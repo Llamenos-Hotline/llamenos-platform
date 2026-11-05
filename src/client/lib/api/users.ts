@@ -21,13 +21,6 @@ export async function listHubUsers(hubId: string) {
   return request<{ users: User[] }>(hubPath(hubId, '/users'))
 }
 
-export async function createUser(data: { name: string; phone: string; roleIds?: string[]; pubkey: string }) {
-  return request<User>(hp('/users'), {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-}
-
 export async function updateUser(pubkey: string, data: Partial<{
   name: string
   phone: string

@@ -4,7 +4,6 @@ import { useAuth } from '@/lib/auth'
 import { useEffect, useState } from 'react'
 import {
   listUsers,
-  createUser,
   updateUser,
   deleteUser,
   listInvites,
@@ -16,11 +15,10 @@ import {
   type RoleDefinition,
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
-import { generateEphemeralKeypair } from '@/lib/platform'
 import { getHubOrigin } from '@/lib/api-config'
 import { buildInviteLink } from '@/lib/invite-code'
 import { useToast } from '@/lib/toast'
-import { UserPlus, Shield, ShieldCheck, Trash2, Key, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
+import { UserPlus, Shield, ShieldCheck, Trash2, Copy, Coffee, Eye, EyeOff, Mail, X } from 'lucide-react'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PinChallengeDialog } from '@/components/pin-challenge-dialog'
 import { usePinChallenge } from '@/lib/use-pin-challenge'
@@ -48,9 +46,7 @@ function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [invites, setInvites] = useState<InviteCode[]>([])
   const [roles, setRoles] = useState<RoleDefinition[]>([])
-  const [showAddForm, setShowAddForm] = useState(false)
   const [showInviteForm, setShowInviteForm] = useState(false)
-  const [generatedDeviceKey, setGeneratedDeviceKey] = useState<string | null>(null)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -83,45 +79,15 @@ function UsersPage() {
           <h1 data-testid="page-title" className="text-xl font-bold sm:text-2xl">{t('users.title')}</h1>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteLink(null) }}>
+          {/* The only way to add someone: an invite. The invitee's device makes
+              their key and it never leaves it — no admin ever holds a user's
+              signing key (#1231). */}
+          <Button data-testid="invite-btn" onClick={() => { setShowInviteForm(true); setInviteLink(null) }}>
             <Mail className="h-4 w-4" />
             {t('users.inviteVolunteer')}
           </Button>
-          <Button data-testid="volunteer-add-btn" onClick={() => { setShowAddForm(true); setGeneratedDeviceKey(null) }}>
-            <UserPlus className="h-4 w-4" />
-            {t('users.addVolunteer')}
-          </Button>
         </div>
       </div>
-
-      {/* Generated key warning */}
-      {generatedDeviceKey && (
-        <Card className="border-yellow-400/50 bg-yellow-50 dark:border-yellow-600/50 dark:bg-yellow-950/10">
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-2">
-              <Key className="mt-0.5 h-4 w-4 text-yellow-600 dark:text-yellow-400" />
-              <div>
-                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">{t('users.inviteGenerated')}</p>
-                <p className="mt-0.5 text-xs text-yellow-600 dark:text-yellow-400/80">{t('users.secretKeyWarning')}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <code data-testid="volunteer-device-key-code" className="flex-1 break-all rounded-md bg-background px-3 py-2 text-xs">{generatedDeviceKey}</code>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => { navigator.clipboard.writeText(generatedDeviceKey); toast(t('common.success'), 'success'); setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 30000) }}
-                aria-label={t('a11y.copyToClipboard')}
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <Button variant="ghost" size="sm" data-testid="dismiss-device-key" onClick={() => setGeneratedDeviceKey(null)}>
-              {t('common.close')}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Invite link display — on the hub's own address, never the webview origin (#1128) */}
       {inviteLink && (
@@ -163,19 +129,6 @@ function UsersPage() {
             setShowInviteForm(false)
           }}
           onCancel={() => setShowInviteForm(false)}
-        />
-      )}
-
-      {/* Add user form */}
-      {showAddForm && (
-        <AddUserForm
-          roles={roles}
-          onCreated={(user, deviceKey) => {
-            setUsers(prev => [...prev, user])
-            setGeneratedDeviceKey(deviceKey)
-            setShowAddForm(false)
-          }}
-          onCancel={() => setShowAddForm(false)}
         />
       )}
 
@@ -345,99 +298,6 @@ function InviteForm({ roles, onCreated, onCancel }: {
               {saving ? t('common.loading') : t('users.createInvite')}
             </Button>
             <Button type="button" variant="outline" onClick={onCancel}>
-              {t('common.cancel')}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-  )
-}
-
-function AddUserForm({ roles, onCreated, onCancel }: {
-  roles: RoleDefinition[]
-  onCreated: (user: User, deviceKey: string) => void
-  onCancel: () => void
-}) {
-  const { t } = useTranslation()
-  const { toast } = useToast()
-  const [name, setName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [roleId, setRoleId] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!isValidE164(phone)) {
-      toast(t('users.invalidPhone'), 'error')
-      return
-    }
-    setSaving(true)
-    try {
-      const keyPair = await generateEphemeralKeypair()
-      const user = await createUser({ name, phone, roleIds: roleId ? [roleId] : undefined, pubkey: keyPair.publicKey })
-      // Expose seedHex for test infrastructure (deviceImportAndLoad requires Ed25519 seed, not secp256k1)
-      const win = window as unknown as Record<string, unknown>
-      if (typeof window !== 'undefined' && win.__TEST_PLATFORM) {
-        win.__last_vol_seed_hex = keyPair.seedHex
-      }
-      onCreated(user, keyPair.deviceKey)
-      toast(t('users.userAdded'), 'success')
-    } catch {
-      toast(t('common.error'), 'error')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <UserPlus className="h-4 w-4 text-muted-foreground" />
-          {t('users.addVolunteer')}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="vol-name">{t('users.name')}</Label>
-              <Input
-                id="vol-name"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="vol-phone">{t('users.phone')}</Label>
-              <PhoneInput
-                id="vol-phone"
-                value={phone}
-                onChange={setPhone}
-                required
-              />
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="vol-role">{t('users.role')}</Label>
-            <Select value={roleId} onValueChange={setRoleId}>
-              <SelectTrigger id="vol-role" data-testid="user-form-role-select">
-                <SelectValue placeholder={t('users.roleHubDefault')} />
-              </SelectTrigger>
-              <SelectContent>
-                {roles.map(role => (
-                  <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex gap-2">
-            <Button data-testid="form-save-btn" type="submit" disabled={saving}>
-              {saving ? t('common.loading') : t('common.save')}
-            </Button>
-            <Button data-testid="form-cancel-btn" type="button" variant="outline" onClick={onCancel}>
               {t('common.cancel')}
             </Button>
           </div>

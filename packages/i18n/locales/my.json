@@ -1320,6 +1320,8 @@
     "hotlineName": "ဟော့လိုင်းအမည်",
     "hotlineNameHelp": "အက်ပ်တွင် စေတနာ့ဝန်ထမ်းများအတွက် ပြသမည်။ လုံခြုံရေးအတွက် PWA သည် ယေဘုယျအမည်ကို အသုံးပြုသည်။",
     "hotlineNamePlaceholder": "လူထုအရေးပေါ်လိုင်း",
+    "hubUrlLabel": "ဟပ် URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "သင့်အရေးပေါ်ဟော့လိုင်းအတွက် အမည်နှင့် ဘာသာစကား ရွေးချယ်ပါ။",
     "identityTitle": "သင့်ဟော့လိုင်းကို အမည်ပေးပါ",
     "inactivityTimeout": "မလှုပ်ရှားမှုချိန်ကုန်ဆုံးချိန် (မိနစ်)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "သင့်အဖွဲ့အတွက် ဖိတ်ကြားကုဒ်များ ဖန်တီးပါ။ ကုဒ်တစ်ခုလျှင် တစ်ကြိမ်သာ အသုံးပြုနိုင်ပြီး ၇ ရက်အတွင်း ကုန်ဆုံးမည်။",
     "inviteNew": "ဖိတ်ကြားချက်အသစ်",
     "inviteTitle": "အသုံးပြုသူများ ဖိတ်ကြားမည်",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "စေတနာ့ဝန်ထမ်းတစ်ဦးလျှင် အများဆုံးတစ်ပြိုင်နက်",
     "messagingSettings": "မက်ဆေ့ချ်ဆက်တင်များ",
     "namePlaceholder": "စေတနာ့ဝန်ထမ်းအမည်",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "ရွေးချယ်နိုင်",
     "organization": "အဖွဲ့အစည်း",
     "organizationPlaceholder": "သင့်အဖွဲ့အစည်းအမည်",
@@ -1371,6 +1375,7 @@
     "pinRequired": "ပြင်ဆင်မှုဆက်လုပ်ရန် သင့် PIN ကို ရိုက်ထည့်ပါ။",
     "primaryLanguage": "အဓိကဘာသာစကား",
     "primaryLanguageHelp": "စီမံခန့်ခွဲသူမျက်နှာပြင်နှင့် IVR အညွှန်းများအတွက် မူလဘာသာစကား။",
+    "providerConnection": "Provider Connection",
     "providersDescription": "သင်ရွေးချယ်ထားသော ချန်နယ်များကို အသက်သွင်းမည့် ဝန်ဆောင်မှုများကို ပြင်ဆင်ပါ။",
     "providersTitle": "ဝန်ဆောင်မှုပေးသူများ ပြင်ဆင်မည်",
     "queueTimeout": "စီတန်းချိန်ကုန်ဆုံးချိန် (စက္ကန့်)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "WhatsApp ချိတ်ဆက်မှု",
     "whatsappTwilio": "Twilio မှတဆင့်",
     "whatsappTwilioNote": "WhatsApp မက်ဆေ့ချ်များကို သင့်ရှိပြီးသား Twilio တယ်လီဖုန်းဝန်ဆောင်မှုမှတဆင့် ကိုင်တွယ်မည်။ ထပ်ဆောင်းပြင်ဆင်ခြင်း မလိုအပ်ပါ။",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "ဟပ် URL",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "activeCalls": "လက်ရှိခေါ်ဆိုမှု {{count}} ခု",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "ဖွင့်ထားသည်",
     "add": "အသုံးပြုသူ ထည့်မည်",
-    "addVolunteer": "အသုံးပြုသူ ထည့်မည်",
     "assignedShifts": "သတ်မှတ်ထားသော အလှည့်များ",
     "changeRole": "ရာထူးပြောင်းမည်",
     "createInvite": "ဖိတ်ကြားချက် ဖန်တီးမည်",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "ဖုန်းနံပါတ် မမှန်ကန်ပါ။ E.164 ပုံစံ အသုံးပြုပါ (ဥပမာ +12125551234)",
     "inviteCreated": "ဖိတ်ကြားချက် ဖန်တီးပြီး",
     "inviteExpires": "{{date}} တွင် ကုန်ဆုံးမည်",
-    "inviteGenerated": "ဖိတ်ကြားချက် ဖန်တီးပြီး! လျှို့ဝှက်သော့ကို လုံခြုံစွာ မျှဝေပါ။",
     "inviteLinkLabel": "ဖိတ်ကြားလင့်ခ်",
     "inviteRevoked": "ဖိတ်ကြားချက် ရုပ်သိမ်းပြီး",
     "inviteVolunteer": "အသုံးပြုသူ ဖိတ်ကြားမည်",
@@ -1904,10 +1903,8 @@
     "roleReporter": "အစီရင်ခံသူ",
     "roleReviewer": "ပြန်လည်စစ်ဆေးသူ",
     "roleVolunteer": "စေတနာ့ဝန်ထမ်း",
-    "secretKeyWarning": "ဤသော့ကို တစ်ကြိမ်သာ ပြမည်။ စေတနာ့ဝန်ထမ်းထံ လုံခြုံစွာ မျှဝေပါ။",
     "title": "အသုံးပြုသူများ",
-    "unnamed": "အမည်မသိ အသုံးပြုသူ",
-    "userAdded": "အသုံးပြုသူ ထည့်ပြီးပါပြီ"
+    "unnamed": "အမည်မသိ အသုံးပြုသူ"
   },
   "webauthn": {
     "browserNotSupported": "သင့်ဘရောက်ဇာသည် Passkeys ကို ပံ့ပိုးမပေးပါ။",

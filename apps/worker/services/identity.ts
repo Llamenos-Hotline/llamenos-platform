@@ -15,7 +15,6 @@ import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import type { Database } from '../db'
 import {
   users,
-  hubs,
   roles as roleDefinitions,
   sessions,
   inviteCodes,
@@ -988,20 +987,16 @@ export class IdentityService {
    * Create a new invite code.
    *
    * `hubId` is the hub the invite admits the invitee to: redemption grants
-   * `roleIds` in that hub only (#1037). An invite without a hub can carry only
-   * global authority — the routes allow that for `role-super-admin` alone.
+   * `roleIds` in that hub only (#1037). Both are required: an invite that
+   * names no hub, or grants no role, admits someone nobody can see, schedule
+   * or ring (#2194).
    */
   async createInvite(data: {
     name: string
     phone: string
     roleIds: string[]
-    /**
-     * The hub the redeemer joins, resolved by the caller (routes/invites.ts).
-     * Null only when the server has no hub yet — the setup wizard invites a
-     * volunteer before it creates the hub — in which case `redeemInvite`
-     * resolves it at redemption.
-     */
-    hubId: string | null
+    /** The hub the redeemer joins, resolved by the caller (routes/invites.ts). */
+    hubId: string
     createdBy: string
   }): Promise<{ invite: InviteCode }> {
     const code = crypto.randomUUID()
@@ -1012,8 +1007,8 @@ export class IdentityService {
       code,
       name: data.name,
       phone: data.phone,
-      // No `role-volunteer` fallback: an empty list means the inviter named no
-      // role and the hub's template named no default, which grants none.
+      // No `role-volunteer` fallback: the route refuses an invite that would
+      // grant none, so these are the roles the inviter or the hub's template named.
       roleIds: data.roleIds,
       createdBy: data.createdBy,
       hubId: data.hubId,
@@ -1044,25 +1039,6 @@ export class IdentityService {
     if (invite.usedAt) return { valid: false, error: 'already_used' }
     if (invite.expiresAt < new Date()) return { valid: false, error: 'expired' }
     return { valid: true, name: invite.name, roleIds: invite.roleIds }
-  }
-
-  /**
-   * Resolve the hub an invite without one admits into.
-   *
-   * Invites created before they carried a hub (#1037) have `hub_id` null. On a
-   * single-hub deployment — the shape R1 ships — there is exactly one answer,
-   * the same one `GET /api/config` reports as `defaultHubId`. With zero or
-   * several active hubs there is no answer, and the redemption is refused
-   * rather than guessing the redeemer into the wrong hub — or, worse, into a
-   * global role (#2153).
-   */
-  private async resolveSoleActiveHubId(tx: Database): Promise<string | null> {
-    const rows = await tx
-      .select({ id: hubs.id })
-      .from(hubs)
-      .where(eq(hubs.status, 'active'))
-      .limit(2)
-    return rows.length === 1 ? rows[0].id : null
   }
 
   /**
@@ -1101,13 +1077,14 @@ export class IdentityService {
       // an empty list means neither the inviter nor the hub's template named a
       // role, and the member joins with none for the operator to assign.
       const grantedRoleIds = invite.roleIds
-      const hubId = invite.hubId ?? await this.resolveSoleActiveHubId(tx)
-      // An invite admits someone to a hub. With no hub to name there is nothing
-      // it can grant, and falling back to a global role would hand the redeemer
-      // authority over every hub (#2153) — so refuse. Throwing rolls back the
-      // claim above, leaving the invite redeemable once a hub exists.
+      const hubId = invite.hubId
+      // An invite admits someone to a hub, and every invite is minted naming
+      // one (#2194). A row without one predates that and can grant nothing: no
+      // hub is guessed for it, and falling back to a global role would hand the
+      // redeemer authority over every hub (#2153). Throwing rolls back the
+      // claim above.
       if (!hubId) {
-        throw new ServiceError(409, 'This invite is not tied to a hub and the server has no single hub to admit you to — ask for a new invite')
+        throw new ServiceError(409, 'This invite is not tied to a hub — ask for a new invite')
       }
 
       // An already-registered pubkey is a person being invited into a SECOND

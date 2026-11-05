@@ -34,8 +34,6 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'get_device_pubkeys',
     // Panic wipe: zeroize CryptoState + delete the Stronghold vault file
     'wipe_keys',
-    // Ephemeral keypair for admin-created users (seed returned by design)
-    'generate_ephemeral_ed25519',
     // Auth token
     'create_auth_token_from_state',
     'create_nonceless_auth_token_from_state',

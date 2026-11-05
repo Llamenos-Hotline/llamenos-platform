@@ -3712,6 +3712,7 @@
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
     "inviteTitle": "Invite Volunteers",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "Max Concurrent Per Volunteer",
     "messagingSettings": "Messaging Settings",
     "namePlaceholder": "Volunteer name",
@@ -4459,7 +4460,6 @@
   "users": {
     "active": "Active",
     "add": "Add Volunteer",
-    "addVolunteer": "Add Volunteer",
     "assignedShifts": "Assigned Shifts",
     "changeRole": "Change role",
     "createInvite": "Create Invite",
@@ -4472,7 +4472,6 @@
     "invalidPhone": "Invalid phone number. Use E.164 format (e.g. +12125551234)",
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
-    "inviteGenerated": "Invite generated! Share the secret key securely.",
     "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
@@ -4495,10 +4494,8 @@
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "Volunteer",
-    "secretKeyWarning": "This key will only be shown once. Share it securely with the volunteer.",
     "title": "Volunteers",
-    "unnamed": "Unnamed Volunteer",
-    "userAdded": "Volunteer added successfully"
+    "unnamed": "Unnamed Volunteer"
   },
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",

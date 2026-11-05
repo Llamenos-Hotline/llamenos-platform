@@ -1320,6 +1320,8 @@
     "hotlineName": "Navê Xeta Alîkariyê",
     "hotlineNameHelp": "Ev nav di serlêdanê de ji xwebexşan re tê nîşandan. Ji bo ewlehiyê, PWA navek giştî bikar tîne.",
     "hotlineNamePlaceholder": "Xeta Krîza Civakê",
+    "hubUrlLabel": "URL ya Navendê",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Ji bo xeta krîzê ya xwe navek û zimanek hilbijêre.",
     "identityTitle": "Nav Li Xeta Alîkariyê Deyne",
     "inactivityTimeout": "Maweya Neçalakiyê (deqîqe)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Ji bo tîma xwe kodên vexwendinê biafirîne. Her kod carekê tê bikaranîn û piştî 7 rojan diqede.",
     "inviteNew": "Vexwendina Nû",
     "inviteTitle": "Bikarhêneran Vexwîne",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "Herî Zêde Hevdem Ji Bo Her Xwebexşê",
     "messagingSettings": "Mîhengên Peyaman",
     "namePlaceholder": "Navê xwebexş",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "ne mecbûrî",
     "organization": "Rêxistin",
     "organizationPlaceholder": "Navê Rêxistina Te",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Ji bo berdewamkirina sazkirinê PIN a xwe binivîse.",
     "primaryLanguage": "Zimanê Sereke",
     "primaryLanguageHelp": "Zimanê standard ji bo navrûya rêvebiriyê û bangên IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Xizmetên ku kanalên te yên hilbijartî dixebitînin saz bike.",
     "providersTitle": "Pêşkêşkeran Mîheng Bike",
     "queueTimeout": "Maweya Rêzê (çirke)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "Girêdana WhatsApp",
     "whatsappTwilio": "Bi riya Twilio",
     "whatsappTwilioNote": "Peyamên WhatsApp dê bi riya pêşkêşkerê te yê Twilio yê heyî bên rêvebirin. Tu mîhenga zêde hewce nake.",
-    "whatsappVerifyToken": "Nîşana Piştrastkirin",
-    "hubUrlLabel": "URL ya Navendê",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Nîşana Piştrastkirin"
   },
   "shifts": {
     "activeCalls": "{{count}} bang(ên) çalak",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Çalak",
     "add": "Bikarhêner Lê Zêde Bike",
-    "addVolunteer": "Bikarhêner Lê Zêde Bike",
     "assignedShifts": "Şiftên Destnîşankirî",
     "changeRole": "Rol biguherîne",
     "createInvite": "Vexwendin Biafirîne",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Jimareya têlefonê ne derbasdar e. Formata E.164 bikar bîne (wek +12125551234)",
     "inviteCreated": "Vexwendin hat afirandin",
     "inviteExpires": "Di {{date}} de diqede",
-    "inviteGenerated": "Vexwendin hat afirandin! Kilîda nepenî bi ewlehî parve bike.",
     "inviteLinkLabel": "Girêdana vexwendinê",
     "inviteRevoked": "Vexwendin hat betalkirin",
     "inviteVolunteer": "Bikarhêner Vexwîne",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Rapordêr",
     "roleReviewer": "Lêkolin",
     "roleVolunteer": "Xwebexş",
-    "secretKeyWarning": "Ev kilîd tenê carekê tê nîşandan. Bi ewlehî bi xwebexş re parve bike.",
     "title": "Bikarhêner",
-    "unnamed": "Bikarhênerê Bênav",
-    "userAdded": "Bikarhêner bi serkeftî hat zêdekirin"
+    "unnamed": "Bikarhênerê Bênav"
   },
   "webauthn": {
     "browserNotSupported": "Geroka te kilîdên derbasbûnê piştgirî nake.",

@@ -26,6 +26,13 @@ import { StepInvite } from './StepInvite'
 import { StepSummary } from './StepSummary'
 
 const TOTAL_STEPS = 6
+/**
+ * The summary completes setup — `POST /api/setup/complete` creates the hub —
+ * and inviting comes after it. An invite admits someone into a hub, so the
+ * wizard never offers one before the hub exists (#2194).
+ */
+const SUMMARY_STEP = 4
+const INVITE_STEP = 5
 
 export interface SetupData {
   hotlineName: string
@@ -100,6 +107,7 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
   const [pinError, setPinError] = useState('')
   const [pinLoading, setPinLoading] = useState(false)
   const [hasStoredKey, setHasStoredKey] = useState(false)
+  const [hubId, setHubId] = useState<string | null>(null)
   const stepHeadingRef = useRef<HTMLHeadingElement>(null)
 
   // Check for stored keys asynchronously (hasStoredKey is async)
@@ -119,7 +127,8 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
   // Escape key goes back one step
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && step > 0) {
+      // Setup is complete from the invite step on: there is nothing to go back to.
+      if (e.key === 'Escape' && step > 0 && step < INVITE_STEP) {
         e.preventDefault()
         setStep(s => s - 1)
       }
@@ -161,7 +170,7 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
   }, [step, data.hotlineName, data.hubUrl, data.selectedChannels])
 
   async function handleNext() {
-    if (step === TOTAL_STEPS - 1) return
+    if (step >= SUMMARY_STEP) return
     setSaving(true)
     try {
       await updateSetupState({
@@ -177,11 +186,11 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
   }
 
   function handleBack() {
-    if (step > 0) setStep(s => s - 1)
+    if (step > 0 && step <= SUMMARY_STEP) setStep(s => s - 1)
   }
 
   function handleSkip() {
-    if (step < TOTAL_STEPS - 1) setStep(s => s + 1)
+    if (step < SUMMARY_STEP) setStep(s => s + 1)
   }
 
   async function handleComplete() {
@@ -193,12 +202,16 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
       // AUTHENTICATED hub list, which the server filters to this admin's
       // memberships — `/api/config` no longer publishes a hub roster (#1710),
       // and choosing from an instance-wide list is the defect in #1708. Non-fatal.
+      // The invite step names this hub explicitly rather than relying on it.
       try {
         const { hubs } = await listHubs()
-        if (hubs.length > 0) setActiveHub(hubs[0].id)
+        if (hubs.length > 0) {
+          setActiveHub(hubs[0].id)
+          setHubId(hubs[0].id)
+        }
       } catch { /* ignore — hub switching is best-effort */ }
       toast(t('setup.complete'), 'success')
-      navigate({ to: '/' })
+      setStep(INVITE_STEP)
     } catch {
       toast(t('setup.completeFailed'), 'error')
     } finally {
@@ -211,8 +224,8 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
     t('setup.stepChannels'),
     t('setup.stepProviders'),
     t('setup.stepSettings'),
-    t('setup.stepInvite'),
     t('setup.stepSummary'),
+    t('setup.stepInvite'),
   ]
 
   // Show bootstrap step if no admin exists
@@ -312,12 +325,12 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
         {step === 1 && <StepChannels data={data} onChange={updateData} headingRef={stepHeadingRef} />}
         {step === 2 && <StepProviders data={data} onChange={updateData} headingRef={stepHeadingRef} />}
         {step === 3 && <StepSettings data={data} onChange={updateData} headingRef={stepHeadingRef} />}
-        {step === 4 && <StepInvite headingRef={stepHeadingRef} />}
-        {step === 5 && <StepSummary data={data} onComplete={handleComplete} saving={saving} headingRef={stepHeadingRef} />}
+        {step === SUMMARY_STEP && <StepSummary data={data} onComplete={handleComplete} saving={saving} headingRef={stepHeadingRef} />}
+        {step === INVITE_STEP && <StepInvite hubId={hubId} onFinish={() => navigate({ to: '/' })} headingRef={stepHeadingRef} />}
       </div>
 
-      {/* Navigation */}
-      {step < TOTAL_STEPS - 1 && (
+      {/* Navigation — the summary and invite steps carry their own buttons */}
+      {step < SUMMARY_STEP && (
         <div className="flex items-center justify-between border-t px-6 py-4">
           <Button variant="ghost" onClick={handleBack} disabled={step === 0} data-testid="setup-back-btn">
             <ArrowLeft className="h-4 w-4" />

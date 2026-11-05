@@ -12,8 +12,8 @@ export const inviteResponseSchema = z.object({
    * The hub the invite admits the redeemer into. Redemption writes a
    * `hubRoles` entry for it, which is what makes the redeemed volunteer
    * visible to the operator and selectable in the shift and ring-group
-   * pickers (#1037). Null only on invites created before invites were
-   * hub-scoped.
+   * pickers (#1037). Null only on invites minted before every invite had to
+   * name a hub (#2194); redemption refuses those.
    */
   hubId: z.string().nullable().optional(),
   createdBy: z.string(),
@@ -53,16 +53,17 @@ export const createInviteBodySchema = z.object({
   name: z.string().min(1).max(200),
   phone: z.string().max(20),
   /**
-   * Roles the redeemer receives, both globally and in the invite's hub.
-   * Omitted or empty means "whatever the hub's template designates for a new
-   * member" — see `resolveTemplateDefaultMemberRoles`. A template that names
-   * none grants none, which is deliberate: the operator then assigns a role
-   * explicitly rather than a new member silently acquiring one (#1446).
+   * Roles the redeemer receives in the invite's hub. Omitted or empty means
+   * "whatever the hub's template designates for a new member" — see
+   * `resolveTemplateDefaultMemberRoles`. When the template names none either,
+   * the invite is refused (400): an invite names the role it grants (#2194),
+   * and a member silently acquiring one is what #1446 forbids.
    */
   roleIds: z.array(z.string()).optional().default([]),
   /**
    * The hub to admit the redeemer into. Omitted means the server resolves it:
    * the sole active hub, else the creator's sole hub membership, else 400.
+   * A server with no hub at all refuses every invite (409, #2194).
    */
   hubId: z.string().min(1).optional(),
 })

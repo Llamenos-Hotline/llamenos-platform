@@ -1328,22 +1328,6 @@ pub fn device_import_and_load(
     Ok(result)
 }
 
-/// Generate an ephemeral Ed25519 keypair for admin-created users.
-/// Returns { signingPubkeyHex, seedHex } — seed intentionally returned for ephemeral provisioning.
-#[tauri::command]
-pub fn generate_ephemeral_ed25519() -> Result<serde_json::Value, String> {
-    let mut seed = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
-
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    let pubkey = signing_key.verifying_key();
-
-    Ok(serde_json::json!({
-        "signingPubkeyHex": hex::encode(pubkey.to_bytes()),
-        "seedHex": hex::encode(seed),
-    }))
-}
-
 /// Generate a fresh 128-bit recovery key for display to the user.
 /// Base32, dash-grouped — the exact string `generate_backup_from_state` expects back.
 #[tauri::command]

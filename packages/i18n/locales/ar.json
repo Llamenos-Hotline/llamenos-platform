@@ -3857,6 +3857,8 @@
     "hotlineName": "Hotline Name",
     "hotlineNameHelp": "This is shown to volunteers in the app. For security, the PWA uses a generic name.",
     "hotlineNamePlaceholder": "Community Crisis Line",
+    "hubUrlLabel": "Hub URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
@@ -3865,6 +3867,7 @@
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
     "inviteTitle": "Invite Volunteers",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "Max Concurrent Per Volunteer",
     "messagingSettings": "Messaging Settings",
     "namePlaceholder": "Volunteer name",
@@ -3967,9 +3970,7 @@
     "whatsappProvider": "WhatsApp Integration",
     "whatsappTwilio": "Via Twilio",
     "whatsappTwilioNote": "WhatsApp messages will be handled through your existing Twilio telephony provider. No additional configuration needed.",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "Hub URL",
-    "hubUrlPlaceholder": "https://hub.example.org"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "active": {
@@ -4607,7 +4608,6 @@
   "users": {
     "active": "نشط",
     "add": "Add Volunteer",
-    "addVolunteer": "إضافة متطوع",
     "assignedShifts": "Assigned Shifts",
     "changeRole": "Change role",
     "createInvite": "Create Invite",
@@ -4620,7 +4620,6 @@
     "invalidPhone": "رقم هاتف غير صالح. استخدم تنسيق E.164 (مثال: +201234567890)",
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
-    "inviteGenerated": "تم إنشاء الدعوة! شارك المفتاح السري بأمان.",
     "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
@@ -4643,10 +4642,8 @@
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "متطوع",
-    "secretKeyWarning": "سيتم عرض هذا المفتاح مرة واحدة فقط. شاركه بأمان مع المتطوع.",
     "title": "المتطوعون",
-    "unnamed": "Unnamed Volunteer",
-    "userAdded": "تمت إضافة المتطوع بنجاح"
+    "unnamed": "Unnamed Volunteer"
   },
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",

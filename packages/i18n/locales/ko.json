@@ -3857,6 +3857,8 @@
     "hotlineName": "Hotline Name",
     "hotlineNameHelp": "This is shown to volunteers in the app. For security, the PWA uses a generic name.",
     "hotlineNamePlaceholder": "Community Crisis Line",
+    "hubUrlLabel": "Hub URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
@@ -3865,6 +3867,7 @@
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
     "inviteTitle": "Invite Volunteers",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "Max Concurrent Per Volunteer",
     "messagingSettings": "Messaging Settings",
     "namePlaceholder": "Volunteer name",
@@ -3967,9 +3970,7 @@
     "whatsappProvider": "WhatsApp Integration",
     "whatsappTwilio": "Via Twilio",
     "whatsappTwilioNote": "WhatsApp messages will be handled through your existing Twilio telephony provider. No additional configuration needed.",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "Hub URL",
-    "hubUrlPlaceholder": "https://hub.example.org"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "active": {
@@ -4607,7 +4608,6 @@
   "users": {
     "active": "활성",
     "add": "Add Volunteer",
-    "addVolunteer": "자원봉사자 추가",
     "assignedShifts": "Assigned Shifts",
     "changeRole": "Change role",
     "createInvite": "Create Invite",
@@ -4620,7 +4620,6 @@
     "invalidPhone": "전화번호가 유효하지 않습니다. E.164 형식을 사용하세요 (예: +821012345678)",
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
-    "inviteGenerated": "초대가 생성되었습니다! 비밀 키를 안전하게 공유하세요.",
     "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
@@ -4643,10 +4642,8 @@
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "자원봉사자",
-    "secretKeyWarning": "이 키는 한 번만 표시됩니다. 자원봉사자와 안전하게 공유하세요.",
     "title": "자원봉사자",
-    "unnamed": "Unnamed Volunteer",
-    "userAdded": "자원봉사자가 성공적으로 추가되었습니다"
+    "unnamed": "Unnamed Volunteer"
   },
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",

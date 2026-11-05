@@ -657,9 +657,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Test-only hook: onboarding generates the seed inside this mock, so a
     // spec that needs to act as the same user from a SECOND client (e.g. the
-    // sigchain read-back gate in #1050) cannot otherwise reach it. Mirrors
-    // window.__last_vol_seed_hex in users.tsx. Never present outside
-    // PLAYWRIGHT_TEST builds (this module throws at load otherwise).
+    // sigchain read-back gate in #1050) cannot otherwise reach it. Never
+    // present outside PLAYWRIGHT_TEST builds (this module throws at load
+    // otherwise).
     ;(window as unknown as Record<string, unknown>).__TEST_LAST_DEVICE_SEED_HEX = bytesToHex(signingSeed)
 
     return result
@@ -907,17 +907,6 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockEncryptedKeys = result
 
     return result
-  },
-
-  // --- Ephemeral Ed25519 keypair (for admin-created users) ---
-
-  generate_ephemeral_ed25519: () => {
-    const seed = randomBytes(32)
-    const pubkey = deriveEd25519Pubkey(seed)
-    return {
-      signingPubkeyHex: bytesToHex(pubkey),
-      seedHex: bytesToHex(seed),
-    }
   },
 
   // --- Backup generation / restore (v4 container) ---

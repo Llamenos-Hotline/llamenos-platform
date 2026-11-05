@@ -1320,6 +1320,8 @@
     "hotlineName": "Hat Adı",
     "hotlineNameHelp": "Bu ad uygulamada gönüllülere gösterilir. Güvenlik için PWA genel bir ad kullanır.",
     "hotlineNamePlaceholder": "Toplum Kriz Hattı",
+    "hubUrlLabel": "Merkez URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Kriz hattınız için bir ad ve dil seçin.",
     "identityTitle": "Hat Hattınızı Adlandırın",
     "inactivityTimeout": "İnaktivite Zaman Aşımı (dakika)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Ekibiniz için davet kodları oluşturun. Her kod tek kullanımlıktır ve 7 gün sonra sona erer.",
     "inviteNew": "Yeni Davet",
     "inviteTitle": "Kullanıcı Davet Et",
+    "launchHotline": "Launch Hotline",
     "maxConcurrent": "Gönüllü Başına Maksimum Eşzamanlı",
     "messagingSettings": "Mesajlaşma Ayarları",
     "namePlaceholder": "Gönüllü adı",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "isteğe bağlı",
     "organization": "Kuruluş",
     "organizationPlaceholder": "Kuruluş Adınız",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Kuruluma devam etmek için PIN kodunuzu girin.",
     "primaryLanguage": "Ana Dil",
     "primaryLanguageHelp": "Yönetim arayüzü ve IVR yönlendirmeleri için varsayılan dil.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Seçtiğiniz kanalları destekleyen hizmetleri kurun.",
     "providersTitle": "Sağlayıcıları Yapılandırın",
     "queueTimeout": "Kuyruk Zaman Aşımı (saniye)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "WhatsApp Entegrasyonu",
     "whatsappTwilio": "Twilio Üzerinden",
     "whatsappTwilioNote": "WhatsApp mesajları mevcut Twilio telefon sağlayıcınız üzerinden işlenecek. Ek yapılandırma gerekmez.",
-    "whatsappVerifyToken": "Doğrulama Jetonu",
-    "hubUrlLabel": "Merkez URL",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Doğrulama Jetonu"
   },
   "shifts": {
     "activeCalls": "{{count}} aktif arama",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Aktif",
     "add": "Kullanıcı Ekle",
-    "addVolunteer": "Kullanıcı Ekle",
     "assignedShifts": "Atanmış Vardiyalar",
     "changeRole": "Rol değiştir",
     "createInvite": "Davet Oluştur",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Geçersiz telefon numarası. E.164 formatı kullanın (ör. +905551234567)",
     "inviteCreated": "Davet oluşturuldu",
     "inviteExpires": "{{date}} tarihinde sona erer",
-    "inviteGenerated": "Davet oluşturuldu! Gizli anahtarı güvenli bir şekilde paylaşın.",
     "inviteLinkLabel": "Davet bağlantısı",
     "inviteRevoked": "Davet iptal edildi",
     "inviteVolunteer": "Kullanıcı Davet Et",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Raporcu",
     "roleReviewer": "İnceleyici",
     "roleVolunteer": "Gönüllü",
-    "secretKeyWarning": "Bu anahtar yalnızca bir kez gösterilecektir. Gönüllüyle güvenli bir şekilde paylaşın.",
     "title": "Kullanıcılar",
-    "unnamed": "Adsız Kullanıcı",
-    "userAdded": "Kullanıcı başarıyla eklendi"
+    "unnamed": "Adsız Kullanıcı"
   },
   "webauthn": {
     "browserNotSupported": "Tarayıcınız geçiş anahtarlarını desteklemiyor.",
