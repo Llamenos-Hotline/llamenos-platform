@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.ShiftResponse
@@ -89,7 +90,7 @@ class ShiftsViewModel @Inject constructor(
             }
 
             try {
-                val response = apiService.request<ShiftsListResponse>("GET", apiService.hp("/api/shifts"))
+                val response = apiService.request<ShiftsListResponse>("GET", apiService.activeHubPath("/api/shifts"))
                 _uiState.update {
                     it.copy(
                         shifts = response.shifts,
@@ -97,6 +98,9 @@ class ShiftsViewModel @Inject constructor(
                         isRefreshing = false,
                     )
                 }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
+                _uiState.update { it.copy(shifts = emptyList(), isLoading = false, isRefreshing = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(

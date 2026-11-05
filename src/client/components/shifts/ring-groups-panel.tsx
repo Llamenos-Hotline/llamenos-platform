@@ -9,6 +9,7 @@ import {
   addRingGroupMembers,
   removeRingGroupMembers,
   listUsers,
+  NoActiveHubError,
   type User,
 } from '@/lib/api'
 import { Users, Trash2, UserPlus, UserMinus } from 'lucide-react'
@@ -46,7 +47,8 @@ export function RingGroupsPanel() {
     Promise.all([
       listRingGroups().then(r => setGroups(r.ringGroups)),
       listUsers().then(r => setUsers(r.users)),
-    ]).catch(() => toast(t('common.error'), 'error'))
+      // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+    ]).catch((err) => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
       .finally(() => setLoading(false))
   }, [])
 

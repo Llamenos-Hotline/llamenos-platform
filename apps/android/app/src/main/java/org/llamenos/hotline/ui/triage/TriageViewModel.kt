@@ -189,7 +189,7 @@ class TriageViewModel @Inject constructor(
                 )
                 val response = apiService.request<ConvertFromReportResponse>(
                     "POST",
-                    apiService.hp("/api/records/convert-from-report"),
+                    apiService.activeHubPath("/api/records/convert-from-report"),
                     body = body,
                 )
                 _uiState.update {

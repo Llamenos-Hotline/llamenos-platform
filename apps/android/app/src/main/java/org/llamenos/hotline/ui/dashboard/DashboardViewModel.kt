@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.AnalyticsRepository
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
@@ -252,7 +253,12 @@ class DashboardViewModel @Inject constructor(
      */
     private suspend fun checkHubReachable(): Boolean {
         return try {
-            apiService.request<MyStatusResponse>("GET", apiService.hp("/api/shifts/my-status"))
+            apiService.request<MyStatusResponse>("GET", apiService.activeHubPath("/api/shifts/my-status"))
+            true
+        } catch (_: NoActiveHubException) {
+            // With no hub selected there is no hub to check and nothing to refresh, so a
+            // refresh has not failed. Shift status belongs to a hub (#2461): the bare path
+            // is not served, so it cannot stand in for "the hub".
             true
         } catch (e: Exception) {
             android.util.Log.w("DashboardViewModel", "my-status check failed: ${e.message}")
@@ -398,7 +404,7 @@ class DashboardViewModel @Inject constructor(
 
     /** A call action goes to the call's own hub, which need not be the one being browsed. */
     private fun callPath(call: ActiveCall, action: String): String =
-        apiService.hubPath(call.hubId ?: apiService.activeHubIdOrNull(), "/api/calls/${call.id}/$action")
+        apiService.hubPath(call.hubId, "/api/calls/${call.id}/$action")
 
     // MARK: - Call Ended prompt
 
@@ -411,9 +417,8 @@ class DashboardViewModel @Inject constructor(
      */
     private fun holdIfOwn(call: ActiveCall?) {
         val signingPubkey = _uiState.value.signingPubkey
-        val hubId = call?.hubId
-        if (call == null || hubId == null || signingPubkey.isEmpty() || call.answeredBy != signingPubkey) return
-        endedCallHold.hold(CallRef(id = call.id, hubId = hubId))
+        if (call == null || signingPubkey.isEmpty() || call.answeredBy != signingPubkey) return
+        endedCallHold.hold(CallRef(id = call.id, hubId = call.hubId))
     }
 
     /** The volunteer dismissed the "Call Ended" prompt without writing a note. */
@@ -430,8 +435,7 @@ class DashboardViewModel @Inject constructor(
         val state = _uiState.value
         val current = state.currentCall
         val ownCurrent = current?.takeIf { it.answeredBy == state.signingPubkey && state.signingPubkey.isNotEmpty() }
-        val hubId = ownCurrent?.hubId
-        return if (ownCurrent != null && hubId != null) CallRef(ownCurrent.id, hubId) else state.endedCall
+        return if (ownCurrent != null) CallRef(ownCurrent.id, ownCurrent.hubId) else state.endedCall
     }
 
     /**
@@ -442,9 +446,11 @@ class DashboardViewModel @Inject constructor(
      */
     private suspend fun fetchActiveCall(hubId: String? = null) {
         try {
-            val fetchedFrom = hubId?.takeUnless { it.isEmpty() } ?: apiService.activeHubIdOrNull()
+            // A call belongs to a hub (#2461): with neither an event's hub nor an active
+            // hub there is no hub to ask, so there is nothing to read — never the bare path.
+            val fetchedFrom = hubId?.takeUnless { it.isEmpty() } ?: apiService.activeHubIdOrNull() ?: return
             val response = apiService.request<ActiveCallsResponse>("GET", apiService.hubPath(fetchedFrom, "/api/calls/active"))
-            val call = response.calls.firstOrNull()?.copy(hubId = fetchedFrom)
+            val call = response.calls.firstOrNull()?.inHub(fetchedFrom)
             if (call != null) {
                 if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "fetchActiveCall: found call id=${call.id} status=${call.status}")
             }

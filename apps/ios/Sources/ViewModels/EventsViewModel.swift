@@ -177,7 +177,7 @@ final class EventsViewModel {
         do {
             let response: EventListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/events") + "?page=\(currentPage)&limit=\(pageSize)"
+                path: try apiService.activeHubPath("/api/events") + "?page=\(currentPage)&limit=\(pageSize)"
             )
             events = response.events
             totalEvents = Int(response.total)
@@ -187,6 +187,13 @@ final class EventsViewModel {
             await decryptEventDetails(response.events)
         } catch {
             guard !Task.isCancelled else { return }
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if APIError.isNoHub(error) {
+                events = []
+                totalEvents = 0
+                eventsLoadError = nil
+                return
+            }
             errorMessage = error.localizedDescription
             eventsLoadError = error.localizedDescription
         }
@@ -230,7 +237,7 @@ final class EventsViewModel {
         // Load linked records (cases)
         do {
             let response: CaseEventListResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/events/\(event.id)/records")
+                method: "GET", path: try apiService.activeHubPath("/api/events/\(event.id)/records")
             )
             linkedCases = response.links
         } catch {
@@ -240,7 +247,7 @@ final class EventsViewModel {
         // Load linked reports
         do {
             let response: ReportEventListResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/events/\(event.id)/reports")
+                method: "GET", path: try apiService.activeHubPath("/api/events/\(event.id)/reports")
             )
             linkedReports = response.links
         } catch {
@@ -251,7 +258,7 @@ final class EventsViewModel {
         do {
             let response: EventListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/events/\(event.id)/subevents")
+                path: try apiService.activeHubPath("/api/events/\(event.id)/subevents")
             )
             subEvents = response.events
         } catch {
@@ -386,7 +393,7 @@ final class EventsViewModel {
             // which the default encoder's `.convertToSnakeCase` would rewrite into
             // keys the route validator rejects.
             let _: ProtocolEvent = try await apiService.request(
-                method: "POST", path: apiService.hp("/api/events"), wireBody: body
+                method: "POST", path: try apiService.activeHubPath("/api/events"), wireBody: body
             )
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             await loadEvents()

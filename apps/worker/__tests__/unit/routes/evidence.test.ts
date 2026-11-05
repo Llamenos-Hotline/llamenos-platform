@@ -18,13 +18,14 @@ const defaultEnv = { HMAC_SECRET: 'test-secret' } as unknown as AppEnv['Bindings
 function makeApp(opts: {
   permissions?: string[]
   pubkey?: string
-  hubId?: string
+  /** The path hub; `null` is a request that did not arrive under /hubs/:hubId. */
+  hubId?: string | null
   services?: Record<string, unknown>
 } = {}) {
   const {
     permissions = ['*'],
     pubkey = 'a'.repeat(64),
-    hubId,
+    hubId = 'hub-1',
     services = {},
   } = opts
 
@@ -32,8 +33,11 @@ function makeApp(opts: {
   const mockCases = {
     createEvidence: vi.fn(),
     createInteraction: vi.fn().mockResolvedValue(undefined),
+    // The record `case-1` and its evidence `ev-1` live in hub-1, the default
+    // path hub, so the hub binding (#2461) admits them.
+    get: vi.fn().mockResolvedValue({ id: 'case-1', hubId: 'hub-1' }),
     listEvidence: vi.fn(),
-    getEvidence: vi.fn(),
+    getEvidence: vi.fn().mockResolvedValue({ id: 'ev-1', caseId: 'case-1' }),
     listCustodyEntries: vi.fn(),
     createCustodyEntry: vi.fn(),
     verifyEvidence: vi.fn(),
@@ -49,7 +53,7 @@ function makeApp(opts: {
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
-    if (hubId) c.set('hubId', hubId)
+    if (hubId !== null) c.set('hubId', hubId)
     c.set('services', {
       audit: mockAudit,
       cases: mockCases,
@@ -167,7 +171,7 @@ describe('POST /records/:id/evidence', () => {
       'evidenceAccessDenied',
       expect.any(String),
       expect.objectContaining({ required: ['evidence:upload'] }),
-      null,
+      'hub-1',
     )
   })
 
@@ -243,7 +247,7 @@ describe('GET /records/:id/evidence', () => {
       'evidenceAccessed',
       expect.any(String),
       expect.objectContaining({ caseId: 'case-1', action: 'list_viewed' }),
-      null,
+      'hub-1',
     )
   })
 })
@@ -289,7 +293,7 @@ describe('GET /evidence/:evidenceId', () => {
       'evidenceAccessed',
       expect.any(String),
       expect.objectContaining({ evidenceId: 'ev-1', action: 'metadata_read' }),
-      null,
+      'hub-1',
     )
   })
 
@@ -302,12 +306,12 @@ describe('GET /evidence/:evidenceId', () => {
       'evidenceAccessDenied',
       expect.any(String),
       expect.objectContaining({ required: ['evidence:download', 'evidence:manage-custody'] }),
-      null,
+      'hub-1',
     )
   })
 
-  it('scopes the access-log entry to the current hub when hub-scoped (Issue #730)', async () => {
-    const { app, mockCases, auditLog } = makeApp({ permissions: ['evidence:download'], hubId: 'hub-1' })
+  it('scopes the access-log entry to the hub of the evidence\'s record (Issue #730, #2461)', async () => {
+    const { app, mockCases, auditLog } = makeApp({ permissions: ['evidence:download'] })
     mockCases.getEvidence.mockResolvedValue({ id: 'ev-1' })
 
     await app.request('/evidence/ev-1')
@@ -356,7 +360,7 @@ describe('GET /evidence/:evidenceId/custody', () => {
       'evidenceAccessed',
       expect.any(String),
       expect.objectContaining({ evidenceId: 'ev-1', action: 'custody_viewed' }),
-      null,
+      'hub-1',
     )
   })
 
@@ -369,7 +373,7 @@ describe('GET /evidence/:evidenceId/custody', () => {
       'evidenceAccessDenied',
       expect.any(String),
       expect.objectContaining({ required: ['evidence:manage-custody'] }),
-      null,
+      'hub-1',
     )
   })
 })
@@ -392,7 +396,7 @@ describe('GET /evidence/:evidenceId/access-log', () => {
     const json = await res.json()
     expect(json.total).toBe(1)
     expect(json.entries).toEqual(entries)
-    expect(mockAudit.listForEvidence).toHaveBeenCalledWith('ev-1', undefined)
+    expect(mockAudit.listForEvidence).toHaveBeenCalledWith('ev-1', 'hub-1')
   })
 
   it('returns 403 for a non-admin (no audit:read permission)', async () => {
@@ -411,7 +415,7 @@ describe('GET /evidence/:evidenceId/access-log', () => {
       'evidenceAccessDenied',
       expect.any(String),
       expect.objectContaining({ required: ['audit:read'] }),
-      null,
+      'hub-1',
     )
   })
 })
@@ -529,5 +533,77 @@ describe('POST /evidence/:evidenceId/verify', () => {
     })
 
     expect(res.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Hub binding (#2461): evidence is reachable only through its record's hub
+// ---------------------------------------------------------------------------
+
+describe('evidence is bound to the path hub (#2461)', () => {
+  const validBody = {
+    fileId: 'file-123',
+    filename: 'evidence.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 1024,
+    classification: 'photo',
+    integrityHash: 'a'.repeat(64),
+    source: 'upload',
+  }
+
+  it('with no path hub, every route is a 404 and nothing is read or written', async () => {
+    const { app, mockCases, auditLog } = makeApp({ hubId: null })
+    const requests: Array<[string, RequestInit | undefined]> = [
+      ['/records/case-1/evidence', undefined],
+      ['/records/case-1/evidence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validBody) }],
+      ['/evidence/ev-1', undefined],
+      ['/evidence/ev-1/custody', undefined],
+      ['/evidence/ev-1/access-log', undefined],
+    ]
+    for (const [path, init] of requests) {
+      const res = await app.request(path, init)
+      expect(res.status, path).toBe(404)
+    }
+    expect(mockCases.get).not.toHaveBeenCalled()
+    expect(mockCases.getEvidence).not.toHaveBeenCalled()
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+    expect(auditLog).not.toHaveBeenCalled()
+  })
+
+  it('a record of another hub is a 404, the same as a missing one, and gets no evidence', async () => {
+    const { app, mockCases } = makeApp({ hubId: 'hub-2' })
+
+    const list = await app.request('/records/case-1/evidence')
+    expect(list.status).toBe(404)
+    expect(await list.json()).toEqual({ error: 'Record not found' })
+
+    const upload = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(upload.status).toBe(404)
+    expect(mockCases.listEvidence).not.toHaveBeenCalled()
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('evidence of another hub\'s record is a 404, the same as missing evidence', async () => {
+    const { app, mockCases } = makeApp({ hubId: 'hub-2' })
+
+    for (const path of ['/evidence/ev-1', '/evidence/ev-1/custody', '/evidence/ev-1/access-log']) {
+      const res = await app.request(path)
+      expect(res.status, path).toBe(404)
+      expect(await res.json()).toEqual({ error: 'Evidence not found' })
+    }
+    expect(mockCases.listCustodyEntries).not.toHaveBeenCalled()
+  })
+
+  it('evidence whose record no longer exists is in no hub', async () => {
+    const { ServiceError } = await import('@worker/services/settings')
+    const { app, mockCases } = makeApp()
+    mockCases.get.mockRejectedValue(new ServiceError(404, 'Record not found'))
+    const res = await app.request('/evidence/ev-1')
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'Evidence not found' })
   })
 })

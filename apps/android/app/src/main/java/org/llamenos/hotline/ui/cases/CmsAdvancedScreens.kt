@@ -86,7 +86,7 @@ fun EvidenceCustodyChainScreen(
         try {
             val response = apiService.request<CustodyChainResponse>(
                 "GET",
-                apiService.hp("/api/evidence/$evidenceId/custody"),
+                apiService.activeHubPath("/api/evidence/$evidenceId/custody"),
             )
             entries = response.custodyChain
         } catch (e: Exception) {

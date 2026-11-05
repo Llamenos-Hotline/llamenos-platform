@@ -101,7 +101,7 @@ struct ContactNotificationSheet: View {
         do {
             let _: [String: String] = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/records/\(recordId)/notify-contacts"),
+                path: try apiService.activeHubPath("/api/records/\(recordId)/notify-contacts"),
                 body: ["notifications": notifications]
             )
             isSending = false

@@ -39,7 +39,7 @@ class ShiftDetailViewModel @Inject constructor(
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 val shiftsResponse = apiService.request<ShiftsListResponse>(
-                    "GET", apiService.hp("/api/shifts"),
+                    "GET", apiService.activeHubPath("/api/shifts"),
                 )
                 val shift = shiftsResponse.shifts.find { it.id == shiftId }
 
@@ -86,7 +86,7 @@ class ShiftDetailViewModel @Inject constructor(
                 // PATCH — see AdminViewModel.updateShift: `PUT /api/shifts/:id`
                 // is not mounted and answered 404, so saving a roster from this
                 // screen never reached the server (#1724).
-                apiService.requestNoContent("PATCH", apiService.hp("/api/shifts/${shift.id}"), request)
+                apiService.requestNoContent("PATCH", apiService.activeHubPath("/api/shifts/${shift.id}"), request)
                 _uiState.update { it.copy(isSaving = false, saveSuccess = true) }
             } catch (e: Exception) {
                 _uiState.update {

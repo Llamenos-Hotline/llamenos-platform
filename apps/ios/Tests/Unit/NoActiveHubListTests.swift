@@ -45,9 +45,10 @@ private final class RecordingStubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-/// A hub-owned list with no active hub (#2405).
+/// A hub-owned list with no active hub (#2405, #2461).
 ///
-/// Notes, reports, contacts and the audit log have no unscoped route (#2395), so with no
+/// Notes, reports, contacts and the audit log have no unscoped route (#2395), nor have
+/// records, events, evidence, calls, shifts and ring groups (#2461), so with no
 /// hub active there is nothing to browse. The screen must settle on its empty state —
 /// not on an error, and not by asking the server for the bare path. The hub URL IS
 /// configured here, so the reason is the missing active hub and not `.noBaseURL`.
@@ -73,7 +74,11 @@ final class NoActiveHubListTests: XCTestCase {
     /// No request may name a hub-owned resource outside `/api/hubs/:hubId`.
     private func assertNoUnscopedHubOwnedRequest(file: StaticString = #filePath, line: UInt = #line) {
         let unscoped = RecordingStubURLProtocol.requests().filter { request in
-            ["/api/reports", "/api/notes", "/api/contacts", "/api/audit"].contains { prefix in
+            [
+                "/api/reports", "/api/notes", "/api/contacts", "/api/audit",
+                // #2461: the server wrote these into hub "" and read any hub's row by id.
+                "/api/records", "/api/events", "/api/evidence", "/api/calls", "/api/shifts", "/api/ring-groups",
+            ].contains { prefix in
                 request.hasSuffix(" \(prefix)") || request.contains(" \(prefix)/")
             }
         }
@@ -125,6 +130,27 @@ final class NoActiveHubListTests: XCTestCase {
 
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertTrue(viewModel.reports.isEmpty)
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    func testRecordsSettleEmptyWithoutAnError() async throws {
+        let viewModel = CaseManagementViewModel(apiService: try makeAPI(), cryptoService: CryptoService())
+
+        await viewModel.loadRecords()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.recordsLoadError)
+        XCTAssertTrue(viewModel.records.isEmpty)
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    func testRingGroupsSettleEmptyWithoutAnError() async throws {
+        let viewModel = ShiftAdminViewModel(apiService: try makeAPI(), hubContext: HubContext())
+
+        await viewModel.loadRingGroups()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.ringGroups.isEmpty)
         assertNoUnscopedHubOwnedRequest()
     }
 

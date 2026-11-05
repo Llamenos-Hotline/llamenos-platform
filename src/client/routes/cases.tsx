@@ -43,7 +43,7 @@ import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
 import { EntityTimelineView } from '@/components/entity-timeline-view'
-import { listEntitiesCrossHub } from '@/lib/api'
+import { listEntitiesCrossHub, NoActiveHubError } from '@/lib/api'
 
 export const Route = createFileRoute('/cases')({
   component: CasesPage,
@@ -126,7 +126,8 @@ function CasesPage() {
         setRecords(recs)
         setTotal(tot)
       })
-      .catch(() => toast(t('cases.loadError', { defaultValue: 'Failed to load cases' }), 'error'))
+      // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+      .catch((err) => { if (!(err instanceof NoActiveHubError)) toast(t('cases.loadError', { defaultValue: 'Failed to load cases' }), 'error') })
       .finally(() => setLoading(false))
   }, [entityTypeFilter, statusFilter, page, crossHub, toast, t])
 

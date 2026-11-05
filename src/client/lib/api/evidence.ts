@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, activeHubPath } from './client'
 import type { EvidenceClassification, CustodyAction, EvidenceMetadata, CustodyEntry } from '@protocol/schemas'
 import type { RecipientEnvelope } from '@shared/types'
 
@@ -21,7 +21,7 @@ export async function listEvidence(recordId: string, params?: {
     page: number
     limit: number
     hasMore: boolean
-  }>(hp(`/records/${recordId}/evidence?${qs}`))
+  }>(activeHubPath(`/records/${recordId}/evidence?${qs}`))
 }
 
 export async function uploadEvidence(recordId: string, body: {
@@ -37,21 +37,21 @@ export async function uploadEvidence(recordId: string, body: {
   descriptionEnvelopes?: RecipientEnvelope[]
   interactionTypeHash?: string
 }) {
-  return request<EvidenceMetadata>(hp(`/records/${recordId}/evidence`), {
+  return request<EvidenceMetadata>(activeHubPath(`/records/${recordId}/evidence`), {
     method: 'POST',
     body: JSON.stringify(body),
   })
 }
 
 export async function getEvidenceMetadata(evidenceId: string) {
-  return request<EvidenceMetadata>(hp(`/evidence/${evidenceId}`))
+  return request<EvidenceMetadata>(activeHubPath(`/evidence/${evidenceId}`))
 }
 
 export async function getEvidenceCustody(evidenceId: string) {
   return request<{
     custodyChain: CustodyEntry[]
     total: number
-  }>(hp(`/evidence/${evidenceId}/custody`))
+  }>(activeHubPath(`/evidence/${evidenceId}/custody`))
 }
 
 export async function logEvidenceAccess(evidenceId: string, body: {
@@ -59,7 +59,7 @@ export async function logEvidenceAccess(evidenceId: string, body: {
   integrityHash: string
   notes?: string
 }) {
-  return request<CustodyEntry>(hp(`/evidence/${evidenceId}/access`), {
+  return request<CustodyEntry>(activeHubPath(`/evidence/${evidenceId}/access`), {
     method: 'POST',
     body: JSON.stringify(body),
   })
@@ -70,7 +70,7 @@ export async function verifyEvidenceIntegrity(evidenceId: string, currentHash: s
     valid: boolean
     originalHash: string
     currentHash: string
-  }>(hp(`/evidence/${evidenceId}/verify`), {
+  }>(activeHubPath(`/evidence/${evidenceId}/verify`), {
     method: 'POST',
     body: JSON.stringify({ currentHash }),
   })

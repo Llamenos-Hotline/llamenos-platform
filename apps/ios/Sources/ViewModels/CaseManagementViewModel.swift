@@ -285,7 +285,14 @@ final class CaseManagementViewModel {
         // must not report "done" while its replacement is still fetching.
         defer { if epoch == recordsLoadEpoch { isLoading = false } }
 
-        var path = apiService.hp("/api/records") + "?page=\(currentPage)&limit=\(pageSize)"
+        // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+        guard let base = try? apiService.activeHubPath("/api/records") else {
+            records = []
+            totalRecords = 0
+            recordsLoadError = nil
+            return
+        }
+        var path = base + "?page=\(currentPage)&limit=\(pageSize)"
         if let etFilter = entityTypeFilter {
             path += "&entityTypeId=\(etFilter)"
         }
@@ -434,7 +441,7 @@ final class CaseManagementViewModel {
 
         do {
             let response: InteractionListResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/records/\(recordId)/interactions") + "?limit=100"
+                method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)/interactions") + "?limit=100"
             )
             interactions = response.interactions
         } catch {
@@ -449,7 +456,7 @@ final class CaseManagementViewModel {
 
         do {
             let response: RecordContactsResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/records/\(recordId)/contacts")
+                method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)/contacts")
             )
             contacts = response.contacts
         } catch {
@@ -464,7 +471,7 @@ final class CaseManagementViewModel {
 
         do {
             let response: EvidenceListResponse = try await apiService.request(
-                method: "GET", path: apiService.hp("/api/records/\(recordId)/evidence") + "?limit=100"
+                method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)/evidence") + "?limit=100"
             )
             evidence = response.evidence
         } catch {
@@ -481,7 +488,7 @@ final class CaseManagementViewModel {
 
         do {
             let _: SharedRecordListResponseRecord = try await apiService.request(
-                method: "PATCH", path: apiService.hp("/api/records/\(recordId)"),
+                method: "PATCH", path: try apiService.activeHubPath("/api/records/\(recordId)"),
                 body: UpdateRecordRequest(statusHash: newStatus, severityHash: nil)
             )
             await loadRecords()
@@ -489,7 +496,7 @@ final class CaseManagementViewModel {
                 // Refresh selected record
                 do {
                     let fresh: SharedRecordListResponseRecord = try await apiService.request(
-                        method: "GET", path: apiService.hp("/api/records/\(recordId)")
+                        method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh
                     // Reload timeline to reflect status change interaction
@@ -547,7 +554,7 @@ final class CaseManagementViewModel {
             // encoder's `.convertToSnakeCase` would rewrite them (and
             // `contentEnvelopes`) into keys the route validator rejects.
             let _: CaseInteraction = try await apiService.request(
-                method: "POST", path: apiService.hp("/api/records/\(recordId)/interactions"),
+                method: "POST", path: try apiService.activeHubPath("/api/records/\(recordId)/interactions"),
                 wireBody: body
             )
 
@@ -568,7 +575,7 @@ final class CaseManagementViewModel {
 
         do {
             try await apiService.request(
-                method: "POST", path: apiService.hp("/api/records/\(recordId)/assign"),
+                method: "POST", path: try apiService.activeHubPath("/api/records/\(recordId)/assign"),
                 body: AssignRecordRequest(pubkeys: [pubkey])
             )
             await loadRecords()
@@ -576,7 +583,7 @@ final class CaseManagementViewModel {
             if selectedRecord?.id == recordId {
                 do {
                     let fresh: SharedRecordListResponseRecord = try await apiService.request(
-                        method: "GET", path: apiService.hp("/api/records/\(recordId)")
+                        method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh
                 } catch { /* keep stale */ }
@@ -595,7 +602,7 @@ final class CaseManagementViewModel {
 
         do {
             try await apiService.request(
-                method: "POST", path: apiService.hp("/api/records/\(recordId)/unassign"),
+                method: "POST", path: try apiService.activeHubPath("/api/records/\(recordId)/unassign"),
                 body: UnassignRecordRequest(pubkey: pubkey)
             )
             await loadRecords()
@@ -603,7 +610,7 @@ final class CaseManagementViewModel {
             if selectedRecord?.id == recordId {
                 do {
                     let fresh: SharedRecordListResponseRecord = try await apiService.request(
-                        method: "GET", path: apiService.hp("/api/records/\(recordId)")
+                        method: "GET", path: try apiService.activeHubPath("/api/records/\(recordId)")
                     )
                     selectedRecord = fresh
                 } catch { /* keep stale */ }

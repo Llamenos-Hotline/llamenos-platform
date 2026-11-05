@@ -17,8 +17,42 @@ import {
   evidenceAccessLogResponseSchema,
 } from '@protocol/schemas/evidence'
 import { authErrors, notFoundError } from '../openapi/helpers'
+import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
+import { ServiceError } from '../services/settings'
 
 const evidence = new Hono<AppEnv>()
+
+// Evidence belongs to a case record, and a record belongs to a hub, so these
+// routes are served only under /hubs/:hubId (#2461). The router is mounted at
+// `/`, and Hono applies a sub-app's middleware by PATH across the whole parent,
+// so the guards name this router's own paths exactly — `/records/*` would also
+// run on every route of the records router. `hubOnly` first: a stray unscoped
+// mount answers 404 before any handler runs.
+evidence.use('/records/:id/evidence', hubOnly)
+evidence.use('/evidence/*', hubOnly)
+
+// Every route may only touch evidence of a record in the path hub; another
+// hub's record or evidence is a 404, the same as a missing one. Past these
+// guards `pathHubId(c)` IS the evidence's hub — the subject handlers audit with.
+evidence.use('/records/:id/evidence', resourceInPathHub({
+  param: 'id',
+  load: async (services, id, hubId) => assertInHub(await services.cases.get(id), hubId, 'Record not found'),
+}))
+evidence.use('/evidence/:evidenceId/*', resourceInPathHub({
+  param: 'evidenceId',
+  load: async (services, id, hubId) => {
+    const item = await services.cases.getEvidence(id)
+    let record
+    try {
+      record = await services.cases.get(item.caseId)
+    } catch (err) {
+      // Evidence whose record is gone is in no hub, so not in this one either.
+      if (err instanceof ServiceError && err.status === 404) throw new ServiceError(404, 'Evidence not found')
+      throw err
+    }
+    return assertInHub(record, hubId, 'Evidence not found')
+  },
+}))
 
 // ============================================================
 // Permission guards that also write a denied-access entry to the
@@ -81,13 +115,11 @@ function deviceCtx(c: Context<AppEnv>): { request: Request; hmacSecret: string }
 }
 
 /**
- * Scope evidence access-log entries to the current hub, same as every other
- * hub-aware audit call (e.g. bans.ts). Evidence routes are mounted both
- * globally and under /hubs/:hubId — undefined outside a hub-scoped request,
- * matching the hub scoping of the case record the evidence belongs to.
+ * Scope evidence access-log entries to the hub of the record the evidence
+ * belongs to — past the guards above, that is the path hub.
  */
-function hubIdOf(c: Context<AppEnv>): string | null {
-  return c.get('hubId') ?? null
+function hubIdOf(c: Context<AppEnv>): string {
+  return pathHubId(c)
 }
 
 // ============================================================
@@ -302,8 +334,7 @@ evidence.get('/evidence/:evidenceId/access-log',
   async (c) => {
     const evidenceId = c.req.param('evidenceId')
     const services = c.get('services')
-    const hubId = c.get('hubId')
-    const entries = await services.audit.listForEvidence(evidenceId, hubId ?? undefined)
+    const entries = await services.audit.listForEvidence(evidenceId, pathHubId(c))
     return c.json({ entries, total: entries.length })
   },
 )
