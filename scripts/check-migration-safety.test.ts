@@ -37,6 +37,7 @@ import {
   parseAnnotations,
   builtSchema,
   parseBackupEntry,
+  judge,
 } from './check-migration-safety'
 import { MigrationGraph, prefixOf, TIMESTAMP_PREFIX } from './lib/migration-graph'
 import { listMigrationFiles } from './lib/migration-statements'
@@ -378,6 +379,22 @@ describe('schema contract', () => {
     ])
   })
 
+  test('a column becomes NOT NULL only where a constrain annotation admitted its SET NOT NULL, and only that column', () => {
+    const tightened = withUsers(
+      previousUsers.map((c) => (c.name === 'team_id' || c.name === 'display_name' ? { ...c, notNull: true } : c)),
+    )
+    expect(compareSchemas(PREVIOUS, tightened, new Set(['public.users.team_id']))).toEqual([
+      'column public.users.display_name became NOT NULL',
+    ])
+    // A licence for a column on another table, or of the same name elsewhere, licenses nothing here.
+    expect(compareSchemas(PREVIOUS, tightened, new Set(['public.notes.team_id', 'public.users.team']))).toHaveLength(2)
+    // It licenses nullability only: a type change on the same column is still refused.
+    const retyped = withUsers(previousUsers.map((c) => (c.name === 'team_id' ? { ...c, notNull: true, type: 'uuid' } : c)))
+    expect(compareSchemas(PREVIOUS, retyped, new Set(['public.users.team_id']))).toEqual([
+      'column public.users.team_id changed type text → uuid',
+    ])
+  })
+
   test('a column or table the previous release declares may be forgotten, unless INSERTs that omit it would fail', () => {
     // Forgetting is the step before contracting: the code stops declaring
     // it, the database keeps it, and the previous release still finds it.
@@ -440,9 +457,24 @@ describe('annotations', () => {
       parseAnnotations(
         '-- migration-safety: allow column public.users.team_id because 1.4 stopped reading it (#1)\nALTER TABLE users DROP COLUMN team_id',
       ),
-    ).toEqual({ annotations: [{ object: 'column public.users.team_id', reason: '1.4 stopped reading it (#1)' }], malformed: [] })
+    ).toEqual({
+      annotations: [{ verb: 'allow', object: 'column public.users.team_id', reason: '1.4 stopped reading it (#1)' }],
+      malformed: [],
+    })
     expect(parseAnnotations('-- migration-safety: allow column public.users.team_id').malformed).toHaveLength(1)
     expect(parseAnnotations('-- migration-safety allow nothing\nSELECT 1')).toEqual({ annotations: [], malformed: [] })
+  })
+
+  test('constrain is its own verb, needs a reason, and no other verb parses', () => {
+    expect(
+      parseAnnotations(
+        '-- migration-safety: constrain column public.t.c because 1.4 refuses to write a row without c (#1)\nALTER TABLE t ALTER COLUMN c SET NOT NULL',
+      ).annotations,
+    ).toEqual([{ verb: 'constrain', object: 'column public.t.c', reason: '1.4 refuses to write a row without c (#1)' }])
+    expect(parseAnnotations('-- migration-safety: constrain column public.t.c').malformed).toHaveLength(1)
+    // A blanket form is not a form: it is reported, and fails the gate.
+    expect(parseAnnotations('-- migration-safety: constrain all because the whole repo is reviewed anyway').malformed).toHaveLength(1)
+    expect(parseAnnotations('-- migration-safety: permit column public.t.c because it is fine really').malformed).toHaveLength(1)
   })
 })
 
@@ -774,6 +806,250 @@ describe('--ci end to end, with no database', () => {
     for (const argv of [[], ['--ci', '--target']]) {
       const r = Bun.spawnSync([process.execPath, join(ROOT, 'scripts', 'check-migration-safety.ts'), ...argv])
       expect(r.exitCode).toBe(2)
+    }
+  })
+})
+
+// ── Tightening a column the previous release still uses (#2468) ─────────────
+
+/**
+ * The defect class #2468 is about: `active_calls.hub_id` is nullable in the
+ * base tree, and the application refuses hubless calls since #2467, but the
+ * schema only enforces that once a migration may SET NOT NULL / add the FK.
+ * The gate must still refuse that migration unannotated, admit it with a
+ * reviewed `constrain` annotation, and let the annotation license nothing
+ * beyond its own statement.
+ */
+describe('constrain: a reviewed tightening of a column the previous release still uses', () => {
+  const SET_HUB_NOT_NULL = 'ALTER TABLE "active_calls" ALTER COLUMN "hub_id" SET NOT NULL;'
+  const SET_RECORD_HUB_NOT_NULL = 'ALTER TABLE "call_records" ALTER COLUMN "hub_id" SET NOT NULL;'
+  const HUB_FK =
+    'ALTER TABLE "active_calls" ADD CONSTRAINT "active_calls_hub_id_hubs_id_fk" FOREIGN KEY ("hub_id") REFERENCES "public"."hubs"("id") ON DELETE cascade ON UPDATE no action;'
+  const HUB_CHECK = `ALTER TABLE "active_calls" ADD CONSTRAINT "active_calls_hub_id_not_blank" CHECK ("hub_id" <> '');`
+  const REASON = 'CallsService refuses a call without a hub since #2467, so the previous release never writes NULL'
+  const constrain = (object: string, reason = REASON) => `-- migration-safety: constrain ${object} because ${reason}\n`
+  const HUB = 'column public.active_calls.hub_id'
+  const RECORD_HUB = 'column public.call_records.hub_id'
+
+  /** Release N's drizzle schema: the newest snapshot, with `columns` declared NOT NULL. */
+  function declareNotNull(root: string, ...columns: [table: string, column: string][]): void {
+    const meta = join(migrationsOf(root), 'meta')
+    const s = JSON.parse(readFileSync(join(meta, newestSnapshotFile(meta)), 'utf-8')) as DrizzleSnapshot & { id: string }
+    s.id = randomUUID()
+    for (const [t, c] of columns) s.tables[`public.${t}`].columns[c].notNull = true
+    writeFileSync(join(meta, '9990_snapshot.json'), JSON.stringify(s))
+  }
+
+  test('GATE THE GATE: an unannotated SET NOT NULL on an existing column is refused with the message it always had', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_hub_not_null.sql', SET_HUB_NOT_NULL)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(
+        '9990_hub_not_null.sql statement 0: set-not-null column public.active_calls.hub_id: the previous release ' +
+          'may still write NULL, or omit the column on INSERT. Use expand/contract (docs/runbooks/migrations.md).',
+      )
+      expect(r.out).toMatch(/schema contract vs \S+: column public\.active_calls\.hub_id became NOT NULL/)
+      expect(r.out).toContain('FAILED: 2 violation(s)')
+    })
+  })
+
+  test('GATE THE GATE: an unannotated FK or CHECK on an existing column is refused with the message it always had', () => {
+    for (const [sql, contype] of [
+      [HUB_FK, 'CONSTR_FOREIGN'],
+      [HUB_CHECK, 'CONSTR_CHECK'],
+    ] as const) {
+      withRepo((root, base) => {
+        addMigration(root, '9990_hub_fk.sql', sql)
+        const r = runCi(root, base)
+        expect(r.code).toBe(1)
+        expect(r.out).toContain(
+          `9990_hub_fk.sql statement 0: add-constraint-existing column public.active_calls.hub_id [${contype}]: ` +
+            'the previous release writes rows the new constraint rejects. Use expand/contract (docs/runbooks/migrations.md).',
+        )
+      })
+    }
+  })
+
+  test('an annotated SET NOT NULL is admitted, part 3 accepts that column becoming NOT NULL, and the reason is printed', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_hub_not_null.sql', constrain(HUB) + SET_HUB_NOT_NULL)
+      const r = runCi(root, base)
+      expect(r.out).toContain('1 tightening(s) admitted by constrain annotations')
+      expect(r.out).toContain(`9990_hub_not_null.sql statement 0: set-not-null ${HUB} admitted by constrain annotation: because ${REASON}`)
+      expect(r.out).not.toContain('became NOT NULL')
+      expect(r.code).toBe(0)
+    })
+  })
+
+  test('annotated FK and CHECK additions are admitted, including the DO block drizzle wraps an FK in', () => {
+    withRepo((root, base) => {
+      addMigration(
+        root,
+        '9990_hub_constraints.sql',
+        [
+          constrain(HUB) + HUB_FK,
+          constrain(HUB) + HUB_CHECK,
+          constrain(HUB) + `DO $$ BEGIN\n ${HUB_FK}\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;`,
+        ].join('\n--> statement-breakpoint\n'),
+      )
+      const r = runCi(root, base)
+      expect(r.out).toContain('3 tightening(s) admitted by constrain annotations')
+      expect(r.code).toBe(0)
+    })
+  })
+
+  test('GATE THE GATE: an annotation on migration A does not license an unannotated tightening in migration B', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'], ['call_records', 'hub_id'])
+      addMigration(root, '9990_a.sql', constrain(HUB) + SET_HUB_NOT_NULL)
+      addMigration(root, '9991_b.sql', SET_RECORD_HUB_NOT_NULL)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`9991_b.sql statement 0: set-not-null ${RECORD_HUB}: the previous release may still write NULL`)
+      expect(r.out).toMatch(/schema contract vs \S+: column public\.call_records\.hub_id became NOT NULL/)
+      // A's own tightening stays admitted, and its column is not reported.
+      expect(r.out).toContain(`9990_a.sql statement 0: set-not-null ${HUB} admitted by constrain annotation`)
+      expect(r.out).not.toContain('column public.active_calls.hub_id became NOT NULL')
+      expect(r.out).toContain('FAILED: 2 violation(s)')
+    })
+  })
+
+  test('GATE THE GATE: the same column in migration B is still refused, though A annotated it', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_a.sql', constrain(HUB) + SET_HUB_NOT_NULL)
+      addMigration(root, '9991_b.sql', HUB_FK)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`9991_b.sql statement 0: add-constraint-existing ${HUB} [CONSTR_FOREIGN]`)
+      expect(r.out).toContain('FAILED: 1 violation(s)')
+    })
+  })
+
+  test('GATE THE GATE: an annotation licenses its own statement only, not the next one in the same file', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_a.sql', `${constrain(HUB)}${SET_HUB_NOT_NULL}\n--> statement-breakpoint\n${HUB_FK}`)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`9990_a.sql statement 1: add-constraint-existing ${HUB} [CONSTR_FOREIGN]`)
+    })
+  })
+
+  test('GATE THE GATE: an annotation placed in another migration matches nothing there, and licenses nothing here', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_a.sql', `${constrain(HUB)}CREATE TABLE scratch_t (x text);`)
+      addMigration(root, '9991_b.sql', SET_HUB_NOT_NULL)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`9990_a.sql statement 0: the annotation for ${HUB} matches no finding in this statement`)
+      expect(r.out).toContain(`9991_b.sql statement 0: set-not-null ${HUB}: the previous release may still write NULL`)
+      expect(r.out).toMatch(/column public\.active_calls\.hub_id became NOT NULL/)
+    })
+  })
+
+  test('a constrain annotation is refused when it is a token, disagrees with the schema, or covers a contraction', () => {
+    const cases: [string, (root: string) => void, string][] = [
+      [
+        'a reason that is a token',
+        (root) => {
+          declareNotNull(root, ['active_calls', 'hub_id'])
+          addMigration(root, '9990_x.sql', constrain(HUB, 'reviewed') + SET_HUB_NOT_NULL)
+        },
+        `the constrain annotation for ${HUB} is rejected: its reason "reviewed" is 1 word(s)`,
+      ],
+      [
+        'a SET NOT NULL the drizzle schema does not declare',
+        (root) => addMigration(root, '9990_x.sql', constrain(HUB) + SET_HUB_NOT_NULL),
+        `the constrain annotation for ${HUB} is rejected: the release being deployed declares it nullable`,
+      ],
+      [
+        'a column the release being deployed no longer declares',
+        (root) => {
+          const meta = join(migrationsOf(root), 'meta')
+          const s = JSON.parse(readFileSync(join(meta, newestSnapshotFile(meta)), 'utf-8')) as DrizzleSnapshot & { id: string }
+          s.id = randomUUID()
+          delete s.tables['public.active_calls'].columns.hub_id
+          writeFileSync(join(meta, '9990_snapshot.json'), JSON.stringify(s))
+          addMigration(root, '9990_x.sql', constrain(HUB) + HUB_FK)
+        },
+        `the constrain annotation for ${HUB} is rejected: the release being deployed does not declare it`,
+      ],
+      [
+        'a drop',
+        (root) => addMigration(root, '9990_x.sql', constrain('column public.users.team_id') + DROP_TEAM_ID),
+        'constrain admits only set-not-null, add-constraint-existing, unique-index-existing, and this statement\'s findings on it are drop-column',
+      ],
+    ]
+    for (const [name, mutate, expected] of cases) {
+      withRepo((root, base) => {
+        mutate(root)
+        const r = runCi(root, base)
+        expect(r.code, name).toBe(1)
+        expect(r.out, name).toContain(expected)
+        expect(r.out, name).not.toContain('admitted by constrain annotation')
+      })
+    }
+  })
+
+  test('constrain admits the tightening only: a retype of the same column in the same statement is still refused', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(
+        root,
+        '9990_x.sql',
+        `${constrain(HUB)}ALTER TABLE "active_calls" ALTER COLUMN "hub_id" SET NOT NULL, ALTER COLUMN "hub_id" SET DATA TYPE varchar(64);`,
+      )
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`9990_x.sql statement 0: alter-column-type ${HUB}`)
+      expect(r.out).toContain(`9990_x.sql statement 0: set-not-null ${HUB} admitted by constrain annotation`)
+      expect(r.out).toContain('FAILED: 1 violation(s)')
+    })
+  })
+
+  test('allow is not a way around it: allow on a tightening is refused, and points at constrain', () => {
+    withRepo((root, base) => {
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      addMigration(root, '9990_x.sql', allow(HUB) + SET_HUB_NOT_NULL)
+      const r = runCi(root, base)
+      expect(r.code).toBe(1)
+      expect(r.out).toContain(`the annotation for ${HUB} is rejected: the release being replaced`)
+      expect(r.out).toContain(`annotate \`-- migration-safety: constrain ${HUB} because`)
+      expect(r.out).toContain(`9990_x.sql statement 0: set-not-null ${HUB}: the previous release may still write NULL`)
+    })
+  })
+
+  test('judged against a real catalog (the --target input) the outcome is the same: refused bare, admitted annotated', async () => {
+    const { root } = scratchRepo()
+    try {
+      const migrations = migrationsOf(root)
+      const settled = listMigrationFiles(migrations)
+      const shipped = builtSchema(MigrationGraph.load(join(migrations, 'meta')), settled).snapshot
+      declareNotNull(root, ['active_calls', 'hub_id'])
+      const input = (sql: string) => {
+        addMigration(root, '9990_hub_not_null.sql', sql)
+        return { root, settled, pending: ['9990_hub_not_null.sql'], live: catalogOf(shipped), preflight: [] }
+      }
+
+      const bare = await judge(input(SET_HUB_NOT_NULL))
+      expect(bare.violations.map((v) => v.message)).toEqual([
+        expect.stringContaining(`9990_hub_not_null.sql statement 0: set-not-null ${HUB}: the previous release may still write NULL`),
+        expect.stringMatching(/column public\.active_calls\.hub_id became NOT NULL$/),
+      ])
+      expect(bare.constrained).toEqual([])
+
+      const annotated = await judge(input(constrain(HUB) + SET_HUB_NOT_NULL))
+      expect(annotated.violations).toEqual([])
+      expect(annotated.constrained).toEqual([
+        { file: '9990_hub_not_null.sql', statementIndex: 0, finding: `set-not-null ${HUB}`, reason: REASON },
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })

@@ -288,6 +288,56 @@ describe('migration safety gate --target', () => {
     expect(contracted.status).toBe(0)
   })
 
+  it('GATE THE GATE (#2468): a SET NOT NULL on a column the database holds is refused bare, admitted by constrain, and the data is still Postgres\'s to check', async () => {
+    const db = await createDatabase(template)
+    const root = scratchRoot()
+    const meta = path.join(root, 'drizzle', 'migrations', 'meta')
+    // Release N declares active_calls.hub_id NOT NULL, as db:generate would write it.
+    const { heads, schema } = MigrationGraph.load(meta).state()
+    const body = structuredClone(schema) as { tables: Record<string, { columns: Record<string, { notNull: boolean }> }> }
+    body.tables['public.active_calls'].columns.hub_id.notNull = true
+    writeFileSync(
+      path.join(meta, `${CONTRACT}_snapshot.json`),
+      JSON.stringify({ id: randomUUID(), prevId: heads[0].id, prevIds: heads.map((h) => h.id), ...body }),
+    )
+    const file = `${CONTRACT}_active_calls_hub_not_null.sql`
+    const setNotNull = 'ALTER TABLE "active_calls" ALTER COLUMN "hub_id" SET NOT NULL;'
+    const reason = 'CallsService refuses a call without a hub since #2467, so the running release never writes NULL'
+
+    addMigration(root, file, setNotNull)
+    const bare = gate(db, { root })
+    expect(bare.status).toBe(1)
+    expect(bare.output).toContain(
+      `${file} statement 0: set-not-null column public.active_calls.hub_id: the previous release may still write NULL, ` +
+        'or omit the column on INSERT. Use expand/contract (docs/runbooks/migrations.md).',
+    )
+    expect(bare.output).toContain('column public.active_calls.hub_id became NOT NULL')
+
+    addMigration(root, file, `-- migration-safety: constrain column public.active_calls.hub_id because ${reason}\n${setNotNull}`)
+    // A row the constraint rejects does not change the gate's judgement: it
+    // judges the migration and the releases, never the data. The data is
+    // Postgres's to check when the statement runs, and it refuses loudly.
+    await withDb(db, (sql) => sql`INSERT INTO active_calls (call_id, hub_id) VALUES ('hubless-call', NULL)`)
+    const annotated = gate(db, { root })
+    expect(annotated.output).toContain(
+      `${file} statement 0: set-not-null column public.active_calls.hub_id admitted by constrain annotation: because ${reason}`,
+    )
+    expect(annotated.status).toBe(0)
+    expect(() => migrate(db, path.join(root, 'drizzle', 'migrations'))).toThrow(/contains null values/)
+    const ledgered = await withDb(db, (sql) => sql`SELECT 1 FROM ${sql(LEDGER)} WHERE filename = ${file} AND applied_at IS NOT NULL`)
+    expect(ledgered).toHaveLength(0)
+
+    // Once the violating row is gone, the same migration applies.
+    await withDb(db, (sql) => sql`DELETE FROM active_calls WHERE call_id = 'hubless-call'`)
+    migrate(db, path.join(root, 'drizzle', 'migrations'))
+    const [{ is_nullable }] = await withDb(
+      db,
+      (sql) =>
+        sql<{ is_nullable: string }[]>`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'active_calls' AND column_name = 'hub_id'`,
+    )
+    expect(is_nullable).toBe('NO')
+  })
+
   it('reports a ledger the runner would refuse before the deploy, not after', async () => {
     const db = await createDatabase(template)
     await withDb(db, (sql) => sql`UPDATE ${sql(LEDGER)} SET checksum = 'tampered' WHERE filename = '0024_ep03_teams_tags.sql'`)
