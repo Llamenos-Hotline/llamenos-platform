@@ -37,7 +37,7 @@ const logger = createLogger('telephony')
  * operator-uploaded prompts as signed URLs, plus the worker's own hold track
  * (#2298) — so no adapter ever has to name a media host.
  */
-async function audioUrlsFor(c: Context<AppEnv>, hubId: string | undefined) {
+async function audioUrlsFor(c: Context<AppEnv>, hubId: string) {
   const origin = new URL(c.req.url).origin
   return {
     ...(await buildAudioUrlMap(c.get('services').settings, origin, c.env.HMAC_SECRET, hubId)),
@@ -74,13 +74,9 @@ const OVER_LIMIT_INCIDENT_KIND = {
  * signal carries a hub and a kind, never the caller's number or the call SID.
  *
  * A failure here must not cost the caller their response, so it is logged
- * loudly rather than thrown; a call with no hub has nobody to tell.
+ * loudly rather than thrown.
  */
-async function signalSpam(services: Services, hubId: string | undefined, kind: IncidentKind<'spam'>): Promise<void> {
-  if (!hubId) {
-    logger.warn('Spam defence acted on a call that resolved to no hub — no incident to raise', { kind })
-    return
-  }
+async function signalSpam(services: Services, hubId: string, kind: IncidentKind<'spam'>): Promise<void> {
   try {
     await services.incidents.signal(hubId, 'spam', kind)
   } catch (err) {
@@ -92,7 +88,7 @@ interface RefusedCall {
   callSid: string
   callerNumber: string
   callerLanguage: string
-  hubId: string | undefined
+  hubId: string
 }
 
 /**
@@ -132,7 +128,7 @@ async function refuseLiveCall(
         hubId: call.hubId,
       })
     case 'voicemail': {
-      await services.calls.addCall(call.hubId ?? '', {
+      await services.calls.addCall(call.hubId, {
         callId: call.callSid,
         callerNumberSealed: sealCallerNumber(call.callerNumber, call.callSid, c.env.SERVER_KEK),
         status: 'ringing',
@@ -178,6 +174,66 @@ async function getHubAdapter(env: Env, services: Services, hubId: string | undef
     return getHubTelephonyFromService(env, services.settings, hubId)
   }
   return getTelephonyFromService(env, services.settings)
+}
+
+/**
+ * The active hub that owns the number a call was placed to, or null when none
+ * does. Only "no such hub" is null; any other failure is thrown, so a database
+ * error is never mistaken for an unrouted number.
+ */
+async function hubForCalledNumber(services: Services, calledNumber: string | undefined): Promise<string | null> {
+  if (!calledNumber) return null
+  try {
+    const { hub } = await services.settings.getHubByPhone(calledNumber)
+    return hub.id
+  } catch (err) {
+    if (err instanceof ServiceError && err.status === 404) return null
+    throw err
+  }
+}
+
+/**
+ * A call to a number no active hub owns is refused (#2460), the way a
+ * messaging webhook that names no hub is (#2395). A call that belongs to no hub
+ * has no one entitled to answer it, no admin who can read its record, and no
+ * hub in which to file a note on it — accepting it is deciding all of that
+ * silently. Refusing it is loud instead (rule V): an error log, a counter, and
+ * a PLATFORM-scope `routing/unrouted_number` incident for the instance's
+ * operators, since there is no hub to raise it in. Neither the caller's
+ * number nor the dialled number is kept.
+ */
+async function signalUnroutedCall(services: Services, calledNumberPresent: boolean): Promise<void> {
+  logger.error('Incoming call to a number no active hub owns — refused. Set the hub\'s phone number to the number the provider delivers (#2460)', {
+    calledNumberPresent,
+  })
+  incCounter('llamenos_call_unrouted_total', { called_number: calledNumberPresent ? 'unmatched' : 'absent' })
+  try {
+    await services.incidents.signalPlatform('routing', 'unrouted_number')
+  } catch (err) {
+    logger.error('Could not record the unrouted-call incident — this refusal is visible in the log and metric only', { error: err })
+  }
+}
+
+/**
+ * The hub a mid-call webhook is for, from its `?hub=`. Every callback URL this
+ * server hands a provider names the call's hub, because /incoming refuses a
+ * call that resolves to none (#2460); a mid-call webhook without one is not
+ * part of any call we accepted. It is refused loudly and the leg is ended —
+ * never served as though it belonged to some hub.
+ */
+async function webhookHub(
+  c: Context<AppEnv>,
+  route: string,
+): Promise<{ hubId: string; adapter: TelephonyAdapter } | { refused: Response }> {
+  const services = c.get('services')
+  const hubId = new URL(c.req.url).searchParams.get('hub')
+  if (!hubId) {
+    logger.error(`Telephony webhook ${route} names no hub — refused (#2460)`)
+    incCounter('llamenos_telephony_hubless_webhook_total', { route })
+    const platform = (await getTelephonyFromService(c.env, services.settings))!
+    return { refused: telephonyResponse(platform.hangupResponse()) }
+  }
+  return { hubId, adapter: (await getHubAdapter(c.env, services, hubId))! }
 }
 
 /** Every refusal reads the same — never reveal which check refused, or whether telephony is set up. */
@@ -384,29 +440,27 @@ telephony.post('/incoming',
   const { callSid, callerNumber, calledNumber } = await globalAdapter.parseIncomingWebhook(c.req.raw)
   logger.info('Incoming call', { callSid })
 
-  // Look up which hub owns the called phone number
-  let hubId: string | undefined
-  if (calledNumber) {
-    try {
-      const { hub } = await services.settings.getHubByPhone(calledNumber)
-      hubId = hub.id
-      logger.info('Resolved hub for incoming call', { hubId })
-      // `/incoming` names no hub in its URL, so its accepted traffic is
-      // attributed here (the provider-auth traffic discriminator, #2330).
-      providerAuthMonitor.recordAccepted(hubId)
-    } catch {
-      // No hub found for this number
-    }
+  // The call belongs to the hub that owns the number it was placed to — and a
+  // number no active hub owns is refused, unanswered and uncharged (#2460).
+  // Nothing about the call is recorded: it has no hub to belong to.
+  const hubId = await hubForCalledNumber(services, calledNumber)
+  if (!hubId) {
+    await signalUnroutedCall(services, !!calledNumber)
+    return telephonyResponse(globalAdapter.rejectCall())
   }
+  logger.info('Resolved hub for incoming call', { hubId })
+  // `/incoming` names no hub in its URL, so its accepted traffic is
+  // attributed here (the provider-auth traffic discriminator, #2330).
+  providerAuthMonitor.recordAccepted(hubId)
 
   // Use hub-scoped adapter for all subsequent operations
-  const adapter = hubId ? ((await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? globalAdapter) : globalAdapter
+  const adapter = (await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? globalAdapter
 
   // #2309: the provider now keeps a log record of this call, naming the
   // caller's number. Where its API can delete one, it is tracked from the first
   // webhook — banned calls included — and deleted once the call has ended.
   if (adapter.deleteCallLog) {
-    await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid: callSid, kind: 'call-log', adapter })
+    await services.providerRecordings.track({ hubId, callId: callSid, recordingSid: callSid, kind: 'call-log', adapter })
   }
 
   // The hub's own voice switch (#2384). Refused before anything rings or is
@@ -450,9 +504,10 @@ telephony.post('/language-selected',
   }),
   async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
+  const resolved = await webhookHub(c, '/language-selected')
+  if ('refused' in resolved) return resolved.refused
+  const { hubId, adapter } = resolved
   const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { callSid, callerNumber, digits } = await adapter.parseLanguageWebhook(c.req.raw)
   const isAuto = url.searchParams.get('auto') === '1'
 
@@ -485,7 +540,7 @@ telephony.post('/language-selected',
   let rateLimited = false
   if (spamSettings.rateLimitEnabled) {
     const rlResult = await services.settings.checkRateLimit({
-      key: `phone:${hubId ? `${hubId}:` : ''}${callerRateLimitDigest(callerNumber)}`,
+      key: `phone:${hubId}:${callerRateLimitDigest(callerNumber)}`,
       maxPerMinute: spamSettings.maxCallsPerMinute,
     })
     rateLimited = rlResult.limited
@@ -534,8 +589,8 @@ telephony.post('/language-selected',
 
   if (!spamSettings.voiceCaptchaEnabled) {
     const origin = new URL(c.req.url).origin
-    logger.info('Starting parallel ringing', { callSid, origin, hubId: hubId || 'global' })
-    backgroundTask(c,startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
+    logger.info('Starting parallel ringing', { callSid, origin, hubId })
+    backgroundTask(c, startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId))
   }
 
   return telephonyResponse(response)
@@ -555,9 +610,10 @@ telephony.post('/captcha',
   }),
   async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
+  const resolved = await webhookHub(c, '/captcha')
+  if ('refused' in resolved) return resolved.refused
+  const { hubId, adapter } = resolved
   const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { digits, callerNumber } = await adapter.parseCaptchaWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
   const callerLang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
@@ -578,7 +634,7 @@ telephony.post('/captcha',
     case 'pass': {
       // Ringing starts on a pass and on nothing else.
       const origin = new URL(c.req.url).origin
-      backgroundTask(c, startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId ?? ''))
+      backgroundTask(c, startParallelRinging(callSid, callerNumber, origin, c.env, services, hubId))
       return telephonyResponse(await adapter.handleCaptchaResponse({
         outcome: 'pass', callSid, callerLanguage: callerLang, hubId, audioUrls: await audioUrlsFor(c, hubId), speechUrl,
       }))
@@ -624,7 +680,7 @@ telephony.post('/user-answer',
   // the hub. The answer is claimed below, and only for a leg that earned it.
   const callToken = url.searchParams.get('callToken') || ''
   const legToken = callToken ? await services.calls.resolveCallToken(callToken) : null
-  const adapter = (await getHubAdapter(c.env, services, legToken?.hubId || undefined))!
+  const adapter = (await getHubAdapter(c.env, services, legToken?.hubId))!
 
   // Whoever picks up this leg is a live phone call, not an API client: every
   // refusal below answers with TwiML that ends the leg, never a JSON error the
@@ -667,7 +723,7 @@ telephony.post('/user-answer',
   // no longer win).
   const winnerLegSid = legInfo?.callSid
   if (winnerLegSid) {
-    await cancelLosingLegs(c.env, services, hubId ?? '', parentCallSid, winnerLegSid)
+    await cancelLosingLegs(c.env, services, hubId, parentCallSid, winnerLegSid)
   } else {
     logger.warn('user-answer: winner leg SID not in webhook — not cancelling other legs', { parentCallSid })
   }
@@ -677,18 +733,18 @@ telephony.post('/user-answer',
     type: 'call:update',
     callId: parentCallSid,
     status: 'in-progress',
-  }, hubId ?? '')
+  }, hubId)
 
   publishEvent(c.env, KIND_PRESENCE_UPDATE, {
     type: 'presence:summary',
     callId: parentCallSid,
-  }, hubId ?? '')
+  }, hubId)
 
   const origin = new URL(c.req.url).origin
   // #1505: provider-side recording is opt-in per hub and OFF by default. The
   // caller was told in the greeting (/language-selected reads the same setting),
   // so recording here without disclosure is not reachable.
-  const { recordCalls } = await services.settings.getCallSettings(hubId || undefined)
+  const { recordCalls } = await services.settings.getCallSettings(hubId)
   const response = await adapter.handleCallAnswered({
     parentCallSid,
     callbackUrl: origin,
@@ -700,7 +756,7 @@ telephony.post('/user-answer',
   // The audit log is the accountability record: it says a volunteer answered
   // only once the bridge instruction exists, never before it. Anything above
   // that throws leaves the call un-audited instead of audited-but-unbridged.
-  await audit(services.audit, 'callAnswered', pubkey, {}, undefined, hubId || null)
+  await audit(services.audit, 'callAnswered', pubkey, {}, undefined, hubId)
 
   return telephonyResponse(response)
 })
@@ -730,15 +786,21 @@ telephony.post('/call-status',
   const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
   const parentCallSid = tokenData?.callSid || url.searchParams.get('parentCallSid') || ''
   const pubkey = tokenData?.volunteerPubkey || ''
-  const hubId = tokenData?.hubId || (await services.calls.getHubIdForCall(parentCallSid)) || undefined
+  const hubId = tokenData?.hubId || (await services.calls.getHubIdForCall(parentCallSid))
+  if (!hubId) {
+    // No call of ours: every call we accept belongs to a hub and is recorded
+    // before anything rings (#2460), so there is nothing to update.
+    logger.warn('Call status for a call with no record — ignored', { parentCallSid })
+    return telephonyResponse((await getTelephonyFromService(c.env, services.settings))!.emptyResponse())
+  }
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { status: callStatus } = await adapter.parseCallStatusWebhook(c.req.raw)
 
-  logger.info('Call status update', { status: callStatus, parentCallSid, hubId: hubId || 'global' })
+  logger.info('Call status update', { status: callStatus, parentCallSid, hubId })
 
   if (callStatus === 'completed' || callStatus === 'busy' || callStatus === 'no-answer' || callStatus === 'failed') {
     if (callStatus === 'completed') {
-      const preCalls = await services.calls.getActiveCalls(hubId ?? '')
+      const preCalls = await services.calls.getActiveCalls(hubId)
       const preCall = preCalls.find(call => call.callId === parentCallSid)
       logger.debug('Ending call', { parentCallSid, foundInActive: !!preCall })
 
@@ -751,7 +813,7 @@ telephony.post('/call-status',
       }
 
       try {
-        await services.calls.endCall(hubId ?? '', parentCallSid)
+        await services.calls.endCall(hubId, parentCallSid)
         logger.debug('Call end result', { parentCallSid, status: 200 })
 
         // Publish call completed event
@@ -759,14 +821,14 @@ telephony.post('/call-status',
           type: 'call:update',
           callId: parentCallSid,
           status: 'completed',
-        }, hubId ?? '')
+        }, hubId)
 
         const duration = preCall
           ? Math.floor((Date.now() - new Date(preCall.startedAt).getTime()) / 1000)
           : undefined
         await audit(services.audit, 'callEnded', pubkey, {
           duration,
-        }, undefined, hubId ?? null)
+        }, undefined, hubId)
       } catch {
         logger.debug('Call end result', { parentCallSid, status: 404 })
         // Already ended by /call-recording
@@ -780,9 +842,10 @@ telephony.post('/call-status',
 // --- Step 6: Wait music for queued callers ---
 telephony.all('/wait-music', validateWebhook, async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
+  const resolved = await webhookHub(c, '/wait-music')
+  if ('refused' in resolved) return resolved.refused
+  const { hubId, adapter } = resolved
   const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
   const queueTime = c.req.method === 'POST'
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
@@ -802,9 +865,10 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
 // --- Step 7: Queue exit -> voicemail if no one answered ---
 telephony.post('/queue-exit', validateWebhook, async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
+  const resolved = await webhookHub(c, '/queue-exit')
+  if ('refused' in resolved) return resolved.refused
+  const { hubId, adapter } = resolved
   const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { result: queueResult } = await adapter.parseQueueExitWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
@@ -812,16 +876,16 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   if (queueResult === 'hangup') {
     // Caller hung up while in queue — end the call as unanswered
     try {
-      await services.calls.endCall(hubId ?? '', callSid)
+      await services.calls.endCall(hubId, callSid)
     } catch (err) {
       // 404 = already ended. Anything else is a real failure and must not be swallowed.
       if (err instanceof ServiceError && err.status === 404) {
-        logger.warn('Queue hangup for a call with no active record', { callSid, hubId: hubId || 'global' })
+        logger.warn('Queue hangup for a call with no active record', { callSid, hubId })
       } else {
         throw err
       }
     }
-    await audit(services.audit, 'callMissed', 'system', { callSid }, undefined, hubId ?? null)
+    await audit(services.audit, 'callMissed', 'system', { callSid }, undefined, hubId)
     return telephonyResponse(adapter.emptyResponse())
   }
 
@@ -847,12 +911,41 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
 // --- Step 8: Voicemail recording complete ---
 telephony.post('/voicemail-complete', validateWebhook, async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
-  const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
+  const resolved = await webhookHub(c, '/voicemail-complete')
+  if ('refused' in resolved) return resolved.refused
+  const { adapter } = resolved
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
   return telephonyResponse(adapter.handleVoicemailComplete(lang, await speechUrlFor(c, adapter)))
 })
+
+/**
+ * A recording callback for a call we have no record of. Every call we accept
+ * belongs to a hub and is recorded before anything rings (#2460), so this is
+ * not one of ours — but the provider may still hold its audio, and with no
+ * hub there is no ledger to track it on. It is deleted at the provider now,
+ * and the outcome is logged and counted either way: caller audio is never
+ * left behind silently.
+ */
+async function refuseOrphanRecording(c: Context<AppEnv>, parentCallSid: string): Promise<Response> {
+  const services = c.get('services')
+  const adapter = (await getTelephonyFromService(c.env, services.settings))!
+  const { status, recordingSid } = await adapter.parseRecordingWebhook(c.req.raw)
+  logger.error('Call recording for a call with no record — it belongs to no hub (#2460)', { parentCallSid, status })
+  if (status !== 'completed') return telephonyResponse(adapter.emptyResponse())
+  if (!recordingSid) {
+    incCounter('llamenos_orphan_call_recording_total', { outcome: 'unaddressable' })
+    logger.error('Orphan call recording carries no handle — it cannot be deleted at the provider', { parentCallSid })
+    return telephonyResponse(adapter.emptyResponse())
+  }
+  try {
+    await adapter.deleteRecording(recordingSid)
+    incCounter('llamenos_orphan_call_recording_total', { outcome: 'deleted' })
+  } catch (err) {
+    incCounter('llamenos_orphan_call_recording_total', { outcome: 'kept' })
+    logger.error('Orphan call recording could not be deleted at the provider', { parentCallSid, error: err })
+  }
+  return telephonyResponse(adapter.emptyResponse())
+}
 
 // --- Step 9: Call recording status callback (bridged call recording) ---
 telephony.post('/call-recording', validateWebhook, async (c) => {
@@ -862,7 +955,8 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
   // CRIT-W1: Hub resolved from DB call record, not from URL param
   // CRIT-W2: Pubkey resolved from active call record (answeredBy), not URL param
   const parentCallSid = url.searchParams.get('parentCallSid') || ''
-  const hubId = (await services.calls.getHubIdForCall(parentCallSid)) || undefined
+  const hubId = await services.calls.getHubIdForCall(parentCallSid)
+  if (!hubId) return refuseOrphanRecording(c, parentCallSid)
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { status: recordingStatus, recordingSid, callSid: webhookCallSid } = await adapter.parseRecordingWebhook(c.req.raw)
 
@@ -875,26 +969,26 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
     // recording is indistinguishable from one that was never made.
     const callId = parentCallSid || webhookCallSid || ''
     if (recordingSid) {
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId, recordingSid, kind: 'call', adapter })
+      await services.providerRecordings.track({ hubId, callId, recordingSid, kind: 'call', adapter })
     } else {
-      await services.providerRecordings.trackUnaddressable({ hubId: hubId ?? '', callId, kind: 'call', adapter })
+      await services.providerRecordings.trackUnaddressable({ hubId, callId, kind: 'call', adapter })
     }
   }
 
   if (recordingStatus === 'completed' && parentCallSid) {
     // Get call info before ending (for audit); also resolves pubkey via answeredBy
-    const activeCallsList = await services.calls.getActiveCalls(hubId ?? '')
+    const activeCallsList = await services.calls.getActiveCalls(hubId)
     const callRecord = activeCallsList.find(call => call.callId === parentCallSid)
     const pubkey = callRecord?.answeredBy ?? ''
 
     // Recording completed means the bridge ended — end the call
     // (safety net in case /call-status doesn't fire)
     try {
-      await services.calls.endCall(hubId ?? '', parentCallSid)
+      await services.calls.endCall(hubId, parentCallSid)
       logger.info('Call recording completed', { parentCallSid, endStatus: 200 })
 
       if (pubkey) {
-        await audit(services.audit, 'callEnded', pubkey, {}, undefined, hubId ?? null)
+        await audit(services.audit, 'callEnded', pubkey, {}, undefined, hubId)
       }
     } catch {
       logger.info('Call recording completed', { parentCallSid, endStatus: 404 })
@@ -909,7 +1003,7 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
         env: c.env,
         services,
         adapter,
-        hubId: hubId ?? '',
+        hubId,
         callSid: parentCallSid,
         recordingSid,
         answeredBy: pubkey,
@@ -927,9 +1021,10 @@ telephony.post('/call-recording', validateWebhook, async (c) => {
 // --- Step 10: Voicemail recording status callback ---
 telephony.post('/voicemail-recording', validateWebhook, async (c) => {
   const url = new URL(c.req.url)
-  const hubId = url.searchParams.get('hub') || undefined
+  const resolved = await webhookHub(c, '/voicemail-recording')
+  if ('refused' in resolved) return resolved.refused
+  const { hubId, adapter } = resolved
   const services = c.get('services')
-  const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { status: recordingStatus, recordingSid } = await adapter.parseRecordingWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
 
@@ -941,19 +1036,19 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
     // handle the recording cannot be fetched or deleted, so it is tracked as
     // unaddressable residue rather than lost.
     if (recordingSid) {
-      await services.providerRecordings.track({ hubId: hubId ?? '', callId: callSid, recordingSid, kind: 'voicemail', adapter })
+      await services.providerRecordings.track({ hubId, callId: callSid, recordingSid, kind: 'voicemail', adapter })
     } else {
-      await services.providerRecordings.trackUnaddressable({ hubId: hubId ?? '', callId: callSid, kind: 'voicemail', adapter })
+      await services.providerRecordings.trackUnaddressable({ hubId, callId: callSid, kind: 'voicemail', adapter })
     }
 
     // Throws 404 if there is no call record at all — that would mean a message was left
     // for a call the hotline never recorded, which must be loud, not silent (#1043).
-    await services.calls.markVoicemail(hubId ?? '', callSid)
+    await services.calls.markVoicemail(hubId, callSid)
 
     // The caller has left a message and is done: close the call so it lands in history as
     // `unanswered` with hasVoicemail=true. (No-op if the caller's leg already ended it.)
     try {
-      await services.calls.endCall(hubId ?? '', callSid)
+      await services.calls.endCall(hubId, callSid)
     } catch (err) {
       if (!(err instanceof ServiceError && err.status === 404)) throw err
     }
@@ -962,9 +1057,9 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
     publishEvent(c.env, KIND_CALL_VOICEMAIL, {
       type: 'voicemail:new',
       callId: callSid,
-    }, hubId ?? '')
+    }, hubId)
 
-    await audit(services.audit, 'voicemailReceived', 'system', { callSid }, { request: c.req.raw, hmacSecret: c.env.HMAC_SECRET }, hubId ?? null)
+    await audit(services.audit, 'voicemailReceived', 'system', { callSid }, { request: c.req.raw, hmacSecret: c.env.HMAC_SECRET }, hubId)
 
     if (recordingSid) {
       // #2297: fetch, transcribe if enabled, then delete the provider's copy.
@@ -972,7 +1067,7 @@ telephony.post('/voicemail-recording', validateWebhook, async (c) => {
         env: c.env,
         services,
         adapter,
-        hubId: hubId ?? '',
+        hubId,
         callSid,
         recordingSid,
       }).then((outcome) => {

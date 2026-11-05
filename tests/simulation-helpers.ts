@@ -72,8 +72,8 @@ export interface SimulateIncomingCallOptions {
   callerNumber: string
   /** Language code (e.g., 'en', 'es'). Optional. */
   language?: string
-  /** Hub ID override. Optional. */
-  hubId?: string
+  /** The hub the call is placed to. Required: every call belongs to a hub (#2460). */
+  hubId: string
   /** When true, errors if the call would ring nobody (on shift / fallback group, available, hub access). Optional. */
   checkVolunteers?: boolean
 }
@@ -173,7 +173,7 @@ export async function simulateIncomingCallResponse(
   return postSimulationRaw<SimulateIncomingCallResult>(request, 'incoming-call', {
     callerNumber: options.callerNumber,
     ...(options.language ? { language: options.language } : {}),
-    ...(options.hubId ? { hubId: options.hubId } : {}),
+    hubId: options.hubId,
     ...(options.checkVolunteers ? { checkVolunteers: true } : {}),
   })
 }
@@ -201,7 +201,7 @@ export async function simulateIncomingCall(
     {
       callerNumber: options.callerNumber,
       ...(options.language ? { language: options.language } : {}),
-      ...(options.hubId ? { hubId: options.hubId } : {}),
+      hubId: options.hubId,
       ...(options.checkVolunteers ? { checkVolunteers: true } : {}),
     },
   )

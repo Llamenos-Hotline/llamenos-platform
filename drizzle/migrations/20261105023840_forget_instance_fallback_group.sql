@@ -1,0 +1,8 @@
+-- Forget step (docs/runbooks/migrations.md, expand/contract): the drizzle schema
+-- stops declaring system_settings.fallback_group — the instance-wide fallback
+-- group, which rang only calls that belonged to no hub (#2460). Such calls are
+-- refused now, and no code reads or writes the column. The generated
+-- `ALTER TABLE "system_settings" DROP COLUMN "fallback_group"` is deleted here:
+-- the previous release still selects the column, and it is NOT NULL with a
+-- default, so this release's INSERTs that omit it still succeed. A later
+-- release drops it, annotated, once no release that declares it is running.

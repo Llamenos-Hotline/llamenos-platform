@@ -271,6 +271,7 @@ test.describe('Simulation endpoint validation', () => {
     try {
       await simulateIncomingCall(request, {
         callerNumber: '',
+        hubId: crypto.randomUUID(),
       })
       // Should not reach here
       expect(true).toBe(false)

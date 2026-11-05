@@ -407,8 +407,13 @@ dev.post('/test-create-shift', async (c) => {
   if (!body.pubkey) {
     return c.json({ error: 'pubkey is required' }, 400)
   }
+  // A shift belongs to a hub; a hubless one would roster someone for calls
+  // that belong to no hub, which cannot exist (#2460).
+  if (!body.hubId) {
+    return c.json({ error: 'hubId is required' }, 400)
+  }
   const services = c.get('services')
-  const hubId = body.hubId ?? ''
+  const hubId = body.hubId
   try {
     const now = new Date()
     const currentDay = now.getUTCDay()
@@ -805,7 +810,8 @@ dev.delete('/test-seed-sample', async (c) => {
 interface SimulateIncomingCallBody {
   callerNumber: string
   language?: string
-  hubId?: string
+  /** The hub the call is placed to. Required: a call belongs to a hub (#2460). */
+  hubId: string
   /** When true, returns 422 if the call would ring nobody (same ring set as real telephony routing) */
   checkVolunteers?: boolean
 }
@@ -863,12 +869,24 @@ dev.post('/test-simulate/incoming-call', async (c) => {
     return c.json({ error: 'callerNumber is required' }, 400)
   }
 
+  // Real telephony refuses a call that resolves to no hub (#2460); a simulated
+  // one that could have none would let a test exercise a call no producer can
+  // create. It names an existing hub, or it is refused.
+  if (!body.hubId) {
+    return c.json({ error: 'hubId is required' }, 400)
+  }
   const callId = crypto.randomUUID()
   const services = c.get('services')
-  const hubId = body.hubId ?? ''
+  const hubId = body.hubId
+  try {
+    await services.settings.getHub(hubId)
+  } catch (err) {
+    if (err instanceof ServiceError && err.status === 404) return c.json({ error: 'Unknown hub' }, 404)
+    throw err
+  }
 
   // Check if the caller is banned (hash before lookup — mirrors real telephony flow)
-  const banned = await services.records.checkBan(banHashes(body.callerNumber, hubId || undefined, c.env.BAN_HASH_KEY), hubId || undefined)
+  const banned = await services.records.checkBan(banHashes(body.callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)
   if (banned) {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }
@@ -913,10 +931,11 @@ dev.post('/test-simulate/answer-call', async (c) => {
 
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
-  if (!call) return c.json({ error: 'Call not found' }, 404)
+  // Every call is created in a hub (#2460); a row without one is not a call.
+  if (!call?.hubId) return c.json({ error: 'Call not found' }, 404)
   let answered
   try {
-    answered = await services.calls.answerCall(call.hubId ?? '', body.callId, body.pubkey)
+    answered = await services.calls.answerCall(call.hubId, body.callId, body.pubkey)
   } catch (err) {
     if (err instanceof ServiceError && (err.status === 404 || err.status === 409)) {
       return c.json({ error: err.message }, err.status)
@@ -927,7 +946,7 @@ dev.post('/test-simulate/answer-call', async (c) => {
   // The simulated pickup stands in for a volunteer's phone leg being bridged
   // (/api/telephony/user-answer), which is where the real flow writes this entry.
   // The REST answer route no longer does for a leg it cannot bridge.
-  await audit(services.audit, 'callAnswered', body.pubkey, {}, undefined, answered.hubId || null)
+  await audit(services.audit, 'callAnswered', body.pubkey, {}, undefined, call.hubId)
 
   // Publish call update event (mirrors real telephony flow)
   // Await to ensure event is in relay before returning — prevents race conditions in E2E tests
@@ -935,13 +954,13 @@ dev.post('/test-simulate/answer-call', async (c) => {
     type: 'call:update',
     callId: body.callId,
     status: 'in-progress',
-  }, call.hubId ?? '')
+  }, call.hubId)
 
   // Publish presence update (mirrors real telephony flow)
   publishEvent(c.env, KIND_PRESENCE_UPDATE, {
     type: 'presence:summary',
     callId: body.callId,
-  }, call.hubId ?? '')
+  }, call.hubId)
 
   return c.json({ ok: true, callId: body.callId, status: 'in-progress' })
 })
@@ -958,15 +977,16 @@ dev.post('/test-simulate/end-call', async (c) => {
 
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
-  if (!call) return c.json({ error: 'Call not found' }, 404)
-  await services.calls.endCall(call.hubId ?? '', body.callId)
+  // Every call is created in a hub (#2460); a row without one is not a call.
+  if (!call?.hubId) return c.json({ error: 'Call not found' }, 404)
+  await services.calls.endCall(call.hubId, body.callId)
 
   // Publish call update event (mirrors real telephony flow)
   publishEvent(c.env, KIND_CALL_UPDATE, {
     type: 'call:update',
     callId: body.callId,
     status: 'completed',
-  }, call.hubId ?? '')
+  }, call.hubId)
 
   return c.json({ ok: true, callId: body.callId, status: 'completed' })
 })
@@ -983,15 +1003,16 @@ dev.post('/test-simulate/voicemail', async (c) => {
 
   const services = c.get('services')
   const call = await services.calls.getActiveCallByCallId(body.callId)
-  if (!call) return c.json({ error: 'Call not found' }, 404)
+  // Every call is created in a hub (#2460); a row without one is not a call.
+  if (!call?.hubId) return c.json({ error: 'Call not found' }, 404)
   // Voicemail = call ends without being answered → status becomes 'unanswered'
-  await services.calls.endCall(call.hubId ?? '', body.callId)
+  await services.calls.endCall(call.hubId, body.callId)
 
   // Publish voicemail event (mirrors real telephony flow)
   publishEvent(c.env, KIND_CALL_VOICEMAIL, {
     type: 'voicemail:new',
     callId: body.callId,
-  }, call.hubId ?? '')
+  }, call.hubId)
 
   return c.json({ ok: true, callId: body.callId, status: 'unanswered' })
 })
