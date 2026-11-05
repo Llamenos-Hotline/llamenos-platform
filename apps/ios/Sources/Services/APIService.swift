@@ -1031,18 +1031,15 @@ extension APIService {
         for index in 0..<totalChunks {
             let start = index * chunkSize
             let end = min(start + chunkSize, encryptedData.count)
-            try await putUploadChunk(
-                encryptedData.subdata(in: start..<end),
-                path: try activeHubPath("/api/uploads/\(started.uploadID)/chunks/\(index)")
-            )
+            try await putUploadChunk(encryptedData.subdata(in: start..<end), uploadID: started.uploadID, index: index)
         }
         return try await request(method: "POST", path: try activeHubPath("/api/uploads/\(started.uploadID)/complete"))
     }
 
     /// PUT one chunk as raw bytes — the JSON request helpers cannot carry a binary body.
-    private func putUploadChunk(_ chunk: Data, path: String) async throws {
+    private func putUploadChunk(_ chunk: Data, uploadID: String, index: Int) async throws {
         guard let baseURL else { throw APIError.noBaseURL }
-        let target = try Self.resolve(path: path, against: baseURL)
+        let target = try Self.resolve(path: try activeHubPath("/api/uploads/\(uploadID)/chunks/\(index)"), against: baseURL)
         var urlRequest = URLRequest(url: target.url)
         urlRequest.httpMethod = "PUT"
         urlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
