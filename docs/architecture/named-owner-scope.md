@@ -2,7 +2,7 @@
 
 Status: **design accepted (operator ruling, 2026-11-05). `bans` is converted in code. The SQL constraint is NOT enforced yet. It is blocked on an operator decision (see [Enforcement status](#enforcement-status)).**
 
-Related: #2459 (M1 invariant: no hubless data), #2464 (per-column companion map, which executes this plan), #2383 (applying a template changes every hub), #2460 / #2461 (the hub-`''` producers).
+Related: #2459 (M1 invariant: no hubless data; survey in `docs/audits/2026-11-04-hubless-data-survey.md`, #2466), #2464 (per-column companion map, which executes this plan), #2383 (applying a template changes every hub), #2460 / #2461 (the hub-`''` producers).
 
 ## The problem
 
