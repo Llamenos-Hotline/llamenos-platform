@@ -1169,9 +1169,7 @@ export class ErasureService {
     if (job.scope === 'hub') {
       if (this.blobMirrors) {
         const fileRows = await this.db.execute<{ id: string }>(sql`
-          SELECT f.id FROM files f
-          JOIN conversations c ON f.conversation_id = c.id
-          WHERE c.hub_id = ${job.hubId}
+          SELECT f.id FROM files f WHERE f.hub_id = ${job.hubId}
         `)
         const fileIds = fileRows.map(r => r.id)
         if (fileIds.length > 0) {

@@ -123,6 +123,14 @@ evidence.post('/records/:id/evidence',
     const services = c.get('services')
     const body = c.req.valid('json')
 
+    // The entry describes a file, so the file must exist: a completed upload
+    // made TO this case record, in this hub (#2462). An entry naming a file
+    // that was never uploaded is a custody chain whose subject is absent.
+    const file = await services.conversations.getCaseRecordFile(body.fileId, caseId)
+    const pathHub = c.get('hubId')
+    if (pathHub && file.hubId !== pathHub) return c.json({ error: 'File not found' }, 404)
+    if (file.status !== 'complete') return c.json({ error: 'File upload not complete' }, 400)
+
     const created = await services.cases.createEvidence(caseId, pubkey, {
       fileId: body.fileId,
       filename: body.filename,

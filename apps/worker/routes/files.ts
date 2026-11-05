@@ -9,11 +9,21 @@ import { incCounter } from './metrics'
 import { shareFileBodySchema, fileEnvelopesResponseSchema, fileMetadataResponseSchema } from '@protocol/schemas/files'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('routes.files')
 
+/**
+ * Encrypted file reads and sharing. Mounted ONLY under /hubs/:hubId (#2462):
+ * a file is read through its own hub, a file of another hub answers like a
+ * missing one, and `files:download-all` / `files:share` are the caller's
+ * permissions IN that hub. So the hub's own admins (whose role grants `files:*`
+ * in the hub) can read and re-share their hub's files, and a global role
+ * reaches a hub's files only through what it grants inside that hub.
+ */
 const files = new Hono<AppEnv>()
+files.use('*', hubOnly)
 
 // Download encrypted file content
 files.get('/:id/content',
@@ -35,7 +45,7 @@ files.get('/:id/content',
     const services = c.get('services')
 
     // Get file record to verify access
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
 
     if (fileRecord.status !== 'complete') {
       return c.json({ error: 'File upload not complete' }, 400)
@@ -109,7 +119,7 @@ files.get('/:id/envelopes',
     const permissions = c.get('permissions')
     const services = c.get('services')
 
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
     const envelopes = (fileRecord.recipientEnvelopes ?? []) as Array<{ pubkey: string }>
 
     const hasAccess = checkPermission(permissions, 'files:download-all') ||
@@ -154,7 +164,7 @@ files.get('/:id/metadata',
     const permissions = c.get('permissions')
     const services = c.get('services')
 
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
     const envelopes = (fileRecord.recipientEnvelopes ?? []) as Array<{ pubkey: string }>
     const metadataEntries = (fileRecord.encryptedMetadata ?? []) as Array<{ pubkey: string }>
 
@@ -189,6 +199,7 @@ files.post('/:id/share', requirePermission('files:share'),
           },
         },
       },
+      404: { description: 'File not found' },
       500: { description: 'Failed to share file' },
       ...authErrors,
     },
@@ -199,11 +210,13 @@ files.post('/:id/share', requirePermission('files:share'),
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
+    const hubId = pathHubId(c)
 
-    // Add the new envelope to the file record via service
+    // Only a file of this hub can be shared through it (404 otherwise).
+    await services.conversations.getFileInHub(fileId, hubId)
     await services.conversations.addFileRecipient(fileId, body.envelope, body.encryptedMetadata)
 
-    await audit(services.audit, 'fileShared', pubkey, { fileId, sharedWith: body.envelope.pubkey }, undefined, null)
+    await audit(services.audit, 'fileShared', pubkey, { fileId, sharedWith: body.envelope.pubkey }, undefined, hubId)
 
     return c.json({ ok: true })
   })

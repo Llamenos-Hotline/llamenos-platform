@@ -536,7 +536,7 @@ reports.get('/:id/files',
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    const filesList = await services.conversations.listFiles(id)
+    const filesList = await services.conversations.listConversationFiles(id, pathHubId(c))
     return c.json({ files: filesList })
   },
 )

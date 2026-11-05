@@ -3,11 +3,11 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
 import { uploadInitBodySchema, uploadInitResponseSchema, chunkUploadResponseSchema, uploadCompleteResponseSchema, uploadStatusResponseSchema } from '@protocol/schemas/uploads'
-import { entityFileUploadResponseSchema } from '@protocol/schemas/entity-schema'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { withRetry, isRetryableError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 import { incCounter } from './metrics'
 import { createLogger } from '../lib/logger'
 
@@ -16,41 +16,17 @@ const logger = createLogger('routes.uploads')
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024  // 100 MB
 const MAX_CHUNK_SIZE = 10 * 1024 * 1024    // 10 MB
 
+/**
+ * Chunked, end-to-end encrypted uploads. Mounted ONLY under /hubs/:hubId
+ * (#2462): the path hub is the file's hub, so `files:upload` is decided by the
+ * caller's role in that hub — a hub member's grant lives in its hub role, never
+ * in a global one (#2153) — and every file is created with a hub and a typed
+ * parent inside it. Every file goes through this one path, including the value
+ * of an entity's file field.
+ */
 const uploads = new Hono<AppEnv>()
+uploads.use('*', hubOnly)
 uploads.use('*', requirePermission('files:upload'))
-
-// Single-shot entity field file upload (≤10 MB encrypted blob, EP06-A2)
-uploads.post('/entity-file',
-  describeRoute({
-    tags: ['Uploads'],
-    summary: 'Upload an encrypted file attached to an entity field',
-    responses: {
-      201: {
-        description: 'File stored',
-        content: { 'application/json': { schema: resolver(entityFileUploadResponseSchema) } },
-      },
-      ...authErrors,
-    },
-  }),
-  async (c) => {
-    const body = await c.req.parseBody()
-    const blob = body['file']
-    if (!(blob instanceof File)) return c.json({ error: 'file required' }, 400)
-    if (blob.size > MAX_CHUNK_SIZE) return c.json({ error: 'file too large (max 10 MB)' }, 413)
-
-    const pubkey = c.get('pubkey')
-    const services = c.get('services')
-    const buffer = await blob.arrayBuffer()
-
-    const fileId = crypto.randomUUID()
-    const uploadedAt = new Date().toISOString()
-
-    await c.env.BLOB_STORAGE.put(`entity-files/${fileId}`, buffer)
-    await audit(services.audit, 'entityFileUploaded', pubkey, { fileId, size: blob.size }, undefined, null)
-
-    return c.json({ fileId, uploadedAt }, 201)
-  },
-)
 
 // Initialize an upload — returns uploadId and chunk upload URLs
 uploads.post('/init',
@@ -73,7 +49,8 @@ uploads.post('/init',
   async (c) => {
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const body = c.req.valid('json') as import('@shared/types').UploadInit
+    const hubId = pathHubId(c)
+    const body = c.req.valid('json')
 
     if (body.totalSize > MAX_UPLOAD_SIZE) {
       return c.json({ error: `File too large (max ${MAX_UPLOAD_SIZE / 1024 / 1024}MB)` }, 400)
@@ -81,10 +58,11 @@ uploads.post('/init',
 
     const uploadId = crypto.randomUUID()
 
-    // Store file record via service
+    // The owner must exist inside the path hub (404 otherwise).
     await services.conversations.createFile({
       id: uploadId,
-      conversationId: body.conversationId,
+      hubId,
+      owner: body.owner,
       uploadedBy: pubkey,
       recipientEnvelopes: body.recipientEnvelopes || [],
       encryptedMetadata: body.encryptedMetadata || [],
@@ -94,10 +72,10 @@ uploads.post('/init',
 
     await audit(services.audit, 'fileUploadStarted', pubkey, {
       uploadId,
-      conversationId: body.conversationId,
+      owner: body.owner,
       totalSize: body.totalSize,
       totalChunks: body.totalChunks,
-    }, undefined, null)
+    }, undefined, hubId)
 
     return c.json({ uploadId, totalChunks: body.totalChunks })
   },
@@ -117,6 +95,7 @@ uploads.put('/:id/chunks/:chunkIndex',
           },
         },
       },
+      413: { description: 'Chunk larger than 10 MB' },
       ...authErrors,
       ...notFoundError,
     },
@@ -133,7 +112,7 @@ uploads.put('/:id/chunks/:chunkIndex',
     }
 
     // Verify ownership before accepting chunk
-    const fileRecord = await services.conversations.getFile(uploadId)
+    const fileRecord = await services.conversations.getFileInHub(uploadId, pathHubId(c))
     if (fileRecord.uploadedBy !== pubkey && !checkPermission(permissions, 'files:manage-all')) {
       return c.json({ error: 'Forbidden' }, 403)
     }
@@ -145,7 +124,7 @@ uploads.put('/:id/chunks/:chunkIndex',
     }
 
     if (body.byteLength > MAX_CHUNK_SIZE) {
-      return c.json({ error: `Chunk too large (max ${MAX_CHUNK_SIZE / 1024 / 1024}MB)` }, 400)
+      return c.json({ error: `Chunk too large (max ${MAX_CHUNK_SIZE / 1024 / 1024}MB)` }, 413)
     }
 
     const blobKey = `files/${uploadId}/chunk-${String(chunkIndex).padStart(6, '0')}`
@@ -202,7 +181,7 @@ uploads.post('/:id/complete',
     const services = c.get('services')
 
     // Verify all chunks are uploaded
-    const fileRecord = await services.conversations.getFile(uploadId)
+    const fileRecord = await services.conversations.getFileInHub(uploadId, pathHubId(c))
 
     if (fileRecord.uploadedBy !== pubkey && !checkPermission(permissions, 'files:manage-all')) {
       return c.json({ error: 'Forbidden' }, 403)
@@ -283,11 +262,15 @@ uploads.post('/:id/complete',
     }
 
     // Mark file as complete via service
-    await services.conversations.markFileComplete(uploadId)
+    const completedAt = await services.conversations.markFileComplete(uploadId)
 
-    await audit(services.audit, 'fileUploadCompleted', pubkey, { uploadId }, undefined, null)
+    await audit(services.audit, 'fileUploadCompleted', pubkey, { uploadId }, undefined, fileRecord.hubId)
 
-    return c.json({ fileId: uploadId, status: 'complete' })
+    return c.json({
+      fileId: uploadId,
+      status: 'complete',
+      completedAt: completedAt.toISOString(),
+    })
   },
 )
 
@@ -315,7 +298,7 @@ uploads.get('/:id/status',
     const uploadId = c.req.param('id')
     const services = c.get('services')
 
-    const fileRecord = await services.conversations.getFile(uploadId)
+    const fileRecord = await services.conversations.getFileInHub(uploadId, pathHubId(c))
 
     // Only allow the uploader or users with files:manage-all to check status
     if (fileRecord.uploadedBy !== pubkey && !checkPermission(permissions, 'files:manage-all')) {
