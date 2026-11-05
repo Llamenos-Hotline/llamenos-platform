@@ -715,27 +715,105 @@ jobs:
           MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail
+
+          # Every failing exit below goes through `refuse`, which records the
+          # verdict token as this step's `reason` output before it exits. The
+          # final "Assert this run reached a real verdict" step reads it, so
+          # the job-level token says WHICH refusal this was — "I could not
+          # ask GitHub" (`queue-pr-lookup`, `queue-check-lookup`) stays
+          # distinguishable from "I asked, and there is no passing verdict"
+          # (`queue-verdict-missing`) instead of both collapsing into one
+          # token that reads like a code objection (#2481). The reason only
+          # ever chooses the MESSAGE; every path through `refuse` exits 1.
+          refuse() {
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+
           pr=$(echo "$MQ_HEAD_REF" | grep -oE 'pr-[0-9]+-' | grep -oE '[0-9]+' || true)
           if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
             echo "::error::fleet/review FAILED: queue-ref-unparseable — could not parse a numeric PR number out of merge_group.head_ref: $MQ_HEAD_REF"
-            exit 1
+            refuse queue-ref-unparseable
           fi
 
-          # Guarded captures throughout (`if ! x=$(...)`), for the same
-          # reason the workflow_dispatch branch of the `ctx` step below is:
-          # under the inherited `-e` a bare assignment dies on the first API
-          # hiccup with nothing but gh's raw stderr, and a required check
-          # that goes red with no reason is what stalls a queue entry a
-          # human then has to dig out of the logs.
-          if ! pr_json="$(gh api "repos/$REPO/pulls/$pr" 2>&1)"; then
+          # ── Bounded retry around the two READS, never the judgement (#2481)
+          # On 2026-11-05 two merge groups (#2467, #2472) were ejected within
+          # one minute because a single `gh api .../pulls/<n>` call failed
+          # while GitHub's API was flaky, discarding a full gate run whose
+          # every other workflow had passed. A failed READ is "I could not
+          # ask", not an answer, so it is retried — 5 attempts, backing off
+          # 2s, 4s, 8s, 16s (30s of sleep at most, against a merge group
+          # that costs a full gate run to rebuild).
+          #
+          # What is retried, by `gh`'s own stderr: anything with no HTTP
+          # status at all (transport errors, timeouts, a GraphQL-level
+          # "Something went wrong"), HTTP 5xx, 408, 429, and a 403 that says
+          # it is a rate limit. Every other 4xx — a 404 for a PR that does
+          # not exist, a 401 for a bad token — is a well-formed answer from
+          # GitHub and fails on the first attempt.
+          #
+          # What CANNOT be retried, by construction: the verdict. `gh_read`
+          # retries only a non-zero `gh` exit; a 200 response saying the PR
+          # carries no fleet/review, or a failing one, is a SUCCESSFUL read,
+          # and the judgement below runs exactly once on it. The step is
+          # never retried as a whole and neither is the job — an outer retry
+          # would re-run a real objection until it went away.
+          #
+          # `gh_read <label> <gh api args...>` sets GH_READ_OUT/GH_READ_ERR
+          # rather than printing, so it runs in THIS shell (not a `$(...)`
+          # subshell) and its ::warning:: lines reach the log as workflow
+          # commands.
+          lookup_retryable() {
+            local code
+            code="$(printf '%s' "$1" | grep -oE 'HTTP [0-9]{3}' | tail -n 1 | grep -oE '[0-9]{3}' || true)"
+            if [ -z "$code" ]; then
+              return 0
+            fi
+            case "$code" in
+              5??|408|429) return 0 ;;
+              403) grep -qi 'rate limit' <<<"$1" ;;
+              *) return 1 ;;
+            esac
+          }
+          GH_READ_ATTEMPTS=5
+          gh_read() {
+            local what="$1" attempt=1 delay=2 errfile
+            shift
+            errfile="$(mktemp)"
+            while :; do
+              if GH_READ_OUT="$(gh api "$@" 2>"$errfile")"; then
+                GH_READ_ERR=""
+                rm -f "$errfile"
+                return 0
+              fi
+              GH_READ_ERR="$(cat "$errfile")"
+              if ! lookup_retryable "$GH_READ_ERR"; then
+                echo "$what: non-retryable failure on attempt $attempt/$GH_READ_ATTEMPTS — a well-formed answer from GitHub, not retried"
+                rm -f "$errfile"
+                return 1
+              fi
+              if [ "$attempt" -ge "$GH_READ_ATTEMPTS" ]; then
+                echo "$what: still failing after $attempt/$GH_READ_ATTEMPTS attempts"
+                rm -f "$errfile"
+                return 1
+              fi
+              echo "::warning::$what failed (attempt $attempt/$GH_READ_ATTEMPTS, transient) — retrying in ${delay}s: $(printf '%s' "$GH_READ_ERR" | tr '\n' ' ')"
+              sleep "$delay"
+              attempt=$((attempt + 1))
+              delay=$((delay * 2))
+            done
+          }
+
+          if ! gh_read "gh api .../pulls/$pr" "repos/$REPO/pulls/$pr"; then
             echo "::error::fleet/review FAILED: queue-pr-lookup — \`gh api .../pulls/$pr\` failed while resolving the PR behind queue entry $MQ_HEAD_REF:"
-            printf '%s\n' "$pr_json"
-            exit 1
+            printf '%s\n' "$GH_READ_ERR"
+            refuse queue-pr-lookup
           fi
+          pr_json="$GH_READ_OUT"
           pr_head="$(printf '%s' "$pr_json" | jq -r '.head.sha')"
           if [[ ! "$pr_head" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::fleet/review FAILED: queue-pr-head-unresolved — PR #$pr's head SHA did not parse out of the API response (got '$pr_head')"
-            exit 1
+            refuse queue-pr-head-unresolved
           fi
 
           # The verdict is read from the CHECK RUN this same job already
@@ -746,13 +824,15 @@ jobs:
           # rather than the `check_name=` query parameter: a head commit here
           # carries well over a page of check runs, and a filter that
           # silently matched nothing would fail this step for a PR that was
-          # in fact reviewed.
-          if ! runs="$(gh api --paginate "repos/$REPO/commits/$pr_head/check-runs?per_page=100" \
-            --jq '.check_runs[] | select(.name == "fleet/review")' | jq -s -c '.')"; then
+          # in fact reviewed. The read goes through the same bounded retry:
+          # a failure here is equally "I could not ask".
+          if ! gh_read "gh api .../commits/$pr_head/check-runs" --paginate "repos/$REPO/commits/$pr_head/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.name == "fleet/review")'; then
             echo "::error::fleet/review FAILED: queue-check-lookup — could not read the check runs on PR #$pr's head $pr_head:"
-            printf '%s\n' "$runs"
-            exit 1
+            printf '%s\n' "$GH_READ_ERR"
+            refuse queue-check-lookup
           fi
+          runs="$(printf '%s' "$GH_READ_OUT" | jq -s -c '.')"
           completed="$(printf '%s' "$runs" | jq -c '[.[] | select(.status == "completed")] | sort_by(.completed_at)')"
           in_flight="$(printf '%s' "$runs" | jq -r '[.[] | select(.status != "completed")] | length')"
           if [ "$in_flight" != "0" ]; then
@@ -761,7 +841,7 @@ jobs:
           if [ "$(printf '%s' "$completed" | jq -r 'length')" = "0" ]; then
             echo "::error::fleet/review FAILED: queue-pr-unreviewed — PR #$pr's head $pr_head carries no completed fleet/review check run, so this queue entry has no review to report"
             echo "Request a review from the fleet reviewer on PR #$pr, let fleet/review conclude on its head, then re-queue it."
-            exit 1
+            refuse queue-pr-unreviewed
           fi
           # The LATEST completed run, never "any of them passed": a
           # re-requested review that found a problem after an earlier pass
@@ -770,7 +850,7 @@ jobs:
           run_url="$(printf '%s' "$completed" | jq -r 'last | .html_url')"
           if [ "$conclusion" != "success" ]; then
             echo "::error::fleet/review FAILED: queue-pr-review-not-passing — PR #$pr's own fleet/review concluded '$conclusion' on its head $pr_head ($run_url); refusing to report a pass for queue commit $MQ_HEAD_SHA"
-            exit 1
+            refuse queue-pr-review-not-passing
           fi
           echo "fleet/review PASS — reported, not re-run."
           echo "PR #$pr's own fleet/review concluded 'success' on its head $pr_head ($run_url)."
@@ -2070,6 +2150,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           QUEUE_OUTCOME: ${{ steps.queue.outcome }}
+          QUEUE_REASON: ${{ steps.queue.outputs.reason }}
           GATE_CONCLUSION: ${{ steps.gate.conclusion }}
           OUTCOME: ${{ steps.gate.outputs.outcome }}
           REVIEW_OUTCOME: ${{ steps.review.outcome }}
@@ -2079,7 +2160,19 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
             if [ "$QUEUE_OUTCOME" != "success" ]; then
-              echo "::error::fleet/review FAILED: queue-verdict-missing — on merge_group the queued-PR verdict step reported '$QUEUE_OUTCOME'; refusing to conclude green on a queue commit with no verdict behind it"
+              # Fail closed on EVERY non-success; the queue step's recorded
+              # reason only picks which token this red carries (#2481). A
+              # READ that stayed unanswerable after the queue step's bounded
+              # retries is infrastructure — re-queueing is the fix — and must
+              # not read as `queue-verdict-missing`, which means GitHub
+              # answered and there is no passing review behind this entry.
+              case "${QUEUE_REASON:-}" in
+                queue-pr-lookup|queue-check-lookup)
+                  echo "::error::fleet/review FAILED: $QUEUE_REASON — on merge_group the queued-PR verdict step could not read GitHub even after its bounded retries; this is an API failure, not a review objection: re-queue the PR"
+                  exit 1
+                  ;;
+              esac
+              echo "::error::fleet/review FAILED: queue-verdict-missing — on merge_group the queued-PR verdict step reported '$QUEUE_OUTCOME' (reason: '${QUEUE_REASON:-none recorded}'); refusing to conclude green on a queue commit with no verdict behind it"
               exit 1
             fi
             echo "merge_group arm: queued-PR verdict step=$QUEUE_OUTCOME"
