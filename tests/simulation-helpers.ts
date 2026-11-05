@@ -85,8 +85,11 @@ export interface SimulateIncomingMessageOptions {
   body: string
   /** Channel type: 'sms' | 'whatsapp' | 'signal'. Defaults to 'sms'. */
   channel?: 'sms' | 'whatsapp' | 'signal'
-  /** Hub ID for conversation scoping. Pass the workerHub fixture value to prevent cross-worker interference. */
-  hubId?: string
+  /**
+   * The hub the message is addressed to — required, like the real webhook's
+   * `?hub=` (#2395, #2459): there is no hubless conversation.
+   */
+  hubId: string
 }
 
 export interface SimulateDeliveryStatusOptions {
@@ -288,6 +291,7 @@ export async function simulateVoicemail(
  *   senderNumber: `+1212${Date.now().toString().slice(-7)}`,
  *   body: 'Help, I need assistance',
  *   channel: 'sms',
+ *   hubId,
  * })
  * ```
  */
@@ -302,7 +306,7 @@ export async function simulateIncomingMessage(
       senderNumber: options.senderNumber,
       body: options.body,
       ...(options.channel ? { channel: options.channel } : {}),
-      ...(options.hubId ? { hubId: options.hubId } : {}),
+      hubId: options.hubId,
     },
   )
 }

@@ -417,7 +417,7 @@ conversations.post('/:id/messages',
     // Server-sealed ones (the branch above) always include the admin reader, so
     // only the client-supplied set can leave the admins out (#2113).
     if (body.encryptedContent) {
-      await assertAdminCanRead(services, c.env, conv.hubId ?? undefined, body.readerEnvelopes, 'A message', { conversationId: id })
+      await assertAdminCanRead(services, c.env, conv.hubId, body.readerEnvelopes, 'A message', { conversationId: id })
     }
 
     // Build the message with initial pending status
@@ -535,12 +535,12 @@ conversations.post('/:id/messages',
       type: 'message:new',
       conversationId: id,
       channelType: 'outbound',
-    }, conv.hubId ?? '')
+    }, conv.hubId)
 
     audit(c.get('services').audit, 'messageSent', pubkey, {
       conversationId: id,
       channel: conv.channelType,
-    }, undefined, conv.hubId ?? null)
+    }, undefined, conv.hubId)
 
     return c.json(msg, 201)
   },
@@ -589,11 +589,11 @@ conversations.patch('/:id',
       type: convEventType,
       conversationId: id,
       assignedTo: body.assignedTo,
-    }, conv.hubId ?? '')
+    }, conv.hubId)
 
     audit(c.get('services').audit, body.status === 'closed' ? 'conversationClosed' : 'conversationUpdated', pubkey, {
       conversationId: id,
-    }, undefined, conv.hubId ?? null)
+    }, undefined, conv.hubId)
 
     return c.json(updated)
   },
@@ -676,7 +676,7 @@ conversations.post('/:id/assignee-envelopes',
         conversationId: id,
         assignedTo,
         added,
-      }, undefined, conv.hubId ?? null)
+      }, undefined, conv.hubId)
 
       // Tell the assignee's open client its messages changed, so the thread
       // re-reads them now instead of on its next background refresh. The
@@ -686,7 +686,7 @@ conversations.post('/:id/assignee-envelopes',
         conversationId: id,
         assignedTo,
         added,
-      }, conv.hubId ?? '')
+      }, conv.hubId)
     }
 
     return c.json({ added })
@@ -757,7 +757,7 @@ conversations.post('/:id/claim',
       type: 'conversation:assigned',
       conversationId: id,
       assignedTo: pubkey,
-    }, conv.hubId ?? '')
+    }, conv.hubId)
 
     // Push notification to assigned user (Epic 86)
     dispatchPushToUser(c.env, services, pubkey, {
@@ -775,7 +775,7 @@ conversations.post('/:id/claim',
     audit(c.get('services').audit, 'conversationClaimed', pubkey, {
       conversationId: id,
       channelType: conv.channelType,
-    }, undefined, conv.hubId ?? null)
+    }, undefined, conv.hubId)
 
     return c.json(claimed)
   },

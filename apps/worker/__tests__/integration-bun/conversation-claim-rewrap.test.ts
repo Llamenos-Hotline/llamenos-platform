@@ -37,7 +37,7 @@ import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { conversations, deviceVerifications, devices, messages, users } from '../../db/schema'
+import { conversations, deviceVerifications, devices, hubs, messages, users } from '../../db/schema'
 import { ConversationsService } from '../../services/conversations'
 import { ServiceError } from '../../services/settings'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../../lib/hpke-recipient'
@@ -50,6 +50,9 @@ const db = createDatabase(DATABASE_URL)
 const service = new ConversationsService(db, 'ab'.repeat(32))
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+/** The hub every inbound message below is addressed to: a conversation always has one (#2459). */
+const HUB_ID = `hub-rewrap-${suite}`
+let hubCreated = false
 const NO_AAD = new Uint8Array(0)
 const LABEL = utf8ToBytes(LABEL_MESSAGE)
 
@@ -128,6 +131,10 @@ async function adminClientRewrap(conversationId: string): Promise<number> {
 }
 
 async function inbound(body: string, sender: string): Promise<{ conversationId: string; messageId: string }> {
+  if (!hubCreated) {
+    await db.insert(hubs).values({ id: HUB_ID, name: HUB_ID, slug: HUB_ID, createdBy: 'integration-test' })
+    hubCreated = true
+  }
   const r = await service.handleIncoming(
     {
       channelType: 'sms',
@@ -138,6 +145,7 @@ async function inbound(body: string, sender: string): Promise<{ conversationId: 
     },
     `hash-${suite}-${sender}`,
     admin.recipient as HpkeRecipientPubkey,
+    HUB_ID,
   )
   if (!createdConversations.includes(r.conversationId)) createdConversations.push(r.conversationId)
   return { conversationId: r.conversationId, messageId: r.messageId }
@@ -171,6 +179,7 @@ afterAll(async () => {
     await db.delete(conversations).where(inArray(conversations.id, createdConversations))
   }
   await db.delete(users).where(inArray(users.pubkey, [volunteer.pubkey, bystander.pubkey]))
+  if (hubCreated) await db.delete(hubs).where(eq(hubs.id, HUB_ID))
 })
 
 describe('claim re-wrap: the claiming volunteer can read pre-claim messages (#1512)', () => {
@@ -402,7 +411,8 @@ describe('re-wrap gate: a key newer than the message needs confirmation (#2143)'
   })
 
   it('a verification by a hub admin of the conversation hub confirms it', async () => {
-    const hubId = `hub-${suite}`
+    // The conversation's own hub: inbound() files every conversation in HUB_ID.
+    const hubId = HUB_ID
     const hubAdmin = bytesToHex(utf8ToBytes(`hadm-${suite}`).slice(0, 32)).padEnd(64, '0')
     await db.delete(users).where(inArray(users.pubkey, [hubAdmin]))
     await db.insert(users).values({
@@ -412,7 +422,6 @@ describe('re-wrap gate: a key newer than the message needs confirmation (#2143)'
     })
     try {
       const { conversationId, messageId, plaintext } = await claimedAgedMessage('hubadmin')
-      await db.update(conversations).set({ hubId }).where(inArray(conversations.id, [conversationId]))
       const device = await stampDevice(volunteer.devices[0], 0)
       await stampDevice(volunteer.devices[1], 0)
       await verify(device, hubAdmin)

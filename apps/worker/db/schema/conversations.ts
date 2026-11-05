@@ -13,6 +13,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { hubs } from './settings'
 
 // ---------------------------------------------------------------------------
 // conversations
@@ -24,7 +25,11 @@ export const conversations = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    hubId: text('hub_id'),
+    // A conversation belongs to the hub its webhook URL named (#2395, #2459);
+    // a message that names no hub is refused, never stored hubless.
+    hubId: text('hub_id')
+      .notNull()
+      .references(() => hubs.id, { onDelete: 'cascade' }),
     channelType: text('channel_type').notNull().default('web'),
     contactIdentifierHash: text('contact_identifier_hash')
       .notNull()

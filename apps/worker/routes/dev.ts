@@ -833,7 +833,8 @@ interface SimulateIncomingMessageBody {
   senderNumber: string
   body: string
   channel?: MessagingChannelType
-  hubId?: string
+  /** The hub the message is addressed to — the webhook's `?hub=`. Required, as there. */
+  hubId: string
 }
 
 interface SimulateDeliveryStatusBody {
@@ -1025,11 +1026,22 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   if (!body.senderNumber || !body.body) {
     return c.json({ error: 'senderNumber and body are required' }, 400)
   }
+  // Mirrors the real webhook (messaging/router.ts, #2395): a message that names
+  // no hub, or an unknown one, is refused — never stored as a hubless conversation.
+  if (!body.hubId) {
+    return c.json({ error: 'hubId is required' }, 400)
+  }
+  const services = c.get('services')
+  try {
+    await services.settings.getHub(body.hubId)
+  } catch (err) {
+    if (err instanceof ServiceError && err.status === 404) return c.json({ error: 'Unknown hub' }, 404)
+    throw err
+  }
 
   const channel: MessagingChannelType = body.channel || 'sms'
   const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
-  const services = c.get('services')
   const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
   const result = await services.conversations.handleIncoming({
     channelType: channel,
@@ -1045,7 +1057,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
     conversationId: result.conversationId,
     messageId: result.messageId,
     channelType: channel,
-  }, body.hubId ?? '')
+  }, body.hubId)
 
   return c.json({ ok: true, conversationId: result.conversationId, messageId: result.messageId })
 })

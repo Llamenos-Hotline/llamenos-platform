@@ -42,11 +42,18 @@ const DATABASE_URL =
 /** Unique schema per test run to prevent cross-run interference */
 const TEST_SCHEMA = `test_outbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
+/** The hubs the events below are addressed to. */
+const HUB_IDS = ['hub-test-1', 'hub-restart-1']
+
+// Mirrors the migrated table, including the #2459 hub constraint: every event
+// names a hub that exists. A fixture that could store a hubless event would
+// prove nothing about the schema the server actually runs on.
 const EVENT_OUTBOX_DDL = `
+  CREATE TABLE ${TEST_SCHEMA}.hubs (id TEXT PRIMARY KEY);
   CREATE TABLE ${TEST_SCHEMA}.event_outbox (
     id            SERIAL PRIMARY KEY,
     event_json    JSONB    NOT NULL,
-    hub_id        TEXT,
+    hub_id        TEXT     NOT NULL REFERENCES ${TEST_SCHEMA}.hubs(id) ON DELETE CASCADE,
     kind          INTEGER  NOT NULL,
     epoch         INTEGER  NOT NULL,
     status        TEXT     NOT NULL DEFAULT 'pending',
@@ -110,6 +117,7 @@ beforeAll(async () => {
   // Create isolated test schema and table
   await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
   await adminSql.unsafe(EVENT_OUTBOX_DDL)
+  for (const id of HUB_IDS) await adminSql.unsafe(`INSERT INTO ${TEST_SCHEMA}.hubs (id) VALUES ('${id}')`)
 
   // Test connection scoped to the test schema via search_path.
   // Configure JSONB serialization so raw objects from bun-jsonb columns
@@ -209,13 +217,16 @@ describe('persist across service restart', () => {
     expect(row.event.hubId).toBe('hub-test-1')
   })
 
-  it('global events (null hubId) persist and are retrievable', async () => {
-    await outbox.enqueue(makeEvent({ hubId: null }))
-
-    const freshOutbox = new EventOutbox(db)
-    const [row] = await freshOutbox.drainBatch()
-
-    expect(row.event.hubId).toBeNull()
+  // #2459: there is no "global" event. The database refuses an event with no
+  // hub and one naming a hub that does not exist, so nothing hubless survives
+  // to be drained.
+  it('an event with no hub, or an unknown hub, is refused by the database', async () => {
+    await expect(testSql`
+      INSERT INTO event_outbox (event_json, kind, epoch) VALUES (${'{}'}::jsonb, 1, 1)
+    `).rejects.toThrow(/null value in column "hub_id"/)
+    await expect(outbox.enqueue(makeEvent({ hubId: 'hub-that-does-not-exist' })))
+      .rejects.toThrow()
+    expect(await new EventOutbox(db).drainBatch()).toEqual([])
   })
 })
 

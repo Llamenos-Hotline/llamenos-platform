@@ -13,6 +13,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { hubs } from './settings'
 
 // ---------------------------------------------------------------------------
 // notes
@@ -24,7 +25,11 @@ export const notes = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    hubId: text('hub_id'),
+    // Every note belongs to a hub (#2459): its admins are its readers, so a
+    // hubless note would be one no hub admin could ever see.
+    hubId: text('hub_id')
+      .notNull()
+      .references(() => hubs.id, { onDelete: 'cascade' }),
     authorPubkey: text('author_pubkey').notNull(),
     callId: text('call_id'),
     conversationId: text('conversation_id'),
@@ -114,7 +119,11 @@ export const contactMetadata = pgTable(
   'contact_metadata',
   {
     contactHash: text('contact_hash').notNull(),
-    hubId: text('hub_id'),
+    // The hub of the notes this row counts (#2459) — the contact hash is
+    // per-hub, so a row without one counts nobody's notes.
+    hubId: text('hub_id')
+      .notNull()
+      .references(() => hubs.id, { onDelete: 'cascade' }),
     firstSeen: timestamp('first_seen', { withTimezone: true })
       .notNull()
       .defaultNow(),

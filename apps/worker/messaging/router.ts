@@ -173,7 +173,7 @@ messaging.post('/:channel/webhook',
               messageId: result.messageId,
               status: statusUpdate.status,
               timestamp: statusUpdate.timestamp,
-            }, hubId ?? '')
+            }, hubId)
           }
 
           // Also correlate with blast deliveries (non-blocking)
@@ -225,7 +225,7 @@ messaging.post('/:channel/webhook',
           isTyping: typing.isTyping,
           channelType: 'signal',
           timestamp: typing.timestamp,
-        }, hubId ?? '')
+        }, hubId)
         return c.json({ ok: true })
       }
 
@@ -240,7 +240,7 @@ messaging.post('/:channel/webhook',
           isRemove: reaction.isRemove ?? false,
           sender: signalPayload.envelope.sourceUuid ?? signalPayload.envelope.source,
           channelType: 'signal',
-        }, hubId ?? '')
+        }, hubId)
         return c.json({ ok: true })
       }
 
@@ -278,7 +278,7 @@ messaging.post('/:channel/webhook',
   // /v1/identities polling endpoint, not yet integrated), so fingerprint is
   // omitted here; this call only ever takes the "new identity" branch, never
   // the "key changed" branch, until that polling integration exists.
-  if (channel === 'signal' && hubId) {
+  if (channel === 'signal') {
     const sourceNumber = incoming.metadata?.source
     const sourceUuid = incoming.metadata?.sourceUuid
     if (sourceNumber && sourceUuid) {
@@ -315,7 +315,6 @@ messaging.post('/:channel/webhook',
   // Keyword interception for blast subscribe/unsubscribe
   if (incoming.body) {
     const normalizedBody = incoming.body.trim().toUpperCase()
-    const effectiveHubId = hubId ?? ''
     // STOP is always recognized (TCPA compliance) — on a switched-off channel too, above
     if (isOptOut(incoming.body)) {
       await recordOptOut(services, incoming, hubId, c.env.MESSAGING_HASH_KEY)
@@ -328,9 +327,9 @@ messaging.post('/:channel/webhook',
       }
       // Check if it matches the subscribe keyword
       try {
-        const settings = await services.blasts.getBlastSettings(effectiveHubId)
+        const settings = await services.blasts.getBlastSettings(hubId)
         if (normalizedBody === settings.subscribeKeyword.toUpperCase()) {
-          await services.blasts.handleSubscriberKeyword(effectiveHubId, {
+          await services.blasts.handleSubscriberKeyword(hubId, {
             identifier: incoming.senderIdentifier,
             ...await subscriberHashesFor(services, incoming, hubId, c.env.MESSAGING_HASH_KEY, { includeRecorded: false }),
             externalId: incoming.externalId,
@@ -363,7 +362,7 @@ messaging.post('/:channel/webhook',
     type: 'message:new',
     conversationId: convResult.conversationId,
     channelType: channel,
-  }, hubId ?? '')
+  }, hubId)
 
   // Auto-assignment for new conversations
   if (convResult.isNew && convResult.status === 'waiting') {
@@ -373,8 +372,7 @@ messaging.post('/:channel/webhook',
   }
 
   // Push notification to assigned volunteer for new messages (Epic 86)
-  // Only dispatch push if hubId is present — mobile clients require a real hub ID to route the notification.
-  if (convResult.conversationId && hubId) {
+  if (convResult.conversationId) {
     backgroundTask(c,(async () => {
       try {
         // Fetch the conversation to get the assigned volunteer
@@ -404,7 +402,7 @@ messaging.post('/:channel/webhook',
     audit(services.audit, 'messageReceived', 'system', {
       channel,
       senderHash,
-    }, undefined, hubId ?? null)
+    }, undefined, hubId)
   )
 
   // Return 200 to acknowledge webhook (providers expect fast acknowledgment)
@@ -421,10 +419,10 @@ function isOptOut(body: string | undefined): boolean {
 async function recordOptOut(
   services: Services,
   incoming: IncomingMessage,
-  hubId: string | undefined,
+  hubId: string,
   messagingHashKey: string,
 ): Promise<void> {
-  await services.blasts.handleSubscriberKeyword(hubId ?? '', {
+  await services.blasts.handleSubscriberKeyword(hubId, {
     identifier: incoming.senderIdentifier,
     ...await subscriberHashesFor(services, incoming, hubId, messagingHashKey, { includeRecorded: true }),
     externalId: incoming.externalId,
@@ -452,12 +450,12 @@ function carriedIdentifiers(incoming: IncomingMessage): string[] {
 async function subscriberHashesFor(
   services: Services,
   incoming: IncomingMessage,
-  hubId: string | undefined,
+  hubId: string,
   messagingHashKey: string,
   { includeRecorded }: { includeRecorded: boolean },
 ) {
   const identifiers = carriedIdentifiers(incoming)
-  if (includeRecorded && incoming.channelType === 'signal' && hubId && identifiers.length === 1) {
+  if (includeRecorded && incoming.channelType === 'signal' && identifiers.length === 1) {
     const known = await services.signalIdentity.getIdentityByUuid(hubId, incoming.senderIdentifier)
     if (known?.number) identifiers.push(known.number)
   }
@@ -543,7 +541,7 @@ async function tryAutoAssign(
       conversationId,
       assignedTo: bestCandidate,
       autoAssigned: true,
-    }, hubId ?? '')
+    }, hubId)
 
     logger.info('Auto-assigned conversation', { conversationId, assignedTo: bestCandidate.slice(0, 8) })
   } catch (err) {

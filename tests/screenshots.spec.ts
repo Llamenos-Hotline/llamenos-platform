@@ -252,13 +252,17 @@ test.describe('App Screenshots', () => {
     await page.setViewportSize(DESKTOP_SIZE)
     await loginAsAdmin(page)
 
-    // Simulate incoming SMS messages to populate conversations
+    // Simulate incoming SMS messages to populate conversations, in the hub the
+    // admin's UI opens on: every conversation has a hub (#2459).
+    const { data: hubList } = await apiGet<{ hubs: Array<{ id: string }> }>(request, '/hubs')
+    const hubId = hubList.hubs[0]?.id
+    if (!hubId) throw new Error('screenshots: the admin belongs to no hub to receive messages in')
     for (const msg of [
       { senderNumber: uniqueCallerNumber(), body: 'Hi, I need some support right now' },
       { senderNumber: uniqueCallerNumber(), body: 'Is there anyone available to talk?' },
       { senderNumber: uniqueCallerNumber(), body: 'Following up from yesterday' },
     ]) {
-      await simulateIncomingMessage(request, msg)
+      await simulateIncomingMessage(request, { ...msg, hubId })
     }
 
     await Navigation.goToConversations(page)

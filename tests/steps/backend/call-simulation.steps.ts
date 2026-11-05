@@ -391,6 +391,7 @@ Given('an incoming SMS from {string} with body {string}', async ({ request, worl
     senderNumber,
     body,
     channel: 'sms',
+    hubId: getScenarioState(world).hubId,
   })
   getCallSimState(world).conversationId = result.conversationId
   getCallSimState(world).messageId = result.messageId
@@ -401,6 +402,7 @@ Given('an incoming WhatsApp message from {string} with body {string}', async ({ 
     senderNumber,
     body,
     channel: 'whatsapp',
+    hubId: getScenarioState(world).hubId,
   })
   getCallSimState(world).conversationId = result.conversationId
   getCallSimState(world).messageId = result.messageId
@@ -411,6 +413,7 @@ Given('an incoming {string} message from {string} with body {string}', async ({ 
     senderNumber,
     body,
     channel: channel as 'sms' | 'whatsapp' | 'signal',
+    hubId: getScenarioState(world).hubId,
   })
   getCallSimState(world).conversationId = result.conversationId
   getCallSimState(world).messageId = result.messageId

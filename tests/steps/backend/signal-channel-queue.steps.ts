@@ -65,12 +65,13 @@ async function markFailed(
 
 // ── Given ────────────────────────────────────────────────────────────
 
-Given('a Signal message fails to send due to bridge timeout', async ({ request, world }) => {
+Given('a Signal message fails to send due to bridge timeout', async ({ request, world, workerHub }) => {
   const state = getQueueState(world)
   const inbound = await simulateIncomingMessage(request, {
     senderNumber: state.recipientIdentifier,
     body: 'Need help',
     channel: 'signal',
+    hubId: workerHub,
   })
   state.conversationId = inbound.conversationId
 })
@@ -81,6 +82,7 @@ Given('a queued message has failed {int} times', async ({ request, world, worker
     senderNumber: state.recipientIdentifier,
     body: 'Need help',
     channel: 'signal',
+    hubId: workerHub,
   })
   state.conversationId = inbound.conversationId
   const enqueued = await enqueue(request, workerHub, inbound.conversationId, state.recipientIdentifier)
@@ -100,6 +102,7 @@ Given('a queued message has been retried {int} times', async ({ request, world, 
     senderNumber: state.recipientIdentifier,
     body: 'Need help',
     channel: 'signal',
+    hubId: workerHub,
   })
   state.conversationId = inbound.conversationId
   const enqueued = await enqueue(request, workerHub, inbound.conversationId, state.recipientIdentifier)
@@ -121,6 +124,7 @@ Given('{int} messages were sent to {string} in the last minute', async ({ reques
       senderNumber: uniqueCallerNumber(),
       body: 'Need help',
       channel: 'signal',
+      hubId: workerHub,
     })
     const enqueued = await enqueue(request, workerHub, inbound.conversationId, recipient)
     const { status: httpStatus } = await devPost(request, '/test-simulate/signal-queue/mark-sent', {
@@ -136,6 +140,7 @@ Given('a dead-letter message exists', async ({ request, world, workerHub }) => {
     senderNumber: state.recipientIdentifier,
     body: 'Need help',
     channel: 'signal',
+    hubId: workerHub,
   })
   state.conversationId = inbound.conversationId
   const enqueued = await enqueue(request, workerHub, inbound.conversationId, state.recipientIdentifier)

@@ -32,7 +32,12 @@ function setup(opts: { transcription?: boolean; audio?: ArrayBuffer | null; dele
       getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: opts.transcription ?? true }),
     },
     identity: {
-      buildReaderPubkeys: vi.fn(async (adminKey: string | undefined) => (adminKey ? [adminKey] : [])),
+      // The hub's admin reader set: the transitional instance key plus the
+      // hub's own admin device keys (IdentityService.listAdminEnvelopeRecipients).
+      listAdminEnvelopeRecipients: vi.fn(async (instanceKey: string | undefined, hubId: string) => [
+        ...(instanceKey ? [instanceKey] : []),
+        `x25519-of-admin-of-${hubId}`,
+      ]),
     },
     records: { createNote: vi.fn(async () => { calls.push('createNote'); return {} }) },
     calls: { updateMetadata: vi.fn().mockResolvedValue({}) },
@@ -54,9 +59,12 @@ describe('processVoicemailRecording', () => {
     expect(calls).toEqual(['track', 'createNote', 'deleteHeld'])
     expect(services.providerRecordings.track).toHaveBeenCalledWith({ hubId: 'hub-1', callId: 'call-1', recordingSid: 'RE1', kind: 'voicemail', adapter })
     expect(adapter.getRecordingAudio).toHaveBeenCalledWith('RE1')
-    // Admin-only reader list, and it is the X25519 key — not ADMIN_PUBKEY (#1283).
+    // #2459: the note is filed in the call's hub, sealed to that hub's admin
+    // reader set only — X25519 keys, never ADMIN_PUBKEY (#1283).
+    expect(services.records.createNote).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1', callId: 'call-1' }))
+    expect(services.identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(env.ADMIN_DECRYPTION_PUBKEY, 'hub-1')
     const readers = vi.mocked(encryptMessageForStorage).mock.calls[0][1]
-    expect(readers).toEqual([env.ADMIN_DECRYPTION_PUBKEY])
+    expect(readers).toEqual([env.ADMIN_DECRYPTION_PUBKEY, 'x25519-of-admin-of-hub-1'])
 
     // The deletion goes through THIS hub's adapter, for THIS call's voicemail only.
     const [resolve, filter] = services.providerRecordings.deleteHeld.mock.calls[0]

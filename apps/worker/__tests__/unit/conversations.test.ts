@@ -71,7 +71,7 @@ describe('ConversationsService', () => {
       const { db, service } = setup()
       db.$setSelectResults([[], [{ count: 0 }]])
 
-      const result = await service.list({ status: 'active' })
+      const result = await service.list({ hubId: 'hub-1', status: 'active' })
       expect(result.conversations).toEqual([])
     })
 
@@ -79,7 +79,7 @@ describe('ConversationsService', () => {
       const { db, service } = setup()
       db.$setSelectResults([[], [{ count: 0 }]])
 
-      await service.list()
+      await service.list({ hubId: 'hub-1' })
     })
   })
 

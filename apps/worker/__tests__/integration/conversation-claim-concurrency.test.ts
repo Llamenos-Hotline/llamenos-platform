@@ -40,11 +40,16 @@ const DATABASE_URL =
 const TEST_SCHEMA = `test_conv_claim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
 // Mirrors apps/worker/db/schema/conversations.ts conversations (messages
-// omitted — not exercised by claim()).
+// omitted — not exercised by claim()), including the #2459 hub constraint: a
+// fixture that could build a hubless conversation would not be the schema the
+// server runs on.
+const HUB_ID = 'hub-claim-concurrency'
 const DDL = `
+  CREATE TABLE ${TEST_SCHEMA}.hubs (id TEXT PRIMARY KEY);
+  INSERT INTO ${TEST_SCHEMA}.hubs (id) VALUES ('${HUB_ID}');
   CREATE TABLE ${TEST_SCHEMA}.conversations (
     id                        TEXT PRIMARY KEY,
-    hub_id                    TEXT,
+    hub_id                    TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.hubs(id) ON DELETE CASCADE,
     channel_type              TEXT NOT NULL DEFAULT 'web',
     contact_identifier_hash   TEXT NOT NULL DEFAULT '',
     assigned_to               TEXT,
@@ -88,8 +93,8 @@ beforeEach(async () => {
 
 async function makeWaitingConversation(id: string): Promise<void> {
   await testSql`
-    INSERT INTO conversations (id, channel_type, status)
-    VALUES (${id}, 'sms', 'waiting')
+    INSERT INTO conversations (id, hub_id, channel_type, status)
+    VALUES (${id}, ${HUB_ID}, 'sms', 'waiting')
   `
 }
 

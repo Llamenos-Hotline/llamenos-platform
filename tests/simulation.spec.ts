@@ -289,11 +289,13 @@ test.describe('Simulation endpoint validation', () => {
     }
   })
 
-  test('incoming message requires senderNumber and body', async ({ request }) => {
+  test('incoming message requires senderNumber and body', async ({ page, request }) => {
+    const hubId = await simulationHub(page, request, 'sim-msg-empty')
     try {
       await simulateIncomingMessage(request, {
         senderNumber: '',
         body: '',
+        hubId,
       })
       expect(true).toBe(false)
     } catch (err) {
