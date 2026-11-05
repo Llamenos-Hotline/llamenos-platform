@@ -17,14 +17,14 @@ Feature: Platform-Scoped Ban Management
   @backend
   Scenario: Super admin lists platform bans (empty)
     Given a super admin user
-    When the admin GETs "/bans/platform"
+    When the admin GETs "/admin/bans"
     Then the response status should be 200
     And the response should contain an empty bans list
 
   @backend
   Scenario: Super admin creates a platform ban
     Given a super admin user
-    When the admin POSTs to "/bans/platform" with phone "+12125551234" and reason "Repeat offender"
+    When the admin POSTs to "/admin/bans" with phone "+12125551234" and reason "Repeat offender"
     Then the response status should be 200
     And the response should contain ok true
 
@@ -32,21 +32,21 @@ Feature: Platform-Scoped Ban Management
   Scenario: Created platform ban appears in list
     Given a super admin user
     And a platform ban exists for "+12125551234"
-    When the admin GETs "/bans/platform"
+    When the admin GETs "/admin/bans"
     Then the response should contain 1 ban
 
   @backend
   Scenario: Super admin removes a platform ban
     Given a super admin user
     And a platform ban exists with id "ban-001"
-    When the admin DELETEs "/bans/platform/ban-001"
+    When the admin DELETEs "/admin/bans/ban-001"
     Then the response status should be 200
     And the response should contain ok true
 
   @backend
   Scenario: Delete returns 404 for unknown ban
     Given a super admin user
-    When the admin DELETEs "/bans/platform/nonexistent-id"
+    When the admin DELETEs "/admin/bans/nonexistent-id"
     Then the response status should be 404
 
   # ── Backend: Bulk import ────────────────────────────────────────────
@@ -54,14 +54,14 @@ Feature: Platform-Scoped Ban Management
   @backend
   Scenario: Super admin bulk imports platform bans
     Given a super admin user
-    When the admin POSTs to "/bans/platform/bulk" with 3 phone numbers
+    When the admin POSTs to "/admin/bans/bulk" with 3 phone numbers
     Then the response status should be 200
     And the response should contain count 3
 
   @backend
   Scenario: Bulk import rejects invalid E.164 numbers
     Given a super admin user
-    When the admin POSTs to "/bans/platform/bulk" with an invalid phone number
+    When the admin POSTs to "/admin/bans/bulk" with an invalid phone number
     Then the response status should be 400
 
   # ── Backend: Search and promote ────────────────────────────────────
@@ -70,14 +70,14 @@ Feature: Platform-Scoped Ban Management
   Scenario: Search finds bans across hub and platform scope
     Given a super admin user
     And a hub ban and a platform ban exist for the same phone number
-    When the admin GETs "/bans/platform/search?phone=+12125551234"
+    When the admin GETs "/admin/bans/search?phone=+12125551234"
     Then the response should contain 2 ban entries
 
   @backend
   Scenario: Promote hub ban to platform scope
     Given a super admin user
     And a hub-scoped ban exists with id "hub-ban-001"
-    When the admin POSTs to "/bans/platform/promote" with banId "hub-ban-001"
+    When the admin POSTs to "/admin/bans/promote" with banId "hub-ban-001"
     Then the response status should be 200
     And a platform-scoped ban should exist for the same phone number
 
@@ -85,21 +85,21 @@ Feature: Platform-Scoped Ban Management
   Scenario: Promoting a hub ban requires the number to be entered again
     Given a super admin user
     And a hub-scoped ban exists with id "hub-ban-002"
-    When the admin POSTs to "/bans/platform/promote" with banId "hub-ban-002" and no phone number
+    When the admin POSTs to "/admin/bans/promote" with banId "hub-ban-002" and no phone number
     Then the response status should be 400
 
   @backend
   Scenario: Promoting a hub ban with a different number is refused
     Given a super admin user
     And a hub-scoped ban exists with id "hub-ban-003"
-    When the admin POSTs to "/bans/platform/promote" with banId "hub-ban-003" and a different phone number
+    When the admin POSTs to "/admin/bans/promote" with banId "hub-ban-003" and a different phone number
     Then the response status should be 400
 
   @backend
   Scenario: Cannot promote already platform-scoped ban
     Given a super admin user
     And a platform-scoped ban exists with id "platform-ban-001"
-    When the admin POSTs to "/bans/platform/promote" with banId "platform-ban-001"
+    When the admin POSTs to "/admin/bans/promote" with banId "platform-ban-001"
     Then the response status should be 409
 
   # ── Backend: Permission enforcement ────────────────────────────────
@@ -107,7 +107,7 @@ Feature: Platform-Scoped Ban Management
   @backend
   Scenario: Hub admin cannot access platform bans
     Given a hub admin user (without platform ban permission)
-    When the admin GETs "/bans/platform"
+    When the admin GETs "/admin/bans"
     Then the response status should be 403
 
   # ── Backend: Platform ban enforced during call routing ──────────────

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { RecordsService } from '@worker/services/records'
 import { createMockDb } from './mock-db'
+import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 
 // Stand-ins for ban hashes (64 hex chars): the service only stores and compares them.
 const HASH_A = 'a'.repeat(64)
@@ -202,7 +203,7 @@ describe('RecordsService', () => {
       db.$setSelectResult([])
       db.$setInsertResult([ban])
 
-      const result = await service.addBan({ phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
+      const result = await service.addBan({ scope: PLATFORM_SCOPE, phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
       expect(result.phone).toBe(HASH_A)
     })
 
@@ -211,16 +212,16 @@ describe('RecordsService', () => {
       const existing = { id: 'ban-1', phone: HASH_A, reason: 'spam' }
       db.$setSelectResult([existing])
 
-      const result = await service.addBan({ phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
+      const result = await service.addBan({ scope: PLATFORM_SCOPE, phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
       expect(result.id).toBe('ban-1')
     })
 
-    it('scopes ban to hubId when provided', async () => {
+    it('writes a hub-scoped ban with that hub as its owner', async () => {
       const { db, service } = setup()
       db.$setSelectResult([])
       db.$setInsertResult([{ id: 'ban-1', hubId: 'hub-1', phone: HASH_A }])
 
-      const result = await service.addBan({ hubId: 'hub-1', phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
+      const result = await service.addBan({ scope: hubScope('hub-1'), phoneHash: HASH_A, reason: 'spam', bannedBy: 'pk1' })
       expect(result.hubId).toBe('hub-1')
     })
   })
@@ -230,15 +231,15 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([{ id: 'ban-1' }, { id: 'ban-2' }])
 
-      const result = await service.listBans('hub-1')
+      const result = await service.listBans(hubScope('hub-1'))
       expect(result.bans).toHaveLength(2)
     })
 
-    it('lists the platform bans when no hubId', async () => {
+    it('lists the platform bans when asked for the platform scope', async () => {
       const { db, service } = setup()
       db.$setSelectResult([{ id: 'ban-1' }])
 
-      const result = await service.listBans()
+      const result = await service.listBans(PLATFORM_SCOPE)
       expect(result.bans).toHaveLength(1)
     })
 
@@ -247,7 +248,7 @@ describe('RecordsService', () => {
       const bannedAt = new Date('2026-10-01T00:00:00Z')
       db.$setSelectResult([{ id: 'ban-1', hubId: 'hub-1', phone: HASH_A, reason: 'abuse', bannedBy: 'pk1', bannedAt }])
 
-      const { bans } = await service.listBans('hub-1')
+      const { bans } = await service.listBans(hubScope('hub-1'))
       expect(bans).toEqual([{ phoneHash: HASH_A, reason: 'abuse', bannedBy: 'pk1', bannedAt }])
     })
   })
@@ -259,10 +260,10 @@ describe('RecordsService', () => {
       db.$setInsertResult([{ id: 'ban-1' }, { id: 'ban-2' }])
 
       const count = await service.bulkAddBans(
+        hubScope('hub-1'),
         [HASH_A, HASH_B, HASH_A],
         'spam',
         'pk1',
-        'hub-1'
       )
 
       // 3 entries → 2 unique (in-batch dedup) → insert with ON CONFLICT DO NOTHING
@@ -275,6 +276,7 @@ describe('RecordsService', () => {
       db.$setInsertResult([{ id: 'ban-1' }])
 
       const count = await service.bulkAddBans(
+        PLATFORM_SCOPE,
         [HASH_A, HASH_B],
         'spam',
         'pk1',
@@ -287,7 +289,7 @@ describe('RecordsService', () => {
   describe('removeBan', () => {
     it('removes ban by phone', async () => {
       const { service } = setup()
-      await expect(service.removeBan(HASH_A)).resolves.toBeUndefined()
+      await expect(service.removeBan(hubScope('hub-1'), HASH_A)).resolves.toBeUndefined()
     })
   })
 
@@ -296,7 +298,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([{ id: 'ban-1' }])
 
-      const result = await service.checkBan({ hub: HASH_A, platform: HASH_B }, 'hub-1')
+      const result = await service.checkBan([{ scope: hubScope('hub-1'), phoneHash: HASH_A }, { scope: PLATFORM_SCOPE, phoneHash: HASH_B }])
       expect(result).toBe(true)
     })
 
@@ -304,7 +306,7 @@ describe('RecordsService', () => {
       const { db, service } = setup()
       db.$setSelectResult([])
 
-      const result = await service.checkBan({ hub: HASH_A, platform: HASH_B }, 'hub-1')
+      const result = await service.checkBan([{ scope: hubScope('hub-1'), phoneHash: HASH_A }, { scope: PLATFORM_SCOPE, phoneHash: HASH_B }])
       expect(result).toBe(false)
     })
   })

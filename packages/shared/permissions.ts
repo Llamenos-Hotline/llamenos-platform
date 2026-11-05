@@ -307,7 +307,7 @@ export const DEFAULT_ROLES: Omit<Role, 'createdAt' | 'updatedAt'>[] = [
       'metrics:read', 'system:view-roles',
       'erasure:*', 'retention:manage',
       // No `bans:*-platform`: a platform ban applies to every hub, which is not
-      // a hub's to decide. It was inert only because /bans/platform is mounted
+      // a hub's to decide. It was inert only because /admin/bans is mounted
       // unscoped, and would have gone live the moment this role was granted
       // globally (#2367).
     ],

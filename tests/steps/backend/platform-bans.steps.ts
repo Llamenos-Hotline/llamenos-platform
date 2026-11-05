@@ -78,13 +78,13 @@ After(async ({ request, world }) => {
     try {
       const { status, data } = await apiGet<{ bans: SearchBanEntry[] }>(
         request,
-        `/bans/platform/search?phone=${encodeURIComponent(phone)}`,
+        `/admin/bans/search?phone=${encodeURIComponent(phone)}`,
         actor?.deviceKey,
       )
       if (status !== 200) continue
       const platformEntries = data.bans.filter((b) => !b.hubId)
       for (const entry of platformEntries) {
-        await apiDelete(request, `/bans/platform/${entry.id}`, actor?.deviceKey)
+        await apiDelete(request, `/admin/bans/${entry.id}`, actor?.deviceKey)
       }
     } catch {
       // Best-effort — a cleanup failure must never fail the scenario itself.
@@ -102,7 +102,7 @@ async function createPlatformBan(
   reason: string,
 ): Promise<void> {
   const actor = getActingAdmin(world)
-  const res = await apiPost(request, '/bans/platform', { phone, reason }, actor?.deviceKey)
+  const res = await apiPost(request, '/admin/bans', { phone, reason }, actor?.deviceKey)
   expect(res.status, `failed to create platform ban for ${phone}: ${JSON.stringify(res.data)}`).toBe(200)
   const s = getS(world)
   s.platformPhones.add(phone)
@@ -125,7 +125,7 @@ async function resolveBanId(
   const actor = getActingAdmin(world)
   const { status, data } = await apiGet<{ bans: SearchBanEntry[] }>(
     request,
-    `/bans/platform/search?phone=${encodeURIComponent(phone)}`,
+    `/admin/bans/search?phone=${encodeURIComponent(phone)}`,
     actor?.deviceKey,
   )
   expect(status).toBe(200)
@@ -153,7 +153,7 @@ function resolveBanPath(world: Record<string, unknown>, path: string): string {
 // matches the feature file's literal "(without platform ban permission)" suffix.
 Given('a hub admin user \\(without platform ban permission\\)', async ({ request, world, workerHub }) => {
   // A hub admin whose role-hub-admin grant is HUB-SCOPED (via hub membership),
-  // not global. /bans/platform is not mounted under /hubs/:hubId/, so
+  // not global. /admin/bans is not mounted under /hubs/:hubId/, so
   // requirePermission('bans:read-platform') only ever consults the caller's
   // GLOBAL role permissions — this actor's global role is the createUserViaApi
   // default (role-volunteer), so unlike a user granted role-hub-admin globally,

@@ -14,7 +14,7 @@ import type { Services } from './index'
 import { getHubTelephonyFromService } from '../lib/service-factories'
 import { MockTelephonyAdapter, MOCK_CALL_SID_PREFIX } from '../telephony/mock'
 import { startParallelRinging } from './ringing'
-import { banHashes } from '../lib/crypto'
+import { callBanLookup } from '../lib/crypto'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL } from '@shared/event-kinds'
 import { ServiceError } from './settings'
@@ -51,7 +51,7 @@ export async function simulateIncomingCall(params: {
   }
 
   // Ban check — same hashed lookup the /incoming webhook performs.
-  const banned = await services.records.checkBan(banHashes(callerNumber, hubId, env.BAN_HASH_KEY), hubId)
+  const banned = await services.records.checkBan(callBanLookup(callerNumber, hubId, env.BAN_HASH_KEY))
   if (banned) return { ok: false, status: 403, code: 'banned' }
 
   const callId = `${MOCK_CALL_SID_PREFIX}${crypto.randomUUID()}`

@@ -6,7 +6,8 @@ import type { Services } from '../services'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
-import { banHash, openCallerNumber, PLATFORM_BAN_SCOPE } from '../lib/crypto'
+import { banHash, openCallerNumber } from '../lib/crypto'
+import { hubScope } from '@shared/owner-scope'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
@@ -592,16 +593,22 @@ calls.post('/:callId/ban',
     // Ban the caller (server resolves phone number — volunteer never sees it). The number is
     // opened from the call's KEK-sealed copy and hashed under the hub's ban key; the call
     // holds no hash of it. A call without a sealed number cannot be banned.
+    //
+    // The ban goes on the CALL's hub's list. A call with no hub (#2460) has no list to
+    // ban on, and is not banned: before #2463 it fell through to the platform list, so a
+    // `bans:report` holder could ban a caller deployment-wide, which takes
+    // `bans:create-platform` and a deliberate request to /admin/bans.
     let banned = false
     try {
       if (!call.callerNumberSealed) throw new Error('call holds no caller number')
-      const banHubId = call.hubId ?? hubId ?? undefined
+      if (!call.hubId) throw new Error('call belongs to no hub')
+      const scope = hubScope(call.hubId)
       const number = openCallerNumber(call.callerNumberSealed, callId, c.env.SERVER_KEK)
       await services.records.addBan({
-        phoneHash: banHash(number, banHubId || PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY),
+        scope,
+        phoneHash: banHash(number, scope, c.env.BAN_HASH_KEY),
         reason: body.reason || 'Banned during active call',
         bannedBy: pubkey,
-        hubId: banHubId,
       })
       banned = true
     } catch {
