@@ -753,6 +753,39 @@ export function reviewOutcomeToken(title: string | null | undefined): ReviewOutc
 }
 
 /**
+ * The annotation title `fleet-review.yml`'s "Name this run's outcome" step
+ * publishes its `<TOKEN> — <detail>` line under. That annotation is the ONLY
+ * place the outcome lives on the check run: the job deliberately holds no
+ * `checks: write`, so the check run's `output.title` (REST) / `title`
+ * (GraphQL) is null on every `fleet/review` run, pass or fail. #2473: `board`
+ * read the token from that never-populated title, so its red-token
+ * REQUEST_REVIEW branch could never fire — an empty title is
+ * indistinguishable, to the code, from "no red token".
+ */
+export const REVIEW_OUTCOME_ANNOTATION = `${REVIEW_JOB} outcome`
+
+/** The two fields of a check-run annotation the outcome reader needs. The
+ *  REST (`check-runs/{id}/annotations`) and GraphQL (`CheckRun.annotations`)
+ *  shapes both carry them under these names. */
+export interface CheckRunAnnotation {
+  title?: string | null
+  message?: string | null
+}
+
+/**
+ * The ONE reader of "what outcome did `fleet/review` record on this check
+ * run": the message of its `fleet/review outcome` annotation (`<TOKEN> —
+ * <detail>`), or `undefined` when no such annotation is present. Pass the
+ * result to `reviewOutcomeToken` for the token. `undefined` is "this run
+ * named no outcome", never a verdict — and a caller that could not READ the
+ * annotations must say so itself rather than pass an empty list here.
+ */
+export function reviewOutcomeFromAnnotations(annotations: readonly CheckRunAnnotation[]): string | undefined {
+  const message = annotations.find((a) => a.title === REVIEW_OUTCOME_ANNOTATION)?.message
+  return message === null || message === undefined || message.length === 0 ? undefined : message
+}
+
+/**
  * `realDispatch` (cli.ts) builds every fleet branch as `fleet/<lane>/<item>`.
  * ONE regex for that grammar, used by everything that reads a fleet branch —
  * deriving the lane (CI, to load its real scope) and the item (cli.ts, to

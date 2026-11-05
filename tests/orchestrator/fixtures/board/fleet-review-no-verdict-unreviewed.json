@@ -1,0 +1,66 @@
+{
+  "_source": "gh api repos/Llamenos-Hotline/llamenos-platform/check-runs/127410783839 (+ /annotations), PR #2478, captured 2026-11-05 for #2473",
+  "checkRun": {
+    "conclusion": "failure",
+    "head_sha": "84941dbea711199155679937510fb9483e35d69a",
+    "id": 127410783839,
+    "name": "fleet/review",
+    "output": {
+      "annotations_count": 4,
+      "summary": null,
+      "text": null,
+      "title": null
+    },
+    "status": "completed"
+  },
+  "annotations": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/Llamenos-Hotline/llamenos-platform/blob/84941dbea711199155679937510fb9483e35d69a/.github",
+      "start_line": 6,
+      "start_column": null,
+      "end_line": 6,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/Llamenos-Hotline/llamenos-platform/blob/84941dbea711199155679937510fb9483e35d69a/.github",
+      "start_line": 282,
+      "start_column": null,
+      "end_line": 282,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "fleet/review outcome",
+      "message": "NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one; request a review",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/Llamenos-Hotline/llamenos-platform/blob/84941dbea711199155679937510fb9483e35d69a/.github",
+      "start_line": 31,
+      "start_column": null,
+      "end_line": 31,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/Llamenos-Hotline/llamenos-platform/blob/84941dbea711199155679937510fb9483e35d69a/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ]
+}
