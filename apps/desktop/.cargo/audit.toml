@@ -2,24 +2,30 @@
 # `cargo audit` (security-audit.yml `rust-audit`) and `cargo deny` read
 # different config files, so the same justified exception lives in both.
 #
-# Only the three zip VULNERABILITIES need listing here. The unmaintained /
-# unsound / yanked findings are warnings, which do not fail `cargo audit`.
+# Only the VULNERABILITIES need listing here. The unmaintained / unsound /
+# yanked findings are warnings, which do not fail `cargo audit`.
 #
-# zip is fixed only in >=9.0.0 and both copies in the lockfile are pinned
-# below that by crates we do not control (verified 2026-10-18, tracked in #1956):
-#   * zip 4.6.1 <- tauri-plugin-updater 2.10.1, Windows target only. Latest
-#     2.14.0 and 3.0.0-alpha.3 still require `zip ^4`; the `zip` feature also
-#     gates the tar/flate2 the macOS/Linux updater needs, so it cannot be off.
-#   * zip 8.6.0 <- libsodium-sys-stable build script (latest 1.24.3 still
-#     requires `zip ^8.6`) via stronghold-runtime <- iota_stronghold <-
-#     tauri-plugin-stronghold. Build-time, MSVC targets only.
+# ── zip 8.6.0 (RUSTSEC-2026-0367 / 0368 / 0369 / 0429) ────────────────────────
 #
-# NOT REACHABLE: all three advisories concern extract() on an attacker-supplied
-# archive. The updater minisign-verifies the payload against our pinned pubkey
-# before extract (tauri-plugin-updater `verify_signature` precedes `install`);
-# libsodium's build script minisign-verifies its MSVC zip against libsodium's
-# pinned key before extracting. Forging either needs a signing key, which would
-# already allow arbitrary code execution without any zip bug.
+# zip is fixed only in >=9.0.0 (tracked in #1956). Re-verified 2026-11-04:
+#   * zip 4.6.1 <- tauri-plugin-updater is GONE. tauri-plugin-updater 2.14.1
+#     (2026-10-28) moved to `zip ^9` and now resolves zip 9.3.0. It requires
+#     tauri ^2.12 and Rust 1.90, which is why Tauri is 2.12.4 and
+#     ../rust-toolchain.toml is 1.90.0.
+#   * zip 8.6.0 <- libsodium-sys-stable build script REMAINS. Latest 1.24.3
+#     still requires `zip ^8.6`, via stronghold-runtime <- iota_stronghold <-
+#     tauri-plugin-stronghold (latest 2.4.0 / 3.0.0-alpha.3 unchanged).
+#     `[patch]` cannot lift a `^8.6` requirement across a major to 9.
+#     Build-time, MSVC targets only; absent from the shipped binary.
+#
+# NOT REACHABLE: all four advisories concern extract() on an attacker-supplied
+# archive. libsodium-sys-stable's build script extracts only its precompiled
+# MSVC zip, and only after `retrieve_and_verify_archive` has minisign-verified
+# it against libsodium's pinned key. Forging that archive needs the signing key,
+# which would already allow arbitrary code execution without any zip bug.
+# RUSTSEC-2026-0429 (process abort on a huge declared symlink size) is a DoS; its
+# worst case here is a failed MSVC build. Operator decision 2026-11-04: a dated
+# exception, exactly like 0367/0368/0369.
 #
 # EXPIRY IS ENFORCED, not advisory. `cargo audit` has no expiry of its own, so
 # the "Enforce advisory ignore expiry" step in security-audit.yml reads every
@@ -27,8 +33,8 @@
 # `[expires YYYY-MM-DD]`, and the build fails once that date has passed. Keep
 # this date in step with the zip entries in /deny.toml.
 #
-# REVISIT by 2026-12-31, tracked in #1956: empty this list,
-# `cargo update -p tauri-plugin-updater -p libsodium-sys-stable`, and run
+# REVISIT by 2026-12-31, tracked in #1956: empty the zip entries,
+# `cargo update -p libsodium-sys-stable -p tauri-plugin-stronghold`, and run
 # `cargo audit`. Anything that no longer fires is dead config.
 
 # ── crypto-bigint 0.5.5 (RUSTSEC-2026-0387) ───────────────────────────────────
@@ -59,7 +65,8 @@
 [advisories]
 ignore = [
   "RUSTSEC-2026-0387", # crypto-bigint 0.5.5 timing variability; no release reaches >=0.7.6 (iota-crypto -> k256 0.13 pin), secp256k1 never invoked, tracked with #1956 [expires 2026-12-01]
-  "RUSTSEC-2026-0367", # zip <9.0.0 keeps SUID/SGID bits on extract; only minisign-verified archives are extracted, no upgrade exists, tracked in #1956 [expires 2026-12-31]
-  "RUSTSEC-2026-0368", # zip <9.0.0 extract() follows attacker symlinks; same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
-  "RUSTSEC-2026-0369", # zip <9.0.0 applies Unix permissions through symlinks on extract(); same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0367", # zip 8.6.0 keeps SUID/SGID bits on extract; only via the libsodium-sys-stable build script, which extracts a minisign-verified archive only, no release on zip 9, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0368", # zip 8.6.0 extract() follows attacker symlinks; same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0369", # zip 8.6.0 applies Unix permissions through symlinks on extract(); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
+  "RUSTSEC-2026-0429", # zip 8.6.0 extract() aborts on a huge declared symlink size (DoS); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]
 ]

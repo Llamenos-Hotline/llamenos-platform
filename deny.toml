@@ -36,10 +36,11 @@ yanked = "warn"
 #     advisory ignored in one place must carry the same dated reason in both.
 #
 # Vulnerabilities (rustls, quick-xml, rkyv) are deliberately NOT listed: they
-# are fixed by upgrading, not by ignoring. The one exception is RUSTSEC-2026-0387
-# (crypto-bigint) below, for which no patched version is reachable.
+# are fixed by upgrading, not by ignoring. The only vulnerabilities listed are
+# RUSTSEC-2026-0387 (crypto-bigint) and the four zip advisories at the end, for
+# which no patched version is reachable.
 #
-# All entries below except RUSTSEC-2026-0387 are UNMAINTAINED (not vulnerable) crates in apps/desktop's
+# Every other entry is an UNMAINTAINED (not vulnerable) crate in apps/desktop's
 # Tauri-side dependency graph. Removing them needs an upstream release of
 # Tauri / tauri-plugin-stronghold; we do not control it. Track re-triage in #646.
 ignore = [
@@ -56,12 +57,6 @@ ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 unmaintained; compile-time proc-macro only (via stronghold_engine), absent from the shipped binary [expires 2026-12-31]" },
   # tauri -> tray-icon -> libappindicator -> gtk -> glib-macros -> proc-macro-error.
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 unmaintained; compile-time proc-macro only (via gtk-rs 0.18 glib-macros), absent from the shipped binary, waits on Tauri's move to gtk4/gtk-rs 0.20 [expires 2026-12-31]" },
-  # tauri-build / tauri-utils -> urlpattern 0.3.0 -> unic-* (5 crates, one advisory each).
-  { id = "RUSTSEC-2025-0075", reason = "unic-char-range unmaintained; via tauri-utils -> urlpattern (capability/URL-pattern parsing of our own tauri.conf.json), no untrusted input, no known vulnerability [expires 2026-12-31]" },
-  { id = "RUSTSEC-2025-0080", reason = "unic-common unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2025-0081", reason = "unic-char-property unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident unmaintained; via tauri-utils -> urlpattern, same as RUSTSEC-2025-0075 [expires 2026-12-31]" },
   # tauri-plugin-notification -> notify-rust -> zbus 5 and tauri-plugin-single-instance
   # -> zbus 5 (Linux D-Bus). zvariant/zbus_names/zvariant_derive were merged into
   # zbus 6.0.0, but every published notify-rust / tauri-plugin-notification /
@@ -69,22 +64,25 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant 5.9.2 unmaintained (merged into zbus 6); via zbus 5 <- notify-rust and tauri-plugin-single-instance, no vulnerability, no upstream release on zbus 6 yet, tracked in #1956 [expires 2026-12-31]" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.1 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.9.2 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
-  # zip: fixed only in >=9.0.0, and BOTH copies in the graph are pinned below it by
-  # crates we do not control (tracked in #1956):
-  #   * zip 4.6.1 <- tauri-plugin-updater (Windows target only; latest 2.14.0 and
-  #     3.0.0-alpha.3 still require `zip ^4`). The `zip` feature also gates the
-  #     tar/flate2 the macOS/Linux updater needs, so it cannot be disabled.
-  #   * zip 8.6.0 <- libsodium-sys-stable build script (latest 1.24.3 still requires
-  #     `zip ^8.6`), via stronghold-runtime <- iota_stronghold <- tauri-plugin-stronghold.
-  # All three advisories concern `extract()` on an ATTACKER-SUPPLIED archive. Neither
-  # copy ever sees one: the updater minisign-verifies the downloaded payload against
-  # our pinned pubkey before it calls extract (updater.rs `verify_signature` precedes
-  # `install`), and libsodium's build script minisign-verifies the libsodium MSVC zip
-  # against libsodium's pinned key before extracting. Forging either needs a signing
-  # key, which would already allow arbitrary code execution without any zip bug.
-  { id = "RUSTSEC-2026-0367", reason = "zip <9.0.0 keeps SUID/SGID bits on extract; zip 4.6.1 (tauri-plugin-updater, Windows only) and 8.6.0 (libsodium-sys-stable build script) both only extract minisign-verified archives, no upgrade exists, tracked in #1956 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2026-0368", reason = "zip <9.0.0 extract() follows attacker symlinks; same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2026-0369", reason = "zip <9.0.0 applies Unix permissions through symlinks on extract(); same two minisign-verified-only call sites as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
+  # zip: every advisory below is fixed only in >=9.0.0 (tracked in #1956).
+  #   * zip 4.6.1 <- tauri-plugin-updater is GONE: tauri-plugin-updater 2.14.1
+  #     (2026-10-28) moved to `zip ^9`, so the updater now builds against zip 9.3.0.
+  #     That release needs tauri ^2.12 and Rust 1.90 (hence the Tauri 2.12.4 and
+  #     apps/desktop/rust-toolchain.toml 1.90.0 bumps that landed with it).
+  #   * zip 8.6.0 <- libsodium-sys-stable build script REMAINS (latest 1.24.3 still
+  #     requires `zip ^8.6`), via stronghold-runtime <- iota_stronghold <-
+  #     tauri-plugin-stronghold. `[patch]` cannot lift a `^8.6` requirement to 9.
+  # All four advisories concern `extract()` on an ATTACKER-SUPPLIED archive. The
+  # remaining call site never sees one: libsodium-sys-stable's build script only
+  # extracts the precompiled MSVC libsodium zip, after `retrieve_and_verify_archive`
+  # has minisign-verified it against libsodium's pinned key (build.rs). Forging it
+  # needs that signing key, which would already allow arbitrary code execution
+  # without any zip bug. Build-time and MSVC-target only; absent from the binary.
+  { id = "RUSTSEC-2026-0367", reason = "zip 8.6.0 (<9.0.0) keeps SUID/SGID bits on extract; only via the libsodium-sys-stable build script, which extracts a minisign-verified archive only, no release on zip 9, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0368", reason = "zip 8.6.0 (<9.0.0) extract() follows attacker symlinks; same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
+  { id = "RUSTSEC-2026-0369", reason = "zip 8.6.0 (<9.0.0) applies Unix permissions through symlinks on extract(); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
+  # Operator decision 2026-11-04: a dated exception, like its three siblings.
+  { id = "RUSTSEC-2026-0429", reason = "zip 8.6.0 (<9.0.0) extract() aborts the process on a symlink entry with a large declared size (DoS); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, worst case a failed MSVC build, tracked in #1956 [expires 2026-12-31]" },
 ]
 
 # ── Licenses ────────────────────────────────────────────────────────────────

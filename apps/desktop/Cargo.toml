@@ -2,7 +2,7 @@
 name = "llamenos-desktop"
 version = "0.21.2"
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.90.0"
 license = "AGPL-3.0-or-later"
 
 [lib]
@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = ["isolation"] }
 # and a loose range on either side lets cargo/bun resolve them independently.
 # Bump BOTH this line and package.json's @tauri-apps/api together; a rail test
 # in tests/tauri-version-alignment.spec.ts fails loudly if they diverge again.
-tauri = { version = "=2.11.1", features = ["tray-icon", "isolation"] }
+tauri = { version = "=2.12.4", features = ["tray-icon", "isolation"] }
 tauri-plugin-stronghold = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
