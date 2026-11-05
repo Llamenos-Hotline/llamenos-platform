@@ -839,12 +839,12 @@ struct TypedReportCreateView: View {
             // path (#2462). Its parent is the hub: the report does not exist yet.
             let response = try await appState.apiService.uploadEncryptedFile(
                 encryptedData: encrypted.encryptedData,
-                owner: Owner(conversationID: nil, kind: .entityField, caseRecordID: nil),
+                owner: FileOwner(conversationID: nil, kind: .entityField, caseRecordID: nil),
                 recipientEnvelopes: encrypted.keyEnvelopes.map {
                     SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey)
                 },
                 encryptedMetadata: encrypted.metadataEnvelopes.map {
-                    SharedMetadata(ct: $0.ct, enc: $0.enc, encryptedContent: $0.encryptedContent, pubkey: $0.pubkey)
+                    EncryptedMetadataEntry(ct: $0.ct, enc: $0.enc, encryptedContent: $0.encryptedContent, pubkey: $0.pubkey)
                 }
             )
 

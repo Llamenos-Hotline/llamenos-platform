@@ -1011,9 +1011,9 @@ extension APIService {
     /// unscoped variant.
     func uploadEncryptedFile(
         encryptedData: Data,
-        owner: Owner,
+        owner: FileOwner,
         recipientEnvelopes: [SharedAdminEnvelope],
-        encryptedMetadata: [SharedMetadata]
+        encryptedMetadata: [EncryptedMetadataEntry]
     ) async throws -> UploadCompleteResponse {
         let chunkSize = Self.uploadChunkSize
         let totalChunks = max(1, (encryptedData.count + chunkSize - 1) / chunkSize)

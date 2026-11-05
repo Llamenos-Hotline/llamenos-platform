@@ -39,6 +39,7 @@ import * as recoveryGroup from '@protocol/schemas/recovery-group'
 import * as devices from '@protocol/schemas/devices'
 import * as settings from '@protocol/schemas/settings'
 import * as shifts from '@protocol/schemas/shifts'
+import * as uploads from '@protocol/schemas/uploads'
 import * as providerSetupApi from '@protocol/schemas/provider-setup/api'
 
 const MODULES: Record<string, Record<string, unknown>> = {
@@ -56,6 +57,9 @@ const MODULES: Record<string, Record<string, unknown>> = {
   '@protocol/schemas/provider-setup/api': providerSetupApi,
   // #2204 — the shift status both iOS screens read.
   '@protocol/schemas/shifts': shifts,
+  // #2462 — the report form's file upload: a discriminated-union owner and nested
+  // envelope types, where a wrong generated type ships a body the route rejects.
+  '@protocol/schemas/uploads': uploads,
 }
 
 const FIXTURE = join(__dirname, '../../../../apps/ios/Tests/Wire/ios-request-bodies.json')
