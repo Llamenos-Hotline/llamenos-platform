@@ -108,7 +108,7 @@ jobs:
     env:
       # `cargo audit` reads Cargo.lock; it compiles nothing. But running it
       # from apps/desktop makes rustup honour that directory's
-      # rust-toolchain.toml and install a second, pinned toolchain (1.88.0
+      # rust-toolchain.toml and install a second, pinned toolchain (1.90.0
       # plus rustfmt, clippy and four cross targets — ~1.7 GB) just to run a
       # lockfile scan. Naming the channel here skips that.
       RUSTUP_TOOLCHAIN: stable
