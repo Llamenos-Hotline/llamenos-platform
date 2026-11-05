@@ -8,6 +8,7 @@
 import { expect } from '@playwright/test'
 import { When, Then, Given, Before } from './fixtures'
 import { resolvePathParams, setLastResponse } from './shared-state'
+import type { AuditLogEntry } from '@protocol/schemas/audit'
 import {
   apiGet,
   apiPost,
@@ -26,7 +27,7 @@ Before({ tags: '@backend' }, async () => {
 // ── Generic admin request with DataTable body ───────────────────────
 
 When('an admin sends {string} to {string} with body:', async (
-  { request, world },
+  { request, world, workerHub },
   method: string,
   path: string,
   dataTable: { raw: () => string[][] },
@@ -41,7 +42,9 @@ When('an admin sends {string} to {string} with body:', async (
     }
   }
 
-  const apiPath = path.startsWith('/api') ? path.slice(4) : path
+  // `:hubId` stands for the scenario's own hub, the way a client addresses it.
+  const resolved = resolvePathParams(world, path, workerHub).replaceAll(':hubId', workerHub)
+  const apiPath = resolved.startsWith('/api') ? resolved.slice(4) : resolved
 
   switch (method) {
     case 'GET':
@@ -159,17 +162,20 @@ Given('I am authenticated as admin', async () => {
 Then(
   'the audit log entry for {string} should not contain the raw phone {string}',
   async ({ request, workerHub }, eventType: string, rawPhone: string) => {
-    const res = await apiGet<{ entries: Array<{ eventType: string; payload: unknown }> }>(
+    // An audit entry names its event in `action` (auditEntryResponseSchema). This step
+    // used to filter on an `eventType` field no entry has, and the ban it inspected
+    // landed in the platform chain rather than this hub's (#2463), so it compared
+    // against zero entries and could not fail.
+    const res = await apiGet<{ entries: AuditLogEntry[] }>(
       request,
-      `/hubs/${workerHub}/audit`,
+      `/hubs/${workerHub}/audit?limit=100`,
       ADMIN_NSEC,
     )
     expect(res.status).toBe(200)
-    const entries = res.data.entries ?? []
-    const matching = entries.filter(e => e.eventType === eventType)
+    const matching = (res.data.entries ?? []).filter(e => e.action === eventType)
+    expect(matching.length, `no "${eventType}" entry in the hub's audit chain`).toBeGreaterThan(0)
     for (const entry of matching) {
-      const payloadStr = JSON.stringify(entry.payload)
-      expect(payloadStr).not.toContain(rawPhone)
+      expect(JSON.stringify(entry)).not.toContain(rawPhone)
     }
   },
 )

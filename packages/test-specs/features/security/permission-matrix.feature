@@ -222,7 +222,7 @@ Feature: Permission Matrix
   # #2463: a hub's ban list has no unscoped route. Before, `/api/bans` with no hub
   # addressed the PLATFORM list behind the hub permissions (bans:create), so a
   # missing hub silently meant "every hub". The platform list is /api/admin/bans.
-  Scenario Outline: <role> finds no ban list outside a hub
+  Scenario Outline: <role> <method> finds no ban list outside a hub
     When the "<role>" user sends "<method>" to "/api/bans"
     Then the response status should be 404
 
