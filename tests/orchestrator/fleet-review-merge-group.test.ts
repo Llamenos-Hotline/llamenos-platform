@@ -300,18 +300,35 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
 })
 
+/** What a scripted `gh` failure looks like: which call fails, how many
+ *  times before it starts answering (omit for "every time"), and the stderr
+ *  it prints — the arm classifies a failure as retryable or not from exactly
+ *  that text, the way it reads real `gh`'s `gh: Not Found (HTTP 404)`. */
+interface GhFailure {
+  kind: 'pulls' | 'checks'
+  times?: number
+  stderr?: string
+}
+
 /**
  * A `gh` stub on PATH. It answers the two calls the arm makes — the PR
  * lookup and the check-run listing — from fixture files, and honours `--jq`
  * the way real `gh` does (one compact JSON value per matching result) by
- * shelling out to the real `jq`. `GH_STUB_FAIL` makes the named call exit
- * non-zero, which is how the fail-closed branches are exercised.
+ * shelling out to the real `jq`. A `GhFailure` makes the named call exit
+ * non-zero (its first `times` calls, or every call), which is how the retry
+ * and the fail-closed branches are exercised. Every call is counted per kind
+ * in `calls-<kind>`, so a test can prove how many times the arm asked.
+ *
+ * `sleep` is stubbed too: the arm backs off between attempts with the real
+ * `sleep` command, and the stub records each requested delay instead of
+ * waiting, so the backoff schedule is asserted rather than slept through.
  */
-function installGhStub(opts: { checkRuns?: CheckRun[]; prHead?: string; fail?: 'pulls' | 'checks' }): string {
+function installGhStub(opts: { checkRuns?: CheckRun[]; prHead?: string; fail?: GhFailure }): string {
   const bin = join(scratch, 'bin')
   mkdirSync(bin, { recursive: true })
   writeFileSync(join(scratch, 'pull.json'), JSON.stringify({ head: { sha: opts.prHead ?? PR_HEAD } }))
   writeFileSync(join(scratch, 'checks.json'), JSON.stringify({ check_runs: opts.checkRuns ?? [] }))
+  writeFileSync(join(scratch, 'fail-stderr'), opts.fail?.stderr ?? `gh: simulated API failure for ${opts.fail?.kind ?? ''}`)
   const stub = `#!/usr/bin/env bash
 set -u
 kind=""
@@ -325,9 +342,14 @@ for a in "$@"; do
   esac
   prev="$a"
 done
+counter="${scratch}/calls-$kind"
+n=$(( $(cat "$counter" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$counter"
 if [ "\${GH_STUB_FAIL:-}" = "$kind" ]; then
-  echo "gh: simulated API failure for $kind" >&2
-  exit 1
+  if [ -z "\${GH_STUB_FAIL_TIMES:-}" ] || [ "$n" -le "\${GH_STUB_FAIL_TIMES}" ]; then
+    cat "${join(scratch, 'fail-stderr')}" >&2
+    exit 1
+  fi
 fi
 case "$kind" in
   pulls) fixture="${join(scratch, 'pull.json')}" ;;
@@ -338,7 +360,29 @@ if [ -n "$filter" ]; then jq -c "$filter" "$fixture"; else cat "$fixture"; fi
 `
   writeFileSync(join(bin, 'gh'), stub)
   chmodSync(join(bin, 'gh'), 0o755)
+  writeFileSync(join(bin, 'sleep'), `#!/usr/bin/env bash\necho "$1" >> "${join(scratch, 'sleeps')}"\n`)
+  chmodSync(join(bin, 'sleep'), 0o755)
   return bin
+}
+
+interface ArmResult {
+  status: number | null
+  output: string
+  /** The `reason=` the arm recorded in $GITHUB_OUTPUT, or '' if none. */
+  reason: string
+  /** How many times the arm called `gh` for the PR lookup / check runs. */
+  pullsCalls: number
+  checksCalls: number
+  /** Every backoff delay the arm asked `sleep` for, in order. */
+  sleeps: number[]
+}
+
+function readCount(path: string): number {
+  try {
+    return Number(readFileSync(path, 'utf8').trim())
+  } catch {
+    return 0
+  }
 }
 
 /** Runs the arm's real script the way GitHub runs an unshelled `run:` step:
@@ -347,25 +391,99 @@ function runArm(opts: {
   checkRuns?: CheckRun[]
   prHead?: string
   headRef?: string
-  fail?: 'pulls' | 'checks'
-} = {}): { status: number | null; output: string } {
+  fail?: GhFailure
+} = {}): ArmResult {
   const bin = installGhStub(opts)
   const scriptPath = join(scratch, 'arm.sh')
+  const outputPath = join(scratch, 'github-output')
   writeFileSync(scriptPath, queueStep().run ?? '')
+  writeFileSync(outputPath, '')
   const result = spawnSync('bash', ['-e', scriptPath], {
     encoding: 'utf8',
     env: {
       ...process.env,
       PATH: `${bin}:${process.env['PATH'] ?? ''}`,
       GH_TOKEN: 'stub',
+      GITHUB_OUTPUT: outputPath,
       REPO: 'Llamenos-Hotline/llamenos-platform',
       MQ_HEAD_REF: opts.headRef ?? QUEUE_REF,
       MQ_HEAD_SHA: QUEUE_HEAD,
       MQ_BASE_SHA: QUEUE_BASE,
-      ...(opts.fail ? { GH_STUB_FAIL: opts.fail } : {}),
+      ...(opts.fail ? { GH_STUB_FAIL: opts.fail.kind } : {}),
+      ...(opts.fail?.times !== undefined ? { GH_STUB_FAIL_TIMES: String(opts.fail.times) } : {}),
+    },
+  })
+  const reasons = readFileSync(outputPath, 'utf8')
+    .split('\n')
+    .filter((l) => l.startsWith('reason='))
+    .map((l) => l.slice('reason='.length))
+  let sleeps: number[] = []
+  try {
+    sleeps = readFileSync(join(scratch, 'sleeps'), 'utf8').trim().split('\n').filter(Boolean).map(Number)
+  } catch {
+    sleeps = []
+  }
+  return {
+    status: result.status,
+    output: `${result.stdout}\n${result.stderr}`,
+    reason: reasons.length === 0 ? '' : (reasons[reasons.length - 1] ?? ''),
+    pullsCalls: readCount(join(scratch, 'calls-pulls')),
+    checksCalls: readCount(join(scratch, 'calls-checks')),
+    sleeps,
+  }
+}
+
+/** The final "Assert this run reached a real verdict" step's real script. */
+function assertStep(): WorkflowStep {
+  const step = reviewSteps().find((s) => s.name === 'Assert this run reached a real verdict')
+  if (!step || typeof step.run !== 'string') {
+    throw new Error('no "Assert this run reached a real verdict" step with a run: block — the parser must not pass vacuously')
+  }
+  return step
+}
+
+/** Runs the assertion step's real script on merge_group with the queue
+ *  step's outcome and recorded reason, the two values the workflow hands it
+ *  as `steps.queue.outcome` / `steps.queue.outputs.reason`. */
+function runAssert(queueOutcome: string, queueReason: string): { status: number | null; output: string } {
+  const scriptPath = join(scratch, 'assert.sh')
+  writeFileSync(scriptPath, assertStep().run ?? '')
+  const result = spawnSync('bash', ['-e', scriptPath], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      EVENT_NAME: 'merge_group',
+      QUEUE_OUTCOME: queueOutcome,
+      QUEUE_REASON: queueReason,
+      GATE_CONCLUSION: '',
+      OUTCOME: '',
+      REVIEW_OUTCOME: '',
+      RESULT_FILE: join(scratch, 'no-result'),
+      REPORT_DIR: join(scratch, 'no-report'),
     },
   })
   return { status: result.status, output: `${result.stdout}\n${result.stderr}` }
+}
+
+/** The whole job on a queue ref, as GitHub composes it: the arm runs, its
+ *  exit status becomes `steps.queue.outcome`, its recorded reason becomes
+ *  `steps.queue.outputs.reason`, and the assertion step concludes. The job
+ *  is green only if both exit 0. */
+function runJob(opts: Parameters<typeof runArm>[0] = {}): {
+  arm: ArmResult
+  job: { status: number | null; output: string }
+} {
+  const arm = runArm(opts)
+  const verdict = runAssert(arm.status === 0 ? 'success' : 'failure', arm.reason)
+  return {
+    arm,
+    job: { status: arm.status === 0 ? verdict.status : 1, output: `${arm.output}\n${verdict.output}` },
+  }
+}
+
+/** Every `fleet/review FAILED: <token>` the job printed, in order. */
+function failedTokens(output: string): string[] {
+  return [...output.matchAll(/fleet\/review FAILED: ([a-z-]+)/g)].map((m) => m[1] ?? '')
 }
 
 describe('rail: the merge-queue arm publishes the constituent PR\'s real verdict', () => {
@@ -457,14 +575,14 @@ describe('rail: the merge-queue arm publishes the constituent PR\'s real verdict
   })
 
   it('FAILS with a named reason when the PR lookup itself fails — never a silent exit 1', () => {
-    const { status, output } = runArm({ fail: 'pulls' })
+    const { status, output } = runArm({ fail: { kind: 'pulls' } })
     expect(status).toBe(1)
     expect(output).toContain('queue-pr-lookup')
     expect(output).toContain('pulls/1185')
   })
 
   it('FAILS with a named reason when the check-run lookup fails', () => {
-    const { status, output } = runArm({ fail: 'checks', checkRuns: [checkRun()] })
+    const { status, output } = runArm({ fail: { kind: 'checks' }, checkRuns: [checkRun()] })
     expect(status).toBe(1)
     expect(output).toContain('queue-check-lookup')
   })
@@ -473,5 +591,183 @@ describe('rail: the merge-queue arm publishes the constituent PR\'s real verdict
     const { status, output } = runArm({ prHead: 'not-a-sha', checkRuns: [checkRun()] })
     expect(status).toBe(1)
     expect(output).toContain('queue-pr-head-unresolved')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2481: retry the LOOKUP, never the judgement.
+//
+// On 2026-11-05 two merge groups (#2467, #2472) were ejected within a minute
+// by a single failed `gh api .../pulls/<n>` call while GitHub's API was
+// flaky; every other workflow in both groups had passed. The arm now retries
+// its two reads with a bounded backoff — and the rails below pin both halves
+// of that: a transient failure no longer ejects, and an unanswerable lookup
+// and a real "no verdict" still fail closed, for DIFFERENT stated reasons.
+// Cases 2 and 3 are the ones that matter: if they ever produced the same
+// token, or one of them went green, the retry would be hiding objections.
+// ---------------------------------------------------------------------------
+
+const HTTP_502 = 'gh: Server Error (HTTP 502)'
+const ATTEMPTS = 5
+
+describe('rail: the queued-PR lookup retries transient failures, never the verdict (#2481)', () => {
+  // Case 1.
+  it('a lookup that fails transiently N-1 times and then answers reaches the real PASS verdict', () => {
+    const { arm, job } = runJob({ checkRuns: [checkRun()], fail: { kind: 'pulls', times: ATTEMPTS - 1, stderr: HTTP_502 } })
+    expect(arm.pullsCalls).toBe(ATTEMPTS)
+    expect(arm.sleeps).toEqual([2, 4, 8, 16])
+    expect(arm.output).toContain('::warning::')
+    expect(arm.output).toContain('retrying in 2s')
+    expect(failedTokens(job.output)).toEqual([])
+    expect(arm.status).toBe(0)
+    expect(job.status).toBe(0)
+    expect(arm.output).toContain('reported, not re-run')
+  })
+
+  // ...and the retried read still feeds a REAL judgement: a transient lookup
+  // failure followed by a failing review must still block.
+  it('a lookup that recovers still reports a FAILING review as failing — the retry wraps the read, not the judgement', () => {
+    const { arm, job } = runJob({
+      checkRuns: [checkRun({ conclusion: 'failure' })],
+      fail: { kind: 'pulls', times: 2, stderr: HTTP_502 },
+    })
+    expect(arm.pullsCalls).toBe(3)
+    expect(job.status).toBe(1)
+    expect(failedTokens(job.output)).toEqual(['queue-pr-review-not-passing', 'queue-verdict-missing'])
+  })
+
+  // Case 2.
+  it('a lookup that fails on every attempt fails the job with queue-pr-lookup — and never with queue-verdict-missing', () => {
+    const { arm, job } = runJob({ checkRuns: [checkRun()], fail: { kind: 'pulls', stderr: HTTP_502 } })
+    expect(arm.pullsCalls).toBe(ATTEMPTS)
+    expect(arm.sleeps).toEqual([2, 4, 8, 16])
+    expect(arm.status).toBe(1)
+    expect(arm.reason).toBe('queue-pr-lookup')
+    expect(job.status).toBe(1)
+    expect(failedTokens(job.output)).toEqual(['queue-pr-lookup', 'queue-pr-lookup'])
+    expect(job.output).not.toContain('queue-verdict-missing')
+    expect(job.output).toContain(HTTP_502)
+    expect(job.output).toContain('not a review objection')
+  })
+
+  // Case 3.
+  it('a lookup that SUCCEEDS for a PR with no verdict fails with queue-verdict-missing, on the first attempt, with no retry', () => {
+    const { arm, job } = runJob({ checkRuns: [] })
+    expect(arm.pullsCalls).toBe(1)
+    expect(arm.checksCalls).toBe(1)
+    expect(arm.sleeps).toEqual([])
+    expect(arm.status).toBe(1)
+    expect(arm.reason).toBe('queue-pr-unreviewed')
+    expect(job.status).toBe(1)
+    expect(failedTokens(job.output)).toEqual(['queue-pr-unreviewed', 'queue-verdict-missing'])
+    expect(job.output).not.toContain('queue-pr-lookup')
+  })
+
+  // Case 4.
+  it('a lookup that succeeds for a PR with a PASS verdict is green, first time, with no retry', () => {
+    const { arm, job } = runJob({ checkRuns: [checkRun()] })
+    expect(arm.pullsCalls).toBe(1)
+    expect(arm.sleeps).toEqual([])
+    expect(arm.reason).toBe('')
+    expect(job.status).toBe(0)
+    expect(failedTokens(job.output)).toEqual([])
+  })
+
+  // The distinction itself, stated once: cases 2 and 3 are both red, and
+  // their job-level tokens are disjoint.
+  it('cases 2 and 3 are both red, for disjoint stated reasons', () => {
+    const lookup = runJob({ checkRuns: [checkRun()], fail: { kind: 'pulls', stderr: HTTP_502 } }).job
+    rmSync(scratch, { recursive: true, force: true })
+    mkdirSync(scratch, { recursive: true })
+    const missing = runJob({ checkRuns: [] }).job
+    expect(lookup.status).toBe(1)
+    expect(missing.status).toBe(1)
+    const a = new Set(failedTokens(lookup.output))
+    const b = new Set(failedTokens(missing.output))
+    expect(a.size).toBeGreaterThan(0)
+    expect(b.size).toBeGreaterThan(0)
+    expect([...a].filter((t) => b.has(t))).toEqual([])
+  })
+
+  // A well-formed "that PR does not exist" is an answer, not a hiccup.
+  it('a 404 for the PR is not retried — a well-formed answer fails on the first attempt', () => {
+    const { arm, job } = runJob({ fail: { kind: 'pulls', stderr: 'gh: Not Found (HTTP 404)' } })
+    expect(arm.pullsCalls).toBe(1)
+    expect(arm.sleeps).toEqual([])
+    expect(arm.reason).toBe('queue-pr-lookup')
+    expect(job.status).toBe(1)
+    expect(arm.output).toContain('non-retryable')
+  })
+
+  it('a 401 is not retried either', () => {
+    const { arm } = runJob({ fail: { kind: 'pulls', stderr: 'gh: Bad credentials (HTTP 401)' } })
+    expect(arm.pullsCalls).toBe(1)
+    expect(arm.status).toBe(1)
+  })
+
+  // The error classes that ARE retried.
+  for (const [label, stderr] of [
+    ['a transport error with no HTTP status', 'Get "https://api.github.com/repos/o/r/pulls/1185": dial tcp: i/o timeout'],
+    ['a GraphQL-level failure', 'GraphQL: Something went wrong while executing your query.'],
+    ['HTTP 503', 'gh: Service Unavailable (HTTP 503)'],
+    ['HTTP 429', 'gh: Too Many Requests (HTTP 429)'],
+    ['a 403 secondary rate limit', 'gh: You have exceeded a secondary rate limit. (HTTP 403)'],
+  ] as const) {
+    it(`retries ${label}, then reaches the verdict`, () => {
+      const { arm, job } = runJob({ checkRuns: [checkRun()], fail: { kind: 'pulls', times: 1, stderr } })
+      expect(arm.pullsCalls).toBe(2)
+      expect(arm.sleeps).toEqual([2])
+      expect(job.status).toBe(0)
+    })
+  }
+
+  it('a 403 that is not a rate limit is not retried', () => {
+    const { arm } = runJob({ fail: { kind: 'pulls', stderr: 'gh: Resource not accessible by integration (HTTP 403)' } })
+    expect(arm.pullsCalls).toBe(1)
+    expect(arm.status).toBe(1)
+  })
+
+  // The check-run listing is the other READ the verdict depends on; the same
+  // bounded retry covers it, with its own token when it stays unanswerable.
+  it('the check-run read retries the same way, and an exhausted one fails as queue-check-lookup, never queue-verdict-missing', () => {
+    const recovered = runJob({ checkRuns: [checkRun()], fail: { kind: 'checks', times: 3, stderr: HTTP_502 } })
+    expect(recovered.arm.checksCalls).toBe(4)
+    expect(recovered.job.status).toBe(0)
+
+    rmSync(scratch, { recursive: true, force: true })
+    mkdirSync(scratch, { recursive: true })
+    const exhausted = runJob({ checkRuns: [checkRun()], fail: { kind: 'checks', stderr: HTTP_502 } })
+    expect(exhausted.arm.checksCalls).toBe(ATTEMPTS)
+    expect(exhausted.job.status).toBe(1)
+    expect(failedTokens(exhausted.job.output)).toEqual(['queue-check-lookup', 'queue-check-lookup'])
+  })
+})
+
+describe('rail: the final assertion fails closed on every non-success queue outcome (#2481)', () => {
+  // The recorded reason only ever selects the MESSAGE. Whatever it says —
+  // including nothing, or a lookup token — a non-success queue step is red.
+  for (const reason of ['', 'queue-pr-lookup', 'queue-check-lookup', 'queue-pr-unreviewed', 'queue-pr-review-not-passing', 'something-new']) {
+    for (const outcome of ['failure', 'cancelled', 'skipped', '']) {
+      it(`queue outcome '${outcome}' with reason '${reason}' is red`, () => {
+        const { status, output } = runAssert(outcome, reason)
+        expect(status).toBe(1)
+        expect(output).toContain(FAILED_MARKER)
+      })
+    }
+  }
+
+  it('a missing or non-lookup reason names queue-verdict-missing and carries the cause', () => {
+    expect(runAssert('failure', 'queue-pr-unreviewed').output).toContain("queue-verdict-missing — on merge_group the queued-PR verdict step reported 'failure' (reason: 'queue-pr-unreviewed')")
+    expect(runAssert('skipped', '').output).toContain("(reason: 'none recorded')")
+    expect(failedTokens(runAssert('failure', 'something-new').output)).toEqual(['queue-verdict-missing'])
+  })
+
+  it('only the two lookup reasons are reported as lookups', () => {
+    expect(failedTokens(runAssert('failure', 'queue-pr-lookup').output)).toEqual(['queue-pr-lookup'])
+    expect(failedTokens(runAssert('failure', 'queue-check-lookup').output)).toEqual(['queue-check-lookup'])
+  })
+
+  it('a successful queue step is green', () => {
+    expect(runAssert('success', '').status).toBe(0)
   })
 })
