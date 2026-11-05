@@ -158,8 +158,11 @@ Given(
       // the 403 was caught as "CMS may not be enabled", no record existed, and
       // the "record" example asserted nothing (#2465). createRecordViaApi
       // throws on any non-2xx, and nothing here catches it.
+      // Assigned to its creator: `cases:read-own` is "read records assigned to
+      // self" (packages/shared/permissions.ts), so an unassigned record is
+      // correctly invisible to the volunteer who created it.
       const etId = await ensureEntityType(request, world)
-      const rec = await createRecordViaApi(request, etId, { hubId: workerHub }, vol.deviceKey)
+      const rec = await createRecordViaApi(request, etId, { hubId: workerHub, assignedTo: [vol.pubkey] }, vol.deviceKey)
       const recordId = (rec as { id?: string }).id
       expect(recordId, `${name}'s record create returned no id: ${JSON.stringify(rec)}`).toBeTruthy()
       user.recordIds.push(recordId!)
