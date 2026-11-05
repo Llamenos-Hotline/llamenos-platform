@@ -18,7 +18,7 @@ UPDATE "files" AS f SET "hub_id" = c."hub_id", "owner_kind" = 'conversation'
 -- which reaches files by hub_id — still reaches the row. A row whose
 -- conversation has no hub stays hubless and is removed by the contract
 -- release, which also drops this trigger.
-CREATE FUNCTION "files_fill_hub_from_conversation"() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION "files_fill_hub_from_conversation"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.hub_id IS NULL AND NEW.owner_kind IS NULL AND NEW.conversation_id IS NOT NULL THEN
     SELECT c.hub_id INTO NEW.hub_id FROM conversations c WHERE c.id = NEW.conversation_id;
@@ -29,7 +29,7 @@ BEGIN
   RETURN NEW;
 END
 $$;--> statement-breakpoint
-CREATE TRIGGER "files_fill_hub" BEFORE INSERT ON "files" FOR EACH ROW EXECUTE FUNCTION "files_fill_hub_from_conversation"();--> statement-breakpoint
+CREATE OR REPLACE TRIGGER "files_fill_hub" BEFORE INSERT ON "files" FOR EACH ROW EXECUTE FUNCTION "files_fill_hub_from_conversation"();--> statement-breakpoint
 -- A file follows its parent (D7a A-D7A-5). The original conversation FK was
 -- NO ACTION, which refused deleting a conversation that has files before the
 -- cascade below could run; recreate it as ON DELETE CASCADE.
