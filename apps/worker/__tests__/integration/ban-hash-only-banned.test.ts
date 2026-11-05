@@ -269,3 +269,56 @@ describe('banning a live caller', () => {
     expect(dump).not.toContain(hashPhone(live, HMAC_SECRET))
   })
 })
+
+describe('a ban list is named by its scope, never by an absent hub (#2463)', () => {
+  // One opaque handle in several scopes. Real hashes differ per scope (each has its
+  // own key), so a shared handle is the only way to prove the scope alone separates rows.
+  const H = 'ab'.repeat(32)
+  const HUB_A = hubScope('scope-hub-a')
+  const HUB_B = hubScope('scope-hub-b')
+  const rowsFor = (phone: string) => fresh.db.select().from(schema.bans).where(eq(schema.bans.phone, phone))
+
+  it('keeps each scope to its own rows: list, add, bulk-add and remove never cross a scope', async () => {
+    await services.records.addBan({ scope: HUB_A, phoneHash: H, reason: 'a', bannedBy: ADMIN })
+    await services.records.addBan({ scope: HUB_B, phoneHash: H, reason: 'b', bannedBy: ADMIN })
+    await services.records.addBan({ scope: PLATFORM_SCOPE, phoneHash: H, reason: 'p', bannedBy: ADMIN })
+    expect((await rowsFor(H)).map(r => r.hubId).sort()).toEqual([null, 'scope-hub-a', 'scope-hub-b'].sort())
+
+    expect((await services.records.listBans(HUB_A)).bans.map(b => b.reason)).toEqual(['a'])
+    const platform = (await services.records.listBans(PLATFORM_SCOPE)).bans.filter(b => b.phoneHash === H)
+    expect(platform.map(b => b.reason)).toEqual(['p'])
+
+    await services.records.removeBan(HUB_A, H)
+    expect((await rowsFor(H)).map(r => r.hubId).sort()).toEqual([null, 'scope-hub-b'].sort())
+    await services.records.removeBan(PLATFORM_SCOPE, H)
+    expect((await rowsFor(H)).map(r => r.hubId)).toEqual(['scope-hub-b'])
+  })
+
+  it('dedupes within a scope, on that scope\'s own unique index, for single and bulk adds', async () => {
+    const P = 'cd'.repeat(32)
+    const first = await services.records.addBan({ scope: PLATFORM_SCOPE, phoneHash: P, reason: 'one', bannedBy: ADMIN })
+    const again = await services.records.addBan({ scope: PLATFORM_SCOPE, phoneHash: P, reason: 'two', bannedBy: ADMIN })
+    expect(again.id).toBe(first.id)
+    expect(await services.records.bulkAddBans(PLATFORM_SCOPE, [P, P], 'bulk', ADMIN)).toBe(0)
+    expect(await services.records.bulkAddBans(HUB_A, [P], 'bulk', ADMIN)).toBe(1)
+    expect(await services.records.bulkAddBans(HUB_A, [P], 'bulk', ADMIN)).toBe(0)
+    expect((await rowsFor(P)).map(r => r.hubId).sort()).toEqual([null, 'scope-hub-a'].sort())
+  })
+
+  it('checks a call against exactly the scopes it is given', async () => {
+    await services.records.addBan({ scope: PLATFORM_SCOPE, phoneHash: banHash(OTHER, PLATFORM_SCOPE, BAN_HASH_KEY), reason: 'p', bannedBy: ADMIN })
+    // A hub lookup alone does not see the platform list; the call lookup does.
+    expect(await services.records.checkBan([{ scope: HUB_A, phoneHash: banHash(OTHER, HUB_A, BAN_HASH_KEY) }])).toBe(false)
+    expect(await services.records.checkBan(callBanLookup(OTHER, HUB_A.hubId, BAN_HASH_KEY))).toBe(true)
+    expect(await services.records.checkBan([])).toBe(false)
+  })
+
+  it('serves a hub ban list only inside a hub: the router refuses with no hub, and writes nothing', async () => {
+    const before = (await fresh.db.select().from(schema.bans)).length
+    const unscoped = appFor(bansRoutes, '/bans')
+    expect((await unscoped.request('/bans')).status).toBe(404)
+    expect((await post(unscoped, '/bans', { phone: '+15550100404', reason: 'x' })).status).toBe(404)
+    expect((await post(unscoped, '/bans/bulk', { phones: ['+15550100404'] })).status).toBe(404)
+    expect((await fresh.db.select().from(schema.bans)).length).toBe(before)
+  })
+})
