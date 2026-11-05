@@ -116,9 +116,7 @@ export class HubShredService {
     // file ids now, because routes/uploads.ts mirrors every file's envelopes
     // into object storage and the mirror outlives the database column.
     const fileRows = await this.db.execute<{ id: string }>(sql`
-      SELECT f.id FROM files f
-      JOIN conversations c ON f.conversation_id = c.id
-      WHERE c.hub_id = ${hubId}
+      SELECT f.id FROM files f WHERE f.hub_id = ${hubId}
     `)
     const fileIds = fileRows.map(r => r.id)
     if (fileIds.length > 0 && !this.blobStorage) {

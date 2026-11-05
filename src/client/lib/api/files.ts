@@ -1,11 +1,23 @@
-import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY } from './client'
+import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY, activeHubPath } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
+import type {
+  UploadInitBody,
+  UploadInitResponse,
+  ChunkUploadResponse,
+  UploadCompleteResponse,
+  UploadStatusResponse,
+  FileEnvelopesResponse,
+  FileMetadataResponse,
+  ShareFileBody,
+} from '@protocol/schemas'
 
 // --- File Uploads ---
+// Uploads and files are mounted only under /hubs/:hubId (#2462): a file belongs
+// to the hub of the record it is attached to, which is the hub being browsed.
 
-export async function initUpload(data: import('@shared/types').UploadInit) {
-  return request<{ uploadId: string; totalChunks: number }>('/uploads/init', {
+export async function initUpload(data: UploadInitBody) {
+  return request<UploadInitResponse>(activeHubPath('/uploads/init'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -22,11 +34,12 @@ export async function uploadChunk(uploadId: string, chunkIndex: number, data: Ar
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
+      const path = activeHubPath(`/uploads/${uploadId}/chunks/${chunkIndex}`)
       const headers = {
-        ...await getAuthHeaders('PUT', `/uploads/${uploadId}/chunks/${chunkIndex}`),
+        ...await getAuthHeaders('PUT', path),
         'Content-Type': 'application/octet-stream',
       }
-      const res = await netFetch(getApiUrl(`/uploads/${uploadId}/chunks/${chunkIndex}`), {
+      const res = await netFetch(getApiUrl(path), {
         method: 'PUT',
         headers,
         body: data,
@@ -42,7 +55,7 @@ export async function uploadChunk(uploadId: string, chunkIndex: number, data: Ar
         throw err
       }
       notifyApiActivity()
-      return res.json() as Promise<{ chunkIndex: number; completedChunks: number; totalChunks: number }>
+      return res.json() as Promise<ChunkUploadResponse>
     } catch (err) {
       if (err instanceof ApiError) throw err
       lastError = err instanceof Error ? err : new Error(String(err))
@@ -56,11 +69,11 @@ export async function uploadChunk(uploadId: string, chunkIndex: number, data: Ar
 }
 
 export async function completeUpload(uploadId: string) {
-  return request<{ fileId: string; status: string }>(`/uploads/${uploadId}/complete`, { method: 'POST' })
+  return request<UploadCompleteResponse>(activeHubPath(`/uploads/${uploadId}/complete`), { method: 'POST' })
 }
 
 export async function getUploadStatus(uploadId: string) {
-  return request<{ uploadId: string; status: string; completedChunks: number; totalChunks: number }>(`/uploads/${uploadId}/status`)
+  return request<UploadStatusResponse>(activeHubPath(`/uploads/${uploadId}/status`))
 }
 
 export async function downloadFile(fileId: string): Promise<ArrayBuffer> {
@@ -71,8 +84,9 @@ export async function downloadFile(fileId: string): Promise<ArrayBuffer> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
-      const headers: Record<string, string> = await getAuthHeaders('GET', `/files/${fileId}/content`)
-      const res = await netFetch(getApiUrl(`/files/${fileId}/content`), { headers, signal: controller.signal })
+      const path = activeHubPath(`/files/${fileId}/content`)
+      const headers: Record<string, string> = await getAuthHeaders('GET', path)
+      const res = await netFetch(getApiUrl(path), { headers, signal: controller.signal })
       if (!res.ok) {
         if (res.status === 401 && 'Authorization' in headers) {
           if (attempt < MAX_RETRIES) continue
@@ -97,18 +111,15 @@ export async function downloadFile(fileId: string): Promise<ArrayBuffer> {
 }
 
 export async function getFileEnvelopes(fileId: string) {
-  return request<{ envelopes: import('@shared/types').FileKeyEnvelope[] }>(`/files/${fileId}/envelopes`)
+  return request<FileEnvelopesResponse>(activeHubPath(`/files/${fileId}/envelopes`))
 }
 
 export async function getFileMetadata(fileId: string) {
-  return request<{ metadata: Array<{ pubkey: string; encryptedContent: string; enc: string; ct: string }> }>(`/files/${fileId}/metadata`)
+  return request<FileMetadataResponse>(activeHubPath(`/files/${fileId}/metadata`))
 }
 
-export async function shareFile(fileId: string, data: {
-  envelope: import('@shared/types').FileKeyEnvelope
-  encryptedMetadata: { pubkey: string; encryptedContent: string; enc: string; ct: string }
-}) {
-  return request<{ ok: true }>(`/files/${fileId}/share`, {
+export async function shareFile(fileId: string, data: ShareFileBody) {
+  return request<{ ok: true }>(activeHubPath(`/files/${fileId}/share`), {
     method: 'POST',
     body: JSON.stringify(data),
   })

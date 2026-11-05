@@ -1,7 +1,8 @@
 /**
  * Unit tests for routes/uploads.ts
  *
- * Tests: size limits, ownership checks, chunk validation, completion logic.
+ * Tests: hub scoping (#2462), size limits, ownership checks, chunk validation,
+ * completion logic.
  *
  * Bug fixed: chunk upload previously used `files:download-all` to gate admin overrides,
  * now correctly uses `files:manage-all`.
@@ -35,12 +36,18 @@ const BLOB_STUB = {
 // Hono bindings — passed as 3rd arg to app.request() so that c.env.BLOB_STORAGE resolves
 const BLOB_BINDINGS = { BLOB_STORAGE: BLOB_STUB }
 
+const HUB = 'hub-1'
+const COMPLETED_AT = new Date('2026-11-05T12:00:00.000Z')
+
 function makeApp(opts: {
   permissions?: string[]
   pubkey?: string
   fileRecord?: FileRecordLike
+  /** The path hub hubContext would set; `null` = an unscoped mount. */
+  hubId?: string | null
 } = {}) {
   const {
+    hubId = HUB,
     permissions = ['files:upload'],
     pubkey = 'uploader-pub',
     fileRecord = {
@@ -58,15 +65,18 @@ function makeApp(opts: {
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
     createFile: vi.fn().mockResolvedValue(undefined),
-    getFile: vi.fn().mockResolvedValue(fileRecord),
+    // A plain (non-report) conversation assigned to the caller.
+    getByIdForHub: vi.fn().mockResolvedValue({ id: 'c1', assignedTo: pubkey, contactIdentifierHash: 'h', metadata: null }),
+    getFileInHub: vi.fn().mockResolvedValue({ hubId: HUB, ownerKind: 'entity_field', ...fileRecord }),
     markChunkComplete: vi.fn().mockResolvedValue({ completedChunks: 1, totalChunks: fileRecord.totalChunks }),
-    markFileComplete: vi.fn().mockResolvedValue(undefined),
+    markFileComplete: vi.fn().mockResolvedValue(COMPLETED_AT),
   }
 
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
+    if (hubId) c.set('hubId', hubId)
     c.set('requestId', 'req-test')
     c.set('services', {
       audit: mockAudit,
@@ -87,15 +97,121 @@ function makeApp(opts: {
 // Global permission gate
 // ---------------------------------------------------------------------------
 
-describe('uploads route — global permission gate (files:upload)', () => {
+describe('uploads route — hub-scoped permission gate (files:upload)', () => {
   it('rejects users without files:upload on POST /init', async () => {
     const { request } = makeApp({ permissions: [] })
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(403)
+  })
+
+  it('is not served outside a hub (#2462)', async () => {
+    // An unscoped request's permissions come from global roles alone, which a
+    // hub member does not have — and a file made there would have no hub.
+    const { request, mockConversations } = makeApp({ hubId: null, permissions: ['*'] })
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'entity_field' }, totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(404)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses an upload naming no owner', async () => {
+    const { request, mockConversations } = makeApp()
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(400)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses attaching to a conversation the caller cannot post into', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:upload'] })
+    mockConversations.getByIdForHub.mockResolvedValueOnce({ id: 'c1', assignedTo: 'someone-else', contactIdentifierHash: 'h', metadata: null })
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(403)
+    expect(mockConversations.getByIdForHub).toHaveBeenCalledWith('c1', HUB)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses attaching to a report the caller cannot read', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:upload'] })
+    mockConversations.getByIdForHub.mockResolvedValueOnce({ id: 'r1', assignedTo: null, contactIdentifierHash: 'other-reporter', metadata: { type: 'report' } })
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'r1' }, totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(403)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('refuses a case-record file without evidence:upload', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:upload'] })
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(403)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('records a case-record file for a caller with evidence:upload', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:upload', 'evidence:upload'] })
+    const res = await request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
+    })
+    expect(res.status).toBe(200)
+    expect(mockConversations.createFile).toHaveBeenCalledWith(
+      expect.objectContaining({ hubId: HUB, owner: { kind: 'case_record', caseRecordId: 'case-1' } }),
+    )
+  })
+
+  it('refuses to complete when the chunks do not add up to the declared size', async () => {
+    BLOB_STUB.get.mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2]).buffer) })
+    const { request, mockConversations } = makeApp({
+      fileRecord: {
+        id: 'upload-1', uploadedBy: 'uploader-pub', status: 'uploading',
+        completedChunks: 1, totalChunks: 1, totalSize: 3,
+      },
+    })
+    const res = await request('/upload-1/complete', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect(mockConversations.markFileComplete).not.toHaveBeenCalled()
+  })
+
+  it('refuses more chunks, or a second completion, once the upload is complete', async () => {
+    const done = {
+      id: 'upload-1', uploadedBy: 'uploader-pub', status: 'complete',
+      completedChunks: 1, totalChunks: 1, totalSize: 3,
+    }
+    const { request, mockConversations } = makeApp({ fileRecord: done })
+    const chunk = await request('/upload-1/chunks/0', { method: 'PUT', body: new Uint8Array([1, 2, 3]) })
+    expect(chunk.status).toBe(409)
+    const again = await request('/upload-1/complete', { method: 'POST' })
+    expect(again.status).toBe(409)
+    expect(mockConversations.markChunkComplete).not.toHaveBeenCalled()
+    expect(mockConversations.markFileComplete).not.toHaveBeenCalled()
+  })
+
+  it('reads an upload only through its path hub', async () => {
+    const { request, mockConversations } = makeApp()
+    await request('/upload-1/status')
+    expect(mockConversations.getFileInHub).toHaveBeenCalledWith('upload-1', HUB)
   })
 
   it('allows users with files:upload', async () => {
@@ -103,7 +219,7 @@ describe('uploads route — global permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(200)
   })
@@ -120,7 +236,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: oversized, totalChunks: 1 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: oversized, totalChunks: 1 }),
     })
     expect(res.status).toBe(400)
     const body = await res.json() as { error: string }
@@ -133,7 +249,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: exactly100MB, totalChunks: 10 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: exactly100MB, totalChunks: 10 }),
     })
     expect(res.status).toBe(200)
   })
@@ -143,7 +259,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: 1024, totalChunks: 3 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 1024, totalChunks: 3 }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { uploadId: string; totalChunks: number }
@@ -156,11 +272,12 @@ describe('POST /uploads/init', () => {
     await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'conv-1', totalSize: 500, totalChunks: 1 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'conv-1' }, totalSize: 500, totalChunks: 1 }),
     })
     expect(mockConversations.createFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        conversationId: 'conv-1',
+        hubId: HUB,
+        owner: { kind: 'conversation', conversationId: 'conv-1' },
         uploadedBy: 'user-pub',
         totalSize: 500,
         totalChunks: 1,
@@ -173,9 +290,12 @@ describe('POST /uploads/init', () => {
     await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'c1', totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
-    expect(mockAudit.log.mock.calls.some((call: unknown[]) => call[0] === 'fileUploadStarted')).toBe(true)
+    const started = mockAudit.log.mock.calls.find((call: unknown[]) => call[0] === 'fileUploadStarted')
+    expect(started).toBeDefined()
+    // Audited on the hub's chain, not the platform's.
+    expect(started).toContain(HUB)
   })
 })
 
@@ -222,7 +342,7 @@ describe('PUT /uploads/:id/chunks/:chunkIndex', () => {
       method: 'PUT',
       body: oversized,
     })
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(413)
     const body = await res.json() as { error: string }
     expect(body.error).toMatch(/too large/)
   })
@@ -437,9 +557,10 @@ describe('POST /uploads/:id/complete', () => {
 
     const res = await request('/upload-1/complete', { method: 'POST' })
     expect(res.status).toBe(200)
-    const body = await res.json() as { fileId: string; status: string }
+    const body = await res.json() as { fileId: string; status: string; completedAt: string }
     expect(body.fileId).toBe('upload-1')
     expect(body.status).toBe('complete')
+    expect(body.completedAt).toBe(COMPLETED_AT.toISOString())
     expect(mockConversations.markFileComplete).toHaveBeenCalledWith('upload-1')
   })
 })

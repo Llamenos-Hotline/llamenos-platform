@@ -413,12 +413,6 @@ export const fileFieldValueSchema = z.object({
 })
 export type FileFieldValue = z.infer<typeof fileFieldValueSchema>
 
-export const entityFileUploadResponseSchema = z.object({
-  fileId: z.uuid(),
-  uploadedAt: z.iso.datetime(),
-})
-export type EntityFileUploadResponse = z.infer<typeof entityFileUploadResponseSchema>
-
 // --- Template customization (EP06-A2) ---
 
 export const entityTemplateCustomizeBodySchema = z.object({

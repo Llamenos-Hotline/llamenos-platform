@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { pubkeySchema, paginationSchema, recipientEnvelopeSchema } from './common'
 import { conversationResponseSchema } from './conversations'
+import { fileRecordSchema } from './files'
 
 // --- Response schemas ---
 
@@ -44,14 +45,11 @@ export const reportCategoriesResponseSchema = z.object({
   categories: z.array(z.string()),
 })
 
+/** A report's completed attachments — the file rows themselves (names stay encrypted). */
 export const reportFilesResponseSchema = z.object({
-  files: z.array(z.object({
-    id: z.string(),
-    name: z.string(),
-    size: z.number().optional(),
-    mimeType: z.string().optional(),
-  })),
+  files: z.array(fileRecordSchema),
 })
+export type ReportFilesResponse = z.infer<typeof reportFilesResponseSchema>
 
 export const reportLinkedCasesResponseSchema = z.object({
   records: z.array(z.object({

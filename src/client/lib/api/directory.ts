@@ -139,20 +139,6 @@ export async function removeGroupMember(groupId: string, contactId: string) {
   })
 }
 
-// --- Entity file upload (EP06-A2) ---
-// Mounted only unscoped (`/api/uploads/entity-file`); the handler never reads a hub id,
-// so this path must not go through `hp()`.
-
-export async function uploadEntityFile(file: File): Promise<{ fileId: string; uploadedAt: string }> {
-  const fd = new FormData()
-  fd.append('file', file)
-  return request<{ fileId: string; uploadedAt: string }>('/uploads/entity-file', {
-    method: 'POST',
-    body: fd,
-    headers: {},  // let browser set Content-Type with boundary
-  })
-}
-
 export async function listDirectoryContactCases(id: string) {
   return request<{ cases: ContactCaseLink[] }>(hp(`/directory/${id}/cases`))
 }

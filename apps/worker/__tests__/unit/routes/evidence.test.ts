@@ -39,6 +39,13 @@ function makeApp(opts: {
     verifyEvidence: vi.fn(),
     ...((services.cases as Record<string, unknown>) ?? {}),
   }
+  // The file the evidence entry names: a completed upload to case-1 (#2462).
+  const mockConversations = {
+    getCaseRecordFile: vi.fn().mockResolvedValue({
+      id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'complete', totalSize: 1024,
+    }),
+    ...((services.conversations as Record<string, unknown>) ?? {}),
+  }
   const mockAudit = {
     log: auditLog,
     listForEvidence: vi.fn().mockResolvedValue([]),
@@ -51,9 +58,10 @@ function makeApp(opts: {
     c.set('permissions', permissions)
     if (hubId) c.set('hubId', hubId)
     c.set('services', {
+      ...services,
       audit: mockAudit,
       cases: mockCases,
-      ...services,
+      conversations: mockConversations,
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')
     await next()
@@ -67,7 +75,7 @@ function makeApp(opts: {
   app.request = ((input: Parameters<typeof app.request>[0], init?: RequestInit) =>
     originalRequest(input, init, defaultEnv)) as typeof app.request
 
-  return { app, mockCases, mockAudit, auditLog }
+  return { app, mockCases, mockAudit, mockConversations, auditLog }
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +115,77 @@ describe('POST /records/:id/evidence', () => {
       expect.objectContaining({ fileId: 'file-123', classification: 'photo' }),
     )
     expect(auditLog).toHaveBeenCalledOnce()
+  })
+
+  it('looks the file up as a file of this case record', async () => {
+    const { app, mockCases, mockConversations } = makeApp({ permissions: ['evidence:upload'] })
+    mockCases.createEvidence.mockResolvedValue({ id: 'ev-1', ...validBody })
+    await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(mockConversations.getCaseRecordFile).toHaveBeenCalledWith('file-123', 'case-1')
+  })
+
+  it('refuses a file that was never uploaded to this record (#2462)', async () => {
+    const { app, mockCases } = makeApp({
+      permissions: ['evidence:upload'],
+      services: {
+        conversations: {
+          getCaseRecordFile: vi.fn().mockRejectedValue(new Error('File not found')),
+        },
+      },
+    })
+    const res = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(res.status).not.toBe(201)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('refuses a file of another hub through a hub path', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['evidence:upload'], hubId: 'hub-2' })
+    const res = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(res.status).toBe(404)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('refuses a size that is not the uploaded file\'s', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['evidence:upload'] })
+    const res = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...validBody, sizeBytes: 999 }),
+    })
+    expect(res.status).toBe(400)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('refuses a file whose upload has not completed', async () => {
+    const { app, mockCases } = makeApp({
+      permissions: ['evidence:upload'],
+      services: {
+        conversations: {
+          getCaseRecordFile: vi.fn().mockResolvedValue({
+            id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'uploading', totalSize: 1024,
+          }),
+        },
+      },
+    })
+    const res = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(res.status).toBe(400)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
   })
 
   it('creates interaction even when classification missing from body', async () => {

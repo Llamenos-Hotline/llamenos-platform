@@ -108,8 +108,9 @@ export interface EncryptedFileMetadata {
 }
 
 // FileKeyEnvelope is re-exported from @protocol/schemas/common above
-// FileRecord and UploadInit canonical types are in @protocol/schemas/files
-export type { FileRecord, UploadInit } from '@protocol/schemas/files'
+// FileRecord / FileOwner are canonical in @protocol/schemas/files, UploadInitBody in ./uploads
+export type { FileRecord, FileOwner } from '@protocol/schemas/files'
+export type { UploadInitBody } from '@protocol/schemas/uploads'
 
 // Client-side plaintext payload — not a wire format
 /** What gets encrypted before storage — replaces plain text */

@@ -1,8 +1,8 @@
 /**
  * Unit tests for routes/files.ts
  *
- * Tests: envelope-based access control, uploader access, files:download-all bypass,
- * file sharing permission, metadata scoping.
+ * Tests: hub scoping (#2462), envelope-based access control, uploader access,
+ * files:download-all bypass, file sharing permission, metadata scoping.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
@@ -36,12 +36,20 @@ const BLOB_STUB = {
 // Hono bindings — passed as 3rd arg to app.request() so that c.env.BLOB_STORAGE resolves
 const BLOB_BINDINGS = { BLOB_STORAGE: BLOB_STUB }
 
+const HUB = 'hub-1'
+
 function makeApp(opts: {
   permissions?: string[]
   pubkey?: string
   fileRecord?: FileRecordLike
+  /** The path hub hubContext would set; `null` = an unscoped mount. */
+  hubId?: string | null
+  /** X25519 keys the caller's devices registered. */
+  deviceKeys?: string[]
 } = {}) {
   const {
+    deviceKeys = [],
+    hubId = HUB,
     permissions = [],
     pubkey = 'my-pubkey',
     fileRecord = {
@@ -55,7 +63,7 @@ function makeApp(opts: {
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
-    getFile: vi.fn().mockResolvedValue(fileRecord),
+    getFileInHub: vi.fn().mockResolvedValue({ hubId: HUB, ownerKind: 'entity_field', ...fileRecord }),
     addFileRecipient: vi.fn().mockResolvedValue(undefined),
   }
 
@@ -63,10 +71,12 @@ function makeApp(opts: {
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
+    if (hubId) c.set('hubId', hubId)
     c.set('requestId', 'req-test')
     c.set('services', {
       audit: mockAudit,
       conversations: mockConversations,
+      identity: { getHpkeRecipients: vi.fn().mockResolvedValue(deviceKeys) },
     } as unknown as AppEnv['Variables']['services'])
     await next()
   })
@@ -82,6 +92,33 @@ function makeApp(opts: {
 // ---------------------------------------------------------------------------
 // GET /:id/content — download access control
 // ---------------------------------------------------------------------------
+
+describe('files route — hub scoping (#2462)', () => {
+  it('is not served outside a hub', async () => {
+    const { request, mockConversations } = makeApp({ hubId: null, permissions: ['*'] })
+    const res = await request('/file-1/envelopes')
+    expect(res.status).toBe(404)
+    expect(mockConversations.getFileInHub).not.toHaveBeenCalled()
+  })
+
+  it('reads a file only through its path hub', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:download-all'] })
+    await request('/file-1/envelopes')
+    expect(mockConversations.getFileInHub).toHaveBeenCalledWith('file-1', HUB)
+  })
+})
+
+describe('files route — envelope addressing', () => {
+  it('finds the caller\'s envelope by a device X25519 key, not only the identity key', async () => {
+    // Envelopes are sealed to device keys (#1021): matching the identity key
+    // alone hid a recipient's own envelope from them.
+    const { request } = makeApp({ pubkey: 'identity-pub', deviceKeys: ['recipient-pub'] })
+    const res = await request('/file-1/envelopes')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { envelopes: Array<{ pubkey: string }> }
+    expect(body.envelopes.map(e => e.pubkey)).toEqual(['recipient-pub'])
+  })
+})
 
 describe('GET /files/:id/content', () => {
   it('returns 400 when file upload is not complete', async () => {
@@ -346,11 +383,28 @@ describe('POST /files/:id/share', () => {
       body: JSON.stringify(shareBody),
     })
     expect(res.status).toBe(200)
+    expect(mockConversations.getFileInHub).toHaveBeenCalledWith('f1', HUB)
     expect(mockConversations.addFileRecipient).toHaveBeenCalledWith(
       'f1',
       shareBody.envelope,
       shareBody.encryptedMetadata,
     )
-    expect(mockAudit.log.mock.calls.some((call: unknown[]) => call[0] === 'fileShared')).toBe(true)
+    const shared = mockAudit.log.mock.calls.find((call: unknown[]) => call[0] === 'fileShared')
+    expect(shared).toBeDefined()
+    expect(shared).toContain(HUB)
+  })
+
+  it('does not share a file of another hub', async () => {
+    const { request, mockConversations } = makeApp({ permissions: ['files:share'] })
+    mockConversations.getFileInHub.mockRejectedValueOnce(
+      Object.assign(new Error('File not found'), { status: 404 }),
+    )
+    const res = await request('/f1/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(shareBody),
+    })
+    expect(res.status).not.toBe(200)
+    expect(mockConversations.addFileRecipient).not.toHaveBeenCalled()
   })
 })

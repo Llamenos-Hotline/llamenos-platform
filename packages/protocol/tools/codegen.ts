@@ -179,6 +179,13 @@ const REFERENCED_BY_NAME = new Set([
   // BOTH, renaming the hub one (`Incident` → `HubIncidentListResponseIncident`)
   // out from under the mobile incident screens.
   'PlatformIncident',
+  // #2462 — the upload owner and the encrypted-metadata entry. `owner` would
+  // otherwise mint a second, identical `Owner` beside `FileOwner`; and once
+  // `fileMetadataResponseSchema` returned whole entries under `metadata`, the
+  // entry took the name `SharedMetadata` and pushed the report metadata object
+  // that held it to `SharedConversationListResponseMetadata`.
+  'FileOwner',
+  'EncryptedMetadataEntry',
 ])
 
 /**
@@ -206,6 +213,10 @@ function deduplicateAnonymousSchemas(
   const parsed = schemas.map(s => JSON.parse(s.schema) as Record<string, unknown>)
   const existingNames = new Set(schemas.map(s => s.name))
   const inlinesByHash = new Map<string, InlineRef[]>()
+  // Union-typed properties (`oneOf`/`anyOf` with no `type` of their own, e.g. a
+  // discriminated union). Never extracted by Phase 2 — only Phase 3 may point
+  // one at the opted-in top-level schema it is identical to.
+  const unionInlinesByHash = new Map<string, InlineRef[]>()
 
   function collectInlines(
     node: Record<string, unknown>,
@@ -247,6 +258,13 @@ function deduplicateAnonymousSchemas(
         }
       }
 
+      // A whole union property (e.g. a discriminated union)
+      if (!propSchema['type'] && (Array.isArray(propSchema['oneOf']) || Array.isArray(propSchema['anyOf']))) {
+        const canon = canonicalize(propSchema)
+        const ref: InlineRef = { schemaIdx, path: propPath, propertyName: propName, isArrayItem: false, canonical: canon }
+        getOrCreateArray(unionInlinesByHash, canon).push(ref)
+      }
+
       // anyOf/oneOf variants (e.g., nullable objects)
       for (const combiner of ['anyOf', 'oneOf'] as const) {
         const variants = propSchema[combiner] as Record<string, unknown>[] | undefined
@@ -278,8 +296,19 @@ function deduplicateAnonymousSchemas(
 
   // Phase 2: Extract duplicates as new top-level schemas, replace with $ref.
   // Sort groups by deepest path first so inner schemas are replaced before their containers.
+  // A group that is exactly an opted-in top-level schema is referenced by that
+  // schema's name in Phase 3. Extracting it here as well would mint a dead
+  // `SharedX` copy that still claims its name — and pushes an unrelated group
+  // holding the same property name to a parent-prefixed name.
+  const optedInCanonicals = new Set<string>()
+  for (let i = 0; i < schemas.length; i++) {
+    if (!REFERENCED_BY_NAME.has(schemas[i].name)) continue
+    const { $schema: _dialect, ...body } = parsed[i]
+    optedInCanonicals.add(canonicalize(body))
+  }
+
   const sortedGroups = [...inlinesByHash.entries()]
-    .filter(([, refs]) => refs.length >= 2)
+    .filter(([canon, refs]) => refs.length >= 2 && !optedInCanonicals.has(canon))
     .sort(([, a], [, b]) => {
       const maxA = Math.max(...a.map(r => r.path.length))
       const maxB = Math.max(...b.map(r => r.path.length))
@@ -353,7 +382,7 @@ function deduplicateAnonymousSchemas(
     topLevelByCanonical.set(canonicalize(body), schemas[i].name)
   }
   let referenced = 0
-  for (const [canon, refs] of inlinesByHash) {
+  for (const [canon, refs] of [...inlinesByHash, ...unionInlinesByHash]) {
     const target = topLevelByCanonical.get(canon)
     if (!target) continue
     for (const ref of refs) {

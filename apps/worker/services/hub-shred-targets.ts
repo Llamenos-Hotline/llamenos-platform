@@ -128,8 +128,12 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   // The executor also deletes files/<id>/envelopes and files/<id>/metadata
   // from blob storage: routes/uploads.ts mirrors these columns there, so
   // clearing the database alone leaves a fully usable wrap in RustFS.
+  //
+  // BY_HUB, not via a parent: a file's own hub_id names its hub whatever its
+  // parent is (#2462). Reached through conversations, the shred missed every
+  // case-record and entity-field file.
   {
-    kind: 'clear-envelopes', table: 'files', scope: VIA_CONVERSATION,
+    kind: 'clear-envelopes', table: 'files', scope: BY_HUB,
     columns: { recipient_envelopes: "'[]'::jsonb", encrypted_metadata: "'[]'::jsonb" },
   },
   // Sealed with a server HMAC secret rather than a reader envelope, so

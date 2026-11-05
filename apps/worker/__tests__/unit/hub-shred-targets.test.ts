@@ -78,6 +78,14 @@ describe('HUB_SHRED_TARGETS', () => {
     expect(HUB_SHRED_TARGETS.filter(t => t.kind === 'audit-shred')).toHaveLength(1)
   })
 
+  it('reaches files by their own hub, not through a conversation (#2462)', () => {
+    // Case-record and entity-field files have no conversation, so a
+    // conversation-joined scope left their envelopes readable after a shred.
+    const files = HUB_SHRED_TARGETS.find(t => t.kind === 'clear-envelopes' && t.table === 'files')
+    expect(files).toBeDefined()
+    expect(files!.kind === 'clear-envelopes' && files!.scope).toEqual({ via: 'hub-id' })
+  })
+
   it('names each table at most once', () => {
     expect(
       new Set(namedTables).size,
