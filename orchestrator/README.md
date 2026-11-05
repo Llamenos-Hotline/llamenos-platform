@@ -100,6 +100,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet halt "<reason>"` | Writes the local halt file and reason, and logs `HALTED`. |
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
+| `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing`, `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
 | `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, files disjoint from the queue and the same pass's picks, iOS-UI-test PRs alone), and never re-queues a PR whose last queue attempt failed on its own diff. Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
@@ -252,6 +253,58 @@ requirements is the same class of defect as the one it exists to catch.
 captured verbatim off the live API (`fixtures/missing-checks/`), including the
 head that was really blocked — a detector verified from its own configuration
 is not verified.
+
+### `pr-why`: a diagnosis that needs no recall (#2469)
+
+"Why is this PR not merging?" used to be answered by somebody remembering a
+list of GitHub API traps. Two were got wrong on #2450 in one night and cost
+~23 hours on a release PR that was mergeable the whole time:
+
+- **`reviewDecision` is permanently `""` here.** `main` requires code-owner
+  review with an approving count of 0, and with a zero threshold GitHub never
+  computes a decision. `pr-why` never reads the field: the code-owner answer
+  comes from CODEOWNERS, the changed paths and each writer's latest review.
+- **A stale auto-merge is never re-evaluated.** Armed while BLOCKED, the PR
+  went CLEAN and nothing happened. CLEAN + `autoMergeRequest` populated + not
+  in the queue is `automerge-stale`, and the remedy is disable → confirm
+  `null` → re-arm.
+
+```
+$ llamenos-fleet pr-why 2470
+pr-why #2470  fix/2463-named-scope → main  head fa58ef9
+  mergeStateStatus=BLOCKED · merge queue: absent · auto-merge: not armed
+
+  1. draft  [BLOCKER]
+     evidence: isDraft=true
+     remedy:   gh pr ready 2470
+  2. review-never-requested  [BLOCKER]
+     evidence: no fleet/review carrier on the head and every run on it has finished
+     evidence: requested_reviewers is empty — a push never starts a review
+     remedy:   request a review from llamenos-auto on #2470
+  3. codeowner-approval-missing  [BLOCKER]
+     evidence: main requires code-owner review; 2 owned path(s) have no APPROVED review from an owner: …
+     …
+result: BLOCKED — 3 blocker(s) (exit 1)
+```
+
+Two properties are bound by tests, not by this paragraph:
+
+- **Read-only.** Every call goes through `ghRead`, which refuses any argv that
+  could write (a method flag, a field on a REST path, a GraphQL mutation, any
+  `gh` subcommand but `api` and `pr view`) — including the `missing-checks`
+  reads it composes with. `tests/orchestrator/pr-why-readonly.test.ts` captures
+  every process the default path spawns under `execFile`; the `pr-why` rail in
+  `guards.test.ts` pins the file's imports and its single `gh` call.
+- **Absent is never fine.** Every observation is a value or the reason it
+  could not be read. A failed read is an `unknown` verdict naming it, and the
+  exit is `2` — a 502 means "could not ask", not "did not happen". A BLOCKED
+  PR with nothing found is `blocked-unexplained`, never a clean bill.
+
+Queue membership is read off the PR itself (`mergeQueueEntry`, cross-checked
+against `isInMergeQueue`), never inferred from `autoMergeRequest`, which is
+consumed on entry. `fleet/review`'s outcome token is the message of its
+`fleet/review outcome` annotation — the job has no `checks: write`, so the
+check run's `output.title` is always empty.
 
 ### `attempted` vs `failed` vs `shadowed`
 

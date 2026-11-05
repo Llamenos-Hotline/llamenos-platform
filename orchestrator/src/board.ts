@@ -1364,9 +1364,7 @@ function defaultBoardFetchDeps(): BoardFetchDeps {
         '-f', `root=${branch}:CODEOWNERS`,
         '-f', `docs=${branch}:docs/CODEOWNERS`,
       ])) as CodeOwnersResponse
-      const repo = out.data?.repository
-      if (repo === undefined || repo === null) throw new Error(`CODEOWNERS query returned no repository${out.errors ? `: ${JSON.stringify(out.errors)}` : ''}`)
-      return repo.github?.text ?? repo.root?.text ?? repo.docs?.text ?? null
+      return codeOwnersTextFrom(out)
     },
     fetchMergeable: async (prNumber) => {
       const data = await ghJson<{ mergeable?: string }>(['pr', 'view', String(prNumber), '--json', 'mergeable'], 30_000)
@@ -1386,7 +1384,7 @@ function defaultBoardFetchDeps(): BoardFetchDeps {
  *  aliased blob reads in one query. A missing file is a `null` object, not
  *  an error, which is what lets `fetchCodeOwners` tell "no CODEOWNERS" from
  *  "could not read it". */
-const CODEOWNERS_QUERY = `
+export const CODEOWNERS_QUERY = `
 query($owner: String!, $repo: String!, $github: String!, $root: String!, $docs: String!) {
   repository(owner: $owner, name: $repo) {
     github: object(expression: $github) { ... on Blob { text } }
@@ -1396,9 +1394,19 @@ query($owner: String!, $repo: String!, $github: String!, $root: String!, $docs: 
 }
 `.trim()
 
-interface CodeOwnersResponse {
+export interface CodeOwnersResponse {
   data?: { repository?: { github: { text?: string } | null; root: { text?: string } | null; docs: { text?: string } | null } | null } | null
   errors?: unknown
+}
+
+/** Pure. The CODEOWNERS text GitHub would use — first of `.github/`, root,
+ *  `docs/` — out of a `CODEOWNERS_QUERY` response; `null` when none of the
+ *  three exists. THROWS when the response has no repository, so an
+ *  unreadable answer is never mistaken for "this branch has no owners". */
+export function codeOwnersTextFrom(out: CodeOwnersResponse): string | null {
+  const repo = out.data?.repository
+  if (repo === undefined || repo === null) throw new Error(`CODEOWNERS query returned no repository${out.errors ? `: ${JSON.stringify(out.errors)}` : ''}`)
+  return repo.github?.text ?? repo.root?.text ?? repo.docs?.text ?? null
 }
 
 export async function fetchBoardFacts(): Promise<BoardFacts> {
