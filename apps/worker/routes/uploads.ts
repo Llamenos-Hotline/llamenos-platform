@@ -233,8 +233,12 @@ uploads.post('/:id/complete',
       chunks.push(new Uint8Array(await obj.arrayBuffer()))
     }
 
-    // Write assembled file
+    // Write assembled file. Its length must be the size declared at init: that
+    // is the size an evidence entry is checked against.
     const totalLen = chunks.reduce((s, c) => s + c.length, 0)
+    if (totalLen !== fileRecord.totalSize) {
+      return c.json({ error: 'Assembled size does not match the declared totalSize' }, 400)
+    }
     const assembled = new Uint8Array(totalLen)
     let offset = 0
     for (const chunk of chunks) {

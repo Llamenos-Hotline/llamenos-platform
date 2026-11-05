@@ -181,6 +181,19 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     )
   })
 
+  it('refuses to complete when the chunks do not add up to the declared size', async () => {
+    BLOB_STUB.get.mockResolvedValueOnce({ arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2]).buffer) })
+    const { request, mockConversations } = makeApp({
+      fileRecord: {
+        id: 'upload-1', uploadedBy: 'uploader-pub', status: 'uploading',
+        completedChunks: 1, totalChunks: 1, totalSize: 3,
+      },
+    })
+    const res = await request('/upload-1/complete', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect(mockConversations.markFileComplete).not.toHaveBeenCalled()
+  })
+
   it('refuses more chunks, or a second completion, once the upload is complete', async () => {
     const done = {
       id: 'upload-1', uploadedBy: 'uploader-pub', status: 'complete',

@@ -682,17 +682,6 @@ final class CryptoService: @unchecked Sendable {
 
     // MARK: - Symmetric Encryption (AES-256-GCM)
 
-    /// Encrypt data with a random AES-256-GCM key. Returns (ciphertextHex, keyHex).
-    ///
-    /// `aadHex` has no default: an AAD that is empty because nobody supplied
-    /// one is the defect #1520 describes. Pass `""` only where the format
-    /// genuinely carries no AAD.
-    func symmetricEncrypt(plaintextHex: String, aadHex: String) throws -> (ciphertextHex: String, keyHex: String) {
-        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
-        let result = try ffiMobileSymmetricEncrypt(plaintextHex: plaintextHex, aadHex: aadHex)
-        return (ciphertextHex: result[0], keyHex: result[1])
-    }
-
     // MARK: - Recovery Group
 
     func recoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
@@ -724,7 +713,12 @@ final class CryptoService: @unchecked Sendable {
     // MARK: - File Encryption (HPKE)
 
     /// Encrypt file data for multiple recipients using HPKE envelope encryption.
-    /// Returns encrypted content, per-recipient key envelopes, and per-recipient metadata envelopes.
+    ///
+    /// The content is AES-256-GCM under a fresh random key bound to the canonical
+    /// LABEL_FILE_KEY content AAD; that key is HPKE-wrapped to each recipient, and
+    /// the file's metadata is sealed per recipient under LABEL_FILE_METADATA. The
+    /// envelopes come back in wire form (`enc`/`ct` hex, PROTOCOL.md §2.3), the
+    /// shape `POST /hubs/:hubId/uploads/init` stores and every client opens.
     func encryptFile(
         data: Data,
         fileName: String,
@@ -732,67 +726,47 @@ final class CryptoService: @unchecked Sendable {
         recipientPubkeys: [String]
     ) throws -> (
         encryptedData: Data,
-        keyEnvelopes: [(pubkey: String, envelope: HpkeEnvelope)],
-        metadataEnvelopes: [(pubkey: String, encryptedContent: String, envelope: HpkeEnvelope)]
+        keyEnvelopes: [(pubkey: String, enc: String, ct: String)],
+        metadataEnvelopes: [(pubkey: String, encryptedContent: String, enc: String, ct: String)]
     ) {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
 
-        // SHA-256 checksum of raw data
-        let checksum = sha256Hex(data)
-
-        // Build metadata JSON
         let metadata: [String: Any] = [
             "originalName": fileName,
             "mimeType": mimeType,
             "size": data.count,
-            "checksum": checksum
+            "checksum": sha256Hex(data)
         ]
         let metadataData = try JSONSerialization.data(withJSONObject: metadata)
         let metadataHex = metadataData.map { String(format: "%02x", $0) }.joined()
 
-        // Random 32-byte file key
-        let fileKeyHex = ffiMobileRandomBytesHex()
-
-        // AES-GCM encrypt file content with file key, binding the canonical
-        // content AAD for LABEL_FILE_KEY.
+        // symmetric_encrypt draws the random file key and returns it with the ciphertext.
         let dataHex = data.map { String(format: "%02x", $0) }.joined()
         let encryptedResult = try ffiMobileSymmetricEncrypt(plaintextHex: dataHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_KEY))
-        // symmetric_encrypt returns [ciphertextHex, randomKeyHex] — but we need to encrypt with our file key.
-        // Use the dedicated key-based encrypt: encrypt dataHex with fileKeyHex via symmetric_decrypt's inverse.
-        // Actually, mobile_symmetric_encrypt generates its own random key. We need to use the file key instead.
-        // The pattern: generate a random key via symmetric_encrypt, then re-wrap that key via HPKE.
-        // But for file encryption, the file key IS the random key. So we use the result directly.
-        let encryptedContentHex = encryptedResult[0]
-        let actualFileKeyHex = encryptedResult[1]
-        guard let encryptedData = hexToData(encryptedContentHex) else {
+        let fileKeyHex = encryptedResult[1]
+        guard let encryptedData = hexToData(encryptedResult[0]) else {
             throw CryptoServiceError.encryptionFailed("Failed to convert encrypted content to Data")
         }
 
-        // HPKE-wrap the file key for each recipient
-        var keyEnvelopes: [(pubkey: String, envelope: HpkeEnvelope)] = []
+        var keyEnvelopes: [(pubkey: String, enc: String, ct: String)] = []
+        var metaEnvelopes: [(pubkey: String, encryptedContent: String, enc: String, ct: String)] = []
         for pubkey in recipientPubkeys {
-            let envelope = try ffiMobileHpkeSealKey(
-                keyHex: actualFileKeyHex,
+            let keyWrap = try toWireEnvelope(ffiMobileHpkeSealKey(
+                keyHex: fileKeyHex,
                 recipientPubkeyHex: pubkey,
                 label: CryptoLabels.LABEL_FILE_KEY,
                 aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_KEY)
-            )
-            keyEnvelopes.append((pubkey: pubkey, envelope: envelope))
-        }
+            ))
+            keyEnvelopes.append((pubkey: pubkey, enc: keyWrap.enc, ct: keyWrap.ct))
 
-        // Encrypt metadata for each recipient with LABEL_FILE_METADATA
-        var metaEnvelopes: [(pubkey: String, encryptedContent: String, envelope: HpkeEnvelope)] = []
-        for pubkey in recipientPubkeys {
             let metaEncResult = try ffiMobileSymmetricEncrypt(plaintextHex: metadataHex, aadHex: try contentAad(CryptoLabels.LABEL_FILE_METADATA))
-            let encMetaHex = metaEncResult[0]
-            let metaKeyHex = metaEncResult[1]
-            let envelope = try ffiMobileHpkeSealKey(
-                keyHex: metaKeyHex,
+            let metaWrap = try toWireEnvelope(ffiMobileHpkeSealKey(
+                keyHex: metaEncResult[1],
                 recipientPubkeyHex: pubkey,
                 label: CryptoLabels.LABEL_FILE_METADATA,
                 aadHex: try keyWrapAad(CryptoLabels.LABEL_FILE_METADATA)
-            )
-            metaEnvelopes.append((pubkey: pubkey, encryptedContent: encMetaHex, envelope: envelope))
+            ))
+            metaEnvelopes.append((pubkey: pubkey, encryptedContent: metaEncResult[0], enc: metaWrap.enc, ct: metaWrap.ct))
         }
 
         return (encryptedData, keyEnvelopes, metaEnvelopes)

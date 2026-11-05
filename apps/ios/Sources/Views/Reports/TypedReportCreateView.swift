@@ -10,7 +10,6 @@ struct FileAttachment {
     let mimeType: String
     var isUploading: Bool = false
     var uploadedFileId: String?
-    var fileKeyHex: String?
     var error: String?
 }
 
@@ -826,40 +825,36 @@ struct TypedReportCreateView: View {
     @MainActor
     private func uploadEncryptedFile(fieldName: String, data: Data, fileName: String, mimeType: String) async {
         do {
-            // Encrypt the file content with a random AES-256-GCM key
-            let plaintextHex = data.map { String(format: "%02x", $0) }.joined()
-            let (ciphertextHex, fileKeyHex) = try appState.cryptoService.symmetricEncrypt(plaintextHex: plaintextHex, aadHex: "")
+            // Seal to this device and the admin key — the reader set every other
+            // record this form writes uses — so the file is readable, not just stored.
+            var recipients: [String] = []
+            if let own = appState.cryptoService.encryptionPubkeyHex { recipients.append(own) }
+            if let admin = appState.adminDecryptionPubkey, !recipients.contains(admin) { recipients.append(admin) }
 
-            // Convert ciphertext hex back to Data for upload
-            let encryptedData = hexToData(ciphertextHex)
-
-            // Upload encrypted data
-            let response = try await appState.apiService.uploadEntityFile(
-                encryptedData: encryptedData,
-                fileName: fileName
+            let encrypted = try appState.cryptoService.encryptFile(
+                data: data, fileName: fileName, mimeType: mimeType, recipientPubkeys: recipients
             )
 
-            fileAttachments[fieldName]?.uploadedFileId = response.fileId
-            fileAttachments[fieldName]?.fileKeyHex = fileKeyHex
+            // A file row of the active hub with its envelopes, through the chunked
+            // path (#2462). Its parent is the hub: the report does not exist yet.
+            let response = try await appState.apiService.uploadEncryptedFile(
+                encryptedData: encrypted.encryptedData,
+                owner: Owner(conversationID: nil, kind: .entityField, caseRecordID: nil),
+                recipientEnvelopes: encrypted.keyEnvelopes.map {
+                    SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey)
+                },
+                encryptedMetadata: encrypted.metadataEnvelopes.map {
+                    SharedMetadata(ct: $0.ct, enc: $0.enc, encryptedContent: $0.encryptedContent, pubkey: $0.pubkey)
+                }
+            )
+
+            fileAttachments[fieldName]?.uploadedFileId = response.fileID
             fileAttachments[fieldName]?.isUploading = false
 
         } catch {
             fileAttachments[fieldName]?.error = error.localizedDescription
             fileAttachments[fieldName]?.isUploading = false
         }
-    }
-
-    private func hexToData(_ hex: String) -> Data {
-        var data = Data(capacity: hex.count / 2)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2)
-            if let byte = UInt8(hex[index..<nextIndex], radix: 16) {
-                data.append(byte)
-            }
-            index = nextIndex
-        }
-        return data
     }
 
     // MARK: - Submit
