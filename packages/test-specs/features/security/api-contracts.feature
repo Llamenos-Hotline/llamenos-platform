@@ -29,13 +29,13 @@ Feature: API Contract Validation
   # ─── Phone Format Validation ───────────────────────────────────────
 
   Scenario: Create ban rejects non-E164 phone
-    When an admin sends "POST" to "/api/bans" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/bans" with body:
       | phone  | 555-123-4567      |
       | reason | invalid phone test |
     Then the response status should be 400
 
   Scenario: Create ban rejects phone without plus prefix
-    When an admin sends "POST" to "/api/bans" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/bans" with body:
       | phone  | 15551234567       |
       | reason | no plus prefix    |
     Then the response status should be 400
@@ -190,7 +190,7 @@ Feature: API Contract Validation
     Then the response status should not be 400
 
   Scenario: Create ban accepts valid E164 phone
-    When an admin sends "POST" to "/api/bans" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/bans" with body:
       | phone  | +15550003333 |
       | reason | valid test   |
     Then the response status should not be 400
@@ -213,7 +213,7 @@ Feature: API Contract Validation
 
   Scenario: Ban audit log does not expose raw phone number
     Given I am authenticated as admin
-    When an admin sends "POST" to "/api/bans" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/bans" with body:
       | phone  | +15550001111   |
       | reason | audit log test |
     Then the response status should be 200
@@ -242,7 +242,7 @@ Feature: API Contract Validation
 
   Scenario: Admin with bans:create can directly ban a phone number
     Given I am authenticated as admin
-    When an admin sends "POST" to "/api/bans" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/bans" with body:
       | phone  | +15550002222 |
       | reason | admin ban    |
     Then the response status should be 200
