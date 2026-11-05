@@ -15,6 +15,7 @@ import { getScenarioState } from './common.steps'
 import { getSharedState, setLastResponse } from './shared-state'
 import {
   apiGet,
+  apiPatch,
   apiPost,
   createUserViaApi,
   createRecordViaApi,
@@ -32,6 +33,8 @@ interface AssignmentState {
   entityTypeDetails?: Record<string, unknown>
   volunteerAPubkey?: string
   volunteerBPubkey?: string
+  /** Volunteers the "on-shift volunteers exist" Given put on shift in the scenario hub. */
+  onShiftPubkeys?: string[]
   suggestions?: Array<Record<string, unknown>>
 }
 
@@ -39,6 +42,13 @@ const ASSIGNMENT_KEY = 'assignment_ep06a3'
 
 function getAssignmentState(world: Record<string, unknown>): AssignmentState {
   return getState<AssignmentState>(world, ASSIGNMENT_KEY)
+}
+
+/** Every volunteer the scenario put on shift was scored — so the per-suggestion checks have a subject. */
+function expectScoredOnShiftVolunteers(world: Record<string, unknown>, suggestions: Array<Record<string, unknown>>): void {
+  const expected = getAssignmentState(world).onShiftPubkeys ?? []
+  expect(expected.length, 'no volunteer was put on shift: the scenario has no subject').toBeGreaterThan(0)
+  expect(suggestions.map(s => s.pubkey)).toEqual(expect.arrayContaining(expected))
 }
 
 Before({ tags: '@backend' }, async ({ world }) => {
@@ -53,14 +63,14 @@ Given('an entity type with autoAssign enabled and threshold {int} exists', async
   const label = 'Auto Assign Scoring'
   const { data, status } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: 'Entity type for autoAssign threshold testing',
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -72,9 +82,10 @@ Given('an entity type with autoAssign enabled and threshold {int} exists', async
       autoAssignThreshold: threshold,
     },
   )
-  if (status < 300) {
-    getAssignmentState(world).entityTypeId = (data as Record<string, unknown>).id as string
-  }
+  // The entity type is this scenario's subject: a refused create must fail here,
+  // not leave a later step to assert against nothing (#2465).
+  expect(status, `create entity type: ${JSON.stringify(data)}`).toBe(201)
+  getAssignmentState(world).entityTypeId = (data as Record<string, unknown>).id as string
 })
 
 When('I fetch the entity type', async ({ request, world }) => {
@@ -108,21 +119,47 @@ Given('an unassigned arrest case exists', async ({ request, world }) => {
   const types = await listEntityTypesViaApi(request, hubId)
   // jail-support template creates 'arrest_case'; fall back to first case type
   const entityType = types.find(t => t.name === 'arrest_case') ?? types.find(t => t.category === 'case')
-  if (!entityType) return
+  // The Background applies the jail-support template. Without its case type
+  // there is no case to suggest assignees for, and this Given used to `return`
+  // and leave the scenario subjectless (#2465).
+  if (!entityType) throw new Error('the jail-support template defines no case type in this hub')
   const record = await createRecordViaApi(request, entityType.id as string, { hubId })
   getAssignmentState(world).recordId = (record as Record<string, unknown>).id as string
 })
 
-Given('on-shift volunteers exist', async ({ request, world }) => {
-  const hubId = getScenarioState(world).hubId
-  const vol1 = await createUserViaApi(request, { name: uniqueName('ScoreVol1') })
-  const vol2 = await createUserViaApi(request, { name: uniqueName('ScoreVol2') })
+/**
+ * A volunteer of the scenario hub, on an always-on shift there — i.e. a
+ * candidate `suggest-assignees` must score. Optionally with specializations,
+ * set through the real admin update route and checked.
+ */
+async function onShiftHubVolunteer(
+  request: import('@playwright/test').APIRequestContext,
+  hubId: string,
+  name: string,
+  specializations?: string[],
+): Promise<string> {
+  const vol = await createUserViaApi(request, { name: uniqueName(name), hubId })
+  if (specializations) {
+    const res = await apiPatch(request, `/users/${vol.pubkey}`, { specializations })
+    expect(res.status, `set ${name}'s specializations: ${JSON.stringify(res.data)}`).toBe(200)
+  }
   await createShiftViaApi(request, {
-    name: uniqueName('ScoreShift'),
+    name: uniqueName(`${name}Shift`),
     ...ALWAYS_ON_SHIFT,
-    userPubkeys: [vol1.pubkey, vol2.pubkey],
+    userPubkeys: [vol.pubkey],
     hubId,
   })
+  return vol.pubkey
+}
+
+Given('on-shift volunteers exist', async ({ request, world }) => {
+  const hubId = getScenarioState(world).hubId
+  // Members of the scenario hub: these used to be created with global roles
+  // only, so nothing tied them to the hub whose case is being scored.
+  getAssignmentState(world).onShiftPubkeys = [
+    await onShiftHubVolunteer(request, hubId, 'ScoreVol1'),
+    await onShiftHubVolunteer(request, hubId, 'ScoreVol2'),
+  ]
 })
 
 // ── Score breakdown assertions ─────────────────────────────────────
@@ -135,7 +172,9 @@ Then('each suggestion should include {string}, {string}, {string}, {string}', as
   expect(res).toBeDefined()
   const body = res!.data as Record<string, unknown>
   const suggestions = (body.suggestions ?? []) as Array<Record<string, unknown>>
-  if (suggestions.length === 0) return // Accept empty list in envs with no on-shift volunteers
+  // The Given put volunteers on shift in this hub; an empty list is a failure
+  // to score them, not an empty environment. It used to `return` here (#2465).
+  expectScoredOnShiftVolunteers(world, suggestions)
   for (const s of suggestions) {
     expect(s).toHaveProperty(f1)
     expect(s).toHaveProperty(f2)
@@ -149,7 +188,9 @@ Then('each suggestion should include {string} array', async ({ world }, field: s
   expect(res).toBeDefined()
   const body = res!.data as Record<string, unknown>
   const suggestions = (body.suggestions ?? []) as Array<Record<string, unknown>>
-  if (suggestions.length === 0) return
+  // The Given put volunteers on shift in this hub; an empty list is a failure
+  // to score them, not an empty environment. It used to `return` here (#2465).
+  expectScoredOnShiftVolunteers(world, suggestions)
   for (const s of suggestions) {
     expect(s).toHaveProperty(field)
     expect(Array.isArray(s[field])).toBe(true)
@@ -164,14 +205,14 @@ Given('an arrest case linked to an entity type requiring specialization {string}
   const label = 'Specialization Required Type'
   const { data: etData, status: etStatus } = await apiPost<Record<string, unknown>>(
     request,
-    hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types',
+    `/hubs/${hubId}/settings/cms/entity-types`,
     {
       name,
       label,
       labelPlural: `${label}s`,
       description: `Entity type requiring ${spec}`,
       category: 'case',
-      hubId: hubId ?? '',
+      hubId,
       statuses: [
         { value: 'open', label: 'Open', order: 0 },
         { value: 'closed', label: 'Closed', order: 1 },
@@ -182,41 +223,49 @@ Given('an arrest case linked to an entity type requiring specialization {string}
       requiredSpecializations: [spec],
     },
   )
-  const entityTypeId = etStatus < 300 ? (etData as Record<string, unknown>).id as string : undefined
-  if (!entityTypeId) return
+  // This Given used to `return` silently when the create failed, so the
+  // scenario ran on with no record and no entity type (#2465).
+  expect(etStatus, `create entity type: ${JSON.stringify(etData)}`).toBe(201)
+  const entityTypeId = (etData as Record<string, unknown>).id as string
 
   const record = await createRecordViaApi(request, entityTypeId, { statusHash: 'open', hubId })
   getAssignmentState(world).recordId = (record as Record<string, unknown>).id as string
   getAssignmentState(world).entityTypeId = entityTypeId
 })
 
+// Both volunteers are on shift in the case's hub, so both MUST be scored. These
+// used to be hubless and off shift, and A's specialization was written to
+// `/users/:pubkey/profile` — a route that does not exist — with the 404
+// swallowed by `.catch(() => {})`. The Then step then returned early when
+// either volunteer was missing, so the scenario asserted nothing (#2465).
 Given('volunteer A has specialization {string}', async ({ request, world }, spec: string) => {
-  const vol = await createUserViaApi(request, { name: uniqueName(`Vol-A-${spec}`) })
-  getAssignmentState(world).volunteerAPubkey = vol.pubkey
-  // Update volunteer profile with specialization
-  await apiPost(request, `/users/${vol.pubkey}/profile`, { specializations: [spec] }).catch(() => {})
+  getAssignmentState(world).volunteerAPubkey = await onShiftHubVolunteer(
+    request, getScenarioState(world).hubId, `Vol-A-${spec}`, [spec],
+  )
 })
 
 Given('volunteer B has no specializations', async ({ request, world }) => {
-  const vol = await createUserViaApi(request, { name: uniqueName('Vol-B-no-spec') })
-  getAssignmentState(world).volunteerBPubkey = vol.pubkey
+  getAssignmentState(world).volunteerBPubkey = await onShiftHubVolunteer(
+    request, getScenarioState(world).hubId, 'Vol-B-no-spec',
+  )
 })
 
 When('I fetch suggest-assignees for the case', async ({ request, world }) => {
   const state = getAssignmentState(world)
-  const recordId = state.recordId ?? (getScenarioState(world).lastApiResponse?.data as string | undefined)
-  if (!recordId) return
-  const res = await apiGet<Record<string, unknown>>(request, `/records/${recordId}/suggest-assignees`)
+  const recordId = state.recordId
+  expect(recordId, 'no case was created to suggest assignees for').toBeTruthy()
+  const res = await apiGet<Record<string, unknown>>(request, `/hubs/${getScenarioState(world).hubId}/records/${recordId}/suggest-assignees`)
   setLastResponse(world, res)
   state.suggestions = ((res.data as Record<string, unknown>)?.suggestions ?? []) as Array<Record<string, unknown>>
 })
 
 Then('volunteer A should have a higher specializationScore than volunteer B', async ({ world }) => {
   const state = getAssignmentState(world)
+  expect(getSharedState(world).lastResponse?.status, 'suggest-assignees').toBe(200)
   const suggestions = state.suggestions ?? []
-  if (suggestions.length < 2) return // Accept if not enough on-shift volunteers in test env
   const volA = suggestions.find(s => s.pubkey === state.volunteerAPubkey)
   const volB = suggestions.find(s => s.pubkey === state.volunteerBPubkey)
-  if (!volA || !volB) return
+  if (!volA) throw new Error('volunteer A (on shift in this hub) was not scored')
+  if (!volB) throw new Error('volunteer B (on shift in this hub) was not scored')
   expect(volA.specializationScore as number).toBeGreaterThan(volB.specializationScore as number)
 })

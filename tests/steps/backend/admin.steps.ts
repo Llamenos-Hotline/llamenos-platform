@@ -156,7 +156,7 @@ Then('all entries should pass integrity checks', async ({ world }) => {
 
 When('I query the shift status', async ({ request, world }) => {
   const hubId = getScenarioState(world).hubId
-  const path = hubId ? `/hubs/${hubId}/shifts` : '/shifts'
+  const path = `/hubs/${hubId}/shifts`
   const { status, data } = await apiGet<{ shifts: Array<{ userPubkeys: string[] }> }>(request, path)
   expect(status).toBe(200)
   getScenarioState(world).lastApiResponse = { status, data }

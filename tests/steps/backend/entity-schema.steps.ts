@@ -9,6 +9,7 @@ import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
 import {
+  ADMIN_SEED,
   apiPost,
   enableCaseManagementViaApi,
   getCaseManagementEnabledViaApi,
@@ -45,8 +46,11 @@ Before({ tags: '@cases or @contacts or @events or @evidence or @templates or @re
 
 // ── Given ───────────────────────────────────────────────────────────
 
-Given('case management is enabled', async ({request, world: _world}) => {
-  await enableCaseManagementViaApi(request, true)
+// Case management is enabled IN the scenario hub. This used to flip the
+// deployment-wide default, which every parallel scenario shares, and which no
+// hub-scoped route consults once the hub has its own value (#2465).
+Given('case management is enabled', async ({ request, world }) => {
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Given('an entity type {string} exists', async ({ request, world }, name: string) => {
@@ -63,8 +67,8 @@ Given('an entity type {string} exists', async ({ request, world }, name: string)
 
 // ── When ────────────────────────────────────────────────────────────
 
-When('the admin enables case management', async ({request, world: _world}) => {
-  await enableCaseManagementViaApi(request, true)
+When('the admin enables case management', async ({ request, world }) => {
+  await enableCaseManagementViaApi(request, true, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 When('the admin creates an entity type named {string} with category {string}', async ({ request, world }, name: string, category: string) => {
@@ -123,7 +127,7 @@ When('the admin adds a field {string} of type {string} to entity type {string}',
 
   const result = await updateEntityTypeViaApi(request, entityType!.id as string, {
     fields: [...existingFields, newField],
-  })
+  }, ADMIN_SEED, getScenarioState(world).hubId)
   getEntitySchemaState(world).lastEntityType = result
 })
 
@@ -132,7 +136,7 @@ When('the admin deletes entity type {string}', async ({request, world}, name: st
   const types = await listEntityTypesViaApi(request, hubId)
   const entityType = types.find(t => t.name === name)
   expect(entityType).toBeTruthy()
-  await deleteEntityTypeViaApi(request, entityType!.id as string)
+  await deleteEntityTypeViaApi(request, entityType!.id as string, ADMIN_SEED, hubId)
 })
 
 When('the admin tries to create an entity type named {string}', async ({request, world}, name: string) => {
@@ -143,14 +147,13 @@ When('the admin tries to create an entity type named {string}', async ({request,
   ]
   // Use raw apiPost (not createEntityTypeViaApi) to capture the actual HTTP status,
   // since createEntityTypeViaApi swallows 409 for idempotent setup helpers.
-  const path = hubId ? `/hubs/${hubId}/settings/cms/entity-types` : '/settings/cms/entity-types'
-  const res = await apiPost(request, path, {
+  const res = await apiPost(request, `/hubs/${hubId}/settings/cms/entity-types`, {
     name,
     label: name.replace(/_/g, ' '),
     labelPlural: `${name.replace(/_/g, ' ')}s`,
     description: `Test entity type ${name}`,
     category: 'case',
-    hubId: hubId ?? '',
+    hubId,
     statuses: defaultStatuses,
     defaultStatus: 'open',
     closedStatuses: ['closed'],
@@ -176,9 +179,12 @@ When('the admin creates a relationship type from {string} to {string} with cardi
 })
 
 When('a volunteer tries to create an entity type', async ({request, world}) => {
-  const vol = await createVolunteerViaApi(request, { name: `vol-schema-${Date.now()}` })
+  // A volunteer OF the scenario hub, so the refusal is for the missing
+  // settings permission there — not for being outside the hub.
+  const hubId = getScenarioState(world).hubId
+  const vol = await createVolunteerViaApi(request, { name: `vol-schema-${Date.now()}`, hubId })
   try {
-    await createEntityTypeViaApi(request, { name: uniqueName('forbidden', '_') }, vol.deviceKey)
+    await createEntityTypeViaApi(request, { name: uniqueName('forbidden', '_'), hubId }, vol.deviceKey)
     setLastResponse(world, { status: 201, data: null })
   } catch (e: unknown) {
     const msg = (e as Error).message
@@ -205,8 +211,8 @@ When('the admin lists all roles', async () => {
 
 // ── Then ────────────────────────────────────────────────────────────
 
-Then('case management should be enabled', async ({request, world: _world}) => {
-  const result = await getCaseManagementEnabledViaApi(request)
+Then('case management should be enabled', async ({ request, world }) => {
+  const result = await getCaseManagementEnabledViaApi(request, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.enabled).toBe(true)
 })
 

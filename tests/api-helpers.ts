@@ -711,12 +711,12 @@ export interface CreateBanResult {
 
 export async function createBanViaApi(
   request: APIRequestContext,
-  options?: { phone?: string; reason?: string; hubId?: string },
+  options: { phone?: string; reason?: string; hubId: string },
 ): Promise<CreateBanResult> {
-  const phone = options?.phone ?? uniquePhone()
-  const reason = options?.reason ?? 'E2E test ban'
+  const phone = options.phone ?? uniquePhone()
+  const reason = options.reason ?? 'E2E test ban'
 
-  const { status, data } = await apiPost<{ ban: { phoneHash: string; reason: string } }>(request, hubPath('/bans', options?.hubId), { phone, reason })
+  const { status, data } = await apiPost<{ ban: { phoneHash: string; reason: string } }>(request, hubOwnedPath('/bans', options.hubId), { phone, reason })
   if (status !== 200 && status !== 201) {
     throw new Error(`Failed to create ban: ${status}`)
   }
@@ -727,17 +727,17 @@ export async function createBanViaApi(
 export async function removeBanViaApi(
   request: APIRequestContext,
   phoneHash: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/bans/${phoneHash}`, hubId))
+  const { status } = await apiDelete(request, hubOwnedPath(`/bans/${phoneHash}`, hubId))
   if (status !== 200) throw new Error(`Failed to remove ban: ${status}`)
 }
 
 export async function listBansViaApi(
   request: APIRequestContext,
-  hubId?: string,
+  hubId: string,
 ): Promise<Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }>> {
-  const { status, data } = await apiGet<{ bans: Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubPath('/bans', hubId))
+  const { status, data } = await apiGet<{ bans: Array<{ phoneHash: string; reason: string; bannedBy: string; bannedAt: string }> }>(request, hubOwnedPath('/bans', hubId))
   if (status !== 200) throw new Error(`Failed to list bans: ${status}`)
   return data.bans
 }
@@ -746,9 +746,9 @@ export async function bulkAddBansViaApi(
   request: APIRequestContext,
   phones: string[],
   reason: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ count: number }> {
-  const { status, data } = await apiPost<{ count: number }>(request, hubPath('/bans/bulk', hubId), { phones, reason })
+  const { status, data } = await apiPost<{ count: number }>(request, hubOwnedPath('/bans/bulk', hubId), { phones, reason })
   if (status !== 200) throw new Error(`Failed to bulk add bans: ${status}`)
   return data
 }
@@ -760,14 +760,28 @@ export interface CreateShiftResult {
   encryptedName: string
 }
 
-/** Resolve hub-scoped path prefix. Hub-scoped resources live at /hubs/:id/resource. */
-function hubPath(base: string, hubId?: string): string {
-  return hubId ? `/hubs/${hubId}${base}` : base
+/**
+ * The path of a hub-owned resource: `/hubs/:hubId<base>`. The ONLY way a helper
+ * in this file builds a hub path (#2465).
+ *
+ * Records, events, evidence, calls, shifts and ring groups have no unscoped route
+ * (#2461) — the unscoped mount used to write them into hub '' — so a helper asked
+ * for one without a hub is a broken test, not a request to send. The same holds
+ * for every other hub-owned resource here (bans, notes, reports, contacts, CMS
+ * schema): there used to be a second, optional-hub `hubPath` that returned the
+ * bare path when the hub was omitted, so a caller that forgot its hub silently
+ * addressed the unscoped mount and a scenario could pass with its subject in no
+ * hub at all. A platform resource has its own helper with its own path; it is
+ * never reached by leaving the hub out. Fails loudly instead of falling back.
+ */
+function hubOwnedPath(base: string, hubId: string): string {
+  if (!hubId) throw new Error(`${base} belongs to a hub (#2461): pass the hub id`)
+  return `/hubs/${hubId}${base}`
 }
 
 export async function createShiftViaApi(
   request: APIRequestContext,
-  options?: {
+  options: {
     encryptedName?: string
     /** @deprecated use encryptedName */
     name?: string
@@ -775,7 +789,7 @@ export async function createShiftViaApi(
     endTime?: string
     days?: number[]
     userPubkeys?: string[]
-    hubId?: string
+    hubId: string
   },
 ): Promise<CreateShiftResult> {
   const id = crypto.randomUUID()
@@ -785,7 +799,7 @@ export async function createShiftViaApi(
   const days = options?.days ?? [1, 2, 3, 4, 5]
   const userPubkeys = options?.userPubkeys ?? []
 
-  const { status, data } = await apiPost<{ id: string }>(request, hubPath('/shifts', options?.hubId), {
+  const { status, data } = await apiPost<{ id: string }>(request, hubOwnedPath('/shifts', options.hubId), {
     id, encryptedName, startTime, endTime, days, userPubkeys,
   })
   if (status !== 200 && status !== 201) {
@@ -811,7 +825,7 @@ export async function clockInViaApi(
   hubId: string,
   seedHex: string,
 ): Promise<void> {
-  const { status } = await apiPost(request, hubPath('/shifts/clock-in', hubId), {}, seedHex)
+  const { status } = await apiPost(request, hubOwnedPath('/shifts/clock-in', hubId), {}, seedHex)
   if (status !== 200) {
     throw new Error(`Failed to clock in: ${status}`)
   }
@@ -820,17 +834,17 @@ export async function clockInViaApi(
 export async function deleteShiftViaApi(
   request: APIRequestContext,
   id: string,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/shifts/${id}`, hubId))
+  const { status } = await apiDelete(request, hubOwnedPath(`/shifts/${id}`, hubId))
   if (status !== 200) throw new Error(`Failed to delete shift: ${status}`)
 }
 
 export async function listShiftsViaApi(
   request: APIRequestContext,
-  hubId?: string,
+  hubId: string,
 ): Promise<Array<{ id: string; encryptedName: string; startTime: string; endTime: string; days: number[]; userPubkeys: string[] }>> {
-  const { status, data } = await apiGet<{ shifts: Array<{ id: string; encryptedName: string; startTime: string; endTime: string; days: number[]; userPubkeys: string[] }> }>(request, hubPath('/shifts', hubId))
+  const { status, data } = await apiGet<{ shifts: Array<{ id: string; encryptedName: string; startTime: string; endTime: string; days: number[]; userPubkeys: string[] }> }>(request, hubOwnedPath('/shifts', hubId))
   if (status !== 200) throw new Error(`Failed to list shifts: ${status}`)
   return data.shifts
 }
@@ -839,9 +853,9 @@ export async function updateShiftViaApi(
   request: APIRequestContext,
   id: string,
   updates: { encryptedName?: string; startTime?: string; endTime?: string; days?: number[]; userPubkeys?: string[] },
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiPatch(request, hubPath(`/shifts/${id}`, hubId), updates)
+  const { status } = await apiPatch(request, hubOwnedPath(`/shifts/${id}`, hubId), updates)
   if (status !== 200) throw new Error(`Failed to update shift: ${status}`)
 }
 
@@ -849,7 +863,7 @@ export async function getFallbackGroupViaApi(
   request: APIRequestContext,
   hubId: string,
 ): Promise<{ volunteers: string[] }> {
-  const { status, data } = await apiGet<{ userPubkeys: string[] }>(request, hubPath('/shifts/fallback', hubId))
+  const { status, data } = await apiGet<{ userPubkeys: string[] }>(request, hubOwnedPath('/shifts/fallback', hubId))
   if (status !== 200) throw new Error(`Failed to get fallback group: ${status}`)
   return { volunteers: data.userPubkeys ?? [] }
 }
@@ -860,7 +874,7 @@ export async function setFallbackGroupViaApi(
   volunteers: string[],
   hubId: string,
 ): Promise<void> {
-  const { status } = await apiPut(request, hubPath('/shifts/fallback', hubId), { userPubkeys: volunteers })
+  const { status } = await apiPut(request, hubOwnedPath('/shifts/fallback', hubId), { userPubkeys: volunteers })
   if (status !== 200) throw new Error(`Failed to set fallback group: ${status}`)
 }
 
@@ -877,7 +891,7 @@ export async function enableMockTelephonyViaApi(
   request: APIRequestContext,
   hubId: string,
 ): Promise<void> {
-  const { status, data } = await apiPut(request, hubPath('/simulated-telephony/mock', hubId), { enabled: true })
+  const { status, data } = await apiPut(request, hubOwnedPath('/simulated-telephony/mock', hubId), { enabled: true })
   if (status !== 200) throw new Error(`Failed to enable mock telephony on hub ${hubId}: ${status} ${JSON.stringify(data)}`)
 }
 
@@ -980,7 +994,7 @@ export async function listNotesViaApi(
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const qsStr = qs.toString()
-  const path = hubPath('/notes', params.hubId) + (qsStr ? `?${qsStr}` : '')
+  const path = hubOwnedPath('/notes', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ notes: NoteRecord[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list notes: ${status}`)
   return data
@@ -1009,7 +1023,7 @@ export async function listAuditLogViaApi(
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const qsStr = qs.toString()
-  const path = hubPath('/audit', params.hubId) + (qsStr ? `?${qsStr}` : '')
+  const path = hubOwnedPath('/audit', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ entries: AuditEntry[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list audit log: ${status}`)
   return data
@@ -1053,7 +1067,7 @@ export async function verifyAuditChainViaApi(
   if (params.limit != null) qs.set('limit', String(params.limit))
   if (params.offset != null) qs.set('offset', String(params.offset))
   const qsStr = qs.toString()
-  const path = hubPath('/audit/verify', params.hubId) + (qsStr ? `?${qsStr}` : '')
+  const path = hubOwnedPath('/audit/verify', params.hubId) + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<ChainVerificationResult>(request, path)
   if (status !== 200) throw new Error(`Failed to verify audit chain: ${status}`)
   return data
@@ -1081,7 +1095,7 @@ export async function listReportsViaApi(
   const qs = new URLSearchParams()
   if (params.status) qs.set('status', params.status)
   const qsStr = qs.toString()
-  const basePath = hubPath('/reports', params.hubId)
+  const basePath = hubOwnedPath('/reports', params.hubId)
   const path = basePath + (qsStr ? `?${qsStr}` : '')
   const { status, data } = await apiGet<{ conversations: ReportRecord[]; total: number }>(request, path)
   if (status !== 200) throw new Error(`Failed to list reports: ${status}`)
@@ -1115,7 +1129,7 @@ export async function createReportViaApi(
   }
   if (options?.reportTypeId) body.reportTypeId = options.reportTypeId
 
-  const { status, data } = await apiPost<ReportRecord>(request, hubPath('/reports', options.hubId), body, seedHex)
+  const { status, data } = await apiPost<ReportRecord>(request, hubOwnedPath('/reports', options.hubId), body, seedHex)
   if (status !== 201 && status !== 200) {
     throw new Error(`Failed to create report: ${status} ${JSON.stringify(data)}`)
   }
@@ -1140,7 +1154,7 @@ export async function assignReportViaApi(
   pubkey: string,
   hubId: string,
 ): Promise<void> {
-  const path = hubPath(`/reports/${reportId}/assign`, hubId)
+  const path = hubOwnedPath(`/reports/${reportId}/assign`, hubId)
   const { status } = await apiPost(request, path, { assignedTo: pubkey })
   if (status !== 200) throw new Error(`Failed to assign report: ${status}`)
 }
@@ -1151,7 +1165,7 @@ export async function updateReportStatusViaApi(
   newStatus: string,
   hubId: string,
 ): Promise<void> {
-  const path = hubPath(`/reports/${reportId}`, hubId)
+  const path = hubOwnedPath(`/reports/${reportId}`, hubId)
   const { status } = await apiPatch(request, path, { status: newStatus })
   if (status !== 200) throw new Error(`Failed to update report status: ${status}`)
 }
@@ -1237,48 +1251,15 @@ export async function testEndpointAccess(
   }
 }
 
-// ── Cleanup ───────────────────────────────────────────────────────
-
-export async function cleanupTestData(
-  request: APIRequestContext,
-  data: {
-    userPubkeys?: string[]
-    /** @deprecated Use userPubkeys instead */
-    volunteerPubkeys?: string[]
-    banPhoneHashes?: string[]
-    shiftIds?: string[]
-    roleIds?: string[]
-  },
-): Promise<void> {
-  const errors: string[] = []
-
-  for (const pubkey of [...(data.userPubkeys ?? []), ...(data.volunteerPubkeys ?? [])]) {
-    try { await deleteUserViaApi(request, pubkey) } catch (e) { errors.push(String(e)) }
-  }
-  for (const phoneHash of data.banPhoneHashes ?? []) {
-    try { await removeBanViaApi(request, phoneHash) } catch (e) { errors.push(String(e)) }
-  }
-  for (const id of data.shiftIds ?? []) {
-    try { await deleteShiftViaApi(request, id) } catch (e) { errors.push(String(e)) }
-  }
-  for (const id of data.roleIds ?? []) {
-    try { await deleteRoleViaApi(request, id) } catch (e) { errors.push(String(e)) }
-  }
-
-  if (errors.length > 0) {
-    console.warn('Cleanup errors:', errors.join(', '))
-  }
-}
-
 // ── Case Management: Entity Schema (Epic 315) ──────────────────────
 
 export async function enableCaseManagementViaApi(
   request: APIRequestContext,
   enabled = true,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ enabled: boolean }> {
-  const { status, data } = await apiPut<{ enabled: boolean }>(request, hubPath('/settings/cms/case-management', hubId), { enabled }, seedHex)
+  const { status, data } = await apiPut<{ enabled: boolean }>(request, hubOwnedPath('/settings/cms/case-management', hubId), { enabled }, seedHex)
   if (status !== 200) throw new Error(`Failed to toggle case management: ${status}`)
   return data
 }
@@ -1286,46 +1267,46 @@ export async function enableCaseManagementViaApi(
 export async function getCaseManagementEnabledViaApi(
   request: APIRequestContext,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ enabled: boolean }> {
-  const { data } = await apiGet<{ enabled: boolean }>(request, hubPath('/settings/cms/case-management', hubId), seedHex)
+  const { data } = await apiGet<{ enabled: boolean }>(request, hubOwnedPath('/settings/cms/case-management', hubId), seedHex)
   return data
 }
 
 export async function createEntityTypeViaApi(
   request: APIRequestContext,
-  options?: {
+  options: {
     name?: string
     label?: string
     category?: string
     color?: string
-    hubId?: string
+    hubId: string
     statuses?: Array<{ value: string; label: string; order: number; isClosed?: boolean }>
     fields?: Array<{ name: string; label: string; type: string; required?: boolean; order: number }>
     numberPrefix?: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? uniqueName('test_type', '_')
+  const name = options.name ?? uniqueName('test_type', '_')
   const defaultStatuses = [
     { value: 'open', label: 'Open', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },
   ]
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath('/settings/cms/entity-types', options?.hubId),
+    hubOwnedPath('/settings/cms/entity-types', options.hubId),
     {
       name,
-      label: options?.label ?? name.replace(/_/g, ' '),
-      labelPlural: options?.label ? `${options.label}s` : `${name.replace(/_/g, ' ')}s`,
+      label: options.label ?? name.replace(/_/g, ' '),
+      labelPlural: options.label ? `${options.label}s` : `${name.replace(/_/g, ' ')}s`,
       description: `Test entity type ${name}`,
-      category: options?.category ?? 'case',
-      color: options?.color,
-      hubId: options?.hubId ?? '',
-      statuses: options?.statuses ?? defaultStatuses,
-      defaultStatus: (options?.statuses ?? defaultStatuses)[0].value,
-      closedStatuses: (options?.statuses ?? defaultStatuses).filter(s => (s as Record<string, unknown>).isClosed).map(s => s.value),
-      fields: (options?.fields ?? []).map((f, i) => ({
+      category: options.category ?? 'case',
+      color: options.color,
+      hubId: options.hubId,
+      statuses: options.statuses ?? defaultStatuses,
+      defaultStatus: (options.statuses ?? defaultStatuses)[0].value,
+      closedStatuses: (options.statuses ?? defaultStatuses).filter(s => (s as Record<string, unknown>).isClosed).map(s => s.value),
+      fields: (options.fields ?? []).map((f, i) => ({
         ...f,
         label: f.label ?? f.name,
         required: f.required ?? false,
@@ -1337,8 +1318,8 @@ export async function createEntityTypeViaApi(
         editableByUsers: true,
         hubEditable: true,
       })),
-      numberPrefix: options?.numberPrefix,
-      numberingEnabled: !!options?.numberPrefix,
+      numberPrefix: options.numberPrefix,
+      numberingEnabled: !!options.numberPrefix,
     },
     seedHex,
   )
@@ -1347,11 +1328,11 @@ export async function createEntityTypeViaApi(
   if (status === 409) {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, 200 * attempt))
-      const types = await listEntityTypesViaApi(request, options?.hubId, seedHex)
+      const types = await listEntityTypesViaApi(request, options.hubId, seedHex)
       const existing = types.find(t => t.name === name)
       if (existing) return existing
     }
-    throw new Error(`Entity type '${name}' returned 409 but not found after retries (hubId=${options?.hubId})`)
+    throw new Error(`Entity type '${name}' returned 409 but not found after retries (hubId=${options.hubId})`)
   }
   if (status !== 201 && status !== 200) throw new Error(`Failed to create entity type: ${status}`)
   return data
@@ -1359,10 +1340,10 @@ export async function createEntityTypeViaApi(
 
 export async function listEntityTypesViaApi(
   request: APIRequestContext,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>[]> {
-  const path = hubId ? `/settings/cms/entity-types?hubId=${hubId}` : '/settings/cms/entity-types'
+  const path = hubOwnedPath('/settings/cms/entity-types', hubId)
   const { data } = await apiGet<{ entityTypes: Record<string, unknown>[] }>(request, path, seedHex)
   return data?.entityTypes ?? []
 }
@@ -1372,9 +1353,9 @@ export async function updateEntityTypeViaApi(
   id: string,
   updates: Record<string, unknown>,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiPatch<Record<string, unknown>>(request, hubPath(`/settings/cms/entity-types/${id}`, hubId), updates, seedHex)
+  const { status, data } = await apiPatch<Record<string, unknown>>(request, hubOwnedPath(`/settings/cms/entity-types/${id}`, hubId), updates, seedHex)
   if (status !== 200) throw new Error(`Failed to update entity type: ${status}`)
   return data
 }
@@ -1383,9 +1364,9 @@ export async function deleteEntityTypeViaApi(
   request: APIRequestContext,
   id: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/settings/cms/entity-types/${id}`, hubId), seedHex)
+  const { status } = await apiDelete(request, hubOwnedPath(`/settings/cms/entity-types/${id}`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to delete entity type: ${status}`)
 }
 
@@ -1397,13 +1378,13 @@ export async function createRelationshipTypeViaApi(
     cardinality?: string
     label?: string
     reverseLabel?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath('/settings/cms/relationship-types', options.hubId),
+    hubOwnedPath('/settings/cms/relationship-types', options.hubId),
     {
       sourceEntityTypeId: options.sourceEntityTypeId,
       targetEntityTypeId: options.targetEntityTypeId,
@@ -1412,7 +1393,7 @@ export async function createRelationshipTypeViaApi(
       reverseLabel: options.reverseLabel ?? 'Related',
       sourceLabel: 'has',
       targetLabel: 'belongs to',
-      hubId: options.hubId ?? '',
+      hubId: options.hubId,
     },
     seedHex,
   )
@@ -1423,13 +1404,13 @@ export async function createRelationshipTypeViaApi(
 export async function generateCaseNumberViaApi(
   request: APIRequestContext,
   prefix: string,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<{ number: string; sequence: number }> {
   const { status, data } = await apiPost<{ number: string; sequence: number }>(
     request,
     '/settings/cms/case-number',
-    { prefix, hubId: hubId ?? '' },
+    { prefix, hubId },
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to generate case number: ${status}`)
@@ -1451,9 +1432,9 @@ export interface TemplateSummary {
 export async function listTemplatesViaApi(
   request: APIRequestContext,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<TemplateSummary[]> {
-  const { status, data } = await apiGet<{ templates: TemplateSummary[] }>(request, hubPath('/settings/cms/templates', hubId), seedHex)
+  const { status, data } = await apiGet<{ templates: TemplateSummary[] }>(request, hubOwnedPath('/settings/cms/templates', hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to list templates: ${status}`)
   return data.templates
 }
@@ -1462,9 +1443,9 @@ export async function getTemplateViaApi(
   request: APIRequestContext,
   templateId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiGet<Record<string, unknown>>(request, hubPath(`/settings/cms/templates/${templateId}`, hubId), seedHex)
+  const { status, data } = await apiGet<Record<string, unknown>>(request, hubOwnedPath(`/settings/cms/templates/${templateId}`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to get template: ${status}`)
   return data
 }
@@ -1473,21 +1454,21 @@ export async function applyTemplateViaApi(
   request: APIRequestContext,
   templateId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ status: number; data: Record<string, unknown> }> {
   const body: Record<string, unknown> = { templateId }
   if (hubId) body.hubId = hubId
-  return apiPost<Record<string, unknown>>(request, hubPath('/settings/cms/templates/apply', hubId), body, seedHex)
+  return apiPost<Record<string, unknown>>(request, hubOwnedPath('/settings/cms/templates/apply', hubId), body, seedHex)
 }
 
 // ── Case Management: CMS Report Types (Epic 343) ────────────────
 
 export async function listCmsReportTypesViaApi(
   request: APIRequestContext,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>[]> {
-  const path = hubId ? `/settings/cms/report-types?hubId=${hubId}` : '/settings/cms/report-types'
+  const path = hubOwnedPath('/settings/cms/report-types', hubId)
   const { data } = await apiGet<{ reportTypes: Record<string, unknown>[] }>(request, path, seedHex)
   return data?.reportTypes ?? []
 }
@@ -1496,21 +1477,21 @@ export async function getCmsReportTypeViaApi(
   request: APIRequestContext,
   id: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiGet<Record<string, unknown>>(request, hubPath(`/settings/cms/report-types/${id}`, hubId), seedHex)
+  const { status, data } = await apiGet<Record<string, unknown>>(request, hubOwnedPath(`/settings/cms/report-types/${id}`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to get CMS report type: ${status}`)
   return data
 }
 
 export async function createCmsReportTypeViaApi(
   request: APIRequestContext,
-  options?: {
+  options: {
     name?: string
     label?: string
     labelPlural?: string
     description?: string
-    hubId?: string
+    hubId: string
     fields?: Array<Record<string, unknown>>
     statuses?: Array<{ value: string; label: string; order: number; isClosed?: boolean }>
     allowCaseConversion?: boolean
@@ -1519,7 +1500,7 @@ export async function createCmsReportTypeViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const name = options?.name ?? uniqueName('test_report_type', '_')
+  const name = options.name ?? uniqueName('test_report_type', '_')
   const defaultStatuses = [
     { value: 'submitted', label: 'Submitted', order: 0 },
     { value: 'closed', label: 'Closed', order: 1, isClosed: true },
@@ -1529,14 +1510,14 @@ export async function createCmsReportTypeViaApi(
     '/settings/cms/report-types',
     {
       name,
-      label: options?.label ?? name.replace(/_/g, ' '),
-      labelPlural: options?.labelPlural ?? `${name.replace(/_/g, ' ')}s`,
-      description: options?.description ?? `Test report type ${name}`,
-      hubId: options?.hubId ?? '',
-      statuses: options?.statuses ?? defaultStatuses,
-      defaultStatus: (options?.statuses ?? defaultStatuses)[0].value,
-      closedStatuses: (options?.statuses ?? defaultStatuses).filter(s => (s as Record<string, unknown>).isClosed).map(s => s.value),
-      fields: (options?.fields ?? []).map((f, i) => ({
+      label: options.label ?? name.replace(/_/g, ' '),
+      labelPlural: options.labelPlural ?? `${name.replace(/_/g, ' ')}s`,
+      description: options.description ?? `Test report type ${name}`,
+      hubId: options.hubId,
+      statuses: options.statuses ?? defaultStatuses,
+      defaultStatus: (options.statuses ?? defaultStatuses)[0].value,
+      closedStatuses: (options.statuses ?? defaultStatuses).filter(s => (s as Record<string, unknown>).isClosed).map(s => s.value),
+      fields: (options.fields ?? []).map((f, i) => ({
         ...f,
         label: f.label ?? f.name,
         required: f.required ?? false,
@@ -1549,9 +1530,9 @@ export async function createCmsReportTypeViaApi(
         hubEditable: true,
         supportAudioInput: f.supportAudioInput ?? false,
       })),
-      allowCaseConversion: options?.allowCaseConversion ?? false,
-      mobileOptimized: options?.mobileOptimized ?? false,
-      allowFileAttachments: options?.allowFileAttachments ?? true,
+      allowCaseConversion: options.allowCaseConversion ?? false,
+      mobileOptimized: options.mobileOptimized ?? false,
+      allowFileAttachments: options.allowFileAttachments ?? true,
     },
     seedHex,
   )
@@ -1564,9 +1545,9 @@ export async function updateCmsReportTypeViaApi(
   id: string,
   updates: Record<string, unknown>,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiPatch<Record<string, unknown>>(request, hubPath(`/settings/cms/report-types/${id}`, hubId), updates, seedHex)
+  const { status, data } = await apiPatch<Record<string, unknown>>(request, hubOwnedPath(`/settings/cms/report-types/${id}`, hubId), updates, seedHex)
   if (status !== 200) throw new Error(`Failed to update CMS report type: ${status}`)
   return data
 }
@@ -1575,9 +1556,9 @@ export async function deleteCmsReportTypeViaApi(
   request: APIRequestContext,
   id: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiDelete(request, hubPath(`/settings/cms/report-types/${id}`, hubId), seedHex)
+  const { status } = await apiDelete(request, hubOwnedPath(`/settings/cms/report-types/${id}`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to archive CMS report type: ${status}`)
 }
 
@@ -1591,10 +1572,10 @@ export async function deleteCmsReportTypeViaApi(
 export async function createContactByNameViaApi(
   request: APIRequestContext,
   displayName: string,
-  extraOptions?: { contactTypeHash?: string; hubId?: string },
+  extraOptions: { contactTypeHash?: string; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const contactType = extraOptions?.contactTypeHash ?? 'individual'
+  const contactType = extraOptions.contactTypeHash ?? 'individual'
   // Build trigram tokens for name search
   const normalized = displayName.toLowerCase()
   const trigrams: string[] = []
@@ -1618,7 +1599,7 @@ export async function createContactByNameViaApi(
     contactTypeHash: contactType,
     nameHash,
     trigramTokens: trigrams,
-    hubId: extraOptions?.hubId,
+    hubId: extraOptions.hubId,
   }, seedHex)
 }
 
@@ -1698,7 +1679,7 @@ export async function validNoteBody(
 
 export async function createContactViaApi(
   request: APIRequestContext,
-  options?: {
+  options: {
     identifierHashes?: string[]
     nameHash?: string
     trigramTokens?: string[]
@@ -1712,12 +1693,12 @@ export async function createContactViaApi(
      */
     summaryEnvelopes?: DesktopReaderEnvelope[]
     contactTypeHash?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  let encryptedSummary = options?.encryptedSummary
-  let summaryEnvelopes = options?.summaryEnvelopes
+  let encryptedSummary = options.encryptedSummary
+  let summaryEnvelopes = options.summaryEnvelopes
   if (!summaryEnvelopes) {
     const contentKey = generateContentKey()
     encryptedSummary ??= encryptContent('test contact summary', contentKey, LABEL_NOTE_KEY)
@@ -1725,15 +1706,15 @@ export async function createContactViaApi(
   }
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath('/directory', options?.hubId),
+    hubOwnedPath('/directory', options.hubId),
     {
-      hubId: options?.hubId ?? '',
-      identifierHashes: options?.identifierHashes ?? [`idhash_${Date.now()}_${Math.random().toString(36).slice(2)}`],
-      nameHash: options?.nameHash,
-      trigramTokens: options?.trigramTokens,
+      hubId: options.hubId,
+      identifierHashes: options.identifierHashes ?? [`idhash_${Date.now()}_${Math.random().toString(36).slice(2)}`],
+      nameHash: options.nameHash,
+      trigramTokens: options.trigramTokens,
       encryptedSummary,
       summaryEnvelopes,
-      contactTypeHash: options?.contactTypeHash,
+      contactTypeHash: options.contactTypeHash,
       tagHashes: [],
       blindIndexes: {},
     },
@@ -1745,15 +1726,15 @@ export async function createContactViaApi(
 
 export async function listContactsViaApi(
   request: APIRequestContext,
-  params?: { page?: number; limit?: number; contactTypeHash?: string; hubId?: string },
+  params: { page?: number; limit?: number; contactTypeHash?: string; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ contacts: Record<string, unknown>[]; total: number; hasMore: boolean }> {
   const qs = new URLSearchParams()
-  if (params?.page) qs.set('page', String(params.page))
-  if (params?.limit) qs.set('limit', String(params.limit))
-  if (params?.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
+  if (params.page) qs.set('page', String(params.page))
+  if (params.limit) qs.set('limit', String(params.limit))
+  if (params.contactTypeHash) qs.set('contactTypeHash', params.contactTypeHash)
   const qsStr = qs.toString()
-  const path = `${hubPath('/directory', params?.hubId)}${qsStr ? `?${qsStr}` : ''}`
+  const path = `${hubOwnedPath('/directory', params.hubId)}${qsStr ? `?${qsStr}` : ''}`
   const { status, data } = await apiGet<{ contacts: Record<string, unknown>[]; total: number; hasMore: boolean }>(request, path, seedHex)
   if (status !== 200) throw new Error(`Failed to list contacts: ${status}`)
   return data
@@ -1762,10 +1743,10 @@ export async function listContactsViaApi(
 export async function lookupContactViaApi(
   request: APIRequestContext,
   identifierHash: string,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<{ contact: Record<string, unknown> | null }> {
-  const { status, data } = await apiGet<{ contact: Record<string, unknown> | null }>(request, `${hubPath('/directory', hubId)}/lookup/${identifierHash}`, seedHex)
+  const { status, data } = await apiGet<{ contact: Record<string, unknown> | null }>(request, `${hubOwnedPath('/directory', hubId)}/lookup/${identifierHash}`, seedHex)
   if (status !== 200) throw new Error(`Failed to lookup contact: ${status}`)
   return data
 }
@@ -1774,10 +1755,10 @@ export async function updateContactViaApi(
   request: APIRequestContext,
   contactId: string,
   updates: Record<string, unknown>,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiPatch<Record<string, unknown>>(request, `${hubPath('/directory', hubId)}/${contactId}`, updates, seedHex)
+  const { status, data } = await apiPatch<Record<string, unknown>>(request, `${hubOwnedPath('/directory', hubId)}/${contactId}`, updates, seedHex)
   if (status !== 200) throw new Error(`Failed to update contact: ${status}`)
   return data
 }
@@ -1785,10 +1766,10 @@ export async function updateContactViaApi(
 export async function deleteContactViaApi(
   request: APIRequestContext,
   contactId: string,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<void> {
-  const { status } = await apiDelete(request, `${hubPath('/directory', hubId)}/${contactId}`, seedHex)
+  const { status } = await apiDelete(request, `${hubOwnedPath('/directory', hubId)}/${contactId}`, seedHex)
   if (status !== 200) throw new Error(`Failed to delete contact: ${status}`)
 }
 
@@ -1797,12 +1778,12 @@ export async function deleteContactViaApi(
 export async function createRecordViaApi(
   request: APIRequestContext,
   entityTypeId: string,
-  options?: {
+  options: {
     statusHash?: string
     assignedTo?: string[]
     blindIndexes?: Record<string, string>
     parentRecordId?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
@@ -1811,7 +1792,7 @@ export async function createRecordViaApi(
   const envelope = await realEnvelope(contentKey, seedHex)
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath('/records', options?.hubId),
+    hubOwnedPath('/records', options.hubId),
     {
       entityTypeId,
       statusHash: options?.statusHash ?? 'status_open_hash',
@@ -1829,7 +1810,7 @@ export async function createRecordViaApi(
 
 export async function listRecordsViaApi(
   request: APIRequestContext,
-  params?: { entityTypeId?: string; statusHash?: string; assignedTo?: string; parentRecordId?: string; page?: number; limit?: number; hubId?: string },
+  params: { entityTypeId?: string; statusHash?: string; assignedTo?: string; parentRecordId?: string; page?: number; limit?: number; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ records: Record<string, unknown>[]; total: number; hasMore: boolean }> {
   const qs = new URLSearchParams()
@@ -1840,7 +1821,7 @@ export async function listRecordsViaApi(
   if (params?.assignedTo) qs.set('assignedTo', params.assignedTo)
   if (params?.parentRecordId) qs.set('parentRecordId', params.parentRecordId)
   const qsStr = qs.toString()
-  const path = `${hubPath('/records', params?.hubId)}${qsStr ? `?${qsStr}` : ''}`
+  const path = `${hubOwnedPath('/records', params.hubId)}${qsStr ? `?${qsStr}` : ''}`
   const { status, data } = await apiGet<{ records: Record<string, unknown>[]; total: number; hasMore: boolean }>(request, path, seedHex)
   if (status !== 200) throw new Error(`Failed to list records: ${status}`)
   return data
@@ -1849,10 +1830,10 @@ export async function listRecordsViaApi(
 export async function getRecordViaApi(
   request: APIRequestContext,
   recordId: string,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiGet<Record<string, unknown>>(request, `${hubPath('/records', hubId)}/${recordId}`, seedHex)
+  const { status, data } = await apiGet<Record<string, unknown>>(request, `${hubOwnedPath('/records', hubId)}/${recordId}`, seedHex)
   if (status !== 200) throw new Error(`Failed to get record: ${status}`)
   return data
 }
@@ -1861,10 +1842,10 @@ export async function updateRecordViaApi(
   request: APIRequestContext,
   recordId: string,
   updates: Record<string, unknown>,
-  hubId?: string,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const { status, data } = await apiPatch<Record<string, unknown>>(request, `${hubPath('/records', hubId)}/${recordId}`, updates, seedHex)
+  const { status, data } = await apiPatch<Record<string, unknown>>(request, `${hubOwnedPath('/records', hubId)}/${recordId}`, updates, seedHex)
   if (status !== 200) throw new Error(`Failed to update record: ${status}`)
   return data
 }
@@ -1875,11 +1856,11 @@ export async function linkContactToRecordViaApi(
   contactId: string,
   role: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<Record<string, unknown>> {
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath(`/records/${recordId}/contacts`, hubId),
+    hubOwnedPath(`/records/${recordId}/contacts`, hubId),
     { contactId, role },
     seedHex,
   )
@@ -1891,9 +1872,9 @@ export async function listRecordContactsViaApi(
   request: APIRequestContext,
   recordId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ contacts: Record<string, unknown>[] }> {
-  const { status, data } = await apiGet<{ contacts: Record<string, unknown>[] }>(request, hubPath(`/records/${recordId}/contacts`, hubId), seedHex)
+  const { status, data } = await apiGet<{ contacts: Record<string, unknown>[] }>(request, hubOwnedPath(`/records/${recordId}/contacts`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to list record contacts: ${status}`)
   return data
 }
@@ -1903,9 +1884,9 @@ export async function assignRecordViaApi(
   recordId: string,
   pubkeys: string[],
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiPost(request, hubPath(`/records/${recordId}/assign`, hubId), { pubkeys }, seedHex)
+  const { status } = await apiPost(request, hubOwnedPath(`/records/${recordId}/assign`, hubId), { pubkeys }, seedHex)
   if (status !== 200) throw new Error(`Failed to assign record: ${status}`)
 }
 
@@ -1914,13 +1895,13 @@ export async function assignRecordViaApi(
 export async function createEventViaApi(
   request: APIRequestContext,
   entityTypeId: string,
-  options?: {
+  options: {
     startDate?: string
     endDate?: string
     eventTypeHash?: string
     statusHash?: string
     parentEventId?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
@@ -1929,7 +1910,7 @@ export async function createEventViaApi(
   const envelope = await realEnvelope(contentKey, seedHex)
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath('/events', options?.hubId),
+    hubOwnedPath('/events', options.hubId),
     {
       entityTypeId,
       startDate: options?.startDate ?? new Date().toISOString(),
@@ -1953,9 +1934,9 @@ export async function linkRecordToEventViaApi(
   eventId: string,
   recordId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiPost(request, hubPath(`/events/${eventId}/records`, hubId), { recordId }, seedHex)
+  const { status } = await apiPost(request, hubOwnedPath(`/events/${eventId}/records`, hubId), { recordId }, seedHex)
   if (status !== 201 && status !== 200) throw new Error(`Failed to link record to event: ${status}`)
 }
 
@@ -1964,9 +1945,9 @@ export async function linkReportToEventViaApi(
   eventId: string,
   reportId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
-  const { status } = await apiPost(request, hubPath(`/events/${eventId}/reports`, hubId), { reportId }, seedHex)
+  const { status } = await apiPost(request, hubOwnedPath(`/events/${eventId}/reports`, hubId), { reportId }, seedHex)
   if (status !== 201 && status !== 200) throw new Error(`Failed to link report to event: ${status}`)
 }
 
@@ -1974,9 +1955,9 @@ export async function listEventRecordsViaApi(
   request: APIRequestContext,
   eventId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ links: Record<string, unknown>[] }> {
-  const { status, data } = await apiGet<{ links: Record<string, unknown>[] }>(request, hubPath(`/events/${eventId}/records`, hubId), seedHex)
+  const { status, data } = await apiGet<{ links: Record<string, unknown>[] }>(request, hubOwnedPath(`/events/${eventId}/records`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to list event records: ${status}`)
   return data
 }
@@ -1985,9 +1966,9 @@ export async function listEventReportsViaApi(
   request: APIRequestContext,
   eventId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ links: Record<string, unknown>[] }> {
-  const { status, data } = await apiGet<{ links: Record<string, unknown>[] }>(request, hubPath(`/events/${eventId}/reports`, hubId), seedHex)
+  const { status, data } = await apiGet<{ links: Record<string, unknown>[] }>(request, hubOwnedPath(`/events/${eventId}/reports`, hubId), seedHex)
   if (status !== 200) throw new Error(`Failed to list event reports: ${status}`)
   return data
 }
@@ -2004,7 +1985,7 @@ export async function createInteractionViaApi(
     interactionTypeHash?: string
     previousStatusHash?: string
     newStatusHash?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
@@ -2031,7 +2012,7 @@ export async function createInteractionViaApi(
 
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath(`/records/${caseId}/interactions`, options.hubId),
+    hubOwnedPath(`/records/${caseId}/interactions`, options.hubId),
     body,
     seedHex,
   )
@@ -2042,7 +2023,7 @@ export async function createInteractionViaApi(
 export async function listInteractionsViaApi(
   request: APIRequestContext,
   caseId: string,
-  params?: { page?: number; limit?: number; interactionTypeHash?: string; hubId?: string },
+  params: { page?: number; limit?: number; interactionTypeHash?: string; hubId: string },
   seedHex = ADMIN_SEED,
 ): Promise<{ interactions: Record<string, unknown>[]; total: number }> {
   const qs = new URLSearchParams()
@@ -2050,7 +2031,7 @@ export async function listInteractionsViaApi(
   if (params?.limit) qs.set('limit', String(params.limit))
   if (params?.interactionTypeHash) qs.set('interactionTypeHash', params.interactionTypeHash)
   const qsStr = qs.toString()
-  const path = `${hubPath(`/records/${caseId}/interactions`, params?.hubId)}${qsStr ? `?${qsStr}` : ''}`
+  const path = `${hubOwnedPath(`/records/${caseId}/interactions`, params.hubId)}${qsStr ? `?${qsStr}` : ''}`
   const { status, data } = await apiGet<{ interactions: Record<string, unknown>[]; total: number }>(request, path, seedHex)
   if (status !== 200) throw new Error(`Failed to list interactions: ${status}`)
   return data
@@ -2061,21 +2042,21 @@ export async function listInteractionsViaApi(
 export async function uploadEvidenceViaApi(
   request: APIRequestContext,
   caseId: string,
-  options?: {
+  options: {
     fileId?: string
     filename?: string
     mimeType?: string
     sizeBytes?: number
     classification?: string
     integrityHash?: string
-    hubId?: string
+    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
   const hash = options?.integrityHash ?? 'a'.repeat(64)
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
-    hubPath(`/records/${caseId}/evidence`, options?.hubId),
+    hubOwnedPath(`/records/${caseId}/evidence`, options.hubId),
     {
       fileId: options?.fileId ?? `file_${Date.now()}`,
       filename: options?.filename ?? `test_evidence_${Date.now()}.jpg`,
@@ -2095,11 +2076,11 @@ export async function getEvidenceCustodyViaApi(
   request: APIRequestContext,
   evidenceId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ custodyChain: Record<string, unknown>[]; total: number }> {
   const { status, data } = await apiGet<{ custodyChain: Record<string, unknown>[]; total: number }>(
     request,
-    hubPath(`/evidence/${evidenceId}/custody`, hubId),
+    hubOwnedPath(`/evidence/${evidenceId}/custody`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to get custody chain: ${status}`)
@@ -2111,11 +2092,11 @@ export async function verifyEvidenceIntegrityViaApi(
   evidenceId: string,
   currentHash: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ valid: boolean; originalHash: string; currentHash: string }> {
   const { status, data } = await apiPost<{ valid: boolean; originalHash: string; currentHash: string }>(
     request,
-    hubPath(`/evidence/${evidenceId}/verify`, hubId),
+    hubOwnedPath(`/evidence/${evidenceId}/verify`, hubId),
     { currentHash },
     seedHex,
   )
@@ -2135,11 +2116,9 @@ export async function identifyCallerViaApi(
   request: APIRequestContext,
   identifierHash: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<CallerIdentificationResult> {
-  const path = hubId
-    ? `/hubs/${hubId}/calls/identify/${identifierHash}`
-    : `/calls/identify/${identifierHash}`
+  const path = hubOwnedPath(`/calls/identify/${identifierHash}`, hubId)
   const { status, data } = await apiGet<CallerIdentificationResult>(
     request,
     path,
@@ -2153,12 +2132,9 @@ export async function listRecordsByContactViaApi(
   request: APIRequestContext,
   contactId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ records: Record<string, unknown>[]; total: number }> {
-  // Hub isolation (Epic E): use hub-scoped path when hubId is provided
-  const path = hubId
-    ? `/hubs/${hubId}/records/by-contact/${contactId}`
-    : `/records/by-contact/${contactId}`
+  const path = hubOwnedPath(`/records/by-contact/${contactId}`, hubId)
   const { status, data } = await apiGet<{ records: Record<string, unknown>[]; total: number }>(
     request,
     path,
@@ -2170,15 +2146,19 @@ export async function listRecordsByContactViaApi(
 
 // ── Case Management: Cross-Hub Sharing (Epic 328) ──────────────────
 
+/**
+ * Cross-hub sharing is a DEPLOYMENT setting: it is mounted only at
+ * `/settings/cms/cross-hub` (entity-schema.ts `deployment`), never under a hub,
+ * so this helper takes no hub.
+ */
 export async function enableCrossHubSharingViaApi(
   request: APIRequestContext,
   enabled: boolean,
   seedHex = ADMIN_SEED,
-  hubId?: string,
 ): Promise<{ enabled: boolean }> {
   const { status, data } = await apiPut<{ enabled: boolean }>(
     request,
-    hubPath('/settings/cms/cross-hub', hubId),
+    '/settings/cms/cross-hub',
     { enabled },
     seedHex,
   )
@@ -2189,11 +2169,10 @@ export async function enableCrossHubSharingViaApi(
 export async function getCrossHubSharingViaApi(
   request: APIRequestContext,
   seedHex = ADMIN_SEED,
-  hubId?: string,
 ): Promise<{ enabled: boolean }> {
   const { data } = await apiGet<{ enabled: boolean }>(
     request,
-    hubPath('/settings/cms/cross-hub', hubId),
+    '/settings/cms/cross-hub',
     seedHex,
   )
   return data
@@ -2225,12 +2204,13 @@ export async function notifyContactsViaApi(
     channel: 'sms' | 'signal' | 'whatsapp'
     message: string
   }>,
+  hubId: string,
   statusLabel = 'released',
   seedHex = ADMIN_SEED,
 ): Promise<{ status: number; data: NotifyContactsResult | null }> {
   return apiPost<NotifyContactsResult>(
     request,
-    `/records/${recordId}/notify-contacts`,
+    hubOwnedPath(`/records/${recordId}/notify-contacts`, hubId),
     {
       statusLabel,
       recipients,
@@ -2247,11 +2227,12 @@ export async function notifyContactsRawViaApi(
   request: APIRequestContext,
   recordId: string,
   body: Record<string, unknown>,
+  hubId: string,
   seedHex = ADMIN_SEED,
 ): Promise<{ status: number; data: unknown }> {
   return apiPost(
     request,
-    `/records/${recordId}/notify-contacts`,
+    hubOwnedPath(`/records/${recordId}/notify-contacts`, hubId),
     body,
     seedHex,
   )
@@ -2295,11 +2276,11 @@ export async function createRelationshipViaApi(
   relationshipType: string,
   direction: 'a_to_b' | 'b_to_a' | 'bidirectional' = 'bidirectional',
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<RelationshipResult> {
   const { status, data } = await apiPost<RelationshipResult>(
     request,
-    hubPath(`/directory/${contactIdA}/relationships`, hubId),
+    hubOwnedPath(`/directory/${contactIdA}/relationships`, hubId),
     { contactIdB, relationshipType, direction },
     seedHex,
   )
@@ -2311,11 +2292,11 @@ export async function listRelationshipsViaApi(
   request: APIRequestContext,
   contactId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<RelationshipListResult> {
   const { status, data } = await apiGet<RelationshipListResult>(
     request,
-    hubPath(`/directory/${contactId}/relationships`, hubId),
+    hubOwnedPath(`/directory/${contactId}/relationships`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to list relationships: ${status}`)
@@ -2327,11 +2308,11 @@ export async function deleteRelationshipViaApi(
   contactId: string,
   relId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
   const { status } = await apiDelete(
     request,
-    hubPath(`/directory/${contactId}/relationships/${relId}`, hubId),
+    hubOwnedPath(`/directory/${contactId}/relationships/${relId}`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to delete relationship: ${status}`)
@@ -2342,7 +2323,7 @@ export async function createAffinityGroupViaApi(
   name: string,
   initialMembers: Array<{ contactId: string; role?: string; isPrimary?: boolean }> = [],
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<GroupResult> {
   const contentKey = generateContentKey()
   const encryptedDetails = encryptContent(JSON.stringify({ name }), contentKey, LABEL_NOTE_KEY)
@@ -2356,7 +2337,7 @@ export async function createAffinityGroupViaApi(
   }))
   const { status, data } = await apiPost<GroupResult>(
     request,
-    hubPath('/directory/groups', hubId),
+    hubOwnedPath('/directory/groups', hubId),
     {
       encryptedDetails,
       detailEnvelopes: [envelope],
@@ -2372,13 +2353,13 @@ export async function addGroupMemberViaApi(
   request: APIRequestContext,
   groupId: string,
   contactId: string,
-  role?: string,
+  role: string | undefined,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ added: boolean; memberCount: number }> {
   const { status, data } = await apiPost<{ added: boolean; memberCount: number }>(
     request,
-    hubPath(`/directory/groups/${groupId}/members`, hubId),
+    hubOwnedPath(`/directory/groups/${groupId}/members`, hubId),
     { contactId, role, isPrimary: false },
     seedHex,
   )
@@ -2391,11 +2372,11 @@ export async function removeGroupMemberViaApi(
   groupId: string,
   contactId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
   const { status } = await apiDelete(
     request,
-    hubPath(`/directory/groups/${groupId}/members/${contactId}`, hubId),
+    hubOwnedPath(`/directory/groups/${groupId}/members/${contactId}`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to remove group member: ${status}`)
@@ -2405,11 +2386,11 @@ export async function listGroupMembersViaApi(
   request: APIRequestContext,
   groupId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ members: GroupMemberResult[] }> {
   const { status, data } = await apiGet<{ members: GroupMemberResult[] }>(
     request,
-    hubPath(`/directory/groups/${groupId}/members`, hubId),
+    hubOwnedPath(`/directory/groups/${groupId}/members`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to list group members: ${status}`)
@@ -2420,11 +2401,11 @@ export async function getAffinityGroupViaApi(
   request: APIRequestContext,
   groupId: string,
   seedHex = ADMIN_SEED,
-  hubId?: string,
+  hubId: string,
 ): Promise<GroupResult & { members: GroupMemberResult[] }> {
   const { status, data } = await apiGet<GroupResult & { members: GroupMemberResult[] }>(
     request,
-    hubPath(`/directory/groups/${groupId}`, hubId),
+    hubOwnedPath(`/directory/groups/${groupId}`, hubId),
     seedHex,
   )
   if (status !== 200) throw new Error(`Failed to get affinity group: ${status}`)
@@ -2440,7 +2421,7 @@ export async function listTriageQueueViaApi(
 ): Promise<{ conversations: Record<string, unknown>[]; total: number }> {
   const qs = new URLSearchParams({ conversionEnabled: 'true' })
   if (params.conversionStatus) qs.set('conversionStatus', params.conversionStatus)
-  const path = `${hubPath('/reports', params.hubId)}?${qs}`
+  const path = `${hubOwnedPath('/reports', params.hubId)}?${qs}`
   const { status, data } = await apiGet<{ conversations: Record<string, unknown>[]; total: number }>(request, path, seedHex)
   if (status !== 200) throw new Error(`Failed to list triage queue: ${status}`)
   return data
@@ -2455,7 +2436,7 @@ export async function updateReportConversionStatusViaApi(
 ): Promise<Record<string, unknown>> {
   const { status, data } = await apiPatch<Record<string, unknown>>(
     request,
-    hubPath(`/reports/${reportId}`, hubId),
+    hubOwnedPath(`/reports/${reportId}`, hubId),
     { conversionStatus },
     seedHex,
   )
@@ -2483,7 +2464,7 @@ export async function createCaseFromReportViaApi(
   const envelope = await realEnvelope(contentKey, seedHex)
   const { status, data } = await apiPost<{ id?: string; reportId?: string; caseId?: string }>(
     request,
-    hubPath(`/reports/${reportId}/records`, hubId),
+    hubOwnedPath(`/reports/${reportId}/records`, hubId),
     {
       caseId: recordId,
       encryptedNotes,

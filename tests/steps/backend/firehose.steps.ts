@@ -7,8 +7,10 @@ import { Given, When, Then } from './fixtures'
 import { getScenarioState } from './common.steps'
 import { apiGet, apiPost, apiPatch, apiDelete } from '../../api-helpers'
 
-function hubPath(base: string, hubId?: string): string {
-  return hubId ? `/hubs/${hubId}${base}` : base
+/** Firehose connections belong to a hub; there is no "no hub" form of this path (#2465). */
+function hubPath(base: string, hubId: string): string {
+  if (!hubId) throw new Error(`hubPath(${base}): a firehose connection needs a hub id`)
+  return `/hubs/${hubId}${base}`
 }
 
 interface FirehoseState {

@@ -370,7 +370,7 @@ async function createTrackedContact(
   request: APIRequestContext,
   casesWorld: CasesWorld,
   name: string,
-  opts?: { contactTypeHash?: string; hubId?: string },
+  opts: { contactTypeHash?: string; hubId: string },
 ): Promise<Record<string, unknown>> {
   const created = await createContactByNameViaApi(request, name, opts)
   casesWorld.contactWithDataId = (created as { id: string }).id

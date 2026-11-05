@@ -9,6 +9,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
+  ADMIN_SEED,
   createContactViaApi,
   createRelationshipViaApi,
   listRelationshipsViaApi,
@@ -90,6 +91,9 @@ When(
       a!.id as string,
       b!.id as string,
       relType,
+      'bidirectional',
+      ADMIN_SEED,
+      getScenarioState(world).hubId,
     )
   },
 )
@@ -106,7 +110,7 @@ Then(
     const b = getRelState(world).contacts.get(aliasB)
     expect(a).toBeTruthy()
     expect(b).toBeTruthy()
-    const result = await listRelationshipsViaApi(request, a!.id as string)
+    const result = await listRelationshipsViaApi(request, a!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
     const bId = b!.id as string
     const found = result.relationships.some(
       r => r.contactIdA === bId || r.contactIdB === bId,
@@ -126,6 +130,8 @@ Given(
       b.id as string,
       relType,
       'bidirectional',
+      ADMIN_SEED,
+      getScenarioState(world).hubId,
     )
   },
 )
@@ -133,7 +139,7 @@ Given(
 When('listing relationships for {string}', async ({ request, world }, alias: string) => {
   const contact = getRelState(world).contacts.get(alias)
   expect(contact, `Contact "${alias}" not found`).toBeTruthy()
-  const result = await listRelationshipsViaApi(request, contact!.id as string)
+  const result = await listRelationshipsViaApi(request, contact!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
   getRelState(world).relationshipList = result.relationships
 })
 
@@ -158,6 +164,9 @@ Given(
       a.id as string,
       b.id as string,
       'support_contact',
+      'bidirectional',
+      ADMIN_SEED,
+      getScenarioState(world).hubId,
     )
   },
 )
@@ -168,6 +177,8 @@ When('the admin deletes the relationship', async ({ request, world }) => {
     request,
     getRelState(world).lastRelationship!.contactIdA,
     getRelState(world).lastRelationship!.id,
+    ADMIN_SEED,
+    getScenarioState(world).hubId,
   )
 })
 
@@ -176,7 +187,7 @@ Then(
   async ({ request, world }, alias: string) => {
     const contact = getRelState(world).contacts.get(alias)
     expect(contact, `Contact "${alias}" not found`).toBeTruthy()
-    const result = await listRelationshipsViaApi(request, contact!.id as string)
+    const result = await listRelationshipsViaApi(request, contact!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
     expect(result.relationships.length).toBe(0)
   },
 )
@@ -192,7 +203,7 @@ When(
     const placeholder = await ensureNamedContact(request, world, `_group_seed_${Date.now()}`)
     getRelState(world).lastGroup = await createAffinityGroupViaApi(request, name, [
       { contactId: placeholder.id as string },
-    ])
+    ], ADMIN_SEED, getScenarioState(world).hubId)
   },
 )
 
@@ -202,7 +213,7 @@ Then(
     expect(getRelState(world).lastGroup).toBeTruthy()
     expect(getRelState(world).lastGroup!.id).toBeTruthy()
     // Verify via GET that the group persists
-    const group = await getAffinityGroupViaApi(request, getRelState(world).lastGroup!.id)
+    const group = await getAffinityGroupViaApi(request, getRelState(world).lastGroup!.id, ADMIN_SEED, getScenarioState(world).hubId)
     expect(group.id).toBe(getRelState(world).lastGroup!.id)
     // encryptedDetails is AES-256-GCM ciphertext — verify it exists (non-empty)
     expect(group.encryptedDetails).toBeTruthy()
@@ -215,10 +226,10 @@ Given('an affinity group exists', async ({ request, world }) => {
   const seed = await ensureNamedContact(request, world, `_group_seed_${Date.now()}`)
   const group = await createAffinityGroupViaApi(request, `Test Group ${Date.now()}`, [
     { contactId: seed.id as string },
-  ])
+  ], ADMIN_SEED, getScenarioState(world).hubId)
   getRelState(world).lastGroup = group
   // Remove the seed member so the group starts with known state
-  await removeGroupMemberViaApi(request, group.id, seed.id as string)
+  await removeGroupMemberViaApi(request, group.id, seed.id as string, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 When(
@@ -227,13 +238,13 @@ When(
     expect(getRelState(world).lastGroup).toBeTruthy()
     const contact = getRelState(world).contacts.get(alias)
     expect(contact, `Contact "${alias}" not found`).toBeTruthy()
-    await addGroupMemberViaApi(request, getRelState(world).lastGroup!.id, contact!.id as string, role)
+    await addGroupMemberViaApi(request, getRelState(world).lastGroup!.id, contact!.id as string, role, ADMIN_SEED, getScenarioState(world).hubId)
   },
 )
 
 Then('the group should have {int} member', async ({ request, world }, count: number) => {
   expect(getRelState(world).lastGroup).toBeTruthy()
-  const result = await listGroupMembersViaApi(request, getRelState(world).lastGroup!.id)
+  const result = await listGroupMembersViaApi(request, getRelState(world).lastGroup!.id, ADMIN_SEED, getScenarioState(world).hubId)
   getRelState(world).groupMembers = result.members
   expect(result.members.length).toBe(count)
 })
@@ -258,6 +269,8 @@ Given(
       request,
       `Group with ${alias} ${Date.now()}`,
       [{ contactId: contact.id as string }],
+      ADMIN_SEED,
+      getScenarioState(world).hubId,
     )
   },
 )
@@ -266,11 +279,11 @@ When('the admin removes {string} from the group', async ({ request, world }, ali
   expect(getRelState(world).lastGroup).toBeTruthy()
   const contact = getRelState(world).contacts.get(alias)
   expect(contact, `Contact "${alias}" not found`).toBeTruthy()
-  await removeGroupMemberViaApi(request, getRelState(world).lastGroup!.id, contact!.id as string)
+  await removeGroupMemberViaApi(request, getRelState(world).lastGroup!.id, contact!.id as string, ADMIN_SEED, getScenarioState(world).hubId)
 })
 
 Then('the group member count should be {int}', async ({ request, world }, count: number) => {
   expect(getRelState(world).lastGroup).toBeTruthy()
-  const result = await listGroupMembersViaApi(request, getRelState(world).lastGroup!.id)
+  const result = await listGroupMembersViaApi(request, getRelState(world).lastGroup!.id, ADMIN_SEED, getScenarioState(world).hubId)
   expect(result.members.length).toBe(count)
 })

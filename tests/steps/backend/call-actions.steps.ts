@@ -81,7 +81,7 @@ When(
     expect(state.callId).toBeTruthy()
     const res = await apiPost(
       request,
-      `/calls/${state.callId}/ban`,
+      `/hubs/${state.hubId}/calls/${state.callId}/ban`,
       {},
       state.volunteers[volIndex].deviceKey,
     )
@@ -97,7 +97,7 @@ When(
     expect(state.callId).toBeTruthy()
     const res = await apiPost(
       request,
-      `/calls/${state.callId}/ban`,
+      `/hubs/${state.hubId}/calls/${state.callId}/ban`,
       { reason },
       state.volunteers[volIndex].deviceKey,
     )
@@ -113,7 +113,7 @@ When(
     expect(state.callId).toBeTruthy()
     const res = await apiPost(
       request,
-      `/calls/${state.callId}/ban`,
+      `/hubs/${state.hubId}/calls/${state.callId}/ban`,
       {},
       state.volunteers[volIndex].deviceKey,
     )
@@ -207,8 +207,8 @@ Then('the call status should be {string}', async ({ request, world }, expectedSt
   const state = getScenarioState(world)
   expect(state.callId).toBeTruthy()
 
-  const historyPath = state.hubId ? `/hubs/${state.hubId}/calls/history` : '/calls/history'
-  const activePath = state.hubId ? `/hubs/${state.hubId}/calls/active` : '/calls/active'
+  const historyPath = `/hubs/${state.hubId}/calls/history`
+  const activePath = `/hubs/${state.hubId}/calls/active`
 
   // Check call history first (completed/unanswered calls)
   const historyRes = await apiGet<{ calls: CallRecord[] }>(

@@ -99,13 +99,14 @@ test.describe('Report Types', () => {
   })
 
   test('report card shows report type badge', async ({ page }) => {
-    // Create our own report type — do not rely on prior test state
-    const reportType = await createCmsReportTypeViaApi(page.request) as { id: string }
-
     // A report lives in a hub (#2395): file it in the hub the page is browsing.
     await loginAsAdmin(page)
     const hubId = await page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null)
     expect(hubId, 'the page has no active hub to file a report in').toBeTruthy()
+
+    // Our own report type, in the SAME hub as the report — do not rely on prior
+    // test state. It used to be created with no hub, i.e. in hub '' (#2465).
+    const reportType = await createCmsReportTypeViaApi(page.request, { hubId: hubId! }) as { id: string }
     await createReportViaApi(page.request, {
       title: `Badge Test Report ${Date.now()}`,
       reportTypeId: reportType.id,

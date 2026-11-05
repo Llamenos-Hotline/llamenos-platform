@@ -247,7 +247,7 @@ When('the {string} user sends {string} to {string} with valid shift body', async
   if (!user) throw new Error(`No test user for role "${role}"`)
 
   const hubId = getScenarioState(world).hubId
-  getSharedState(world).lastResponse = await apiPost(request, hubId ? `/hubs/${hubId}/shifts` : '/shifts', {
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${hubId}/shifts`, {
     id: crypto.randomUUID(),
     encryptedName: uniqueName('PM Shift'),
     startTime: '09:00',
