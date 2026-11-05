@@ -3,7 +3,7 @@ import {
   buildBoard, classifyPr, classifyReviewFailure, isBotAuthor,
   normalizeCheckRunState, normalizeStatusContextState, renderBoard, renderBoardPorcelain,
   fetchBoardFactsWith, deriveBranchRuleset, parseCodeOwners, codeOwnersOf,
-  resolveMergeable, staleGreenNote,
+  resolveMergeable, staleGreenNote, checkRunAnnotationsPageFrom,
   runBoard,
   type BoardFacts, type PrFact, type PrCheckContext, type FleetStateFact, type BoardFetchDeps,
   type BranchGate, type BranchRuleset, type CheckState,
@@ -16,9 +16,10 @@ import liveNoVerdictUnreviewed from './fixtures/board/fleet-review-no-verdict-un
 /** A live `fleet/review` check run (PR #2478, run 127410783839) and its
  *  annotations, captured verbatim from the REST API for #2473. */
 const LIVE_NO_VERDICT_UNREVIEWED = liveNoVerdictUnreviewed as {
-  checkRun: { id: number; name: string; conclusion: string; output: { title: string | null } }
-  annotations: (CheckRunAnnotation & { annotation_level: string })[]
+  checkRun: { id: number; node_id: string; name: string; conclusion: string; output: { title: string | null } }
+  annotationsResponse: { data: { node: { databaseId: number; title: string | null; annotations: { nodes: CheckRunAnnotation[] } } } }
 }
+const LIVE_ANNOTATIONS: CheckRunAnnotation[] = LIVE_NO_VERDICT_UNREVIEWED.annotationsResponse.data.node.annotations.nodes
 
 const HEAD = 'head-sha-111'
 const OTHER_SHA = 'stale-sha-999'
@@ -125,9 +126,9 @@ type GqlContextFixture = GqlPrNodeFixture['commits']['nodes'][number]['commit'] 
  *  returns it — the GraphQL twin of `cheapPassChecks`. */
 function gqlCheapPass(): GqlContextFixture[] {
   return [
-    { __typename: 'CheckRun', databaseId: 101, name: 'ci-status', status: 'COMPLETED', conclusion: 'SUCCESS' },
-    { __typename: 'CheckRun', databaseId: 102, name: 'gitleaks', status: 'COMPLETED', conclusion: 'SUCCESS' },
-    { __typename: 'CheckRun', databaseId: 103, name: 'CodeQL', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', id: 'CR_101', name: 'ci-status', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', id: 'CR_102', name: 'gitleaks', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', id: 'CR_103', name: 'CodeQL', status: 'COMPLETED', conclusion: 'SUCCESS' },
     { __typename: 'StatusContext', context: VERIFY_JOB, state: 'SUCCESS' },
   ]
 }
@@ -1028,7 +1029,7 @@ describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review ou
   // annotation.
   const live = LIVE_NO_VERDICT_UNREVIEWED
   const liveReviewNode = (): GqlContextFixture => ({
-    __typename: 'CheckRun', databaseId: live.checkRun.id, name: REVIEW_JOB, title: live.checkRun.output.title,
+    __typename: 'CheckRun', id: live.checkRun.node_id, name: REVIEW_JOB, title: live.checkRun.output.title,
     status: 'COMPLETED', conclusion: 'FAILURE', checkSuite: { workflowRun: { databaseId: 42 } },
   } as GqlContextFixture)
   const boardFor = async (fetchCheckRunAnnotations: BoardFetchDeps['fetchCheckRunAnnotations']) => {
@@ -1046,13 +1047,22 @@ describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review ou
     expect(live.checkRun.name).toBe(REVIEW_JOB)
     expect(live.checkRun.conclusion).toBe('failure')
     expect(live.checkRun.output.title).toBeNull()
-    expect(reviewOutcomeFromAnnotations(live.annotations)).toMatch(/^NO-VERDICT:unreviewed /)
+    expect(live.annotationsResponse.data.node.title).toBeNull()
+    expect(reviewOutcomeFromAnnotations(LIVE_ANNOTATIONS)).toMatch(/^NO-VERDICT:unreviewed /)
+  })
+
+  it('checkRunAnnotationsPageFrom parses the live GraphQL page, and refuses an unreadable one rather than returning []', () => {
+    expect(checkRunAnnotationsPageFrom(live.annotationsResponse)).toEqual({ annotations: LIVE_ANNOTATIONS, nextCursor: undefined })
+    expect(() => checkRunAnnotationsPageFrom({ errors: [{ message: 'rate limited' }] })).toThrow(/rate limited/)
+    expect(() => checkRunAnnotationsPageFrom({ data: { node: null } })).toThrow(/no CheckRun annotations/)
+    expect(() => checkRunAnnotationsPageFrom({ data: { node: { annotations: { pageInfo: { hasNextPage: true, endCursor: null }, nodes: [] } } } })).toThrow(/no cursor/)
+    expect(checkRunAnnotationsPageFrom({ data: { node: { annotations: { pageInfo: { hasNextPage: true, endCursor: 'c2' }, nodes: [] } } } }).nextCursor).toBe('c2')
   })
 
   it('a red NO-VERDICT:unreviewed carried in the ANNOTATION drives the board to REQUEST_REVIEW', async () => {
-    const fetchCheckRunAnnotations = vi.fn(async () => live.annotations)
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
     const { factsOut } = await boardFor(fetchCheckRunAnnotations)
-    expect(fetchCheckRunAnnotations).toHaveBeenCalledWith(live.checkRun.id)
+    expect(fetchCheckRunAnnotations).toHaveBeenCalledWith(live.checkRun.node_id)
     const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
     expect(review?.reviewOutcome).toEqual({ read: true, message: expect.stringMatching(/^NO-VERDICT:unreviewed /) })
     const row = buildBoard(factsOut).rows.find((r) => r.number === 7)
@@ -1061,7 +1071,7 @@ describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review ou
   })
 
   it('the same red run whose annotations carry NO outcome does NOT issue REQUEST_REVIEW', async () => {
-    const { factsOut } = await boardFor(async () => live.annotations.filter((a) => a.title !== REVIEW_OUTCOME_ANNOTATION))
+    const { factsOut } = await boardFor(async () => LIVE_ANNOTATIONS.filter((a) => a.title !== REVIEW_OUTCOME_ANNOTATION))
     const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
     expect(review?.reviewOutcome).toEqual({ read: true, message: undefined })
     const row = buildBoard(factsOut).rows.find((r) => r.number === 7)
@@ -1077,19 +1087,19 @@ describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review ou
     expect(row?.action).toBe('CANNOT_DECIDE')
   })
 
-  it('a FAILed fleet/review CheckRun with no databaseId is unreadable, not silently token-less', async () => {
+  it('a FAILed fleet/review CheckRun with no node id is unreadable, not silently token-less', async () => {
     const node = gqlPr(8, [{ __typename: 'CheckRun', name: REVIEW_JOB, status: 'COMPLETED', conclusion: 'FAILURE' }])
-    const fetchCheckRunAnnotations = vi.fn(async () => live.annotations)
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
     const factsOut = await fetchBoardFactsWith({ ...gateDeps, fetchCheckRunAnnotations, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
     expect(fetchCheckRunAnnotations).not.toHaveBeenCalled()
-    expect(factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)?.reviewOutcome).toEqual({ read: false, detail: expect.stringContaining('databaseId') })
+    expect(factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)?.reviewOutcome).toEqual({ read: false, detail: expect.stringContaining('node id') })
   })
 
   it('reads annotations only for a FAILed fleet/review CheckRun — never a passing or unrelated one', async () => {
-    const fetchCheckRunAnnotations = vi.fn(async () => live.annotations)
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
     const node = gqlPr(9, [
-      { __typename: 'CheckRun', databaseId: 1, name: 'ci-status', status: 'COMPLETED', conclusion: 'FAILURE' },
-      { __typename: 'CheckRun', databaseId: 2, name: REVIEW_JOB, status: 'COMPLETED', conclusion: 'SUCCESS' },
+      { __typename: 'CheckRun', id: 'CR_1', name: 'ci-status', status: 'COMPLETED', conclusion: 'FAILURE' },
+      { __typename: 'CheckRun', id: 'CR_2', name: REVIEW_JOB, status: 'COMPLETED', conclusion: 'SUCCESS' },
     ])
     const factsOut = await fetchBoardFactsWith({ ...gateDeps, fetchCheckRunAnnotations, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
     expect(fetchCheckRunAnnotations).not.toHaveBeenCalled()

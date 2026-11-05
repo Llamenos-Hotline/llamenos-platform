@@ -1002,7 +1002,7 @@ query($owner: String!, $repo: String!, $count: Int!, $after: String) {
                   nodes {
                     __typename
                     ... on CheckRun {
-                      databaseId
+                      id
                       name
                       status
                       conclusion
@@ -1027,8 +1027,9 @@ query($owner: String!, $repo: String!, $count: Int!, $after: String) {
 
 interface GqlCheckRunNode {
   __typename: 'CheckRun'
-  /** The check run's own id — what `fetchCheckRunAnnotations` reads by. */
-  databaseId?: number | null
+  /** The check run's GraphQL node id — what `fetchCheckRunAnnotations`
+   *  reads its annotations by. */
+  id?: string | null
   name: string
   status: string
   conclusion: string | null
@@ -1102,13 +1103,13 @@ export interface BoardFetchDeps {
    *  blessing a substantive failure as something else — see the module
    *  comment on `classifyReviewFailure`). */
   fetchRunJobs(runId: number): Promise<{ steps: WorkflowStep[]; runAttempt: number } | undefined>
-  /** `gh api repos/{REPO}/check-runs/{id}/annotations`, every page — only
-   *  ever called for a `fleet/review` CheckRun whose conclusion is FAILURE,
+  /** `CHECK_RUN_ANNOTATIONS_QUERY` for one CheckRun node id, every page —
+   *  only ever called for a `fleet/review` CheckRun whose conclusion is FAILURE,
    *  to read the outcome token `fleet-review.yml` publishes there (#2473;
    *  the check run's `title` is never written). THROWS on failure, with the
    *  `gh` detail as the message, so a failed read can never be mistaken for
    *  a run that named no outcome. */
-  fetchCheckRunAnnotations(checkRunId: number): Promise<CheckRunAnnotation[]>
+  fetchCheckRunAnnotations(checkRunNodeId: string): Promise<CheckRunAnnotation[]>
   checkFleetHalt(): Promise<{ halted: boolean; reason?: string }>
   /** `gh api repos/{REPO}/rules/branches/{branch}` — the raw rule list,
    *  every page. THROWS on failure (with the `gh` detail as the message) so
@@ -1158,13 +1159,13 @@ export async function resolveMergeable(
   return value
 }
 
-function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; checkRunId?: number; workflowRunId?: number; startedAt?: string } {
+function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 'StatusContext'; state: CheckState; checkRunNodeId?: string; workflowRunId?: number; startedAt?: string } {
   if (node.__typename === 'CheckRun') {
     return {
       name: node.name,
       kind: 'CheckRun',
       state: normalizeCheckRunState(node.status, node.conclusion),
-      checkRunId: node.databaseId ?? undefined,
+      checkRunNodeId: node.id ?? undefined,
       workflowRunId: node.checkSuite?.workflowRun?.databaseId ?? undefined,
       startedAt: node.startedAt ?? undefined,
     }
@@ -1177,21 +1178,60 @@ function toCheckState(node: GqlContextNode): { name: string; kind: 'CheckRun' | 
  *  detail — never an empty annotation list, which would read as "no token". */
 async function readReviewOutcome(
   deps: Pick<BoardFetchDeps, 'fetchCheckRunAnnotations'>,
-  checkRunId: number | undefined,
+  checkRunNodeId: string | undefined,
 ): Promise<ReviewOutcomeRead> {
-  if (checkRunId === undefined) return { read: false, detail: 'the GraphQL CheckRun carried no databaseId' }
+  if (checkRunNodeId === undefined) return { read: false, detail: 'the GraphQL CheckRun carried no node id' }
   try {
-    return { read: true, message: reviewOutcomeFromAnnotations(await deps.fetchCheckRunAnnotations(checkRunId)) }
+    return { read: true, message: reviewOutcomeFromAnnotations(await deps.fetchCheckRunAnnotations(checkRunNodeId)) }
   } catch (error) {
-    return { read: false, detail: `check run ${checkRunId}'s annotations: ${error instanceof Error ? error.message : String(error)}` }
+    return { read: false, detail: `check run ${checkRunNodeId}'s annotations: ${error instanceof Error ? error.message : String(error)}` }
   }
+}
+
+/** Reads ONE CheckRun's annotations by node id, a page at a time. GraphQL,
+ *  not the REST annotations path: that path shares its prefix with the
+ *  endpoint that CREATES a check run, and the forgery rail
+ *  (`checkRunsViolations`, forgery-rails.ts) confines that endpoint's name to
+ *  one pinned read. */
+export const CHECK_RUN_ANNOTATIONS_QUERY = `
+query($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on CheckRun {
+      annotations(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { title message }
+      }
+    }
+  }
+}
+`.trim()
+
+interface CheckRunAnnotationsResponse {
+  data?: { node?: { annotations?: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    nodes: CheckRunAnnotation[]
+  } } | null } | null
+  errors?: unknown
+}
+
+/** Pure. One page of a `CHECK_RUN_ANNOTATIONS_QUERY` response. THROWS on
+ *  GraphQL errors, a missing node, or a node with no annotations connection
+ *  — an unreadable answer is never an empty annotation list. */
+export function checkRunAnnotationsPageFrom(raw: unknown): { annotations: CheckRunAnnotation[]; nextCursor: string | undefined } {
+  const body = raw as CheckRunAnnotationsResponse
+  if (Array.isArray(body.errors) && body.errors.length > 0) throw new Error(`GraphQL errors: ${JSON.stringify(body.errors).slice(0, 300)}`)
+  const connection = body.data?.node?.annotations
+  if (connection === undefined) throw new Error('the response carried no CheckRun annotations connection')
+  const { hasNextPage, endCursor } = connection.pageInfo
+  if (hasNextPage && (endCursor === null || endCursor.length === 0)) throw new Error('annotations page claims a next page but gave no cursor')
+  return { annotations: connection.nodes, nextCursor: hasNextPage ? endCursor ?? undefined : undefined }
 }
 
 /**
  * Turns every page of `gh api graphql` open-PR results plus, for any FAILed
  * `fleet/review` CheckRun found in them, one
  * `gh api .../actions/runs/{id}/jobs` lookup and one
- * `gh api .../check-runs/{id}/annotations` read each, into `BoardFacts`.
+ * `CHECK_RUN_ANNOTATIONS_QUERY` read each, into `BoardFacts`.
  */
 async function gatherGate(deps: BoardFetchDeps, branch: string): Promise<BranchGate> {
   let ruleset: RulesetFact
@@ -1302,7 +1342,7 @@ export async function fetchBoardFactsWith(deps: BoardFetchDeps): Promise<BoardFa
       // (`classifyPr`'s REQUEST_REVIEW branch) — read it from the annotation,
       // the one place `fleet/review` records it (#2473).
       if (base.kind === 'CheckRun' && base.name === REVIEW_JOB && base.state === 'FAIL') {
-        check.reviewOutcome = await readReviewOutcome(deps, base.checkRunId)
+        check.reviewOutcome = await readReviewOutcome(deps, base.checkRunNodeId)
       }
 
       // Only a FAILed fleet/review CheckRun ever needs the infra-vs-
@@ -1403,16 +1443,26 @@ function defaultBoardFetchDeps(): BoardFetchDeps {
       if (job === undefined) return undefined
       return { steps: job.steps.map((s) => ({ name: s.name, conclusion: s.conclusion })), runAttempt: job.run_attempt }
     },
-    fetchCheckRunAnnotations: async (checkRunId) => {
-      let raw: string
-      try {
-        raw = await gh(['api', '--paginate', '--slurp', `repos/${REPO}/check-runs/${checkRunId}/annotations?per_page=100`])
-      } catch (error) {
-        throw new Error(describeGhFailure(error), { cause: error })
+    fetchCheckRunAnnotations: async (checkRunNodeId) => {
+      const all: CheckRunAnnotation[] = []
+      const seen = new Set<string>()
+      let after: string | undefined
+      for (;;) {
+        const args = ['api', 'graphql', '-f', `query=${CHECK_RUN_ANNOTATIONS_QUERY}`, '-f', `id=${checkRunNodeId}`]
+        if (after !== undefined) args.push('-f', `after=${after}`)
+        let raw: string
+        try {
+          raw = await gh(args)
+        } catch (error) {
+          throw new Error(describeGhFailure(error), { cause: error })
+        }
+        const page = checkRunAnnotationsPageFrom(JSON.parse(raw) as unknown)
+        all.push(...page.annotations)
+        if (page.nextCursor === undefined) return all
+        if (seen.has(page.nextCursor)) throw new Error(`annotations pagination repeated cursor ${page.nextCursor}`)
+        seen.add(page.nextCursor)
+        after = page.nextCursor
       }
-      const pages = JSON.parse(raw) as unknown
-      if (!Array.isArray(pages) || !pages.every(Array.isArray)) throw new Error(`annotations response was not a list of pages: ${raw.slice(0, 300)}`)
-      return (pages as unknown[][]).flat() as CheckRunAnnotation[]
     },
     checkFleetHalt: checkHalt,
     fetchBranchRules: async (branch) => {

@@ -765,8 +765,8 @@ export function reviewOutcomeToken(title: string | null | undefined): ReviewOutc
 export const REVIEW_OUTCOME_ANNOTATION = `${REVIEW_JOB} outcome`
 
 /** The two fields of a check-run annotation the outcome reader needs. The
- *  REST (`check-runs/{id}/annotations`) and GraphQL (`CheckRun.annotations`)
- *  shapes both carry them under these names. */
+ *  REST and GraphQL (`CheckRun.annotations`) shapes both carry them under
+ *  these names. */
 export interface CheckRunAnnotation {
   title?: string | null
   message?: string | null
