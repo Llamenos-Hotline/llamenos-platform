@@ -239,12 +239,15 @@ describe('#1728 every literal route the mobile clients call is one the worker mo
     // PUT on that path, which is the whole of #1724.
     expect(isMounted('PUT', '/api/settings/call')).toBe(false)
     // Parameterised segments resolve, and a client-interpolated segment is
-    // matched only against a `:param` — `PUT /api/shifts/fallback` IS mounted,
-    // so a looser match would have called `PUT /api/shifts/$id` mounted, which
-    // is the exact 404 a review caught by hand on #1722.
-    expect(isMounted('PATCH', `/api/shifts/${PARAM}`)).toBe(true)
-    expect(isMounted('PUT', `/api/shifts/${PARAM}`)).toBe(false)
-    expect(isMounted('PUT', '/api/shifts/fallback')).toBe(true)
+    // matched only against a `:param` — `PUT .../shifts/fallback` IS mounted,
+    // so a looser match would have called `PUT .../shifts/$id` mounted, which
+    // is the exact 404 a review caught by hand on #1722. Shifts are hub-only
+    // (#2461), so the probe is the hub path, and the bare one is NOT mounted.
+    const shifts = `/api/hubs/${PARAM}/shifts`
+    expect(isMounted('PATCH', `${shifts}/${PARAM}`)).toBe(true)
+    expect(isMounted('PUT', `${shifts}/${PARAM}`)).toBe(false)
+    expect(isMounted('PUT', `${shifts}/fallback`)).toBe(true)
+    expect(isMounted('PUT', '/api/shifts/fallback')).toBe(false)
   })
 
   it.each(PLATFORMS)('%s: the scanner found call sites, so it is not silently matching nothing', platform => {
@@ -257,16 +260,20 @@ describe('#1728 every literal route the mobile clients call is one the worker mo
     expect(scanned[platform].skipped).toBeGreaterThan(0)
   })
 
-  it.each(PLATFORMS)('%s calls hub-owned resources only under a hub (#2395)', platform => {
+  // #2395: notes, reports, contacts, audit. #2461: records, events, evidence,
+  // calls, shifts, ring groups — the server used to write those into hub ''.
+  const HUB_OWNED = 'notes|reports|contacts|audit|records|events|evidence|calls|shifts|ring-groups'
+
+  it.each(PLATFORMS)('%s calls hub-owned resources only under a hub (#2395, #2461)', platform => {
     const sites = scanned[platform].resolvable
-    const hubOwned = /^\/api\/(notes|reports|contacts|audit)(\/|$)/
+    const hubOwned = new RegExp(`^/api/(${HUB_OWNED})(/|$)`)
     expect(
       sites.filter(s => hubOwned.test(s.path)).map(s => `${s.method} ${readable(s.path)} (${s.file})`),
-      'notes, reports, contacts and the audit log have no unscoped route: use activeHubPath(...)',
+      'these resources have no unscoped route: use activeHubPath(...), or hubPath(call.hubId, ...) for a call',
     ).toEqual([])
     // ...and the scanner sees the activeHubPath calls, so the assertion above is not vacuous.
-    const scoped = new RegExp(`^/api/hubs/${PARAM}/(notes|reports|contacts|audit)(/|$)`)
-    expect(sites.filter(s => scoped.test(s.path)).length).toBeGreaterThan(2)
+    const scoped = new RegExp(`^/api/hubs/${PARAM}/(${HUB_OWNED})(/|$)`)
+    expect(sites.filter(s => scoped.test(s.path)).length).toBeGreaterThan(10)
   })
 
   it.each(PLATFORMS)('%s calls only routes the worker mounts', platform => {

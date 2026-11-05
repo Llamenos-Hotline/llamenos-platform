@@ -28,15 +28,17 @@ import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.telephony.EndedCallHold
+import org.llamenos.hotline.ui.calls.CallHistoryViewModel
 import org.llamenos.hotline.ui.contacts.ContactsViewModel
 import org.llamenos.hotline.ui.notes.NotesViewModel
 import org.llamenos.hotline.ui.reports.ReportsViewModel
 import org.llamenos.hotline.ui.triage.TriageViewModel
 
 /**
- * A hub-owned list with no active hub (#2405).
+ * A hub-owned list with no active hub (#2405, #2461).
  *
- * Notes, reports, contacts and the audit log have no unscoped route (#2395), so
+ * Notes, reports, contacts and the audit log have no unscoped route (#2395), nor
+ * have records, events, evidence, calls, shifts and ring groups (#2461), so
  * [ApiService.activeHubPath] throws [org.llamenos.hotline.api.NoActiveHubException]
  * when no hub is active and the hub list says the user belongs to none. There is then nothing to browse: the screen must settle on
  * its empty state, not on an error, and must not ask the server for the bare path.
@@ -81,7 +83,11 @@ class NoActiveHubListTest {
     /** No request may name a hub-owned resource outside `/api/hubs/:hubId`. */
     private fun assertNoUnscopedHubOwnedRequest() {
         val unscoped = synchronized(requested) { requested.toList() }.filter { path ->
-            listOf("/api/reports", "/api/notes", "/api/contacts", "/api/audit").any { prefix ->
+            listOf(
+                "/api/reports", "/api/notes", "/api/contacts", "/api/audit",
+                // #2461: the server wrote these into hub "" and read any hub's row by id.
+                "/api/records", "/api/events", "/api/evidence", "/api/calls", "/api/shifts", "/api/ring-groups",
+            ).any { prefix ->
                 path == prefix || path.startsWith("$prefix/")
             }
         }
@@ -192,5 +198,29 @@ class NoActiveHubListTest {
         assertTrue(state.reports.isEmpty())
         assertFalse(state.isLoading)
         assertNoUnscopedHubOwnedRequest()
+    }
+
+    @Test
+    fun `call history settles empty without an error when no hub is active`() = runTest(UnconfinedTestDispatcher()) {
+        val hubs = activeHubState(null)
+        val vm = CallHistoryViewModel(apiService(hubs), hubs, mockk<CryptoService>(relaxed = true))
+
+        vm.loadCalls()
+
+        val state = vm.uiState.value
+        assertNull(state.error)
+        assertTrue(state.calls.isEmpty())
+        assertFalse(state.isLoading)
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    @Test
+    fun `call history still reports a refused request with a hub active`() = runTest(UnconfinedTestDispatcher()) {
+        val hubs = activeHubState("hub-1")
+        val vm = CallHistoryViewModel(apiService(hubs), hubs, mockk<CryptoService>(relaxed = true))
+
+        vm.loadCalls()
+
+        assertNotNull("A failed request is an error, not an empty list", vm.uiState.value.error)
     }
 }

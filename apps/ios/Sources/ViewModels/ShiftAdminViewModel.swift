@@ -97,11 +97,12 @@ final class ShiftAdminViewModel {
         do {
             let response: ShiftsListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts")
+                path: try apiService.activeHubPath("/api/shifts")
             )
             shifts = response.shifts
         } catch {
-            if errorMessage == nil { errorMessage = error.localizedDescription }
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if !APIError.isNoHub(error), errorMessage == nil { errorMessage = error.localizedDescription }
         }
     }
 
@@ -119,11 +120,12 @@ final class ShiftAdminViewModel {
         do {
             let response: RingGroupListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/ring-groups")
+                path: try apiService.activeHubPath("/api/ring-groups")
             )
             ringGroups = response.ringGroups
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
         }
         isLoading = false
     }
@@ -140,7 +142,7 @@ final class ShiftAdminViewModel {
             let body = CreateRingGroupBody(encryptedName: trimmed, id: UUID().uuidString)
             let _: RingGroupDetailResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/ring-groups"),
+                path: try apiService.activeHubPath("/api/ring-groups"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")
@@ -163,7 +165,7 @@ final class ShiftAdminViewModel {
             let body = UpdateRingGroupBody(encryptedName: trimmed)
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "PUT",
-                path: apiService.hp("/api/ring-groups/\(id)"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)"),
                 body: body
             )
             ringGroupDetail = detail
@@ -186,7 +188,7 @@ final class ShiftAdminViewModel {
         do {
             let _: OkResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/ring-groups/\(id)")
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)")
             )
             successMessage = NSLocalizedString("common_deleted", comment: "Deleted")
             await loadRingGroups()
@@ -200,7 +202,7 @@ final class ShiftAdminViewModel {
         do {
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/ring-groups/\(id)")
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)")
             )
             ringGroupDetail = detail
         } catch {
@@ -215,7 +217,7 @@ final class ShiftAdminViewModel {
             let body = RingGroupMembersBody(pubkeys: pubkeys)
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/ring-groups/\(groupId)/members"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(groupId)/members"),
                 body: body
             )
             ringGroupDetail = detail
@@ -231,7 +233,7 @@ final class ShiftAdminViewModel {
             let body = RingGroupMembersBody(pubkeys: [pubkey])
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/ring-groups/\(groupId)/members"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(groupId)/members"),
                 body: body
             )
             ringGroupDetail = detail
@@ -249,11 +251,12 @@ final class ShiftAdminViewModel {
         do {
             let response: FallbackGroup = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts/fallback")
+                path: try apiService.activeHubPath("/api/shifts/fallback")
             )
             fallbackPubkeys = response.userPubkeys
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
         }
     }
 
@@ -267,7 +270,7 @@ final class ShiftAdminViewModel {
             let body = FallbackGroup(userPubkeys: pubkeys)
             let _: FallbackGroup = try await apiService.request(
                 method: "PUT",
-                path: apiService.hp("/api/shifts/fallback"),
+                path: try apiService.activeHubPath("/api/shifts/fallback"),
                 body: body
             )
             await loadFallback()
@@ -287,11 +290,12 @@ final class ShiftAdminViewModel {
             let to = DateFormatting.wireDateString(from: overrideTo)
             let response: ShiftOverrideListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts/overrides?from=\(from)&to=\(to)")
+                path: try apiService.activeHubPath("/api/shifts/overrides?from=\(from)&to=\(to)")
             )
             overrides = response.overrides.sorted { $0.date < $1.date }
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
         }
         isLoading = false
     }
@@ -320,7 +324,7 @@ final class ShiftAdminViewModel {
             )
             let _: Override = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/shifts/overrides"),
+                path: try apiService.activeHubPath("/api/shifts/overrides"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")
@@ -340,7 +344,7 @@ final class ShiftAdminViewModel {
         do {
             let _: OkResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/shifts/overrides/\(id)")
+                path: try apiService.activeHubPath("/api/shifts/overrides/\(id)")
             )
             successMessage = NSLocalizedString("common_deleted", comment: "Deleted")
             await loadOverrides()
@@ -357,11 +361,12 @@ final class ShiftAdminViewModel {
         do {
             let response: ShiftJoinRequestListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts/requests")
+                path: try apiService.activeHubPath("/api/shifts/requests")
             )
             requests = response.requests
         } catch {
-            errorMessage = error.localizedDescription
+            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
         }
         isLoading = false
     }
@@ -375,7 +380,7 @@ final class ShiftAdminViewModel {
             let body = ReviewShiftJoinRequestBody(status: approve ? .approved : .denied)
             let _: ShiftJoinRequestResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/shifts/requests/\(id)/\(approve ? "approve" : "reject")"),
+                path: try apiService.activeHubPath("/api/shifts/requests/\(id)/\(approve ? "approve" : "reject")"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")

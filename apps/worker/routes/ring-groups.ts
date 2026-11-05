@@ -11,8 +11,14 @@ import {
 } from '@protocol/schemas/ring-group'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 
 const ringGroups = new Hono<AppEnv>()
+
+// A ring group is part of a hub's ring set, so this router is served only under
+// /hubs/:hubId (#2461). Registered first: a stray unscoped mount answers 404
+// before any handler could create a group in no hub.
+ringGroups.use('*', hubOnly)
 
 // Map DB member row to protocol response shape
 function mapMember(row: { userPubkey: string; addedBy: string; createdAt: Date }) {
@@ -45,7 +51,7 @@ ringGroups.get('/',
   requirePermission('shifts:manage-ring-groups'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { ringGroups: rows } = await services.ringGroups.list(hubId)
     return c.json({
       ringGroups: rows.map(row => ({
@@ -72,7 +78,7 @@ ringGroups.post('/',
   validator('json', createRingGroupBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const body = c.req.valid('json')
     const row = await services.ringGroups.create(hubId, { encryptedName: body.encryptedName })
     return c.json(mapGroup(row, []))
@@ -92,7 +98,7 @@ ringGroups.get('/:id',
   requirePermission('shifts:manage-ring-groups'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { id } = c.req.param()
     const { ringGroup, members } = await services.ringGroups.get(hubId, id)
     return c.json(mapGroup(ringGroup, members))
@@ -113,7 +119,7 @@ ringGroups.put('/:id',
   validator('json', updateRingGroupBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { id } = c.req.param()
     const body = c.req.valid('json')
     await services.ringGroups.update(hubId, id, body)
@@ -135,7 +141,7 @@ ringGroups.delete('/:id',
   requirePermission('shifts:manage-ring-groups'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { id } = c.req.param()
     await services.ringGroups.delete(hubId, id)
     return c.json({ ok: true })
@@ -156,7 +162,7 @@ ringGroups.post('/:id/members',
   validator('json', ringGroupMembersBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const { id } = c.req.param()
     const body = c.req.valid('json')
@@ -182,7 +188,7 @@ ringGroups.delete('/:id/members',
   validator('json', ringGroupMembersBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { id } = c.req.param()
     const body = c.req.valid('json')
     for (const memberPubkey of body.pubkeys) {

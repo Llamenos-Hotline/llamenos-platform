@@ -1,4 +1,4 @@
-import { request, hp, hubPath, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY } from './client'
+import { request, activeHubPath, hubPath, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
 import type { ActiveCall, CallRecord, UserPresence } from '@protocol/schemas'
@@ -43,7 +43,7 @@ export async function getCallHistory(params?: { page?: number; limit?: number; s
   if (params?.dateFrom) qs.set('dateFrom', params.dateFrom)
   if (params?.dateTo) qs.set('dateTo', params.dateTo)
   if (params?.status) qs.set('status', params.status)
-  return request<{ calls: CallRecord[]; total: number }>(hp(`/calls/history?${qs}`))
+  return request<{ calls: CallRecord[]; total: number }>(activeHubPath(`/calls/history?${qs}`))
 }
 
 // --- Call Actions (REST) ---
@@ -65,13 +65,13 @@ export async function reportCallSpam(callId: string, hubId: string) {
 // --- Calls Today ---
 
 export async function getCallsTodayCount() {
-  return request<{ count: number }>(hp('/calls/today-count'))
+  return request<{ count: number }>(activeHubPath('/calls/today-count'))
 }
 
 // --- Call Recording ---
 
 export async function getCallRecording(callId: string): Promise<ArrayBuffer> {
-  const pathOnly = hp(`/calls/${callId}/recording`).split('?')[0]
+  const pathOnly = activeHubPath(`/calls/${callId}/recording`).split('?')[0]
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       await new Promise(r => setTimeout(r, BASE_RETRY_DELAY * Math.pow(2, attempt - 1)))
@@ -80,7 +80,7 @@ export async function getCallRecording(callId: string): Promise<ArrayBuffer> {
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
       const headers = await getAuthHeaders('GET', pathOnly)
-      const res = await netFetch(getApiUrl(hp(`/calls/${callId}/recording`)), { headers, signal: controller.signal })
+      const res = await netFetch(getApiUrl(activeHubPath(`/calls/${callId}/recording`)), { headers, signal: controller.signal })
       if (!res.ok) {
         if (res.status === 401 && 'Authorization' in headers) {
           if (attempt < MAX_RETRIES) continue
@@ -107,5 +107,5 @@ export async function getCallRecording(callId: string): Promise<ArrayBuffer> {
 // --- User Presence (admin only) ---
 
 export async function getUserPresence() {
-  return request<{ users: UserPresence[] }>(hp('/calls/presence'))
+  return request<{ users: UserPresence[] }>(activeHubPath('/calls/presence'))
 }

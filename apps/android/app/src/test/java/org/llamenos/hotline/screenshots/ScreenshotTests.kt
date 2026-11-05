@@ -501,6 +501,7 @@ class ScreenshotTests {
                     answeredBy = samplePubkey,
                     startedAt = sampleTimestamp,
                     status = "in-progress",
+                    hubId = "hub-screenshots",
                 ),
             )
         )

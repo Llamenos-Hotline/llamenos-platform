@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { getCallHistory, listUsers, type CallRecord, type User } from '@/lib/api'
+import { getCallHistory, listUsers, NoActiveHubError, type CallRecord, type User } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { decryptCallRecord } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
@@ -73,7 +73,8 @@ function CallHistoryPage() {
       status: status || undefined,
     })
       .then(r => { setCalls(r.calls); setTotal(r.total) })
-      .catch(() => toast(t('common.error'), 'error'))
+      // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
+      .catch((err) => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
       .finally(() => setLoading(false))
   }, [page, q, dateFrom, dateTo, status])
 

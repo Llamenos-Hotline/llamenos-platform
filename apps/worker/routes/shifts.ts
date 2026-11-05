@@ -26,8 +26,15 @@ import {
   reviewShiftJoinRequestBodySchema,
 } from '@protocol/schemas/shift-request'
 import { z } from 'zod/v4'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 
 const shifts = new Hono<AppEnv>()
+
+// Shifts, clock-ins, overrides, availability, join requests and the fallback
+// group all belong to a hub — together they are a hub's ring set — so this
+// router is served only under /hubs/:hubId (#2461). Registered first: a stray
+// unscoped mount answers 404 before any handler could write into no hub.
+shifts.use('*', hubOnly)
 
 /** Whether the caller holds `perm` globally or in the hub the request is scoped to. */
 function holds(c: Context<AppEnv>, perm: string): boolean {
@@ -93,7 +100,7 @@ shifts.get('/my-status',
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const [result, active] = await Promise.all([
       services.shifts.getMyStatus(hubId, pubkey),
       services.activeShifts.getActive(pubkey, hubId),
@@ -117,7 +124,7 @@ shifts.post('/clock-in',
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     await services.activeShifts.clockIn(pubkey, hubId)
     return c.json({ ok: true })
   },
@@ -136,7 +143,7 @@ shifts.post('/clock-out',
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     await services.activeShifts.clockOut(pubkey, hubId)
     return c.json({ ok: true })
   },
@@ -155,7 +162,7 @@ shifts.post('/heartbeat',
   async (c) => {
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     await services.activeShifts.heartbeat(pubkey, hubId)
     return c.json({ ok: true })
   },
@@ -180,7 +187,7 @@ shifts.get('/active',
   requirePermission('shifts:manage'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { activeShifts: rows } = await services.activeShifts.listActiveByHub(hubId)
     return c.json({
       activeShifts: rows.map(r => ({
@@ -208,7 +215,7 @@ shifts.get('/overrides',
   validator('query', overrideQuerySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { from, to } = c.req.valid('query')
     const { overrides } = await services.shiftOverrides.listByDateRange(hubId, from, to)
     return c.json({ overrides: overrides.map(mapOverride) })
@@ -228,7 +235,7 @@ shifts.post('/overrides',
   validator('json', createShiftOverrideBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const row = await services.shiftOverrides.create(hubId, {
@@ -261,7 +268,7 @@ shifts.delete('/overrides/:id',
   requirePermission('shifts:manage-overrides'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const { id } = c.req.param()
     const removed = await services.shiftOverrides.delete(hubId, id)
@@ -285,7 +292,7 @@ shifts.get('/availability',
   validator('query', overrideQuerySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { from, to } = c.req.valid('query')
     const { blocks } = await services.shiftAvailability.listByDateRange(hubId, from, to)
     return c.json({ blocks: blocks.map(mapAvailability) })
@@ -304,7 +311,7 @@ shifts.get('/availability/my',
   requirePermission('shifts:set-availability'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const { blocks } = await services.shiftAvailability.list(hubId, pubkey)
     return c.json({ blocks: blocks.map(mapAvailability) })
@@ -324,7 +331,7 @@ shifts.post('/availability',
   validator('json', createAvailabilityBlockBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const row = await services.shiftAvailability.create(hubId, {
@@ -350,7 +357,7 @@ shifts.delete('/availability/:id',
   requirePermission('shifts:set-availability'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { id } = c.req.param()
     // shifts:set-availability is a self-service permission: without shifts:manage a
     // user may delete only their own block. Someone else's is reported as not found
@@ -380,7 +387,7 @@ shifts.get('/requests',
   requirePermission('shifts:approve-requests'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { requests } = await services.shiftRequests.listPending(hubId)
     return c.json({ requests: requests.map(mapRequest) })
   },
@@ -399,7 +406,7 @@ shifts.post('/requests',
   validator('json', createShiftJoinRequestBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const row = await services.shiftRequests.create(hubId, {
@@ -425,7 +432,7 @@ shifts.post('/requests/:id/approve',
   validator('json', reviewShiftJoinRequestBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const { id } = c.req.param()
     const row = await services.shiftRequests.approve(hubId, id, pubkey)
@@ -447,7 +454,7 @@ shifts.post('/requests/:id/reject',
   validator('json', reviewShiftJoinRequestBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const { id } = c.req.param()
     const row = await services.shiftRequests.reject(hubId, id, pubkey)
@@ -456,16 +463,6 @@ shifts.post('/requests/:id/reject',
 )
 
 // --- Permission-gated routes ---
-
-/**
- * A fallback group belongs to a hub. There is no instance-wide one: it existed
- * only to ring calls that belonged to no hub, and every call now belongs to a
- * hub (#2460). The unscoped mount of this router therefore has no fallback
- * group to read or write.
- */
-function noInstanceFallbackGroup(c: Context<AppEnv>) {
-  return c.json({ error: 'Fallback groups are per hub: use /api/hubs/:hubId/shifts/fallback' }, 404)
-}
 
 shifts.get('/fallback',
   describeRoute({
@@ -486,9 +483,9 @@ shifts.get('/fallback',
   }),
   requirePermission('shifts:manage-fallback'),
   async (c) => {
-    const hubId = c.get('hubId')
-    if (!hubId) return noInstanceFallbackGroup(c)
-    const result = await c.get('services').settings.getFallbackGroup(hubId)
+    const services = c.get('services')
+    const hubId = pathHubId(c)
+    const result = await services.settings.getFallbackGroup(hubId)
     return c.json(result)
   },
 )
@@ -513,10 +510,10 @@ shifts.put('/fallback',
   requirePermission('shifts:manage-fallback'),
   validator('json', fallbackGroupSchema),
   async (c) => {
-    const hubId = c.get('hubId')
-    if (!hubId) return noInstanceFallbackGroup(c)
+    const services = c.get('services')
+    const hubId = pathHubId(c)
     const body = c.req.valid('json')
-    const result = await c.get('services').settings.setFallbackGroup(body, hubId)
+    const result = await services.settings.setFallbackGroup(body, hubId)
     return c.json(result)
   },
 )
@@ -550,7 +547,7 @@ shifts.get('/',
   requireAnyPermission('shifts:read', 'shifts:read-own'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const result = await services.shifts.list(hubId)
     if (holds(c, 'shifts:read')) return c.json(result)
     const pubkey = c.get('pubkey')

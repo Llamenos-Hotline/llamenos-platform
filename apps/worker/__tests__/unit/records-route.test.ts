@@ -582,3 +582,43 @@ describe('records — hub isolation', () => {
     expect(body.fields).toContain(DEV.assignee)
   })
 })
+
+// ---------------------------------------------------------------------------
+// #2461 — a change to a record is audited to the hub that owns it
+// ---------------------------------------------------------------------------
+
+describe('record mutations audit to the record\'s hub, never the platform chain (#2461)', () => {
+  const mutations: Array<[string, string, string, unknown]> = [
+    ['recordUpdated', 'PATCH', '/rec-1', { statusHash: 'closed-hash' }],
+    ['recordDeleted', 'DELETE', '/rec-1', undefined],
+    ['recordAssigned', 'POST', '/rec-1/assign', { pubkeys: ['b'.repeat(64)] }],
+    ['recordContactLinked', 'POST', '/rec-1/contacts', { contactId: '550e8400-e29b-41d4-a716-446655440000', role: 'caller' }],
+  ]
+
+  for (const [event, method, path, body] of mutations) {
+    it(`${method} ${path} → '${event}' lands in the record's hub chain`, async () => {
+      const { app, mockAudit } = makeApp({ hubId: 'hub-owner' })
+      const res = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      expect(res.status, await res.clone().text()).toBeLessThan(300)
+      const call = mockAudit.log.mock.calls.find((c: unknown[]) => c[0] === event)
+      expect(call, `${event} was audited`).toBeDefined()
+      // AuditService.log(event, actor, details, hubId): `null` is the platform chain.
+      expect(call?.[3]).toBe('hub-owner')
+    })
+  }
+
+  it('a record of another hub is refused before anything is changed or audited', async () => {
+    const { app, mockAudit, mockCases } = makeApp({
+      hubId: 'hub-path',
+      record: { id: 'rec-1', createdBy: 'owner-pub', assignedTo: [], hubId: 'hub-owner' },
+    })
+    const res = await app.request('/rec-1', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+    expect(mockCases.delete).not.toHaveBeenCalled()
+    expect(mockAudit.log).not.toHaveBeenCalled()
+  })
+})

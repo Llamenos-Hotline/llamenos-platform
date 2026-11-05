@@ -150,7 +150,7 @@ final class TriageViewModel {
             )
             let _: ConvertFromReportResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/records/convert-from-report"),
+                path: try apiService.activeHubPath("/api/records/convert-from-report"),
                 body: body
             )
             await refresh()
