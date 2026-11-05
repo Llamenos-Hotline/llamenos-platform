@@ -8,15 +8,35 @@
 -- does not exist.
 --
 -- Tighten in place (docs/runbooks/migrations.md). Each `constrain` annotation below
--- names what stops the previous release writing a row the constraint rejects. Rows
--- already stored are checked by Postgres when each statement runs. A violating row
--- fails the migration, which leaves the previous release serving. Hubless notes and
--- conversations are unreachable through every route (#2381, #2395), but they are
--- caller data, so this migration does not delete them. An operator who hits the
--- failure decides what to do with them. Outbox rows are only a delivery queue: a
--- hubless or dangling one can never be delivered (the drain refused it), so those
--- are deleted first.
+-- names what stops the previous release writing a row the constraint rejects.
+--
+-- Rows already stored. Outbox rows are only a delivery queue, and a hubless or
+-- dangling one can never be delivered (the drain refused it), so those are deleted.
+-- Hubless notes and conversations are unreachable through every route (#2381,
+-- #2395), but they are caller data, so this migration does not delete them. The
+-- check below refuses the whole file instead, naming each table and its count, and
+-- the previous release keeps serving until an operator decides what to do with the
+-- rows. That check runs BEFORE any constraint is added. The runner retries a failed
+-- file from its first statement, and ADD CONSTRAINT has no IF NOT EXISTS. If a
+-- dangling row were found at the third FK, the first one would already exist, and
+-- every later boot would stop on it.
 DELETE FROM "event_outbox" WHERE "hub_id" IS NULL OR "hub_id" NOT IN (SELECT "id" FROM "hubs");--> statement-breakpoint
+DO LANGUAGE plpgsql $$
+DECLARE
+  hubless text;
+BEGIN
+  SELECT string_agg(t || ': ' || n, ', ') INTO hubless FROM (
+    SELECT 'notes' AS t, count(*) AS n FROM "notes" WHERE "hub_id" IS NULL OR "hub_id" NOT IN (SELECT "id" FROM "hubs")
+    UNION ALL
+    SELECT 'conversations', count(*) FROM "conversations" WHERE "hub_id" IS NULL OR "hub_id" NOT IN (SELECT "id" FROM "hubs")
+    UNION ALL
+    SELECT 'contact_metadata', count(*) FROM "contact_metadata" WHERE "hub_id" NOT IN (SELECT "id" FROM "hubs")
+  ) AS counts WHERE n > 0;
+  IF hubless IS NOT NULL THEN
+    RAISE EXCEPTION 'rows with no hub, or a hub that does not exist (#2464): %. No route can reach them; delete or re-file them, then restart', hubless;
+  END IF;
+END
+$$;--> statement-breakpoint
 -- migration-safety: constrain column public.event_outbox.hub_id because the previous release's publishEvent drops an event naming no hub before it reaches the outbox, and the undeliverable hubless rows were deleted above
 ALTER TABLE "event_outbox" ALTER COLUMN "hub_id" SET NOT NULL;--> statement-breakpoint
 -- migration-safety: constrain column public.contact_metadata.hub_id because hub_id is already part of the table's primary key, so Postgres has always refused a NULL here
