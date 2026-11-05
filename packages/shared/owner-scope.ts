@@ -57,14 +57,3 @@ export function hubScope(hubId: string): HubScope {
 export function assertNeverScope(scope: never): never {
   throw new Error(`Unhandled owner scope: ${JSON.stringify(scope)}`)
 }
-
-export function sameScope(a: OwnerScope, b: OwnerScope): boolean {
-  switch (a.kind) {
-    case 'hub':
-      return b.kind === 'hub' && a.hubId === b.hubId
-    case 'platform':
-      return b.kind === 'platform'
-    default:
-      return assertNeverScope(a)
-  }
-}

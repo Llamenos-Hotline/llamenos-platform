@@ -2222,30 +2222,30 @@ Hub-only: there is no unscoped `/api/reports` (#2395). `metadata.reportTitle` an
 ### 4.11 Bans
 
 ```
-POST /api/bans
+POST /api/hubs/:hubId/bans
 Permission: bans:create
 Body: { "phone": string (E.164), "reason": string }
 Response: { "ban": BanEntry }
 
-GET /api/bans
+GET /api/hubs/:hubId/bans
 Permission: bans:read
 Response: { "bans": BanEntry[] }
 
 // BanEntry = { "phoneHash": string, "reason": string, "bannedBy": string, "bannedAt": string }
 // phoneHash is the §2.10 banHash for the hub: an opaque unban handle. No number, masked or not.
 
-POST /api/bans/bulk
+POST /api/hubs/:hubId/bans/bulk
 Permission: bans:bulk-create
 Body: { "phones": string[] (E.164), "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/:phoneHash
+DELETE /api/hubs/:hubId/bans/:phoneHash
 Permission: bans:delete
 Response: { "ok": true }
-// :phoneHash is the 64-hex handle from GET /api/bans. A number in the path is refused (400).
+// :phoneHash is the 64-hex handle from GET /api/hubs/:hubId/bans. A number in the path is refused (400).
 ```
 
-Hub-scoped: `/api/hubs/:hubId/bans/*`
+Hub-only: there is no unscoped `/api/bans` (#2463). It used to serve the platform list behind the hub permissions, so a missing hub meant "every hub". The platform list is §4.47, `/api/admin/bans`.
 
 ### 4.12 Settings
 
@@ -3828,7 +3828,7 @@ Hub-scoped: `/api/hubs/:hubId/retention/*`
 
 ### 4.47 Platform Bans
 
-Platform-scoped bans (cross-hub). Requires `bans:*-platform` permissions.
+Platform-scoped bans (cross-hub). Requires `bans:*-platform` permissions. Under `/api/admin/`, beside the platform audit chain and platform incidents (#2463). The platform scope is a named resource, never a hub request with the hub left out.
 
 ```
 GET    /api/admin/bans
