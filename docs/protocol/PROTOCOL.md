@@ -1951,6 +1951,8 @@ PATCH /api/hubs/:hubId/users/:targetPubkey
 
 ### 4.6 Shifts
 
+Hub-only: shifts, clock-ins, overrides, availability blocks, join requests and the fallback group exist only inside a hub. There is no unscoped `/api/shifts`; the router answers `404` to any request outside `/hubs/:hubId` (#2461). The paths below are written unscoped for brevity and are served under `/api/hubs/:hubId/...`.
+
 ```
 GET /api/shifts/my-status
 Auth: Required (any role)
@@ -2025,6 +2027,10 @@ Hub-only: notes exist only inside a hub. There is no unscoped `/api/notes`; the 
 - A hub with **no** resolvable admin recipient at all (an empty `admin` reader set — no admin of the hub with a registered device and no hub escrow key — and no `ADMIN_DECRYPTION_PUBKEY`) is **refused** with `503` and an operator-visible error log. The hub last-admin invariant guarantees the hub has an admin, so an empty recipient set is a misconfiguration, and storing under it would create a note nobody can ever open. Server-sealed records (inbound messages, call records) are unaffected: the server cannot refuse a caller who has already spoken, so those keep the loud-but-stored contract.
 
 ### 4.8 Calls
+
+Hub-only: calls exist only inside a hub. There is no unscoped `/api/calls`; the router answers `404` to any request outside `/hubs/:hubId` (#2461). The paths below are written unscoped for brevity and are served under `/api/hubs/:hubId/...`.
+
+Every lookup by `:callId` is bounded to the path hub: a call of another hub reads as missing. A client acting on a call (answer, hang up, spam, ban) addresses the call's own hub, which need not be the one being browsed (multi-hub routing axiom).
 
 ```
 GET /api/calls/active
@@ -3142,7 +3148,9 @@ Response: { "members": GroupMember[] }
 
 ### 4.31 Records
 
-Case/entity record management (replaces legacy event system). Hub-scoped and global.
+Case/entity record management (replaces legacy event system).
+
+Hub-only: records exist only inside a hub. There is no unscoped `/api/records`; the router answers `404` to any request outside `/hubs/:hubId` (#2461). The paths below are written unscoped for brevity and are served under `/api/hubs/:hubId/...`. A record is created in the path hub, its envelope recipients are that hub's members (plus super-admins), and every change to it is audited in that hub's chain.
 
 ```
 GET    /api/records
@@ -3263,7 +3271,7 @@ Hub-scoped: `/api/hubs/:hubId/records/*`
 
 ### 4.32 Events (Deprecated)
 
-> **Deprecation Notice:** The `/events` group is deprecated (Sunset: 2026-07-01). Successor: `/records` with `category:"event"` entity types. All responses include `Deprecation: true`, `Sunset: 2026-07-01`, and `Link: </api/records?category=event>; rel="successor-version"` headers.
+> **Deprecation Notice:** The `/events` group is deprecated (Sunset: 2026-07-01). Successor: `/records` with `category:"event"` entity types. All responses include `Deprecation: true`, `Sunset: 2026-07-01`, and `Link: </api/hubs/:hubId/records?category=event>; rel="successor-version"` headers. Events are hub-only: there is no unscoped `/api/events` (#2461).
 
 Events are now configurable entity types with `category:"event"`. Use the Records API (Section 4.31) with an `entityTypeId` corresponding to an event entity type — dates, locations, and all other event fields are stored as encrypted record content.
 
@@ -3272,6 +3280,8 @@ The deprecated `/api/events` and `/api/hubs/:hubId/events` endpoints remain avai
 ### 4.33 Evidence
 
 Evidence metadata and chain of custody. Mounted under `/records/:id/evidence` and `/evidence/:id`.
+
+Hub-only: evidence items exist only inside a hub. There is no unscoped `/api/evidence`; the router answers `404` to any request outside `/hubs/:hubId` (#2461). The paths below are written unscoped for brevity and are served under `/api/hubs/:hubId/...`. Evidence is reachable only through the hub of the record it belongs to.
 
 ```
 POST   /api/records/:id/evidence
