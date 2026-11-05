@@ -166,28 +166,14 @@ final class SecurityHardeningTests: XCTestCase {
     }
 
     // MARK: - Certificate Pinning Constants (H14)
+    // Pin computation and chain evaluation are covered by CertificatePinningTests.
 
     func testCertificatePinsNonEmpty() {
-        // Static default pins must be non-empty — production uses Let's Encrypt CA pins
-        // (ISRG Root X1 + X2). Dynamic pins from /api/config/pins supplement these;
-        // static defaults remain active if the fetch fails.
-        XCTAssertFalse(
-            CertificatePins.defaultHashes.isEmpty,
-            "CertificatePins.defaultHashes must not be empty — must contain Let's Encrypt CA pins"
-        )
-    }
-
-    func testCertificatePinsEnabledWhenHashesPopulated() {
-        // CertificatePins.isEnabled is a computed property: isEnabled == !active.hashes.isEmpty.
-        // Static defaults are always populated, so isEnabled must be true at launch.
-        XCTAssertFalse(
-            CertificatePins.defaultHashes.isEmpty,
-            "defaultHashes must be non-empty so pinning activates on launch"
-        )
-        // With default hashes loaded into active, pinning must be enabled.
-        XCTAssertTrue(
-            CertificatePins.isEnabled,
-            "Pinning must be enabled when hashes are configured"
+        // Production pins Let's Encrypt's ISRG Root X1 + X2. The set is a constant —
+        // there is no runtime update that could empty it and switch pinning off.
+        XCTAssertEqual(
+            CertificatePins.pinned.count, 2,
+            "CertificatePins.pinned must hold both ISRG root pins"
         )
     }
 
