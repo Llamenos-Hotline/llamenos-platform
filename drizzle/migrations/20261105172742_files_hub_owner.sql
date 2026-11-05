@@ -12,6 +12,24 @@ ALTER TABLE "files" ADD COLUMN "case_record_id" text;--> statement-breakpoint
 UPDATE "files" AS f SET "hub_id" = c."hub_id", "owner_kind" = 'conversation'
   FROM "conversations" AS c
   WHERE f."conversation_id" = c."id" AND c."hub_id" IS NOT NULL AND f."hub_id" IS NULL;--> statement-breakpoint
+-- Dual write for the expand phase, by the database: an INSERT from the
+-- previous release (rollout window or rollback) names a conversation but no
+-- hub. Fill hub_id and owner_kind from that conversation, so the hub shred —
+-- which reaches files by hub_id — still reaches the row. A row whose
+-- conversation has no hub stays hubless and is removed by the contract
+-- release, which also drops this trigger.
+CREATE FUNCTION "files_fill_hub_from_conversation"() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.hub_id IS NULL AND NEW.owner_kind IS NULL AND NEW.conversation_id IS NOT NULL THEN
+    SELECT c.hub_id INTO NEW.hub_id FROM conversations c WHERE c.id = NEW.conversation_id;
+    IF NEW.hub_id IS NOT NULL THEN
+      NEW.owner_kind := 'conversation';
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;--> statement-breakpoint
+CREATE TRIGGER "files_fill_hub" BEFORE INSERT ON "files" FOR EACH ROW EXECUTE FUNCTION "files_fill_hub_from_conversation"();--> statement-breakpoint
 -- A file follows its parent (D7a A-D7A-5). The original conversation FK was
 -- NO ACTION, which refused deleting a conversation that has files before the
 -- cascade below could run; recreate it as ON DELETE CASCADE.
@@ -23,10 +41,10 @@ ALTER TABLE "conversations" ADD CONSTRAINT "conversations_id_hub_id_unique" UNIQ
 -- migration-safety: constrain column public.case_records.id because id is already the primary key, so no two rows can share an (id, hub_id) pair
 ALTER TABLE "case_records" ADD CONSTRAINT "case_records_id_hub_id_unique" UNIQUE("id","hub_id");--> statement-breakpoint
 ALTER TABLE "files" ADD CONSTRAINT "files_hub_id_hubs_id_fk" FOREIGN KEY ("hub_id") REFERENCES "public"."hubs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
--- migration-safety: constrain column public.files.conversation_id because the previous release never writes hub_id, and MATCH SIMPLE skips the check for any row whose hub_id is NULL
+-- migration-safety: constrain column public.files.conversation_id because the previous release never writes hub_id, and files_fill_hub copies it from the very conversation the row names, so the pair matches (or stays NULL, which MATCH SIMPLE skips)
 ALTER TABLE "files" ADD CONSTRAINT "files_conversation_hub_fk" FOREIGN KEY ("conversation_id","hub_id") REFERENCES "public"."conversations"("id","hub_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "files" ADD CONSTRAINT "files_case_record_hub_fk" FOREIGN KEY ("case_record_id","hub_id") REFERENCES "public"."case_records"("id","hub_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
--- migration-safety: constrain column public.files.conversation_id because the previous release never writes owner_kind, and a NULL owner_kind leaves every disjunct unknown, which a CHECK admits
+-- migration-safety: constrain column public.files.conversation_id because the previous release writes only conversation_id, which files_fill_hub turns into owner_kind 'conversation' (or leaves owner_kind NULL, which a CHECK admits)
 ALTER TABLE "files" ADD CONSTRAINT "files_owner_check" CHECK ((owner_kind = 'conversation' AND conversation_id IS NOT NULL AND case_record_id IS NULL)
        OR (owner_kind = 'case_record' AND case_record_id IS NOT NULL AND conversation_id IS NULL)
        OR (owner_kind = 'entity_field' AND conversation_id IS NULL AND case_record_id IS NULL));--> statement-breakpoint

@@ -42,7 +42,7 @@ function makeApp(opts: {
   // The file the evidence entry names: a completed upload to case-1 (#2462).
   const mockConversations = {
     getCaseRecordFile: vi.fn().mockResolvedValue({
-      id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'complete',
+      id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'complete', totalSize: 1024,
     }),
     ...((services.conversations as Record<string, unknown>) ?? {}),
   }
@@ -157,13 +157,24 @@ describe('POST /records/:id/evidence', () => {
     expect(mockCases.createEvidence).not.toHaveBeenCalled()
   })
 
+  it('refuses a size that is not the uploaded file\'s', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['evidence:upload'] })
+    const res = await app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...validBody, sizeBytes: 999 }),
+    })
+    expect(res.status).toBe(400)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
   it('refuses a file whose upload has not completed', async () => {
     const { app, mockCases } = makeApp({
       permissions: ['evidence:upload'],
       services: {
         conversations: {
           getCaseRecordFile: vi.fn().mockResolvedValue({
-            id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'uploading',
+            id: 'file-123', hubId: 'hub-1', ownerKind: 'case_record', caseRecordId: 'case-1', status: 'uploading', totalSize: 1024,
           }),
         },
       },

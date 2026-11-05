@@ -130,6 +130,9 @@ evidence.post('/records/:id/evidence',
     const pathHub = c.get('hubId')
     if (pathHub && file.hubId !== pathHub) return c.json({ error: 'File not found' }, 404)
     if (file.status !== 'complete') return c.json({ error: 'File upload not complete' }, 400)
+    if (body.sizeBytes !== file.totalSize) {
+      return c.json({ error: 'sizeBytes does not match the uploaded file' }, 400)
+    }
 
     const created = await services.cases.createEvidence(caseId, pubkey, {
       fileId: body.fileId,

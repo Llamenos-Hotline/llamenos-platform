@@ -8,6 +8,7 @@ import { audit } from '../services/audit'
 import { withRetry, isRetryableError } from '../lib/retry'
 import { getCircuitBreaker } from '../lib/circuit-breaker'
 import { hubOnly, pathHubId } from '../lib/hub-scope'
+import { isReport, verifyReportAccess } from '../lib/report-access'
 import { incCounter } from './metrics'
 import { createLogger } from '../lib/logger'
 
@@ -43,6 +44,7 @@ uploads.post('/init',
         },
       },
       ...authErrors,
+      ...notFoundError,
     },
   }),
   validator('json', uploadInitBodySchema),
@@ -54,6 +56,21 @@ uploads.post('/init',
 
     if (body.totalSize > MAX_UPLOAD_SIZE) {
       return c.json({ error: `File too large (max ${MAX_UPLOAD_SIZE / 1024 / 1024}MB)` }, 400)
+    }
+
+    // Attaching a file to a parent takes the right to add to that parent:
+    // posting into a conversation (report access for a report), or registering
+    // evidence on a case record — not merely `files:upload` somewhere in the hub.
+    const permissions = c.get('permissions')
+    const { owner } = body
+    if (owner.kind === 'conversation') {
+      const conv = await services.conversations.getByIdForHub(owner.conversationId, hubId)
+      const mayAdd = isReport(conv)
+        ? verifyReportAccess(conv, pubkey, permissions)
+        : checkPermission(permissions, 'conversations:send-any') || conv.assignedTo === pubkey
+      if (!mayAdd) return c.json({ error: 'Forbidden' }, 403)
+    } else if (owner.kind === 'case_record' && !checkPermission(permissions, 'evidence:upload')) {
+      return c.json({ error: 'Forbidden', required: 'evidence:upload' }, 403)
     }
 
     const uploadId = crypto.randomUUID()
@@ -95,6 +112,7 @@ uploads.put('/:id/chunks/:chunkIndex',
           },
         },
       },
+      409: { description: 'Upload already completed' },
       413: { description: 'Chunk larger than 10 MB' },
       ...authErrors,
       ...notFoundError,
@@ -115,6 +133,10 @@ uploads.put('/:id/chunks/:chunkIndex',
     const fileRecord = await services.conversations.getFileInHub(uploadId, pathHubId(c))
     if (fileRecord.uploadedBy !== pubkey && !checkPermission(permissions, 'files:manage-all')) {
       return c.json({ error: 'Forbidden' }, 403)
+    }
+    // A completed file is immutable: evidence may already describe its bytes.
+    if (fileRecord.status !== 'uploading') {
+      return c.json({ error: 'Upload already completed' }, 409)
     }
 
     // Store chunk directly in blob storage
@@ -170,6 +192,7 @@ uploads.post('/:id/complete',
           },
         },
       },
+      409: { description: 'Upload already completed' },
       ...authErrors,
       ...notFoundError,
     },
@@ -185,6 +208,10 @@ uploads.post('/:id/complete',
 
     if (fileRecord.uploadedBy !== pubkey && !checkPermission(permissions, 'files:manage-all')) {
       return c.json({ error: 'Forbidden' }, 403)
+    }
+    // Re-assembling a completed file would replace bytes evidence may describe.
+    if (fileRecord.status !== 'uploading') {
+      return c.json({ error: 'Upload already completed' }, 409)
     }
 
     if (fileRecord.completedChunks < fileRecord.totalChunks) {
