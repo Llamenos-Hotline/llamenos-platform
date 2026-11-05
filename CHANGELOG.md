@@ -404,6 +404,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.4 (2026-11-05)
+
+### Features
+
+- llamenos-fleet pr-why <pr> — named, deterministic verdicts for a PR that is not merging (#2472)
+
+### Fixes
+
+- refuse calls to a number no hub owns; delete the hub-'' accommodation (#2460) (#2467)
+- fleet/review retries its queued-PR lookup, never the verdict (#2481) (#2482)
+- git-ancestry flake was a hook-timeout kill misread as a git error; library no longer turns a kill into a verdict (#2477) (#2487)
+- board reads the fleet/review outcome from its annotation, not the never-written title (#2473) (#2488)
+- notes, contact metadata, conversations and outbox events always have a hub (#2464) (#2485)
+
 ## 0.21.3 (2026-11-04)
 
 ### Features
