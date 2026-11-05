@@ -459,7 +459,18 @@ function checkVerdicts(facts: PrWhyFacts, s: PrState, v: Verdict[]): void {
     } else if (ctx.verdict === 'PENDING' || ctx.verdict === 'ABSENT_PENDING') {
       pending.push(`${ctx.name} (${ctx.verdict === 'PENDING' ? 'in flight' : 'not posted yet; a run is still going'})`)
     } else if (ctx.verdict === 'ABSENT_SETTLED') {
-      absent.push(ctx.name)
+      if (ctx.name === REVIEW_JOB && s.reviewRequests.length === 0) {
+        // #1760's born-dead shape: no verdict AND nobody asked. A re-run of
+        // anything cannot post it — only a review request starts one.
+        v.push({
+          name: 'review-never-requested',
+          severity: 'blocker',
+          evidence: [`no ${REVIEW_JOB} carrier on the head and every run on it has finished`, 'requested_reviewers is empty — a push never starts a review'],
+          remedy: `request a review from llamenos-auto on #${s.number}`,
+        })
+      } else {
+        absent.push(ctx.name)
+      }
     }
   }
   if (failing.length > 0) {

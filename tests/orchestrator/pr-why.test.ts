@@ -278,7 +278,7 @@ describe('required-context-absent — delegated to missing-checks', () => {
     expect(r.verdicts[0]?.remedy).toContain('missing-checks --pr 4242')
   })
   it('flips: a run still in flight makes it required-check-pending instead', () => {
-    const inFlight: HeadWorkflowRun[] = [{ ...settledRuns[0]!, status: 'in_progress', conclusion: null }]
+    const inFlight: HeadWorkflowRun[] = [{ id: 1, name: 'CI', event: 'pull_request', status: 'in_progress', conclusion: null, runAttempt: 1 }]
     const f = facts({ state: approvedByOwner, checks: { ok: true, value: head([run({ name: 'fleet/review', id: REVIEW_ID })], inFlight) } })
     expect(names(f)).toEqual(['required-check-pending'])
     produced.add('required-check-pending')
@@ -313,6 +313,12 @@ describe('fleet/review verdicts — read from the outcome annotation, not output
   })
   it('review-never-requested: NO-VERDICT:unreviewed with nobody requested', () => {
     expectVerdict(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:unreviewed — no review has ever been earned') }), 'review-never-requested')
+  })
+  it('review-never-requested: fleet/review absent on a settled head with nobody requested', () => {
+    const noReview = head([run({ name: 'ci-status', id: 100 })])
+    expect(names(facts({ state: approvedByOwner, checks: { ok: true, value: noReview } }))).toEqual(['review-never-requested'])
+    // flips: once somebody is requested the absence is a plain absent context
+    expect(names(facts({ state: { ...approvedByOwner, reviewRequests: ['llamenos-auto'] }, checks: { ok: true, value: noReview } }))).toEqual(['required-context-absent'])
   })
   it('flips: a reviewer is already requested → not review-never-requested', () => {
     const f = facts({ state: { ...approvedByOwner, reviewRequests: ['llamenos-auto'] }, ...redReview('NO-VERDICT:unreviewed — x') })
