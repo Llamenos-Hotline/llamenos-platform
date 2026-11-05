@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
-  runReviewCi, reviewResultRecorder, reviewOutcomeToken,
+  runReviewCi, reviewResultRecorder, reviewOutcomeToken, reviewOutcomeFromAnnotations, REVIEW_OUTCOME_ANNOTATION,
   REVIEW_CI_RESULTS, REVIEW_OUTCOME_TOKENS, REVIEW_RESULT_FILE_ENV,
   type CiContext, type ReviewCiDeps, type ReviewCiResult, type ReviewOutcomeToken,
 } from '../../orchestrator/src/ci.js'
@@ -33,7 +33,7 @@ import type { VerifyReport } from '../../orchestrator/src/verify.js'
  */
 
 const FLEET_REVIEW_YML = join(process.cwd(), '.github', 'workflows', 'fleet-review.yml')
-const ANNOTATION_TITLE = 'fleet/review outcome'
+const ANNOTATION_TITLE = REVIEW_OUTCOME_ANNOTATION
 const CLASSES = ['PASS:', 'REJECTED:', 'NO-VERDICT:'] as const
 
 interface WorkflowStep { name?: string; id?: string; if?: string; env?: Record<string, string>; run?: string }
@@ -148,11 +148,17 @@ function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Nam
     REVIEW_OUTCOME: facts.REVIEW_OUTCOME ?? '',
     EARNED_SHA: facts.EARNED_SHA ?? '',
   })
-  const m = /^::(notice|error) title=fleet\/review outcome::(.*)$/m.exec(r.stdout)
+  // Every workflow-command annotation the step printed, read back through
+  // the SAME reader `board` uses on the live check run (#2473) — so the
+  // annotation title this step writes and the one consumers look for are
+  // pinned to one constant, not two spellings.
+  const annotations = [...r.stdout.matchAll(/^::(notice|warning|error) title=([^:]*)::(.*)$/gm)]
+    .map((m) => ({ level: m[1] ?? '', title: m[2] ?? '', message: m[3] ?? '' }))
+  const outcome = reviewOutcomeFromAnnotations(annotations)
   return {
     status: r.status,
-    title: m?.[2] ?? null,
-    level: m?.[1] ?? null,
+    title: outcome ?? null,
+    level: annotations.find((a) => a.title === ANNOTATION_TITLE)?.level ?? null,
     summary: existsSync(summaryFile) ? readFileSync(summaryFile, 'utf8') : '',
     stdout: r.stdout + r.stderr,
   }
@@ -405,7 +411,7 @@ describe('rail: every fleet/review outcome is named on its own check (#1230)', (
     )
     // And it is the LAST thing the step does, so the annotation and the
     // summary are written before the step fails.
-    const annotation = script.lastIndexOf('title=fleet/review outcome::')
+    const annotation = script.lastIndexOf(`title=${ANNOTATION_TITLE}::`)
     const summary = script.lastIndexOf('GITHUB_STEP_SUMMARY')
     const exit = script.lastIndexOf('exit 1')
     expect(exit).toBeGreaterThan(annotation)

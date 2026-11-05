@@ -3,12 +3,23 @@ import {
   buildBoard, classifyPr, classifyReviewFailure, isBotAuthor,
   normalizeCheckRunState, normalizeStatusContextState, renderBoard, renderBoardPorcelain,
   fetchBoardFactsWith, deriveBranchRuleset, parseCodeOwners, codeOwnersOf,
-  resolveMergeable, staleGreenNote,
+  resolveMergeable, staleGreenNote, checkRunAnnotationsPageFrom,
   runBoard,
   type BoardFacts, type PrFact, type PrCheckContext, type FleetStateFact, type BoardFetchDeps,
   type BranchGate, type BranchRuleset, type CheckState,
 } from '../../orchestrator/src/board.js'
-import { VERIFY_JOB, REVIEW_JOB } from '../../orchestrator/src/ci.js'
+import {
+  VERIFY_JOB, REVIEW_JOB, REVIEW_OUTCOME_ANNOTATION, reviewOutcomeFromAnnotations, type CheckRunAnnotation,
+} from '../../orchestrator/src/ci.js'
+import liveNoVerdictUnreviewed from './fixtures/board/fleet-review-no-verdict-unreviewed.json'
+
+/** A live `fleet/review` check run (PR #2478, run 127410783839) and its
+ *  annotations, captured verbatim from the REST API for #2473. */
+const LIVE_NO_VERDICT_UNREVIEWED = liveNoVerdictUnreviewed as {
+  checkRun: { id: number; node_id: string; name: string; conclusion: string; output: { title: string | null } }
+  annotationsResponse: { data: { node: { databaseId: number; title: string | null; annotations: { nodes: CheckRunAnnotation[] } } } }
+}
+const LIVE_ANNOTATIONS: CheckRunAnnotation[] = LIVE_NO_VERDICT_UNREVIEWED.annotationsResponse.data.node.annotations.nodes
 
 const HEAD = 'head-sha-111'
 const OTHER_SHA = 'stale-sha-999'
@@ -110,6 +121,17 @@ type GqlPrNodeFixture = Awaited<ReturnType<BoardFetchDeps['queryOpenPrs']>> exte
 type GqlContextFixture = GqlPrNodeFixture['commits']['nodes'][number]['commit'] extends infer C
   ? C extends { statusCheckRollup: { contexts: { nodes: (infer X)[] } } | null } ? X : never
   : never
+
+/** Every required context other than fleet/review, green, as `PR_QUERY`
+ *  returns it — the GraphQL twin of `cheapPassChecks`. */
+function gqlCheapPass(): GqlContextFixture[] {
+  return [
+    { __typename: 'CheckRun', id: 'CR_101', name: 'ci-status', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', id: 'CR_102', name: 'gitleaks', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'CheckRun', id: 'CR_103', name: 'CodeQL', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'StatusContext', context: VERIFY_JOB, state: 'SUCCESS' },
+  ]
+}
 
 /** One open-PR node exactly as `PR_QUERY` returns it. */
 function gqlPr(number: number, contexts: GqlContextFixture[] = []): GqlPrNodeFixture {
@@ -395,6 +417,7 @@ describe('fetchBoardFactsWith', () => {
   const deps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
     queryOpenPrs: vi.fn(async () => ({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } })),
     fetchRunJobs: vi.fn(async () => undefined),
+    fetchCheckRunAnnotations: vi.fn(async () => []),
     checkFleetHalt: vi.fn(async () => ({ halted: false })),
     fetchBranchRules: vi.fn(async () => LIVE_MAIN_RULES),
     fetchCodeOwners: vi.fn(async () => null),
@@ -669,6 +692,7 @@ describe('fetchBoardFactsWith — ruleset acquisition', () => {
   const baseDeps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
     queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [gqlPr(1), gqlPr(2), gqlPr(3)], pageInfo: { hasNextPage: false, endCursor: null } } } } }),
     fetchRunJobs: async () => undefined,
+    fetchCheckRunAnnotations: async () => [],
     checkFleetHalt: async () => ({ halted: false }),
     fetchBranchRules: async () => LIVE_MAIN_RULES,
     fetchCodeOwners: async () => `packages/crypto/ @${OWNER}\n`,
@@ -894,7 +918,7 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({
         state: 'FAIL',
-        title: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one',
+        reviewOutcome: { read: true, message: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one' },
         reviewFailureKind: 'infrastructure',
         runAttempt: 1,
       })],
@@ -909,7 +933,7 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({
         state: 'FAIL',
-        title: 'NO-VERDICT:not-requested — this event did not ask us for a review',
+        reviewOutcome: { read: true, message: 'NO-VERDICT:not-requested — this event did not ask us for a review' },
         reviewFailureKind: 'infrastructure',
         runAttempt: 1,
       })],
@@ -921,7 +945,7 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({
         state: 'FAIL',
-        title: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one',
+        reviewOutcome: { read: true, message: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one' },
         reviewFailureKind: 'infrastructure',
         runAttempt: 1,
       })],
@@ -930,11 +954,11 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     expect(c.action).toBe('RERUN_REVIEW')
   })
 
-  it('any OTHER red title with an empty request list keeps the old tree — the remedy there IS a rerun', () => {
+  it('any OTHER red outcome with an empty request list keeps the old tree — the remedy there IS a rerun', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({
         state: 'FAIL',
-        title: 'NO-VERDICT:engine-unavailable — the review engine could not run',
+        reviewOutcome: { read: true, message: 'NO-VERDICT:engine-unavailable — the review engine could not run' },
         reviewFailureKind: 'infrastructure',
         runAttempt: 1,
       })],
@@ -942,9 +966,26 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     expect(c.action).toBe('RERUN_REVIEW')
   })
 
-  it('a red check with NO title at all keeps the old tree', () => {
+  it('a red check whose annotations named NO outcome keeps the old tree', () => {
     const c = classify(pr({
-      checks: [...cheapPassChecks(), reviewCheck({ state: 'FAIL', reviewFailureKind: 'infrastructure', runAttempt: 1 })],
+      checks: [...cheapPassChecks(), reviewCheck({ state: 'FAIL', reviewOutcome: { read: true, message: undefined }, reviewFailureKind: 'infrastructure', runAttempt: 1 })],
+    }))
+    expect(c.action).toBe('RERUN_REVIEW')
+  })
+
+  it('an UNREADABLE outcome with an empty request list is CANNOT_DECIDE — never guessed onto the rerun tree (#2473)', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({ state: 'FAIL', reviewOutcome: { read: false, detail: 'HTTP 502' }, reviewFailureKind: 'infrastructure', runAttempt: 1 })],
+    }))
+    expect(c.action).toBe('CANNOT_DECIDE')
+    expect(c.reason).toContain('outcome annotation is unreadable')
+    expect(c.reason).toContain('HTTP 502')
+  })
+
+  it('an unreadable outcome with a PENDING reviewer keeps the rerun tree — the token could not route anywhere new', () => {
+    const c = classify(pr({
+      checks: [...cheapPassChecks(), reviewCheck({ state: 'FAIL', reviewOutcome: { read: false, detail: 'HTTP 502' }, reviewFailureKind: 'infrastructure', runAttempt: 1 })],
+      reviewRequests: ['llamenos-auto'],
     }))
     expect(c.action).toBe('RERUN_REVIEW')
   })
@@ -956,12 +997,13 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
   })
 })
 
-describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)', () => {
+describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review outcome annotation (#2473)', () => {
   const gateDeps = {
     checkFleetHalt: async () => ({ halted: false }),
     fetchBranchRules: async () => LIVE_MAIN_RULES,
     fetchCodeOwners: async () => null,
     fetchRunJobs: async () => ({ steps: [], runAttempt: 1 }),
+    fetchCheckRunAnnotations: async () => [],
     fetchMergeable: async () => 'MERGEABLE',
     fetchBaseHeadDate: async () => undefined,
   }
@@ -979,13 +1021,89 @@ describe('fetchBoardFactsWith — reviewRequests and the CheckRun title (#1760)'
     expect(factsOut.prs[0]?.reviewRequests).toEqual(['llamenos-auto', 'core-team'])
   })
 
-  it('carries the CheckRun title through to the PrCheckContext so classifyPr can read the outcome token', async () => {
-    const node = gqlPr(7, [
-      { __typename: 'CheckRun', name: REVIEW_JOB, title: 'NO-VERDICT:unreviewed — nothing has judged this diff', status: 'COMPLETED', conclusion: 'FAILURE', checkSuite: { workflowRun: { databaseId: 42 } } },
-    ])
-    const factsOut = await fetchBoardFactsWith({ ...gateDeps, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
+  // #2473. The test that used to stand here fed a GraphQL CheckRun whose
+  // `title` carried the token — a value GitHub never returns for
+  // `fleet/review` (the job holds no `checks: write`), so it passed while the
+  // branch it guarded could never fire in production. These fixtures are the
+  // live payload: `title: null`, the token in the `fleet/review outcome`
+  // annotation.
+  const live = LIVE_NO_VERDICT_UNREVIEWED
+  const liveReviewNode = (): GqlContextFixture => ({
+    __typename: 'CheckRun', id: live.checkRun.node_id, name: REVIEW_JOB, title: live.checkRun.output.title,
+    status: 'COMPLETED', conclusion: 'FAILURE', checkSuite: { workflowRun: { databaseId: 42 } },
+  } as GqlContextFixture)
+  const boardFor = async (fetchCheckRunAnnotations: BoardFetchDeps['fetchCheckRunAnnotations']) => {
+    const node = gqlPr(7, [...gqlCheapPass(), liveReviewNode()])
+    const deps: BoardFetchDeps = {
+      ...gateDeps,
+      fetchRunJobs: async () => ({ steps: [{ name: 'Gate', conclusion: 'failure' as const }], runAttempt: 1 }),
+      fetchCheckRunAnnotations,
+      queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }),
+    }
+    return { factsOut: await fetchBoardFactsWith(deps), deps }
+  }
+
+  it('the live payload: title is null and the outcome lives only in the annotation', () => {
+    expect(live.checkRun.name).toBe(REVIEW_JOB)
+    expect(live.checkRun.conclusion).toBe('failure')
+    expect(live.checkRun.output.title).toBeNull()
+    expect(live.annotationsResponse.data.node.title).toBeNull()
+    expect(reviewOutcomeFromAnnotations(LIVE_ANNOTATIONS)).toMatch(/^NO-VERDICT:unreviewed /)
+  })
+
+  it('checkRunAnnotationsPageFrom parses the live GraphQL page, and refuses an unreadable one rather than returning []', () => {
+    expect(checkRunAnnotationsPageFrom(live.annotationsResponse)).toEqual({ annotations: LIVE_ANNOTATIONS, nextCursor: undefined })
+    expect(() => checkRunAnnotationsPageFrom({ errors: [{ message: 'rate limited' }] })).toThrow(/rate limited/)
+    expect(() => checkRunAnnotationsPageFrom({ data: { node: null } })).toThrow(/no CheckRun annotations/)
+    expect(() => checkRunAnnotationsPageFrom({ data: { node: { annotations: { pageInfo: { hasNextPage: true, endCursor: null }, nodes: [] } } } })).toThrow(/no cursor/)
+    expect(checkRunAnnotationsPageFrom({ data: { node: { annotations: { pageInfo: { hasNextPage: true, endCursor: 'c2' }, nodes: [] } } } }).nextCursor).toBe('c2')
+  })
+
+  it('a red NO-VERDICT:unreviewed carried in the ANNOTATION drives the board to REQUEST_REVIEW', async () => {
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
+    const { factsOut } = await boardFor(fetchCheckRunAnnotations)
+    expect(fetchCheckRunAnnotations).toHaveBeenCalledWith(live.checkRun.node_id)
     const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
-    expect(review?.title).toContain('NO-VERDICT:unreviewed')
+    expect(review?.reviewOutcome).toEqual({ read: true, message: expect.stringMatching(/^NO-VERDICT:unreviewed /) })
+    const row = buildBoard(factsOut).rows.find((r) => r.number === 7)
+    expect(row?.action).toBe('REQUEST_REVIEW')
+    expect(row?.reason).toContain('NO-VERDICT:unreviewed')
+  })
+
+  it('the same red run whose annotations carry NO outcome does NOT issue REQUEST_REVIEW', async () => {
+    const { factsOut } = await boardFor(async () => LIVE_ANNOTATIONS.filter((a) => a.title !== REVIEW_OUTCOME_ANNOTATION))
+    const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
+    expect(review?.reviewOutcome).toEqual({ read: true, message: undefined })
+    const row = buildBoard(factsOut).rows.find((r) => r.number === 7)
+    expect(row?.action).not.toBe('REQUEST_REVIEW')
+    expect(row?.action).toBe('RERUN_REVIEW')
+  })
+
+  it('a FAILED annotations read is recorded as unreadable, never as "no token" — and the board says it cannot decide', async () => {
+    const { factsOut } = await boardFor(async () => { throw new Error('HTTP 502: Bad Gateway') })
+    const review = factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)
+    expect(review?.reviewOutcome).toEqual({ read: false, detail: expect.stringContaining('HTTP 502') })
+    const row = buildBoard(factsOut).rows.find((r) => r.number === 7)
+    expect(row?.action).toBe('CANNOT_DECIDE')
+  })
+
+  it('a FAILed fleet/review CheckRun with no node id is unreadable, not silently token-less', async () => {
+    const node = gqlPr(8, [{ __typename: 'CheckRun', name: REVIEW_JOB, status: 'COMPLETED', conclusion: 'FAILURE' }])
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, fetchCheckRunAnnotations, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
+    expect(fetchCheckRunAnnotations).not.toHaveBeenCalled()
+    expect(factsOut.prs[0]?.checks.find((c) => c.name === REVIEW_JOB)?.reviewOutcome).toEqual({ read: false, detail: expect.stringContaining('node id') })
+  })
+
+  it('reads annotations only for a FAILed fleet/review CheckRun — never a passing or unrelated one', async () => {
+    const fetchCheckRunAnnotations = vi.fn(async () => LIVE_ANNOTATIONS)
+    const node = gqlPr(9, [
+      { __typename: 'CheckRun', id: 'CR_1', name: 'ci-status', status: 'COMPLETED', conclusion: 'FAILURE' },
+      { __typename: 'CheckRun', id: 'CR_2', name: REVIEW_JOB, status: 'COMPLETED', conclusion: 'SUCCESS' },
+    ])
+    const factsOut = await fetchBoardFactsWith({ ...gateDeps, fetchCheckRunAnnotations, queryOpenPrs: async () => ({ data: { repository: { pullRequests: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } } }) })
+    expect(fetchCheckRunAnnotations).not.toHaveBeenCalled()
+    expect(factsOut.prs[0]?.checks.every((c) => c.reviewOutcome === undefined)).toBe(true)
   })
 })
 
@@ -1151,6 +1269,7 @@ describe('fetchBoardFactsWith — mergeable resolution and evidence ageing (#184
   const deps = (over: Partial<BoardFetchDeps> = {}): BoardFetchDeps => ({
     queryOpenPrs: vi.fn(async () => ({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } })),
     fetchRunJobs: vi.fn(async () => undefined),
+    fetchCheckRunAnnotations: vi.fn(async () => []),
     checkFleetHalt: vi.fn(async () => ({ halted: false })),
     fetchBranchRules: vi.fn(async () => LIVE_MAIN_RULES),
     fetchCodeOwners: vi.fn(async () => null),
