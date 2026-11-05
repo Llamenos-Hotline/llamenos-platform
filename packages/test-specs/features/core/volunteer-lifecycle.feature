@@ -281,12 +281,6 @@ Feature: Volunteer Lifecycle
     Then I should see the "Hub Admin" badge on their card
 
   @desktop @ios @android
-  Scenario: Add Volunteer form shows available roles
-    Given I am logged in as an admin
-    When I open the Add Volunteer form
-    Then I should see all available roles in the form
-
-  @desktop @ios @android
   Scenario: Invite form shows available roles
     Given I am logged in as an admin
     When I open the Invite form

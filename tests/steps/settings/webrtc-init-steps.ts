@@ -14,8 +14,7 @@ import { expect } from '@playwright/test'
 import { Given, Then } from '../fixtures'
 import {
   Timeouts,
-  createUserAndGetDeviceKey,
-  dismissDeviceKeyCard,
+  inviteVolunteerAndJoin,
   loginAsVolunteer,
   uniquePhone,
 } from '../../helpers'
@@ -26,8 +25,7 @@ Given(
   async ({ page }, callPreference: string) => {
     // Background already logged in an admin; create the volunteer through the UI.
     await Navigation.goToVolunteers(page)
-    const deviceKey = await createUserAndGetDeviceKey(page, `WebRTC-Vol-${Date.now()}`, uniquePhone())
-    await dismissDeviceKeyCard(page)
+    const deviceKey = await inviteVolunteerAndJoin(page, `WebRTC-Vol-${Date.now()}`, uniquePhone())
 
     // Force this volunteer's call preference so the dashboard's WebRtcStatus
     // badge actually calls initWebRtc() on mount. Must be installed BEFORE

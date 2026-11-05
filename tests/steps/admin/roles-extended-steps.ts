@@ -217,7 +217,7 @@ When('I view the volunteer list', async ({ page }) => {
 Then('the role dropdown should show all default roles', async ({ page, request }) => {
   // The old assertion was `select, [role="combobox"], [role="listbox"]`.first() being
   // visible — satisfied by any combobox on the page, never checking a single role.
-  await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
+  await page.getByTestId(TestIds.INVITE_BTN).click()
   await expectFormOffersSystemRoles(page, request)
 })
 
@@ -285,11 +285,6 @@ Then('I should see the {string} badge on their card', async ({ page, rolesWorld 
   await Navigation.goToVolunteers(page)
   const row = VolunteerPage.getRowById(page, seedHexToPubkey(rolesWorld.volunteerNsec))
   await expect(row.getByTestId(TestIds.VOLUNTEER_ROW_ROLE_BADGE)).toContainText(roleName, { timeout: Timeouts.ELEMENT })
-})
-
-When('I open the Add Volunteer form', async ({ page }) => {
-  await Navigation.goToVolunteers(page)
-  await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
 })
 
 When('I open the Invite form', async ({ page }) => {

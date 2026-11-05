@@ -68,14 +68,10 @@ async function advanceWizardToStep(page: Page, targetStep: number, channel = 'Re
   await expect(page.locator('[role="progressbar"][aria-valuenow="4"]')).toBeVisible({ timeout: 10000 })
   if (targetStep === 3) return
 
-  // Step 3 – Settings: advance
+  // Step 3 – Settings: advance to step 4, the summary. Inviting comes after the
+  // summary launches the hotline (#2194), so the summary is as far as "advance" goes.
   await page.getByTestId(TestIds.SETUP_NEXT_BTN).click()
   await expect(page.locator('[role="progressbar"][aria-valuenow="5"]')).toBeVisible({ timeout: 10000 })
-  if (targetStep === 4) return
-
-  // Step 4 – Invite: advance
-  await page.getByTestId(TestIds.SETUP_NEXT_BTN).click()
-  await expect(page.locator('[role="progressbar"][aria-valuenow="6"]')).toBeVisible({ timeout: 10000 })
 }
 
 /**
@@ -422,18 +418,37 @@ Given('I selected {string} and advanced to settings step', async ({ page }, chan
   await advanceWizardToStep(page, 3, channel)
 })
 
-Given('I am on the invite step', async ({ page }) => {
+Given('I have launched the hotline from the setup wizard', async ({ page }) => {
   await advanceWizardToStep(page, 4)
+  await page.getByTestId(TestIds.SETUP_COMPLETE_BTN).click()
+  // Step 5, the invite step, renders only once `POST /api/setup/complete` succeeded.
+  await expect(page.locator('[role="progressbar"][aria-valuenow="6"]')).toBeVisible({ timeout: Timeouts.API })
 })
 
 When('I fill in the volunteer name', async ({ page }) => {
-  await page.getByLabel(/name/i).first().fill(`SetupVol ${Date.now()}`)
+  const name = `SetupVol ${Date.now()}`
+  await page.getByTestId(TestIds.INVITE_NAME_INPUT).fill(name)
+  await page.evaluate((n) => { (window as unknown as Record<string, unknown>).__test_setup_vol_name = n }, name)
 })
 
 When('I fill in the volunteer phone', async ({ page }) => {
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  await page.getByLabel(/phone/i).first().fill(phone)
-  await page.getByLabel(/phone/i).first().blur()
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).fill(phone)
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).blur()
+})
+
+Then('the invite should name the hub the wizard launched and the role chosen', async ({ page, backendRequest }) => {
+  const { apiGet } = await import('../../api-helpers')
+  const name = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_setup_vol_name as string)
+  expect(name, 'the volunteer name step records the name it typed').toBeTruthy()
+  const { data } = await apiGet<{ invites: Array<{ name: string; hubId?: string | null; roleIds: string[] }> }>(backendRequest, '/invites')
+  const invite = data.invites.find(i => i.name === name)
+  expect(invite, `no invite named ${name}`).toBeTruthy()
+  // The wizard used to mint this invite before any hub existed: hub-less and
+  // role-less, so its redeemer joined nothing (#2194).
+  expect(invite!.roleIds).toEqual(['role-volunteer'])
+  const { data: hubs } = await apiGet<{ hubs: Array<{ id: string }> }>(backendRequest, '/hubs')
+  expect(hubs.hubs.map(h => h.id), 'the invite names a hub that exists').toContain(invite!.hubId)
 })
 
 Then('the volunteer name should appear with an invite code', async ({ page }) => {
@@ -442,7 +457,7 @@ Then('the volunteer name should appear with an invite code', async ({ page }) =>
 })
 
 Given('I have completed all wizard steps', async ({ page }) => {
-  await advanceWizardToStep(page, 5)
+  await advanceWizardToStep(page, 4)
 })
 
 Then('I should see the configured hotline name', async ({ page }) => {
@@ -480,8 +495,8 @@ Then('the previously entered hotline name should still be filled', async ({ page
 })
 
 When('I complete the entire setup wizard', async ({ page }) => {
-  await advanceWizardToStep(page, 5)
-  // Should now be on Step 5 – Summary with "Go to Dashboard" button
+  await advanceWizardToStep(page, 4)
+  // Should now be on the summary, with its "Launch Hotline" button
   await expect(page.getByText(/review|summary|launch/i).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
@@ -546,7 +561,7 @@ Then('I should see the report content', async ({ page }) => {
 // --- Setup wizard ---
 
 When('I navigate to the setup wizard summary step', async ({ page }) => {
-  await advanceWizardToStep(page, 5)
+  await advanceWizardToStep(page, 4)
 })
 
 // 'I visit the login page' -> defined in common/navigation-steps.ts

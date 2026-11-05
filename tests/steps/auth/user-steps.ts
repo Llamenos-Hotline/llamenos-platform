@@ -10,8 +10,7 @@ import { Given, When, Then } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import {
   Timeouts,
-  createUserAndGetDeviceKey,
-  dismissDeviceKeyCard,
+  inviteVolunteerAndJoin,
   chooseFormRole,
   loginAsVolunteer,
   loginAsAdmin,
@@ -27,11 +26,10 @@ Given('an admin has created a volunteer', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await page.evaluate((n) => {
     (window as unknown as Record<string, unknown>).__test_vol_nsec = n
   }, deviceKey)
-  await dismissDeviceKeyCard(page)
 })
 
 When('the volunteer logs in with their device key', async ({ page }) => {
@@ -43,8 +41,7 @@ Given('a volunteer has logged in', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
-  await dismissDeviceKeyCard(page)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await loginAsVolunteer(page, deviceKey)
 })
 
@@ -57,8 +54,7 @@ Given('a volunteer is logged in and on the dashboard', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
-  await dismissDeviceKeyCard(page)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await loginAsVolunteer(page, deviceKey)
 })
 
@@ -67,8 +63,7 @@ Given('a volunteer is logged in', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
-  await dismissDeviceKeyCard(page)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await loginAsVolunteer(page, deviceKey)
 })
 
@@ -76,11 +71,10 @@ Given('a volunteer exists', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await page.evaluate((n) => {
     (window as unknown as Record<string, unknown>).__test_vol_nsec = n
   }, deviceKey)
-  await dismissDeviceKeyCard(page)
 })
 
 When('they tap the break button', async ({ page }) => {
@@ -213,8 +207,8 @@ Then('the volunteer name should no longer appear in the list', async ({ page }) 
 
 // --- Form validation ---
 
-Then('I should see the volunteer device key', async ({ page }) => {
-  await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: Timeouts.API })
+When('I choose the volunteer role in the form', async ({ page }) => {
+  await chooseFormRole(page)
 })
 
 When('I paste invalid phone numbers in the textarea', async ({ page }) => {
@@ -243,16 +237,14 @@ Given('I have created a volunteer', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `AuditVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  await createUserAndGetDeviceKey(page, name, phone)
-  await dismissDeviceKeyCard(page)
+  await inviteVolunteerAndJoin(page, name, phone)
 })
 
 Given('I have created and then deleted a volunteer', async ({ page }) => {
   await Navigation.goToVolunteers(page)
   const name = `DeleteVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  await createUserAndGetDeviceKey(page, name, phone)
-  await dismissDeviceKeyCard(page)
+  await inviteVolunteerAndJoin(page, name, phone)
   // Delete the volunteer
   const row = page.getByTestId(TestIds.VOLUNTEER_ROW).filter({ hasText: name })
   await row.getByTestId(TestIds.VOLUNTEER_DELETE_BTN).click()
@@ -315,11 +307,10 @@ Given('a reporter has been invited and onboarded', async ({ page, backendRequest
   await Navigation.goToVolunteers(page)
   const name = `Reporter ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await createUserAndGetDeviceKey(page, name, phone)
+  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
   await page.evaluate((n) => {
     (window as unknown as Record<string, unknown>).__test_reporter_nsec = n
   }, deviceKey)
-  await dismissDeviceKeyCard(page)
   await grantReporterRole(backendRequest, deviceKey, workerHub)
 })
 
@@ -332,8 +323,7 @@ Given('a reporter is logged in', async ({ page, backendRequest, workerHub }) => 
     await Navigation.goToVolunteers(page)
     const name = `Reporter ${Date.now()}`
     const phone = `+1212${Date.now().toString().slice(-7)}`
-    key = await createUserAndGetDeviceKey(page, name, phone)
-    await dismissDeviceKeyCard(page)
+    key = await inviteVolunteerAndJoin(page, name, phone)
     await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)
@@ -347,8 +337,7 @@ When('the reporter logs in', async ({ page, backendRequest, workerHub }) => {
     await Navigation.goToVolunteers(page)
     const name = `Reporter ${Date.now()}`
     const phone = `+1212${Date.now().toString().slice(-7)}`
-    key = await createUserAndGetDeviceKey(page, name, phone)
-    await dismissDeviceKeyCard(page)
+    key = await inviteVolunteerAndJoin(page, name, phone)
     await grantReporterRole(backendRequest, key, workerHub)
   }
   await loginAsVolunteer(page, key)

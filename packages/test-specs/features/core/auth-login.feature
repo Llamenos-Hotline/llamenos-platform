@@ -379,35 +379,39 @@ Feature: Authentication & Login
 
   # ── Desktop/Mobile: Form Validation ───────────────────────────────
 
-  @desktop @ios @android
-  Scenario: Volunteer form rejects invalid phone
+  # An admin adds someone only by inviting them (#1231): the invite form is the
+  # volunteer form. Desktop only — Android's add-volunteer dialog these
+  # scenarios used to drive still awaits the same change.
+  @desktop
+  Scenario: Invite form rejects invalid phone
     Given I am logged in as an admin
     When I navigate to the "Volunteers" page
-    And I click "Add Volunteer"
+    And I click "Invite Volunteer"
     And I fill in name with "Test"
     And I fill in phone with "+123"
-    And I click "Save"
+    And I click "Create Invite"
     Then I should see "invalid phone"
 
-  @desktop @ios @android
-  Scenario: Volunteer form rejects phone without plus prefix
+  @desktop
+  Scenario: Invite form rejects phone without plus prefix
     Given I am logged in as an admin
     When I navigate to the "Volunteers" page
-    And I click "Add Volunteer"
+    And I click "Invite Volunteer"
     And I fill in name with "Test"
     And I fill in phone with "1234"
-    And I click "Save"
+    And I click "Create Invite"
     Then I should see "invalid phone"
 
-  @desktop @ios @android
-  Scenario: Volunteer form accepts valid E.164 phone
+  @desktop
+  Scenario: Invite form accepts valid E.164 phone
     Given I am logged in as an admin
     When I navigate to the "Volunteers" page
-    And I click "Add Volunteer"
+    And I click "Invite Volunteer"
     And I fill in name with "Valid Phone Test"
     And I fill in a valid phone number
-    And I click "Save"
-    Then I should see the volunteer device key
+    And I choose the volunteer role in the form
+    And I click "Create Invite"
+    Then an invite link should be generated
 
   @desktop @ios @android
   Scenario: Ban form rejects invalid phone

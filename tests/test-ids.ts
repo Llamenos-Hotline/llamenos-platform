@@ -40,7 +40,6 @@ export const TestIds = {
   // ============ Volunteers ============
   VOLUNTEER_LIST: 'volunteer-list',
   VOLUNTEER_ROW: 'volunteer-row',
-  VOLUNTEER_ADD_BTN: 'volunteer-add-btn',
   VOLUNTEER_DELETE_BTN: 'volunteer-delete-btn',
   VOLUNTEER_ROW_ROLE_SELECT: 'volunteer-row-role-select',
   VOLUNTEER_ROW_ROLE_OPTION: 'volunteer-row-role-option',
@@ -53,14 +52,15 @@ export const TestIds = {
   USER_FORM_ROLE_SELECT: 'user-form-role-select',
   USER_FORM_ROLE_OPTION: 'user-form-role-option',
   VOLUNTEER_EDIT_BTN: 'volunteer-edit-btn',
-  VOLUNTEER_DEVICE_KEY_CARD: 'volunteer-device-key-card',
-  VOLUNTEER_DEVICE_KEY_CODE: 'volunteer-device-key-code',
   VOLUNTEER_INVITE_CARD: 'volunteer-invite-card',
   VOLUNTEER_INVITE_LINK: 'volunteer-invite-link',
-  DISMISS_DEVICE_KEY: 'dismiss-device-key',
   DISMISS_INVITE: 'dismiss-invite',
   TOGGLE_PHONE_VISIBILITY: 'toggle-phone-visibility',
   INVITE_BTN: 'invite-btn',
+  INVITE_NAME_INPUT: 'invite-name-input',
+  INVITE_PHONE_INPUT: 'invite-phone-input',
+  CREATE_INVITE_BTN: 'create-invite-btn',
+  INVITE_LINK_CODE: 'invite-link-code',
   REVOKE_INVITE_BTN: 'revoke-invite-btn',
 
   // ============ Shifts ============
@@ -331,6 +331,9 @@ export const TestIds = {
   SETUP_NEXT_BTN: 'setup-next-btn',
   SETUP_BACK_BTN: 'setup-back-btn',
   SETUP_SKIP_BTN: 'setup-skip-btn',
+  SETUP_COMPLETE_BTN: 'setup-complete-btn',
+  SETUP_GENERATE_INVITE_BTN: 'setup-generate-invite-btn',
+  SETUP_FINISH_BTN: 'setup-finish-btn',
 
   // ============ Forms (Generic) ============
   FORM_SAVE_BTN: 'form-save-btn',

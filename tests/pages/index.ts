@@ -8,7 +8,7 @@
 
 import { type Page, type Locator, expect } from '@playwright/test'
 import { TestIds } from '../test-ids'
-import { Timeouts, chooseFormRole } from '../helpers'
+import { Timeouts } from '../helpers'
 
 // ============ Base Page Helpers ============
 
@@ -160,45 +160,6 @@ export const VolunteerPage = {
     await option.click()
     expect((await patchResponse).ok(), `PATCH /users/${pubkey.slice(0, 8)} role change failed`).toBe(true)
     await expect(row.getByTestId(TestIds.VOLUNTEER_ROW_ROLE_BADGE)).toContainText(role.name, { timeout: Timeouts.ELEMENT })
-  },
-
-  /**
-   * Open the add volunteer form.
-   */
-  async openAddForm(page: Page): Promise<void> {
-    await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
-    await expect(page.getByLabel('Name')).toBeVisible()
-  },
-
-  /**
-   * Fill and submit the add volunteer form.
-   */
-  async addVolunteer(page: Page, name: string, phone: string): Promise<void> {
-    await page.getByLabel('Name').fill(name)
-    await page.getByLabel('Phone Number').fill(phone)
-    await page.getByLabel('Phone Number').blur()
-    await chooseFormRole(page)
-    await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-    await expect(page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)).toBeVisible({ timeout: 15000 })
-  },
-
-  /**
-   * Get the generated nsec from the nsec card.
-   */
-  async getNsec(page: Page): Promise<string> {
-    const nsecCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
-    await expect(nsecCode).toBeVisible({ timeout: 15000 })
-    const nsec = await nsecCode.textContent()
-    if (!nsec) throw new Error('Failed to get nsec')
-    return nsec
-  },
-
-  /**
-   * Dismiss the nsec card.
-   */
-  async dismissDeviceKeyCard(page: Page): Promise<void> {
-    await page.getByTestId(TestIds.DISMISS_DEVICE_KEY).click()
-    await expect(page.getByTestId(TestIds.DISMISS_DEVICE_KEY)).not.toBeVisible()
   },
 
   /**
