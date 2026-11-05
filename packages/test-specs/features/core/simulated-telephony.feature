@@ -110,10 +110,14 @@ Feature: Simulated telephony
     Then the response status should be 200
     And the simulated call should have notified 1 volunteers
 
+  # There is no instance-wide fallback group (#2460). It existed only to ring calls
+  # that belonged to no hub, and every call belongs to a hub now: the unscoped
+  # route has no group to write, and a hub's call reads only its own hub's.
   @backend @simulated-telephony @calls
-  Scenario: The instance-wide fallback group is never rung for a hub's call
-    Given a volunteer is in the instance-wide fallback group
-    And the hub uses the mock telephony provider
+  Scenario: There is no instance-wide fallback group to ring a hub's call
+    When the admin puts a hub member in the unscoped fallback group
+    Then the response status should be 404
+    Given the hub uses the mock telephony provider
     When the admin simulates an incoming call
     Then the response status should be 422
 

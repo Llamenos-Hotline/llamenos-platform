@@ -847,17 +847,18 @@ export async function updateShiftViaApi(
 
 export async function getFallbackGroupViaApi(
   request: APIRequestContext,
-  hubId?: string,
+  hubId: string,
 ): Promise<{ volunteers: string[] }> {
   const { status, data } = await apiGet<{ userPubkeys: string[] }>(request, hubPath('/shifts/fallback', hubId))
   if (status !== 200) throw new Error(`Failed to get fallback group: ${status}`)
   return { volunteers: data.userPubkeys ?? [] }
 }
 
+/** A hub's fallback group. Per hub only: there is no instance-wide one (#2460). */
 export async function setFallbackGroupViaApi(
   request: APIRequestContext,
   volunteers: string[],
-  hubId?: string,
+  hubId: string,
 ): Promise<void> {
   const { status } = await apiPut(request, hubPath('/shifts/fallback', hubId), { userPubkeys: volunteers })
   if (status !== 200) throw new Error(`Failed to set fallback group: ${status}`)

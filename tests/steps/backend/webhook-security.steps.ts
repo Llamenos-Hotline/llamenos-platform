@@ -9,6 +9,7 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { setLastResponse } from './shared-state'
 import { createHmac } from 'node:crypto'
+import { apiGet } from '../../api-helpers'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -211,6 +212,37 @@ When('a Twilio-signed incoming-call webhook with the same payload is delivered',
   const res = await postIncoming(request, ensurePayload(state), state.twilioAuthToken)
   state.webhookResponses.push(res)
   setLastResponse(world, { status: res.status, data: res.body })
+})
+
+When('a Twilio-signed incoming call to a number no hub owns is delivered', async ({ request, world }) => {
+  const state = getWebhookState(world)
+  // A number unique to this run, so no hub (in this or any earlier scenario) owns it.
+  const unowned = `+1555${String(Date.now()).slice(-7)}`
+  const res = await postIncoming(request, {
+    CallSid: `CA${crypto.randomUUID().replace(/-/g, '')}`,
+    From: '+15551234567',
+    To: unowned,
+  }, state.twilioAuthToken)
+  state.webhookResponses.push(res)
+  setLastResponse(world, { status: res.status, data: res.body })
+})
+
+Then('the webhook response should reject the call', async ({ world }) => {
+  const res = getWebhookState(world).webhookResponses[0]
+  expectTwiml(res)
+  // Refused before anything answers — never the language menu of some hub.
+  expect(res.body).toContain('<Reject')
+  expect(res.body).not.toContain('<Gather')
+})
+
+Then('the platform should have an open routing incident for an unrouted number', async ({ request }) => {
+  const { status, data } = await apiGet<{ incidents: Array<{ category: string; counts: Record<string, number> }> }>(
+    request,
+    '/admin/incidents?open=true',
+  )
+  expect(status).toBe(200)
+  const routing = data.incidents.find((i) => i.category === 'routing')
+  expect(routing?.counts.unrouted_number ?? 0).toBeGreaterThan(0)
 })
 
 Then('the webhook response should be TwiML and not the replay acknowledgement', async ({ world }) => {
