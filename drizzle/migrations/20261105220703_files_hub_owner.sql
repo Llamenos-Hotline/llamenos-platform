@@ -8,16 +8,17 @@ ALTER TABLE "files" ADD COLUMN "hub_id" text;--> statement-breakpoint
 ALTER TABLE "files" ADD COLUMN "owner_kind" text;--> statement-breakpoint
 ALTER TABLE "files" ADD COLUMN "case_record_id" text;--> statement-breakpoint
 -- Backfill: before this migration the only parent a file could name was a
--- conversation, and the conversation's hub is the file's hub.
+-- conversation, and the conversation's hub is the file's hub (every
+-- conversation has one since 20261105181320, #2464).
 UPDATE "files" AS f SET "hub_id" = c."hub_id", "owner_kind" = 'conversation'
   FROM "conversations" AS c
-  WHERE f."conversation_id" = c."id" AND c."hub_id" IS NOT NULL AND f."hub_id" IS NULL;--> statement-breakpoint
+  WHERE f."conversation_id" = c."id" AND f."hub_id" IS NULL;--> statement-breakpoint
 -- Dual write for the expand phase, by the database: an INSERT from the
 -- previous release (rollout window or rollback) names a conversation but no
 -- hub. Fill hub_id and owner_kind from that conversation, so the hub shred —
--- which reaches files by hub_id — still reaches the row. A row whose
--- conversation has no hub stays hubless and is removed by the contract
--- release, which also drops this trigger.
+-- which reaches files by hub_id — still reaches the row. A row that names no
+-- conversation stays hubless and is removed by the contract release (#2486),
+-- which also drops this trigger.
 CREATE OR REPLACE FUNCTION "files_fill_hub_from_conversation"() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.hub_id IS NULL AND NEW.owner_kind IS NULL AND NEW.conversation_id IS NOT NULL THEN

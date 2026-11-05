@@ -1,11 +1,9 @@
 {
-  "id": "29fc4ec1-b3a8-4cc2-81cb-b1709fdce325",
-  "prevId": "d540e843-d002-4f8f-9608-9242bff3661c",
+  "id": "d81f45b6-bee4-4fa8-b400-9adda7aa48b9",
+  "prevId": "f4c837dc-5444-48db-a0ec-a7fca9f1d28c",
   "prevIds": [
-    "d540e843-d002-4f8f-9608-9242bff3661c",
-    "1369ca7d-448f-414b-a06b-262a85c31e30",
-    "8bb34293-a14b-4bb0-8d96-75143c95d224",
-    "94ff11c4-9c0d-4f55-828a-975e5e32e0c4"
+    "f4c837dc-5444-48db-a0ec-a7fca9f1d28c",
+    "637633fb-0c32-4ac5-a5d4-cdbf2d9dc276"
   ],
   "version": "7",
   "dialect": "postgresql",
@@ -258,7 +256,7 @@
           "name": "hub_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "kind": {
           "name": "kind",
@@ -347,7 +345,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "event_outbox_hub_id_hubs_id_fk": {
+          "name": "event_outbox_hub_id_hubs_id_fk",
+          "tableFrom": "event_outbox",
+          "tableTo": "hubs",
+          "columnsFrom": [
+            "hub_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -3038,13 +3050,6 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
-        "fallback_group": {
-          "name": "fallback_group",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
         "report_categories": {
           "name": "report_categories",
           "type": "text[]",
@@ -4489,7 +4494,7 @@
           "name": "hub_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "first_seen": {
           "name": "first_seen",
@@ -4514,7 +4519,21 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "contact_metadata_hub_id_hubs_id_fk": {
+          "name": "contact_metadata_hub_id_hubs_id_fk",
+          "tableFrom": "contact_metadata",
+          "tableTo": "hubs",
+          "columnsFrom": [
+            "hub_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {
         "contact_metadata_contact_hash_hub_id_pk": {
           "name": "contact_metadata_contact_hash_hub_id_pk",
@@ -4999,7 +5018,7 @@
           "name": "hub_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "channel_type": {
           "name": "channel_type",
@@ -5100,7 +5119,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "conversations_hub_id_hubs_id_fk": {
+          "name": "conversations_hub_id_hubs_id_fk",
+          "tableFrom": "conversations",
+          "tableTo": "hubs",
+          "columnsFrom": [
+            "hub_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "conversations_id_hub_id_unique": {
@@ -7496,7 +7529,7 @@
           "name": "hub_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "author_pubkey": {
           "name": "author_pubkey",
@@ -7637,7 +7670,21 @@
           "with": {}
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "notes_hub_id_hubs_id_fk": {
+          "name": "notes_hub_id_hubs_id_fk",
+          "tableFrom": "notes",
+          "tableTo": "hubs",
+          "columnsFrom": [
+            "hub_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
