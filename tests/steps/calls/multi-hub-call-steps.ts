@@ -54,16 +54,16 @@ When('a call comes in on the volunteer\'s second hub while the first hub is acti
   // Ringing is bounded by the 15s poll fallback, on top of login: budget for it explicitly.
   $test.slow()
   const { hubId, volunteerPubkey } = await recordedIds(page)
-  expect(hubId, 'the multi-hub Given step must record the second hub id').toBeTruthy()
-  expect(volunteerPubkey, 'the multi-hub Given step must record the volunteer pubkey').toBeTruthy()
+  if (!hubId) throw new Error('the multi-hub Given step must record the second hub id')
+  if (!volunteerPubkey) throw new Error('the multi-hub Given step must record the volunteer pubkey')
 
   // The call rings the volunteer on the second hub: nobody is on shift there, so the
   // hub's fallback group is its ring set.
-  await setFallbackGroupViaApi(backendRequest, [volunteerPubkey!], hubId)
+  await setFallbackGroupViaApi(backendRequest, [volunteerPubkey], hubId)
   // Answering from the app is a database write that bridges nobody, so the server only
   // accepts it on a hub that can connect the volunteer (#2168): the mock provider is that
   // hub for a test. Without it the answer is refused (422) and the call stays ringing.
-  await enableMockTelephonyViaApi(backendRequest, hubId!)
+  await enableMockTelephonyViaApi(backendRequest, hubId)
 
   const { callId, status } = await simulateIncomingCall(backendRequest, {
     callerNumber: uniqueCallerNumber(),

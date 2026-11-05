@@ -51,6 +51,8 @@ function makeApp(opts: {
     updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
     getHubs: vi.fn().mockResolvedValue({ hubs: [] }),
     createHub: vi.fn().mockResolvedValue(undefined),
+    // No platform provider configured in the database unless a test says so.
+    getTelephonyProvider: vi.fn().mockResolvedValue(null),
     getMessagingConfig: vi.fn().mockResolvedValue(null),
   }
 
@@ -176,6 +178,45 @@ describe('POST /setup/complete', () => {
     )
     expect(mockIdentity.setHubRole).not.toHaveBeenCalled()
     expect(auditLog).toHaveBeenCalledOnce()
+  })
+
+  // #2460: routing matches an incoming call against `hubs.phone_number`. The
+  // wizard's provider step stores the hotline number on the platform provider
+  // configuration, so that is where the default hub's number comes from — the
+  // same precedence the platform adapter is built from (database, then env).
+  it("gives the default hub the wizard-configured provider's number", async () => {
+    const { app, mockSettings } = makeApp({ env: {} })
+    mockSettings.getHubs.mockResolvedValue({ hubs: [] })
+    mockSettings.getTelephonyProvider.mockResolvedValue({ type: 'twilio', phoneNumber: '+15557770001' })
+
+    const res = await app.request('/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockSettings.createHub).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneNumber: '+15557770001' }),
+      expect.objectContaining({ roleIds: ['role-super-admin'] }),
+    )
+  })
+
+  it('prefers the configured provider to TWILIO_PHONE_NUMBER, as the platform adapter does', async () => {
+    const { app, mockSettings } = makeApp({ env: { TWILIO_PHONE_NUMBER: '+15550001234' } })
+    mockSettings.getHubs.mockResolvedValue({ hubs: [] })
+    mockSettings.getTelephonyProvider.mockResolvedValue({ type: 'telnyx', phoneNumber: '+15557770002' })
+
+    await app.request('/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(mockSettings.createHub).toHaveBeenCalledWith(
+      expect.objectContaining({ phoneNumber: '+15557770002' }),
+      expect.anything(),
+    )
   })
 
   it('does not create hub when one already exists', async () => {

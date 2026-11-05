@@ -71,11 +71,9 @@ function connect(
  */
 function makeServices(rosters: Record<string, string[]>): Services {
   const everyone = [...new Set(Object.values(rosters).flat())]
-  // The '' roster is a call that resolved to no hub: there is no hub to be a member
-  // of, so those users hold the volunteer role globally instead.
   const hubRolesOf = (pubkey: string) =>
     Object.entries(rosters)
-      .filter(([hubId, roster]) => hubId !== '' && roster.includes(pubkey))
+      .filter(([, roster]) => roster.includes(pubkey))
       .map(([hubId]) => ({ hubId, roleIds: ['role-volunteer'] }))
   return {
     shifts: { getCurrentVolunteers: vi.fn(async (hubId: string) => rosters[hubId] ?? []) },
@@ -93,7 +91,7 @@ function makeServices(rosters: Record<string, string[]>): Services {
       getUsers: vi.fn().mockResolvedValue({
         users: everyone.map(pubkey => ({
           pubkey, active: true, onBreak: false, callPreference: 'browser', phone: null,
-          roles: (rosters[''] ?? []).includes(pubkey) ? ['role-volunteer'] : [],
+          roles: [],
           hubRoles: hubRolesOf(pubkey),
         })),
       }),
@@ -153,14 +151,21 @@ describe('call:ring relay delivery (#1013)', () => {
     expect(outsider.received()).toEqual([])
   })
 
-  it('a call that resolved to no hub is not broadcast on the global pseudo-hub', async () => {
-    const listener = connect(mgr, 'pk-any', [HUB_A], [HUB_A, 'global'])
-    const services = makeServices({ '': ['pk-any'] })
+  it('a user who is a member of no hub is never rung, even when a fallback group names them (#2460)', async () => {
+    // The membership check used to be skipped for a call that resolved to no
+    // hub, so anyone in the instance-wide fallback group rang — member of a hub
+    // or not. Every call now belongs to a hub and the check has no exemption.
+    const member = connect(mgr, 'pk-member', [HUB_A], [HUB_A])
+    const services = makeServices({ [HUB_A]: [] })
+    vi.mocked(services.settings.getFallbackGroup).mockResolvedValue({ userPubkeys: ['pk-nohub'] })
+    vi.mocked(services.identity.getUsers).mockResolvedValue({
+      users: [{ pubkey: 'pk-nohub', active: true, onBreak: false, callPreference: 'browser', phone: null, roles: [], hubRoles: [] }],
+    } as unknown as Awaited<ReturnType<Services['identity']['getUsers']>>)
 
-    const result = await startParallelRinging('CA-nohub', '+15551230005', 'http://x', env, services, '')
+    const result = await startParallelRinging('CA-nonmember', '+15551230005', 'http://x', env, services, HUB_A)
 
-    // The volunteer WAS selected, so an empty inbox is the publish decision, not an empty ring set
-    expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
-    expect(listener.received()).toEqual([])
+    expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
+    expect(member.received()).toEqual([])
+    expect(services.calls.createCallToken).not.toHaveBeenCalled()
   })
 })

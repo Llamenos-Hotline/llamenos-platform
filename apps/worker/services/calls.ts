@@ -53,6 +53,18 @@ export interface CallsServiceDeps {
   serverKek?: string
 }
 
+/**
+ * Every call belongs to a hub (#2460): its hub decides who may be rung, who may
+ * answer and which admins can read its record, so a call with none has no
+ * owner. `/api/telephony/incoming` refuses a call to a number no hub owns; this
+ * refuses the write, so no other path can create one. (`active_calls.hub_id` is
+ * still nullable in the database — the migration gate admits `SET NOT NULL`
+ * only through a column replacement — so the invariant is held here.)
+ */
+function assertCallHub(hubId: string): void {
+  if (!hubId) throw new Error('A call must belong to a hub (#2460)')
+}
+
 export class CallsService {
   constructor(
     protected db: Database,
@@ -318,6 +330,7 @@ export class CallsService {
       status?: string
     },
   ): Promise<ActiveCallRow & { pushRef: string }> {
+    assertCallHub(hubId)
     const pushRef = newPushRef()
     const [row] = await this.db
       .insert(activeCalls)
@@ -714,6 +727,7 @@ export class CallsService {
    *   - tokens are deleted when the call ends (`endCall` / stale expiry).
    */
   async createCallToken(params: { callSid: string; volunteerPubkey: string; hubId: string }): Promise<string> {
+    assertCallHub(params.hubId)
     const token = crypto.randomUUID()
     await this.db.insert(callTokens).values({
       token,

@@ -445,6 +445,16 @@ shifts.post('/requests/:id/reject',
 
 // --- Permission-gated routes ---
 
+/**
+ * A fallback group belongs to a hub. There is no instance-wide one: it existed
+ * only to ring calls that belonged to no hub, and every call now belongs to a
+ * hub (#2460). The unscoped mount of this router therefore has no fallback
+ * group to read or write.
+ */
+function noInstanceFallbackGroup(c: Context<AppEnv>) {
+  return c.json({ error: 'Fallback groups are per hub: use /api/hubs/:hubId/shifts/fallback' }, 404)
+}
+
 shifts.get('/fallback',
   describeRoute({
     tags: ['Shifts'],
@@ -459,13 +469,14 @@ shifts.get('/fallback',
         },
       },
       ...authErrors,
+      ...notFoundError,
     },
   }),
   requirePermission('shifts:manage-fallback'),
   async (c) => {
-    const services = c.get('services')
-    const hubId = c.get('hubId') ?? undefined
-    const result = await services.settings.getFallbackGroup(hubId)
+    const hubId = c.get('hubId')
+    if (!hubId) return noInstanceFallbackGroup(c)
+    const result = await c.get('services').settings.getFallbackGroup(hubId)
     return c.json(result)
   },
 )
@@ -484,15 +495,16 @@ shifts.put('/fallback',
         },
       },
       ...authErrors,
+      ...notFoundError,
     },
   }),
   requirePermission('shifts:manage-fallback'),
   validator('json', fallbackGroupSchema),
   async (c) => {
-    const services = c.get('services')
-    const hubId = c.get('hubId') ?? undefined
+    const hubId = c.get('hubId')
+    if (!hubId) return noInstanceFallbackGroup(c)
     const body = c.req.valid('json')
-    const result = await services.settings.setFallbackGroup(body, hubId)
+    const result = await c.get('services').settings.setFallbackGroup(body, hubId)
     return c.json(result)
   },
 )

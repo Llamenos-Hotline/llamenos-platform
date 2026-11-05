@@ -16,9 +16,11 @@ import { Timeouts } from '../../helpers'
 // every later step on the page title; now a call that cannot be established
 // fails the scenario, and every step asserts the call UI it names.
 
-Given('I have an active call', async ({ page, backendRequest }) => {
+Given('I have an active call', async ({ page, backendRequest, workerHub }) => {
   const { simulateIncomingCall, simulateAnswerCall } = await import('../../simulation-helpers')
-  const callResult = await simulateIncomingCall(backendRequest, { callerNumber: '+15551234567' })
+  // In the hub the page is pinned to: a call belongs to a hub (#2460), and the
+  // client lists active calls per member hub.
+  const callResult = await simulateIncomingCall(backendRequest, { callerNumber: '+15551234567', hubId: workerHub })
   expect(callResult?.callId, 'simulated incoming call').toBeTruthy()
   const pubkey = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as { getDevicePubkeys(): Promise<{ signingPubkeyHex: string }> }

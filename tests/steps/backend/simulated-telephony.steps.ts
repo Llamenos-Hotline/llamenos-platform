@@ -104,27 +104,20 @@ Given('a volunteer who is not on shift is in the hub fallback group', async ({ r
   state.volunteers.push(fallback)
 })
 
-// The instance-wide fallback row is server-wide state, so the scenario that writes it must put
-// it back — this project runs serially, and a leftover group would poison every later scenario.
-let instanceFallbackDirty = false
 const extraHubIds: string[] = []
 
 After({ tags: '@simulated-telephony' }, async ({ request }) => {
-  if (instanceFallbackDirty) {
-    instanceFallbackDirty = false
-    await setFallbackGroupViaApi(request, [])
-  }
   for (const hubId of extraHubIds.splice(0)) await deleteHubViaApiIfPresent(request, hubId)
 })
 
-Given('a volunteer is in the instance-wide fallback group', async ({ request, world }) => {
+When('the admin puts a hub member in the unscoped fallback group', async ({ request, world }) => {
   const state = getScenarioState(world)
   const vol = await createVolunteerViaApi(request, { name: `BDD Instance Fallback ${Date.now()}` })
-  // A member of the called hub, so the only thing keeping them from ringing is WHICH group is read
+  // A member of the called hub, so if the write landed anywhere a hub's call
+  // reads, the only thing keeping them from ringing would be WHICH group is read.
   await addHubMemberViaApi(request, state.hubId, vol.pubkey, ['role-volunteer'])
-  instanceFallbackDirty = true
-  // No hubId: the un-hubbed route edits the instance-level group, not this hub's.
-  await setFallbackGroupViaApi(request, [vol.pubkey])
+  // No hub in the path: the unscoped mount, which used to edit the instance-wide group.
+  setLastResponse(world, await apiPut(request, '/shifts/fallback', { userPubkeys: [vol.pubkey] }))
   state.volunteers.push(vol)
 })
 

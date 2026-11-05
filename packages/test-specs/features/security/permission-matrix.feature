@@ -144,7 +144,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to get fallback group
-    When the "<role>" user sends "GET" to "/api/shifts/fallback"
+    When the "<role>" user sends "GET" to "/api/hubs/:hubId/shifts/fallback"
     Then the response status should be <status>
 
     Examples:
@@ -156,7 +156,7 @@ Feature: Permission Matrix
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to set fallback group
-    When the "<role>" user sends "PUT" to "/api/shifts/fallback" with fallback body
+    When the "<role>" user sends "PUT" to "/api/hubs/:hubId/shifts/fallback" with fallback body
     Then the response status should be <status>
 
     Examples:

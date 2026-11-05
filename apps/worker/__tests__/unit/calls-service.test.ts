@@ -153,6 +153,20 @@ describe('CallsService', () => {
       })
       expect(result.status).toBe('in-progress')
     })
+
+    it('refuses a call that belongs to no hub (#2460)', async () => {
+      const { svc, db } = createServiceWithData()
+      await expect(svc.addCall('', { callId: 'call-nohub', callerNumberSealed: null })).rejects.toThrow('must belong to a hub')
+      expect(db.insert).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('createCallToken', () => {
+    it('refuses a token for a call that belongs to no hub (#2460)', async () => {
+      const { svc, db } = createServiceWithData()
+      await expect(svc.createCallToken({ callSid: 'call-nohub', volunteerPubkey: 'a'.repeat(64), hubId: '' })).rejects.toThrow('must belong to a hub')
+      expect(db.insert).not.toHaveBeenCalled()
+    })
   })
 
   describe('answerCall', () => {

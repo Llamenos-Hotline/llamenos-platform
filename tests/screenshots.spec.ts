@@ -20,6 +20,7 @@ import {
   TestIds,
   Timeouts,
   resetTestState,
+  useScenarioHub,
 } from './helpers'
 import { Navigation } from './pages/index'
 import {
@@ -224,11 +225,12 @@ test.describe('App Screenshots', () => {
 
   test('active call', async ({ page, request }) => {
     await page.setViewportSize(DESKTOP_SIZE)
-    await loginAsAdmin(page)
+    // A call belongs to a hub (#2460): create one, pin the client to it, log in.
+    const hubId = await useScenarioHub(page, request, 'screenshot-active-call')
 
     // Simulate incoming call and leave it ringing so the UI shows the call panel
     const callerNumber = uniqueCallerNumber()
-    await simulateIncomingCall(request, { callerNumber }).catch(() => {
+    await simulateIncomingCall(request, { callerNumber, hubId }).catch(() => {
       // If simulation fails (backend not configured), capture dashboard as fallback
     })
 
