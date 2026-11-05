@@ -117,9 +117,11 @@ The `bans` conversion is the pattern. Copy it.
 
 ## Enforcement status
 
-**Not enforced in SQL.** The invariant is currently held only by the TypeScript layer described above.
+**Not enforced in SQL yet.** The invariant is currently held only by the TypeScript layer described above. The CHECK is landed by #2476, through the `constrain` annotation described below.
 
-The migration-safety gate refuses the constraint. A probe migration (`CREATE TYPE owner_scope …`, `ADD COLUMN scope … DEFAULT 'hub' NOT NULL`, an `UPDATE … SET scope = 'platform' WHERE hub_id IS NULL`, `DROP DEFAULT`, `ADD CONSTRAINT … CHECK`) was run through `bun run migration:safety --ci` and then deleted:
+### Why the gate refused it
+
+Before #2471, the migration-safety gate refused the constraint. A probe migration (`CREATE TYPE owner_scope …`, `ADD COLUMN scope … DEFAULT 'hub' NOT NULL`, an `UPDATE … SET scope = 'platform' WHERE hub_id IS NULL`, `DROP DEFAULT`, `ADD CONSTRAINT … CHECK`) was run through `bun run migration:safety --ci` and then deleted:
 
 ```
 ✗ statement 4: add-constraint-existing column public.bans.hub_id [CONSTR_CHECK]:
@@ -127,29 +129,32 @@ The migration-safety gate refuses the constraint. A probe migration (`CREATE TYP
 [migration-safety] FAILED: 1 violation(s)
 ```
 
-The refusal is **correct on its own terms**. An N-1 release writes platform bans without naming `scope`, and the new constraint rejects those rows. It **cannot be annotated**. The gate accepts an annotation only once the replaced release's snapshot no longer declares the object, and `bans.hub_id` is still declared. #2467 hit the same refusal for `NOT NULL` / FK on `active_calls.hub_id` and `call_records.hub_id`.
+The refusal is **correct on its own terms**, and the reasoning is why an absent id is unsafe to leave unconstrained. An N-1 release writes platform bans without naming `scope`, and the new constraint rejects those rows. At the time the gate had no way to admit a tightening of a column the replaced release still declares: its only annotation, `allow`, is verified against a snapshot that no longer declares the object, and `bans.hub_id` is still declared. #2467 hit the same refusal for `NOT NULL` / FK on `active_calls.hub_id` and `call_records.hub_id`.
 
-The gate's policy was **not** changed. Choosing a remedy is an operator decision:
+### The remedy chosen: a reviewed `constrain` annotation (#2468, #2471)
 
-- **R1: regenerate the migration baseline (recommended).** The project is pre-production, and `CLAUDE.md` says no data migrations are needed. A single, operator-scheduled baseline regeneration can land every scoped table's `scope` column, CHECK and partial indexes, plus #2464's `NOT NULL` / FK / drop-`DEFAULT ''` set, in one event. After that, expand/contract applies normally. Cost: it must be coordinated with every open migration PR, which all regenerate on top of the new baseline.
-- **R2: table replacement, per table (gate-legal today, no gate change).** Create the scoped table under a new name with the column and CHECK from birth, move the service to it, copy the rows in the expand migration, and drop the old table one release later with a verifiable annotation. Cost: a new table name per row set, and one release with a stale table. Without dual writes, bans written by N-1 during a rollout would be lost. That is acceptable only pre-production.
-- **R3: an annotation for constraints, reviewed by a person.** Not recommended. The gate's annotations are trustworthy because they are *verified* against a snapshot. A "trust me" annotation for constraints would weaken the gate permanently, for a need that ends at the first production release.
+The first draft of this document weighed three remedies. It recommended a baseline regeneration (R1) and rejected an annotation for constraints (R3) on the grounds that an unverifiable "trust me" annotation would weaken the gate permanently. That was written without knowledge of #2468 / #2471 and is superseded on both counts:
 
-Until a remedy is chosen, every converted row set still stores its scope as "hub id present or absent". The guarantee is that **no code path writes or reads that encoding except `lib/owner-scope.ts`**, and every caller states its scope.
+- **The operator ruled for the annotation path on 2026-11-05 (#2468).** A baseline regeneration only works while the project is pre-production. An annotation behaves the same way once there is production data.
+- **What #2471 shipped is not an unverifiable annotation.** `-- migration-safety: constrain column <schema>.<table>.<column> because <reason>` covers only tightenings (`set-not-null`, `add-constraint-existing` for UNIQUE / PK / FK / CHECK, `unique-index-existing`), never a drop, rename or retype. It licenses only the statement that carries it, and an annotation that matches no finding in its statement is itself a violation. The reason must be at least five words and is printed as a CI notice. The newest snapshot must still declare the object, and a `SET NOT NULL` must be declared `.notNull()` in drizzle. The schema contract accepts "became NOT NULL" only for a column a `constrain` annotation admitted. Unannotated statements are refused with the unchanged message. Six injected mutations of the gate were each caught by its tests, and a real-Postgres `--target` test covers it (`docs/runbooks/migrations.md`, "Tightening: `constrain`").
+
+The annotation does not make the N-1 problem disappear. It moves it to where a person must answer it in the diff: the reason has to say why the previous release can no longer write a row the constraint rejects. For `bans` that means the `scope` column ships first, with every producer writing it, and the CHECK follows once the release being replaced is one that writes `scope`. The other two remedies the first draft listed, a baseline regeneration (R1) and per-table replacement (R2), are not pursued.
+
+Until the CHECK lands, every converted row set still stores its scope as "hub id present or absent". The guarantee is that **no code path writes or reads that encoding except `lib/owner-scope.ts`**, and every caller states its scope.
 
 ## Application plan, by row set
 
-This is what #2464 executes. "(a)" means "keep as deployment configuration, with a named scope". "(b)" means "it is hub data; remove the platform copy". The DDL in each row waits on [Enforcement status](#enforcement-status). The code half of each row can land now, following the `bans` pattern.
+This is what #2464 executes. "(a)" means "keep as deployment configuration, with a named scope". "(b)" means "it is hub data; remove the platform copy". The DDL in each row lands through the `constrain` annotation ([Enforcement status](#enforcement-status)): the `scope` column first, the CHECK once the release being replaced writes it. The code half of each row can land now, following the `bans` pattern.
 
 | Row set | Today | Ruling | Target | Notes / blocked on |
 |---|---|---|---|---|
-| **Ban list** (`bans`) | `hub_id IS NULL` = platform. Partial unique index on `hub_id IS NULL`. | (a) | `scope` + CHECK. Partial unique indexes keyed on `scope`. | **Converted in code (this PR).** DDL blocked (R1/R2). |
+| **Ban list** (`bans`) | `hub_id IS NULL` = platform. Partial unique index on `hub_id IS NULL`. | (a) | `scope` + CHECK. Partial unique indexes keyed on `scope`. | **Converted in code (#2470).** DDL: #2476. |
 | **Audit chain** (`audit_log`) | `hub_id IS NULL` = the platform chain | (a) | `scope` + CHECK. The hash chain is per scope. `audit(…)` takes a scope instead of `hubId ?? null`. | First fix the producers that write hub actions into the platform chain: #2460 (calls) and #2461 (unscoped record mounts). `/api/admin/audit` already exists. |
 | **Incidents** (`hub_incidents`, `PlatformIncidentRow`) | `hub_id IS NULL` = platform | (a) if a producer survives | `scope` + CHECK, or remove the platform half | The only known producer is an erasure of a subject in no hub (#2347). If #2194 / #2459 make hubless users impossible, the platform scope has no producer and is removed. Decide after #2194. The `20261031214240` snapshot still records `hub_id` NOT NULL (#2464). Fix it in the same migration. |
 | **Global provider** (`provider_configs.hub_id IS NULL`, `oauth_states.hub_id`) | NULL = the global provider. Hubs fall back to it. | (a) | `scope` + CHECK. Provider resolution becomes an explicit two-scope lookup (hub, then platform), shaped like `callBanLookup`. | The messaging sender is deployment-wide (#2395). The **voice number** is what maps a call to a hub (#2460, #1331), so a platform voice provider must not route calls into a hub by fallback. Settle that with #1331. |
 | **IVR audio, entity / relationship / report types** (`hub_id = ''` = platform default) | NOT NULL `DEFAULT ''`. Hub reads fall back to the `''` row. Protocol `hubId: z.string().optional().default('')`. | **Split template from type** | (1) `*_templates` tables are the platform templates: configuration with a `scope` column (`platform` now, `organization` in M2). (2) The type tables become hub data: `hub_id` NOT NULL with an FK and no `DEFAULT ''`, and **no** platform row. Hub creation copies the templates into the hub's own rows. A hub edits its copy, never the shared row. | **Fixes #2383 at the root.** Protocol `hubId` becomes required, and codegen drops the client optionals. Hub records reference only their hub's type ids. |
 | **Custom note fields** (`custom_field_definitions`, no hub column) | One deployment-wide list, replaced wholesale | Split template from type (same as above) | Per-hub definitions (hub data, since notes reference them), plus optional platform templates | Note fields are referenced by hub notes, so they are hub data. Also replace `getCustomFields(role = 'admin')` with a permission check. |
-| **Instance fallback ring group** (`system_settings.fallbackGroup`) | Read only by a hub-`''` call | **(b)** | Removed | In flight in #2467 (`forget_instance_fallback_group`), together with the hubless call path. |
+| **Instance fallback ring group** (`system_settings.fallbackGroup`) | Read only by a hub-`''` call | **(b)** | Removed | Removed by #2467 (`forget_instance_fallback_group`), together with the hubless call path. |
 | **Retention floors** (`retention_platform_floors`) | A named platform table, no hub column | (a) | No change. A dedicated platform table is a valid encoding. | Already correct. |
 | **Messaging suppressions** (`messaging_suppressions.source_hub_id`) | Nullable provenance on a deployment-wide STOP list | (a) | No scope column: **every** row is platform-owned, so the table itself is the named scope. `source_hub_id` is provenance, not ownership. Document it as such, with an FK and nullable. | The sender is deployment-wide (#2395). |
 
@@ -173,7 +178,7 @@ This is what #2464 executes. "(a)" means "keep as deployment configuration, with
 | `telephony.ts`, `dev.ts`, `call-simulation.ts` | `checkBan(banHashes(n, hubId), hubId)` | `checkBan(callBanLookup(n, hubId))` |
 | Desktop `lib/api/bans.ts`, iOS `AdminViewModel`, Android `AdminViewModel` | `hp()` / a bare `/api/bans`, which fell back to the platform list with no active hub | `activeHubPath(…)`: throws with no hub |
 
-**One inference remains, on purpose:** `callBanLookup(phone, hubId: string | undefined)` checks a call with no hub against the platform list alone. Its only producer is the hubless call path (#2460). When #2460 / PR #2467 refuse such calls, `hubId` becomes required and the branch is deleted.
+**No inference remains.** `callBanLookup(phone, hubId: string)` always checks a call against its hub's list and the platform's. Its hubless branch, which checked a call with no hub against the platform list alone, was deleted once #2467 made telephony refuse a call to a number no hub owns (#2460).
 
 ## Hub-admin invariant
 

@@ -83,14 +83,13 @@ export function banLookup(phone: string, scopes: readonly OwnerScope[], banHashK
 }
 
 /**
- * The ban lists an inbound call is checked against: the platform's, and its hub's.
+ * The ban lists an inbound call is checked against: its hub's, and the platform's.
  *
- * `hubId` is optional only because the hubless call path still exists (#2460):
- * a call to a number no hub owns. That call is checked against the platform list
- * alone. Once #2460 refuses such a call, `hubId` becomes required.
+ * `hubId` is required: a call to a number no hub owns is refused before any ban
+ * check (#2460), so there is no hubless call to check against the platform list alone.
  */
-export function callBanLookup(phone: string, hubId: string | undefined, banHashKey: string): ScopedBanHash[] {
-  return banLookup(phone, hubId ? [hubScope(hubId), PLATFORM_SCOPE] : [PLATFORM_SCOPE], banHashKey)
+export function callBanLookup(phone: string, hubId: string, banHashKey: string): ScopedBanHash[] {
+  return banLookup(phone, [hubScope(hubId), PLATFORM_SCOPE], banHashKey)
 }
 
 const CALLER_RATE_KEY_EPOCH_MS = 60_000

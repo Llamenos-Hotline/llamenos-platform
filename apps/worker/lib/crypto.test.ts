@@ -564,10 +564,6 @@ describe('banHash', () => {
       { scope: hubScope('hub-1'), phoneHash: banHash(NUMBER, hubScope('hub-1'), KEY) },
       { scope: PLATFORM_SCOPE, phoneHash: banHash(NUMBER, PLATFORM_SCOPE, KEY) },
     ])
-    // The hubless call path (#2460): the platform list alone, never a hub-'' list.
-    expect(callBanLookup(NUMBER, undefined, KEY)).toEqual([
-      { scope: PLATFORM_SCOPE, phoneHash: banHash(NUMBER, PLATFORM_SCOPE, KEY) },
-    ])
   })
 
   it('keeps the key derivation it had before the scope was named, so no stored ban hash changes (#2463)', () => {
