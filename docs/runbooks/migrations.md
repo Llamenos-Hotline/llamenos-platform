@@ -69,8 +69,27 @@ Never `RENAME COLUMN`: the previous release still names the old column.
 
 ### Make a column NOT NULL (`notes.author`)
 
-The gate never accepts `SET NOT NULL` on a column that already exists. It cannot
-prove that the previous release never writes NULL. Replace the column:
+The gate refuses an unannotated `SET NOT NULL` on a column that already exists.
+It cannot prove that the previous release never writes NULL. There are two
+ways through.
+
+**Tighten in place**, when the previous release already guarantees the
+column is never NULL (the code that refuses a NULL write shipped in an earlier
+release) and every existing row has a value. Declare the column `.notNull()`
+in the drizzle schema, run `bun run db:generate`, and annotate the generated
+statement with the argument a reviewer checks (see "Tightening: `constrain`"
+below):
+
+```sql
+-- migration-safety: constrain column public.active_calls.hub_id because CallsService has refused a call without a hub since the release that shipped #2467
+ALTER TABLE "active_calls" ALTER COLUMN "hub_id" SET NOT NULL;
+```
+
+Postgres checks the existing rows when the statement runs, and fails the
+migration if one is NULL. Backfill (`UPDATE … WHERE hub_id IS NULL`) in an
+earlier statement or release if any can be.
+
+**Replace the column**, when the previous release can still write NULL:
 
 1. **N, expand + backfill:** add `author_v2 text NOT NULL DEFAULT ''`. A
    NOT NULL column with a default accepts the previous release's INSERTs,
@@ -98,7 +117,8 @@ table **created in this release** needs no default: N-1 never writes that table.
 On columns N-1 already writes, the constraint rejects rows N-1 still produces.
 Constraints on columns or tables that do not exist yet are fine. N-1
 leaves those NULL, and UNIQUE, FK and CHECK all accept NULL. On an existing
-column, enforce it in the release **after** the code that guarantees it ships.
+column, enforce it in the release **after** the code that guarantees it ships,
+with a `constrain` annotation on the statement that adds it.
 
 ## What the gate checks
 
@@ -227,6 +247,46 @@ ALTER TABLE "users" DROP COLUMN "team_id";
 - Dynamic SQL and unparseable statements cannot be allowed.
 - The annotation ships inside the file and the image, so the deploy check sees
   exactly what CI saw.
+- `allow` never covers a tightening (below): the column it tightens is still
+  declared, so the verification always fails, and the message points at
+  `constrain`.
+
+## Tightening: `constrain`
+
+`SET NOT NULL`, `ADD CONSTRAINT` (UNIQUE, PRIMARY KEY, FOREIGN KEY, CHECK) and
+`CREATE UNIQUE INDEX` on a column the previous release still writes make the
+database reject a write that release may still make. Unannotated, the gate
+refuses them. An author who intends one says so, inside that statement:
+
+```sql
+-- migration-safety: constrain column public.active_calls.hub_id because CallsService has refused a call without a hub since the release that shipped #2467
+ALTER TABLE "active_calls" ADD CONSTRAINT "active_calls_hub_id_hubs_id_fk" FOREIGN KEY ("hub_id") REFERENCES "public"."hubs"("id");
+```
+
+Unlike `allow`, this cannot be verified against the release being replaced,
+because that release declares the column by design. It is a **reviewed
+assertion**, and the gate holds it to these rules:
+
+- It covers only the tightening findings on `<object>` in the statement that
+  carries it. Another statement, another file, another column, or a drop or
+  retype of the same column in the same statement, is still refused. There is
+  no file-wide, repo-wide, environment-variable or command-line form, so a
+  licence is always one line in the diff, next to the statement it licenses.
+- The reason must be at least five words. It is the argument that the previous
+  release never writes a row the constraint rejects: name the change that
+  guarantees it.
+- It must agree with the release being deployed. The newest snapshot has to
+  still declare the object, and for a `SET NOT NULL`, declare the column NOT
+  NULL. The schema contract accepts a column becoming NOT NULL only where a
+  `constrain` annotation admitted that column's `SET NOT NULL`.
+- The gate prints every admission with its reason, and in CI it is a notice
+  on the file, so the reviewer reads the claim, not just a green check.
+- It judges the migration, not the data, so it behaves the same on an empty
+  database and a production one. Existing rows are Postgres's to check when
+  the statement runs. A row that violates the constraint fails the migration,
+  which leaves the file unapplied in the ledger and the previous release
+  serving. Use `NOT VALID` plus a later `VALIDATE CONSTRAINT` to separate
+  enforcement on new writes from the check of old rows.
 
 ## Deploying: the pre-deploy check and the mandatory backup
 
