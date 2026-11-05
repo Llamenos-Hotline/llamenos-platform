@@ -599,6 +599,115 @@ describe('rail: the fleet never bypasses a PR\'s checks, and never reviews', () 
   })
 })
 
+/**
+ * #2469: `llamenos-fleet pr-why` DIAGNOSES. It must never merge, dequeue,
+ * re-arm, approve, label, re-run or cancel — even when its own remedy line
+ * says exactly what to run. `pr-why-readonly.test.ts` proves that at
+ * runtime, under `execFile`; this rail binds the source, so the property
+ * cannot be lost by an edit that test's canned GitHub happens not to reach:
+ *
+ *  - pr-why.ts imports exactly an allowlisted set of symbols — a new import
+ *    (`enableAutoMerge`, `cancelRun`, `node:child_process`) is a new
+ *    capability and has to be argued for here;
+ *  - `gh` is called once, inside `ghRead`, after `assertReadOnlyGhArgs`;
+ *    no `ghJson`, `fetch`, `execFile` or `spawn` anywhere;
+ *  - the composed `missing-checks` reads are handed `ghRead`, and
+ *    missing-checks.ts carries no write flag or GraphQL mutation of its own;
+ *  - `reviewDecision` is never requested — not in a query, not as a field
+ *    name in an argv. Reading it is the exact bug the command was built to
+ *    stop (it is permanently "" under this repo's ruleset);
+ *  - no argv literal starts a mutating `gh` subcommand.
+ */
+describe('rail: pr-why is read-only (#2469)', () => {
+  const PR_WHY_FILE = join(process.cwd(), 'orchestrator', 'src', 'pr-why.ts')
+  const ALLOWED_IMPORTS: Record<string, string[]> = {
+    './gh.js': ['REPO', 'describeGhFailure', 'gh'],
+    './board.js': ['CODEOWNERS_QUERY', 'codeOwnersOf', 'codeOwnersTextFrom', 'deriveBranchRuleset', 'parseCodeOwners', 'type BranchRuleset', 'type CodeOwnerRule', 'type CodeOwnersResponse'],
+    './missing-checks.js': ['defaultMissingChecksDeps', 'diagnosePrHead', 'type Carrier', 'type HeadDiagnosis', 'type MissingChecksDeps'],
+    './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'laneIdFromBranch', 'reviewOutcomeToken'],
+  }
+  const MUTATING_ARGV = /\[\s*['"`](?:pr|run|issue|label|repo|workflow|release|gist|secret|variable|cache)['"`]\s*,\s*['"`](?:merge|edit|close|reopen|ready|review|cancel|rerun|create|delete|comment|lock|unlock|dispatch|run|set|enable|disable|transfer|add|remove)['"`]/
+
+  /** Comments are prose about the code, not the code — a docstring may say
+   *  "a `mutation`" or name `reviewDecision` to forbid it. String contents
+   *  are kept: a query is a string. */
+  const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/[^\n]*/g, '$1')
+
+  function prWhyReadOnlyViolations(source: string): string[] {
+    const text = stripComments(source)
+    const out: string[] = []
+    const imports = [...text.matchAll(/^import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'([^']+)'/gm)]
+    const bare = [...text.matchAll(/^import\s+(?!\{|type\s+\{)[^\n]*$/gm)]
+    for (const b of bare) out.push(`non-braced import: ${b[0]}`)
+    const seen = new Set<string>()
+    for (const m of imports) {
+      const from = m[2] ?? ''
+      seen.add(from)
+      const allowed = ALLOWED_IMPORTS[from]
+      if (allowed === undefined) { out.push(`imports from ${from}, which is not allowlisted`); continue }
+      const names = (m[1] ?? '').split(',').map((n) => n.trim().replace(/\s+/g, ' ')).filter((n) => n.length > 0)
+      for (const n of names) if (!allowed.includes(n)) out.push(`imports ${n} from ${from}, which is not allowlisted`)
+    }
+    if (/\brequire\(|\bimport\(/.test(text)) out.push('dynamic import/require')
+    const ghCalls = text.match(/(?<![\w.])gh\(/g) ?? []
+    if (ghCalls.length !== 1) out.push(`calls gh( ${ghCalls.length} times — exactly one, inside ghRead, is allowed`)
+    if (!/export async function ghRead\(args: string\[\]\): Promise<string> \{\n\s*assertReadOnlyGhArgs\(args\)\n\s*return gh\(args\)\n\}/.test(text)) {
+      out.push('ghRead no longer asserts read-only before its one gh call')
+    }
+    for (const tok of ['ghJson', 'fetch(', 'execFile', 'spawn', 'child_process', 'Bun.']) {
+      if (text.includes(tok)) out.push(`uses ${tok}`)
+    }
+    const msDeps = text.match(/defaultMissingChecksDeps\([^)]*\)/g) ?? []
+    if (msDeps.length !== 1 || msDeps[0] !== 'defaultMissingChecksDeps(ghRead)') {
+      out.push(`the composed missing-checks deps are not built on ghRead: ${msDeps.join(', ') || '(none)'}`)
+    }
+    for (const t of text.match(/`[^`]*`/g) ?? []) {
+      if (t.includes('reviewDecision') && /\bquery\b|\{/.test(t)) out.push('a query template requests reviewDecision')
+      if (/\bmutation\b/.test(t)) out.push('a template literal carries a GraphQL mutation')
+    }
+    if (/['"`]reviewDecision['"`]|--json[^\n]*reviewDecision/.test(text)) out.push('an argv requests reviewDecision')
+    const mut = MUTATING_ARGV.exec(text)
+    if (mut !== null) out.push(`mutating gh argv: ${mut[0]}`)
+    return out
+  }
+
+  const real = (): string => readFileSync(PR_WHY_FILE, 'utf8')
+
+  it('pr-why.ts is read-only as it stands', () => {
+    expect(prWhyReadOnlyViolations(real())).toEqual([])
+  })
+
+  it('missing-checks.ts — which pr-why composes with — carries no write flag or mutation', () => {
+    const text = readFileSync(MISSING_CHECKS_FILE, 'utf8')
+    for (const tok of ["'-X'", "'--method'", "'-f'", "'-F'", "'--input'", "'--field'", "'--raw-field'", 'mutation', "'merge'", "'cancel'", "'edit'"]) {
+      expect(text, `missing-checks.ts contains ${tok}`).not.toContain(tok)
+    }
+  })
+
+  describe('the rail refuses what it exists to refuse', () => {
+    const mutate = (from: string, to: string): string => {
+      const text = real()
+      expect(text, `fixture anchor missing: ${from}`).toContain(from)
+      return text.replace(from, to)
+    }
+    it.each([
+      ['an import of a writer', "import { QUEUE_CLEARED_LABEL,", "import { enableAutoMerge } from './cli.js'\nimport { QUEUE_CLEARED_LABEL,"],
+      ['an extra symbol from an allowed module', 'import { REPO, gh, describeGhFailure }', 'import { REPO, gh, ghJson, describeGhFailure }'],
+      ['child_process', "import { REPO, gh, describeGhFailure } from './gh.js'", "import { REPO, gh, describeGhFailure } from './gh.js'\nimport { execFile } from 'node:child_process'"],
+      ['a second, direct gh call', 'readHead: async (pr) => {', "readHead: async (pr) => {\n      await gh(['api', 'repos/x'])"],
+      ['ghRead losing its guard', '  assertReadOnlyGhArgs(args)\n  return gh(args)', '  return gh(args)'],
+      ['missing-checks deps on the raw gh', 'defaultMissingChecksDeps(ghRead)', 'defaultMissingChecksDeps()'],
+      ['reviewDecision in the PR query', '      mergeStateStatus\n      mergeable\n', '      mergeStateStatus\n      reviewDecision\n      mergeable\n'],
+      ['reviewDecision as an argv field', "['pr', 'view', String(pr), '--json', 'headRefOid']", "['pr', 'view', String(pr), '--json', 'reviewDecision']"],
+      ['a mutation in a query template', 'query($owner: String!, $name: String!, $number: Int!) {', 'mutation($owner: String!, $name: String!, $number: Int!) {'],
+      ['a mutating argv routed through ghRead', "await ghRead(['pr', 'view'", "await ghRead(['pr', 'merge'"],
+      ['a label edit routed through ghRead', "await ghRead(['pr', 'view'", "await ghRead(['issue', 'edit'"],
+    ])('refuses %s', (_name, from, to) => {
+      expect(prWhyReadOnlyViolations(mutate(from, to))).not.toEqual([])
+    })
+  })
+})
+
 describe('rail: crypto and protocol always reach a human', () => {
   it.each([
     'packages/crypto/src/hpke.rs',

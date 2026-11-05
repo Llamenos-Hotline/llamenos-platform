@@ -868,6 +868,7 @@ export async function getFallbackGroupViaApi(
   return { volunteers: data.userPubkeys ?? [] }
 }
 
+/** A hub's fallback group. Per hub only: there is no instance-wide one (#2460). */
 export async function setFallbackGroupViaApi(
   request: APIRequestContext,
   volunteers: string[],

@@ -693,30 +693,23 @@ export class SettingsService {
   // Fallback Group
   // =========================================================================
 
-  async getFallbackGroup(hubId?: string): Promise<{
+  /**
+   * A hub's fallback group: who rings when nobody is both scheduled and
+   * clocked in. Per hub only — every call belongs to a hub (#2460), so there
+   * is no instance-wide group for a call that belongs to none.
+   */
+  async getFallbackGroup(hubId: string): Promise<{
     userPubkeys: string[]
   }> {
-    if (hubId) {
-      const settings = await this.getHubSettings(hubId)
-      const group = settings.fallbackGroup
-      return { userPubkeys: Array.isArray(group) ? (group as string[]) : [] }
-    }
-    const row = await getSettings(this.db)
-    const group = row.fallbackGroup ?? []
-    return { userPubkeys: group }
+    const settings = await this.getHubSettings(hubId)
+    const group = settings.fallbackGroup
+    return { userPubkeys: Array.isArray(group) ? (group as string[]) : [] }
   }
 
   async setFallbackGroup(data: {
     userPubkeys: string[]
-  }, hubId?: string): Promise<{ ok: true }> {
-    if (hubId) {
-      await this.updateHubSettings(hubId, { fallbackGroup: data.userPubkeys })
-      return { ok: true }
-    }
-    await this.db
-      .update(systemSettings)
-      .set({ fallbackGroup: data.userPubkeys })
-      .where(eq(systemSettings.id, SINGLETON_ID))
+  }, hubId: string): Promise<{ ok: true }> {
+    await this.updateHubSettings(hubId, { fallbackGroup: data.userPubkeys })
     return { ok: true }
   }
 

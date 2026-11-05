@@ -275,11 +275,14 @@ When('the {string} user sends {string} to the deletable shift endpoint', async (
   getSharedState(world).lastResponse = await apiDelete(request, `/hubs/${hubId}/shifts/${getPermMatrixState(world).deletableShiftId}`, user.deviceKey)
 })
 
-When('the {string} user sends {string} to {string} with fallback body', async ({ request, world }, role: string, _method: string, _path: string) => {
+When('the {string} user sends {string} to {string} with fallback body', async ({ request, world }, role: string, _method: string, path: string) => {
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  getSharedState(world).lastResponse = await apiPut(request, '/shifts/fallback', {
+  // Fallback groups are per hub (#2460): the path names the scenario's hub.
+  const hubId = getScenarioState(world).hubId
+  if (!hubId) throw new Error('permission matrix: no scenario hub for the fallback group')
+  getSharedState(world).lastResponse = await apiPut(request, path.replace(/^\/api/, '').replace(':hubId', hubId), {
     userPubkeys: [],
   }, user.deviceKey)
 })

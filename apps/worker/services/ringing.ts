@@ -1,6 +1,6 @@
 import type { Env } from '../types'
 import type { Services } from '../services'
-import { getTelephonyFromService, getHubTelephonyFromService, resolveHubTelephonyConfig } from '../lib/service-factories'
+import { getHubTelephonyFromService, resolveHubTelephonyConfig } from '../lib/service-factories'
 import { dispatchVoipPushFromService } from '../lib/voip-push'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING } from '@shared/event-kinds'
@@ -96,7 +96,7 @@ export async function resolveRingableVolunteers(
   // #2384), so nobody is a ring target for it: its roster is not coverage. This
   // is the one place that says so, so presence, the answer route and the
   // routing diagnostic agree with the ringing path.
-  if (hubId !== '' && !(await services.settings.isHubChannelEnabled(hubId, 'voice'))) return null
+  if (!(await services.settings.isHubChannelEnabled(hubId, 'voice'))) return null
 
   const scheduledPubkeys = await services.shifts.getCurrentVolunteers(hubId)
 
@@ -135,10 +135,11 @@ export async function resolveRingableVolunteers(
   // Same rule `hubContext` applies to the answer route — any effective permission in
   // the hub (global role or hub-scoped role). Without this a stale shift entry or a
   // fallback group naming a user from another hub would push "a caller is waiting"
-  // to someone with no business in this hub. Global-scope calls (hubId '') have no hub.
-  const { roles: allRoles } = hubId !== '' ? await services.settings.getRoles() : { roles: [] }
+  // to someone with no business in this hub. Every call belongs to a hub (#2460),
+  // so this check has no exemption.
+  const { roles: allRoles } = await services.settings.getRoles()
   const hasHubAccess = (v: RingableUser) =>
-    hubId === '' || resolveHubPermissions(v.roles ?? [], v.hubRoles ?? [], allRoles, hubId).length > 0
+    resolveHubPermissions(v.roles ?? [], v.hubRoles ?? [], allRoles, hubId).length > 0
 
   // Availability rules: a volunteer must be active, not on break, not on a live call,
   // and a member of the hub.
@@ -225,10 +226,7 @@ export async function resolveInAppRingTargets(
   hubId: string,
   candidates: RingableUser[],
 ): Promise<InAppRingTarget[]> {
-  // A call that resolved to no hub has no relay channel and no push audience
-  // (see below); it gets no in-app leg either, so the in-app path never
-  // reaches someone the other notification paths deliberately skipped.
-  if (hubId === '' || candidates.length === 0) return []
+  if (candidates.length === 0) return []
 
   try {
     const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
@@ -342,9 +340,7 @@ export async function cancelLosingLegs(
   const legSids = takeRingLegs(callSid)
   if (legSids.length === 0) return
   try {
-    const adapter = hubId !== ''
-      ? await getHubTelephonyFromService(env, services.settings, hubId)
-      : await getTelephonyFromService(env, services.settings)
+    const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
     if (!adapter) return
     await adapter.cancelRinging(legSids, winnerLegSid)
   } catch (err) {
@@ -408,41 +404,31 @@ export async function startParallelRinging(
 
     logger.info('Ringing volunteers', { callSid, total: available.length, phone: toRingPhone.length, browserVoip: browserVoip.length, inApp: appTargets.length })
 
-    // Volunteers reached by the relay event and VoIP push below. A call that resolved
-    // to no hub sends neither, so its browser/VoIP volunteers were not notified at all.
-    const notifiedOutOfBand = hubId === '' ? 0 : browserVoip.length
+    // Volunteers reached by the relay event and VoIP push below.
+    const notifiedOutOfBand = browserVoip.length
 
-    if (hubId !== '') {
-      // Publish the ring to the hub that owns the call. Every member of that hub
-      // whose relay socket subscribes to it rings — including members whose
-      // active hub in the UI is a different one (multi-hub routing axiom).
-      publishEvent(env, KIND_CALL_RING, { type: 'call:ring', callId: callSid, pushRef }, hubId)
+    // Publish the ring to the hub that owns the call. Every member of that hub
+    // whose relay socket subscribes to it rings — including members whose
+    // active hub in the UI is a different one (multi-hub routing axiom).
+    publishEvent(env, KIND_CALL_RING, { type: 'call:ring', callId: callSid, pushRef }, hubId)
 
-      // Dispatch VoIP push notifications to mobile volunteers with registered VoIP tokens.
-      dispatchVoipPushFromService(
-        browserVoip.map(v => v.pubkey),
-        pushRef,
-        hubId,
-        env,
-        services.identity,
-      ).catch(err => {
-        // VoIP push is best-effort — Nostr relay is the primary notification path
-        logger.error('VoIP push dispatch failed', err)
-      })
-    } else {
-      // A call whose dialled number maps to no hub has no member set to ring over
-      // the relay or VoIP push. Never fall back to an instance-wide channel: that
-      // would expose the ring to every user of every hub.
-      logger.error('Call resolved to no hub — relay and VoIP clients cannot be rung', { callSid })
-    }
+    // Dispatch VoIP push notifications to mobile volunteers with registered VoIP tokens.
+    dispatchVoipPushFromService(
+      browserVoip.map(v => v.pubkey),
+      pushRef,
+      hubId,
+      env,
+      services.identity,
+    ).catch(err => {
+      // VoIP push is best-effort — Nostr relay is the primary notification path
+      logger.error('VoIP push dispatch failed', err)
+    })
 
     // Ring the legs that actually make a device ring: volunteers' phones, and
     // the in-app endpoints registered on our own PBX. Both go through the one
     // adapter call, so both land in the one first-pickup-wins leg registry.
     if (toRingPhone.length > 0 || appTargets.length > 0) {
-      const adapter = hubId !== ''
-        ? await getHubTelephonyFromService(env, services.settings, hubId)
-        : await getTelephonyFromService(env, services.settings)
+      const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
       if (!adapter) return { ringing: true, volunteersNotified: available.length }
 
       // CRIT-W2: Generate opaque single-use call tokens per volunteer.

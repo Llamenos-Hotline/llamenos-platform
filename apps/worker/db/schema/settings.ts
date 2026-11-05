@@ -42,10 +42,6 @@ export const systemSettings = pgTable('system_settings', {
   crossHubSettings: jsonb('cross_hub_settings').notNull().default({}),
   ttlOverrides: jsonb('ttl_overrides').notNull().default({}),
   appliedTemplates: jsonb('applied_templates').notNull().default([]),
-  fallbackGroup: text('fallback_group')
-    .array()
-    .notNull()
-    .default(sql`'{}'::text[]`),
   reportCategories: text('report_categories')
     .array()
     .notNull()

@@ -25,9 +25,10 @@ const logger = createLogger('channel-guard')
 /**
  * Refuse an inbound contact on a channel the hub has switched off.
  *
- * Returns true when the contact must be refused, after recording it. A webhook
- * that names no hub (`hubId` undefined) is deployment-wide traffic with no hub
- * switches to consult, and is never refused here.
+ * Returns true when the contact must be refused, after recording it. Every
+ * inbound contact names its hub by the time it gets here: a message webhook
+ * with no `?hub=` is refused (#2395), and so is a call to a number no hub owns
+ * (#2460).
  *
  * Never throws, and fails OPEN: if the switch cannot be read the contact is
  * processed. A database blip must not turn a crisis line's inbound traffic
@@ -36,10 +37,9 @@ const logger = createLogger('channel-guard')
  */
 export async function refuseIfChannelDisabled(
   services: Pick<Services, 'settings' | 'incidents'>,
-  hubId: string | undefined,
+  hubId: string,
   channel: Exclude<HubChannelType, 'email'>,
 ): Promise<boolean> {
-  if (!hubId) return false
 
   let enabled: boolean
   try {

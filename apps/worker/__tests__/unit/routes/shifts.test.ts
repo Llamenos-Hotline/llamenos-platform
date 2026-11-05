@@ -215,6 +215,40 @@ describe('shifts routes', () => {
   })
 
   // -------------------------------------------------------------------------
+  // The unscoped mount has no fallback group (#2460)
+  // -------------------------------------------------------------------------
+
+  describe('/shifts/fallback with no hub', () => {
+    // The instance-wide group rang only calls that belonged to no hub; such
+    // calls are refused now, so there is nothing for this mount to read or write.
+    it('GET is 404 and reads nothing', async () => {
+      const getFallbackGroupSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['shifts:manage-fallback'],
+        serviceMock: { settings: { getFallbackGroup: getFallbackGroupSpy } },
+      })
+      const res = await app.request('/shifts/fallback')
+      expect(res.status).toBe(404)
+      expect(getFallbackGroupSpy).not.toHaveBeenCalled()
+    })
+
+    it('PUT is 404 and writes nothing', async () => {
+      const setFallbackGroupSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['shifts:manage-fallback'],
+        serviceMock: { settings: { setFallbackGroup: setFallbackGroupSpy } },
+      })
+      const res = await app.request('/shifts/fallback', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userPubkeys: ['d'.repeat(64)] }),
+      })
+      expect(res.status).toBe(404)
+      expect(setFallbackGroupSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // GET /shifts — List (via entity-router)
   // -------------------------------------------------------------------------
 

@@ -113,6 +113,11 @@ export const INCIDENT_CATEGORIES = {
       nobody_would_ring: 'notify',
       // Calls came in (≥ ROUTING_NO_ANSWER_MIN_INBOUND) and none was answered.
       no_answers: 'notify',
+      // A call to a number no active hub owns, refused at /incoming (#2460).
+      // PLATFORM scope only: there is no hub to raise it in, which is the
+      // point — the number is misconfigured (or its hub suspended) and every
+      // caller dialling it is refused until an instance operator fixes it.
+      unrouted_number: 'notify',
       [WORKER_FAILING_KIND]: 'notify',
     },
   },

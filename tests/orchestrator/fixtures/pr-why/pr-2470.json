@@ -1,0 +1,32 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 2470,
+        "state": "OPEN",
+        "isDraft": true,
+        "headRefOid": "fa58ef95952ed55931bee4397feb2cb97f6f9d98",
+        "headRefName": "fix/2463-named-scope",
+        "baseRefName": "main",
+        "mergeStateStatus": "BLOCKED",
+        "mergeable": "MERGEABLE",
+        "changedFiles": 34,
+        "author": {
+          "login": "rhonda-rodododo"
+        },
+        "labels": {
+          "nodes": []
+        },
+        "autoMergeRequest": null,
+        "isInMergeQueue": false,
+        "mergeQueueEntry": null,
+        "latestOpinionatedReviews": {
+          "nodes": []
+        },
+        "reviewRequests": {
+          "nodes": []
+        }
+      }
+    }
+  }
+}

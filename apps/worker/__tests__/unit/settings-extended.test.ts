@@ -24,7 +24,6 @@ function makeSettingsRow(overrides: Record<string, unknown> = {}) {
     },
     callSettings: { queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 },
     ivrLanguages: ['en'],
-    fallbackGroup: [],
     setupState: null,
     messagingConfig: null,
     reportCategories: null,
@@ -541,30 +540,33 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
 // ---------------------------------------------------------------------------
 
 describe('SettingsService.getFallbackGroup', () => {
-  it('returns fallback group from global settings', async () => {
-    const { db, service } = setup()
-    db.$setSelectResult([makeSettingsRow({ fallbackGroup: ['pk1', 'pk2'] })])
+  // Per hub only: there is no instance-wide group (#2460).
+  it("returns the hub's fallback group", async () => {
+    const { service } = setup()
+    const read = vi.spyOn(service, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.getHubSettings>>)
 
-    const result = await service.getFallbackGroup()
+    const result = await service.getFallbackGroup('hub-1')
     expect(result.userPubkeys).toEqual(['pk1', 'pk2'])
+    expect(read).toHaveBeenCalledWith('hub-1')
   })
 
-  it('returns empty array when fallbackGroup is null', async () => {
-    const { db, service } = setup()
-    db.$setSelectResult([makeSettingsRow({ fallbackGroup: null })])
+  it('returns an empty group when the hub has none', async () => {
+    const { service } = setup()
+    vi.spyOn(service, 'getHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.getHubSettings>>)
 
-    const result = await service.getFallbackGroup()
+    const result = await service.getFallbackGroup('hub-1')
     expect(result.userPubkeys).toEqual([])
   })
 })
 
 describe('SettingsService.setFallbackGroup', () => {
-  it('updates global fallback group', async () => {
-    const { db, service } = setup()
+  it("writes the hub's fallback group", async () => {
+    const { service } = setup()
+    const write = vi.spyOn(service, 'updateHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.updateHubSettings>>)
 
-    const result = await service.setFallbackGroup({ userPubkeys: ['pk1', 'pk2'] })
+    const result = await service.setFallbackGroup({ userPubkeys: ['pk1', 'pk2'] }, 'hub-1')
     expect(result).toEqual({ ok: true })
-    expect(db.update).toHaveBeenCalled()
+    expect(write).toHaveBeenCalledWith('hub-1', { fallbackGroup: ['pk1', 'pk2'] })
   })
 })
 

@@ -108,12 +108,20 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
     const { hubs } = await services.settings.getHubs()
     if (hubs.length === 0) {
       const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
+      // The default hub answers the hotline number — the one routing matches an
+      // incoming call against (`hubs.phone_number`). It is the number of the
+      // provider the platform's calls actually go through, in the precedence
+      // `getTelephonyFromService` builds that provider from: the configuration
+      // the wizard's provider step saved, else the TWILIO_* env vars. Reading
+      // only the env var left a wizard-configured deployment's hub with no
+      // number, and every call to it routed to no hub (#2460).
+      const platformProvider = await services.settings.getTelephonyProvider()
       const defaultHub = {
         id: crypto.randomUUID(),
         name: hotlineName,
         slug: hotlineName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         status: 'active' as const,
-        phoneNumber: c.env.TWILIO_PHONE_NUMBER || '',
+        phoneNumber: (platformProvider ? platformProvider.phoneNumber : c.env.TWILIO_PHONE_NUMBER) || '',
         description: '',
         createdBy: pubkey,
         createdAt: new Date().toISOString(),

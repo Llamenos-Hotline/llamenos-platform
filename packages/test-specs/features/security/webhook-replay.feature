@@ -46,3 +46,14 @@ Feature: Webhook replay protection
     And a Twilio-signed incoming-call webhook with the same payload is delivered
     Then the unsigned webhook response status should be 403
     And the webhook response should be TwiML and not the replay acknowledgement
+
+  # #2460: a call belongs to the hub that owns the number it was placed to. A
+  # correctly signed call to a number no active hub owns used to proceed in a
+  # pseudo-hub nobody administers. It is refused unanswered, and the refusal is
+  # visible as a platform-scope incident — it has no hub to be raised in.
+  @signed-webhooks
+  Scenario: A signed call to a number no hub owns is refused, and the refusal is visible
+    Given the server accepts Twilio-signed telephony webhooks
+    When a Twilio-signed incoming call to a number no hub owns is delivered
+    Then the webhook response should reject the call
+    And the platform should have an open routing incident for an unrouted number
