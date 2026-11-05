@@ -404,6 +404,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.3 (2026-11-04)
+
+### Features
+
+- fail new/changed values that are verbatim English; report the backlog (#2335) (#2350)
+- queue-feed — a durable owner feeds the merge queue (#2434)
+- a failed erasure reaches erasure:admin and can be retried or abandoned; a hub-less subject opens a platform incident [PROTO] (#2347) (#2361)
+- milestone-scoped lane sources + explicit phase-then-age queue order (#2445)
+
+### Fixes
+
+- hub-owned routers refuse requests outside /hubs/:hubId; a route-table ledger fails any new dual mount (#2395) (#2405)
+- SignalIdentityService refuses a non-Drizzle db; router uses services (#2447) (#2449)
+- UI_TESTING registration no longer blocks the main thread in AppState.init (#2426)
+- the watchdog checks outcomes, not just liveness (#1834) (#2444)
+- cancel orphaned merge_group runs — queue reshuffles leak both Mac runners (#2438)
+- board treats CONFLICTING as its own REBASE bucket, ages stale greens, resolves mergeable by polling (#2442)
+- doctor reports a self-healing quota halt as WARN, never FAIL (#2440)
+- migration-order answers its own ancestry question; a gate that could not run says so (#2456)
+- connection card reads Connected only once every member hub has acknowledged its subscription (#2428) (#2432)
+- enforce the no-enqueue rule with a merge-queue guard, not a prohibition line (#2436)
+- fleet/review prefers the runner's pinned Bun; setup-bun is a 3-minute fallback (#2437)
+
 ## 0.21.2 (2026-11-03)
 
 ### Features
