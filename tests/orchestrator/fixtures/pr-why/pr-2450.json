@@ -1,0 +1,44 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 2450,
+        "state": "OPEN",
+        "isDraft": false,
+        "headRefOid": "6802d4589b290b8f591d7b9748d8f996b5604f71",
+        "headRefName": "release",
+        "baseRefName": "main",
+        "mergeStateStatus": "UNKNOWN",
+        "mergeable": "UNKNOWN",
+        "changedFiles": 8,
+        "author": {
+          "login": "llamenos-auto"
+        },
+        "labels": {
+          "nodes": []
+        },
+        "autoMergeRequest": null,
+        "isInMergeQueue": true,
+        "mergeQueueEntry": {
+          "state": "QUEUED",
+          "position": 3,
+          "enqueuedAt": "2026-11-05T14:49:46Z"
+        },
+        "latestOpinionatedReviews": {
+          "nodes": [
+            {
+              "author": {
+                "login": "rhonda-rodododo"
+              },
+              "state": "APPROVED",
+              "submittedAt": "2026-11-05T14:48:50Z"
+            }
+          ]
+        },
+        "reviewRequests": {
+          "nodes": []
+        }
+      }
+    }
+  }
+}

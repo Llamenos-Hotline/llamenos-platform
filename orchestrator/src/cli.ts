@@ -54,6 +54,7 @@ import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type Lan
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
 import { runBoard } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
+import { runPrWhy } from './pr-why.js'
 import { defaultQueueSweepDeps, renderSweepInline, runQueueSweep, sweepQueueRuns } from './queue-sweep.js'
 import { runQueueFeedWith, renderQueueFeed, defaultQueueFeedDeps } from './queue-feed.js'
 import { notify } from './notify.js'
@@ -2037,6 +2038,14 @@ const HANDLERS: Record<string, CommandHandler> = {
   // exits 1 when a head is blocked forever, 2 when a required set could not
   // be read.
   'missing-checks': (rest) => runMissingChecks(rest),
+  // #2469: "why is this PR not merging?" as a ranked list of named,
+  // deterministic verdicts — each with its evidence and remedy — instead of
+  // a person remembering which GitHub field lies (`reviewDecision` is
+  // permanently "" here; a stale auto-merge is never re-evaluated). Composes
+  // with `missing-checks` for the absent-context diagnosis. Read-only: every
+  // call goes through `ghRead`, which refuses any write. Exit 0 nothing owed,
+  // 1 blocked, 2 a verdict could not be observed.
+  'pr-why': (rest) => runPrWhy(rest),
   // #1868: cancel orphaned merge_group runs — a queue reshuffle (dequeue,
   // ejection, rebuild) leaves the old entry's run EXECUTING on a Mac mini
   // whose results can never be used. Also runs automatically at the start

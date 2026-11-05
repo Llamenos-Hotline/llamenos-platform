@@ -116,7 +116,7 @@
  */
 
 import { deriveBranchRuleset, type RulesetFact } from './board.js'
-import { REPO, commitSha, gh, ghJson, describeGhFailure } from './gh.js'
+import { REPO, commitSha, gh, describeGhFailure } from './gh.js'
 
 // ---------------------------------------------------------------------------
 // Observations — one shape per thing read off a head. Pure functions below
@@ -609,22 +609,38 @@ async function resolveRulesets(deps: MissingChecksDeps, prs: OpenPrRef[]): Promi
   return out
 }
 
-async function diagnoseOne(deps: MissingChecksDeps, pr: OpenPrRef, ruleset: RulesetFact | undefined): Promise<PrDiagnosis> {
+/**
+ * One PR's head, against a ruleset the caller already resolved. Exported so
+ * `pr-why` composes with this diagnosis instead of reimplementing it (#2469).
+ *
+ * A failed read of the head is `ok: false`, never an empty carrier list: the
+ * fetchers THROW on failure (see `pagedJson`), and an empty list here would
+ * score every required context `ABSENT_SETTLED` — this tool reporting the
+ * very blockage it exists to find, for a head it never managed to read.
+ */
+export async function diagnosePrHead(deps: MissingChecksDeps, pr: OpenPrRef, ruleset: RulesetFact | undefined): Promise<PrDiagnosis> {
   if (ruleset === undefined || !ruleset.ok) {
     const reason = ruleset === undefined ? 'its ruleset was never read' : ruleset.reason
     return { ok: false, pr: pr.number, headRefName: pr.headRefName, reason: `the required set for ${pr.baseRefName} is unknown: ${reason}` }
   }
 
-  const [checkRuns, statuses, runs] = await Promise.all([
-    deps.fetchCheckRuns(pr.headRefOid),
-    deps.fetchCommitStatuses(pr.headRefOid),
-    deps.fetchWorkflowRuns(pr.headRefOid),
-  ])
-
-  // Jobs are only needed for the dropped-job fingerprint, which only a run
-  // that concluded `failure` can show.
-  const failedRuns = runs.filter((r) => r.status === SETTLED_RUN_STATUS && r.conclusion === 'failure')
-  const jobLists = await Promise.all(failedRuns.map(async (r) => [r.id, await deps.fetchRunJobs(r.id)] as const))
+  let checkRuns: HeadCheckRun[]
+  let statuses: HeadCommitStatus[]
+  let runs: HeadWorkflowRun[]
+  let jobLists: (readonly [number, HeadRunJob[]])[]
+  try {
+    [checkRuns, statuses, runs] = await Promise.all([
+      deps.fetchCheckRuns(pr.headRefOid),
+      deps.fetchCommitStatuses(pr.headRefOid),
+      deps.fetchWorkflowRuns(pr.headRefOid),
+    ])
+    // Jobs are only needed for the dropped-job fingerprint, which only a run
+    // that concluded `failure` can show.
+    const failedRuns = runs.filter((r) => r.status === SETTLED_RUN_STATUS && r.conclusion === 'failure')
+    jobLists = await Promise.all(failedRuns.map(async (r) => [r.id, await deps.fetchRunJobs(r.id)] as const))
+  } catch (e) {
+    return { ok: false, pr: pr.number, headRefName: pr.headRefName, reason: `the head ${pr.headRefOid.slice(0, 7)} could not be read: ${describeGhFailure(e)}` }
+  }
 
   return {
     ok: true,
@@ -655,7 +671,7 @@ export async function diagnosePrsWith(deps: MissingChecksDeps, prNumber?: number
     for (let i = next++; i < prs.length; i = next++) {
       const pr = prs[i]
       if (pr === undefined) continue
-      out[i] = await diagnoseOne(deps, pr, rulesets.get(pr.baseRefName))
+      out[i] = await diagnosePrHead(deps, pr, rulesets.get(pr.baseRefName))
     }
   }))
   return out
@@ -666,28 +682,39 @@ interface GhStatusResponse { statuses?: { context?: string; state?: string; upda
 interface GhRunsPage { workflow_runs?: { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; run_attempt?: number }[] }
 interface GhJobsPage { jobs?: { name?: string; conclusion?: string | null }[] }
 
+/** Runs one `gh` argv and returns stdout, THROWING on failure. `gh` itself
+ *  by default; `pr-why` hands in its read-only runner instead, so every call
+ *  this module makes on that command's path passes the same guard. */
+export type GhRunner = (args: string[]) => Promise<string>
+
 /** `--paginate --slurp` returns an ARRAY of page objects. Flattening the
  *  pages is not optional cosmetics: without it only the first page of checks
  *  is read, and a required context sitting on page two reads as absent —
- *  this tool inventing the very bug it reports. */
-async function pagedJson<T>(endpoint: string): Promise<T[]> {
-  const pages = await ghJson<T[]>(['api', '--paginate', '--slurp', endpoint])
-  return pages ?? []
+ *  this tool inventing the very bug it reports.
+ *
+ *  THROWS on a failed read. This used to be `ghJson(...) ?? []`, which turned
+ *  a 502 on the check-run read into an empty carrier list — every required
+ *  context then scored `ABSENT_SETTLED` and the head was reported blocked
+ *  forever by a context that was in fact green. "Could not ask" must never
+ *  read as "nothing there" (#2469). */
+async function pagedJson<T>(run: GhRunner, endpoint: string): Promise<T[]> {
+  const pages = JSON.parse(await run(['api', '--paginate', '--slurp', endpoint])) as unknown
+  if (!Array.isArray(pages)) throw new Error(`GET ${endpoint} did not return a page list`)
+  return pages as T[]
 }
 
-export function defaultMissingChecksDeps(): MissingChecksDeps {
+export function defaultMissingChecksDeps(run: GhRunner = gh): MissingChecksDeps {
   return {
     listPrs: async (prNumber) => {
       const fields = 'number,headRefOid,headRefName,baseRefName,mergeStateStatus'
       const args = prNumber === undefined
         ? ['pr', 'list', '--state', 'open', '--limit', '100', '--json', fields]
         : ['pr', 'view', String(prNumber), '--json', fields]
-      const data = await ghJson<OpenPrRef[] | OpenPrRef>(args)
-      if (data === undefined) throw new Error(`could not list open PRs in ${REPO}`)
+      const data = JSON.parse(await run(args)) as OpenPrRef[] | OpenPrRef
       return Array.isArray(data) ? data : [data]
     },
     fetchBranchRules: async (branch) => {
-      const pages = JSON.parse(await gh([
+      const pages = JSON.parse(await run([
         'api', '--paginate', '--slurp', `repos/${REPO}/rules/branches/${encodeURIComponent(branch)}?per_page=100`,
       ])) as unknown
       return Array.isArray(pages) ? pages.flat() : pages
@@ -704,7 +731,7 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       //
       // `commitSha` pins the segment to a SHA: a `..` there would resolve
       // to the endpoint that CREATES a check run (#1673, see gh.ts).
-      const pages = await pagedJson<GhCheckRunsPage>(`repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)
+      const pages = await pagedJson<GhCheckRunsPage>(run, `repos/${REPO}/commits/${commitSha(sha)}/check-runs?per_page=100`)
       return pages.flatMap((p) => p.check_runs ?? []).map((r) => ({
         id: r.id ?? 0,
         name: r.name ?? '',
@@ -715,11 +742,11 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       }))
     },
     fetchCommitStatuses: async (sha) => {
-      const pages = await pagedJson<GhStatusResponse>(`repos/${REPO}/commits/${commitSha(sha)}/status?per_page=100`)
+      const pages = await pagedJson<GhStatusResponse>(run, `repos/${REPO}/commits/${commitSha(sha)}/status?per_page=100`)
       return pages.flatMap((p) => p.statuses ?? []).map((s) => ({ context: s.context ?? '', state: s.state ?? '', updatedAt: s.updated_at ?? '' }))
     },
     fetchWorkflowRuns: async (sha) => {
-      const pages = await pagedJson<GhRunsPage>(`repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100`)
+      const pages = await pagedJson<GhRunsPage>(run, `repos/${REPO}/actions/runs?head_sha=${sha}&per_page=100`)
       return pages.flatMap((p) => p.workflow_runs ?? []).map((r) => ({
         id: r.id ?? 0,
         name: r.name ?? '',
@@ -730,7 +757,7 @@ export function defaultMissingChecksDeps(): MissingChecksDeps {
       }))
     },
     fetchRunJobs: async (runId) => {
-      const pages = await pagedJson<GhJobsPage>(`repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`)
+      const pages = await pagedJson<GhJobsPage>(run, `repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`)
       return pages.flatMap((p) => p.jobs ?? []).map((j) => ({ name: j.name ?? '', conclusion: j.conclusion ?? null }))
     },
   }
