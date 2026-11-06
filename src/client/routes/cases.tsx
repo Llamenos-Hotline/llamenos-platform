@@ -43,11 +43,16 @@ import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
 import { EntityTimelineView } from '@/components/entity-timeline-view'
-import { listEntitiesCrossHub, NoActiveHubError } from '@/lib/api'
+import { listEntitiesCrossHub } from '@/lib/api'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 
 export const Route = createFileRoute('/cases')({
   component: CasesPage,
 })
+
+type RecordsPage = { records: CaseRecord[]; total: number }
+const EMPTY_RECORDS_PAGE: RecordsPage = { records: [], total: 0 }
 
 function CasesPage() {
   const { t } = useTranslation()
@@ -55,9 +60,6 @@ function CasesPage() {
   const { toast } = useToast()
 
   // --- Data state ---
-  const [records, setRecords] = useState<CaseRecord[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
   const [cmsEnabled, setCmsEnabled] = useState<boolean | null>(null)
 
@@ -84,10 +86,6 @@ function CasesPage() {
     [entityTypes],
   )
 
-  const selectedRecord = records.find(r => r.id === selectedId)
-  const selectedEntityType = selectedRecord
-    ? entityTypeMap.get(selectedRecord.entityTypeId)
-    : undefined
 
   // --- Load entity types + CMS status + auto-assignment ---
   useEffect(() => {
@@ -105,8 +103,7 @@ function CasesPage() {
   }, [])
 
   // --- Fetch records ---
-  const fetchRecords = useCallback(() => {
-    setLoading(true)
+  const loadRecords = useCallback((): Promise<RecordsPage> => {
     const params: {
       entityTypeId?: string
       statusHash?: string
@@ -117,21 +114,24 @@ function CasesPage() {
     if (entityTypeFilter !== 'all') params.entityTypeId = entityTypeFilter
     if (statusFilter !== 'all') params.statusHash = statusFilter
 
-    const fetch = crossHub
+    return crossHub
       ? listEntitiesCrossHub({ ...params, crossHub: true }).then(({ records: recs, total: tot }) => ({ records: recs as CaseRecord[], total: tot }))
-      : listRecords(params)
+      : listRecords(params).then(({ records: recs, total: tot }) => ({ records: recs, total: tot }))
+  }, [entityTypeFilter, statusFilter, page, crossHub])
+  const { data: recordsPage, setData: setRecordsPage, noHub, loading, reload: fetchRecords } = useHubOwned(loadRecords, {
+    empty: EMPTY_RECORDS_PAGE,
+    onError: () => toast(t('cases.loadError', { defaultValue: 'Failed to load cases' }), 'error'),
+  })
+  const { records, total } = recordsPage
+  const setRecords = useCallback(
+    (update: (prev: CaseRecord[]) => CaseRecord[]) => setRecordsPage(prev => ({ ...prev, records: update(prev.records) })),
+    [setRecordsPage],
+  )
 
-    fetch
-      .then(({ records: recs, total: tot }) => {
-        setRecords(recs)
-        setTotal(tot)
-      })
-      // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-      .catch((err) => { if (!(err instanceof NoActiveHubError)) toast(t('cases.loadError', { defaultValue: 'Failed to load cases' }), 'error') })
-      .finally(() => setLoading(false))
-  }, [entityTypeFilter, statusFilter, page, crossHub, toast, t])
-
-  useEffect(() => { fetchRecords() }, [fetchRecords])
+  const selectedRecord = records.find(r => r.id === selectedId)
+  const selectedEntityType = selectedRecord
+    ? entityTypeMap.get(selectedRecord.entityTypeId)
+    : undefined
 
   // Poll records
   useEffect(() => {
@@ -226,7 +226,7 @@ function CasesPage() {
   }, [entityTypes])
 
   const totalPages = Math.ceil(total / pageSize)
-  const showEmptyState = !loading && records.length === 0 && entityTypeFilter === 'all' && statusFilter === 'all'
+  const showEmptyState = !noHub && !loading && records.length === 0 && entityTypeFilter === 'all' && statusFilter === 'all'
 
   // CMS not enabled
   if (cmsEnabled === false) {
@@ -458,7 +458,9 @@ function CasesPage() {
               </div>
             </div>
 
-            {loading ? (
+            {noHub ? (
+              <NoActiveHubNotice />
+            ) : loading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>

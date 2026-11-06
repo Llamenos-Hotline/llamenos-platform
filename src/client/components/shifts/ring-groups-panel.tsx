@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import {
@@ -9,9 +9,10 @@ import {
   addRingGroupMembers,
   removeRingGroupMembers,
   listUsers,
-  NoActiveHubError,
   type User,
 } from '@/lib/api'
+import { useHubOwned, useActiveHubId } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { Users, Trash2, UserPlus, UserMinus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,21 +36,22 @@ type RingGroupDetail = Omit<RingGroup, 'memberCount'> & {
 export function RingGroupsPanel() {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const [groups, setGroups] = useState<RingGroup[]>([])
+  const hubId = useActiveHubId()
+  const loadGroups = useCallback(() => listRingGroups().then(r => r.ringGroups), [])
+  const { data: groups, setData: setGroups, noHub, loading } = useHubOwned<RingGroup[]>(loadGroups, {
+    empty: [],
+    onError: () => toast(t('common.error'), 'error'),
+  })
   const [users, setUsers] = useState<User[]>([])
-  const [loading, setLoading] = useState(true)
-  const [editingGroup, setEditingGroup] = useState<RingGroupDetail | null>(null)
+  const [openGroup, setEditingGroup] = useState<RingGroupDetail | null>(null)
+  // A group opened in one hub is not shown in another, nor with none.
+  const editingGroup = openGroup && openGroup.hubId === hubId ? openGroup : null
   const [showForm, setShowForm] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    Promise.all([
-      listRingGroups().then(r => setGroups(r.ringGroups)),
-      listUsers().then(r => setUsers(r.users)),
-      // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-    ]).catch((err) => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
-      .finally(() => setLoading(false))
+    listUsers().then(r => setUsers(r.users)).catch(() => toast(t('common.error'), 'error'))
   }, [])
 
   async function handleCreate(e: React.FormEvent) {
@@ -107,6 +109,7 @@ export function RingGroupsPanel() {
     }
   }
 
+  if (noHub) return <NoActiveHubNotice />
   if (loading) return <div className="py-8 text-center text-muted-foreground">{t('common.loading')}</div>
 
   return (
