@@ -8,6 +8,7 @@ import { chunkedUpload } from '@/lib/chunked-upload'
 import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import type { FileFieldValue } from '@protocol/schemas/entity-schema'
+import { hubAdminReaders, activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface EntityFileFieldProps {
   value: FileFieldValue | null
@@ -15,13 +16,19 @@ interface EntityFileFieldProps {
   maxFileSize?: number
   allowedMimeTypes?: string[]
   disabled?: boolean
+  /**
+   * The hub of the record this field belongs to (`record.hubId`): the file is
+   * sealed to that hub's admins and stored in it. Omit it only for a form that
+   * creates a new record in the hub being browsed.
+   */
+  hubId?: string
 }
 
 export function EntityFileField({
-  value, onChange, maxFileSize = 10 * 1024 * 1024, allowedMimeTypes, disabled = false,
+  value, onChange, maxFileSize = 10 * 1024 * 1024, allowedMimeTypes, disabled = false, hubId,
 }: EntityFileFieldProps) {
   const { t } = useTranslation()
-  const { adminDecryptionPubkey, publicKey } = useAuth()
+  const { publicKey } = useAuth()
   const { toast } = useToast()
   const inputRef = useRef<HTMLInputElement>(null)
   const [progress, setProgress] = useState<number | null>(null)
@@ -39,17 +46,18 @@ export function EntityFileField({
     setProgress(10)
     try {
       const recipients: string[] = publicKey ? [publicKey] : []
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        recipients.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub the file belongs to (#1035): the record's own
+      // hub when it already exists, else the hub the new record is created in.
+      recipients.push(...(hubId ? await hubAdminReaders(hubId) : await activeHubAdminReaders()))
       const encrypted = await encryptFile(file, recipients)
       setProgress(30)
-      // A file row of the active hub, with its envelopes, through the same
+      // A file row of the record's hub, with its envelopes, through the same
       // chunked path as every other file (#2462). Its parent is the hub: the
       // entity this field belongs to may not exist yet.
       const { fileId, completedAt: uploadedAt } = await chunkedUpload({
         encrypted,
         owner: { kind: 'entity_field' },
+        hubId,
         onProgress: (completed, total) => setProgress(30 + Math.round((completed / total) * 70)),
       })
 

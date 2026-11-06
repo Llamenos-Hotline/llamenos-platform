@@ -53,6 +53,8 @@ function makeServices(channelEnabled: boolean) {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
     },
+    // The hub's admin reader set (#1034): one hub admin with a registered device.
+    identity: { readersFor: vi.fn().mockResolvedValue(['ad'.repeat(32)]) },
     conversations: {
       handleIncoming: vi.fn().mockResolvedValue({
         conversationId: 'conv-2384',

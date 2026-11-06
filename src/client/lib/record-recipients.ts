@@ -24,12 +24,15 @@ import { getRecordEnvelopeRecipients } from './api/records'
  * `summary` is deliberately broader (every member who may see the case exists)
  * and `pii` deliberably narrower.
  *
+ * `hubId` is the record's own hub (`record.hubId`): a record opened from the
+ * cross-hub list is not in the hub being browsed.
+ *
  * Returns `[]` until the fetch resolves, and `[]` on failure. Callers must add
  * their own device key and the admin recipient themselves and must not treat an
  * empty list as "no readers" — a shorter list costs a reader, which is
  * recoverable; sealing to a key nobody holds is not.
  */
-export function useRecordFieldRecipients(recordId: string | undefined): string[] {
+export function useRecordFieldRecipients(recordId: string | undefined, hubId?: string): string[] {
   const [recipients, setRecipients] = useState<string[]>([])
 
   useEffect(() => {
@@ -40,7 +43,7 @@ export function useRecordFieldRecipients(recordId: string | undefined): string[]
     let cancelled = false
     void (async () => {
       try {
-        const tiers = await getRecordEnvelopeRecipients({ recordId })
+        const tiers = await getRecordEnvelopeRecipients({ recordId, hubId })
         if (!cancelled) setRecipients(tiers.fields)
       } catch {
         // A failed lookup must not block filing a comment or uploading
@@ -52,7 +55,7 @@ export function useRecordFieldRecipients(recordId: string | undefined): string[]
       }
     })()
     return () => { cancelled = true }
-  }, [recordId])
+  }, [recordId, hubId])
 
   return recipients
 }

@@ -31,7 +31,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('./auth', () => ({
   useAuth: () => ({
-    hasDeviceKey: true, publicKey: 'a'.repeat(64), isAdmin: false, adminDecryptionPubkey: 'b'.repeat(64),
+    hasDeviceKey: true, publicKey: 'a'.repeat(64), isAdmin: false,
   }),
 }))
 vi.mock('./note-sheet-context', () => ({ useNoteSheet: () => state.sheet }))
@@ -43,7 +43,11 @@ vi.mock('./platform', () => ({
   encryptDraft: vi.fn(async (s: string) => s),
   decryptDraft: vi.fn(async (s: string) => s),
 }))
-vi.mock('./admin-recipient', () => ({ adminHpkeRecipient: (k: string) => k }))
+// The hub's admin reader set: one hub admin's device key, whichever hub is asked.
+vi.mock('./admin-recipient', () => ({
+  hubAdminReaders: async () => ['b'.repeat(64)],
+  NoAdminReaderError: class NoAdminReaderError extends Error {},
+}))
 vi.mock('./api', () => ({
   createNote: state.createNote,
   updateNote: vi.fn(),

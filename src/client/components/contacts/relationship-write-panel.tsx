@@ -4,7 +4,6 @@ import {
   createContactRelationship, deleteContactRelationship,
   type ContactRelationship,
 } from '@/lib/api'
-import { useAuth } from '@/lib/auth'
 import { encryptMessage } from '@/lib/platform'
 import { RELATIONSHIP_TYPES } from '@protocol/schemas/contact-relationships'
 import { Button } from '@/components/ui/button'
@@ -12,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input'
 import { Trash2, Plus, Loader2 } from 'lucide-react'
 import { useToast } from '@/lib/toast'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface RelationshipWritePanelProps {
   contactId: string
@@ -24,8 +24,7 @@ export function RelationshipWritePanel({
   contactId, relationships, onRelationshipsChange, canWrite,
 }: RelationshipWritePanelProps) {
   const { t } = useTranslation()
-  const { adminDecryptionPubkey } = useAuth()
-  const { toast } = useToast()
+    const { toast } = useToast()
   const [adding, setAdding] = useState(false)
   const [targetContactId, setTargetContactId] = useState('')
   const [relType, setRelType] = useState<string>(RELATIONSHIP_TYPES[0])
@@ -35,7 +34,7 @@ export function RelationshipWritePanel({
     if (!targetContactId || !relType) return
     setSaving(true)
     try {
-      const readerPubkeys: string[] = adminDecryptionPubkey ? [adminDecryptionPubkey] : []
+      const readerPubkeys: string[] = await activeHubAdminReaders()
       const encrypted = await encryptMessage('', readerPubkeys)
       const rel = await createContactRelationship(contactId, {
         contactIdB: targetContactId,

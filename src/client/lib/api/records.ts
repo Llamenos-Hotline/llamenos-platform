@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, hp, hubPath } from './client'
 import type { CaseRecord, RecordContact, CreateRecordBody, UpdateRecordBody } from '@protocol/schemas/records'
 import type { MergeRecordsBody, MergeRecordsResponse } from '@protocol/schemas/entity-merge'
 import type { AssignmentSuggestion } from '@protocol/schemas'
@@ -37,8 +37,14 @@ export async function createRecord(body: CreateRecordBody) {
   })
 }
 
-export async function updateRecord(id: string, body: UpdateRecordBody) {
-  return request<CaseRecord>(hp(`/records/${id}`), {
+/**
+ * `hubId` is the record's own hub (`record.hubId`). Omit it only when the record
+ * is known to be in the hub being browsed: a record opened from the cross-hub
+ * list belongs to another hub, and a write aimed at the browsed hub's path is
+ * refused as "not found".
+ */
+export async function updateRecord(id: string, body: UpdateRecordBody, hubId?: string) {
+  return request<CaseRecord>(hubId ? hubPath(hubId, `/records/${id}`) : hp(`/records/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(body),
   })
@@ -186,13 +192,16 @@ export async function getRecordEnvelopeRecipients(params: {
   entityTypeId?: string
   assignedTo?: string[]
   recordId?: string
+  /** The record's own hub (`record.hubId`); only meaningful with `recordId`. */
+  hubId?: string
 }) {
   if (params.recordId) {
+    const path = `/records/${params.recordId}/envelope-recipients`
     return request<{
       summary: string[]
       fields: string[]
       pii: string[]
-    }>(hp(`/records/${params.recordId}/envelope-recipients`))
+    }>(params.hubId ? hubPath(params.hubId, path) : hp(path))
   }
   if (!params.entityTypeId) {
     throw new Error('getRecordEnvelopeRecipients: pass recordId or entityTypeId')
