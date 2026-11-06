@@ -1,11 +1,13 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
-import { useEffect, useState, useCallback } from 'react'
-import { listContacts, NoActiveHubError, getContactTimeline, type ContactSummary, type EncryptedNote, type Conversation } from '@/lib/api'
+import { useState, useCallback } from 'react'
+import { listContacts, getContactTimeline, type ContactSummary, type EncryptedNote, type Conversation } from '@/lib/api'
 import { decryptNote, decryptLegacyNote } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
+import { useHubOwned, useActiveHubId } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import type { NotePayload } from '@shared/types'
 import { Contact, StickyNote, MessageSquare, Phone, FileText, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -22,36 +24,29 @@ export const Route = createFileRoute('/contacts')({
   component: ContactsPage,
 })
 
+const EMPTY_CONTACTS_PAGE: { contacts: ContactSummary[]; total: number } = { contacts: [], total: 0 }
+
 function ContactsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate({ from: '/contacts' })
   const { hasDeviceKey, publicKey, isAdmin } = useAuth()
   const { toast } = useToast()
   const { page } = Route.useSearch()
-  const [contacts, setContacts] = useState<ContactSummary[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [selectedHash, setSelectedHash] = useState<string | null>(null)
+  const hubId = useActiveHubId()
+  const [selection, setSelection] = useState<{ hubId: string; hash: string } | null>(null)
+  // A contact opened in one hub is not shown in another, nor with none.
+  const selectedHash = selection && selection.hubId === hubId ? selection.hash : null
+  const setSelectedHash = (hash: string | null) => setSelection(hash && hubId ? { hubId, hash } : null)
   const [timeline, setTimeline] = useState<{ notes: EncryptedNote[]; conversations: Conversation[] }>({ notes: [], conversations: [] })
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [decryptedNotes, setDecryptedNotes] = useState<Map<string, string>>(new Map())
   const limit = 50
 
-  const loadContacts = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await listContacts({ page, limit })
-      setContacts(res.contacts)
-      setTotal(res.total)
-    } catch (err) {
-      // No hub to browse is an empty list, not a failure to load one (#2405).
-      if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [page, t, toast])
-
-  useEffect(() => { loadContacts() }, [loadContacts])
+  const loadContacts = useCallback(() => listContacts({ page, limit }), [page])
+  const { data: { contacts, total }, noHub, loading } = useHubOwned(loadContacts, {
+    empty: EMPTY_CONTACTS_PAGE,
+    onError: () => toast(t('common.error'), 'error'),
+  })
 
   async function handleSelectContact(hash: string) {
     setSelectedHash(hash)
@@ -220,7 +215,13 @@ function ContactsPage() {
         {t('contacts.description', { defaultValue: 'View unified interaction history across calls, conversations, and reports.' })}
       </p>
 
-      {loading ? (
+      {noHub ? (
+        <Card>
+          <CardContent>
+            <NoActiveHubNotice />
+          </CardContent>
+        </Card>
+      ) : loading ? (
         <Card>
           <CardContent className="py-8">
             <div className="space-y-3">

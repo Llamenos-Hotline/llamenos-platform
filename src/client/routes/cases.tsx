@@ -135,7 +135,7 @@ function CasesPage() {
 
   // Poll records
   useEffect(() => {
-    const interval = setInterval(fetchRecords, 30_000)
+    const interval = setInterval(() => fetchRecords({ background: true }), 30_000)
     return () => clearInterval(interval)
   }, [fetchRecords])
 

@@ -10,12 +10,13 @@ import {
   assignReport,
   updateReport,
   getReportTypes,
-  NoActiveHubError,
   type Report,
   type ConversationMessage,
 } from '@/lib/api'
 import type { ReportType } from '@shared/types'
 import { encryptMessage } from '@/lib/platform'
+import { useHubOwned, useActiveHubId } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { formatRelativeTime } from '@/lib/format'
 import { ReportForm } from '@/components/ReportForm'
 import { FileUpload } from '@/components/FileUpload'
@@ -33,14 +34,21 @@ export const Route = createFileRoute('/reports')({
   component: ReportsPage,
 })
 
+const NO_REPORTS: Report[] = []
+
 function ReportsPage() {
   const { t } = useTranslation()
   const { hasDeviceKey, publicKey, isAdmin, hasPermission, adminDecryptionPubkey } = useAuth()
   const { toast } = useToast()
 
-  const [reports, setReports] = useState<Report[]>([])
-  const [loading, setLoading] = useState(true)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const hubId = useActiveHubId()
+  const [selection, setSelection] = useState<{ hubId: string; id: string } | null>(null)
+  // A report opened in one hub is not shown in another, nor with none.
+  const selectedId = selection && selection.hubId === hubId ? selection.id : null
+  const setSelectedId = useCallback(
+    (id: string | null) => setSelection(id && hubId ? { hubId, id } : null),
+    [hubId],
+  )
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -51,8 +59,6 @@ function ReportsPage() {
   const [showFileUpload, setShowFileUpload] = useState(false)
   const [reportTypes, setReportTypes] = useState<ReportType[]>([])
 
-  const selectedReport = reports.find(r => r.id === selectedId)
-
   // Load report types
   useEffect(() => {
     getReportTypes()
@@ -61,35 +67,26 @@ function ReportsPage() {
   }, [])
 
   // Fetch reports
-  useEffect(() => {
-    setLoading(true)
+  const loadReports = useCallback(() => {
     const params: { status?: string; category?: string } = {}
     if (statusFilter !== 'all') params.status = statusFilter
     if (categoryFilter !== 'all') params.category = categoryFilter
-
-    listReports(params)
-      .then(({ conversations }) => setReports(conversations))
-      .catch(err => {
-        // No hub to browse is an empty list, not a failure to load one (#2405).
-        if (!(err instanceof NoActiveHubError)) toast(t('reports.loadError', { defaultValue: 'Failed to load reports' }), 'error')
-      })
-      .finally(() => setLoading(false))
-  }, [statusFilter, categoryFilter, t, toast])
+    return listReports(params).then(({ conversations }) => conversations)
+  }, [statusFilter, categoryFilter])
+  const { data: reports, setData: setReports, noHub, loading, reload: reloadReports } = useHubOwned(loadReports, {
+    empty: NO_REPORTS,
+    onError: (_err, { background }) => {
+      if (background) console.error('[reports] Background report refresh failed')
+      else toast(t('reports.loadError', { defaultValue: 'Failed to load reports' }), 'error')
+    },
+  })
+  const selectedReport = reports.find(r => r.id === selectedId)
 
   // Poll reports periodically
   useEffect(() => {
-    const interval = setInterval(() => {
-      const params: { status?: string; category?: string } = {}
-      if (statusFilter !== 'all') params.status = statusFilter
-      if (categoryFilter !== 'all') params.category = categoryFilter
-      listReports(params)
-        .then(({ conversations }) => setReports(conversations))
-        .catch(err => {
-          if (!(err instanceof NoActiveHubError)) console.error('[reports] Background report refresh failed')
-        })
-    }, 30_000)
+    const interval = setInterval(() => reloadReports({ background: true }), 30_000)
     return () => clearInterval(interval)
-  }, [statusFilter, categoryFilter])
+  }, [reloadReports])
 
   // Load messages when report is selected
   useEffect(() => {
@@ -134,7 +131,7 @@ function ReportsPage() {
     } catch {
       toast(t('reports.closeError', { defaultValue: 'Failed to close report' }), 'error')
     }
-  }, [selectedId, toast, t])
+  }, [selectedId, setSelectedId, setReports, toast, t])
 
   const handleSendReply = useCallback(async () => {
     if (!selectedId || !replyText.trim() || !hasDeviceKey || !publicKey) return
@@ -186,19 +183,13 @@ function ReportsPage() {
   }, [selectedId, hasDeviceKey, publicKey, adminDecryptionPubkey, toast, t])
 
   const handleReportCreated = useCallback((reportId: string) => {
-    // Refresh reports list and select the new one.
-    // Set loading so the list panel stays rendered (not empty state) while fetching.
-    setLoading(true)
-    listReports()
-      .then(({ conversations }) => {
-        setReports(conversations)
-        setSelectedId(reportId)
-      })
-      .catch(() => toast(t('common.error'), 'error'))
-      .finally(() => setLoading(false))
-  }, [t, toast])
+    // Refresh reports list and select the new one. `reload` sets loading, so the
+    // list panel stays rendered (not empty state) while fetching.
+    reloadReports()
+    setSelectedId(reportId)
+  }, [reloadReports, setSelectedId])
 
-  const showEmptyState = !loading && reports.length === 0
+  const showEmptyState = !noHub && !loading && reports.length === 0
 
   return (
     <div className="space-y-4">
@@ -240,7 +231,13 @@ function ReportsPage() {
         </div>
       )}
 
-      {showEmptyState ? (
+      {noHub ? (
+        <Card>
+          <CardContent>
+            <NoActiveHubNotice />
+          </CardContent>
+        </Card>
+      ) : showEmptyState ? (
         <Card data-testid="empty-state">
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <FileText className="mb-3 h-10 w-10 text-muted-foreground/40" />

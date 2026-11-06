@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useCallTimer, useShiftStatus } from '@/lib/hooks'
 import { useCalls, useIncomingCalls } from '@/lib/calls-context'
 import { useNoteSheet } from '@/lib/note-sheet-context'
@@ -15,6 +15,7 @@ import { encryptNote } from '@/lib/platform'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
 import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useConfig } from '@/lib/config'
+import { useHubOwned } from '@/lib/hub-owned'
 import { useTranscription } from '@/lib/transcription'
 
 import { useToast } from '@/lib/toast'
@@ -46,6 +47,8 @@ export const Route = createFileRoute('/')({
   component: DashboardPage,
 })
 
+const NO_PRESENCE: UserPresence[] = []
+
 function DashboardPage() {
   const { t } = useTranslation()
   const { isAuthenticated, isAdmin, hasDeviceKey, publicKey, onBreak, toggleBreak, hasPermission } = useAuth()
@@ -62,7 +65,6 @@ function DashboardPage() {
   const clockOutMutation = useClockOut()
   const readiness = callReadiness({ onShift, clockedIn }, onBreak)
   const canClockIn = isAdmin || hasPermission('shifts:set-availability')
-  const [presence, setPresence] = useState<UserPresence[]>([])
   const [users, setUsers] = useState<User[]>([])
   const personalStats = usePersonalStats(isAuthenticated)
 
@@ -72,23 +74,25 @@ function DashboardPage() {
     }
   }, [isAuthenticated, navigate])
 
-  // Fetch volunteer presence (admin only) with periodic refresh
+  // Volunteer presence in the active hub (admin only) — hub-owned, so bound to that hub.
+  const loadPresence = useCallback(
+    () => (isAuthenticated && isAdmin ? getUserPresence().then(r => r.users) : Promise.resolve(NO_PRESENCE)),
+    [isAuthenticated, isAdmin],
+  )
+  const { data: presence, reload: reloadPresence } = useHubOwned(loadPresence, {
+    empty: NO_PRESENCE,
+    onError: () => console.error('[dashboard] Failed to fetch user presence'),
+  })
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return
     let mounted = true
-    const fetchPresence = () => {
-      getUserPresence().then(r => { if (mounted) setPresence(r.users) }).catch(() => {
-        console.error('[dashboard] Failed to fetch user presence')
-      })
-    }
-    fetchPresence()
     listUsers().then(r => { if (mounted) setUsers(r.users) }).catch(() => {
       console.error('[dashboard] Failed to fetch user list')
     })
     // Poll presence every 15s (replaces WS-based real-time presence)
-    const interval = setInterval(fetchPresence, 15_000)
+    const interval = setInterval(() => reloadPresence({ background: true }), 15_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [isAuthenticated, isAdmin])
+  }, [isAuthenticated, isAdmin, reloadPresence])
 
   if (!isAuthenticated) return null
 

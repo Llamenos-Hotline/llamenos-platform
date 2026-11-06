@@ -1,12 +1,11 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
   listUsers,
   listRoles,
   listAuditLog,
-  NoActiveHubError,
   listShifts,
   updateUser,
   type User,
@@ -16,6 +15,8 @@ import {
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
 import { useToast } from '@/lib/toast'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import {
   ArrowLeft,
   ScrollText,
@@ -46,47 +47,49 @@ export const Route = createFileRoute('/users_/$pubkey')({
 
 const DAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
 
+const NO_SHIFTS: Shift[] = []
+const EMPTY_AUDIT_PAGE: { entries: AuditLogEntry[]; total: number } = { entries: [], total: 0 }
+
 function UserProfilePage() {
   const { t } = useTranslation()
   const { isAdmin } = useAuth()
   const { pubkey } = Route.useParams()
   const { toast } = useToast()
   const [user, setUser] = useState<User | null>(null)
-  const [shifts, setShifts] = useState<Shift[]>([])
   const [roles, setRoles] = useState<RoleDefinition[]>([])
-  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([])
-  const [auditTotal, setAuditTotal] = useState(0)
   const [auditPage, setAuditPage] = useState(1)
   const [loading, setLoading] = useState(true)
-  const [auditLoading, setAuditLoading] = useState(true)
   const [showPhone, setShowPhone] = useState(false)
   const [savingChannels, setSavingChannels] = useState(false)
   const auditLimit = 20
 
-  // Load user + shifts
+  // Load user + roles
   useEffect(() => {
     Promise.all([
       listUsers(),
-      listShifts(),
       listRoles(),
-    ]).then(([userRes, shiftRes, rolesRes]) => {
+    ]).then(([userRes, rolesRes]) => {
       const found = userRes.users.find(u => u.pubkey === pubkey) || null
       setUser(found)
-      setShifts(shiftRes.shifts)
       setRoles(rolesRes.roles)
     }).catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
   }, [pubkey, t, toast])
 
-  // Load audit entries for this user
-  useEffect(() => {
-    setAuditLoading(true)
-    listAuditLog({ page: auditPage, limit: auditLimit, actorPubkey: pubkey })
-      .then(r => { setAuditEntries(r.entries); setAuditTotal(r.total) })
-      // No hub to browse is an empty chain, not a failure to load one (#2405).
-      .catch(err => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
-      .finally(() => setAuditLoading(false))
-  }, [pubkey, auditPage, t, toast])
+  // The active hub's shifts and audit chain — hub-owned, so bound to that hub.
+  const loadShifts = useCallback(() => listShifts().then(r => r.shifts), [])
+  const { data: shifts, noHub } = useHubOwned(loadShifts, {
+    empty: NO_SHIFTS,
+    onError: () => toast(t('common.error'), 'error'),
+  })
+  const loadAudit = useCallback(
+    () => listAuditLog({ page: auditPage, limit: auditLimit, actorPubkey: pubkey }),
+    [pubkey, auditPage],
+  )
+  const { data: { entries: auditEntries, total: auditTotal }, loading: auditLoading } = useHubOwned(loadAudit, {
+    empty: EMPTY_AUDIT_PAGE,
+    onError: () => toast(t('common.error'), 'error'),
+  })
 
   const assignedShifts = useMemo(
     () => shifts.filter(s => s.userPubkeys.includes(pubkey)),
@@ -201,7 +204,9 @@ function UserProfilePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {assignedShifts.length === 0 ? (
+          {noHub ? (
+            <NoActiveHubNotice />
+          ) : assignedShifts.length === 0 ? (
             <div className="px-6 pb-6 text-sm text-muted-foreground">
               {t('userProfile.noShifts')}
             </div>
@@ -260,7 +265,9 @@ function UserProfilePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {auditLoading ? (
+          {noHub ? (
+            <NoActiveHubNotice />
+          ) : auditLoading ? (
             <div className="divide-y divide-border">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-4 px-6 py-3">
