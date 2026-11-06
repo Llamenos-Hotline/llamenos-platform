@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import type { AppEnv, Env } from '../types'
 import type { MessagingChannelType, WhatsAppConfig } from '@shared/types'
 import type { MessagingAdapter, IncomingMessage } from './adapter'
@@ -8,7 +8,6 @@ import { KIND_MESSAGE_NEW, KIND_CONVERSATION_ASSIGNED, KIND_MESSAGE_REACTION, KI
 import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService } from '../lib/push-dispatch'
 import { createLogger } from '../lib/logger'
-import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { messagingContactHash, subscriberHashes } from '../lib/messaging-contact-hash'
 import { backgroundTask } from '../lib/hono-compat'
 import type { Services } from '../services'
@@ -17,7 +16,8 @@ import type { SignalWebhookPayload } from './signal/types'
 import { OPT_IN_KEYWORDS } from '../services/messaging-suppression'
 import { observeFirehoseMessage } from './firehose-observer'
 import { refuseIfChannelDisabled } from './channel-guard'
-import { checkWebhookReplay } from '../services/webhook-replay'
+import { checkWebhookReplay, releaseWebhookReplay } from '../services/webhook-replay'
+import { InboundUnreadableError } from '../services/conversations'
 import { getDb } from '../db'
 import { ServiceError } from '../services/settings'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
@@ -269,6 +269,17 @@ messaging.post('/:channel/webhook',
   // adapter hashes, so there is no second value that could disagree with it.
   const senderHash = messagingContactHash(incoming.senderIdentifier, hubId, c.env.MESSAGING_HASH_KEY)
 
+  // Who can read it, resolved before anything acts on the message (#1034): the
+  // hub's own admin readers — its admins' registered devices and its escrow
+  // key. With none, the message is refused here, ahead of every side effect,
+  // rather than stored where no admin could ever open it. A STOP is still
+  // honoured, exactly as on a switched-off channel.
+  const adminReaders = await services.identity.readersFor(hubId, 'admin')
+  if (adminReaders.length === 0) {
+    if (isOptOut(incoming.body)) await recordOptOut(services, incoming, hubId, c.env.MESSAGING_HASH_KEY)
+    return refuseUnreadableInbound(c, channel, hubId, bodyText)
+  }
+
   // Identity trust tracking: record/refresh the sender's Signal identity on
   // first (and every subsequent) contact. SignalIdentityService.recordIdentity
   // already existed with full trust-level logic (TOFU/auto/manual) and a
@@ -341,21 +352,23 @@ messaging.post('/:channel/webhook',
     }
   }
 
-  // Forward to ConversationsService for processing
-  // #1283: this passed ADMIN_PUBKEY — the admin's Ed25519 *signing* key — as the
-  // HPKE recipient every inbound message was sealed to. Both keys are 64 hex
-  // characters, so nothing objected, and the resulting envelopes could not be
-  // opened by the admin or anyone else. `transitionalInstanceRecipient` returns the X25519
-  // key or nothing, and the parameter's type now rejects the Ed25519 one.
+  // Forward to ConversationsService for processing.
   //
   // #1140: `hubId` must be forwarded. It is read from `?hub=` above and used for
   // the relay event and the push below, but was omitted here — so every inbound
   // conversation was created with `hub_id = NULL`, and
   // `GET /hubs/:hubId/conversations` filters on `eq(conversations.hubId, hubId)`.
-  // The desktop client only ever calls that hub-scoped path, so inbound messages
-  // were invisible on desktop. The dev simulation route forwards a hubId from its
-  // request body, which is why every backend BDD messaging scenario passed.
-  const convResult = await services.conversations.handleIncoming(incoming, senderHash, transitionalInstanceRecipient(c.env), hubId)
+  //
+  // The reader set re-checked inside `handleIncoming` can only be empty here if
+  // the hub's last readable admin lost their device between the check above and
+  // this call; it is refused the same way.
+  let convResult: Awaited<ReturnType<typeof services.conversations.handleIncoming>>
+  try {
+    convResult = await services.conversations.handleIncoming(incoming, senderHash, adminReaders, hubId)
+  } catch (err) {
+    if (err instanceof InboundUnreadableError) return refuseUnreadableInbound(c, channel, hubId, bodyText)
+    throw err
+  }
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
@@ -408,6 +421,37 @@ messaging.post('/:channel/webhook',
   // Return 200 to acknowledge webhook (providers expect fast acknowledgment)
   return c.json({ ok: true })
 })
+
+/**
+ * Refuse an inbound message no admin of its hub could read (#1034,
+ * `InboundUnreadableError`), loudly and recoverably: an error-level log naming
+ * the hub, the replay slot handed back so a redelivery is processed, and a 503
+ * with `Retry-After` so the provider records the failure and keeps the message
+ * in its own log. Never a 200 for a message that was not stored.
+ */
+async function refuseUnreadableInbound(
+  c: Context<AppEnv>,
+  channel: string,
+  hubId: string,
+  bodyText: string,
+): Promise<Response> {
+  logger.error(
+    `Inbound ${channel} message REFUSED: hub has no admin reader (no hub admin has a registered device and the hub has no escrow key). ` +
+    'A hub admin must sign in on a device, or set the hub escrow key.',
+    { hubId, channel },
+  )
+  try {
+    await releaseWebhookReplay(getDb(), channel, bodyText)
+  } catch (err) {
+    logger.error('Could not release the replay slot of a refused inbound message; a redelivery will be answered as a duplicate', {
+      hubId,
+      channel,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+  c.header('Retry-After', '60')
+  return c.json({ error: 'No admin of this hub can read inbound messages yet' }, 503)
+}
 
 /** Every identifier this message itself carries for its sender. */
 /** Is this message an opt-out (STOP)? */

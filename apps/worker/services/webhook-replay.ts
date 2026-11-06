@@ -1,6 +1,6 @@
 import { createHash } from 'crypto'
 import { webhookNonces } from '../db/schema/webhook-nonces'
-import { lt } from 'drizzle-orm'
+import { eq, lt } from 'drizzle-orm'
 import { createLogger } from '../lib/logger'
 import { isDuplicateKeyError } from '../lib/db-errors'
 import type { Database } from '../db'
@@ -20,8 +20,7 @@ export async function checkWebhookReplay(
   bodyText: string,
   windowSeconds: number = DEFAULT_WINDOW_S,
 ): Promise<boolean> {
-  const nonceInput = `${provider}:${bodyText}`
-  const hash = createHash('sha256').update(nonceInput).digest('hex')
+  const hash = nonceHash(provider, bodyText)
 
   const expiresAt = new Date(Date.now() + windowSeconds * 1000)
 
@@ -39,6 +38,27 @@ export async function checkWebhookReplay(
     }
     throw e
   }
+}
+
+function nonceHash(provider: string, bodyText: string): string {
+  return createHash('sha256').update(`${provider}:${bodyText}`).digest('hex')
+}
+
+/**
+ * Give back the slot `checkWebhookReplay` claimed for this delivery, so the
+ * provider's redelivery is processed instead of answered as a duplicate.
+ *
+ * For a delivery the server REFUSED after claiming it (an inbound message no
+ * hub admin could read, #1034). Without this, the refusal's 503 prompts a retry
+ * that the replay guard answers with an idempotent 200 — and the provider
+ * stops retrying a message that was never stored.
+ */
+export async function releaseWebhookReplay(
+  db: Database,
+  provider: string,
+  bodyText: string,
+): Promise<void> {
+  await db.delete(webhookNonces).where(eq(webhookNonces.nonceHash, nonceHash(provider, bodyText)))
 }
 
 /**
