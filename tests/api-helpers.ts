@@ -19,6 +19,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
 import {
   ADMIN_SIGNING_SEED,
   generateContentKey,
@@ -1618,6 +1619,22 @@ async function realEnvelope(
 }
 
 /**
+ * Seal a case summary, fields payload or comment for the seed's HPKE recipient
+ * in the case-record format (PROTOCOL.md §2.18) — the construction pinned to the
+ * server-persisted vectors by tests/crypto-interop.spec.ts — so seeded case
+ * records and comments open in the desktop UI like any client-written one.
+ */
+async function sealCaseForSeed(
+  purpose: CasePurposeMock,
+  plaintext: string,
+  seedHex = ADMIN_SEED,
+): Promise<{ encryptedContent: string; envelopes: Array<{ pubkey: string; ct: string; enc: string }> }> {
+  const recipient = hpkeRecipientForSeed(seedHex)
+  const sealed = await sealCaseMock(purpose, plaintext, [], { encryptionPubkeyHex: recipient.pubkeyHex, signingPubkeyHex: '' })
+  return { encryptedContent: sealed.encryptedContent, envelopes: sealed.readerEnvelopes }
+}
+
+/**
  * Encrypt content with real AES-256-GCM and produce HPKE envelopes for recipients.
  * Returns the hex ciphertext and an array of recipient envelopes.
  * This replaces all fake base64 "encryption" in test helpers.
@@ -1787,9 +1804,7 @@ export async function createRecordViaApi(
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const contentKey = generateContentKey()
-  const encryptedSummary = encryptContent('test record', contentKey, LABEL_NOTE_KEY)
-  const envelope = await realEnvelope(contentKey, seedHex)
+  const summary = await sealCaseForSeed('summary', JSON.stringify({ title: 'test record' }), seedHex)
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
     hubOwnedPath('/records', options.hubId),
@@ -1798,8 +1813,8 @@ export async function createRecordViaApi(
       statusHash: options?.statusHash ?? 'status_open_hash',
       assignedTo: options?.assignedTo ?? [],
       blindIndexes: options?.blindIndexes ?? {},
-      encryptedSummary,
-      summaryEnvelopes: [envelope],
+      encryptedSummary: summary.encryptedContent,
+      summaryEnvelopes: summary.envelopes,
       parentRecordId: options?.parentRecordId,
     },
     seedHex,
@@ -1996,8 +2011,9 @@ export async function createInteractionViaApi(
   }
   // Schema requires sourceId for note/call/message; encryptedContent for comment
   if (options.interactionType === 'comment' && !options.encryptedContent) {
-    body.encryptedContent = encryptContent('test comment', contentKey, LABEL_NOTE_KEY)
-    body.contentEnvelopes = [await realEnvelope(contentKey, seedHex)]
+    const comment = await sealCaseForSeed('comment', 'test comment', seedHex)
+    body.encryptedContent = comment.encryptedContent
+    body.contentEnvelopes = comment.envelopes
   }
   if (['note', 'call', 'message'].includes(options.interactionType) && !options.sourceId) {
     body.sourceId = crypto.randomUUID()
