@@ -37,6 +37,7 @@ import {
   AudioLines,
   File,
 } from 'lucide-react'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 // --- Classification options ---
 
@@ -94,7 +95,7 @@ export function EvidenceUploadDialog({
 }: EvidenceUploadDialogProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const { publicKey, adminDecryptionPubkey } = useAuth()
+  const { publicKey } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [selectedFile, setSelectedFile] = useState<globalThis.File | null>(null)
@@ -164,7 +165,7 @@ export function EvidenceUploadDialog({
       const recipients = Array.from(new Set([
         ...readerPubkeys,
         ...(publicKey ? [publicKey] : []),
-        ...(adminDecryptionPubkey ? [adminDecryptionPubkey] : []),
+        ...await hubAdminReaders(),
       ]))
       // sizeBytes and integrityHash are derived from the CIPHERTEXT: a hash or
       // length of the plaintext stored next to the ciphertext would let the
@@ -201,7 +202,7 @@ export function EvidenceUploadDialog({
     } finally {
       setUploading(false)
     }
-  }, [selectedFile, publicKey, adminDecryptionPubkey, readerPubkeys, recordId, classification, onUploadComplete, resetState, t, toast])
+  }, [selectedFile, publicKey, readerPubkeys, recordId, classification, onUploadComplete, resetState, t, toast])
 
   const selectedIcon = CLASSIFICATION_OPTIONS.find(c => c.value === classification)?.icon ?? File
 

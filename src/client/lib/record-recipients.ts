@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { getRecordEnvelopeRecipients } from './api/records'
-import { adminHpkeRecipient } from './admin-recipient'
+import { getActiveHub, NoActiveHubError } from './api'
+import { hubAdminReaders, NoAdminReaderError, type AdminHpkeRecipient } from './admin-recipient'
+
+export { NoAdminReaderError }
 
 /**
  * THE contract for who a case record is sealed to. Every desktop create/update
@@ -22,23 +25,8 @@ import { adminHpkeRecipient } from './admin-recipient'
  */
 export type RecordTier = 'summary' | 'fields' | 'pii'
 
-/** The reader list of each tier: X25519 device keys, plus the author and an admin. */
+/** The reader list of each tier: X25519 device keys, plus the author and every admin of the hub. */
 export type RecordReaders = Readonly<Record<RecordTier, string[]>>
-
-/**
- * Raised when there is no admin who could read what is about to be written.
- *
- * It is the same refusal `note-sheet.tsx` makes (#1468, #1824): an envelope set
- * with no admin reader stores, acknowledges and renders to its author, and no
- * admin can ever open it. The caller keeps the user's input on screen and says
- * why; it does not substitute another key.
- */
-export class NoAdminReaderError extends Error {
-  constructor() {
-    super('no admin decryption key is configured, so no admin could read this record')
-    this.name = 'NoAdminReaderError'
-  }
-}
 
 const HEX64_RE = /^[0-9a-f]{64}$/
 
@@ -55,30 +43,38 @@ function dedupe(keys: readonly string[]): string[] {
 }
 
 /**
- * Author + the server's tier + the admin recipient, in that order.
+ * Author + the server's tier + every admin of the record's hub, in that order.
  *
  * `serverTiers === null` is a failed lookup, and it is not an error: the lookup
  * is advice about who ELSE may read, and a crisis hotline cannot fail to record
  * a call because an HTTP request for it failed. The author keeps their own
- * envelope and the admin keeps theirs; the reader this omits is a co-assignee,
- * which a re-wrap can restore. What the fallback never does is name some other
- * key to stand in — a made-up reader is an envelope nobody can open (#1021).
+ * envelope and the hub's admins keep theirs; the reader this omits is a
+ * co-assignee, which a re-wrap can restore. What the fallback never does is
+ * name some other key to stand in — a made-up reader is an envelope nobody can
+ * open (#1021).
  *
- * Throws {@link NoAdminReaderError} when the admin recipient is absent or is not
- * a 64-hex key. Server entries that are not 64-hex are dropped, not repaired.
+ * `adminReaders` is the hub's `admin` reader set (`hubAdminReaders()`, #1035):
+ * the registered device keys of every member holding the admin minimum in the
+ * hub, plus its escrow key. It is never the instance-wide
+ * `adminDecryptionPubkey` — that is one env-configured key, absent on a
+ * wizard-bootstrapped deployment, and never a reader of hub content.
+ *
+ * Throws {@link NoAdminReaderError} when `adminReaders` is empty: a record no
+ * admin can open cannot be repaired afterwards. Server entries that are not
+ * 64-hex are dropped, not repaired.
  */
 export function composeReaders(
   serverTiers: Readonly<Record<RecordTier, readonly string[]>> | null,
   authorPubkey: string,
-  adminDecryptionPubkey: string | null | undefined,
+  adminReaders: readonly AdminHpkeRecipient[],
+  hubId: string,
 ): RecordReaders {
-  const admin = adminHpkeRecipient(adminDecryptionPubkey)
-  if (!admin) throw new NoAdminReaderError()
+  if (adminReaders.length === 0) throw new NoAdminReaderError(hubId)
   const tier = (name: RecordTier): string[] =>
     dedupe([
       authorPubkey,
       ...(serverTiers?.[name] ?? []).map(k => k.toLowerCase()).filter(k => HEX64_RE.test(k)),
-      admin,
+      ...adminReaders,
     ])
   return { summary: tier('summary'), fields: tier('fields'), pii: tier('pii') }
 }
@@ -87,25 +83,40 @@ export function composeReaders(
 interface ReaderParams {
   /** This user's account key (`useAuth().publicKey`); the sealing device is always a reader. */
   authorPubkey: string
-  adminDecryptionPubkey: string | null | undefined
+  /**
+   * The hub the record lives in — the hub whose admins must be able to read
+   * it. Defaults to the active hub, which is where a new record is created.
+   */
+  hubId?: string | null
+}
+
+/**
+ * The hub's admin readers, resolved before the tier lookup: a hub with no
+ * admin able to read refuses the write without spending the second round trip.
+ */
+async function adminReadersOf(hubId: string | null | undefined): Promise<{ hubId: string; admins: AdminHpkeRecipient[] }> {
+  const hub = hubId ?? getActiveHub()
+  if (!hub) throw new NoActiveHubError('/readers')
+  return { hubId: hub, admins: await hubAdminReaders(hub) }
 }
 
 /**
  * Who may read a record that does not exist yet.
  *
  * `assignedTo` is the intended assignees' account keys (`records.assigned_to`
- * values), which the server resolves to their devices. The admin check runs
- * before the request: a hub with no admin recipient refuses the write without
- * spending a round trip.
+ * values), which the server resolves to their devices. The hub's admin
+ * readers are resolved first: a hub with no admin able to read refuses the
+ * write before the tier lookup.
  */
 export async function resolveCreationReaders(
   params: ReaderParams & { entityTypeId: string; assignedTo: string[] },
 ): Promise<RecordReaders> {
-  composeReaders(null, params.authorPubkey, params.adminDecryptionPubkey)
+  const { hubId, admins } = await adminReadersOf(params.hubId)
   return composeReaders(
     await lookupTiers({ entityTypeId: params.entityTypeId, assignedTo: params.assignedTo }),
     params.authorPubkey,
-    params.adminDecryptionPubkey,
+    admins,
+    hubId,
   )
 }
 
@@ -113,11 +124,12 @@ export async function resolveCreationReaders(
 export async function resolveRecordReaders(
   params: ReaderParams & { recordId: string },
 ): Promise<RecordReaders> {
-  composeReaders(null, params.authorPubkey, params.adminDecryptionPubkey)
+  const { hubId, admins } = await adminReadersOf(params.hubId)
   return composeReaders(
     await lookupTiers({ recordId: params.recordId }),
     params.authorPubkey,
-    params.adminDecryptionPubkey,
+    admins,
+    hubId,
   )
 }
 
@@ -156,7 +168,7 @@ async function lookupTiers(
  * and `pii` deliberably narrower.
  *
  * Returns `[]` until the fetch resolves, and `[]` on failure. Callers must add
- * their own device key and the admin recipient themselves and must not treat an
+ * their own device key and the hub's admin readers themselves and must not treat an
  * empty list as "no readers" — a shorter list costs a reader, which is
  * recoverable; sealing to a key nobody holds is not.
  */
@@ -176,7 +188,7 @@ export function useRecordFieldRecipients(recordId: string | undefined): string[]
       } catch {
         // A failed lookup must not block filing a comment or uploading
         // evidence during a crisis call. The caller still seals to its own
-        // device key and the admin recipient, so the content is readable by
+        // device key and the hub's admin readers, so the content is readable by
         // the author and by an admin — the reader this omits is a co-assignee,
         // and a re-wrap can restore them later.
         if (!cancelled) setRecipients([])

@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { Lock, Loader2, Send, FileText } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { CustomFieldInputs, validateCustomFields } from '@/components/notes/custom-field-inputs'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 interface ReportFormProps {
   open: boolean
@@ -25,7 +26,7 @@ interface ReportFormProps {
 
 export function ReportForm({ open, onOpenChange, onCreated }: ReportFormProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin } = useAuth()
   const { toast } = useToast()
 
   const [title, setTitle] = useState('')
@@ -110,9 +111,8 @@ export function ReportForm({ open, onOpenChange, onCreated }: ReportFormProps) {
     try {
       // Build reader list: reporter + admin decryption key
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await hubAdminReaders())
 
       // Encrypt body with custom field values as structured payload
       const nonEmptyFields = Object.entries(fieldValues).filter(([, v]) => v !== '' && v !== undefined)
@@ -139,7 +139,7 @@ export function ReportForm({ open, onOpenChange, onCreated }: ReportFormProps) {
     } finally {
       setSubmitting(false)
     }
-  }, [title, body, selectedTypeId, selectedType, fieldValues, reportFields, hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey, toast, t, resetForm, onOpenChange, onCreated])
+  }, [title, body, selectedTypeId, selectedType, fieldValues, reportFields, hasDeviceKey, publicKey, isAdmin, toast, t, resetForm, onOpenChange, onCreated])
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

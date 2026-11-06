@@ -52,8 +52,12 @@ const assignee = person()    // assigned to an existing record, not its author
 const summaryOnly = person() // may see the case exists, nothing more
 const outsider = person()    // holds no case permission at all
 const admin = person()       // reads everything, via cases:read-all
-/** The instance admin decryption key: a recipient of its own, in no tier. */
-const instanceAdmin = person()
+/**
+ * A key in the hub's admin reader set that is in no tier — the hub's escrow
+ * key. The admin set (`GET /hubs/:hubId/readers?purpose=admin`, #1035) is
+ * sealed to whole, whatever the tiers say.
+ */
+const escrow = person()
 
 const EDIT_SLUG = 'field-editor'
 const VIEW_SLUG = 'case-viewer'
@@ -96,12 +100,16 @@ const mocks = vi.hoisted(() => ({
   createRecord: vi.fn(),
   createCaseFromReport: vi.fn(),
   updateRecord: vi.fn(),
+  getHubReaders: vi.fn(),
   toast: vi.fn(),
 }))
 
 vi.mock('@/lib/api/records', () => ({ getRecordEnvelopeRecipients: mocks.getRecordEnvelopeRecipients }))
 
 vi.mock('@/lib/api', () => ({
+  getActiveHub: () => HUB_ID,
+  getHubReaders: mocks.getHubReaders,
+  NoActiveHubError: class NoActiveHubError extends Error {},
   listEntityTypes: vi.fn(async () => ({ entityTypes: [entityType] })),
   createRecord: mocks.createRecord,
   createCaseFromReport: mocks.createCaseFromReport,
@@ -111,12 +119,13 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
 
-let adminDecryptionPubkey = ''
+const HUB_ID = 'hub-1'
+/** What the hub's `admin` reader set answers: the keys of every admin of the hub. */
+let hubAdminKeys: string[] = []
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     hasDeviceKey: true,
     publicKey: author.account,
-    adminDecryptionPubkey,
     hasPermission: () => true,
   }),
 }))
@@ -172,7 +181,12 @@ async function openAs(who: Person, purpose: CasePurposeMock, sealed: CaseCiphert
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  adminDecryptionPubkey = instanceAdmin.device
+  hubAdminKeys = [admin.device, escrow.device]
+  mocks.getHubReaders.mockImplementation(async (hubId: string, purpose: string) => {
+    expect(hubId).toBe(HUB_ID)
+    expect(purpose).toBe('admin')
+    return { recipients: hubAdminKeys }
+  })
   mocks.createRecord.mockResolvedValue({ id: 'rec-new' })
   // Creation: the by-entity-type variant, with the intended assignees.
   mocks.getRecordEnvelopeRecipients.mockImplementation(async (q: { assignedTo?: string[]; recordId?: string }) =>
@@ -195,7 +209,7 @@ describe('creating a case seals each tier to the readers the server names', () =
     expect(fieldKeys).toContain(editor.device)
     expect(fieldKeys).toContain(author.device)
     expect(fieldKeys).toContain(admin.device)
-    expect(fieldKeys).toContain(instanceAdmin.device)
+    expect(fieldKeys).toContain(escrow.device)
     expect(fieldKeys).not.toContain(summaryOnly.device)
     expect(fieldKeys).not.toContain(outsider.device)
   })
@@ -203,7 +217,7 @@ describe('creating a case seals each tier to the readers the server names', () =
   it('stores the summary tier for everyone with read access to the type, the author and the admin', async () => {
     const stored = await createCase()
     const summaryKeys = keysOf(stored.summary)
-    for (const reader of [editor, summaryOnly, admin, author, instanceAdmin]) {
+    for (const reader of [editor, summaryOnly, admin, author, escrow]) {
       expect(summaryKeys).toContain(reader.device)
     }
     expect(summaryKeys).not.toContain(outsider.device)
@@ -217,7 +231,7 @@ describe('creating a case seals each tier to the readers the server names', () =
 
   it('lets the author and the admin decrypt too', async () => {
     const stored = await createCase()
-    for (const reader of [author, instanceAdmin, admin]) {
+    for (const reader of [author, escrow, admin]) {
       expect(await openAs(reader, 'fields', stored.fields!)).not.toBeNull()
     }
   })
@@ -256,19 +270,19 @@ describe('a failed recipient lookup never blocks creating the case', () => {
     mocks.getRecordEnvelopeRecipients.mockRejectedValue(new Error('network down'))
   })
 
-  it('still creates it, readable by exactly the author and the admin', async () => {
+  it("still creates it, readable by exactly the author and the hub's admin readers", async () => {
     const stored = await createCase()
     for (const sealed of [stored.summary, stored.fields!]) {
-      expect(new Set(keysOf(sealed))).toEqual(new Set([author.device, instanceAdmin.device]))
+      expect(new Set(keysOf(sealed))).toEqual(new Set([author.device, admin.device, escrow.device]))
     }
     expect(await openAs(author, 'summary', stored.summary)).not.toBeNull()
-    expect(await openAs(instanceAdmin, 'fields', stored.fields!)).not.toBeNull()
+    expect(await openAs(escrow, 'fields', stored.fields!)).not.toBeNull()
   })
 
   it('names no substituted key: no tier member and no account key appears', async () => {
     const stored = await createCase()
     const all = [...keysOf(stored.summary), ...keysOf(stored.fields!)]
-    for (const other of [editor, assignee, summaryOnly, outsider, admin]) {
+    for (const other of [editor, assignee, summaryOnly, outsider]) {
       expect(all).not.toContain(other.device)
       expect(all).not.toContain(other.account)
     }
@@ -278,10 +292,10 @@ describe('a failed recipient lookup never blocks creating the case', () => {
 })
 
 describe('an envelope set with no admin reader is unreachable', () => {
-  it.each([['empty', ''], ['not hex', 'not-a-key'], ['wrong length', 'ab'.repeat(16)]])(
-    'refuses to create the case when the admin key is %s, and never asks the server',
-    async (_label, value) => {
-      adminDecryptionPubkey = value
+  it.each([['empty', []], ['not hex', ['not-a-key']], ['wrong length', ['ab'.repeat(16)]]])(
+    "refuses to create the case when the hub's admin reader set is %s, and never asks for the tiers",
+    async (_label, value: string[]) => {
+      hubAdminKeys = value
       const view = render(createElement(CreateRecordDialog, {
         open: true, onOpenChange: vi.fn(), onCreated: vi.fn(), defaultEntityTypeId: entityType.id,
       }))
@@ -302,7 +316,7 @@ describe('updating an existing record\'s fields', () => {
       return serverTiers([assignee.account])
     })
     const readers = await resolveRecordReaders({
-      recordId: 'rec-1', authorPubkey: editor.account, adminDecryptionPubkey: instanceAdmin.device,
+      recordId: 'rec-1', authorPubkey: editor.account,
     })
     const sealed = await sealCaseMock('fields', '{"k":"v"}', readers.fields, {
       encryptionPubkeyHex: editor.device, signingPubkeyHex: editor.account,
@@ -312,11 +326,23 @@ describe('updating an existing record\'s fields', () => {
     expect(await openAs(summaryOnly, 'fields', sealed)).toBeNull()
   })
 
-  it('falls back to author + admin when the lookup fails', async () => {
+  it("falls back to author + the hub's admin readers when the lookup fails", async () => {
     mocks.getRecordEnvelopeRecipients.mockRejectedValue(new Error('offline'))
     const readers = await resolveRecordReaders({
-      recordId: 'rec-1', authorPubkey: editor.account, adminDecryptionPubkey: instanceAdmin.device,
+      recordId: 'rec-1', authorPubkey: editor.account,
     })
-    expect(readers.fields).toEqual([editor.account, instanceAdmin.device])
+    expect(readers.fields).toEqual([editor.account, admin.device, escrow.device])
+  })
+
+  it("asks the record's own hub for its admins, not the browsed one", async () => {
+    mocks.getHubReaders.mockImplementation(async (hubId: string) => {
+      expect(hubId).toBe('hub-of-the-record')
+      return { recipients: [admin.device] }
+    })
+    const readers = await resolveRecordReaders({
+      recordId: 'rec-1', authorPubkey: editor.account, hubId: 'hub-of-the-record',
+    })
+    expect(readers.fields).toContain(admin.device)
+    expect(readers.fields).not.toContain(escrow.device)
   })
 })

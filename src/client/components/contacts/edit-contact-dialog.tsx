@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Loader2 } from 'lucide-react'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 interface EditContactDialogProps {
   contact: DirectoryContact
@@ -24,7 +25,7 @@ interface EditContactDialogProps {
 
 export function EditContactDialog({ contact, open, onOpenChange, onUpdated }: EditContactDialogProps) {
   const { t } = useTranslation()
-  const { publicKey, adminDecryptionPubkey } = useAuth()
+  const { publicKey } = useAuth()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
   const [displayName, setDisplayName] = useState('')
@@ -39,9 +40,8 @@ export function EditContactDialog({ contact, open, onOpenChange, onUpdated }: Ed
     setSaving(true)
     try {
       const readerPubkeys: string[] = publicKey ? [publicKey] : []
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await hubAdminReaders())
 
       const summary: DirectoryContactSummary = {
         displayName: displayName.trim(),
@@ -62,7 +62,7 @@ export function EditContactDialog({ contact, open, onOpenChange, onUpdated }: Ed
     } finally {
       setSaving(false)
     }
-  }, [displayName, contact, publicKey, adminDecryptionPubkey, onUpdated, onOpenChange, t, toast])
+  }, [displayName, contact, publicKey, onUpdated, onOpenChange, t, toast])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

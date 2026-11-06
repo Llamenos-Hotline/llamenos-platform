@@ -56,7 +56,7 @@ const EMPTY_RECORDS_PAGE: RecordsPage = { records: [], total: 0 }
 
 function CasesPage() {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, hasPermission, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin, hasPermission } = useAuth()
   const { toast } = useToast()
 
   // --- Data state ---
@@ -529,7 +529,6 @@ function CasesPage() {
                 hasPermission={hasPermission}
                 publicKey={publicKey}
                 hasDeviceKey={hasDeviceKey}
-                adminDecryptionPubkey={adminDecryptionPubkey}
                 onStatusChange={handleStatusChange}
                 onAssignToMe={handleAssignToMe}
                 onUnassign={handleUnassign}
@@ -714,7 +713,6 @@ function RecordDetail({
   hasPermission,
   publicKey,
   hasDeviceKey,
-  adminDecryptionPubkey,
   onStatusChange,
   onAssignToMe,
   onUnassign,
@@ -727,7 +725,6 @@ function RecordDetail({
   hasPermission: (p: string) => boolean
   publicKey: string | null
   hasDeviceKey: boolean
-  adminDecryptionPubkey: string
   onStatusChange: (id: string, newStatus: string) => void
   onAssignToMe: (id: string) => void
   onUnassign: (id: string) => void
@@ -953,7 +950,6 @@ function RecordDetail({
             isAssigned={isAssigned}
             hasDeviceKey={hasDeviceKey}
             publicKey={publicKey}
-            adminDecryptionPubkey={adminDecryptionPubkey}
           />
         )}
         {activeTab === 'timeline' && (
@@ -995,7 +991,6 @@ function DetailsTab({
   isAssigned,
   hasDeviceKey,
   publicKey,
-  adminDecryptionPubkey,
 }: {
   record: CaseRecord
   entityType: EntityTypeDefinition
@@ -1003,7 +998,6 @@ function DetailsTab({
   isAssigned: boolean
   hasDeviceKey: boolean
   publicKey: string | null
-  adminDecryptionPubkey: string
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -1062,7 +1056,6 @@ function DetailsTab({
         const readers = await resolveRecordReaders({
           recordId: record.id,
           authorPubkey: publicKey,
-          adminDecryptionPubkey,
         })
 
         const encrypted = await sealCase('fields', JSON.stringify(newValues), readers.fields)
@@ -1082,7 +1075,7 @@ function DetailsTab({
         )
       }
     }, 800)
-  }, [publicKey, hasDeviceKey, adminDecryptionPubkey, canEdit, record.id, toast, t])
+  }, [publicKey, hasDeviceKey, canEdit, record.id, toast, t])
 
   if (entityType.fields.length === 0) {
     return (
