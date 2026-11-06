@@ -161,21 +161,39 @@ describe('HubShredService.execute', () => {
     expect(after!.adminEnvelopes).toEqual([])
   })
 
-  it('clears the file envelope columns AND deletes the blob-store mirrors', async () => {
+  /**
+   * A file of `hubId` under each owner kind (#2462). Reached through a
+   * conversation join, the shred missed case-record and entity-field files.
+   */
+  async function fileParent(hubId: string, kind: 'conversation' | 'case_record' | 'entity_field') {
+    if (kind === 'conversation') {
+      const [conversation] = await fresh.db.insert(schema.conversations).values({ hubId }).returning()
+      return { ownerKind: kind, conversationId: conversation!.id }
+    }
+    if (kind === 'case_record') {
+      const [record] = await fresh.db
+        .insert(schema.caseRecords)
+        .values({ hubId, statusHash: 'status', createdBy: 'creator-pk' })
+        .returning()
+      return { ownerKind: kind, caseRecordId: record!.id }
+    }
+    return { ownerKind: kind }
+  }
+
+  it.each(['conversation', 'case_record', 'entity_field'] as const)(
+    'clears the envelope columns AND deletes the blob-store mirrors of a %s file',
+    async (kind) => {
     const hubId = await createHub()
     const fileReader = reader()
     const blob = fakeBlobStore()
     fresh.useBlobStorage(blob)
 
-    const [conversation] = await fresh.db
-      .insert(schema.conversations)
-      .values({ hubId })
-      .returning()
     const sealed = encryptMessageForStorage('attachment contents', [fileReader.pubkey])
     const [file] = await fresh.db
       .insert(schema.files)
       .values({
-        conversationId: conversation!.id,
+        hubId,
+        ...(await fileParent(hubId, kind)),
         uploadedBy: fileReader.pubkey,
         recipientEnvelopes: sealed.readerEnvelopes,
         encryptedMetadata: sealed.readerEnvelopes,
@@ -210,19 +228,17 @@ describe('HubShredService.execute', () => {
       .where(eq(schema.reEncryptionJobs.hubId, hubId))
     expect(marker!.scope).toBe('hub')
     expect(marker!.status).toBe('completed')
-  })
+    },
+  )
 
   it('refuses to shred a hub with files when no blob store is reachable', async () => {
     const hubId = await createHub()
     fresh.useBlobStorage(undefined as never)
-    const [conversation] = await fresh.db
-      .insert(schema.conversations)
-      .values({ hubId })
-      .returning()
     await fresh.db
       .insert(schema.files)
       .values({
-        conversationId: conversation!.id,
+        hubId,
+        ownerKind: 'entity_field',
         uploadedBy: 'uploader-pk',
         status: 'completed',
       })

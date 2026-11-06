@@ -140,6 +140,19 @@
       "optionalKeys": []
     },
     {
+      "id": "initUpload",
+      "method": "POST",
+      "path": "/api/hubs/:hubId/uploads/init",
+      "module": "@protocol/schemas/uploads",
+      "schema": "uploadInitBodySchema",
+      "swiftType": "UploadInitBody",
+      "callSite": "apps/ios/Sources/Services/APIService.swift",
+      "optionalKeys": [
+        "encryptedMetadata",
+        "recipientEnvelopes"
+      ]
+    },
+    {
       "id": "storeUserRecoveryEnvelope",
       "method": "POST",
       "path": "/api/recovery-group/user-envelope",
@@ -504,6 +517,52 @@
         },
         "phoneNumber": "+15550001111",
         "provider": "twilio"
+      }
+    },
+    "initUpload": {
+      "wire": {
+        "encryptedMetadata": [
+          {
+            "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "encryptedContent": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "pubkey": "abababababababababababababababababababababababababababababababab"
+          }
+        ],
+        "owner": {
+          "kind": "entity_field"
+        },
+        "recipientEnvelopes": [
+          {
+            "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "pubkey": "abababababababababababababababababababababababababababababababab"
+          }
+        ],
+        "totalChunks": 1,
+        "totalSize": 1024
+      },
+      "legacySnakeCase": {
+        "encrypted_metadata": [
+          {
+            "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "encrypted_content": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "pubkey": "abababababababababababababababababababababababababababababababab"
+          }
+        ],
+        "owner": {
+          "kind": "entity_field"
+        },
+        "recipient_envelopes": [
+          {
+            "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "pubkey": "abababababababababababababababababababababababababababababababab"
+          }
+        ],
+        "total_chunks": 1,
+        "total_size": 1024
       }
     }
   }

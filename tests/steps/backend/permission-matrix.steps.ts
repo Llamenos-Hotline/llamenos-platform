@@ -26,7 +26,10 @@ import {
   ADMIN_SEED,
   encryptForTest,
   validNoteBody,
+  uploadFileViaApi,
 } from '../../api-helpers'
+import { hpkeRecipientForSeed, wrapKeyForRecipient } from '../../crypto-helpers'
+import { LABEL_FILE_KEY } from '@shared/crypto-labels'
 
 const BASE_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
@@ -469,10 +472,17 @@ When('the {string} user sends {string} to {string} with share body', async ({ re
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
-  // Extract file ID from path, send share request
-  getSharedState(world).lastResponse = await apiPost(request, '/files/test-file-id/share', {
-    envelope: { pubkey: user.pubkey, encryptedFileKey: 'test', enc: user.pubkey },
-    encryptedMetadata: { pubkey: user.pubkey, encryptedContent: 'test', enc: user.pubkey },
+  // A real file of the scenario hub (#2462: files live only under a hub), and a
+  // real re-wrap of its key for the role user — the request a sharing admin's
+  // client makes. Whether it is admitted is then the role's `files:share` in
+  // that hub, and nothing else.
+  const hubId = getScenarioState(world).hubId
+  const file = await uploadFileViaApi(request, { hubId, owner: { kind: 'entity_field' } })
+  const recipient = hpkeRecipientForSeed(user.deviceKey)
+  const wrapped = await wrapKeyForRecipient(file.contentKey, recipient.pubkeyHex, recipient.skHex, LABEL_FILE_KEY)
+  getSharedState(world).lastResponse = await apiPost(request, `/hubs/${hubId}/files/${file.fileId}/share`, {
+    envelope: { pubkey: recipient.pubkeyHex, ...wrapped },
+    encryptedMetadata: { pubkey: recipient.pubkeyHex, encryptedContent: 'aa', ...wrapped },
   }, user.deviceKey)
 })
 

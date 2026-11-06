@@ -641,9 +641,11 @@ Feature: Permission Matrix
 
   # ─── Files Domain ─────────────────────────────────────────────────
 
+  # Files exist only under a hub (#2462), so sharing is decided by the role the
+  # user holds IN the file's hub.
   Scenario Outline: <role> <expected> access to share file
-    When the "<role>" user sends "POST" to "/api/files/test-file-id/share" with share body
-    Then the response status should not be 403
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/files/:fileId/share" with share body
+    Then the response status should be 200
 
     Examples:
       | role         | expected  |
@@ -651,7 +653,7 @@ Feature: Permission Matrix
       | hub-admin    | has       |
 
   Scenario Outline: <role> denied access to share file
-    When the "<role>" user sends "POST" to "/api/files/test-file-id/share" with share body
+    When the "<role>" user sends "POST" to "/api/hubs/:hubId/files/:fileId/share" with share body
     Then the response status should be 403
 
     Examples:

@@ -228,7 +228,7 @@ describe('ConversationsService.addFileRecipient grants a usable envelope (#1595)
 
     const [file] = await db
       .insert(files)
-      .values({ conversationId: conversation!.id, uploadedBy: 'pk-uploader' })
+      .values({ hubId, ownerKind: 'conversation', conversationId: conversation!.id, uploadedBy: 'pk-uploader' })
       .returning({ id: files.id })
 
     const metadata = {

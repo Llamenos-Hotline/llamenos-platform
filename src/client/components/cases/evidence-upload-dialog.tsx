@@ -3,11 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { useAuth } from '@/lib/auth'
 import { prepareEvidenceUpload } from '@/lib/evidence-upload'
+import { chunkedUpload } from '@/lib/chunked-upload'
 import {
   uploadEvidence,
-  initUpload,
-  uploadChunk,
-  completeUpload,
   type EvidenceMetadata,
   type EvidenceClassification,
 } from '@/lib/api'
@@ -174,30 +172,14 @@ export function EvidenceUploadDialog({
       const { encrypted, sizeBytes, integrityHash } = await prepareEvidenceUpload(selectedFile, recipients)
       setProgress(15)
 
-      // 2. Initialize chunked upload of the ENCRYPTED content
-      const totalSize = sizeBytes
-      const totalChunks = Math.ceil(totalSize / CHUNK_SIZE)
-      const { uploadId } = await initUpload({
-        totalSize,
-        totalChunks,
-        conversationId: recordId,
-        recipientEnvelopes: encrypted.recipientEnvelopes,
-        encryptedMetadata: encrypted.encryptedMetadata,
+      // 2–4. Upload the ENCRYPTED content as a file of this case record. The
+      // record — not a conversation — is the file's parent (#2462).
+      const { fileId } = await chunkedUpload({
+        encrypted,
+        owner: { kind: 'case_record', caseRecordId: recordId },
+        chunkSize: CHUNK_SIZE,
+        onProgress: (completed, total) => setProgress(20 + Math.round((completed / total) * 70)),
       })
-      setProgress(20)
-
-      // 3. Upload encrypted chunks
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * CHUNK_SIZE
-        const end = Math.min(start + CHUNK_SIZE, totalSize)
-        const chunk = encrypted.encryptedContent.slice(start, end).buffer as ArrayBuffer
-
-        await uploadChunk(uploadId, i, chunk)
-        setProgress(20 + Math.round(((i + 1) / totalChunks) * 70))
-      }
-
-      // 4. Complete upload
-      const { fileId } = await completeUpload(uploadId)
       setProgress(95)
 
       // 5. Register as evidence

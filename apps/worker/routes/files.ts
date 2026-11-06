@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -9,11 +9,34 @@ import { incCounter } from './metrics'
 import { shareFileBodySchema, fileEnvelopesResponseSchema, fileMetadataResponseSchema } from '@protocol/schemas/files'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('routes.files')
 
+/**
+ * Encrypted file reads and sharing. Mounted ONLY under /hubs/:hubId (#2462):
+ * a file is read through its own hub, a file of another hub answers like a
+ * missing one, and `files:download-all` / `files:share` are the caller's
+ * permissions IN that hub. So the hub's own admins (whose role grants `files:*`
+ * in the hub) can read and re-share their hub's files, and a global role
+ * reaches a hub's files only through what it grants inside that hub.
+ */
 const files = new Hono<AppEnv>()
+files.use('*', hubOnly)
+
+/**
+ * Every key an envelope addressed to the caller can carry: their identity key
+ * (a client may address its own envelope by it) and each X25519 key their
+ * devices registered — what every other writer seals to, since an Ed25519
+ * identity key is never an HPKE recipient (#1021). Matching the identity key
+ * alone left every recipient but the uploader unable to find their envelope.
+ */
+async function callerAddresses(c: Context<AppEnv>): Promise<Set<string>> {
+  const pubkey = c.get('pubkey')
+  const devices = await c.get('services').identity.getHpkeRecipients(pubkey)
+  return new Set<string>([pubkey, ...devices])
+}
 
 // Download encrypted file content
 files.get('/:id/content',
@@ -35,7 +58,7 @@ files.get('/:id/content',
     const services = c.get('services')
 
     // Get file record to verify access
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
 
     if (fileRecord.status !== 'complete') {
       return c.json({ error: 'File upload not complete' }, 400)
@@ -43,9 +66,10 @@ files.get('/:id/content',
 
     // Verify the requester has an envelope (is an authorized recipient)
     const envelopes = (fileRecord.recipientEnvelopes ?? []) as Array<{ pubkey: string }>
+    const mine = await callerAddresses(c)
     const hasAccess = checkPermission(permissions, 'files:download-all') ||
       fileRecord.uploadedBy === pubkey ||
-      envelopes.some(e => e.pubkey === pubkey)
+      envelopes.some(e => mine.has(e.pubkey))
 
     if (!hasAccess) {
       return c.json({ error: 'Forbidden' }, 403)
@@ -109,24 +133,24 @@ files.get('/:id/envelopes',
     const permissions = c.get('permissions')
     const services = c.get('services')
 
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
     const envelopes = (fileRecord.recipientEnvelopes ?? []) as Array<{ pubkey: string }>
+    const mine = await callerAddresses(c)
 
     const hasAccess = checkPermission(permissions, 'files:download-all') ||
       fileRecord.uploadedBy === pubkey ||
-      envelopes.some(e => e.pubkey === pubkey)
+      envelopes.some(e => mine.has(e.pubkey))
 
     if (!hasAccess) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    // Return only the envelope for the requesting user (or all for users with download-all)
+    // Return only the requesting user's envelopes (or all for users with download-all)
     if (checkPermission(permissions, 'files:download-all')) {
       return c.json({ envelopes })
     }
 
-    const myEnvelope = envelopes.find(e => e.pubkey === pubkey)
-    return c.json({ envelopes: myEnvelope ? [myEnvelope] : [] })
+    return c.json({ envelopes: envelopes.filter(e => mine.has(e.pubkey)) })
   })
 
 // Get encrypted file metadata
@@ -154,25 +178,25 @@ files.get('/:id/metadata',
     const permissions = c.get('permissions')
     const services = c.get('services')
 
-    const fileRecord = await services.conversations.getFile(fileId)
+    const fileRecord = await services.conversations.getFileInHub(fileId, pathHubId(c))
     const envelopes = (fileRecord.recipientEnvelopes ?? []) as Array<{ pubkey: string }>
     const metadataEntries = (fileRecord.encryptedMetadata ?? []) as Array<{ pubkey: string }>
 
+    const mine = await callerAddresses(c)
     const hasAccess = checkPermission(permissions, 'files:download-all') ||
       fileRecord.uploadedBy === pubkey ||
-      envelopes.some(e => e.pubkey === pubkey)
+      envelopes.some(e => mine.has(e.pubkey))
 
     if (!hasAccess) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    // Return only the metadata blob for the requesting user (or all for users with download-all)
+    // Return only the requesting user's metadata entries (or all for users with download-all)
     if (checkPermission(permissions, 'files:download-all')) {
       return c.json({ metadata: metadataEntries })
     }
 
-    const myMeta = metadataEntries.find(m => m.pubkey === pubkey)
-    return c.json({ metadata: myMeta ? [myMeta] : [] })
+    return c.json({ metadata: metadataEntries.filter(m => mine.has(m.pubkey)) })
   })
 
 // Share file with a new recipient (requires files:share — admin re-encrypts the file key for a volunteer)
@@ -189,6 +213,7 @@ files.post('/:id/share', requirePermission('files:share'),
           },
         },
       },
+      404: { description: 'File not found' },
       500: { description: 'Failed to share file' },
       ...authErrors,
     },
@@ -199,11 +224,13 @@ files.post('/:id/share', requirePermission('files:share'),
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
+    const hubId = pathHubId(c)
 
-    // Add the new envelope to the file record via service
+    // Only a file of this hub can be shared through it (404 otherwise).
+    await services.conversations.getFileInHub(fileId, hubId)
     await services.conversations.addFileRecipient(fileId, body.envelope, body.encryptedMetadata)
 
-    await audit(services.audit, 'fileShared', pubkey, { fileId, sharedWith: body.envelope.pubkey }, undefined, null)
+    await audit(services.audit, 'fileShared', pubkey, { fileId, sharedWith: body.envelope.pubkey }, undefined, hubId)
 
     return c.json({ ok: true })
   })

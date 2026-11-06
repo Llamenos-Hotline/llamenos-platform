@@ -10,9 +10,11 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { files } from './conversations'
 
 // ---------------------------------------------------------------------------
 // case_records
@@ -83,6 +85,10 @@ export const caseRecords = pgTable(
       table.hubId,
       table.categoryHash,
     ),
+    // The target of files' (case_record_id, hub_id) foreign key: a file can
+    // only name a case record of its own hub. `id` is the primary key, so the
+    // pair is unique by construction.
+    unique('case_records_id_hub_id_unique').on(table.id, table.hubId),
   ],
 )
 
@@ -248,7 +254,11 @@ export const evidence = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     caseId: text('case_id').notNull(),
-    fileId: text('file_id').notNull(),
+    // The uploaded file this entry describes. It must exist: an evidence row
+    // naming no file is an entry whose subject is absent (#2462).
+    fileId: text('file_id')
+      .notNull()
+      .references(() => files.id),
     filename: text('filename').notNull(),
     mimeType: text('mime_type').notNull(),
     sizeBytes: integer('size_bytes').notNull(),

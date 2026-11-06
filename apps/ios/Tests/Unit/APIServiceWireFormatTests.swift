@@ -346,6 +346,21 @@ final class APIServiceWireFormatTests: XCTestCase {
                 provider: .twilio
             )),
 
+            // POST /api/hubs/:hubId/uploads/init — uploadInitBodySchema (#2462). The
+            // report form's file field: `owner` is a discriminated union and the
+            // envelopes nest generated types, so a wrong generated type here ships a
+            // body the validator rejects. totalChunks/totalSize are required, the
+            // envelopes optional.
+            ("initUpload", UploadInitBody(
+                encryptedMetadata: [EncryptedMetadataEntry(
+                    ct: Self.ct, enc: Self.enc, encryptedContent: Self.ct, pubkey: Self.pubkey
+                )],
+                owner: FileOwner(conversationID: nil, kind: .entityField, caseRecordID: nil),
+                recipientEnvelopes: [Self.admin],
+                totalChunks: 1,
+                totalSize: 1024
+            )),
+
             // POST /api/recovery-group/user-envelope — a `[String: String]` body.
             // A key strategy rewrites Dictionary keys too, so untyped bodies were
             // affected as much as the generated structs.

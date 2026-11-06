@@ -1010,42 +1010,59 @@ final class APIService: @unchecked Sendable {
     }
 }
 
-// MARK: - Entity File Upload
-
-/// Local API response type — distinct from the codegen EntityFileUploadResponse
-/// because the decoder uses convertFromSnakeCase and expects String dates (not Date).
-struct APIFileUploadResponse: Decodable {
-    let fileId: String
-    let uploadedAt: String
-}
+// MARK: - Chunked File Upload
 
 extension APIService {
-    /// Upload encrypted file data as multipart/form-data to the entity-file endpoint.
-    func uploadEntityFile(encryptedData: Data, fileName: String) async throws -> APIFileUploadResponse {
-        guard let baseURL else { throw APIError.noBaseURL }
+    /// Bytes per chunk. The server refuses a chunk over 10 MB (routes/uploads.ts).
+    static let uploadChunkSize = 5 * 1024 * 1024
 
-        let boundary = UUID().uuidString
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
-        body.append(encryptedData)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-
-        let target = try Self.resolve(path: "/api/uploads/entity-file", against: baseURL)
-        var urlRequest = URLRequest(url: target.url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-        urlRequest.httpBody = body
-
-        if cryptoService.isUnlocked {
-            let token = try cryptoService.createAuthToken(method: "POST", path: target.signedPath)
-            let authJSON = """
-            {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"}
-            """
-            urlRequest.setValue("Bearer \(authJSON)", forHTTPHeaderField: "Authorization")
+    /// Upload an encrypted file into the active hub through the chunked path every
+    /// client uses (#2462): init with the file's owner and its envelopes, one PUT
+    /// per chunk, then complete. Files exist only inside a hub, so there is no
+    /// unscoped variant.
+    func uploadEncryptedFile(
+        encryptedData: Data,
+        owner: FileOwner,
+        recipientEnvelopes: [SharedAdminEnvelope],
+        encryptedMetadata: [EncryptedMetadataEntry]
+    ) async throws -> UploadCompleteResponse {
+        let chunkSize = Self.uploadChunkSize
+        let totalChunks = max(1, (encryptedData.count + chunkSize - 1) / chunkSize)
+        let started: UploadInitResponse = try await request(
+            method: "POST",
+            path: try activeHubPath("/api/uploads/init"),
+            wireBody: UploadInitBody(
+                encryptedMetadata: encryptedMetadata,
+                owner: owner,
+                recipientEnvelopes: recipientEnvelopes,
+                totalChunks: totalChunks,
+                totalSize: encryptedData.count
+            )
+        )
+        for index in 0..<totalChunks {
+            let start = index * chunkSize
+            let end = min(start + chunkSize, encryptedData.count)
+            try await putUploadChunk(encryptedData.subdata(in: start..<end), uploadID: started.uploadID, index: index)
         }
+        return try await request(method: "POST", path: try activeHubPath("/api/uploads/\(started.uploadID)/complete"))
+    }
+
+    /// PUT one chunk as raw bytes — the JSON request helpers cannot carry a binary body.
+    private func putUploadChunk(_ chunk: Data, uploadID: String, index: Int) async throws {
+        guard let baseURL else { throw APIError.noBaseURL }
+        let target = try Self.resolve(path: try activeHubPath("/api/uploads/\(uploadID)/chunks/\(index)"), against: baseURL)
+        var urlRequest = URLRequest(url: target.url)
+        urlRequest.httpMethod = "PUT"
+        urlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        urlRequest.httpBody = chunk
+
+        let token = try cryptoService.createAuthToken(method: "PUT", path: target.signedPath)
+        let nonceField = token.nonce.map { ",\"nonce\":\"\($0)\"" } ?? ""
+        let authJSON = """
+        {"pubkey":"\(token.pubkey)","timestamp":\(token.timestamp),"token":"\(token.token)"\(nonceField)}
+        """
+        urlRequest.setValue("Bearer \(authJSON)", forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await Self.data(for: urlRequest, on: session)
         guard let httpResponse = response as? HTTPURLResponse,
@@ -1054,7 +1071,6 @@ extension APIService {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw APIError.requestFailed(statusCode: code, body: bodyString)
         }
-        return try decoder.decode(APIFileUploadResponse.self, from: data)
     }
 }
 

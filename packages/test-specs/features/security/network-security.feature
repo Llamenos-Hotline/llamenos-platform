@@ -173,7 +173,8 @@ Feature: Network Security
   Scenario: Upload chunk endpoint enforces ownership
     Given volunteer A uploads a file chunk
     When volunteer B tries to access volunteer A's upload status
-    Then the request should be rejected with 403
+    # 404, not 403: another member's upload answers like one that does not exist.
+    Then the request should be rejected with 404
 
   @backend
   Scenario: Sessions are revoked on volunteer deactivation
