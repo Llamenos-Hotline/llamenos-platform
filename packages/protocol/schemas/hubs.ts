@@ -101,6 +101,8 @@ export const hubReadersResponseSchema = z.object({
   recipients: z.array(pubkeySchema),
 })
 
+export type HubReadersResponse = z.infer<typeof hubReadersResponseSchema>
+
 /**
  * The hub's optional escrow (recovery) key: an X25519 public key whose secret
  * the hub's admins hold offline. A member of every purpose's reader set (A7).

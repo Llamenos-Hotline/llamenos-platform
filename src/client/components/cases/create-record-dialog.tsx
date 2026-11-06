@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Lock, Loader2, Plus } from 'lucide-react'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 interface CreateRecordDialogProps {
   open: boolean
@@ -40,7 +41,7 @@ export function CreateRecordDialog({
   defaultEntityTypeId,
 }: CreateRecordDialogProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
 
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
@@ -109,9 +110,8 @@ export function CreateRecordDialog({
     try {
       // Build reader pubkeys for E2EE envelopes
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await hubAdminReaders())
 
       // Encrypt summary (title + description + status + severity)
       const summary = JSON.stringify({
@@ -166,7 +166,7 @@ export function CreateRecordDialog({
     }
   }, [
     selectedType, title, description, fieldValues,
-    hasDeviceKey, publicKey, adminDecryptionPubkey,
+    hasDeviceKey, publicKey,
     toast, t, resetForm, onOpenChange, onCreated,
   ])
 

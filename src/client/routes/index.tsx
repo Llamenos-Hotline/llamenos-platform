@@ -12,7 +12,7 @@ import { useClockIn, useClockOut } from '@/lib/queries/shifts'
 import { createNote, banAndHangup, getUserPresence, listUsers, type HubCall, type UserPresence, type User } from '@/lib/api'
 import { usePersonalStats } from '@/lib/queries/analytics'
 import { encryptNote } from '@/lib/platform'
-import { adminHpkeRecipient } from '@/lib/admin-recipient'
+import { hubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
 import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useConfig } from '@/lib/config'
 import { useTranscription } from '@/lib/transcription'
@@ -389,7 +389,6 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const { adminDecryptionPubkey } = useAuth()
   const { formatted } = useCallTimer(call.startedAt)
   // Held in memory (not disk) so it survives a lock, which unmounts this panel.
   const [noteText, setNoteTextState] = useState(() => getCallNoteDraft(call.id))
@@ -415,22 +414,19 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
     if (!noteText.trim()) return
     setSaving(true)
     try {
-      // No admin recipient means no admin could ever read this note. The old
-      // `adminDecryptionPubkey || authorPubkey` wrapped it twice to the author
-      // and left admins locked out silently (#1468). Refuse and say so.
-      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
-      if (!adminPub) {
-        toast(t('notes.noAdminRecipient'), 'error')
-        return
-      }
-      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify({ text: noteText }), authorPubkey, [adminPub])
+      // Sealed to every admin of the call's hub (#1035). No admin reader means
+      // no admin could ever read this note: `hubAdminReaders` refuses, and the
+      // catch says so. The old `adminDecryptionPubkey || authorPubkey` wrapped
+      // it twice to the author and left admins locked out silently (#1468).
+      const admins = await hubAdminReaders(call.hubId)
+      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify({ text: noteText }), authorPubkey, admins)
       await createNote({ callId: call.id, encryptedContent, authorEnvelope, adminEnvelopes }, call.hubId)
       // Filed: no longer an unsaved draft to restore after a lock.
       setCallNoteDraft(call.id, '')
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      toast(err instanceof NoAdminReaderError ? t('notes.noAdminRecipient') : t('common.error'), 'error')
     } finally {
       setSaving(false)
     }
@@ -447,20 +443,20 @@ function ActiveCallPanel({ call, onHangup, onReportSpam, onBanNumber, authorPubk
         // write (#1468). The volunteer learns the transcript was not kept,
         // which the substituted key hid. Hanging up is never blocked — not by
         // a transcription failure (see catch) and not by this.
-        const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
-        if (text.trim() && !adminPub) {
-          toast(t('notes.noAdminRecipient'), 'error')
-        } else if (text.trim() && adminPub) {
+        if (text.trim()) {
+          const admins = await hubAdminReaders(call.hubId)
           const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(
             JSON.stringify({ text: `[${t('transcription.title')}] ${text}` }),
             authorPubkey,
-            [adminPub],
+            admins,
           )
           await createNote({ callId: call.id, encryptedContent, authorEnvelope, adminEnvelopes }, call.hubId)
           toast(t('transcription.saved'), 'success')
         }
-      } catch {
-        // Transcription failure shouldn't block hangup
+      } catch (err) {
+        // Transcription failure shouldn't block hangup. A hub with no admin
+        // reader is surfaced, never written around.
+        if (err instanceof NoAdminReaderError) toast(t('notes.noAdminRecipient'), 'error')
       }
     }
     onHangup()

@@ -8,6 +8,7 @@ import { chunkedUpload } from '@/lib/chunked-upload'
 import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import type { FileFieldValue } from '@protocol/schemas/entity-schema'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 interface EntityFileFieldProps {
   value: FileFieldValue | null
@@ -21,7 +22,7 @@ export function EntityFileField({
   value, onChange, maxFileSize = 10 * 1024 * 1024, allowedMimeTypes, disabled = false,
 }: EntityFileFieldProps) {
   const { t } = useTranslation()
-  const { adminDecryptionPubkey, publicKey } = useAuth()
+  const { publicKey } = useAuth()
   const { toast } = useToast()
   const inputRef = useRef<HTMLInputElement>(null)
   const [progress, setProgress] = useState<number | null>(null)
@@ -39,9 +40,8 @@ export function EntityFileField({
     setProgress(10)
     try {
       const recipients: string[] = publicKey ? [publicKey] : []
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        recipients.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      recipients.push(...await hubAdminReaders())
       const encrypted = await encryptFile(file, recipients)
       setProgress(30)
       // A file row of the active hub, with its envelopes, through the same

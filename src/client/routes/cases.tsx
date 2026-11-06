@@ -44,6 +44,7 @@ import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
 import { EntityTimelineView } from '@/components/entity-timeline-view'
 import { listEntitiesCrossHub } from '@/lib/api'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 export const Route = createFileRoute('/cases')({
   component: CasesPage,
@@ -51,7 +52,7 @@ export const Route = createFileRoute('/cases')({
 
 function CasesPage() {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, hasPermission, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin, hasPermission } = useAuth()
   const { toast } = useToast()
 
   // --- Data state ---
@@ -526,7 +527,6 @@ function CasesPage() {
                 hasPermission={hasPermission}
                 publicKey={publicKey}
                 hasDeviceKey={hasDeviceKey}
-                adminDecryptionPubkey={adminDecryptionPubkey}
                 onStatusChange={handleStatusChange}
                 onAssignToMe={handleAssignToMe}
                 onUnassign={handleUnassign}
@@ -711,7 +711,6 @@ function RecordDetail({
   hasPermission,
   publicKey,
   hasDeviceKey,
-  adminDecryptionPubkey,
   onStatusChange,
   onAssignToMe,
   onUnassign,
@@ -724,7 +723,6 @@ function RecordDetail({
   hasPermission: (p: string) => boolean
   publicKey: string | null
   hasDeviceKey: boolean
-  adminDecryptionPubkey: string
   onStatusChange: (id: string, newStatus: string) => void
   onAssignToMe: (id: string) => void
   onUnassign: (id: string) => void
@@ -950,7 +948,6 @@ function RecordDetail({
             isAssigned={isAssigned}
             hasDeviceKey={hasDeviceKey}
             publicKey={publicKey}
-            adminDecryptionPubkey={adminDecryptionPubkey}
           />
         )}
         {activeTab === 'timeline' && (
@@ -992,7 +989,6 @@ function DetailsTab({
   isAssigned,
   hasDeviceKey,
   publicKey,
-  adminDecryptionPubkey,
 }: {
   record: CaseRecord
   entityType: EntityTypeDefinition
@@ -1000,7 +996,6 @@ function DetailsTab({
   isAssigned: boolean
   hasDeviceKey: boolean
   publicKey: string | null
-  adminDecryptionPubkey: string
 }) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -1054,9 +1049,8 @@ function DetailsTab({
       setSaveStatus('saving')
       try {
         const readerPubkeys = [publicKey]
-        if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-          readerPubkeys.push(adminDecryptionPubkey)
-        }
+        // Every admin of the hub, not one env-configured key (#1035).
+        readerPubkeys.push(...await hubAdminReaders())
 
         const encrypted = await sealCase('fields', JSON.stringify(newValues), readerPubkeys)
         await updateRecord(record.id, {
@@ -1070,7 +1064,7 @@ function DetailsTab({
         toast(t('cases.saveError', { defaultValue: 'Failed to save field changes' }), 'error')
       }
     }, 800)
-  }, [publicKey, hasDeviceKey, adminDecryptionPubkey, canEdit, record.id, toast, t])
+  }, [publicKey, hasDeviceKey, canEdit, record.id, toast, t])
 
   if (entityType.fields.length === 0) {
     return (
