@@ -16,6 +16,8 @@ function createApp() {
     prefix: '/bans',
     routes: bansRoutes,
     authenticated: true,
+    // The ban router is hub-only (#2463); validation runs past its hub guard.
+    hubId: 'hub-1',
   })
 }
 

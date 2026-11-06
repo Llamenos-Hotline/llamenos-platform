@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import banRoutes from '@worker/routes/bans'
 import { banHash } from '@worker/lib/crypto'
+import { hubScope } from '@shared/owner-scope'
 
 const TEST_BAN_HASH_KEY = 'b'.repeat(64)
 
@@ -12,14 +13,15 @@ const TEST_BAN_HASH_KEY = 'b'.repeat(64)
 
 function createTestApp(opts: {
   permissions?: string[]
-  hubId?: string
+  /** The path hub. `null` mounts the router with no hub, which it must refuse (#2463). */
+  hubId?: string | null
   pubkey?: string
   serviceMock?: Record<string, unknown>
   auditLogSpy?: ReturnType<typeof vi.fn>
 } = {}) {
   const {
     permissions = ['*'],
-    hubId,
+    hubId = 'hub-1',
     pubkey = 'a'.repeat(64),
     serviceMock = {},
     auditLogSpy = vi.fn().mockResolvedValue(undefined),
@@ -55,7 +57,7 @@ function createTestApp(opts: {
       onBreak: false,
       callPreference: 'phone',
     })
-    if (hubId !== undefined) {
+    if (hubId !== null) {
       c.set('hubId', hubId)
     }
     c.env = {
@@ -75,6 +77,37 @@ function createTestApp(opts: {
 // ---------------------------------------------------------------------------
 
 describe('bans routes', () => {
+  // -------------------------------------------------------------------------
+  // No hub, no list (#2463)
+  // -------------------------------------------------------------------------
+
+  describe('outside a hub', () => {
+    // Before #2463 this router was also mounted with no hub, and a missing hub meant
+    // the PLATFORM list, reachable with the hub permissions. Every endpoint must now
+    // refuse, even for '*', and never reach the service.
+    const requests: Array<[string, string, unknown?]> = [
+      ['GET', '/bans'],
+      ['POST', '/bans', { phone: '+12125551234' }],
+      ['POST', '/bans/bulk', { phones: ['+12125551234'] }],
+      ['DELETE', `/bans/${'f'.repeat(64)}`],
+    ]
+    for (const [method, path, body] of requests) {
+      it(`${method} ${path} is 404 and touches no ban list`, async () => {
+        const records = {
+          listBans: vi.fn(), addBan: vi.fn(), bulkAddBans: vi.fn(), removeBan: vi.fn(),
+        }
+        const { app, auditLogSpy } = createTestApp({ hubId: null, permissions: ['*'], serviceMock: { records } })
+        const res = await app.request(path, {
+          method,
+          ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+        })
+        expect(res.status).toBe(404)
+        for (const fn of Object.values(records)) expect(fn).not.toHaveBeenCalled()
+        expect(auditLogSpy).not.toHaveBeenCalled()
+      })
+    }
+  })
+
   beforeEach(() => {
     vi.restoreAllMocks()
   })
@@ -98,7 +131,7 @@ describe('bans routes', () => {
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.bans).toHaveLength(1)
-      expect(listBansSpy).toHaveBeenCalledWith('hub-1')
+      expect(listBansSpy).toHaveBeenCalledWith(hubScope('hub-1'))
     })
 
     it('requires bans:read permission', async () => {
@@ -115,7 +148,7 @@ describe('bans routes', () => {
   describe('POST /bans', () => {
     it('bans a valid phone number', async () => {
       const addBanSpy = vi.fn().mockResolvedValue({
-        phone: banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
+        phone: banHash('+12125551234', hubScope('hub-1'), TEST_BAN_HASH_KEY),
         reason: 'Spam',
         bannedBy: 'a'.repeat(64),
         bannedAt: new Date().toISOString(),
@@ -137,10 +170,10 @@ describe('bans routes', () => {
       // The response carries an opaque handle, a reason and a date: no number, masked or not.
       expect(Object.keys(json.ban).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
       expect(JSON.stringify(json)).not.toContain('1234')
-      expect(json.ban.phoneHash).toBe(banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY))
+      expect(json.ban.phoneHash).toBe(banHash('+12125551234', hubScope('hub-1'), TEST_BAN_HASH_KEY))
       expect(addBanSpy).toHaveBeenCalledWith({
-        hubId: 'hub-1',
-        phoneHash: banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
+        scope: hubScope('hub-1'),
+        phoneHash: banHash('+12125551234', hubScope('hub-1'), TEST_BAN_HASH_KEY),
         reason: 'Spam',
         bannedBy: 'a'.repeat(64),
       })
@@ -211,11 +244,12 @@ describe('bans routes', () => {
       const json = await res.json()
       expect(json.count).toBe(2)
       expect(bulkAddBansSpy).toHaveBeenCalledWith(
+        hubScope('hub-1'),
         [
-          banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY),
-          banHash('+12125555678', 'hub-1', TEST_BAN_HASH_KEY),
+          banHash('+12125551234', hubScope('hub-1'), TEST_BAN_HASH_KEY),
+          banHash('+12125555678', hubScope('hub-1'), TEST_BAN_HASH_KEY),
         ],
-        'Spam', 'a'.repeat(64), 'hub-1',
+        'Spam', 'a'.repeat(64),
       )
       expect(auditLogSpy).toHaveBeenCalledOnce()
     })
@@ -267,7 +301,7 @@ describe('bans routes', () => {
 
     it('unbans by the handle from the ban list', async () => {
       const removeBanSpy = vi.fn().mockResolvedValue(undefined)
-      const handle = banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY)
+      const handle = banHash('+12125551234', hubScope('hub-1'), TEST_BAN_HASH_KEY)
       const { app, auditLogSpy } = createTestApp({
         permissions: ['bans:delete'],
         hubId: 'hub-1',
@@ -276,7 +310,7 @@ describe('bans routes', () => {
 
       const res = await app.request(`/bans/${handle}`, { method: 'DELETE' })
       expect(res.status).toBe(200)
-      expect(removeBanSpy).toHaveBeenCalledWith(handle, 'hub-1')
+      expect(removeBanSpy).toHaveBeenCalledWith(hubScope('hub-1'), handle)
       expect(auditLogSpy).toHaveBeenCalledOnce()
     })
 

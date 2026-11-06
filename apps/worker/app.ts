@@ -267,7 +267,8 @@ authenticated.route('/users', usersRoutes)
 authenticated.route('/volunteers', usersRoutes)
 authenticated.route('/identity', identityRoutes)
 authenticated.route('/shifts', shiftsRoutes)
-authenticated.route('/bans', bansRoutes)
+// No unscoped /bans: a hub's ban list is only under /hubs/:hubId/bans, and the
+// platform list is /admin/bans. A missing hub never meant "platform" (#2463).
 authenticated.route('/calls', callsRoutes)
 authenticated.route('/settings/cms', entitySchemaRoutes)
 authenticated.route('/settings', settingsRoutes)
@@ -306,7 +307,7 @@ authenticated.route('/erasure', erasureRoutes)
 // Incidents that belong to no hub. Under /admin, not /incidents: a hub's incidents are only
 // under /hubs/:hubId/incidents, and an unscoped /incidents/* mount is the #2395 shape.
 authenticated.route('/admin/incidents', platformIncidentsRoutes)
-authenticated.route('/bans/platform', platformBansRoutes)
+authenticated.route('/admin/bans', platformBansRoutes)
 authenticated.route('/retention', retentionRoutes)
 authenticated.route('/settings/platform', platformSettingsRoutes)
 authenticated.route('/ring-groups', ringGroupsRoutes)

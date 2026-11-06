@@ -111,8 +111,8 @@ struct ClientUser: Codable, Identifiable, Sendable {
 // The three ban-list endpoints each return a different element shape, all
 // generated from packages/protocol/schemas/bans.ts:
 //   GET /api/bans                  → BanListResponse / BanListResponseBan
-//   GET /api/bans/platform         → PlatformBanListResponse / PlatformBanListResponseBan
-//   GET /api/bans/platform/search  → SearchBansResponse / SearchBansResponseBan
+//   GET /api/admin/bans         → PlatformBanListResponse / PlatformBanListResponseBan
+//   GET /api/admin/bans/search  → SearchBansResponse / SearchBansResponseBan
 // `BanRowDisplay` is the client-side UI facade over those wire types.
 
 /// Display facade for a ban row from any of the three ban-list endpoints.

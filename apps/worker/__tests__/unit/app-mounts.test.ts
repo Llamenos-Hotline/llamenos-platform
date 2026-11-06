@@ -113,8 +113,6 @@ const LEDGER: Record<string, string> = {
     'Handlers fall back to `hubId ?? \'\'`, which names no hub; /my-status is the caller\'s own (#2381 audit).',
   '/calls':
     'Handlers fall back to `hubId ?? \'\'`, which names no hub (#2381 audit).',
-  '/bans':
-    'Unscoped = the platform ban list (`hub_id IS NULL`), a deployment-wide list by design.',
   '/blasts':
     'WIDENS (#2404): listSubscribers / listBlasts / getSubscriberStats drop the hub filter with no hub.',
   '/directory':
