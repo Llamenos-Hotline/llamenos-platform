@@ -4,7 +4,7 @@ import type { AppEnv, EncryptedMessage } from '../types'
 import type { MessagingChannelType } from '@shared/types'
 import { routeOutboundMessage } from '../messaging/delivery-router'
 import { checkPermission, requirePermission } from '../middleware/permission-guard'
-import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema, assigneeEnvelopeGapsResponseSchema, addAssigneeEnvelopesBodySchema, addAssigneeEnvelopesResponseSchema } from '@protocol/schemas/conversations'
+import { listConversationsQuerySchema, sendMessageBodySchema, updateConversationBodySchema, conversationResponseSchema, messageResponseSchema, conversationListResponseSchema, messageListResponseSchema, conversationStatsResponseSchema, volunteerLoadResponseSchema, assigneeEnvelopeGapsResponseSchema, addAssigneeEnvelopesBodySchema, addAssigneeEnvelopesResponseSchema, type ConversationListResponse, type MessageListResponse } from '@protocol/schemas/conversations'
 import { paginationSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
@@ -24,6 +24,7 @@ import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
 import { ServiceError } from '../services/settings'
+import { toConversationResponse, toMessageResponse } from '../services/conversations'
 
 const logger = createLogger('routes.conversations')
 
@@ -76,10 +77,28 @@ function dispatchPushToUser(
 }
 
 /**
- * GET /conversations — list this hub's conversations
- * Users with conversations:read-all in the hub see all of them.
- * Others see only their assigned + the waiting conversations on channels they may
- * claim in this hub — none at all when they may claim no channel.
+ * The channels whose waiting queue a member without `conversations:read-all`
+ * may see: those their hub permissions let them claim, narrowed to their own
+ * configured channels when they have set any, and none at all when messaging
+ * is off for them. The same three gates `POST /:id/claim` applies, so the list
+ * never offers a conversation the claim would refuse. Empty means NO waiting
+ * conversation — never "unfiltered".
+ */
+function visibleWaitingChannels(permissions: string[], user: AppEnv['Variables']['user']): string[] {
+  if (user.messagingEnabled === false) return []
+  const claimable = getClaimableChannels(permissions)
+  const own = user.supportedMessagingChannels
+  return own && own.length > 0 ? claimable.filter(ch => (own as readonly string[]).includes(ch)) : claimable
+}
+
+/**
+ * GET /conversations — one page of this hub's conversations the caller may see.
+ *
+ * One shape for every caller (`conversationListResponseSchema`); permissions
+ * choose the rows, not the payload. With `conversations:read-all` that is the
+ * whole hub. Without it, it is the caller's own conversations plus the waiting
+ * queue on the channels they may claim — one predicate in one query, so the
+ * filters, `total` and the page all describe the same set.
  */
 conversations.get('/',
   describeRoute({
@@ -87,7 +106,7 @@ conversations.get('/',
     summary: 'List conversations',
     responses: {
       200: {
-        description: 'List of conversations',
+        description: 'One page of the conversations visible to the caller',
         content: {
           'application/json': {
             schema: resolver(conversationListResponseSchema),
@@ -100,73 +119,30 @@ conversations.get('/',
   validator('query', listConversationsQuerySchema),
   async (c) => {
     const services = c.get('services')
-    const pubkey = c.get('pubkey')
     const permissions = c.get('permissions')
-    const user = c.get('user')
-    const canReadAll = checkPermission(permissions, 'conversations:read-all')
     const query = c.req.valid('query')
-    const hubId = requireHubId(c)
-
-    const offset = (query.page - 1) * query.limit
-
-    // Users without read-all only see their assigned conversations + waiting queue
-    if (!canReadAll) {
-      // Fetch assigned conversations
-      const assigned = await services.conversations.list({
-        hubId,
-        status: query.status as import('../types').ConversationStatus | undefined,
-        channelType: query.channel as MessagingChannelType | 'web' | undefined,
-        assignedTo: pubkey,
-        limit: query.limit,
-        offset,
-      })
-
-      // Also fetch waiting conversations (available to claim)
-      const waiting = await services.conversations.list({
-        hubId,
-        status: 'waiting',
-        channelType: query.channel as MessagingChannelType | 'web' | undefined,
-        limit: query.limit,
-        offset,
-      })
-
-      // The waiting queue is what the caller may claim, so it is bounded by the
-      // channels their hub permissions let them claim. No claimable channel means
-      // no waiting conversation — an empty set never means "unfiltered".
-      const claimableChannels = getClaimableChannels(permissions)
-      const userChannels = user.supportedMessagingChannels
-
-      let filteredWaiting = waiting.conversations.filter(conv =>
-        claimableChannels.includes(conv.channelType)
-      )
-      // Also filter by user's configured supported channels (if set)
-      if (userChannels && userChannels.length > 0) {
-        filteredWaiting = filteredWaiting.filter(conv =>
-          userChannels.includes(conv.channelType as MessagingChannelType)
-        )
-      }
-      // Hide all waiting if messaging is disabled for this user
-      if (user.messagingEnabled === false) {
-        filteredWaiting = []
-      }
-
-      return c.json({
-        conversations: [...assigned.conversations, ...filteredWaiting],
-        assignedCount: assigned.total,
-        waitingCount: filteredWaiting.length,
-        claimableChannels,
-      })
-    }
 
     const result = await services.conversations.list({
-      hubId,
-      status: query.status as import('../types').ConversationStatus | undefined,
-      channelType: query.channel as MessagingChannelType | 'web' | undefined,
+      hubId: requireHubId(c),
+      status: query.status,
+      channelType: query.channel,
+      assignedTo: query.assignedTo,
+      // Never reports: those are listed by /reports under the reports permissions.
+      type: 'conversation',
+      contactHash: query.contactHash,
+      visibleTo: checkPermission(permissions, 'conversations:read-all')
+        ? undefined
+        : { pubkey: c.get('pubkey'), waitingChannels: visibleWaitingChannels(permissions, c.get('user')) },
       limit: query.limit,
-      offset,
+      offset: (query.page - 1) * query.limit,
     })
 
-    return c.json(result)
+    return c.json({
+      conversations: result.conversations.map(toConversationResponse),
+      total: result.total,
+      page: query.page,
+      limit: query.limit,
+    } satisfies ConversationListResponse)
   },
 )
 
@@ -256,7 +232,7 @@ conversations.get('/:id',
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    return c.json(conv)
+    return c.json(toConversationResponse(conv))
   },
 )
 
@@ -300,7 +276,12 @@ conversations.get('/:id/messages',
       offset: (query.page - 1) * query.limit,
     })
 
-    return c.json(result)
+    return c.json({
+      messages: result.messages.map(toMessageResponse),
+      total: result.total,
+      page: query.page,
+      limit: query.limit,
+    } satisfies MessageListResponse)
   },
 )
 
@@ -542,7 +523,7 @@ conversations.post('/:id/messages',
       channel: conv.channelType,
     }, undefined, conv.hubId)
 
-    return c.json(msg, 201)
+    return c.json(toMessageResponse(msg), 201)
   },
 )
 
@@ -595,7 +576,7 @@ conversations.patch('/:id',
       conversationId: id,
     }, undefined, conv.hubId)
 
-    return c.json(updated)
+    return c.json(toConversationResponse(updated))
   },
 )
 
@@ -777,7 +758,7 @@ conversations.post('/:id/claim',
       channelType: conv.channelType,
     }, undefined, conv.hubId)
 
-    return c.json(claimed)
+    return c.json(toConversationResponse(claimed))
   },
 )
 

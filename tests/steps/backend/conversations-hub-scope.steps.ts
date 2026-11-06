@@ -183,7 +183,9 @@ Then('the response carries no conversation counts', async ({ world }) => {
 
 Then('the listed conversations are exactly none', async ({ world }) => {
   expect(listedIds(world)).toEqual([])
-  expect((lastResponse(world).data as { waitingCount?: number }).waitingCount).toBe(0)
+  // `total` counts the same visible set the page lists (#2118), so nothing
+  // hidden can be counted either.
+  expect((lastResponse(world).data as { total?: number }).total).toBe(0)
 })
 
 Then(
