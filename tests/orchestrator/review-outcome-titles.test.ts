@@ -154,10 +154,12 @@ function name(facts: Facts, script = step('fleet-review', NAMING_STEP).run): Nam
   // pinned to one constant, not two spellings.
   const annotations = [...r.stdout.matchAll(/^::(notice|warning|error) title=([^:]*)::(.*)$/gm)]
     .map((m) => ({ level: m[1] ?? '', title: m[2] ?? '', message: m[3] ?? '' }))
-  const outcome = reviewOutcomeFromAnnotations(annotations)
+  // The step's stdout is the whole list — nothing was cut off.
+  const outcome = reviewOutcomeFromAnnotations(annotations, { complete: true })
+  if (!outcome.read) throw new Error(`a complete annotation list read as undecidable: ${outcome.detail}`)
   return {
     status: r.status,
-    title: outcome ?? null,
+    title: outcome.message ?? null,
     level: annotations.find((a) => a.title === ANNOTATION_TITLE)?.level ?? null,
     summary: existsSync(summaryFile) ? readFileSync(summaryFile, 'utf8') : '',
     stdout: r.stdout + r.stderr,
@@ -787,5 +789,24 @@ esac
   it('the review job hands the publishing job the head it judged, and its tree', () => {
     expect(job('fleet-review').outputs?.['head_sha']).toBe('${{ steps.ctx.outputs.head_sha }}')
     expect(job('fleet-review').outputs?.['head_tree']).toBe('${{ steps.head_export.outputs.head_tree }}')
+  })
+})
+
+describe('reviewOutcomeFromAnnotations — the one reader keeps its third state (#2488, #2490)', () => {
+  const OUTCOME = { title: REVIEW_OUTCOME_ANNOTATION, message: 'NO-VERDICT:unreviewed — no review has ever been earned' }
+  const NOISE = { title: '', message: 'Node.js 20 is deprecated.' }
+  it('a whole list naming the outcome reads it', () => {
+    expect(reviewOutcomeFromAnnotations([NOISE, OUTCOME], { complete: true })).toEqual({ read: true, message: OUTCOME.message })
+  })
+  it('a whole list naming none is read: true with no message — the run named no outcome', () => {
+    expect(reviewOutcomeFromAnnotations([NOISE], { complete: true })).toEqual({ read: true, message: undefined })
+    expect(reviewOutcomeFromAnnotations([{ title: REVIEW_OUTCOME_ANNOTATION, message: '' }], { complete: true })).toEqual({ read: true, message: undefined })
+  })
+  it('a cut-off list naming none is read: false — cannot decide, never "no token"', () => {
+    expect(reviewOutcomeFromAnnotations([NOISE], { complete: false })).toEqual({ read: false, detail: expect.stringContaining(REVIEW_OUTCOME_ANNOTATION) })
+    expect(reviewOutcomeFromAnnotations([], { complete: false }).read).toBe(false)
+  })
+  it('a cut-off list that still reached the outcome reads it — presence is proven', () => {
+    expect(reviewOutcomeFromAnnotations([OUTCOME], { complete: false })).toEqual({ read: true, message: OUTCOME.message })
   })
 })

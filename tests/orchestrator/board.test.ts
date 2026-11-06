@@ -1048,7 +1048,7 @@ describe('fetchBoardFactsWith — reviewRequests (#1760) and the fleet/review ou
     expect(live.checkRun.conclusion).toBe('failure')
     expect(live.checkRun.output.title).toBeNull()
     expect(live.annotationsResponse.data.node.title).toBeNull()
-    expect(reviewOutcomeFromAnnotations(LIVE_ANNOTATIONS)).toMatch(/^NO-VERDICT:unreviewed /)
+    expect(reviewOutcomeFromAnnotations(LIVE_ANNOTATIONS, { complete: true })).toEqual({ read: true, message: expect.stringMatching(/^NO-VERDICT:unreviewed /) })
   })
 
   it('checkRunAnnotationsPageFrom parses the live GraphQL page, and refuses an unreadable one rather than returning []', () => {

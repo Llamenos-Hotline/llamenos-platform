@@ -773,16 +773,41 @@ export interface CheckRunAnnotation {
 }
 
 /**
- * The ONE reader of "what outcome did `fleet/review` record on this check
- * run": the message of its `fleet/review outcome` annotation (`<TOKEN> —
- * <detail>`), or `undefined` when no such annotation is present. Pass the
- * result to `reviewOutcomeToken` for the token. `undefined` is "this run
- * named no outcome", never a verdict — and a caller that could not READ the
- * annotations must say so itself rather than pass an empty list here.
+ * What a reader learned about the outcome ONE `fleet/review` check run
+ * recorded. Three states, and the third is not optional (#2488, #2490):
+ *
+ *  - `read: true` + `message` — the run's `fleet/review outcome` annotation,
+ *    `<TOKEN> — <detail>`; pass it to `reviewOutcomeToken` for the token;
+ *  - `read: true` + `message: undefined` — every annotation was read and
+ *    none named an outcome: the run never named one;
+ *  - `read: false` + `detail` — the reader could not tell. A failed read, or
+ *    an annotation list cut off before an outcome was found. This is
+ *    "cannot decide", never "no token": folding it into the second state is
+ *    the absent-read-as-fine shape that hid #2473.
  */
-export function reviewOutcomeFromAnnotations(annotations: readonly CheckRunAnnotation[]): string | undefined {
-  const message = annotations.find((a) => a.title === REVIEW_OUTCOME_ANNOTATION)?.message
-  return message === null || message === undefined || message.length === 0 ? undefined : message
+export type ReviewOutcomeRead =
+  | { read: true; message: string | undefined }
+  | { read: false; detail: string }
+
+/**
+ * The ONE reader of "what outcome did `fleet/review` record on this check
+ * run" — `board` and `pr-why` both go through it, so the annotation's name
+ * and shape are known in exactly one place. `complete` says whether
+ * `annotations` is the run's WHOLE list: a page that was cut off can only
+ * prove presence, so an absent outcome on it is `read: false`, not
+ * "none named". A caller whose read FAILED outright must build its own
+ * `read: false` rather than pass an empty list here.
+ */
+export function reviewOutcomeFromAnnotations(
+  annotations: readonly CheckRunAnnotation[],
+  list: { complete: boolean },
+): ReviewOutcomeRead {
+  const raw = annotations.find((a) => a.title === REVIEW_OUTCOME_ANNOTATION)?.message
+  const message = raw === null || raw === undefined || raw.length === 0 ? undefined : raw
+  if (message === undefined && !list.complete) {
+    return { read: false, detail: `the annotation list was cut off by its page before a "${REVIEW_OUTCOME_ANNOTATION}" annotation was found` }
+  }
+  return { read: true, message }
 }
 
 /**

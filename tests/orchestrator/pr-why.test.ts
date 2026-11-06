@@ -9,6 +9,7 @@ import {
 } from '../../orchestrator/src/pr-why.js'
 import { diagnoseHead, defaultMissingChecksDeps, type HeadCheckRun, type HeadWorkflowRun, type MissingChecksDeps } from '../../orchestrator/src/missing-checks.js'
 import type { BranchRuleset, CodeOwnerRule } from '../../orchestrator/src/board.js'
+import { REVIEW_OUTCOME_ANNOTATION, reviewOutcomeFromAnnotations, type CheckRunAnnotation } from '../../orchestrator/src/ci.js'
 
 /**
  * #2469. Every verdict has a fixture that yields it BY NAME, and a mutation
@@ -24,6 +25,14 @@ import type { BranchRuleset, CodeOwnerRule } from '../../orchestrator/src/board.
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'pr-why')
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, name), 'utf8'))
+
+/** The slice of `review-runs-*.json` (a raw REVIEW_RUNS_QUERY response) the
+ *  annotation tests reach into. */
+interface Review2467 { data: { repository: { object: { checkSuites: { nodes: { checkRuns: { nodes: {
+  databaseId: number
+  annotations: { pageInfo: { hasNextPage: boolean }; nodes: CheckRunAnnotation[] }
+}[] } }[] } } } } }
+const runNodes = (raw: Review2467) => raw.data.repository.object.checkSuites.nodes.flatMap((s) => s.checkRuns.nodes)
 
 const SHA = 'a'.repeat(40)
 const OTHER_SHA = 'b'.repeat(40)
@@ -52,7 +61,7 @@ function head(checkRuns: HeadCheckRun[], runs: HeadWorkflowRun[] = settledRuns) 
 
 const reviewRun = (over: Partial<ReviewRun> = {}): ReviewRun => ({
   id: REVIEW_ID, status: 'completed', conclusion: 'success', startedAt: '2026-11-05T10:00:00Z',
-  outcome: 'PASS:reviewed — every reviewer read this diff and passed it', annotationsTruncated: false, ...over,
+  outcome: { read: true, message: 'PASS:reviewed — every reviewer read this diff and passed it' }, ...over,
 })
 
 function prState(over: Partial<PrState> = {}): PrState {
@@ -300,7 +309,7 @@ describe('required-context-absent — delegated to missing-checks', () => {
 describe('fleet/review verdicts — read from the outcome annotation, not output.title', () => {
   const redReview = (outcome: string | undefined, over: Partial<ReviewRun> = {}): Pick<PrWhyFacts, 'checks' | 'reviewRuns'> => ({
     checks: { ok: true, value: head([run({ name: 'ci-status', id: 100 }), run({ name: 'fleet/review', id: REVIEW_ID, conclusion: 'failure' })]) },
-    reviewRuns: { ok: true, value: [reviewRun({ conclusion: 'failure', outcome, ...over })] },
+    reviewRuns: { ok: true, value: [reviewRun({ conclusion: 'failure', outcome: { read: true, message: outcome }, ...over })] },
   })
   it('review-verdict-stale-by-tree: NO-VERDICT:tree-changed', () => {
     const r = expectVerdict(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:tree-changed — the last PASS judged another tree') }), 'review-verdict-stale-by-tree')
@@ -333,8 +342,10 @@ describe('fleet/review verdicts — read from the outcome annotation, not output
     const f = facts({ state: approvedByOwner, ...redReview('x'), reviewRuns: { ok: false, reason: 'HTTP 502' } })
     expect(exitCodeFor(diagnosePrWhy(f))).toBe(2)
   })
-  it('no outcome on a truncated annotation page is unknown; on a complete page it is an unnamed failure', () => {
-    expect(names(facts({ state: approvedByOwner, ...redReview(undefined, { annotationsTruncated: true }) }))).toEqual(['unknown'])
+  it('an outcome the reader could not decide (read: false) is unknown; a read that found none is an unnamed failure', () => {
+    const undecided = facts({ state: approvedByOwner, ...redReview(undefined, { outcome: { read: false, detail: 'cut off' } }) })
+    expect(names(undecided)).toEqual(['unknown'])
+    expect(exitCodeFor(diagnosePrWhy(undecided))).toBe(2)
     expect(names(facts({ state: approvedByOwner, ...redReview(undefined) }))).toEqual(['required-check-failing'])
   })
   it('latestReviewRun orders by startedAt, id breaking ties — never list order', () => {
@@ -736,16 +747,63 @@ describe('prStateFrom', () => {
 describe('reviewRunsFrom', () => {
   it('finds both fleet/review runs on #2467\'s head and their outcome annotations', () => {
     const runs = reviewRunsFrom(fixture('review-runs-2467-77962f5.json'))
-    expect(runs.map((r) => [r.id, r.conclusion, r.outcome?.split(' ')[0]])).toEqual(expect.arrayContaining([
+    expect(runs.map((r) => [r.id, r.conclusion, r.outcome.read ? r.outcome.message?.split(' ')[0] : 'UNREAD'])).toEqual(expect.arrayContaining([
       [127036521163, 'failure', 'NO-VERDICT:unreviewed'],
       [127036866882, 'success', 'PASS:reviewed'],
     ]))
     expect(latestReviewRun(runs)?.id).toBe(127036866882)
   })
+  it('reads each run\'s outcome through ci.ts\'s one reader — the same answer board gets for the same annotations', () => {
+    const raw = fixture('review-runs-2467-77962f5.json') as Review2467
+    for (const r of reviewRunsFrom(raw)) {
+      const node = runNodes(raw).find((n) => n.databaseId === r.id)
+      expect(r.outcome).toEqual(reviewOutcomeFromAnnotations(node?.annotations.nodes ?? [], { complete: true }))
+    }
+  })
   it('throws on a truncated suite page rather than guessing the newest run', () => {
     const raw = structuredClone(fixture('review-runs-2467-77962f5.json')) as { data: { repository: { object: { checkSuites: { pageInfo: { hasNextPage: boolean } } } } } }
     raw.data.repository.object.checkSuites.pageInfo.hasNextPage = true
     expect(() => reviewRunsFrom(raw)).toThrow('unread page')
+  })
+})
+
+/** #2490. #2467's real red `fleet/review` run, whose outcome annotation sits
+ *  SECOND in its list (after a Node.js deprecation notice), with that list
+ *  cut off by its page after the first annotation — the outcome exists but
+ *  was never read. This is the unreadable annotation: pr-why must say it
+ *  cannot tell, never fall through to "the run named no outcome". */
+describe('#2490 — an unreadable outcome annotation is unknown end to end, never a negative', () => {
+  const RED_2467 = 127036521163
+  function red2467(cut: boolean): ReviewRun {
+    const raw = structuredClone(fixture('review-runs-2467-77962f5.json')) as Review2467
+    const node = runNodes(raw).find((n) => n.databaseId === RED_2467)
+    if (node === undefined) throw new Error('fixture lost #2467\'s red run')
+    expect(node.annotations.nodes.findIndex((a) => a.title === REVIEW_OUTCOME_ANNOTATION)).toBeGreaterThan(0)
+    if (cut) {
+      node.annotations.nodes = node.annotations.nodes.slice(0, 1)
+      node.annotations.pageInfo.hasNextPage = true
+    } else {
+      node.annotations.nodes = node.annotations.nodes.filter((a) => a.title !== REVIEW_OUTCOME_ANNOTATION)
+    }
+    const run = reviewRunsFrom(raw).find((r) => r.id === RED_2467)
+    if (run === undefined) throw new Error('reviewRunsFrom dropped the red run')
+    return { ...run, id: REVIEW_ID }
+  }
+  const redHead = { ok: true as const, value: head([run({ name: 'ci-status', id: 100 }), run({ name: 'fleet/review', id: REVIEW_ID, conclusion: 'failure' })]) }
+
+  it('the cut-off page reads as read: false from the shared reader', () => {
+    expect(red2467(true).outcome).toEqual({ read: false, detail: expect.stringContaining('cut off') })
+  })
+  it('pr-why reports unknown and exits 2 — not required-check-failing, not review-never-requested', () => {
+    const r = diagnosePrWhy(facts({ state: approvedByOwner, checks: redHead, reviewRuns: { ok: true, value: [red2467(true)] } }))
+    expect(r.verdicts.map((v) => v.name)).toEqual(['unknown'])
+    expect(r.verdicts[0]?.evidence.join(' ')).toContain(`run ${REVIEW_ID}`)
+    expect(exitCodeFor(r)).toBe(2)
+  })
+  it('flips: the same run with a WHOLE list that names no outcome is a real (unnamed) failure, exit 1', () => {
+    const r = diagnosePrWhy(facts({ state: approvedByOwner, checks: redHead, reviewRuns: { ok: true, value: [red2467(false)] } }))
+    expect(r.verdicts.map((v) => v.name)).toEqual(['required-check-failing'])
+    expect(exitCodeFor(r)).toBe(1)
   })
 })
 

@@ -3,7 +3,7 @@ import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
 import { isReviewerLabel } from './specialist.js'
-import { REVIEW_JOB, reviewOutcomeToken, reviewOutcomeFromAnnotations, type CheckRunAnnotation } from './ci.js'
+import { REVIEW_JOB, reviewOutcomeToken, reviewOutcomeFromAnnotations, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
 
 /**
  * `llamenos-fleet board` — the deterministic gate decision table.
@@ -57,14 +57,6 @@ export type ReviewFailureKind = 'infrastructure' | 'substantive'
  * `buildBoard`'s own tests can pin down with nothing but a `BoardFacts`
  * literal — no mocked `gh` calls involved.
  */
-/** The outcome a FAILed `fleet/review` check run recorded — or that it
- *  could not be read. `message` is the annotation's `<TOKEN> — <detail>`
- *  line; `undefined` when the run's annotations were read and none named an
- *  outcome. */
-export type ReviewOutcomeRead =
-  | { read: true; message: string | undefined }
-  | { read: false; detail: string }
-
 export interface PrCheckContext {
   name: string
   kind: 'CheckRun' | 'StatusContext'
@@ -1182,7 +1174,8 @@ async function readReviewOutcome(
 ): Promise<ReviewOutcomeRead> {
   if (checkRunNodeId === undefined) return { read: false, detail: 'the GraphQL CheckRun carried no node id' }
   try {
-    return { read: true, message: reviewOutcomeFromAnnotations(await deps.fetchCheckRunAnnotations(checkRunNodeId)) }
+    // `fetchCheckRunAnnotations` follows every cursor, so the list is whole.
+    return reviewOutcomeFromAnnotations(await deps.fetchCheckRunAnnotations(checkRunNodeId), { complete: true })
   } catch (error) {
     return { read: false, detail: `check run ${checkRunNodeId}'s annotations: ${error instanceof Error ? error.message : String(error)}` }
   }
