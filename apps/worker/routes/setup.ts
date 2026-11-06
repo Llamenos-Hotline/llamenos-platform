@@ -107,6 +107,21 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
     // anyway.)
     const { hubs } = await services.settings.getHubs()
     if (hubs.length === 0) {
+      // The setup admin founds the hub as its admin, and must be a READER of it
+      // from the first message (#1034, operator ruling 2026-11-05): their own
+      // registered device key is what inbound messages, notes and reports are
+      // sealed to (`readersFor(hub, 'admin')`). A founder with no registered
+      // device would leave the hub with an empty admin reader set, and every
+      // inbound message to it refused. Refused here instead, where the person
+      // who can fix it is looking: the desktop wizard registers this device
+      // before it calls this route, so only a client that skipped that lands here.
+      const founderReaders = await services.identity.getHpkeRecipients(pubkey)
+      if (founderReaders.length === 0) {
+        return c.json({
+          error: 'Register this device (POST /api/devices/register with its X25519 encryption key) before completing setup: ' +
+            "the hub's first admin must be able to read what the hub receives",
+        }, 409)
+      }
       const hotlineName = c.env.HOTLINE_NAME || 'Hotline'
       // The default hub answers the hotline number — the one routing matches an
       // incoming call against (`hubs.phone_number`). It is the number of the
@@ -127,8 +142,12 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
-      // The setup admin founds the default hub with all roles, atomically (#2126)
-      await services.settings.createHub(defaultHub, { pubkey, roleIds: ['role-super-admin'] })
+      // The setup admin founds the default hub as a genuine HUB admin,
+      // atomically (#2126): the role the catalog designates for a founder by
+      // permission (`hubFounderRoleIds`), never a role id. Their instance-wide
+      // authority is their global role; inside the hub they hold exactly what
+      // any hub admin holds, which is what makes them its reader (D1).
+      await services.settings.createHub(defaultHub, { pubkey })
     }
 
     const result = await services.settings.updateSetupState({ setupCompleted: true })

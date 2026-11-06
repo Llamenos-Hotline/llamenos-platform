@@ -58,6 +58,9 @@ function makeApp(opts: {
 
   const mockIdentity = {
     setHubRole: vi.fn().mockResolvedValue(undefined),
+    // The setup admin has registered this device's X25519 key, as the desktop
+    // wizard does before it completes setup (#1034).
+    getHpkeRecipients: vi.fn().mockResolvedValue(['f'.repeat(64)]),
   }
 
   const app = new Hono<AppEnv>()
@@ -174,7 +177,9 @@ describe('POST /setup/complete', () => {
     // no second step that could fail and leave the hub without an admin.
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Test Hotline', phoneNumber: '+15550001234' }),
-      { pubkey: 'a'.repeat(64), roleIds: ['role-super-admin'] },
+      // No role id: the founder gets the role the catalog designates by
+      // permission (`hubFounderRoleIds`), never a hardcoded one (#1034).
+      { pubkey: 'a'.repeat(64) },
     )
     expect(mockIdentity.setHubRole).not.toHaveBeenCalled()
     expect(auditLog).toHaveBeenCalledOnce()
@@ -198,7 +203,7 @@ describe('POST /setup/complete', () => {
     expect(res.status).toBe(200)
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ phoneNumber: '+15557770001' }),
-      expect.objectContaining({ roleIds: ['role-super-admin'] }),
+      { pubkey: 'a'.repeat(64) },
     )
   })
 
@@ -217,6 +222,26 @@ describe('POST /setup/complete', () => {
       expect.objectContaining({ phoneNumber: '+15557770002' }),
       expect.anything(),
     )
+  })
+
+  // #1034: the hub's first admin is its first READER. A founder with no
+  // registered device key would found a hub whose admin reader set is empty,
+  // and every inbound message to it would be refused.
+  it('refuses to found the hub until the setup admin has a registered device key', async () => {
+    const { app, mockSettings, mockIdentity } = makeApp()
+    mockSettings.getHubs.mockResolvedValue({ hubs: [] })
+    mockIdentity.getHpkeRecipients.mockResolvedValue([])
+
+    const res = await app.request('/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(409)
+    expect(mockIdentity.getHpkeRecipients).toHaveBeenCalledWith('a'.repeat(64))
+    expect(mockSettings.createHub).not.toHaveBeenCalled()
+    expect(mockSettings.updateSetupState).not.toHaveBeenCalled()
   })
 
   it('does not create hub when one already exists', async () => {
@@ -260,7 +285,7 @@ describe('POST /setup/complete', () => {
 
     expect(mockSettings.createHub).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Hotline', slug: 'hotline' }),
-      expect.objectContaining({ roleIds: ['role-super-admin'] }),
+      { pubkey: 'a'.repeat(64) },
     )
   })
 
