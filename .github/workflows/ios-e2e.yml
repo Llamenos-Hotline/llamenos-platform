@@ -1255,9 +1255,17 @@ jobs:
             # xcodebuild refuses to write a result bundle over an existing one.
             rm -rf "$xcresult"
             rc=0
+            # -derivedDataPath keeps this run's DerivedData in RUNNER_TEMP,
+            # which the runner empties between jobs. Without it xcodebuild
+            # creates a fresh ~/Library/Developer/Xcode/DerivedData/Llamenos-*
+            # entry per shard holding the coverage .profraw (85-110 MiB each,
+            # measured 2026-11-05) with NO info.plist, which the disk guard's
+            # reclaim deliberately never deletes - so every shard leaked onto
+            # the internal volume the 12 GiB floor protects.
             # shellcheck disable=SC2086
             xcodebuild test-without-building \
               -xctestrun "$XCTESTRUN" \
+              -derivedDataPath "$RUNNER_TEMP/llamenos-test-derived-data" \
               -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
               -parallel-testing-enabled NO \
               -test-timeouts-enabled YES \

@@ -53,12 +53,18 @@
 #
 # Deliberately NOT touched, each for a measured reason:
 #
-#   * `~/Library/Developer/Xcode/DerivedData` — CI never writes here: both iOS
-#     build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
-#     delete it themselves. Each Xcode directory's info.plist names its
-#     WorkspacePath. Only entries whose workspace is gone and whose directory
-#     has been idle for at least 60 minutes are reclaimed; live, recent, and
-#     uninspectable entries are retained and reported.
+#   * `~/Library/Developer/Xcode/DerivedData` — CI does not write here: both
+#     iOS build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
+#     the `ui` shards' `test-without-building` passes one under RUNNER_TEMP
+#     too. Each Xcode directory's info.plist names its WorkspacePath. Only
+#     entries whose workspace is gone and whose directory has been idle for at
+#     least 60 minutes are reclaimed; live, recent, and uninspectable entries
+#     are retained and reported. ONE plist-less shape is reclaimed: the entry
+#     a `test-without-building` run leaves when it is NOT given a
+#     -derivedDataPath (until 2026-11-05 every `ui` shard did, 85-110 MiB of
+#     coverage .profraw each, and a branch whose workflow predates the fix
+#     still does). It is recognised by its exact contents, not its name alone
+#     — see is_test_run_derived_data.
 #   * simulator devices not covered by the rules above — a booted device, or
 #     a Shutdown one younger than MAC_SIM_STALE_MAX_AGE_HOURS. `report`
 #     surfaces the fat ones and what reclaiming them would cost; the decision
@@ -540,6 +546,36 @@ reclaim() {
   log ""
 }
 
+# The DerivedData entry `xcodebuild test-without-building -xctestrun` creates
+# when it is given no -derivedDataPath: named Llamenos-<hash>, no info.plist
+# (there is no workspace), and nothing at the top but Logs/, TestResults/ and
+# a Build/ holding only ProfileData/ (the coverage .profraw). A real build's
+# entry has an info.plist and Build/Intermediates.noindex, so it can never
+# match. Idle means NOTHING inside was modified within SIM_MAX_AGE_MIN, which
+# is above the `ui` job's cap, so a live shard's entry is never a candidate.
+is_test_run_derived_data() {
+  local dir="$1" child name
+  case "$(basename "$dir")" in Llamenos-*) : ;; *) return 1 ;; esac
+  [ ! -e "$dir/info.plist" ] || return 1
+  [ -d "$dir/Logs" ] || return 1
+  for child in "$dir"/* "$dir"/.[!.]*; do
+    [ -e "$child" ] || continue
+    name="$(basename "$child")"
+    case "$name" in
+      Logs|TestResults) : ;;
+      Build)
+        local sub
+        for sub in "$child"/* "$child"/.[!.]*; do
+          [ -e "$sub" ] || continue
+          [ "$(basename "$sub")" = "ProfileData" ] || return 1
+        done
+        ;;
+      *) return 1 ;;
+    esac
+  done
+  [ -z "$(find "$dir" -mmin "-${SIM_MAX_AGE_MIN}" -print -quit 2>/dev/null)" ]
+}
+
 # Remove only old DerivedData entries with a parseable plist naming a workspace
 # that no longer exists. Keep apparent size informational; df deltas are the
 # only measurement of actual reclaimed capacity, especially on APFS clones.
@@ -553,6 +589,17 @@ reclaim_derived_data() {
     plist="$dir/info.plist"
     apparent="$(apparent_gib "$dir")"
     if [ ! -e "$plist" ]; then
+      if is_test_run_derived_data "$dir"; then
+        rc=0
+        rm_ci_path "$dir" || rc=$?
+        case "$rc" in
+          0) deleted_any=1
+             log "  removed leaked test-run DerivedData $(basename "$dir") (${apparent} GiB apparent): no info.plist, only Logs/TestResults/Build/ProfileData, idle > ${SIM_MAX_AGE_MIN} min" ;;
+          2) : ;;
+          *) exit 1 ;;
+        esac
+        continue
+      fi
       log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): missing info.plist"
       continue
     fi
@@ -766,7 +813,20 @@ selftest() {
   log "── selftest: DerivedData safety predicates ──"
   local orphan="$DERIVED_DATA/orphan" live="$DERIVED_DATA/live" missing="$DERIVED_DATA/missing-plist"
   local malformed="$DERIVED_DATA/malformed-plist" fresh="$DERIVED_DATA/fresh"
+  # Plist-less entries: the leaked test-run shape (reclaimed when idle), the
+  # same shape still being written (retained), and look-alikes that hold
+  # anything a real build would (retained).
+  local testrun="$DERIVED_DATA/Llamenos-selftestidle" testrun_live="$DERIVED_DATA/Llamenos-selftestlive"
+  local testrun_build="$DERIVED_DATA/Llamenos-selftestbuild" testrun_extra="$DERIVED_DATA/Llamenos-selftestextra"
   mkdir -p "$orphan" "$live" "$missing" "$malformed" "$fresh" "$sandbox/live-workspace"
+  mkdir -p "$testrun/Logs/Test" "$testrun/TestResults" "$testrun/Build/ProfileData/X"
+  : > "$testrun/Build/ProfileData/X/a.profraw"
+  mkdir -p "$testrun_live/Logs/Test" "$testrun_live/Build/ProfileData/X"
+  : > "$testrun_live/Build/ProfileData/X/a.profraw"
+  mkdir -p "$testrun_build/Logs" "$testrun_build/Build/ProfileData" "$testrun_build/Build/Intermediates.noindex"
+  mkdir -p "$testrun_extra/Logs" "$testrun_extra/SourcePackages"
+  # Everything idle except testrun_live, whose newest file stays fresh.
+  find "$testrun" "$testrun_build" "$testrun_extra" -exec touch -t 202001010000 {} +
   cat > "$orphan/info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -805,7 +865,13 @@ EOF
     log "  FAIL  df did not show space returned: ${before_kib} KiB -> ${after_kib} KiB"
     fails=$((fails + 1))
   fi
-  for leaf in "$live" "$missing" "$malformed" "$fresh"; do
+  if [ ! -e "$testrun" ]; then
+    log "  ok    leaked idle test-run DerivedData was removed"
+  else
+    log "  FAIL  leaked idle test-run DerivedData survived"
+    fails=$((fails + 1))
+  fi
+  for leaf in "$live" "$missing" "$malformed" "$fresh" "$testrun_live" "$testrun_build" "$testrun_extra"; do
     if [ -d "$leaf" ]; then
       log "  ok    retained $(basename "$leaf")"
     else
