@@ -1,4 +1,3 @@
-import CommonCrypto
 import Foundation
 import os
 
@@ -1089,152 +1088,42 @@ struct EmptyResponse: Decodable {
 
 // MARK: - Certificate Pinning (H14)
 
-/// Pin configuration for a single deployment. Each deployment (self-hosted org)
-/// has its own TLS certificate chain. Pins target the intermediate CA — not the
-/// leaf — so routine cert renewal does not break pinning.
-struct PinConfig {
-    /// Base64-encoded SHA-256 SPKI hashes for trusted intermediate CAs.
-    let hashes: [String]
-    /// ISO-8601 `notBefore` / `notAfter` — ignored for static pins, used for dynamic rotation.
-    let notBefore: Date?
-    let notAfter: Date?
-}
-
-/// Deployment-configurable certificate pins.
-///
-/// Static defaults pin against Let's Encrypt intermediate CAs (ISRG Root X1 + X2)
-/// because the production deployment uses 1984 DNS + Let's Encrypt, NOT Cloudflare.
-///
-/// Pin hashes target the **intermediate CA SPKI** (Subject Public Key Info), not the
-/// leaf certificate. This means normal cert renewal (which reuses the same CA) does
-/// not trigger a pin mismatch.
-///
-/// Dynamic pin updates: on launch, clients fetch `GET /api/config/pins` which returns
-/// an Ed25519-signed pin list. If the fetch fails, static defaults remain active.
-enum CertificatePins {
-
-    // MARK: - Let's Encrypt Intermediate CA SPKI SHA-256 Hashes
-
-    /// ISRG Root X1 (RSA 4096, cross-signed by DST Root CA X3).
-    /// Extracted via:
-    ///   curl -s https://letsencrypt.org/certs/isrgrootx1.pem \
-    ///     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der \
-    ///     | openssl dgst -sha256 -binary | base64
-    static let isrgRootX1Hash = "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M="
-
-    /// ISRG Root X2 (ECDSA P-384, backup root).
-    /// Extracted via same procedure against isrg-root-x2.pem.
-    static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
-
-    /// Static default pins — used until dynamic pins are fetched and verified.
-    /// Minimum 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).
-    static let defaultHashes: [String] = [
-        isrgRootX1Hash,
-        isrgRootX2Hash,
-    ]
-
-    /// The currently active pin set. Starts with static defaults; replaced by
-    /// verified dynamic pins after a successful fetch from the server.
-    private(set) static var active = PinConfig(
-        hashes: defaultHashes,
-        notBefore: nil,
-        notAfter: nil
-    )
-
-    /// Whether certificate pinning is active (at least one pin configured).
-    static var isEnabled: Bool {
-        return !active.hashes.isEmpty
-    }
-
-    /// Replace the active pin set with dynamically-fetched, server-signed pins.
-    /// Called by `PinUpdateService` after signature verification succeeds.
-    static func updatePins(_ config: PinConfig) {
-        active = config
-    }
-
-    /// Reset to static defaults (e.g. if dynamic pin list expires).
-    static func resetToDefaults() {
-        active = PinConfig(hashes: defaultHashes, notBefore: nil, notAfter: nil)
-    }
-}
-
-/// URLSessionDelegate that enforces certificate pinning against trusted intermediate
-/// CA SPKI hashes. Pin mismatch is a **hard failure** — the connection is refused
-/// unconditionally with no fallback to unpinned TLS.
+/// URLSessionDelegate that enforces certificate pinning (see `CertificatePinValidator`).
+/// A refused chain is a **hard failure** — the connection is cancelled with no fallback
+/// to unpinned TLS. Shared by `APIService` and `WebSocketService`.
 final class CertificatePinningDelegate: NSObject, URLSessionDelegate {
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        // Only handle server trust challenges
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let serverTrust = challenge.protectionSpace.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
 
-        // Allow localhost / 127.0.0.1 without pinning (local development)
         let host = challenge.protectionSpace.host
-        if host == "localhost" || host == "127.0.0.1" {
+        switch CertificatePinValidator.evaluate(serverTrust, host: host) {
+        case .loopbackExempt:
+            // Local development: the system's own TLS validation still applies.
             completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        // If pinning is not configured, fall through to default TLS validation
-        guard CertificatePins.isEnabled else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        // Validate the certificate chain
-        guard let certificateChain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate] else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-
-        let activePins = CertificatePins.active.hashes
-        var pinMatched = false
-        var observedHashes: [String] = []
-        for certificate in certificateChain {
-            if let publicKey = SecCertificateCopyKey(certificate) {
-                var error: Unmanaged<CFError>?
-                if let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? {
-                    let hash = sha256Base64(publicKeyData)
-                    observedHashes.append(hash)
-                    if activePins.contains(hash) {
-                        pinMatched = true
-                        break
-                    }
-                }
-            }
-        }
-
-        if pinMatched {
+        case .accept:
             completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            // Hard fail: pin mismatch — report security event and refuse connection.
+        case .rejectUntrustedChain:
+            #if DEBUG
+            print("[CertPinning] HARD FAIL: untrusted chain for host: \(host). Connection refused.")
+            #endif
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        case .rejectPinMismatch(let observed):
             #if DEBUG
             print("[CertPinning] HARD FAIL: Pin mismatch for host: \(host). Connection refused.")
             #endif
             SecurityEventService.shared.report(
-                .certPinMismatch(activePins: activePins, observedPins: observedHashes)
+                .certPinMismatch(activePins: CertificatePins.pinned.sorted(), observedPins: observed)
             )
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
-
-    /// Compute SHA-256 hash of data, return as base64 string.
-    private func sha256Base64(_ data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: 32)
-        data.withUnsafeBytes { buffer in
-            _ = CC_SHA256(buffer.baseAddress, CC_LONG(data.count), &hash)
-        }
-        return Data(hash).base64EncodedString()
-    }
 }
-
-// MARK: - Dynamic Pin Update
-// The pin list response is the generated `ConfigPinsResponse`
-// (packages/protocol/schemas/config.ts): pins, signature, notBefore, notAfter.
 
