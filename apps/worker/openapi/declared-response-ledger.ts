@@ -27,7 +27,6 @@ const TRACKING_ISSUE = 2521
 
 export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
   { method: 'GET', route: '/api/admin/audit', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/bans', status: 200, issue: TRACKING_ISSUE },
   { method: 'GET', route: '/api/erasure/me', status: 200, issue: TRACKING_ISSUE },
   { method: 'GET', route: '/api/hubs/:hubId/audit', status: 200, issue: TRACKING_ISSUE },
   { method: 'POST', route: '/api/hubs/:hubId/bans', status: 200, issue: TRACKING_ISSUE },
