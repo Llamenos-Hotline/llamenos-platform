@@ -1054,6 +1054,8 @@ export class IdentityService {
    */
   async redeemInvite(data: { code: string; pubkey: string }): Promise<{
     volunteer: ReturnType<typeof sanitizeUser>
+    /** What the invite admitted the redeemer to, and who issued it — for the audit entry. */
+    admission: { hubId: string; roleIds: string[]; invitedBy: string | null }
   }> {
     return this.db.transaction(async (tx) => {
       // RACE-01: Atomic claim — single UPDATE collapses read+check+write.
@@ -1086,6 +1088,7 @@ export class IdentityService {
       if (!hubId) {
         throw new ServiceError(409, 'This invite is not tied to a hub — ask for a new invite')
       }
+      const admission = { hubId, roleIds: grantedRoleIds, invitedBy: invite.createdBy }
 
       // An already-registered pubkey is a person being invited into a SECOND
       // hub, not an error. Merge the grant into their existing hubRoles rather
@@ -1109,7 +1112,7 @@ export class IdentityService {
           })
           .where(eq(users.pubkey, data.pubkey))
           .returning()
-        return { volunteer: sanitizeUser(rowToUser(row)) }
+        return { volunteer: sanitizeUser(rowToUser(row)), admission }
       }
 
       // Create volunteer. The SELECT above is not a lock on a row that does
@@ -1137,7 +1140,7 @@ export class IdentityService {
 
       if (!volRow) throw new ServiceError(409, 'A user with this key already exists')
 
-      return { volunteer: sanitizeUser(rowToUser(volRow)) }
+      return { volunteer: sanitizeUser(rowToUser(volRow)), admission }
     })
   }
 

@@ -125,8 +125,17 @@ invites.post('/redeem',
     const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
-    const result = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
-    return c.json(result)
+    const { volunteer, admission } = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
+    // A volunteer joining a hub is audited like any other addition — and this
+    // entry is the volunteer's own act, signed with a key only their device
+    // holds, so "volunteer X joined" is attributable to X alone (#1231).
+    await audit(services.audit, 'userAdded', body.pubkey, {
+      target: body.pubkey,
+      roles: admission.roleIds,
+      via: 'invite',
+      invitedBy: admission.invitedBy,
+    }, undefined, admission.hubId)
+    return c.json({ volunteer })
   },
 )
 

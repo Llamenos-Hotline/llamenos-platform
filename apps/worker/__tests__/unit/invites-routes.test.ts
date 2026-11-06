@@ -87,7 +87,10 @@ function createApp(
   const services = {
     identity: {
       validateInvite: vi.fn().mockResolvedValue({ valid: true, name: 'Test Invite' }),
-      redeemInvite: vi.fn().mockResolvedValue({ ok: true }),
+      redeemInvite: vi.fn().mockResolvedValue({
+        volunteer: { pubkey: 'new-user' },
+        admission: { hubId: 'hub-1', roleIds: ['role-volunteer'], invitedBy: 'creator-pk' },
+      }),
       createInvite: vi.fn().mockResolvedValue({ code: 'INV-123', name: 'New Invite' }),
       revokeInvite: vi.fn().mockResolvedValue(undefined),
       getInvites: vi.fn().mockResolvedValue({ invites: [] }),
@@ -167,6 +170,29 @@ describe('invites routes', () => {
       }, defaultEnv)
 
       expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ volunteer: { pubkey: 'new-user' } })
+    })
+
+    it('audits the join as the volunteer\'s own act, in the invite\'s hub (#1231)', async () => {
+      // The redemption is signed with a key only the volunteer's device holds,
+      // so this entry is attributable to them and nobody else.
+      const { app } = createApp()
+
+      const res = await app.request('/invites/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'INV-123', pubkey: 'new-user', timestamp: Date.now(), token: 'valid-sig' }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        'userAdded',
+        'new-user',
+        expect.objectContaining({ target: 'new-user', via: 'invite', invitedBy: 'creator-pk', roles: ['role-volunteer'] }),
+        undefined,
+        'hub-1',
+      )
     })
 
     it('rejects invalid signature', async () => {
