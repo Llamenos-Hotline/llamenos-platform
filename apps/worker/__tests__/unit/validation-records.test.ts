@@ -18,6 +18,8 @@ function createApp() {
     prefix: '/records',
     routes: recordsRoutes,
     authenticated: true,
+    // The router is hub-only (#2461): validation is exercised past `hubOnly`.
+    hubId: 'hub-1',
   })
 }
 

@@ -20,9 +20,14 @@ import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
-import { resourceInPathHub } from '../lib/hub-scope'
+import { hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 
 const events = new Hono<AppEnv>()
+
+// An event belongs to a hub, so this router is served only under /hubs/:hubId
+// (#2461). Registered first: a stray unscoped mount answers 404 before any
+// handler could create an event in no hub or read another hub's by id.
+events.use('*', hubOnly)
 
 // =========================================================================
 // Deprecation middleware — all /events/* endpoints are deprecated.
@@ -35,11 +40,13 @@ events.use('*', async (c, next) => {
   await next()
   c.header('Deprecation', 'true')
   c.header('Sunset', SUNSET_DATE)
-  c.header('Link', '</api/records?category=event>; rel="successor-version"')
+  c.header('Link', `</api/hubs/${pathHubId(c)}/records?category=event>; rel="successor-version"`)
 })
 
-// Inside /hubs/:hubId every /:id route may only touch an event of that hub
-// (#2011); another hub's event is a 404, the same as a missing one. An event is
+// Every /:id route may only touch an event of the path hub (#2011); another
+// hub's event is a 404, the same as a missing one. There is always a path hub
+// here (`hubOnly`), so the binding always applies (#2461), and past it
+// `pathHubId(c)` IS the event's hub — the subject handlers audit with. An event is
 // either a legacy `events` row or a case record whose entity type has category
 // "event" (#789), so the lookup is the one the link routes themselves use —
 // `getEvent` only knows the legacy table and would refuse every record-backed
@@ -74,7 +81,7 @@ events.get('/',
   requirePermission('events:read'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const query = c.req.valid('query')
 
     const result = await services.cases.listEvents({
@@ -150,7 +157,7 @@ events.post('/',
       if (entityType.numberingEnabled && entityType.numberPrefix) {
         const result = await services.settings.generateCaseNumber({
           prefix: entityType.numberPrefix,
-          hubId: c.get('hubId') ?? '',
+          hubId: pathHubId(c),
         })
         caseNumber = result.number
       }
@@ -160,7 +167,7 @@ events.post('/',
 
     const event = await services.cases.createEvent({
       ...body,
-      hubId: c.get('hubId') ?? '',
+      hubId: pathHubId(c),
       createdBy: pubkey,
       caseNumber,
     })
@@ -177,7 +184,7 @@ events.post('/',
       eventId: event.id,
       entityTypeId: event.entityTypeId,
       caseNumber: event.caseNumber,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(event, 201)
   },
@@ -216,7 +223,7 @@ events.patch('/:id',
       eventId: id,
     }, updated.hubId ?? '')
 
-    await audit(services.audit, 'eventUpdated', pubkey, { eventId: id }, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'eventUpdated', pubkey, { eventId: id }, undefined, pathHubId(c))
 
     return c.json(updated)
   },
@@ -248,7 +255,7 @@ events.delete('/:id',
 
     await services.cases.deleteEvent(id)
 
-    await audit(services.audit, 'eventDeleted', pubkey, { eventId: id }, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'eventDeleted', pubkey, { eventId: id }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -276,7 +283,7 @@ events.get('/:id/subevents',
   async (c) => {
     const id = c.req.param('id')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // Sub-events are events with parentEventId = this event's id
     const result = await services.cases.listEvents({
@@ -318,13 +325,13 @@ events.post('/:id/records',
       body.recordId,
       id,
       pubkey,
-      c.get('hubId') ?? '',
+      pathHubId(c),
     )
 
     await audit(services.audit, 'recordLinkedToEvent', pubkey, {
       eventId: id,
       recordId: body.recordId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result, 201)
   },
@@ -355,12 +362,12 @@ events.delete('/:id/records/:recordId',
     const pubkey = c.get('pubkey')
     const services = c.get('services')
 
-    await services.cases.unlinkEvent(recordId, id, c.get('hubId') ?? '')
+    await services.cases.unlinkEvent(recordId, id, pathHubId(c))
 
     await audit(services.audit, 'recordUnlinkedFromEvent', pubkey, {
       eventId: id,
       recordId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -388,7 +395,7 @@ events.get('/:id/records',
   async (c) => {
     const id = c.req.param('id')
     const services = c.get('services')
-    const eventRecords = await services.cases.listEventRecords(id, c.get('hubId') ?? '')
+    const eventRecords = await services.cases.listEventRecords(id, pathHubId(c))
     return c.json({ links: eventRecords })
   },
 )
@@ -423,13 +430,13 @@ events.post('/:id/reports',
       body.reportId,
       id,
       pubkey,
-      c.get('hubId') ?? '',
+      pathHubId(c),
     )
 
     await audit(services.audit, 'reportLinkedToEvent', pubkey, {
       eventId: id,
       reportId: body.reportId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result, 201)
   },
@@ -460,12 +467,12 @@ events.delete('/:id/reports/:reportId',
     const pubkey = c.get('pubkey')
     const services = c.get('services')
 
-    await services.cases.unlinkReportEvent(reportId, id, c.get('hubId') ?? '')
+    await services.cases.unlinkReportEvent(reportId, id, pathHubId(c))
 
     await audit(services.audit, 'reportUnlinkedFromEvent', pubkey, {
       eventId: id,
       reportId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -493,7 +500,7 @@ events.get('/:id/reports',
   async (c) => {
     const id = c.req.param('id')
     const services = c.get('services')
-    const reports = await services.cases.listEventReports(id, c.get('hubId') ?? '')
+    const reports = await services.cases.listEventReports(id, pathHubId(c))
     return c.json({ links: reports })
   },
 )

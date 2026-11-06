@@ -482,19 +482,17 @@ export class CallsService {
     return row
   }
 
-  /** Get a single encrypted call record by ID */
   /**
    * The finished call `callId`, within `hubId`. A call of another hub reads as
-   * missing (`null`), exactly like an unknown id (#2011). `hubId === ''` is the
-   * unscoped mount, which has no hub to bound to (the convention of
-   * `getActiveCallById`'s callers: `c.get('hubId') ?? ''`).
+   * missing (`null`), exactly like an unknown id (#2011). There is no lookup by
+   * id alone: every caller is on a hub-only router, and a hubless form would
+   * hand any hub's call to whoever reached it without a hub (#2461).
    */
   async getCallRecord(hubId: string, callId: string): Promise<CallRecordRow | null> {
-    const byId = eq(callRecords.callId, callId)
     const [row] = await this.db
       .select()
       .from(callRecords)
-      .where(hubId ? and(byId, eq(callRecords.hubId, hubId)) : byId)
+      .where(and(eq(callRecords.callId, callId), eq(callRecords.hubId, hubId)))
       .limit(1)
 
     return row ?? null

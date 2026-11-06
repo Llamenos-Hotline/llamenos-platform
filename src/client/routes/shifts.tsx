@@ -50,6 +50,8 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { UserMultiSelect } from '@/components/user-multi-select'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
+import { useActiveHubId } from '@/lib/hub-owned'
 
 export const Route = createFileRoute('/shifts')({
   component: ShiftsPage,
@@ -73,6 +75,7 @@ function ShiftsPage() {
   const { isAdmin, hasPermission } = useAuth()
   const { toast } = useToast()
   const { currentHubId } = useConfig()
+  const noHub = useActiveHubId() === null
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<Tab>('schedule')
   // Server-derived: the clock-in row outlives this component, a local flag did not.
@@ -167,12 +170,14 @@ function ShiftsPage() {
         ))}
       </div>
 
-      {activeTab === 'schedule' && <ScheduleTab isAdmin={isAdmin} toast={toast} t={t} />}
-      {activeTab === 'ring-groups' && isAdmin && <RingGroupsTab toast={toast} t={t} />}
-      {activeTab === 'overrides' && isAdmin && <OverridesTab toast={toast} t={t} />}
-      {activeTab === 'availability' && <AvailabilityTab toast={toast} t={t} />}
-      {activeTab === 'requests' && isAdmin && <RequestsTab toast={toast} t={t} />}
-      {activeTab === 'active' && isAdmin && <ActiveTab toast={toast} t={t} />}
+      {/* Every tab is hub-owned (#2461): with no hub, say so instead of "no shifts". */}
+      {noHub && <NoActiveHubNotice />}
+      {!noHub && activeTab === 'schedule' && <ScheduleTab isAdmin={isAdmin} toast={toast} t={t} />}
+      {!noHub && activeTab === 'ring-groups' && isAdmin && <RingGroupsTab toast={toast} t={t} />}
+      {!noHub && activeTab === 'overrides' && isAdmin && <OverridesTab toast={toast} t={t} />}
+      {!noHub && activeTab === 'availability' && <AvailabilityTab toast={toast} t={t} />}
+      {!noHub && activeTab === 'requests' && isAdmin && <RequestsTab toast={toast} t={t} />}
+      {!noHub && activeTab === 'active' && isAdmin && <ActiveTab toast={toast} t={t} />}
     </div>
   )
 }

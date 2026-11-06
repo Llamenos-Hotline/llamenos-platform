@@ -289,12 +289,12 @@ final class ShiftsViewModel {
         do {
             let response: AvailabilityBlockListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts/availability/my")
+                path: try apiService.activeHubPath("/api/shifts/availability/my")
             )
             myAvailabilityBlocks = response.blocks.sorted { $0.startDate < $1.startDate }
         } catch {
-            if case APIError.noBaseURL = error {
-                // Hub not configured — no blocks to show
+            if APIError.isNoHub(error) {
+                // No hub configured or selected — no blocks to show (#2461)
             } else if errorMessage == nil {
                 errorMessage = error.localizedDescription
             }
@@ -325,7 +325,7 @@ final class ShiftsViewModel {
             )
             let _: Block = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/shifts/availability"),
+                path: try apiService.activeHubPath("/api/shifts/availability"),
                 body: body
             )
 
@@ -346,7 +346,7 @@ final class ShiftsViewModel {
         do {
             let _: OkResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/shifts/availability/\(id)")
+                path: try apiService.activeHubPath("/api/shifts/availability/\(id)")
             )
             await loadAvailabilityBlocks()
         } catch {
@@ -398,13 +398,13 @@ final class ShiftsViewModel {
             // hub to "" and the list comes back empty for every real hub.
             let response: ShiftsListResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/shifts")
+                path: try apiService.activeHubPath("/api/shifts")
             )
             shifts = response.shifts
             groupShiftsByDay()
         } catch {
-            if case APIError.noBaseURL = error {
-                // Hub not configured — show empty schedule
+            if APIError.isNoHub(error) {
+                // No hub configured or selected — show empty schedule (#2461)
             } else if errorMessage == nil {
                 // Don't overwrite status error
                 errorMessage = error.localizedDescription

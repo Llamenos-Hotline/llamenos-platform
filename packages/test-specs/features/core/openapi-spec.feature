@@ -54,13 +54,13 @@ Feature: OpenAPI Specification & Documentation
       | post   | /auth/login       |
       | get    | /users            |
       | post   | /users            |
-      | get    | /shifts           |
-      | post   | /shifts           |
+      | get    | /hubs/{hubId}/shifts           |
+      | post   | /hubs/{hubId}/shifts           |
       | get    | /bans             |
       | post   | /bans             |
       | get    | /hubs/{hubId}/notes            |
       | post   | /hubs/{hubId}/notes            |
-      | get    | /calls/active     |
+      | get    | /hubs/{hubId}/calls/active     |
       | get    | /hubs/{hubId}/conversations |
       | get    | /blasts           |
       | post   | /blasts           |

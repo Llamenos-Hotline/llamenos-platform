@@ -87,11 +87,9 @@ final class CallHistoryViewModel {
         errorMessage = nil
 
         do {
-            let response: ProtocolCallHistoryResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/calls/history?limit=50")
-            )
-            calls = response.calls.map { dto in
+            // No hub is no call history — never the last hub's (#2461, #2478).
+            let read = try await apiService.getHubOwned("/api/calls/history?limit=50", as: ProtocolCallHistoryResponse.self)
+            calls = read.rows(\.calls).map { dto in
                 let status: CallStatus
                 switch dto.status {
                 case .some(.completed), .some(.inProgress): status = .answered
@@ -125,11 +123,7 @@ final class CallHistoryViewModel {
                 )
             }
         } catch {
-            if case APIError.noBaseURL = error {
-                // Expected when hub isn't configured yet
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
         }
 
         isLoading = false

@@ -13,6 +13,8 @@ import {
   type ConversionStatus,
 } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/format'
+import { useHubOwned, useActiveHubId } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { TriageReportContent } from '@/components/cases/triage-report-content'
 import { TriageCaseCreationPanel } from '@/components/cases/triage-case-creation-panel'
 import { TriageLinkedCases } from '@/components/cases/triage-linked-cases'
@@ -34,15 +36,14 @@ const STATUS_TABS: Array<{ key: ConversionStatus | 'all'; labelKey: string; defa
   { key: 'completed', labelKey: 'triage.statusCompleted', defaultLabel: 'Completed' },
 ]
 
+const EMPTY_QUEUE: { reports: Report[]; total: number } = { reports: [], total: 0 }
+
 function TriagePage() {
   const { t } = useTranslation()
   const { hasPermission } = useAuth()
   const { toast } = useToast()
 
   // Data state
-  const [reports, setReports] = useState<Report[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
   const [reportTypes, setReportTypes] = useState<ReportTypeDefinition[]>([])
   const [cmsEnabled, setCmsEnabled] = useState<boolean | null>(null)
 
@@ -53,8 +54,18 @@ function TriagePage() {
   // looking at — and a derived lookup turned that into the whole detail pane
   // (report content, case panel, linked cases) disappearing mid-task. Only an
   // explicit selection change clears it.
-  const [selectedReport, setSelectedReport] = useState<Report | null>(null)
+  // It is also bound to the hub it was opened in: not shown in another, nor with none.
+  const hubId = useActiveHubId()
+  const [opened, setOpened] = useState<{ hubId: string; report: Report } | null>(null)
+  const selectedReport = opened && opened.hubId === hubId ? opened.report : null
   const selectedId = selectedReport?.id ?? null
+  const setSelectedReport = useCallback((update: (prev: Report | null) => Report | null) => {
+    setOpened(prev => {
+      const current = prev && prev.hubId === hubId ? prev.report : null
+      const next = update(current)
+      return next && hubId ? { hubId, report: next } : null
+    })
+  }, [hubId])
   const [statusTab, setStatusTab] = useState<ConversionStatus | 'all'>('pending')
   const [page, setPage] = useState(1)
   const [linkedCasesRefreshKey, setLinkedCasesRefreshKey] = useState(0)
@@ -84,8 +95,7 @@ function TriagePage() {
   }, [])
 
   // Fetch triage queue
-  const fetchReports = useCallback(() => {
-    setLoading(true)
+  const loadQueue = useCallback(() => {
     const params: { conversionStatus?: ConversionStatus; page?: number; limit?: number } = {
       page,
       limit: pageSize,
@@ -93,31 +103,33 @@ function TriagePage() {
     if (statusTab !== 'all') {
       params.conversionStatus = statusTab
     }
+    return listTriageQueue(params).then(({ conversations, total: tot }) => ({ reports: conversations, total: tot }))
+  }, [statusTab, page])
+  const { data: queue, setData: setQueue, noHub, loading, reload: fetchReports } = useHubOwned(loadQueue, {
+    empty: EMPTY_QUEUE,
+    onError: () => toast(t('triage.loadError', { defaultValue: 'Failed to load triage queue' }), 'error'),
+  })
+  const { reports, total } = queue
+  const setReports = useCallback(
+    (update: (prev: Report[]) => Report[]) => setQueue(prev => ({ ...prev, reports: update(prev.reports) })),
+    [setQueue],
+  )
 
-    listTriageQueue(params)
-      .then(({ conversations, total: t }) => {
-        setReports(conversations)
-        setTotal(t)
-        // Refresh the open report from the new page when it is still listed;
-        // keep the copy we have when it is not (it just left this status tab).
-        setSelectedReport(prev =>
-          prev ? conversations.find(r => r.id === prev.id) ?? prev : prev)
-      })
-      .catch(() => toast(t('triage.loadError', { defaultValue: 'Failed to load triage queue' }), 'error'))
-      .finally(() => setLoading(false))
-  }, [statusTab, page, toast, t])
-
-  useEffect(() => { fetchReports() }, [fetchReports])
+  // Refresh the open report from the new page when it is still listed;
+  // keep the copy we have when it is not (it just left this status tab).
+  useEffect(() => {
+    setSelectedReport(prev => (prev ? reports.find(r => r.id === prev.id) ?? prev : prev))
+  }, [reports, setSelectedReport])
 
   // Poll
   useEffect(() => {
-    const interval = setInterval(fetchReports, 30_000)
+    const interval = setInterval(() => fetchReports({ background: true }), 30_000)
     return () => clearInterval(interval)
   }, [fetchReports])
 
   const handleSelectReport = useCallback((reportId: string) => {
-    setSelectedReport(reports.find(r => r.id === reportId) ?? null)
-  }, [reports])
+    setSelectedReport(() => reports.find(r => r.id === reportId) ?? null)
+  }, [reports, setSelectedReport])
 
   const handleStatusChange = useCallback(async (reportId: string, newStatus: ConversionStatus) => {
     try {
@@ -226,7 +238,7 @@ function TriagePage() {
             key={tab.key}
             type="button"
             data-testid={`triage-status-tab-${tab.key}`}
-            onClick={() => { setStatusTab(tab.key); setPage(1); setSelectedReport(null) }}
+            onClick={() => { setStatusTab(tab.key); setPage(1); setSelectedReport(() => null) }}
             className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
               statusTab === tab.key
                 ? 'bg-primary text-primary-foreground font-medium'
@@ -250,7 +262,9 @@ function TriagePage() {
             </h2>
           </div>
 
-          {loading ? (
+          {noHub ? (
+            <NoActiveHubNotice />
+          ) : loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

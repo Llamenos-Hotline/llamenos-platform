@@ -95,11 +95,8 @@ final class ShiftAdminViewModel {
     /// Load shifts for the override scope picker and request shift-name lookup.
     func loadShifts() async {
         do {
-            let response: ShiftsListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts")
-            )
-            shifts = response.shifts
+            // No hub is no shifts — never the last hub's (#2461, #2478).
+            shifts = try await apiService.getHubOwned("/api/shifts", as: ShiftsListResponse.self).rows(\.shifts)
         } catch {
             if errorMessage == nil { errorMessage = error.localizedDescription }
         }
@@ -117,11 +114,8 @@ final class ShiftAdminViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let response: RingGroupListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/ring-groups")
-            )
-            ringGroups = response.ringGroups
+            // No hub is no ring groups — never the last hub's (#2461, #2478).
+            ringGroups = try await apiService.getHubOwned("/api/ring-groups", as: RingGroupListResponse.self).rows(\.ringGroups)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -140,7 +134,7 @@ final class ShiftAdminViewModel {
             let body = CreateRingGroupBody(encryptedName: trimmed, id: UUID().uuidString)
             let _: RingGroupDetailResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/ring-groups"),
+                path: try apiService.activeHubPath("/api/ring-groups"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")
@@ -163,7 +157,7 @@ final class ShiftAdminViewModel {
             let body = UpdateRingGroupBody(encryptedName: trimmed)
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "PUT",
-                path: apiService.hp("/api/ring-groups/\(id)"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)"),
                 body: body
             )
             ringGroupDetail = detail
@@ -186,7 +180,7 @@ final class ShiftAdminViewModel {
         do {
             let _: OkResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/ring-groups/\(id)")
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)")
             )
             successMessage = NSLocalizedString("common_deleted", comment: "Deleted")
             await loadRingGroups()
@@ -200,7 +194,7 @@ final class ShiftAdminViewModel {
         do {
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "GET",
-                path: apiService.hp("/api/ring-groups/\(id)")
+                path: try apiService.activeHubPath("/api/ring-groups/\(id)")
             )
             ringGroupDetail = detail
         } catch {
@@ -215,7 +209,7 @@ final class ShiftAdminViewModel {
             let body = RingGroupMembersBody(pubkeys: pubkeys)
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/ring-groups/\(groupId)/members"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(groupId)/members"),
                 body: body
             )
             ringGroupDetail = detail
@@ -231,7 +225,7 @@ final class ShiftAdminViewModel {
             let body = RingGroupMembersBody(pubkeys: [pubkey])
             let detail: RingGroupDetailResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/ring-groups/\(groupId)/members"),
+                path: try apiService.activeHubPath("/api/ring-groups/\(groupId)/members"),
                 body: body
             )
             ringGroupDetail = detail
@@ -247,11 +241,8 @@ final class ShiftAdminViewModel {
     func loadFallback() async {
         errorMessage = nil
         do {
-            let response: FallbackGroup = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts/fallback")
-            )
-            fallbackPubkeys = response.userPubkeys
+            // No hub is no fallback group — never the last hub's (#2461, #2478).
+            fallbackPubkeys = try await apiService.getHubOwned("/api/shifts/fallback", as: FallbackGroup.self).rows(\.userPubkeys)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -267,7 +258,7 @@ final class ShiftAdminViewModel {
             let body = FallbackGroup(userPubkeys: pubkeys)
             let _: FallbackGroup = try await apiService.request(
                 method: "PUT",
-                path: apiService.hp("/api/shifts/fallback"),
+                path: try apiService.activeHubPath("/api/shifts/fallback"),
                 body: body
             )
             await loadFallback()
@@ -285,11 +276,11 @@ final class ShiftAdminViewModel {
         do {
             let from = DateFormatting.wireDateString(from: overrideFrom)
             let to = DateFormatting.wireDateString(from: overrideTo)
-            let response: ShiftOverrideListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts/overrides?from=\(from)&to=\(to)")
-            )
-            overrides = response.overrides.sorted { $0.date < $1.date }
+            // No hub is no overrides — never the last hub's (#2461, #2478).
+            overrides = try await apiService
+                .getHubOwned("/api/shifts/overrides?from=\(from)&to=\(to)", as: ShiftOverrideListResponse.self)
+                .rows(\.overrides)
+                .sorted { $0.date < $1.date }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -320,7 +311,7 @@ final class ShiftAdminViewModel {
             )
             let _: Override = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/shifts/overrides"),
+                path: try apiService.activeHubPath("/api/shifts/overrides"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")
@@ -340,7 +331,7 @@ final class ShiftAdminViewModel {
         do {
             let _: OkResponse = try await apiService.request(
                 method: "DELETE",
-                path: apiService.hp("/api/shifts/overrides/\(id)")
+                path: try apiService.activeHubPath("/api/shifts/overrides/\(id)")
             )
             successMessage = NSLocalizedString("common_deleted", comment: "Deleted")
             await loadOverrides()
@@ -355,11 +346,8 @@ final class ShiftAdminViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let response: ShiftJoinRequestListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.hp("/api/shifts/requests")
-            )
-            requests = response.requests
+            // No hub is no requests — never the last hub's (#2461, #2478).
+            requests = try await apiService.getHubOwned("/api/shifts/requests", as: ShiftJoinRequestListResponse.self).rows(\.requests)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -375,7 +363,7 @@ final class ShiftAdminViewModel {
             let body = ReviewShiftJoinRequestBody(status: approve ? .approved : .denied)
             let _: ShiftJoinRequestResponse = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/shifts/requests/\(id)/\(approve ? "approve" : "reject")"),
+                path: try apiService.activeHubPath("/api/shifts/requests/\(id)/\(approve ? "approve" : "reject")"),
                 body: body
             )
             successMessage = NSLocalizedString("common_success", comment: "Success")

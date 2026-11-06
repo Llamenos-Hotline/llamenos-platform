@@ -59,7 +59,7 @@ class UserDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = apiService.request<ShiftsListResponse>(
-                    "GET", apiService.hp("/api/shifts"),
+                    "GET", apiService.activeHubPath("/api/shifts"),
                 )
                 // Filter shifts that include this volunteer
                 val assigned = response.shifts.filter { pubkey in it.userPubkeys }

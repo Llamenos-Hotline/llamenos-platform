@@ -265,8 +265,8 @@ When('an admin requests volunteer {string}', async ({ request, world }, pubkey: 
   getSharedState(world).lastResponse = await apiPatch(request, `/users/${pubkey}`, { name: 'test' })
 })
 
-When('an admin deletes shift {string}', async ({ request, world }, id: string) => {
-  getSharedState(world).lastResponse = await apiDelete(request, `/shifts/${id}`)
+When('an admin deletes shift {string}', async ({ request, world, workerHub }, id: string) => {
+  getSharedState(world).lastResponse = await apiDelete(request, `/hubs/${workerHub}/shifts/${id}`)
 })
 
 When('an admin requests note replies for {string}', async ({ request, world, workerHub }, noteId: string) => {

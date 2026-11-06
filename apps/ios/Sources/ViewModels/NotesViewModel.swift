@@ -213,10 +213,18 @@ final class NotesViewModel {
 
     private func fetchNotesPage(page: Int, replacing: Bool) async {
         do {
-            let response: NotesListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.activeHubPath("/api/notes?page=\(page)&limit=\(pageSize)")
+            let read = try await apiService.getHubOwned(
+                "/api/notes?page=\(page)&limit=\(pageSize)", as: NotesListResponse.self
             )
+            // No hub is no notes — never the last hub's (#2461, #2478).
+            guard let response = read.response else {
+                encryptedNotes = []
+                notes = []
+                totalCount = 0
+                currentPage = 1
+                hasMore = false
+                return
+            }
 
             if replacing {
                 encryptedNotes = response.notes
@@ -231,11 +239,7 @@ final class NotesViewModel {
             // Decrypt all notes
             notes = encryptedNotes.compactMap(decryptNote)
         } catch {
-            if APIError.isNoHub(error) {
-                // No hub to browse — show the empty state, no error
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
         }
     }
 

@@ -335,18 +335,12 @@ final class ReportsViewModel {
 
     private func fetchReports() async {
         do {
-            let response: ReportListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.activeHubPath("/api/reports") + "?limit=50"
-            )
-            reports = response.conversations
-            totalCount = Int(response.total)
+            // No hub is no reports — never the last hub's (#2461, #2478).
+            let read = try await apiService.getHubOwned("/api/reports?limit=50", as: ReportListResponse.self)
+            reports = read.rows(\.conversations)
+            totalCount = read.response.map { Int($0.total) } ?? 0
         } catch {
-            if APIError.isNoHub(error) {
-                // No hub to browse — show the empty state, no error
-            } else {
-                errorMessage = error.localizedDescription
-            }
+            errorMessage = error.localizedDescription
         }
     }
 

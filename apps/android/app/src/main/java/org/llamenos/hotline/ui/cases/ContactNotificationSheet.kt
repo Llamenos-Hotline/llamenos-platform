@@ -200,7 +200,7 @@ fun ContactNotificationSheet(
                             try {
                                 apiService.request<Map<String, Any>>(
                                     "POST",
-                                    apiService.hp("/api/records/$recordId/notify-contacts"),
+                                    apiService.activeHubPath("/api/records/$recordId/notify-contacts"),
                                     body = mapOf("notifications" to notifications),
                                 )
                                 isSending = false

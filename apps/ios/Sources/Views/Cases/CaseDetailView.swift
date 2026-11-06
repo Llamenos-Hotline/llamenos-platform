@@ -580,6 +580,8 @@ struct CaseDetailView: View {
     }
 
     @State private var inlineCommentText: String = ""
+    /// Why the last inline comment was not saved; its text stays in the field.
+    @State private var inlineCommentError: String?
 
     private var commentInputBar: some View {
         VStack(spacing: 4) {
@@ -598,9 +600,15 @@ struct CaseDetailView: View {
                 if !inlineCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         let text = inlineCommentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        inlineCommentText = ""
+                        inlineCommentError = nil
                         Task {
-                            await submitComment(text)
+                            // The field is cleared only once the comment is saved; on a
+                            // failure the text stays and the reason shows below it.
+                            if let error = await submitComment(text) {
+                                inlineCommentError = error
+                            } else if inlineCommentText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                                inlineCommentText = ""
+                            }
                         }
                     } label: {
                         Image(systemName: "paperplane.fill")
@@ -624,6 +632,15 @@ struct CaseDetailView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
 
+            if let inlineCommentError {
+                Text(inlineCommentError)
+                    .font(.brand(.footnote))
+                    .foregroundStyle(Color.brandDestructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .accessibilityIdentifier("case-comment-error")
+            }
+
             // E2EE indicator
             HStack(spacing: 3) {
                 Image(systemName: "lock.fill")
@@ -641,10 +658,9 @@ struct CaseDetailView: View {
         )) {
             AddCommentSheet(
                 onSubmit: { text in
-                    Task {
-                        await submitComment(text)
-                        viewModel.showCommentSheet = false
-                    }
+                    let error = await submitComment(text)
+                    if error == nil { viewModel.showCommentSheet = false }
+                    return error
                 }
             )
             .presentationDetents([.medium])
@@ -657,13 +673,19 @@ struct CaseDetailView: View {
     /// server stores the envelopes it is given verbatim — a comment wrapped only
     /// for the author would be permanently unreadable to admins, breaking the
     /// accountability guarantee in `docs/security/CRYPTO_ARCHITECTURE.md`.
-    private func submitComment(_ text: String) async {
+    ///
+    /// Answers nil once the comment is saved, or the error to show — never nothing at
+    /// all, so a comment that was not saved cannot be mistaken for one that was.
+    private func submitComment(_ text: String) async -> String? {
         await appState.ensureAdminPubkeyLoaded()
-        await viewModel.addComment(
+        let saved = await viewModel.addComment(
             recordId: record.id,
             text: text,
             adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
         )
+        if saved { return nil }
+        return viewModel.errorMessage
+            ?? NSLocalizedString("error_boundary_title", comment: "Something went wrong")
     }
 
     // MARK: - Contacts Tab

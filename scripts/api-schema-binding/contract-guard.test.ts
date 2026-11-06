@@ -85,14 +85,15 @@ describe('break it: each seeded defect is caught', () => {
     // requestBytes is the signed binary-response entry point (call-recording audio). If the
     // guard did not know it as a callee, its path would be checked only as a stray literal
     // with no verb — and a POST to a GET-only route would pass.
-    const f = only(kotlin(`suspend fun audio(id: String) = apiService.requestBytes("POST", apiService.hp("/api/calls/$id/recording"))`))
+    const f = only(kotlin(`suspend fun audio(id: String) = apiService.requestBytes("POST", apiService.activeHubPath("/api/calls/$id/recording"))`))
     expect(f.category).toBe('wrong-verb')
   })
 
   test('PUT where the route is PATCH (Kotlin, hp-wrapped)', () => {
-    const f = only(kotlin(`suspend fun save(id: String) = apiService.request<Event>("PUT", apiService.hp("/api/events/$id"))`))
+    // A still-dual mount, so `hp()` resolves on both sides: events are hub-only (#2461).
+    const f = only(kotlin(`suspend fun save(id: String) = apiService.request<Contact>("PUT", apiService.hp("/api/directory/$id"))`))
     expect(f.category).toBe('wrong-verb')
-    expect(f.nearest).toContain('PATCH /api/events/:id')
+    expect(f.nearest).toContain('PATCH /api/directory/:id')
   })
 
   test('PUT where the route is PATCH (desktop)', () => {
@@ -170,7 +171,7 @@ describe('break it: each seeded defect is caught', () => {
   })
 
   test('a correct call produces no finding, and the ALL verb matches any method', () => {
-    expect(swift(`func ok() async throws { try await api.request(method: "GET", path: hp("/api/calls/active")) }`)).toEqual([])
+    expect(swift(`func ok() async throws { try await api.request(method: "GET", path: try api.activeHubPath("/api/calls/active")) }`)).toEqual([])
     expect(swift(`func ok() async throws { try await api.request(method: "POST", path: "/api/telephony/wait-music") }`)).toEqual([])
   })
 })
@@ -195,7 +196,7 @@ describe('call-site parsing follows the way the clients build paths', () => {
     expect(kotlin(`
       suspend fun list(q: String?) {
           val query = buildString {
-              append(apiService.hp("/api/records"))
+              append(apiService.activeHubPath("/api/records"))
               append("?limit=50")
               q?.let { append("&q=$it") }
           }
@@ -205,10 +206,10 @@ describe('call-site parsing follows the way the clients build paths', () => {
 
   test('both arms of a ternary are checked', () => {
     const f = only(swift(`func go(edit: Bool, id: String) async throws {
-        try await api.request(method: "GET", path: edit ? "/api/calls/active" : "/api/calls/\\(id)/nope")
+        try await api.request(method: "GET", path: edit ? "/api/settings/call" : "/api/settings/call/\\(id)/nope")
     }`))
     expect(f.category).toBe('unmounted')
-    expect(f.path).toBe('/api/calls/:param/nope')
+    expect(f.path).toBe('/api/settings/call/:param/nope')
   })
 
   test('a local helper that builds the path is inlined with its arguments', () => {
@@ -223,7 +224,7 @@ describe('call-site parsing follows the way the clients build paths', () => {
   test('kotlin: ApiService.hubPath(hubId, path) names the hub explicitly, through a helper whose body starts on the next line', () => {
     const f = only(kotlin(`
       private fun callPath(call: ActiveCall, action: String): String =
-          apiService.hubPath(call.hubId ?: apiService.activeHubIdOrNull(), "/api/calls/\${call.id}/$action")
+          apiService.hubPath(call.hubId, "/api/calls/\${call.id}/$action")
       suspend fun hangup(call: ActiveCall) = apiService.requestNoContent("POST", callPath(call, "nope"))
     `))
     expect(f.category).toBe('unmounted')

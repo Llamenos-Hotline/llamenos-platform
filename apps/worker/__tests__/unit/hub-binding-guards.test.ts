@@ -20,6 +20,9 @@ import blastsRouter from '../../routes/blasts'
 import directoryRouter from '../../routes/contacts-v2'
 import eventsRouter from '../../routes/events'
 import firehoseRouter from '../../routes/firehose'
+import recordsRouter from '../../routes/records'
+import evidenceRouter from '../../routes/evidence'
+import callsRouter from '../../routes/calls'
 
 /** A service whose every method fails the test unless the case lent it a stand-in. */
 function tripwire(lent: Record<string, unknown> = {}): unknown {
@@ -80,13 +83,38 @@ const CASES = [
     router: firehoseRouter,
     services: { firehose: tripwire({ getConnection: async () => OTHER_HUB_ROW }) },
   },
+  // #2461: these were also served unscoped, where their binding did nothing.
+  {
+    name: 'records',
+    router: recordsRouter,
+    services: { cases: tripwire({ get: async () => OTHER_HUB_ROW }) },
+  },
+  {
+    name: 'evidence',
+    router: evidenceRouter,
+    services: {
+      cases: tripwire({
+        get: async () => OTHER_HUB_ROW,
+        getEvidence: async () => ({ id: 'some-id', caseId: 'case-other' }),
+      }),
+      audit: tripwire({ log: async () => undefined }),
+    },
+  },
+  {
+    // A call of another hub is not found by a lookup bounded to the path hub.
+    name: 'calls',
+    router: callsRouter,
+    services: {
+      calls: tripwire({ getActiveCallById: async () => null, getCallRecord: async () => null }),
+    },
+  },
 ]
 
 describe('hub-bound routers refuse a foreign id on every :id route', () => {
   for (const { name, router, services } of CASES) {
     const idRoutes = [...new Map(
       router.routes
-        .filter(r => r.method !== 'ALL' && /:(id|groupId)(\/|$)/.test(r.path))
+        .filter(r => r.method !== 'ALL' && /:(id|groupId|callId|evidenceId)(\/|$)/.test(r.path))
         .map(r => [`${r.method} ${r.path}`, r]),
     ).values()]
 
