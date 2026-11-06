@@ -1,4 +1,4 @@
-# shellcheck shell=bash
+# shellcheck shell=bash disable=SC2034  # GH_READ_OUT/GH_READ_ERR are outputs, read by the sourcing step
 #
 # gh-read.sh — the ONE bounded-retry policy for a gate's GitHub API reads
 # (#2481, #2483). Source it; do not execute it.
