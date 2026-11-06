@@ -66,6 +66,8 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     readRunJobs: async () => [],
     readWorkflowFile: async () => undefined,
     listRecentWorkflowRuns: async () => [],
+    readJobAnnotations: async () => [],
+    readHeadFirstSeen: async () => undefined,
     listPrComments: async () => [],
     postPrComment: async () => {},
     enableAutoMerge: async () => {},
@@ -91,7 +93,7 @@ function mkRun(id: number, conclusion: string, overrides: Partial<MergeGroupRun>
 /** A job that ran for `seconds`, ending at `end`. */
 function mkJob(name: string, conclusion: string, seconds: number, end = '2026-11-05T15:30:00Z'): RunJob {
   const e = Date.parse(end)
-  return { name, conclusion, startedAt: new Date(e - seconds * 1000).toISOString(), completedAt: new Date(e).toISOString(), steps: [] }
+  return { nodeId: 'CR_1', name, conclusion, startedAt: new Date(e - seconds * 1000).toISOString(), completedAt: new Date(e).toISOString(), steps: [] }
 }
 
 describe('queueRunPr — the merge-group branch grammar', () => {

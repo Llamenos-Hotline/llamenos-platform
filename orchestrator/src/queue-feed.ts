@@ -15,7 +15,7 @@ import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } fro
 import { checkHalt } from './killswitch.js'
 import {
   classifyAttempt, newAttemptReadCache, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
-  type AttemptReadDeps, type AttemptReadCache, type PlatformFlags, type RunJob, type TimeoutEvidence,
+  type AttemptReadDeps, type AttemptReadCache, type PlatformFlags, type RunJob, type InfraEvidence,
 } from './queue-attempt.js'
 
 /**
@@ -119,6 +119,25 @@ import {
  *    normal duration that cannot be established). Skipped, with the evidence
  *    logged. Before #2458 every cancellation-only ejection re-armed
  *    uncapped, because cancelled jobs were never read at all.
+ *
+ *  - `infra-declared` (#2529) — every failure-class job the diff schedules
+ *    declared itself environmental (the iOS disk-headroom guard: "THIS IS NOT
+ *    A TEST FAILURE AND NOT THIS PR'S FAULT"). The reason a job failed
+ *    outranks which shard it was: the shard map used to read "an iOS diff
+ *    schedules the iOS shard" as "the diff broke it" even when the step
+ *    refused to run. Same one-per-head cap as `infra-timeout`. A genuine
+ *    test failure carries no declaration and stays `own-diff`.
+ *
+ * HEAD-SCOPED. A verdict is evidence about ONE head. The queue branch names
+ * the PR and the base, never the head, so the head is recovered from time:
+ * an attempt any of whose runs was created before GitHub first saw the PR's
+ * current head commit (`readHeadFirstSeen`) was produced by an EARLIER head
+ * and says nothing about this one (#2478 was refused by a run created 37
+ * minutes before its fix existed — forever, since its "last queue attempt"
+ * could never change). The re-queue cap is keyed to the same thing: its
+ * marker comment names the head sha. One notion of "which head", two readers.
+ * A head age that cannot be read keeps the attempt as evidence — the
+ * pre-#2529 behaviour, the closed direction.
  *
  * Aggregate jobs (`ci-status`, `changes`) never attribute: `ci-status` fails
  * BECAUSE a member failed, so it names no culprit.
@@ -230,6 +249,14 @@ export interface QueueFeedDeps {
   /** Recent completed runs of one workflow file, newest first — the
    *  "normal duration" sample. `undefined` on failure. */
   listRecentWorkflowRuns: AttemptReadDeps['listRecentWorkflowRuns']
+  /** A job's failure annotations (`::error::`) — where a step that failed
+   *  for the environment's sake says so. `undefined` on failure. */
+  readJobAnnotations: AttemptReadDeps['readJobAnnotations']
+  /** When GitHub first recorded `headSha` — the earliest check suite created
+   *  for it, a time the author cannot set (a commit's own date can be). The
+   *  lower bound of any queue attempt that could be about that head.
+   *  `undefined` on any failure or when no suite exists. */
+  readHeadFirstSeen(headSha: string): Promise<string | undefined>
   /** Every comment body on the PR. `undefined` on ANY failure — an
    *  unreadable comment list is never "no prior re-queue" (the cap). */
   listPrComments(pr: number): Promise<string[] | undefined>
@@ -291,6 +318,22 @@ export function latestQueueAttempts(runs: readonly MergeGroupRun[], branch: stri
   return new Map([...latest].map(([pr, v]) => [pr, v.attempt]))
 }
 
+/**
+ * Whether a queue attempt was produced by an EARLIER head than the one first
+ * seen at `headFirstSeen`: any of its runs created before that moment. A queue
+ * entry needs its head to exist, so no run of an attempt for THIS head can
+ * predate it. An unparseable time proves nothing, so it never marks an attempt
+ * stale — the attempt stays evidence (the closed direction).
+ */
+export function attemptPredatesHead(attempt: QueueAttempt, headFirstSeen: string): boolean {
+  const seen = Date.parse(headFirstSeen)
+  if (Number.isNaN(seen)) return false
+  return attempt.runs.some((r) => {
+    const created = Date.parse(r.createdAt)
+    return !Number.isNaN(created) && created < seen
+  })
+}
+
 /** Parses the `merge_queue` rule out of a branch's raw ruleset. */
 export function mergeQueueConfigFromRules(rules: unknown): MergeQueueConfig | undefined {
   if (!Array.isArray(rules)) return undefined
@@ -340,7 +383,7 @@ export interface BranchFeedResult {
 
 export interface Skip { pr: number; reason: string }
 
-export interface InfraRequeue { pr: number; head: string; runIds: number[]; evidence: TimeoutEvidence[] }
+export interface InfraRequeue { pr: number; head: string; runIds: number[]; evidence: InfraEvidence[] }
 
 export interface QueueFeedResult {
   halted: boolean
@@ -554,8 +597,17 @@ async function feedBranch(
     // OWN diff is a defect to fix, not a retry; one whose attempt was only
     // cancelled is re-queued solely when the cancellation was provably an
     // infrastructure timeout, at most once per head (#2458).
-    const attempt = attempts.get(pr.number)
+    let attempt = attempts.get(pr.number)
     let infra: InfraRequeue | undefined
+    if (attempt !== undefined && !attempt.succeeded) {
+      const headFirstSeen = await deps.readHeadFirstSeen(pr.headRefOid)
+      if (headFirstSeen === undefined) {
+        deps.log(`queue-feed: pr ${pr.number}: when head ${pr.headRefOid.slice(0, 12)} first appeared could not be read — its last queue attempt is judged as evidence about this head`)
+      } else if (attemptPredatesHead(attempt, headFirstSeen)) {
+        result.notes.push(`pr ${pr.number}: last queue attempt (run${attempt.runs.length === 1 ? '' : 's'} ${attempt.runs.map((r) => r.id).join(', ')}) predates head ${pr.headRefOid.slice(0, 12)} (first seen ${headFirstSeen}) — an earlier head's verdict, not evidence about this one`)
+        attempt = undefined
+      }
+    }
     if (attempt !== undefined && !attempt.succeeded) {
       const runIds = attempt.runs.map((r) => r.id)
       const runLabel = `run${runIds.length === 1 ? '' : 's'} ${runIds.join(', ')}`
@@ -585,7 +637,8 @@ async function feedBranch(
       if (verdict.kind === 'sibling') {
         result.notes.push(`pr ${pr.number}: last queue attempt failed on shard(s) its diff does not touch (${verdict.failed.join(', ')}) — ejected by a sibling or a flake, eligible`)
       } else {
-        // verdict.kind === 'infra-timeout' — the cap, read from the PR itself.
+        // verdict.kind is 'infra-timeout' or 'infra-declared' — the cap, read
+        // from the PR itself.
         const comments = await deps.listPrComments(pr.number)
         if (comments === undefined) {
           result.skipped.push({ pr: pr.number, reason: `its last queue attempt (${runLabel}) was an infrastructure ejection, but its comments could not be read — the one-per-head cap is unverifiable, so it is not re-queued` })
@@ -692,6 +745,10 @@ export function renderQueueFeed(result: QueueFeedResult): string {
   if (result.branches.length === 0 && !result.halted) lines.push('queue-feed: no open PRs')
   return lines.join('\n')
 }
+
+/** A job's annotations. `id` is the job's node id (`CR_…`); any other node
+ *  type resolves to `{}` here and reads as unreadable, never as empty. */
+const JOB_ANNOTATIONS_QUERY = `query($id: ID!) { node(id: $id) { ... on CheckRun { annotations(first: 100) { nodes { annotationLevel message } } } } }`
 
 /** A workflow file path as the runs API reports it. */
 const WORKFLOW_PATH_RE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
@@ -862,16 +919,16 @@ export function defaultQueueFeedDeps(
     },
     readRunJobs: async (runId) => {
       const pages = await ghJson<{ jobs?: {
-        name?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null
+        node_id?: string; name?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null
         steps?: { name?: string; conclusion?: string | null; completed_at?: string | null }[]
       }[] }[]>(
         ['api', '--paginate', '--slurp', `repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`], 60_000,
         (d) => log(`queue-feed: reading run ${runId}'s jobs failed: ${d}`),
       )
       if (pages === undefined) return undefined
-      return pages.flatMap((p) => p.jobs ?? []).flatMap((j): RunJob[] => (typeof j.name === 'string'
+      return pages.flatMap((p) => p.jobs ?? []).flatMap((j): RunJob[] => (typeof j.name === 'string' && typeof j.node_id === 'string'
         ? [{
-            name: j.name, conclusion: j.conclusion ?? '',
+            nodeId: j.node_id, name: j.name, conclusion: j.conclusion ?? '',
             startedAt: j.started_at ?? undefined, completedAt: j.completed_at ?? undefined,
             steps: (j.steps ?? []).map((st) => ({ name: st.name ?? '', conclusion: st.conclusion ?? '', completedAt: st.completed_at ?? undefined })),
           }]
@@ -903,6 +960,35 @@ export function defaultQueueFeedDeps(
       )
       if (data === undefined || !Array.isArray(data.workflow_runs)) return undefined
       return data.workflow_runs.flatMap((r) => (typeof r.id === 'number' ? [r.id] : []))
+    },
+    readJobAnnotations: async (nodeId) => {
+      // A GraphQL READ of the CheckRun the job is. A query cannot write, so
+      // nothing here can forge a check — the property the forgery rail on
+      // the REST resource exists to keep.
+      const raw = await ghJson<{
+        data?: { node?: { annotations?: { nodes?: ({ annotationLevel?: string; message?: string | null } | null)[] } } | null }
+        errors?: unknown
+      }>([
+        'api', 'graphql', '-f', `query=${JOB_ANNOTATIONS_QUERY}`, '-f', `id=${nodeId}`,
+      ], 60_000, (d) => log(`queue-feed: reading job ${nodeId}'s annotations failed: ${d}`))
+      const nodes = raw?.data?.node?.annotations?.nodes
+      if (raw === undefined || raw.errors !== undefined || !Array.isArray(nodes)) return undefined
+      return nodes.flatMap((a) => (a?.annotationLevel === 'FAILURE' && typeof a.message === 'string' ? [a.message] : []))
+    },
+    readHeadFirstSeen: async (headSha) => {
+      let sha: string
+      try {
+        sha = commitSha(headSha)
+      } catch {
+        return undefined
+      }
+      const data = await ghJson<{ check_suites?: { created_at?: string }[] }>(
+        ['api', `repos/${REPO}/commits/${sha}/check-suites?per_page=100`], 60_000,
+        (d) => log(`queue-feed: reading commit ${sha.slice(0, 8)}'s check suites failed: ${d}`),
+      )
+      if (data === undefined || !Array.isArray(data.check_suites)) return undefined
+      const times = data.check_suites.flatMap((c) => (typeof c.created_at === 'string' && !Number.isNaN(Date.parse(c.created_at)) ? [c.created_at] : []))
+      return times.length === 0 ? undefined : times.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b))
     },
     listPrComments: async (pr) => {
       const pages = await ghJson<{ body?: string | null }[][]>(
