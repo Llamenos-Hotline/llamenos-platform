@@ -17,7 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Lock, Loader2, Plus } from 'lucide-react'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface CreateRecordDialogProps {
   open: boolean
@@ -111,7 +111,7 @@ export function CreateRecordDialog({
       // Build reader pubkeys for E2EE envelopes
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       // Encrypt summary (title + description + status + severity)
       const summary = JSON.stringify({

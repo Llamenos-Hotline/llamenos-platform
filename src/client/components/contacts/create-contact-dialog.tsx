@@ -24,7 +24,7 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Plus, Trash2, Loader2 } from 'lucide-react'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface IdentifierRow {
   tempId: string
@@ -116,7 +116,7 @@ export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateCon
       // Build reader pubkeys for E2EE envelopes
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       // Encrypt contact summary (displayName + contactType + tags)
       const summary: DirectoryContactSummary = {
