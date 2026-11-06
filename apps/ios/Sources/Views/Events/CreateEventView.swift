@@ -19,6 +19,9 @@ struct CreateEventView: View {
     @State private var hasEndDate: Bool = false
     @State private var location: String = ""
     @State private var selectedEntityTypeId: String?
+    /// Why the last submit did not create the event. The sheet stays open with every
+    /// field intact, so an event that was not saved can never look as if it was (#2478).
+    @State private var submitError: String?
 
     var body: some View {
         NavigationStack {
@@ -104,6 +107,15 @@ struct CreateEventView: View {
                         comment: "Enter an approximate location. Exact coordinates are never stored for safety."
                     ))
                 }
+
+                if let submitError {
+                    Section {
+                        Text(submitError)
+                            .font(.brand(.footnote))
+                            .foregroundStyle(Color.brandDestructive)
+                    }
+                    .accessibilityIdentifier("event-create-error")
+                }
             }
             .navigationTitle(
                 parentEventId != nil
@@ -169,8 +181,12 @@ struct CreateEventView: View {
         )
 
         if success {
+            submitError = nil
             dismiss()
             onDismiss()
+        } else {
+            submitError = viewModel.errorMessage
+                ?? NSLocalizedString("error_boundary_title", comment: "Something went wrong")
         }
     }
 }

@@ -520,9 +520,15 @@ final class CaseManagementViewModel {
     ///     (`CasesService.createInteraction`) and never adds readers of its own,
     ///     so every reader has to be wrapped for here or admin accountability
     ///     access is lost — see `docs/security/CRYPTO_ARCHITECTURE.md`.
-    func addComment(recordId: String, text: String, adminPubkeys: [String]) async {
+    ///
+    /// Returns whether the comment was saved. On failure `errorMessage` says why and
+    /// the caller must keep the text and show it: a comment that silently vanished is
+    /// one the volunteer believes is on the record (#2478).
+    @discardableResult
+    func addComment(recordId: String, text: String, adminPubkeys: [String]) async -> Bool {
         isActionInProgress = true
         defer { isActionInProgress = false }
+        errorMessage = nil
 
         do {
             // Encrypt the comment content for the author and every admin reader.
@@ -561,9 +567,11 @@ final class CaseManagementViewModel {
             // Reload timeline
             await loadInteractions(for: recordId)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            return true
         } catch {
             errorMessage = error.localizedDescription
             UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return false
         }
     }
 
