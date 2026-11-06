@@ -355,15 +355,14 @@ final class CaseManagementViewModel {
             let envelopes = record.summaryEnvelopes
             guard !envelopes.isEmpty else { continue }
 
-            // Find our envelope
-            guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { continue }
+            // Not addressed to this device: not a reader.
+            guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { continue }
 
             do {
-                let plaintext = try cryptoService.decryptRecordData(
-                    ciphertextHex: encryptedSummary,
-                    enc: envelope.enc,
-                    ct: envelope.ct,
-                    label: CryptoLabels.LABEL_CASE_SUMMARY
+                let plaintext = try cryptoService.openCase(
+                    purpose: .summary,
+                    encryptedContent: encryptedSummary,
+                    envelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
                 )
                 if let data = plaintext.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -393,14 +392,13 @@ final class CaseManagementViewModel {
               let envelopes = record.fieldEnvelopes,
               !envelopes.isEmpty else { return }
 
-        guard let envelope = envelopes.first(where: { $0.pubkey == ourPubkey }) else { return }
+        guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { return }
 
         do {
-            let plaintext = try cryptoService.decryptRecordData(
-                ciphertextHex: encryptedFields,
-                enc: envelope.enc,
-                ct: envelope.ct,
-                label: CryptoLabels.LABEL_CASE_FIELDS
+            let plaintext = try cryptoService.openCase(
+                purpose: .fields,
+                encryptedContent: encryptedFields,
+                envelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
             )
             if let data = plaintext.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -518,8 +516,11 @@ final class CaseManagementViewModel {
         defer { isActionInProgress = false }
 
         do {
-            // Encrypt the comment content for the author and every admin reader.
-            let encrypted = try cryptoService.encryptMessage(
+            // Sealed as a case comment for this device and every admin reader;
+            // the crate supplies the label and AAD (#2499). It used to be sealed
+            // as a conversation message (LABEL_MESSAGE, no AAD).
+            let encrypted = try cryptoService.sealCase(
+                purpose: .comment,
                 plaintext: text,
                 readerPubkeys: adminPubkeys
             )
