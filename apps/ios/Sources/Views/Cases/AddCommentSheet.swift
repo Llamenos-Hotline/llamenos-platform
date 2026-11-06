@@ -4,12 +4,17 @@ import SwiftUI
 
 /// Bottom sheet for adding a comment to a case's timeline.
 /// Comment is encrypted before submission via E2EE.
+///
+/// `onSubmit` answers nil once the comment is saved — the presenter then closes the
+/// sheet — or the error to show. On an error the sheet stays open with the text intact,
+/// so a comment that was not saved can never look as if it was (#2478).
 struct AddCommentSheet: View {
-    let onSubmit: (String) -> Void
+    let onSubmit: (String) async -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var commentText: String = ""
     @State private var isSubmitting: Bool = false
+    @State private var submitError: String?
 
     private var canSubmit: Bool {
         !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSubmitting
@@ -39,6 +44,14 @@ struct AddCommentSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if let submitError {
+                    Text(submitError)
+                        .font(.brand(.footnote))
+                        .foregroundStyle(Color.brandDestructive)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("comment-submit-error")
+                }
+
                 Spacer()
             }
             .padding()
@@ -57,8 +70,12 @@ struct AddCommentSheet: View {
                         // never submit.
                         guard canSubmit else { return }
                         isSubmitting = true
+                        submitError = nil
                         let text = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        onSubmit(text)
+                        Task {
+                            submitError = await onSubmit(text)
+                            isSubmitting = false
+                        }
                     } label: {
                         if isSubmitting {
                             ProgressView()
