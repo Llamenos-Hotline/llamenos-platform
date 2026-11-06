@@ -53,12 +53,18 @@
 #
 # Deliberately NOT touched, each for a measured reason:
 #
-#   * `~/Library/Developer/Xcode/DerivedData` — CI never writes here: both iOS
-#     build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
-#     delete it themselves. Each Xcode directory's info.plist names its
-#     WorkspacePath. Only entries whose workspace is gone and whose directory
-#     has been idle for at least 60 minutes are reclaimed; live, recent, and
-#     uninspectable entries are retained and reported.
+#   * `~/Library/Developer/Xcode/DerivedData` — CI does not write here: both
+#     iOS build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
+#     the `ui` shards' `test-without-building` passes one under RUNNER_TEMP
+#     too. Each Xcode directory's info.plist names its WorkspacePath. Only
+#     entries whose workspace is gone and whose directory has been idle for at
+#     least 60 minutes are reclaimed; live, recent, and uninspectable entries
+#     are retained and reported. ONE plist-less shape is reclaimed: the entry
+#     a `test-without-building` run leaves when it is NOT given a
+#     -derivedDataPath (until 2026-11-05 every `ui` shard did, 85-110 MiB of
+#     coverage .profraw each, and a branch whose workflow predates the fix
+#     still does). It is recognised by its exact contents, not its name alone
+#     — see is_test_run_derived_data.
 #   * simulator devices not covered by the rules above — a booted device, or
 #     a Shutdown one younger than MAC_SIM_STALE_MAX_AGE_HOURS. `report`
 #     surfaces the fat ones and what reclaiming them would cost; the decision
@@ -98,6 +104,33 @@
 # volume hit zero, so free space when they started was ~10 GiB. A 12 GiB
 # threshold would have refused them, which is the outcome this issue asks for.
 #
+# WHICH VOLUME IT MEASURES, AND WHY THAT IS CHECKED, NOT ASSUMED
+# ---------------------------------------------------------------
+# The threshold is only meaningful on the filesystem the job writes to. It
+# measures VOLUME (/System/Volumes/Data), and `guard` first proves that every
+# path a job writes is on that same filesystem: RUNNER_TEMP (DerivedData and
+# build products), RUNNER_WORKSPACE (the checkout), the runner's own `_diag`
+# (the write that crashed the agent in #1665) and the CoreSimulator device set.
+# If any of them resolves elsewhere - a symlink onto the external
+# /Volumes/CIScratch SSD is the realistic way - the job is REFUSED, because a
+# guard reading 15 GiB free on the internal disk says nothing about the disk
+# the build is filling.
+#
+# Refused rather than measured-as-well, because on this host such a path is
+# broken twice over (measured 2026-11-05):
+#   * the runner service cannot read the external drive at all. macOS TCC
+#     "Removable Volumes" records the runner's node binary as DENIED, and a
+#     launchd-started process gets EPERM on /Volumes/CIScratch while an ssh
+#     session is allowed - so every shell-side check looks healthy. On
+#     2026-10-21 a DerivedData symlink there wedged this script's own
+#     directory walk for 36 minutes per job.
+#   * any grant would not survive: the runner self-updates into a new
+#     `externals.<version>/` directory, which changes the binary TCC keys on.
+# The runners start from launchd at boot, before an external mount is
+# guaranteed, too. CI's build data therefore stays on the internal volume, and
+# out-of-CI builds over ssh use the SSD instead (scripts/lib/ios-build-data.sh).
+# docs/runbooks/mac-ci-runner-disk.md has the layout and the operator options.
+#
 # MAC_DISK_WARN_FREE_GIB (default 16) is the band where the host still runs but
 # is drifting toward the refusal, emitted as a `::warning::` so it is visible
 # before it costs anybody a queue cycle.
@@ -109,7 +142,7 @@
 # USAGE
 #   mac-runner-disk-guard.sh report    # measure and print; never fails
 #   mac-runner-disk-guard.sh reclaim   # prune CI-owned space; never fails
-#   mac-runner-disk-guard.sh guard     # report, reclaim, re-measure, then gate
+#   mac-runner-disk-guard.sh guard     # check write paths, report, reclaim, re-measure, then gate
 #   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
@@ -513,6 +546,36 @@ reclaim() {
   log ""
 }
 
+# The DerivedData entry `xcodebuild test-without-building -xctestrun` creates
+# when it is given no -derivedDataPath: named Llamenos-<hash>, no info.plist
+# (there is no workspace), and nothing at the top but Logs/, TestResults/ and
+# a Build/ holding only ProfileData/ (the coverage .profraw). A real build's
+# entry has an info.plist and Build/Intermediates.noindex, so it can never
+# match. Idle means NOTHING inside was modified within SIM_MAX_AGE_MIN, which
+# is above the `ui` job's cap, so a live shard's entry is never a candidate.
+is_test_run_derived_data() {
+  local dir="$1" child name
+  case "$(basename "$dir")" in Llamenos-*) : ;; *) return 1 ;; esac
+  [ ! -e "$dir/info.plist" ] || return 1
+  [ -d "$dir/Logs" ] || return 1
+  for child in "$dir"/* "$dir"/.[!.]*; do
+    [ -e "$child" ] || continue
+    name="$(basename "$child")"
+    case "$name" in
+      Logs|TestResults) : ;;
+      Build)
+        local sub
+        for sub in "$child"/* "$child"/.[!.]*; do
+          [ -e "$sub" ] || continue
+          [ "$(basename "$sub")" = "ProfileData" ] || return 1
+        done
+        ;;
+      *) return 1 ;;
+    esac
+  done
+  [ -z "$(find "$dir" -mmin "-${SIM_MAX_AGE_MIN}" -print -quit 2>/dev/null)" ]
+}
+
 # Remove only old DerivedData entries with a parseable plist naming a workspace
 # that no longer exists. Keep apparent size informational; df deltas are the
 # only measurement of actual reclaimed capacity, especially on APFS clones.
@@ -526,6 +589,17 @@ reclaim_derived_data() {
     plist="$dir/info.plist"
     apparent="$(apparent_gib "$dir")"
     if [ ! -e "$plist" ]; then
+      if is_test_run_derived_data "$dir"; then
+        rc=0
+        rm_ci_path "$dir" || rc=$?
+        case "$rc" in
+          0) deleted_any=1
+             log "  removed leaked test-run DerivedData $(basename "$dir") (${apparent} GiB apparent): no info.plist, only Logs/TestResults/Build/ProfileData, idle > ${SIM_MAX_AGE_MIN} min" ;;
+          2) : ;;
+          *) exit 1 ;;
+        esac
+        continue
+      fi
       log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): missing info.plist"
       continue
     fi
@@ -562,6 +636,66 @@ reclaim_derived_data() {
       *) exit 1 ;;
     esac
   done
+}
+
+# ── write paths ─────────────────────────────────────────────────────────────
+
+# Mount point of the filesystem holding an existing path (follows symlinks, so
+# a symlinked directory reports where its data really goes). Mount points may
+# contain spaces: join every field from the 6th on. Empty when df cannot stat
+# the path, which on this host is what TCC's EPERM looks like.
+mount_point_of() {
+  df -P "$1" 2>/dev/null | awk 'NR==2 { s=$6; for (i=7; i<=NF; i++) s = s " " $i; print s }'
+}
+
+# Prints the marker line `write paths OK:` on success; the workflow's watchdog
+# fallback looks for it, so a hang INSIDE this check is a refusal, not a pass.
+check_write_paths() {
+  local want entry label path mp bad=0 runner_root
+  local -a paths
+  want="$(mount_point_of "$VOLUME")"
+  if [ -z "$want" ]; then
+    log "::error::ios runner REFUSED to run: disk-guard cannot read the filesystem of ${VOLUME}, the volume it measures. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+    return 1
+  fi
+
+  paths=("CoreSimulator device set|$SIM_DEVICES")
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    paths+=("RUNNER_TEMP (DerivedData, build products)|$RUNNER_TEMP")
+  fi
+  if [ -n "${RUNNER_WORKSPACE:-}" ]; then
+    paths+=("RUNNER_WORKSPACE (checkout)|$RUNNER_WORKSPACE")
+    runner_root="${RUNNER_WORKSPACE%%/_work/*}"
+    if [ "$runner_root" != "$RUNNER_WORKSPACE" ]; then
+      paths+=("runner _diag (the agent's own log)|$runner_root/_diag")
+    fi
+  fi
+
+  log "── write paths (must be on ${want}, the volume this guard measures) ──"
+  for entry in "${paths[@]}"; do
+    label="${entry%%|*}"
+    path="${entry#*|}"
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+      log "  absent, nothing to check: $label ($path)"
+      continue
+    fi
+    # Printed BEFORE the df, so a df that blocks on an unreadable volume
+    # leaves the path it blocked on as the last line of the log.
+    log "  checking: $label ($path)"
+    mp="$(mount_point_of "$path")"
+    if [ -z "$mp" ]; then
+      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on a filesystem this runner cannot even stat. On this host that is macOS TCC 'Removable Volumes' denying the runner service access to an external drive (a symlink onto /Volumes/CIScratch is the usual cause). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. CI build data must stay on ${want}; see docs/runbooks/mac-ci-runner-disk.md."
+      bad=1
+    elif [ "$mp" != "$want" ]; then
+      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on ${mp}, but this guard's ${MIN_FREE_GIB} GiB floor measures ${want}, so its verdict would say nothing about the disk this job fills. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. The runner service cannot use an external drive (TCC 'Removable Volumes'; launchd starts it before external mounts), so move that path back onto ${want}; see docs/runbooks/mac-ci-runner-disk.md."
+      bad=1
+    else
+      log "  ok: on $mp"
+    fi
+  done
+  [ "$bad" -eq 0 ] || return 1
+  log "write paths OK: every path this job writes is on ${want}"
+  log ""
 }
 
 # ── gate ────────────────────────────────────────────────────────────────────
@@ -679,7 +813,20 @@ selftest() {
   log "── selftest: DerivedData safety predicates ──"
   local orphan="$DERIVED_DATA/orphan" live="$DERIVED_DATA/live" missing="$DERIVED_DATA/missing-plist"
   local malformed="$DERIVED_DATA/malformed-plist" fresh="$DERIVED_DATA/fresh"
+  # Plist-less entries: the leaked test-run shape (reclaimed when idle), the
+  # same shape still being written (retained), and look-alikes that hold
+  # anything a real build would (retained).
+  local testrun="$DERIVED_DATA/Llamenos-selftestidle" testrun_live="$DERIVED_DATA/Llamenos-selftestlive"
+  local testrun_build="$DERIVED_DATA/Llamenos-selftestbuild" testrun_extra="$DERIVED_DATA/Llamenos-selftestextra"
   mkdir -p "$orphan" "$live" "$missing" "$malformed" "$fresh" "$sandbox/live-workspace"
+  mkdir -p "$testrun/Logs/Test" "$testrun/TestResults" "$testrun/Build/ProfileData/X"
+  : > "$testrun/Build/ProfileData/X/a.profraw"
+  mkdir -p "$testrun_live/Logs/Test" "$testrun_live/Build/ProfileData/X"
+  : > "$testrun_live/Build/ProfileData/X/a.profraw"
+  mkdir -p "$testrun_build/Logs" "$testrun_build/Build/ProfileData" "$testrun_build/Build/Intermediates.noindex"
+  mkdir -p "$testrun_extra/Logs" "$testrun_extra/SourcePackages"
+  # Everything idle except testrun_live, whose newest file stays fresh.
+  find "$testrun" "$testrun_build" "$testrun_extra" -exec touch -t 202001010000 {} +
   cat > "$orphan/info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -718,7 +865,13 @@ EOF
     log "  FAIL  df did not show space returned: ${before_kib} KiB -> ${after_kib} KiB"
     fails=$((fails + 1))
   fi
-  for leaf in "$live" "$missing" "$malformed" "$fresh"; do
+  if [ ! -e "$testrun" ]; then
+    log "  ok    leaked idle test-run DerivedData was removed"
+  else
+    log "  FAIL  leaked idle test-run DerivedData survived"
+    fails=$((fails + 1))
+  fi
+  for leaf in "$live" "$missing" "$malformed" "$fresh" "$testrun_live" "$testrun_build" "$testrun_extra"; do
     if [ -d "$leaf" ]; then
       log "  ok    retained $(basename "$leaf")"
     else
@@ -739,6 +892,42 @@ EOF
       fails=$((fails + 1))
     fi
   done
+
+  log "── selftest: write paths must be on the measured volume ──"
+  # /dev is its own filesystem (devfs on macOS, devtmpfs on Linux) on every
+  # host this runs on, so it stands in for "a path on another disk" without
+  # needing a mount. Subshells keep the overrides from leaking.
+  mkdir -p "$sandbox/write-same"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="$sandbox/write-same"; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  ok    accepts write paths on the measured volume"
+  else
+    log "  FAIL  refused write paths that are on the measured volume"
+    fails=$((fails + 1))
+  fi
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="/dev"; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted RUNNER_TEMP on a different filesystem from the measured volume"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses RUNNER_TEMP on a different filesystem"
+  fi
+  ln -s /dev "$sandbox/write-symlink"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-symlink"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted a device set SYMLINKED onto a different filesystem"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses a write path symlinked onto a different filesystem"
+  fi
+  ln -s "$sandbox/does-not-exist" "$sandbox/write-dangling"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-dangling"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted a DANGLING symlink as a write path (an unmounted drive looks like this)"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses a dangling symlink (what an unmounted drive leaves behind)"
+  fi
 
   log ""
   if [ "$fails" -ne 0 ]; then
@@ -819,6 +1008,12 @@ case "$MODE" in
   reclaim)  reclaim ;;
   install-timer) install_timer ;;
   guard)
+    # First, and before anything that walks a directory: if a write path is on
+    # an unreadable volume, report/reclaim would wedge on it (2026-10-21).
+    if ! check_write_paths; then
+      summarize "REFUSED: a path this job writes is not on ${VOLUME}, the volume the disk floor measures. Environmental, not this PR."
+      exit 1
+    fi
     report
     reclaim
     if gate; then

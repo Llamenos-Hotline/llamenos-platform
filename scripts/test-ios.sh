@@ -43,6 +43,13 @@ if ! command -v xcodebuild &>/dev/null; then
   exit 1
 fi
 
+# DerivedData goes to the external SSD, never Xcode's default location on the
+# internal disk the CI runners' guard protects; refuses loudly if the SSD is not
+# mounted. See scripts/lib/ios-build-data.sh.
+# shellcheck source=lib/ios-build-data.sh
+source "$SCRIPT_DIR/lib/ios-build-data.sh"
+ios_build_data_preflight "$PROJECT_ROOT"
+
 IOS_DIR="$PROJECT_ROOT/apps/ios"
 DESTINATION="platform=iOS Simulator,name=${SIMULATOR}"
 TEST_HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
@@ -102,6 +109,7 @@ fi
 if ! reporter_run_step "xcodebuild build" \
   xcodebuild build -project "$IOS_DIR/Llamenos.xcodeproj" -scheme Llamenos \
     -destination "$DESTINATION" \
+    -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
     CODE_SIGNING_ALLOWED=NO; then
   overall_result="fail"
   reporter_record_suite "build" 0 1 0
@@ -119,6 +127,7 @@ echo -e "${CYAN:-}--- Unit Tests ---${RESET:-}"
 unit_exit=0
 xcodebuild test -project "$IOS_DIR/Llamenos.xcodeproj" -scheme Llamenos \
   -destination "$DESTINATION" \
+  -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
   -only-testing:LlamenosTests \
   CODE_SIGNING_ALLOWED=NO 2>&1 | \
   tee "$UNIT_LOG" "$REPORTER_LOG_FILE" | \
@@ -154,6 +163,7 @@ echo -e "${CYAN:-}--- UI Tests ---${RESET:-}"
 ui_exit=0
 xcodebuild test -project "$IOS_DIR/Llamenos.xcodeproj" -scheme Llamenos \
   -destination "$DESTINATION" \
+  -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
   -only-testing:LlamenosUITests \
   CODE_SIGNING_ALLOWED=NO 2>&1 | \
   tee "$UI_LOG" -a "$REPORTER_LOG_FILE" | \
