@@ -495,17 +495,6 @@ final class APIService: @unchecked Sendable {
         return Self.hubPath(hubId, path)
     }
 
-    /// GET a hub-owned resource from the active hub (#2478).
-    ///
-    /// With no hub there is nothing to ask, and the answer is `.noHub` — a value the
-    /// caller assigns through, not an error it can swallow while the last hub's rows
-    /// stay on screen. `path` is the unscoped `/api/...` path, query string included.
-    func getHubOwned<T: Decodable>(_ path: String, as _: T.Type = T.self) async throws -> HubOwnedRead<T> {
-        guard baseURL != nil, let hubId = hubContext.activeHubId else { return .noHub }
-        let response: T = try await request(method: "GET", path: Self.hubPath(hubId, path))
-        return .loaded(response)
-    }
-
     /// Scope an `/api/...` path to the given hub.
     ///
     /// The server mounts hub-scoped routes at `/api/hubs/:hubId/...`, so
