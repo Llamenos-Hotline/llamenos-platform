@@ -5,6 +5,54 @@ import conversationsRoute from '@worker/routes/conversations'
 import * as wsEvents from '@worker/lib/ws-events'
 import * as serviceFactories from '@worker/lib/service-factories'
 import { ServiceError } from '@worker/services/settings'
+import type { conversations as conversationsTable, messages as messagesTable } from '@worker/db/schema'
+import { conversationListResponseSchema, messageListResponseSchema } from '@protocol/schemas/conversations'
+
+/**
+ * A conversation row as the service returns it: the database's shape, with
+ * `null` for unset columns and `Date` timestamps — not the wire shape. The
+ * route serializes it (#2118), so a fixture in the wire shape would test a
+ * route that does not exist.
+ */
+function convRow(over: Partial<typeof conversationsTable.$inferSelect> = {}): typeof conversationsTable.$inferSelect {
+  const at = new Date('2026-11-01T12:00:00.000Z')
+  return {
+    id: 'conv-1',
+    hubId: 'hub-1',
+    channelType: 'sms',
+    contactIdentifierHash: 'hash123',
+    assignedTo: null,
+    status: 'active',
+    createdAt: at,
+    updatedAt: at,
+    lastMessageAt: at,
+    messageCount: 0,
+    metadata: null,
+    ...over,
+  }
+}
+
+/** A message row as the service returns it (see `convRow`). */
+function msgRow(over: Partial<typeof messagesTable.$inferSelect> = {}): typeof messagesTable.$inferSelect {
+  return {
+    id: 'msg-1',
+    conversationId: 'conv-1',
+    direction: 'outbound',
+    authorPubkey: null,
+    externalId: null,
+    encryptedContent: 'cafe',
+    readerEnvelopes: [],
+    hasAttachments: false,
+    attachmentIds: [],
+    status: 'sent',
+    deliveredAt: null,
+    readAt: null,
+    failureReason: null,
+    retryCount: 0,
+    createdAt: new Date('2026-11-01T12:00:00.000Z'),
+    ...over,
+  }
+}
 
 vi.mock('@worker/lib/ws-events', () => ({
   publishEvent: vi.fn(),
@@ -46,23 +94,19 @@ function createTestApp(opts: {
   const defaultServices = {
     conversations: {
       list: vi.fn().mockResolvedValue({ conversations: [], total: 0 }),
-      getById: vi.fn().mockResolvedValue({
+      getById: vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'sms',
         contactIdentifierHash: 'hash123',
         assignedTo: pubkey,
         status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        lastMessageAt: new Date().toISOString(),
-        messageCount: 0,
-      }),
+      })),
       getStats: vi.fn().mockResolvedValue({ total: 5, waiting: 2 }),
       getAllVolunteerLoads: vi.fn().mockResolvedValue({ [pubkey]: 3 }),
       listMessages: vi.fn().mockResolvedValue({ messages: [], total: 0 }),
-      addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
-      update: vi.fn().mockResolvedValue({ id: 'conv-1', status: 'closed' }),
-      claim: vi.fn().mockResolvedValue({ id: 'conv-1', assignedTo: pubkey, status: 'active' }),
+      addMessage: vi.fn().mockResolvedValue(msgRow({ id: 'msg-1' })),
+      update: vi.fn().mockResolvedValue(convRow({ id: 'conv-1', status: 'closed' })),
+      claim: vi.fn().mockResolvedValue(convRow({ id: 'conv-1', assignedTo: pubkey, status: 'active' })),
       getContactIdentifier: vi.fn().mockResolvedValue('+15551234567'),
     },
     identity: {
@@ -146,187 +190,93 @@ describe('conversations route', () => {
   })
 
   describe('GET /', () => {
-    it('lists all conversations for admin with read-all permission', async () => {
-      const listSpy = vi.fn().mockResolvedValue({
-        conversations: [{ id: 'conv-1', channelType: 'sms', status: 'active' }],
-        total: 1,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:read-all'],
-        services: { conversations: { list: listSpy } },
-      })
+    // Which rows a caller sees is one SQL predicate in the service, pinned
+    // against real rows in integration-bun/conversation-list-wire-contract.test.ts.
+    // Here: the route derives that predicate from PERMISSIONS, and answers every
+    // caller in the one declared shape.
+    const VOLUNTEER = 'test-pubkey-' + '0'.repeat(50)
 
-      const res = await app.request('/')
+    async function listWith(permissions: string[], user?: Record<string, unknown>, query = '') {
+      const listSpy = vi.fn().mockResolvedValue({
+        conversations: [convRow({ id: 'conv-1', assignedTo: VOLUNTEER }), convRow({ id: 'conv-2', status: 'waiting' })],
+        total: 7,
+      })
+      const app = createTestApp({ permissions, ...(user && { user }), services: { conversations: { list: listSpy } } })
+      const res = await app.request(`/${query}`)
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.conversations).toHaveLength(1)
-      expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
+      return { body, filters: listSpy.mock.calls[0][0] }
+    }
+
+    it('answers read-all in the declared shape, with the whole hub visible', async () => {
+      const { body, filters } = await listWith(['conversations:read-all'])
+      expect(conversationListResponseSchema.parse(body)).toEqual({
+        conversations: expect.any(Array),
+        total: 7,
+        page: 1,
+        limit: 50,
+      })
+      expect(Object.keys(body).sort()).toEqual(['conversations', 'limit', 'page', 'total'])
+      expect(filters).toEqual(expect.objectContaining({ hubId: 'hub-1', visibleTo: undefined }))
     })
 
-    it('returns assigned + waiting conversations for a volunteer who may claim their channels', async () => {
-      const assignedSpy = vi.fn().mockResolvedValue({
-        conversations: [{ id: 'conv-1', channelType: 'sms', status: 'active' }],
-        total: 1,
-      })
-      const waitingSpy = vi.fn().mockResolvedValue({
-        conversations: [
-          { id: 'conv-2', channelType: 'sms', status: 'waiting' },
-          { id: 'conv-3', channelType: 'whatsapp', status: 'waiting' },
-        ],
-        total: 2,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:read-assigned', 'conversations:claim-sms', 'conversations:claim-whatsapp'],
-        services: {
-          conversations: {
-            list: vi.fn().mockImplementation((args) => {
-              if (args.assignedTo) return assignedSpy(args)
-              return waitingSpy(args)
-            }),
-          },
-        },
-      })
+    it('answers a caller without read-all in the SAME shape, limited to their own and the waiting queue they may claim', async () => {
+      const { body, filters } = await listWith(['conversations:read-assigned', 'conversations:claim-sms', 'conversations:claim-whatsapp'])
+      expect(Object.keys(body).sort()).toEqual(['conversations', 'limit', 'page', 'total'])
+      conversationListResponseSchema.parse(body)
+      expect(filters.visibleTo).toEqual({ pubkey: VOLUNTEER, waitingChannels: ['sms', 'whatsapp'] })
+    })
 
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.conversations).toHaveLength(3)
-      expect(body.assignedCount).toBe(1)
-      expect(body.waitingCount).toBe(2)
-      // Both queries are this hub's.
-      expect(assignedSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
-      expect(waitingSpy).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
+    it('serializes rows: no null for an absent assignee, ISO timestamps', async () => {
+      const { body } = await listWith(['conversations:read-all'])
+      const waiting = body.conversations.find((c: { id: string }) => c.id === 'conv-2')
+      expect('assignedTo' in waiting).toBe(false)
+      expect('metadata' in waiting).toBe(false)
+      expect(waiting.createdAt).toBe('2026-11-01T12:00:00.000Z')
     })
 
     it('shows no waiting conversation to a caller who may claim no channel (#2381)', async () => {
       // An empty claimable set used to skip the channel filter entirely, so a
       // caller with no claim permission saw the whole waiting queue.
-      const waitingSpy = vi.fn().mockResolvedValue({
-        conversations: [
-          { id: 'conv-2', channelType: 'sms', status: 'waiting' },
-          { id: 'conv-3', channelType: 'whatsapp', status: 'waiting' },
-        ],
-        total: 2,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:read-assigned'],
-        services: {
-          conversations: {
-            list: vi.fn().mockImplementation((args) => {
-              if (args.assignedTo) return { conversations: [{ id: 'conv-1', channelType: 'sms', status: 'active' }], total: 1 }
-              return waitingSpy(args)
-            }),
-          },
-        },
-      })
-
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.conversations.map((c: { id: string }) => c.id)).toEqual(['conv-1'])
-      expect(body.waitingCount).toBe(0)
-      expect(body.claimableChannels).toEqual([])
+      const { filters } = await listWith(['conversations:read-assigned'])
+      expect(filters.visibleTo).toEqual({ pubkey: VOLUNTEER, waitingChannels: [] })
     })
 
-    it('filters waiting conversations by claimable channels', async () => {
-      const waitingSpy = vi.fn().mockResolvedValue({
-        conversations: [
-          { id: 'conv-2', channelType: 'sms', status: 'waiting' },
-          { id: 'conv-3', channelType: 'signal', status: 'waiting' },
-        ],
-        total: 2,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:claim-sms'],
-        services: {
-          conversations: {
-            list: vi.fn().mockImplementation((args) => {
-              if (args.status === 'waiting') return waitingSpy(args)
-              return { conversations: [], total: 0 }
-            }),
-          },
-        },
-      })
-
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.conversations).toHaveLength(1)
-      expect(body.conversations[0].channelType).toBe('sms')
+    it('narrows the waiting queue to the channels the caller may claim', async () => {
+      const { filters } = await listWith(['conversations:claim-sms'])
+      expect(filters.visibleTo.waitingChannels).toEqual(['sms'])
     })
 
-    it('filters waiting by user supportedMessagingChannels', async () => {
-      const waitingSpy = vi.fn().mockResolvedValue({
-        conversations: [
-          { id: 'conv-2', channelType: 'sms', status: 'waiting' },
-          { id: 'conv-3', channelType: 'whatsapp', status: 'waiting' },
-          { id: 'conv-4', channelType: 'signal', status: 'waiting' },
-        ],
-        total: 3,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:claim-sms', 'conversations:claim-whatsapp', 'conversations:claim-signal'],
-        user: {
-          supportedMessagingChannels: ['sms'],
-          messagingEnabled: true,
-        },
-        services: {
-          conversations: {
-            list: vi.fn().mockImplementation((args) => {
-              if (args.status === 'waiting') return waitingSpy(args)
-              return { conversations: [], total: 0 }
-            }),
-          },
-        },
-      })
-
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.conversations).toHaveLength(1)
-      expect(body.conversations[0].channelType).toBe('sms')
+    it('narrows the waiting queue to the user\'s supportedMessagingChannels', async () => {
+      const { filters } = await listWith(
+        ['conversations:claim-sms', 'conversations:claim-whatsapp', 'conversations:claim-signal'],
+        { supportedMessagingChannels: ['sms'], messagingEnabled: true },
+      )
+      expect(filters.visibleTo.waitingChannels).toEqual(['sms'])
     })
 
-    it('hides all waiting conversations when messagingEnabled is false', async () => {
-      const waitingSpy = vi.fn().mockResolvedValue({
-        conversations: [{ id: 'conv-2', channelType: 'sms', status: 'waiting' }],
-        total: 1,
-      })
-      const app = createTestApp({
-        permissions: ['conversations:claim-sms'],
-        user: { messagingEnabled: false },
-        services: {
-          conversations: {
-            list: vi.fn().mockImplementation((args) => {
-              if (args.status === 'waiting') return waitingSpy(args)
-              return { conversations: [], total: 0 }
-            }),
-          },
-        },
-      })
-
-      const res = await app.request('/')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.waitingCount).toBe(0)
-      expect(body.conversations).toHaveLength(0)
+    it('shows no waiting queue when messagingEnabled is false', async () => {
+      const { filters } = await listWith(['conversations:claim-sms'], { messagingEnabled: false })
+      expect(filters.visibleTo.waitingChannels).toEqual([])
     })
 
-    it('passes pagination params to service', async () => {
-      const listSpy = vi.fn().mockResolvedValue({ conversations: [], total: 0 })
-      const app = createTestApp({
-        permissions: ['conversations:read-all'],
-        services: { conversations: { list: listSpy } },
-      })
-
-      await app.request('/?page=2&limit=10&status=active&channel=sms')
-      expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({
+    it('passes the query to the service and echoes page and limit', async () => {
+      const { body, filters } = await listWith(['conversations:read-all'], undefined, '?page=2&limit=10&status=active&channel=sms')
+      expect(filters).toEqual(expect.objectContaining({
         hubId: 'hub-1',
         status: 'active',
         channelType: 'sms',
         limit: 10,
         offset: 10,
       }))
+      expect(body.page).toBe(2)
+      expect(body.limit).toBe(10)
+    })
+
+    it('refuses status=all: omitting the status is how a client asks for every status', async () => {
+      const app = createTestApp({ permissions: ['conversations:read-all'] })
+      const res = await app.request('/?status=all')
+      expect(res.status).toBe(400)
     })
   })
 
@@ -388,11 +338,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 for non-admin viewing another volunteers conversation', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy } },
@@ -403,11 +353,11 @@ describe('conversations route', () => {
     })
 
     it('allows viewing waiting conversations without assignment', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: null,
         status: 'waiting',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy } },
@@ -418,11 +368,11 @@ describe('conversations route', () => {
     })
 
     it('allows admin to view any conversation', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-all'],
         services: { conversations: { getById: getSpy } },
@@ -436,7 +386,7 @@ describe('conversations route', () => {
   describe('GET /:id/messages', () => {
     it('returns paginated messages', async () => {
       const listSpy = vi.fn().mockResolvedValue({
-        messages: [{ id: 'msg-1' }],
+        messages: [msgRow({ id: 'msg-1' })],
         total: 1,
       })
       const app = createTestApp({
@@ -447,16 +397,17 @@ describe('conversations route', () => {
       const res = await app.request('/conv-1/messages?page=1&limit=20')
       expect(res.status).toBe(200)
       const body = await res.json()
+      expect(messageListResponseSchema.parse(body)).toEqual({ messages: expect.any(Array), total: 1, page: 1, limit: 20 })
       expect(body.messages).toHaveLength(1)
       expect(listSpy).toHaveBeenCalledWith('conv-1', { limit: 20, offset: 0 })
     })
 
     it('returns 403 for unauthorized conversation', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy } },
@@ -469,7 +420,7 @@ describe('conversations route', () => {
 
   describe('POST /:id/messages', () => {
     it('sends outbound message for assigned volunteer', async () => {
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { addMessage: addSpy } },
@@ -493,7 +444,7 @@ describe('conversations route', () => {
     })
 
     it('refuses (422) a client-sealed message whose envelopes name no admin key', async () => {
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { addMessage: addSpy } },
@@ -512,7 +463,7 @@ describe('conversations route', () => {
     })
 
     it('refuses (422) a client-sealed message with no envelopes on an external channel', async () => {
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { addMessage: addSpy } },
@@ -528,13 +479,13 @@ describe('conversations route', () => {
     })
 
     it('allows admin with send-any to message any conversation', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
         channelType: 'web',
-      })
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:send-any'],
         services: { conversations: { getById: getSpy, addMessage: addSpy } },
@@ -552,11 +503,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 for non-admin messaging unassigned conversation', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy } },
@@ -574,13 +525,13 @@ describe('conversations route', () => {
     })
 
     it('marks web channel messages as delivered without external send', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'test-pubkey-' + '0'.repeat(50),
         status: 'active',
         channelType: 'web',
-      })
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy, addMessage: addSpy } },
@@ -599,13 +550,13 @@ describe('conversations route', () => {
     })
 
     it('sends via messaging adapter when plaintext provided for external channel', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'test-pubkey-' + '0'.repeat(50),
         status: 'active',
         channelType: 'sms',
-      })
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const sendSpy = vi.fn().mockResolvedValue({ success: true, externalId: 'ext-123' })
       const adapterSpy = vi.fn().mockResolvedValue({ sendMessage: sendSpy })
 
@@ -632,13 +583,13 @@ describe('conversations route', () => {
     })
 
     it('marks failed when messaging adapter returns failure', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'test-pubkey-' + '0'.repeat(50),
         status: 'active',
         channelType: 'sms',
-      })
-      const addSpy = vi.fn().mockResolvedValue({ id: 'msg-new' })
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const sendSpy = vi.fn().mockResolvedValue({ success: false, error: 'Provider error' })
       const adapterSpy = vi.fn().mockResolvedValue({ sendMessage: sendSpy })
 
@@ -668,7 +619,7 @@ describe('conversations route', () => {
 
   describe('PATCH /:id', () => {
     it('updates conversation for assigned volunteer', async () => {
-      const updateSpy = vi.fn().mockResolvedValue({ id: 'conv-1', status: 'closed' })
+      const updateSpy = vi.fn().mockResolvedValue(convRow({ id: 'conv-1', status: 'closed' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { update: updateSpy } },
@@ -684,12 +635,12 @@ describe('conversations route', () => {
     })
 
     it('allows admin with update permission', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
-      const updateSpy = vi.fn().mockResolvedValue({ id: 'conv-1', status: 'closed' })
+      }))
+      const updateSpy = vi.fn().mockResolvedValue(convRow({ id: 'conv-1', status: 'closed' }))
       const app = createTestApp({
         permissions: ['conversations:update'],
         services: { conversations: { getById: getSpy, update: updateSpy } },
@@ -704,11 +655,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 for non-admin without update permission', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         assignedTo: 'other-pubkey',
         status: 'active',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
         services: { conversations: { getById: getSpy } },
@@ -725,12 +676,12 @@ describe('conversations route', () => {
 
   describe('POST /:id/claim', () => {
     it('claims waiting conversation for volunteer with channel permission', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'sms',
         status: 'waiting',
-      })
-      const claimSpy = vi.fn().mockResolvedValue({ id: 'conv-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' })
+      }))
+      const claimSpy = vi.fn().mockResolvedValue(convRow({ id: 'conv-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' }))
       const app = createTestApp({
         permissions: ['conversations:claim-sms'],
         services: { conversations: { getById: getSpy, claim: claimSpy } },
@@ -766,11 +717,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 when volunteer lacks channel claim permission', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'signal',
         status: 'waiting',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:claim-sms'],
         services: { conversations: { getById: getSpy } },
@@ -784,11 +735,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 when user not configured for channel', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'signal',
         status: 'waiting',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:claim-signal'],
         user: {
@@ -805,11 +756,11 @@ describe('conversations route', () => {
     })
 
     it('returns 403 when messaging is disabled for user', async () => {
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'sms',
         status: 'waiting',
-      })
+      }))
       const app = createTestApp({
         permissions: ['conversations:claim-sms'],
         user: { messagingEnabled: false },
@@ -826,12 +777,12 @@ describe('conversations route', () => {
       const { clearTestPushLog, getTestPushLog } = await import('@worker/lib/push-dispatch')
       clearTestPushLog()
 
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         channelType: 'sms',
         status: 'waiting',
-      })
-      const claimSpy = vi.fn().mockResolvedValue({ id: 'conv-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' })
+      }))
+      const claimSpy = vi.fn().mockResolvedValue(convRow({ id: 'conv-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' }))
       const app = createTestApp({
         permissions: ['conversations:claim-sms'],
         services: { conversations: { getById: getSpy, claim: claimSpy } },
@@ -847,13 +798,13 @@ describe('conversations route', () => {
     it('publishes the assignment to the conversation hub, where clients subscribe', async () => {
       const publishSpy = vi.mocked(wsEvents.publishEvent)
       publishSpy.mockClear()
-      const getSpy = vi.fn().mockResolvedValue({
+      const getSpy = vi.fn().mockResolvedValue(convRow({
         id: 'conv-1',
         hubId: 'hub-1',
         channelType: 'sms',
         status: 'waiting',
-      })
-      const claimSpy = vi.fn().mockResolvedValue({ id: 'conv-1', hubId: 'hub-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' })
+      }))
+      const claimSpy = vi.fn().mockResolvedValue(convRow({ id: 'conv-1', hubId: 'hub-1', assignedTo: 'test-pubkey-' + '0'.repeat(50), status: 'active' }))
       const app = createTestApp({
         permissions: ['conversations:claim-sms'],
         services: { conversations: { getById: getSpy, claim: claimSpy } },

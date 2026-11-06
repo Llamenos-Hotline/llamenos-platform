@@ -75,6 +75,7 @@ import { recordHttpRequest } from './routes/metrics'
 import { openAPIRouteHandler } from 'hono-openapi'
 import { Scalar } from '@scalar/hono-api-reference'
 import { openAPIConfig } from './openapi/config'
+import { enforceDeclaredResponses } from './openapi/declared-responses'
 import { ServiceError } from './services/settings'
 import { createLogger } from './lib/logger'
 import { devSurfacesEnabled } from './lib/dev-surfaces'
@@ -102,6 +103,9 @@ const api = new Hono<AppEnv>()
 // Request ID middleware — first in chain for full correlation coverage
 api.use('*', requestId)
 api.use('*', requestLogger)
+// Every response is checked against the schema its route declared (#2118) —
+// the schema the mobile clients are generated from. See openapi/declared-responses.ts.
+api.use('*', enforceDeclaredResponses())
 
 // HTTP metrics middleware — records request duration and counts for Prometheus
 api.use('*', async (c, next) => {
