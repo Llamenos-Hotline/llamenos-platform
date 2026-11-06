@@ -69,22 +69,28 @@ function shq(s: string): string {
 }
 
 /**
- * Runs `body` after sourcing the library and `reporter_init`, then
- * `reporter_summary pass` (unless the body already exits). REPORTER_TIMEOUT is
- * left at a long value on purpose: the timeout-warning watcher sleeps for 80%
- * of it, and if it ever again outlives its step while holding stdout, this
- * piped spawn blocks for minutes and the test times out.
+ * The bash program: source the library, `reporter_init`, `body`, then
+ * `reporter_summary pass` (unless the body already exits).
  */
-function runReporter(body: string, platform = 'rail'): Run {
-  const script = [
+function driver(body: string, platform: string): string {
+  return [
     'set -euo pipefail',
     `source ${shq(LIBRARY)}`,
     `reporter_init ${shq(platform)}`,
     body,
     'reporter_summary pass',
   ].join('\n')
-  const proc = Bun.spawnSync(['bash', '-c', script], {
-    env: { ...process.env, TMPDIR: tmp, JSON_OUTPUT: 'true', REPORTER_TIMEOUT: '600' },
+}
+const ENV = (): Record<string, string | undefined> => ({
+  ...process.env,
+  TMPDIR: tmp,
+  JSON_OUTPUT: 'true',
+  REPORTER_TIMEOUT: '600',
+})
+
+function runReporter(body: string, platform = 'rail'): Run {
+  const proc = Bun.spawnSync(['bash', '-c', driver(body, platform)], {
+    env: ENV(),
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -263,4 +269,24 @@ describe('attribution cannot be ambiguous', () => {
     expect(run.stderr).toContain("step 'dup' already ran")
     expect(run.summary).toBeNull()
   })
+})
+
+describe('a finished run releases its stdout', () => {
+  // The timeout-warning watcher sleeps for 80% of REPORTER_TIMEOUT (480 s here).
+  // When its subshell was killed it left that `sleep` running, holding the
+  // script's stdout open, so anything reading the output through a pipe — this
+  // test, `| tee`, `| grep` — waited minutes after the run had finished.
+  // spawnSync returns on exit and cannot see this; reading stdout to EOF can.
+  test('stdout reaches EOF as soon as the script exits', async () => {
+    const proc = Bun.spawn(['bash', '-c', driver(`reporter_run_step "green" ${emit(GREEN_PROJECT)}`, 'eof')], {
+      env: ENV(),
+      stdout: 'pipe',
+      stderr: 'ignore',
+    })
+    const eof = new Response(proc.stdout).text().then(() => 'eof' as const)
+    const stuck = new Promise<'stuck'>((r) => setTimeout(() => r('stuck'), 10_000))
+    const outcome = await Promise.race([eof, stuck])
+    proc.kill()
+    expect(outcome).toBe('eof')
+  }, 20_000)
 })
