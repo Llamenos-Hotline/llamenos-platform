@@ -187,7 +187,9 @@ val copyTestVectors by tasks.registering(Copy::class) {
 // interop tests through Android's production readers. `stored-record-vectors.json` is
 // encryptMessageForStorage / encryptCallRecordForStorage output (#1927/#1928, read by
 // EnvelopeAadInteropTest); `server-event-vectors.json` is ws-events.ts encryptEventContent
-// output (#2117, read by ServerEventInteropTest). Served as a generated androidTest asset
+// output (#2117, read by ServerEventInteropTest); `case-record-vectors.json` is case records
+// and comments as CasesService persisted them (#2499, read by CaseRecordVectorTest). Served
+// as a generated androidTest asset
 // (a build directory, never the source tree) through the Variant API.
 abstract class CopyCryptoVectors : DefaultTask() {
     @get:InputFiles
@@ -207,7 +209,11 @@ abstract class CopyCryptoVectors : DefaultTask() {
 
 val copyCryptoVectors by tasks.registering(CopyCryptoVectors::class) {
     val fixtures = "${rootProject.projectDir}/../../packages/crypto/tests/fixtures"
-    vectors.from(file("$fixtures/stored-record-vectors.json"), file("$fixtures/server-event-vectors.json"))
+    vectors.from(
+        file("$fixtures/stored-record-vectors.json"),
+        file("$fixtures/server-event-vectors.json"),
+        file("$fixtures/case-record-vectors.json"),
+    )
 }
 
 androidComponents {

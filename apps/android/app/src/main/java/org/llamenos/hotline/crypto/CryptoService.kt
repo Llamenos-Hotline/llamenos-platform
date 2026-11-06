@@ -142,6 +142,16 @@ data class EncryptedMessage(
     val envelopes: List<RecipientEnvelope>,
 )
 
+/**
+ * A sealed case ciphertext — a record's summary or fields, or a case comment —
+ * in wire form: [ciphertextHex] is the API's `encrypted*` field and [envelopes]
+ * its `*Envelopes` list, unchanged.
+ */
+data class EncryptedCase(
+    val ciphertextHex: String,
+    val envelopes: List<RecipientEnvelope>,
+)
+
 @kotlinx.serialization.Serializable
 data class ShamirShare(
     val x: Int,
@@ -695,6 +705,71 @@ class CryptoService @Inject constructor() {
             )
         } catch (_: org.llamenos.core.CryptoException) {
             null
+        }
+    }
+
+    // ---- Case records + case comments (sealed per purpose, #2499) ----
+
+    /**
+     * Seal a case record's summary or fields, or a case comment, as this device for
+     * this device plus [readerPubkeys] (X25519).
+     *
+     * The label and AAD are not arguments: [org.llamenos.core.mobileSealCase] derives
+     * both from [purpose] inside `packages/crypto/src/case_record.rs`. Android used to
+     * seal case records as `LABEL_MESSAGE` with no AAD and case comments as notes, so
+     * no other platform — and, for comments, not Android itself — could read them.
+     */
+    suspend fun sealCase(
+        purpose: org.llamenos.core.CasePurpose,
+        plaintext: String,
+        readerPubkeys: List<String>,
+    ): EncryptedCase = withContext(computeDispatcher) {
+        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        if (!isUnlocked) throw CryptoException("No key loaded")
+        try {
+            val sealed = org.llamenos.core.mobileSealCase(
+                purpose = purpose,
+                plaintext = plaintext,
+                readerPubkeys = readerPubkeys,
+            )
+            EncryptedCase(
+                ciphertextHex = sealed.encryptedContent,
+                envelopes = sealed.readerEnvelopes.map {
+                    RecipientEnvelope(pubkey = it.pubkey, enc = it.enc, ct = it.ct)
+                },
+            )
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Case encryption failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Open a case ciphertext as this device. [envelopes] are all of its envelopes as
+     * they arrive on the wire; Rust picks the one addressed to this device. Returns
+     * null when none is ours — this device is not a reader.
+     *
+     * An envelope that IS ours but will not open is not "not a reader": it throws,
+     * so a writer that sealed in another format surfaces instead of rendering as a
+     * silently encrypted row.
+     */
+    suspend fun openCase(
+        purpose: org.llamenos.core.CasePurpose,
+        encryptedContent: String,
+        envelopes: List<RecipientEnvelope>,
+    ): String? = withContext(computeDispatcher) {
+        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        val ours = encryptionPubkeyHex ?: return@withContext null
+        if (!isUnlocked || envelopes.none { it.pubkey.equals(ours, ignoreCase = true) }) {
+            return@withContext null
+        }
+        try {
+            org.llamenos.core.mobileOpenCase(
+                purpose = purpose,
+                encryptedContent = encryptedContent,
+                envelopes = envelopes.map { it.toFfiRecipientEnvelope() },
+            )
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Case decryption failed: ${e.message}", e)
         }
     }
 

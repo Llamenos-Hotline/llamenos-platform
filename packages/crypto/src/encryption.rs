@@ -299,14 +299,36 @@ pub fn seal_record_for_readers(
     readers: &[RecordReader],
     label: &str,
 ) -> Result<EncryptedMessage, CryptoError> {
+    seal_multi_reader(plaintext, readers, label, &[], &[])
+}
+
+/// The one multi-reader seal: a fresh content key encrypts `plaintext` under
+/// `content_aad`, and is HPKE-wrapped (`info = label`, `aad = wrap_aad`) for
+/// each reader. Wire form: hex `encryptedContent`, hex `enc` / `ct`.
+///
+/// Crate-private on purpose. The AAD is a property of the *record kind*, so the
+/// public entry points are per purpose — [`seal_record_for_readers`] for stored
+/// records (empty AAD) and `crate::case_record` for case records (canonical
+/// AAD) — and no caller outside the crate ever passes a label or an AAD here.
+pub(crate) fn seal_multi_reader(
+    plaintext: &[u8],
+    readers: &[RecordReader],
+    label: &str,
+    content_aad: &[u8],
+    wrap_aad: &[u8],
+) -> Result<EncryptedMessage, CryptoError> {
     let content_key = Zeroizing::new(random_bytes_32());
-    let packed = aes256gcm_encrypt(&content_key, plaintext, &[])?;
+    let packed = aes256gcm_encrypt(&content_key, plaintext, content_aad)?;
 
     let reader_envelopes = readers
         .iter()
         .map(|reader| {
-            let sealed =
-                hpke_envelope::hpke_seal_key(&content_key, &reader.encryption_pubkey, label, &[])?;
+            let sealed = hpke_envelope::hpke_seal_key(
+                &content_key,
+                &reader.encryption_pubkey,
+                label,
+                wrap_aad,
+            )?;
             let enc: [u8; WIRE_ENC_LEN] = decode_wire_bytes("enc", &sealed.enc)?;
             let ct: [u8; WIRE_KEY_CT_LEN] = decode_wire_bytes("ct", &sealed.ct)?;
             Ok(RecipientKeyEnvelope {
@@ -336,6 +358,27 @@ pub fn open_record_for_reader(
     secret_key_hex: &str,
     label: &str,
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    open_multi_reader(
+        encrypted_content,
+        envelopes,
+        reader_addresses,
+        secret_key_hex,
+        label,
+        &[],
+        &[],
+    )
+}
+
+/// The reader half of [`seal_multi_reader`]; crate-private for the same reason.
+pub(crate) fn open_multi_reader(
+    encrypted_content: &str,
+    envelopes: &[RecipientKeyEnvelope],
+    reader_addresses: &[&str],
+    secret_key_hex: &str,
+    label: &str,
+    content_aad: &[u8],
+    wrap_aad: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let mut found: Option<&RecipientKeyEnvelope> = None;
     for envelope in envelopes {
         for address in reader_addresses {
@@ -354,10 +397,14 @@ pub fn open_record_for_reader(
         enc: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_ENC_LEN>("enc", &envelope.enc)?),
         ct: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_KEY_CT_LEN>("ct", &envelope.ct)?),
     };
-    let content_key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &[])?;
+    let content_key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, wrap_aad)?;
 
     let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
-    Ok(Zeroizing::new(aes256gcm_decrypt(&content_key, &data, &[])?))
+    Ok(Zeroizing::new(aes256gcm_decrypt(
+        &content_key,
+        &data,
+        content_aad,
+    )?))
 }
 
 // ── HKDF-based Symmetric Encryption (drafts, export) ────────────────

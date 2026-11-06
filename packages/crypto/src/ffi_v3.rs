@@ -588,6 +588,40 @@ pub fn mobile_encrypt_message(
     )
 }
 
+// ── Case records + case comments, sealed per purpose (#2499) ─────────
+
+/// Seal a case ciphertext — a record's summary or fields, or a comment — as
+/// this device, for this device plus `reader_pubkeys` (X25519, hex).
+///
+/// There is no label and no AAD argument: `crate::case_record` derives both
+/// from `purpose`, so Swift and Kotlin cannot seal a case record under
+/// `LABEL_MESSAGE` or without its AAD (the #2499 split). The result maps onto
+/// the API's `encrypted*` / `*Envelopes` pair unchanged.
+#[uniffi::export]
+pub fn mobile_seal_case(
+    purpose: crate::case_record::CasePurpose,
+    plaintext: String,
+    reader_pubkeys: Vec<String>,
+) -> Result<crate::case_record::EncryptedCaseCiphertext, CryptoError> {
+    with_secrets(|_, ds| {
+        crate::case_record::seal_as_device(purpose, ds, &plaintext, &reader_pubkeys)
+    })
+}
+
+/// Open a case ciphertext as this device. Takes all of its envelopes; Rust
+/// picks the one addressed to this device's X25519 key. Neither the device key
+/// nor the content key reaches Swift or Kotlin.
+#[uniffi::export]
+pub fn mobile_open_case(
+    purpose: crate::case_record::CasePurpose,
+    encrypted_content: String,
+    envelopes: Vec<RecipientKeyEnvelope>,
+) -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| {
+        crate::case_record::open_as_device(purpose, secrets, ds, &encrypted_content, &envelopes)
+    })
+}
+
 // ── Envelope AAD derivation (exported so mobile never re-spells the rule) ──
 
 /// `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.

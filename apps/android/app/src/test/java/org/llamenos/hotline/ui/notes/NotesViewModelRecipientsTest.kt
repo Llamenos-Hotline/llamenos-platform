@@ -20,7 +20,9 @@ import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.RetryInterceptor
 import org.llamenos.hotline.api.SessionState
+import org.llamenos.core.CasePurpose
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.EncryptedCase
 import org.llamenos.hotline.crypto.EncryptedNote
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.KeyValueStore
@@ -28,6 +30,7 @@ import org.llamenos.hotline.crypto.NoteEnvelope
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.telephony.EndedCallHold
 import org.llamenos.hotline.ui.cases.CaseManagementViewModel
+import org.llamenos.protocol.RecipientEnvelope
 
 /**
  * Guards the recipient-list wiring fixed by issue #1023 at the ViewModel
@@ -152,9 +155,23 @@ class NotesViewModelRecipientsTest {
         assertEquals(listOf(authorPub, adminPub), recipientsSlot.captured)
     }
 
+    /**
+     * A case comment is sealed as a case comment, not a note (#2499): it used to go
+     * through [CryptoService.encryptNote] and be opened as a message, so Android
+     * could not read its own comments. The crate adds this device as a reader
+     * itself (`case_record::seal_as_device`), so the ViewModel passes the admins.
+     */
     @Test
-    fun `case addComment seals to the author plus the admin`() = runTest {
+    fun `case addComment seals a case comment for the admins and never as a note`() = runTest {
         val cryptoService = makeCryptoService()
+        coEvery { cryptoService.sealCase(any(), any(), any()) } answers {
+            EncryptedCase(
+                ciphertextHex = "deadbeef",
+                envelopes = (listOf(authorPub) + thirdArg<List<String>>()).map { pub ->
+                    RecipientEnvelope(pubkey = pub, enc = "enc-$pub", ct = "ct-$pub")
+                },
+            )
+        }
         val vm = CaseManagementViewModel(
             apiService = makeApiService(),
             cryptoService = cryptoService,
@@ -166,8 +183,9 @@ class NotesViewModelRecipientsTest {
 
         vm.addComment(recordId = "record-1", comment = "case comment")
 
-        val recipientsSlot = slot<List<String>>()
-        coVerify(exactly = 1) { cryptoService.encryptNote(any(), capture(recipientsSlot)) }
-        assertEquals(listOf(authorPub, adminPub), recipientsSlot.captured)
+        val readersSlot = slot<List<String>>()
+        coVerify(exactly = 1) { cryptoService.sealCase(CasePurpose.COMMENT, "case comment", capture(readersSlot)) }
+        assertEquals(listOf(adminPub), readersSlot.captured)
+        coVerify(exactly = 0) { cryptoService.encryptNote(any(), any()) }
     }
 }

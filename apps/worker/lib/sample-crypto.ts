@@ -15,7 +15,7 @@
  * re-spelt here.
  */
 import { x25519 } from '@noble/curves/ed25519.js'
-import { hkdfSha256, hpkeSeal, randomBytes, symmetricEncrypt } from '@llamenos/crypto/ffi'
+import { caseSeal, hkdfSha256, hpkeSeal, randomBytes, symmetricEncrypt, type CasePurpose } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
@@ -75,4 +75,21 @@ export function sealForReaders(
   })
 
   return { encryptedContent, envelopes }
+}
+
+/**
+ * Seal a case record's summary or fields, or a case comment, for every reader.
+ *
+ * Not [sealForReaders]: a case ciphertext's label, AAD and envelope addressing
+ * are decided in `packages/crypto/src/case_record.rs`, the same code every
+ * client runs (#2499), so the sample cases open in the real UI on every
+ * platform. Envelopes are addressed to each reader's X25519 key.
+ */
+export function sealCaseForReaders(
+  purpose: CasePurpose,
+  plaintext: string,
+  readers: SampleReader[],
+): { encryptedContent: string; envelopes: RecipientEnvelope[] } {
+  const sealed = caseSeal(purpose, plaintext, readers.map(r => r.encryptionPubkey))
+  return { encryptedContent: sealed.encryptedContent, envelopes: sealed.readerEnvelopes }
 }

@@ -8,7 +8,7 @@ import {
   type EntityTypeDefinition,
   type CreateRecordBody,
 } from '@/lib/api'
-import { encryptMessage } from '@/lib/platform'
+import { sealCase } from '@/lib/platform'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -122,16 +122,16 @@ export function CreateRecordDialog({
           ? selectedType.severities?.find(s => s.value === selectedType.defaultSeverity)?.label ?? selectedType.defaultSeverity
           : undefined,
       })
-      const encryptedSummary = await encryptMessage(summary, readerPubkeys)
+      const encryptedSummary = await sealCase('summary', summary, readerPubkeys)
 
       // Encrypt field values if any are set
       const nonEmptyFields = Object.entries(fieldValues).filter(
         ([, v]) => v !== '' && v !== undefined && v !== false,
       )
-      let encryptedFields: Awaited<ReturnType<typeof encryptMessage>> | undefined
+      let encryptedFields: Awaited<ReturnType<typeof sealCase>> | undefined
       if (nonEmptyFields.length > 0) {
         const fieldsPayload = JSON.stringify(Object.fromEntries(nonEmptyFields))
-        encryptedFields = await encryptMessage(fieldsPayload, readerPubkeys)
+        encryptedFields = await sealCase('fields', fieldsPayload, readerPubkeys)
       }
 
       // Build the blind index status hash (use the default status value as a simple hash for now)

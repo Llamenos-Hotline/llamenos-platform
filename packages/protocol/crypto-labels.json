@@ -111,6 +111,7 @@
     "HMAC_MESSAGING_CONTACT_PREFIX": "llamenos:messaging-contact:",
     "LABEL_MESSAGING_CONTACT_HUB_KEY": "llamenos:messaging-contact-hub-key:v1",
     "LABEL_CALL_RECORDING_SEAL": "llamenos:call-recording-seal:v1",
-    "LABEL_PROVIDER_REF_KEY": "llamenos:provider-ref-key:v1"
+    "LABEL_PROVIDER_REF_KEY": "llamenos:provider-ref-key:v1",
+    "LABEL_CASE_COMMENT": "llamenos:case-comment"
   }
 }

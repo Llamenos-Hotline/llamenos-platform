@@ -57,6 +57,9 @@ pub mod envelope_aad;
 // === Audit key management (AES-256-GCM + HPKE wrapping) ===
 pub mod audit_key;
 
+// === Case records + case comments, sealed per purpose (#2499) ===
+pub mod case_record;
+
 // === Offline key backup — the one canonical backup file format (v4) ===
 pub mod backup;
 
