@@ -157,8 +157,8 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
   await page.getByTestId('channel-card-reports').click()
   await page.getByTestId(TestIds.SETUP_NEXT_BTN).click()
 
-  // Skip remaining wizard steps (providers, settings, invite)
-  for (let i = 0; i < 3; i++) {
+  // Skip the remaining configuration steps (providers, settings)
+  for (let i = 0; i < 2; i++) {
     const skipBtn = page.getByTestId(TestIds.SETUP_SKIP_BTN)
     const nextBtn = page.getByTestId(TestIds.SETUP_NEXT_BTN)
     // Both may be visible — prefer Skip when available
@@ -172,11 +172,17 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
   }
 
   // Summary step — click "Launch"
-  const launchBtn = page.getByTestId('setup-complete-btn')
+  const launchBtn = page.getByTestId(TestIds.SETUP_COMPLETE_BTN)
   await launchBtn.waitFor({ state: 'visible', timeout: 10000 })
   await launchBtn.click()
 
-  // After launch, the wizard calls completeSetup() then navigates to /.
+  // Launch completes setup — creating the hub — and only then offers to invite
+  // people into it (#2194). The team is invited from the users page below.
+  const finishBtn = page.getByTestId(TestIds.SETUP_FINISH_BTN)
+  await finishBtn.waitFor({ state: 'visible', timeout: 60000 })
+  await finishBtn.click()
+
+  // The wizard then navigates to /.
   // The root auth guard may show: dashboard, profile-setup, or login/PIN screen.
   const sidebar = page.getByTestId(TestIds.NAV_SIDEBAR)
   const profileSetupBtn = page.getByRole('button', { name: /complete setup/i })

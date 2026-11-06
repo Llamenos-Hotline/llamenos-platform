@@ -14,7 +14,9 @@
 use std::sync::{Mutex, MutexGuard};
 
 use llamenos_core::{
-    auth, backup, device_keys, hpke_envelope,
+    auth, backup, case_record, device_keys,
+    encryption::RecipientKeyEnvelope,
+    hpke_envelope,
     labels::{
         LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH, LABEL_MESSAGE,
         LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
@@ -202,6 +204,34 @@ impl CryptoState {
         let plaintext = hpke_envelope::hpke_open(envelope, &secret_hex, expected_label, &aad)
             .map_err(err_str)?;
         Ok(hex::encode(plaintext))
+    }
+
+    /// Seal a case ciphertext as this device — the inner half of
+    /// `seal_case_from_state`, callable without a Tauri runtime so the
+    /// conformance tests run the exact production call.
+    fn seal_case(
+        &self,
+        purpose: case_record::CasePurpose,
+        plaintext: &str,
+        reader_pubkeys: &[String],
+    ) -> Result<case_record::EncryptedCaseCiphertext, String> {
+        let ds = self.get_device_state()?;
+        case_record::seal_as_device(purpose, &ds, plaintext, reader_pubkeys).map_err(err_str)
+    }
+
+    /// Open a case ciphertext as this device — the inner half of
+    /// `open_case_from_state`.
+    fn open_case(
+        &self,
+        purpose: case_record::CasePurpose,
+        encrypted_content: &str,
+        envelopes: &[RecipientKeyEnvelope],
+    ) -> Result<String, String> {
+        let ds = self.get_device_state()?;
+        self.with_secrets(|secrets| {
+            case_record::open_as_device(purpose, secrets, &ds, encrypted_content, envelopes)
+                .map_err(err_str)
+        })
     }
 
     /// Sign `message` with the device signing key — private: the only callers are
@@ -527,6 +557,39 @@ pub fn hpke_open_key_from_state(
     aad_hex: String,
 ) -> Result<String, String> {
     state.hpke_open_key_hex(&envelope, &expected_label, &aad_hex)
+}
+
+// ── Case records + case comments, sealed per purpose (#2499) ────────
+
+/// Seal a case record's summary or fields, or a case comment, as this device
+/// for this device plus `reader_pubkeys` (X25519, hex).
+///
+/// `purpose` is `"summary"`, `"fields"` or `"comment"`. There is no label and
+/// no AAD argument: `llamenos_core::case_record` derives both, the same code
+/// iOS, Android and the server run. The desktop used to compose this in the
+/// webview from `hpke_seal_key` + AES-GCM under `LABEL_MESSAGE` with no AAD,
+/// which no other platform opened (#2499). Neither the device key nor the
+/// content key crosses into the webview.
+#[tauri::command]
+pub fn seal_case_from_state(
+    state: tauri::State<'_, CryptoState>,
+    purpose: case_record::CasePurpose,
+    plaintext: String,
+    reader_pubkeys: Vec<String>,
+) -> Result<case_record::EncryptedCaseCiphertext, String> {
+    state.seal_case(purpose, &plaintext, &reader_pubkeys)
+}
+
+/// Open a case ciphertext as this device. Takes all of its envelopes; Rust
+/// picks the one addressed to this device's X25519 key.
+#[tauri::command]
+pub fn open_case_from_state(
+    state: tauri::State<'_, CryptoState>,
+    purpose: case_record::CasePurpose,
+    encrypted_content: String,
+    envelopes: Vec<RecipientKeyEnvelope>,
+) -> Result<String, String> {
+    state.open_case(purpose, &encrypted_content, &envelopes)
 }
 
 // ── PUK (Per-User Key) ─────────────────────────────────────────────
@@ -1326,22 +1389,6 @@ pub fn device_import_and_load(
 
     let result = serde_json::to_value(&encrypted_imported).map_err(err_str)?;
     Ok(result)
-}
-
-/// Generate an ephemeral Ed25519 keypair for admin-created users.
-/// Returns { signingPubkeyHex, seedHex } — seed intentionally returned for ephemeral provisioning.
-#[tauri::command]
-pub fn generate_ephemeral_ed25519() -> Result<serde_json::Value, String> {
-    let mut seed = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
-
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    let pubkey = signing_key.verifying_key();
-
-    Ok(serde_json::json!({
-        "signingPubkeyHex": hex::encode(pubkey.to_bytes()),
-        "seedHex": hex::encode(seed),
-    }))
 }
 
 /// Generate a fresh 128-bit recovery key for display to the user.
@@ -2438,6 +2485,146 @@ mod ipc_surface_tests {
             &"x".repeat(65),
         ] {
             assert!(!is_session_id(bad), "{bad:?} must be refused");
+        }
+    }
+}
+
+// ── Case-record conformance against the server-persisted vectors (#2499) ──
+//
+// The desktop's production reader and writer for case ciphertexts are
+// `open_case_from_state` / `seal_case_from_state`. These tests run their inner
+// halves (`CryptoState::open_case` / `seal_case`) against
+// `packages/crypto/tests/fixtures/case-record-vectors.json` — bytes the server
+// persisted — with the reader's secret held in `CryptoState` the whole time.
+// Before #2499 the desktop opened case records as stored messages
+// (`LABEL_MESSAGE`, empty AAD); `the_pre_2499_desktop_reader_cannot_open_them`
+// keeps that reading pinned as a failure.
+#[cfg(test)]
+mod case_record_conformance_tests {
+    use super::*;
+    use llamenos_core::encryption::open_record_for_reader;
+
+    const FIXTURE: &str =
+        include_str!("../../../packages/crypto/tests/fixtures/case-record-vectors.json");
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Fixture {
+        readers: Vec<Reader>,
+        records: Vec<Record>,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Reader {
+        name: String,
+        x25519_secret_hex: String,
+        x25519_pubkey_hex: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Record {
+        name: String,
+        purpose: case_record::CasePurpose,
+        plaintext: String,
+        encrypted_content: String,
+        reader_envelopes: Vec<RecipientKeyEnvelope>,
+    }
+
+    fn fixture() -> Fixture {
+        serde_json::from_str(FIXTURE).expect("case-record-vectors.json does not parse")
+    }
+
+    /// A CryptoState unlocked with a fixture reader's published X25519 secret.
+    fn state_for(reader: &Reader) -> CryptoState {
+        let encryption_seed: [u8; 32] = hex::decode(&reader.x25519_secret_hex)
+            .unwrap()
+            .try_into()
+            .expect("fixture x25519 secret is 32 bytes");
+        let secrets = device_keys::DeviceSecrets {
+            signing_seed: [0x5a; 32],
+            encryption_seed,
+        };
+        let ds = device_keys::DeviceKeyState {
+            device_id: format!("vector-{}", reader.name),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);
+        let state = CryptoState::new();
+        state.load_secrets_for_test(secrets, ds);
+        state
+    }
+
+    #[test]
+    fn every_reader_opens_every_persisted_case_ciphertext() {
+        let f = fixture();
+        assert_eq!(f.records.len(), 3, "summary, fields and comment");
+        for reader in &f.readers {
+            let state = state_for(reader);
+            for rec in &f.records {
+                let opened = state
+                    .open_case(rec.purpose, &rec.encrypted_content, &rec.reader_envelopes)
+                    .unwrap_or_else(|e| panic!("{} cannot open {}: {e}", reader.name, rec.name));
+                assert_eq!(opened, rec.plaintext, "{} / {}", reader.name, rec.name);
+            }
+        }
+    }
+
+    #[test]
+    fn the_pre_2499_desktop_reader_cannot_open_them() {
+        let f = fixture();
+        let reader = &f.readers[0];
+        for rec in &f.records {
+            assert!(
+                open_record_for_reader(
+                    &rec.encrypted_content,
+                    &rec.reader_envelopes,
+                    &[&reader.x25519_pubkey_hex],
+                    &reader.x25519_secret_hex,
+                    LABEL_MESSAGE,
+                )
+                .is_err(),
+                "{} opened as a stored message",
+                rec.name
+            );
+        }
+    }
+
+    /// The writer half: what the desktop seals, the other fixture reader opens
+    /// through the same production reader — and the device is always a reader,
+    /// even when the webview passes its Ed25519 account key as it used to.
+    #[test]
+    fn a_case_ciphertext_this_desktop_seals_opens_for_the_other_reader() {
+        let f = fixture();
+        let (volunteer, admin) = (&f.readers[0], &f.readers[1]);
+        let writer = state_for(volunteer);
+        let account_key = writer.get_device_state().unwrap().signing_pubkey_hex;
+        for purpose in case_record::CasePurpose::ALL {
+            let sealed = writer
+                .seal_case(
+                    purpose,
+                    "desktop-sealed",
+                    &[account_key.clone(), admin.x25519_pubkey_hex.clone()],
+                )
+                .unwrap();
+            let addresses: Vec<&str> = sealed
+                .reader_envelopes
+                .iter()
+                .map(|e| e.pubkey.as_str())
+                .collect();
+            assert_eq!(
+                addresses,
+                vec![
+                    volunteer.x25519_pubkey_hex.as_str(),
+                    admin.x25519_pubkey_hex.as_str()
+                ]
+            );
+            let opened = state_for(admin)
+                .open_case(purpose, &sealed.encrypted_content, &sealed.reader_envelopes)
+                .unwrap();
+            assert_eq!(opened, "desktop-sealed");
         }
     }
 }

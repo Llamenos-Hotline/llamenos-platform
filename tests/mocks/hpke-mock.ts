@@ -72,6 +72,8 @@ export const LABEL_MAP: Record<string, number> = {
   'llamenos:message': 5,
   'llamenos:call-meta': 6,
   'llamenos:shift-schedule': 7,
+  'llamenos:case-summary': 30,
+  'llamenos:case-fields': 31,
   'llamenos:puk:sign:v1': 41,
   'llamenos:puk:dh:v1': 42,
   'llamenos:puk:secretbox:v1': 43,
@@ -85,6 +87,7 @@ export const LABEL_MAP: Record<string, number> = {
   'llamenos:recovery-group:share-contribute:v1': 62,
   'llamenos:recovery-group:liveness-proof:v1': 63,
   'llamenos:sas-derive:v1': 80,
+  'llamenos:case-comment': 109,
 }
 
 export function labelToId(label: string): number {

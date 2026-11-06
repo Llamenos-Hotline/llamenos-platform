@@ -352,6 +352,11 @@ fun ConversationDetailScreen(
                         }
                     }
 
+                    // A failed load is not an empty thread (#2118): only the error card below.
+                    uiState.messagesError != null && uiState.messages.isEmpty() -> {
+                        Box(modifier = Modifier.fillMaxSize())
+                    }
+
                     uiState.messages.isEmpty() && !uiState.isLoadingMessages -> {
                         Box(
                             modifier = Modifier

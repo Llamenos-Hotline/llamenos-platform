@@ -1,6 +1,7 @@
 import { type Page, type APIRequestContext, expect } from '@playwright/test'
 import { devSurfaceSecret } from './dev-surface-secret'
 import { TestIds } from './test-ids'
+import { generateTestKeypair, redeemInviteViaApi } from './api-helpers'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
 /** @deprecated Use ADMIN_SEED */
@@ -454,48 +455,52 @@ export async function chooseFormRole(page: Page, roleId = 'role-volunteer'): Pro
 }
 
 /**
- * Create a volunteer via UI and return the raw Ed25519 seed hex for login.
+ * Add a volunteer the only way the app offers: the admin issues an invite on
+ * the users page, and the volunteer's own device makes their keypair and
+ * redeems it. No admin, server or page ever holds the volunteer's signing seed
+ * (#1231) — here the test process plays the volunteer's device, so the seed it
+ * returns never passed through the admin's page.
  *
- * The displayed device key is only for user display. Internally,
- * the volunteer was created with an Ed25519 keypair. We return the raw seedHex
- * so that `loginAsVolunteer` uses `deviceImportAndLoad`.
- *
- * The seedHex is stored in `window.__last_vol_seed_hex` by users.tsx after
- * calling generateEphemeralKeypair().
+ * Leaves the admin on a freshly loaded users page that lists the new member.
+ * Returns the volunteer's seed, for `loginAsVolunteer`.
  */
-export async function createUserAndGetDeviceKey(page: Page, name: string, phone: string): Promise<string> {
+export async function inviteVolunteerAndJoin(
+  page: Page,
+  name: string,
+  phone: string,
+  roleId = 'role-volunteer',
+): Promise<string> {
   await page.getByTestId(TestIds.NAV_VOLUNTEERS).click()
-  await expect(page.getByTestId(TestIds.PAGE_TITLE)).toBeVisible()
+  const inviteBtn = page.getByTestId(TestIds.INVITE_BTN)
+  await expect(inviteBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await inviteBtn.click()
 
-  await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
-  await page.getByLabel('Name').fill(name)
-  await page.getByLabel('Phone Number').fill(phone)
-  await page.getByLabel('Phone Number').blur()
-  await chooseFormRole(page)
-  await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
+  await page.getByTestId(TestIds.INVITE_NAME_INPUT).fill(name)
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).fill(phone)
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).blur()
+  await chooseFormRole(page, roleId)
+  await page.getByTestId(TestIds.CREATE_INVITE_BTN).click()
 
-  const keyCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
-  await expect(keyCode).toBeVisible({ timeout: Timeouts.API })
+  const linkCode = page.getByTestId(TestIds.INVITE_LINK_CODE)
+  await expect(linkCode).toBeVisible({ timeout: Timeouts.API })
+  const link = (await linkCode.textContent())?.trim() ?? ''
+  const code = new URL(link).searchParams.get('code')
+  if (!code) throw new Error(`invite link carries no code: ${link}`)
 
-  // Try to get the raw Ed25519 seedHex from window state (set by users.tsx).
-  // If available, return it so loginAsVolunteer uses deviceImportAndLoad (Ed25519).
-  // If not available (e.g., pre-test reload), fall back to displayed key from DOM.
-  const seedHex = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__last_vol_seed_hex as string | undefined,
-  )
-  if (seedHex && /^[0-9a-f]{64}$/.test(seedHex)) {
-    return seedHex
-  }
+  // The volunteer's device: it makes the key, and only its signature and
+  // public key ever reach the server.
+  const { seedHex } = generateTestKeypair()
+  const { status, data } = await redeemInviteViaApi(page.request, code, seedHex)
+  expect(status, `redeeming the invite for ${name}: ${JSON.stringify(data)}`).toBe(200)
 
-  const key = await keyCode.textContent()
-  if (!key) throw new Error('Failed to get device key')
-  return key
-}
-
-/** Dismiss the device key card shown after volunteer creation. */
-export async function dismissDeviceKeyCard(page: Page): Promise<void> {
-  await page.getByTestId('dismiss-device-key').click()
-  await expect(page.getByTestId('dismiss-device-key')).not.toBeVisible()
+  await page.getByTestId(TestIds.DISMISS_INVITE).click()
+  // The list was loaded before the volunteer existed. Re-enter the page (a
+  // reload would lose the mock CryptoState) so it lists them.
+  await page.getByTestId(TestIds.NAV_DASHBOARD).click()
+  await page.getByTestId(TestIds.NAV_VOLUNTEERS).click()
+  await expect(page.getByTestId(TestIds.VOLUNTEER_ROW).filter({ hasText: name }).first())
+    .toBeVisible({ timeout: Timeouts.API })
+  return seedHex
 }
 
 export async function completeProfileSetup(page: Page) {

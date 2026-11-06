@@ -1320,6 +1320,8 @@
     "hotlineName": "Rub'i' Oyonem Tzij",
     "hotlineNameHelp": "Re' kak'ut chi ke ri aj samajela' pa ri k'uxlab'al. Rech ruchajixik, ri PWA kakojo' jun chijujunal b'i'.",
     "hotlineNamePlaceholder": "Oyonem Tzij rech K'ayewal Tinamital",
+    "hubUrlLabel": "Hub URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Tacha' jun b'i' xuqujeʼ jun ch'ab'al rech ri oyonem tzij rech k'ayewal.",
     "identityTitle": "Tab'i'aj ri Oyonem Tzij awech",
     "inactivityTimeout": "Ramaj rech Man Samajin ta (minutos)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Keb'an taq etal rech okem chi ke ri amolaj. Jujun etal kakojo' xa jun mul xuqujeʼ kak'is pa 7 q'ij.",
     "inviteNew": "K'ak'a' Sik'ixik",
     "inviteTitle": "Kesik'ix Aj Samajela'",
+    "launchHotline": "Chatikirisaj ri Oyonem Tzij",
     "maxConcurrent": "Jachike Junam pa Jujun Aj Samajel",
     "messagingSettings": "Uchojmixik Taq Tzijob'al",
     "namePlaceholder": "Rub'i' aj samajel",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "we kawaj",
     "organization": "Molaj",
     "organizationPlaceholder": "Rub'i' ri Amolaj",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Tatz'ib'aj ri PIN awech rech kasamajix ri chojmixik.",
     "primaryLanguage": "Nab'ey Ch'ab'al",
     "primaryLanguageHelp": "Ri ruyonil ch'ab'al rech ri ucholajil b'anel xuqujeʼ taq ch'ab'al IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Tichojmirisax ri taq samajib'al rech ri taq b'eyal ach'akon.",
     "providersTitle": "Tichojmirisax Taq Ajya'ol",
     "queueTimeout": "Ramaj Ruk'iyik (segundos)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "Ruk'amik WhatsApp",
     "whatsappTwilio": "Rik'in Twilio",
     "whatsappTwilioNote": "Ri taq tzijob'al WhatsApp keb'an rik'in ri ajya'ol Twilio awech. Majun nik'aj chik chojmixik rajawaxik.",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "Hub URL",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "activeCalls": "{{count}} oyonik tajin kasamaj",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Samajin",
     "add": "Titz'aqatisax Aj Samajel",
-    "addVolunteer": "Titz'aqatisax Aj Samajel",
     "assignedShifts": "Taq Samaj Ya'on",
     "changeRole": "Tijalwachix ruk'amal",
     "createInvite": "Tib'an Sik'ixik",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Man okel ta ri rajilab'al teléfono. Takojo' E.164 ruwach (achi'el +12125551234)",
     "inviteCreated": "Ri sik'ixik xb'an",
     "inviteExpires": "Kak'is {{date}}",
-    "inviteGenerated": "¡Ri sik'ixik xb'an! Tataq ri ewan etal pa jun chajin rub'eyal.",
     "inviteLinkLabel": "Okem rech sik'ixik",
     "inviteRevoked": "Ri sik'ixik xq'at",
     "inviteVolunteer": "Tisik'ix Aj Samajel",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Aj Rutzijol",
     "roleReviewer": "Tz'etonel",
     "roleVolunteer": "Aj Samajel",
-    "secretKeyWarning": "Re etal re' kak'ut xa jun mul. Tataq pa jun chajin rub'eyal chi re ri aj samajel.",
     "title": "Aj Samajela'",
-    "unnamed": "Aj Samajel chi Maj B'i'",
-    "userAdded": "Ri aj samajel xtz'aqatisax utz"
+    "unnamed": "Aj Samajel chi Maj B'i'"
   },
   "webauthn": {
     "browserNotSupported": "Ri ak'uxlab'al man kutikir ta ri taq ewan etal.",

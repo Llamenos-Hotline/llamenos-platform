@@ -94,6 +94,10 @@ if (
 // here is an ordinary caller and the exemption is opt-in at the call site.
 const BACKEND_PROJECT_USE = {
   baseURL: BACKEND_BASE_URL,
+  // Every response a backend scenario receives is held to the schema its route
+  // declares — the one the mobile clients are generated from (#2118). See
+  // apps/worker/openapi/declared-responses.ts.
+  extraHTTPHeaders: { "X-Declared-Response-Check": "enforce" },
 };
 
 const playwrightConfig = defineConfig({

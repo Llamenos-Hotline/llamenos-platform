@@ -213,6 +213,8 @@ pub fn run() {
             crypto::hpke_open_from_state,
             crypto::hpke_seal_key,
             crypto::hpke_open_key_from_state,
+            crypto::seal_case_from_state,
+            crypto::open_case_from_state,
             // PUK (Per-User Key — seed stays in Rust CryptoState)
             crypto::puk_create_from_state,
             crypto::puk_rotate_from_state,
@@ -244,7 +246,6 @@ pub fn run() {
             crypto::recovery_group_decrypt,
             // C06: Missing IPC commands
             crypto::device_import_and_load,
-            crypto::generate_ephemeral_ed25519,
             crypto::generate_backup_from_state,
             crypto::generate_recovery_key,
             crypto::backup_verify_credential,

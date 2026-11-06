@@ -1,0 +1,316 @@
+# Output of probe.sql against a scratch database migrated to 20261105220703_files_hub_owner.sql (81 files), 2026-11-05.
+==== probe results
+ seq |                                    probe                                    | verdict  |                                                                         detail
+-----+-----------------------------------------------------------------------------+----------+--------------------------------------------------------------------------------------------------------------------------------------------------------
+   1 | a2p_registrations.hub_id orphan                                             | REJECTED | 23503 insert or update on table "a2p_registrations" violates foreign key constraint "a2p_registrations_hub_id_hubs_id_fk"
+   2 | a2p_registrations.hub_id empty-string hub                                   | REJECTED | 23503 insert or update on table "a2p_registrations" violates foreign key constraint "a2p_registrations_hub_id_hubs_id_fk"
+   3 | active_calls.answered_by orphan                                             | ACCEPTED | {"hub_id": "hub-A", "answered_by": "no-such-id"}
+   4 | active_calls.hub_id orphan                                                  | ACCEPTED | {"hub_id": "no-such-id"}
+   5 | active_calls.hub_id empty-string hub                                        | ACCEPTED | {"hub_id": ""}
+   6 | active_calls.reported_by orphan                                             | ACCEPTED | {"hub_id": "hub-A", "reported_by": "no-such-id"}
+   7 | active_shifts.hub_id orphan                                                 | ACCEPTED | {"hub_id": "no-such-id"}
+   8 | active_shifts.hub_id empty-string hub                                       | ACCEPTED | {"hub_id": ""}
+   9 | active_shifts.pubkey orphan                                                 | ACCEPTED | {"hub_id": "hub-A", "pubkey": "no-such-id"}
+  10 | affinity_groups.created_by orphan                                           | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+  11 | affinity_groups.hub_id orphan                                               | ACCEPTED | {"hub_id": "no-such-id"}
+  12 | affinity_groups.hub_id empty-string hub                                     | ACCEPTED | {"hub_id": ""}
+  13 | audit_log.actor_pubkey orphan                                               | ACCEPTED | {"hub_id": "hub-A", "actor_pubkey": "no-such-id"}
+  14 | audit_log.hub_id orphan                                                     | ACCEPTED | {"hub_id": "no-such-id"}
+  15 | audit_log.hub_id empty-string hub                                           | ACCEPTED | {"hub_id": ""}
+  16 | audit_user_keys.user_pubkey orphan                                          | ACCEPTED | {"user_pubkey": "no-such-id"}
+  17 | auth_nonces.pubkey orphan                                                   | ACCEPTED | {"pubkey": "no-such-id"}
+  18 | bans.banned_by orphan                                                       | ACCEPTED | {"hub_id": "hub-A", "banned_by": "no-such-id"}
+  19 | bans.hub_id orphan                                                          | ACCEPTED | {"hub_id": "no-such-id"}
+  20 | bans.hub_id empty-string hub                                                | ACCEPTED | {"hub_id": ""}
+  21 | blast_deliveries.blast_id orphan                                            | REJECTED | 23503 insert or update on table "blast_deliveries" violates foreign key constraint "blast_deliveries_blast_id_fkey"
+  22 | blast_deliveries.blast_id cross-hub                                         | ACCEPTED | {"blast_id": "bl-B", "subscriber_id": "sub-A"}
+  23 | blast_deliveries.subscriber_id orphan                                       | REJECTED | 23503 insert or update on table "blast_deliveries" violates foreign key constraint "blast_deliveries_subscriber_id_fkey"
+  24 | blast_deliveries.subscriber_id cross-hub                                    | ACCEPTED | {"blast_id": "bl-A", "subscriber_id": "sub-B"}
+  25 | blast_settings.hub_id orphan                                                | ACCEPTED | {"hub_id": "no-such-id"}
+  26 | blast_settings.hub_id empty-string hub                                      | ACCEPTED | {"hub_id": ""}
+  27 | blasts.created_by orphan                                                    | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+  28 | blasts.hub_id orphan                                                        | ACCEPTED | {"hub_id": "no-such-id"}
+  29 | blasts.hub_id empty-string hub                                              | ACCEPTED | {"hub_id": ""}
+  30 | call_records.answered_by orphan                                             | ACCEPTED | {"hub_id": "hub-A", "answered_by": "no-such-id"}
+  31 | call_records.hub_id orphan                                                  | ACCEPTED | {"hub_id": "no-such-id"}
+  32 | call_records.hub_id empty-string hub                                        | ACCEPTED | {"hub_id": ""}
+  33 | call_tokens.hub_id orphan                                                   | ACCEPTED | {"hub_id": "no-such-id"}
+  34 | call_tokens.hub_id empty-string hub                                         | ACCEPTED | {"hub_id": ""}
+  35 | call_tokens.volunteer_pubkey orphan                                         | ACCEPTED | {"hub_id": "hub-A", "volunteer_pubkey": "no-such-id"}
+  36 | case_contacts.added_by orphan                                               | ACCEPTED | {"added_by": "no-such-id"}
+  37 | case_contacts.case_id orphan                                                | ACCEPTED | {"case_id": "no-such-id", "contact_id": "ct-A"}
+  38 | case_contacts.case_id cross-hub                                             | ACCEPTED | {"case_id": "rec-B", "contact_id": "ct-A"}
+  39 | case_contacts.contact_id orphan                                             | ACCEPTED | {"case_id": "rec-A", "contact_id": "no-such-id"}
+  40 | case_contacts.contact_id cross-hub                                          | ACCEPTED | {"case_id": "rec-A", "contact_id": "ct-B"}
+  41 | case_events.case_id orphan                                                  | ACCEPTED | {"case_id": "no-such-id", "event_id": "ev-A"}
+  42 | case_events.case_id cross-hub                                               | ACCEPTED | {"case_id": "rec-B", "event_id": "ev-A"}
+  43 | case_events.event_id orphan                                                 | ACCEPTED | {"case_id": "rec-A", "event_id": "no-such-id"}
+  44 | case_events.event_id cross-hub                                              | ACCEPTED | {"case_id": "rec-A", "event_id": "ev-B"}
+  45 | case_events.linked_by orphan                                                | ACCEPTED | {"linked_by": "no-such-id"}
+  46 | case_interactions.author_pubkey orphan                                      | ACCEPTED | {"author_pubkey": "no-such-id"}
+  47 | case_interactions.case_id orphan                                            | ACCEPTED | {"case_id": "no-such-id"}
+  48 | case_number_sequences.hub_id orphan                                         | ACCEPTED | {"hub_id": "no-such-id"}
+  49 | case_number_sequences.hub_id empty-string hub                               | ACCEPTED | {"hub_id": ""}
+  50 | case_records.assigned_to orphan                                             | ACCEPTED | {"hub_id": "hub-A", "assigned_to": "{no-such-id}"}
+  51 | case_records.created_by orphan                                              | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+  52 | case_records.entity_type_id orphan                                          | ACCEPTED | {"hub_id": "hub-A", "entity_type_id": "no-such-id"}
+  53 | case_records.entity_type_id cross-hub                                       | ACCEPTED | {"hub_id": "hub-A", "entity_type_id": "etd-B"}
+  54 | case_records.event_ids orphan                                               | ACCEPTED | {"hub_id": "hub-A", "event_ids": "{no-such-id}"}
+  55 | case_records.event_ids cross-hub                                            | ACCEPTED | {"hub_id": "hub-A", "event_ids": "{ev-B}"}
+  56 | case_records.hub_id orphan                                                  | ACCEPTED | {"hub_id": "no-such-id"}
+  57 | case_records.hub_id empty-string hub                                        | ACCEPTED | {"hub_id": ""}
+  58 | case_records.merged_into_id orphan                                          | ACCEPTED | {"hub_id": "hub-A", "merged_into_id": "no-such-id"}
+  59 | case_records.merged_into_id cross-hub                                       | ACCEPTED | {"hub_id": "hub-A", "merged_into_id": "rec-B"}
+  60 | case_records.parent_record_id orphan                                        | ACCEPTED | {"hub_id": "hub-A", "parent_record_id": "no-such-id"}
+  61 | case_records.parent_record_id cross-hub                                     | ACCEPTED | {"hub_id": "hub-A", "parent_record_id": "rec-B"}
+  62 | case_records.report_ids orphan                                              | ACCEPTED | {"hub_id": "hub-A", "report_ids": "{no-such-id}"}
+  63 | case_records.report_ids cross-hub                                           | ACCEPTED | {"hub_id": "hub-A", "report_ids": "{cv-B}"}
+  64 | contact_metadata.hub_id orphan                                              | REJECTED | 23503 insert or update on table "contact_metadata" violates foreign key constraint "contact_metadata_hub_id_hubs_id_fk"
+  65 | contact_metadata.hub_id empty-string hub                                    | REJECTED | 23503 insert or update on table "contact_metadata" violates foreign key constraint "contact_metadata_hub_id_hubs_id_fk"
+  66 | contact_relationships.contact_id_a orphan                                   | ACCEPTED | {"hub_id": "hub-A", "contact_id_a": "no-such-id", "contact_id_b": "ct-A"}
+  67 | contact_relationships.contact_id_a cross-hub                                | ACCEPTED | {"hub_id": "hub-A", "contact_id_a": "ct-B", "contact_id_b": "ct-A"}
+  68 | contact_relationships.contact_id_b orphan                                   | ACCEPTED | {"hub_id": "hub-A", "contact_id_a": "ct-A", "contact_id_b": "no-such-id"}
+  69 | contact_relationships.contact_id_b cross-hub                                | ACCEPTED | {"hub_id": "hub-A", "contact_id_a": "ct-A", "contact_id_b": "ct-B"}
+  70 | contact_relationships.created_by orphan                                     | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+  71 | contact_relationships.hub_id orphan                                         | ACCEPTED | {"hub_id": "no-such-id"}
+  72 | contact_relationships.hub_id empty-string hub                               | ACCEPTED | {"hub_id": ""}
+  73 | contact_team_assignments.assigned_by orphan                                 | ACCEPTED | {"hub_id": "hub-A", "assigned_by": "no-such-id"}
+  74 | contact_team_assignments.contact_id orphan                                  | REJECTED | 23503 insert or update on table "contact_team_assignments" violates foreign key constraint "contact_team_assignments_contact_id_contacts_id_fk"
+  75 | contact_team_assignments.contact_id cross-hub                               | ACCEPTED | {"hub_id": "hub-A", "team_id": "tm-A", "contact_id": "ct-B"}
+  76 | contact_team_assignments.hub_id orphan                                      | ACCEPTED | {"hub_id": "no-such-id"}
+  77 | contact_team_assignments.hub_id empty-string hub                            | ACCEPTED | {"hub_id": ""}
+  78 | contact_team_assignments.team_id orphan                                     | REJECTED | 23503 insert or update on table "contact_team_assignments" violates foreign key constraint "contact_team_assignments_team_id_teams_id_fk"
+  79 | contact_team_assignments.team_id cross-hub                                  | ACCEPTED | {"hub_id": "hub-A", "team_id": "tm-B", "contact_id": "ct-A"}
+  80 | contacts.hub_id orphan                                                      | ACCEPTED | {"hub_id": "no-such-id"}
+  81 | contacts.hub_id empty-string hub                                            | ACCEPTED | {"hub_id": ""}
+  82 | contacts.merged_into_id orphan                                              | ACCEPTED | {"hub_id": "hub-A", "merged_into_id": "no-such-id"}
+  83 | contacts.merged_into_id cross-hub                                           | ACCEPTED | {"hub_id": "hub-A", "merged_into_id": "ct-B"}
+  84 | conversations.assigned_to orphan                                            | ACCEPTED | {"hub_id": "hub-A", "assigned_to": "no-such-id"}
+  85 | conversations.hub_id orphan                                                 | REJECTED | 23503 insert or update on table "conversations" violates foreign key constraint "conversations_hub_id_hubs_id_fk"
+  86 | conversations.hub_id empty-string hub                                       | REJECTED | 23503 insert or update on table "conversations" violates foreign key constraint "conversations_hub_id_hubs_id_fk"
+  87 | custody_entries.actor_pubkey orphan                                         | ACCEPTED | {"actor_pubkey": "no-such-id"}
+  88 | custody_entries.evidence_id orphan                                          | ACCEPTED | {"evidence_id": "no-such-id"}
+  89 | device_verifications.target_device_id orphan                                | ACCEPTED | {"target_device_id": "no-such-id"}
+  90 | device_verifications.target_pubkey orphan                                   | ACCEPTED | {"target_pubkey": "no-such-id"}
+  91 | device_verifications.verifier_pubkey orphan                                 | ACCEPTED | {"verifier_pubkey": "no-such-id"}
+  92 | devices.pubkey orphan                                                       | REJECTED | 23503 insert or update on table "devices" violates foreign key constraint "devices_pubkey_users_pubkey_fk"
+  93 | entity_type_definitions.hub_id orphan                                       | ACCEPTED | {"hub_id": "no-such-id"}
+  94 | entity_type_definitions.hub_id empty-string hub                             | ACCEPTED | {"hub_id": ""}
+  95 | entity_type_definitions.template_id orphan                                  | ACCEPTED | {"hub_id": "hub-A", "template_id": "no-such-id"}
+  96 | erasure_config.hub_id orphan                                                | ACCEPTED | {"hub_id": "no-such-id"}
+  97 | erasure_config.hub_id empty-string hub                                      | ACCEPTED | {"hub_id": ""}
+  98 | erasure_config.updated_by orphan                                            | ACCEPTED | {"hub_id": "hub-A", "updated_by": "no-such-id"}
+  99 | erasure_requests.abandoned_by orphan                                        | ACCEPTED | {"scope": "user", "hub_id": null, "user_id": "pk-u1", "abandoned_by": "no-such-id"}
+ 100 | erasure_requests.co_approver_pubkey orphan                                  | ACCEPTED | {"scope": "user", "hub_id": null, "user_id": "pk-u1", "co_approver_pubkey": "no-such-id"}
+ 101 | erasure_requests.hub_id orphan                                              | ACCEPTED | {"scope": "hub", "hub_id": "no-such-id"}
+ 102 | erasure_requests.hub_id empty-string hub                                    | ACCEPTED | {"scope": "hub", "hub_id": ""}
+ 103 | erasure_requests.requested_by orphan                                        | ACCEPTED | {"scope": "user", "hub_id": null, "user_id": "pk-u1", "requested_by": "no-such-id"}
+ 104 | erasure_requests.user_id orphan                                             | ACCEPTED | {"scope": "user", "hub_id": null, "user_id": "no-such-id"}
+ 105 | event_outbox.hub_id orphan                                                  | REJECTED | 23503 insert or update on table "event_outbox" violates foreign key constraint "event_outbox_hub_id_hubs_id_fk"
+ 106 | event_outbox.hub_id empty-string hub                                        | REJECTED | 23503 insert or update on table "event_outbox" violates foreign key constraint "event_outbox_hub_id_hubs_id_fk"
+ 107 | events.created_by orphan                                                    | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 108 | events.entity_type_id orphan                                                | ACCEPTED | {"hub_id": "hub-A", "entity_type_id": "no-such-id"}
+ 109 | events.entity_type_id cross-hub                                             | ACCEPTED | {"hub_id": "hub-A", "entity_type_id": "etd-B"}
+ 110 | events.hub_id orphan                                                        | ACCEPTED | {"hub_id": "no-such-id"}
+ 111 | events.hub_id empty-string hub                                              | ACCEPTED | {"hub_id": ""}
+ 112 | events.parent_event_id orphan                                               | ACCEPTED | {"hub_id": "hub-A", "parent_event_id": "no-such-id"}
+ 113 | events.parent_event_id cross-hub                                            | ACCEPTED | {"hub_id": "hub-A", "parent_event_id": "ev-B"}
+ 114 | evidence.case_id orphan                                                     | ACCEPTED | {"case_id": "no-such-id", "file_id": "file-A"}
+ 115 | evidence.case_id cross-hub                                                  | ACCEPTED | {"case_id": "rec-B", "file_id": "file-A"}
+ 116 | evidence.file_id orphan                                                     | REJECTED | 23503 insert or update on table "evidence" violates foreign key constraint "evidence_file_id_files_id_fk"
+ 117 | evidence.file_id cross-hub                                                  | ACCEPTED | {"case_id": "rec-A", "file_id": "file-B"}
+ 118 | evidence.uploaded_by orphan                                                 | ACCEPTED | {"uploaded_by": "no-such-id"}
+ 119 | files.hub_id orphan                                                         | REJECTED | 23503 insert or update on table "files" violates foreign key constraint "files_hub_id_hubs_id_fk"
+ 120 | files.hub_id empty-string hub                                               | REJECTED | 23503 insert or update on table "files" violates foreign key constraint "files_hub_id_hubs_id_fk"
+ 121 | files.message_id orphan                                                     | ACCEPTED | {"hub_id": "hub-A", "message_id": "no-such-id", "owner_kind": "conversation", "conversation_id": "cv-A"}
+ 122 | files.uploaded_by orphan                                                    | ACCEPTED | {"hub_id": "hub-A", "owner_kind": "entity_field", "uploaded_by": "no-such-id"}
+ 123 | firehose_connections.agent_pubkey orphan                                    | ACCEPTED | {"hub_id": "hub-A", "agent_pubkey": "no-such-id"}
+ 124 | firehose_connections.hub_id orphan                                          | ACCEPTED | {"hub_id": "no-such-id"}
+ 125 | firehose_connections.hub_id empty-string hub                                | ACCEPTED | {"hub_id": ""}
+ 126 | firehose_connections.report_type_id orphan                                  | ACCEPTED | {"hub_id": "hub-A", "report_type_id": "no-such-id"}
+ 127 | firehose_connections.report_type_id cross-hub                               | ACCEPTED | {"hub_id": "hub-A", "report_type_id": "rtd-B"}
+ 128 | firehose_message_buffer.connection_id orphan                                | REJECTED | 23503 insert or update on table "firehose_message_buffer" violates foreign key constraint "firehose_message_buffer_connection_id_fkey"
+ 129 | firehose_message_buffer.extracted_report_id orphan                          | ACCEPTED | {"connection_id": "fc-A", "extracted_report_id": "no-such-id"}
+ 130 | firehose_message_buffer.extracted_report_id cross-hub                       | ACCEPTED | {"connection_id": "fc-A", "extracted_report_id": "cv-B"}
+ 131 | firehose_message_buffer.window_key_id orphan                                | ACCEPTED | {"connection_id": "fc-A", "window_key_id": "no-such-id"}
+ 132 | firehose_notification_optouts.connection_id orphan                          | REJECTED | 23503 insert or update on table "firehose_notification_optouts" violates foreign key constraint "firehose_notification_optouts_connection_id_fkey"
+ 133 | firehose_notification_optouts.user_id orphan                                | ACCEPTED | {"user_id": "no-such-id"}
+ 134 | firehose_window_keys.connection_id orphan                                   | REJECTED | 23503 insert or update on table "firehose_window_keys" violates foreign key constraint "firehose_window_keys_connection_id_fkey"
+ 135 | group_members.contact_id orphan                                             | ACCEPTED | {"group_id": "ag-A", "contact_id": "no-such-id"}
+ 136 | group_members.contact_id cross-hub                                          | ACCEPTED | {"group_id": "ag-A", "contact_id": "ct-B"}
+ 137 | group_members.group_id orphan                                               | ACCEPTED | {"group_id": "no-such-id", "contact_id": "ct-A"}
+ 138 | group_members.group_id cross-hub                                            | ACCEPTED | {"group_id": "ag-B", "contact_id": "ct-A"}
+ 139 | hub_incidents.hub_id orphan                                                 | REJECTED | 23503 insert or update on table "hub_incidents" violates foreign key constraint "hub_incidents_hub_id_hubs_id_fk"
+ 140 | hub_incidents.hub_id empty-string hub                                       | REJECTED | 23503 insert or update on table "hub_incidents" violates foreign key constraint "hub_incidents_hub_id_hubs_id_fk"
+ 141 | hub_keys.hub_id orphan                                                      | REJECTED | 23503 insert or update on table "hub_keys" violates foreign key constraint "hub_keys_hub_id_hubs_id_fk"
+ 142 | hub_keys.hub_id empty-string hub                                            | REJECTED | 23503 insert or update on table "hub_keys" violates foreign key constraint "hub_keys_hub_id_hubs_id_fk"
+ 143 | hub_keys.recipient_pubkey orphan                                            | ACCEPTED | {"hub_id": "hub-A", "recipient_pubkey": "no-such-id"}
+ 144 | hub_onboarding_state.hub_id orphan                                          | REJECTED | 23503 insert or update on table "hub_onboarding_state" violates foreign key constraint "hub_onboarding_state_hub_id_hubs_id_fk"
+ 145 | hub_onboarding_state.hub_id empty-string hub                                | REJECTED | 23503 insert or update on table "hub_onboarding_state" violates foreign key constraint "hub_onboarding_state_hub_id_hubs_id_fk"
+ 146 | hub_onboarding_state.template_id orphan                                     | ACCEPTED | {"hub_id": "hub-A", "template_id": "no-such-id"}
+ 147 | hub_recovery_group_shares.holder_pubkey orphan                              | ACCEPTED | {"hub_id": "hub-A", "holder_pubkey": "no-such-id"}
+ 148 | hub_recovery_group_shares.hub_id orphan                                     | REJECTED | 23503 insert or update on table "hub_recovery_group_shares" violates foreign key constraint "hub_recovery_group_shares_hub_id_hub_recovery_groups_hub_
+ 149 | hub_recovery_groups.hub_id orphan                                           | ACCEPTED | {"hub_id": "no-such-id", "threshold": 2, "delay_hours": 24, "total_shares": 3, "emergency_floor_hours": 1}
+ 150 | hub_recovery_groups.hub_id empty-string hub                                 | ACCEPTED | {"hub_id": "", "threshold": 2, "delay_hours": 24, "total_shares": 3, "emergency_floor_hours": 1}
+ 151 | hub_settings.hub_id orphan                                                  | REJECTED | 23503 insert or update on table "hub_settings" violates foreign key constraint "hub_settings_hub_id_hubs_id_fk"
+ 152 | hub_settings.hub_id empty-string hub                                        | REJECTED | 23503 insert or update on table "hub_settings" violates foreign key constraint "hub_settings_hub_id_hubs_id_fk"
+ 153 | hub_storage_credentials.hub_id orphan                                       | REJECTED | 23503 insert or update on table "hub_storage_credentials" violates foreign key constraint "hub_storage_credentials_hub_id_hubs_id_fk"
+ 154 | hub_storage_credentials.hub_id empty-string hub                             | REJECTED | 23503 insert or update on table "hub_storage_credentials" violates foreign key constraint "hub_storage_credentials_hub_id_hubs_id_fk"
+ 155 | hub_storage_settings.hub_id orphan                                          | REJECTED | 23503 insert or update on table "hub_storage_settings" violates foreign key constraint "hub_storage_settings_hub_id_hubs_id_fk"
+ 156 | hub_storage_settings.hub_id empty-string hub                                | REJECTED | 23503 insert or update on table "hub_storage_settings" violates foreign key constraint "hub_storage_settings_hub_id_hubs_id_fk"
+ 157 | hubs.created_by orphan                                                      | ACCEPTED | {"created_by": "no-such-id"}
+ 158 | invite_codes.created_by orphan                                              | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 159 | invite_codes.hub_id orphan                                                  | ACCEPTED | {"hub_id": "no-such-id"}
+ 160 | invite_codes.hub_id empty-string hub                                        | ACCEPTED | {"hub_id": ""}
+ 161 | invite_codes.used_by orphan                                                 | ACCEPTED | {"hub_id": "hub-A", "used_by": "no-such-id"}
+ 162 | ivr_audio.hub_id orphan                                                     | ACCEPTED | {"hub_id": "no-such-id"}
+ 163 | ivr_audio.hub_id empty-string hub                                           | ACCEPTED | {"hub_id": ""}
+ 164 | messages.attachment_ids orphan                                              | ACCEPTED | {"attachment_ids": "{no-such-id}", "conversation_id": "cv-A"}
+ 165 | messages.attachment_ids cross-hub                                           | ACCEPTED | {"attachment_ids": "{file-B}", "conversation_id": "cv-A"}
+ 166 | messages.author_pubkey orphan                                               | ACCEPTED | {"author_pubkey": "no-such-id"}
+ 167 | messages.conversation_id orphan                                             | REJECTED | 23503 insert or update on table "messages" violates foreign key constraint "messages_conversation_id_conversations_id_fk"
+ 168 | messaging_suppression_identifiers.suppression_id orphan                     | REJECTED | 23503 insert or update on table "messaging_suppression_identifiers" violates foreign key constraint "messaging_suppression_identifiers_suppression_id_
+ 169 | messaging_suppressions.source_hub_id orphan                                 | ACCEPTED | {"source_hub_id": "no-such-id"}
+ 170 | mls_pending_messages.hub_id orphan                                          | ACCEPTED | {"hub_id": "no-such-id"}
+ 171 | mls_pending_messages.hub_id empty-string hub                                | ACCEPTED | {"hub_id": ""}
+ 172 | mls_pending_messages.recipient_device_id orphan                             | ACCEPTED | {"hub_id": "hub-A", "recipient_device_id": "no-such-id"}
+ 173 | note_replies.author_pubkey orphan                                           | ACCEPTED | {"author_pubkey": "no-such-id"}
+ 174 | note_replies.note_id orphan                                                 | REJECTED | 23503 insert or update on table "note_replies" violates foreign key constraint "note_replies_note_id_notes_id_fk"
+ 175 | notes.author_pubkey orphan                                                  | ACCEPTED | {"hub_id": "hub-A", "author_pubkey": "no-such-id"}
+ 176 | notes.call_id orphan                                                        | ACCEPTED | {"hub_id": "hub-A", "call_id": "no-such-id"}
+ 177 | notes.call_id cross-hub                                                     | ACCEPTED | {"hub_id": "hub-A", "call_id": "call-B"}
+ 178 | notes.conversation_id orphan                                                | ACCEPTED | {"hub_id": "hub-A", "conversation_id": "no-such-id"}
+ 179 | notes.conversation_id cross-hub                                             | ACCEPTED | {"hub_id": "hub-A", "conversation_id": "cv-B"}
+ 180 | notes.hub_id orphan                                                         | REJECTED | 23503 insert or update on table "notes" violates foreign key constraint "notes_hub_id_hubs_id_fk"
+ 181 | notes.hub_id empty-string hub                                               | REJECTED | 23503 insert or update on table "notes" violates foreign key constraint "notes_hub_id_hubs_id_fk"
+ 182 | oauth_states.hub_id orphan                                                  | REJECTED | 23503 insert or update on table "oauth_states" violates foreign key constraint "oauth_states_hub_id_hubs_id_fk"
+ 183 | oauth_states.hub_id empty-string hub                                        | REJECTED | 23503 insert or update on table "oauth_states" violates foreign key constraint "oauth_states_hub_id_hubs_id_fk"
+ 184 | platform_role_envelopes.admin_pubkey orphan                                 | ACCEPTED | {"admin_pubkey": "no-such-id"}
+ 185 | provider_configs.hub_id orphan                                              | REJECTED | 23503 insert or update on table "provider_configs" violates foreign key constraint "provider_configs_hub_id_hubs_id_fk"
+ 186 | provider_configs.hub_id empty-string hub                                    | REJECTED | 23503 insert or update on table "provider_configs" violates foreign key constraint "provider_configs_hub_id_hubs_id_fk"
+ 187 | provider_recordings.call_id orphan                                          | ACCEPTED | {"hub_id": "hub-A", "call_id": "no-such-id"}
+ 188 | provider_recordings.call_id cross-hub                                       | ACCEPTED | {"hub_id": "hub-A", "call_id": "call-B"}
+ 189 | provider_recordings.hub_id orphan                                           | ACCEPTED | {"hub_id": "no-such-id"}
+ 190 | provider_recordings.hub_id empty-string hub                                 | ACCEPTED | {"hub_id": ""}
+ 191 | provider_templates.created_by orphan                                        | ACCEPTED | {"created_by": "no-such-id"}
+ 192 | provision_rooms.primary_pubkey orphan                                       | ACCEPTED | {"primary_pubkey": "no-such-id"}
+ 193 | puk_envelopes.device_id orphan                                              | ACCEPTED | {"device_id": "no-such-id"}
+ 194 | puk_envelopes.user_pubkey orphan                                            | REJECTED | 23503 insert or update on table "puk_envelopes" violates foreign key constraint "puk_envelopes_user_pubkey_users_pubkey_fk"
+ 195 | push_reminders_sent.pubkey orphan                                           | ACCEPTED | {"pubkey": "no-such-id"}
+ 196 | push_reminders_sent.shift_id orphan                                         | ACCEPTED | {"shift_id": "no-such-id"}
+ 197 | re_encryption_jobs.hub_id orphan                                            | ACCEPTED | {"hub_id": "no-such-id"}
+ 198 | re_encryption_jobs.hub_id empty-string hub                                  | ACCEPTED | {"hub_id": ""}
+ 199 | re_encryption_jobs.user_id orphan                                           | ACCEPTED | {"hub_id": "hub-A", "user_id": "no-such-id"}
+ 200 | recovery_session_contributions.contributor_pubkey orphan                    | ACCEPTED | {"contributor_pubkey": "no-such-id"}
+ 201 | recovery_session_contributions.session_id orphan                            | REJECTED | 23503 insert or update on table "recovery_session_contributions" violates foreign key constraint "recovery_session_contributions_session_id_recovery_s
+ 202 | recovery_sessions.cancelled_by orphan                                       | ACCEPTED | {"hub_id": "hub-A", "cancelled_by": "no-such-id"}
+ 203 | recovery_sessions.hub_id orphan                                             | ACCEPTED | {"hub_id": "no-such-id"}
+ 204 | recovery_sessions.hub_id empty-string hub                                   | ACCEPTED | {"hub_id": ""}
+ 205 | recovery_sessions.user_pubkey orphan                                        | ACCEPTED | {"hub_id": "hub-A", "user_pubkey": "no-such-id"}
+ 206 | relationship_type_definitions.hub_id orphan                                 | ACCEPTED | {"hub_id": "no-such-id"}
+ 207 | relationship_type_definitions.hub_id empty-string hub                       | ACCEPTED | {"hub_id": ""}
+ 208 | relationship_type_definitions.source_entity_type_id orphan                  | ACCEPTED | {"hub_id": "hub-A", "source_entity_type_id": "no-such-id"}
+ 209 | relationship_type_definitions.source_entity_type_id cross-hub               | ACCEPTED | {"hub_id": "hub-A", "source_entity_type_id": "etd-B"}
+ 210 | relationship_type_definitions.target_entity_type_id orphan                  | ACCEPTED | {"hub_id": "hub-A", "target_entity_type_id": "no-such-id"}
+ 211 | relationship_type_definitions.target_entity_type_id cross-hub               | ACCEPTED | {"hub_id": "hub-A", "target_entity_type_id": "etd-B"}
+ 212 | relationship_type_definitions.template_id orphan                            | ACCEPTED | {"hub_id": "hub-A", "template_id": "no-such-id"}
+ 213 | report_cases.case_id orphan                                                 | ACCEPTED | {"case_id": "no-such-id", "report_id": "cv-A"}
+ 214 | report_cases.case_id cross-hub                                              | ACCEPTED | {"case_id": "rec-B", "report_id": "cv-A"}
+ 215 | report_cases.linked_by orphan                                               | ACCEPTED | {"linked_by": "no-such-id"}
+ 216 | report_cases.report_id orphan                                               | ACCEPTED | {"case_id": "rec-A", "report_id": "no-such-id"}
+ 217 | report_cases.report_id cross-hub                                            | ACCEPTED | {"case_id": "rec-A", "report_id": "cv-B"}
+ 218 | report_events.event_id orphan                                               | ACCEPTED | {"event_id": "no-such-id", "report_id": "cv-A"}
+ 219 | report_events.event_id cross-hub                                            | ACCEPTED | {"event_id": "ev-B", "report_id": "cv-A"}
+ 220 | report_events.linked_by orphan                                              | ACCEPTED | {"linked_by": "no-such-id"}
+ 221 | report_events.report_id orphan                                              | ACCEPTED | {"event_id": "ev-A", "report_id": "no-such-id"}
+ 222 | report_events.report_id cross-hub                                           | ACCEPTED | {"event_id": "ev-A", "report_id": "cv-B"}
+ 223 | report_type_definitions.hub_id orphan                                       | ACCEPTED | {"hub_id": "no-such-id"}
+ 224 | report_type_definitions.hub_id empty-string hub                             | ACCEPTED | {"hub_id": ""}
+ 225 | report_type_definitions.template_id orphan                                  | ACCEPTED | {"hub_id": "hub-A", "template_id": "no-such-id"}
+ 226 | retention_platform_floors.updated_by orphan                                 | ACCEPTED | {"updated_by": "no-such-id"}
+ 227 | retention_settings.hub_id orphan                                            | ACCEPTED | {"hub_id": "no-such-id"}
+ 228 | retention_settings.hub_id empty-string hub                                  | ACCEPTED | {"hub_id": ""}
+ 229 | retention_settings.updated_by orphan                                        | ACCEPTED | {"hub_id": "hub-A", "updated_by": "no-such-id"}
+ 230 | ring_group_members.added_by orphan                                          | ACCEPTED | {"added_by": "no-such-id"}
+ 231 | ring_group_members.ring_group_id orphan                                     | REJECTED | 23503 insert or update on table "ring_group_members" violates foreign key constraint "ring_group_members_ring_group_id_ring_groups_id_fk"
+ 232 | ring_group_members.user_pubkey orphan                                       | ACCEPTED | {"user_pubkey": "no-such-id"}
+ 233 | ring_groups.hub_id orphan                                                   | ACCEPTED | {"hub_id": "no-such-id"}
+ 234 | ring_groups.hub_id empty-string hub                                         | ACCEPTED | {"hub_id": ""}
+ 235 | security_events.device_id orphan                                            | ACCEPTED | {"device_id": "no-such-id"}
+ 236 | security_events.user_pubkey orphan                                          | REJECTED | 23503 insert or update on table "security_events" violates foreign key constraint "security_events_user_pubkey_users_pubkey_fk"
+ 237 | sessions.pubkey orphan                                                      | REJECTED | 23503 insert or update on table "sessions" violates foreign key constraint "sessions_pubkey_users_pubkey_fk"
+ 238 | shift_join_requests.hub_id orphan                                           | ACCEPTED | {"hub_id": "no-such-id"}
+ 239 | shift_join_requests.hub_id empty-string hub                                 | ACCEPTED | {"hub_id": ""}
+ 240 | shift_join_requests.reviewed_by orphan                                      | ACCEPTED | {"hub_id": "hub-A", "reviewed_by": "no-such-id"}
+ 241 | shift_join_requests.shift_id orphan                                         | REJECTED | 23503 insert or update on table "shift_join_requests" violates foreign key constraint "shift_join_requests_shift_id_shifts_id_fk"
+ 242 | shift_join_requests.shift_id cross-hub                                      | ACCEPTED | {"hub_id": "hub-A", "shift_id": "sh-B"}
+ 243 | shift_join_requests.user_pubkey orphan                                      | ACCEPTED | {"hub_id": "hub-A", "user_pubkey": "no-such-id"}
+ 244 | shift_overrides.created_by orphan                                           | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 245 | shift_overrides.hub_id orphan                                               | ACCEPTED | {"hub_id": "no-such-id"}
+ 246 | shift_overrides.hub_id empty-string hub                                     | ACCEPTED | {"hub_id": ""}
+ 247 | shift_overrides.shift_id orphan                                             | REJECTED | 23503 insert or update on table "shift_overrides" violates foreign key constraint "shift_overrides_shift_id_shifts_id_fk"
+ 248 | shift_overrides.shift_id cross-hub                                          | ACCEPTED | {"hub_id": "hub-A", "shift_id": "sh-B"}
+ 249 | shifts.created_by orphan                                                    | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 250 | shifts.hub_id orphan                                                        | ACCEPTED | {"hub_id": "no-such-id"}
+ 251 | shifts.hub_id empty-string hub                                              | ACCEPTED | {"hub_id": ""}
+ 252 | shifts.ring_group_id orphan                                                 | REJECTED | 23503 insert or update on table "shifts" violates foreign key constraint "shifts_ring_group_id_ring_groups_id_fk"
+ 253 | shifts.ring_group_id cross-hub                                              | ACCEPTED | {"hub_id": "hub-A", "ring_group_id": "rg-B"}
+ 254 | sigchain_links.signer_device_id orphan                                      | ACCEPTED | {"signer_device_id": "no-such-id"}
+ 255 | sigchain_links.signer_pubkey orphan                                         | ACCEPTED | {"signer_pubkey": "no-such-id"}
+ 256 | sigchain_links.user_pubkey orphan                                           | REJECTED | 23503 insert or update on table "sigchain_links" violates foreign key constraint "sigchain_links_user_pubkey_users_pubkey_fk"
+ 257 | signal_identities.hub_id orphan                                             | REJECTED | 23503 insert or update on table "signal_identities" violates foreign key constraint "signal_identities_hub_id_hubs_id_fk"
+ 258 | signal_identities.hub_id empty-string hub                                   | REJECTED | 23503 insert or update on table "signal_identities" violates foreign key constraint "signal_identities_hub_id_hubs_id_fk"
+ 259 | signal_identities.verified_by orphan                                        | ACCEPTED | {"hub_id": "hub-A", "verified_by": "no-such-id"}
+ 260 | signal_message_queue.conversation_id orphan                                 | ACCEPTED | {"hub_id": "hub-A", "conversation_id": "no-such-id"}
+ 261 | signal_message_queue.conversation_id cross-hub                              | ACCEPTED | {"hub_id": "hub-A", "conversation_id": "cv-B"}
+ 262 | signal_message_queue.hub_id orphan                                          | REJECTED | 23503 insert or update on table "signal_message_queue" violates foreign key constraint "signal_message_queue_hub_id_hubs_id_fk"
+ 263 | signal_message_queue.hub_id empty-string hub                                | REJECTED | 23503 insert or update on table "signal_message_queue" violates foreign key constraint "signal_message_queue_hub_id_hubs_id_fk"
+ 264 | signal_registrations.hub_id orphan                                          | REJECTED | 23503 insert or update on table "signal_registrations" violates foreign key constraint "signal_registrations_hub_id_hubs_id_fk"
+ 265 | signal_registrations.hub_id empty-string hub                                | REJECTED | 23503 insert or update on table "signal_registrations" violates foreign key constraint "signal_registrations_hub_id_hubs_id_fk"
+ 266 | subscribers.hub_id orphan                                                   | ACCEPTED | {"hub_id": "no-such-id"}
+ 267 | subscribers.hub_id empty-string hub                                         | ACCEPTED | {"hub_id": ""}
+ 268 | tags.created_by orphan                                                      | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 269 | tags.hub_id orphan                                                          | REJECTED | 23503 insert or update on table "tags" violates foreign key constraint "tags_hub_id_hubs_id_fk"
+ 270 | tags.hub_id empty-string hub                                                | REJECTED | 23503 insert or update on table "tags" violates foreign key constraint "tags_hub_id_hubs_id_fk"
+ 271 | team_members.added_by orphan                                                | ACCEPTED | {"added_by": "no-such-id"}
+ 272 | team_members.team_id orphan                                                 | REJECTED | 23503 insert or update on table "team_members" violates foreign key constraint "team_members_team_id_teams_id_fk"
+ 273 | team_members.user_pubkey orphan                                             | REJECTED | 23503 insert or update on table "team_members" violates foreign key constraint "team_members_user_pubkey_users_pubkey_fk"
+ 274 | teams.created_by orphan                                                     | ACCEPTED | {"hub_id": "hub-A", "created_by": "no-such-id"}
+ 275 | teams.hub_id orphan                                                         | REJECTED | 23503 insert or update on table "teams" violates foreign key constraint "teams_hub_id_hubs_id_fk"
+ 276 | teams.hub_id empty-string hub                                               | REJECTED | 23503 insert or update on table "teams" violates foreign key constraint "teams_hub_id_hubs_id_fk"
+ 277 | user_availability_blocks.hub_id orphan                                      | ACCEPTED | {"hub_id": "no-such-id"}
+ 278 | user_availability_blocks.hub_id empty-string hub                            | ACCEPTED | {"hub_id": ""}
+ 279 | user_availability_blocks.user_pubkey orphan                                 | ACCEPTED | {"hub_id": "hub-A", "user_pubkey": "no-such-id"}
+ 280 | user_recovery_envelopes.hub_id orphan                                       | REJECTED | 23503 insert or update on table "user_recovery_envelopes" violates foreign key constraint "user_recovery_envelopes_hub_id_hubs_id_fk"
+ 281 | user_recovery_envelopes.hub_id empty-string hub                             | REJECTED | 23503 insert or update on table "user_recovery_envelopes" violates foreign key constraint "user_recovery_envelopes_hub_id_hubs_id_fk"
+ 282 | user_recovery_envelopes.user_pubkey orphan                                  | ACCEPTED | {"hub_id": "hub-A", "user_pubkey": "no-such-id"}
+ 283 | user_role_envelopes.user_pubkey orphan                                      | REJECTED | 23503 insert or update on table "user_role_envelopes" violates foreign key constraint "user_role_envelopes_user_pubkey_users_pubkey_fk"
+ 284 | user_security_prefs.user_pubkey orphan                                      | REJECTED | 23503 insert or update on table "user_security_prefs" violates foreign key constraint "user_security_prefs_user_pubkey_users_pubkey_fk"
+ 285 | user_signal_contacts.user_pubkey orphan                                     | REJECTED | 23503 insert or update on table "user_signal_contacts" violates foreign key constraint "user_signal_contacts_user_pubkey_users_pubkey_fk"
+ 286 | users.supervisor_pubkey orphan                                              | ACCEPTED | {"supervisor_pubkey": "no-such-id"}
+ 287 | users.team_id orphan                                                        | ACCEPTED | {"team_id": "no-such-id"}
+ 288 | webauthn_challenges.pubkey orphan                                           | ACCEPTED | {"pubkey": "no-such-id"}
+ 289 | webauthn_credentials.pubkey orphan                                          | REJECTED | 23503 insert or update on table "webauthn_credentials" violates foreign key constraint "webauthn_credentials_pubkey_users_pubkey_fk"
+ 290 | case_interactions.source_id note: orphan                                    | ACCEPTED | {"case_id": "rec-A", "source_id": "no-such-id", "interaction_type": "note"}
+ 291 | case_interactions.source_id note: hub-B note on hub-A record                | ACCEPTED | {"case_id": "rec-A", "source_id": "note-B", "interaction_type": "note"}
+ 292 | case_interactions.source_id call: hub-B call on hub-A record                | ACCEPTED | {"case_id": "rec-A", "source_id": "call-B", "interaction_type": "call"}
+ 293 | case_interactions.source_id report_conversion: hub-B report on hub-A record | ACCEPTED | {"case_id": "rec-A", "source_id": "cv-B", "interaction_type": "report_conversion"}
+ 294 | case_interactions.source_id note type naming a call id (type confusion)     | ACCEPTED | {"case_id": "rec-A", "source_id": "call-A", "interaction_type": "note"}
+ 295 | case_interactions.interaction_type outside the protocol enum                | ACCEPTED | {"case_id": "rec-A", "interaction_type": "no-such-type"}
+ 296 | files conversation-owned, hub-B conversation, hub-A                         | REJECTED | 23503 insert or update on table "files" violates foreign key constraint "files_conversation_hub_fk"
+ 297 | files case-owned, hub-B record, hub-A                                       | REJECTED | 23503 insert or update on table "files" violates foreign key constraint "files_case_record_hub_fk"
+ 298 | files case-owned, orphan record, hub NULL                                   | ACCEPTED | {"hub_id": null, "owner_kind": "case_record", "case_record_id": "no-such-id"}
+ 299 | files case-owned, hub-B record, hub NULL                                    | ACCEPTED | {"hub_id": null, "owner_kind": "case_record", "case_record_id": "rec-B"}
+ 300 | files no owner, no parent, no hub                                           | ACCEPTED | {"hub_id": null, "owner_kind": null, "case_record_id": null, "conversation_id": null}
+ 301 | files owner_kind NULL, orphan case_record_id, hub NULL                      | ACCEPTED | {"hub_id": null, "owner_kind": null, "case_record_id": "no-such-id"}
+ 302 | files entity_field owned, hub-A (names no parent at all)                    | ACCEPTED | {"hub_id": "hub-A", "owner_kind": "entity_field"}
+(302 rows)
+
+==== summary
+ verdict  | count
+----------+-------
+ ACCEPTED |   232
+ REJECTED |    70
+(2 rows)
+
+ROLLBACK

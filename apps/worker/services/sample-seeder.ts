@@ -31,7 +31,7 @@ import {
   SAMPLE_HUB,
   SAMPLE_SHIFTS,
 } from '../lib/sample-dataset'
-import { sampleReader, sealForReaders, type SampleReader } from '../lib/sample-crypto'
+import { sampleReader, sealCaseForReaders, sealForReaders, type SampleReader } from '../lib/sample-crypto'
 import { sampleIdentities, type SampleIdentity } from '../lib/sample-identities'
 import type { DevSurfacesEnv } from '../lib/dev-surfaces'
 import { encryptContactIdentifier } from '../lib/crypto'
@@ -233,10 +233,10 @@ export async function seedSampleDataset(
 
   for (const sampleCase of SAMPLE_CASES) {
     const assignee = reader(sampleCase.assignedTo)
-    const sealed = sealForReaders(
+    const sealed = sealCaseForReaders(
+      'summary',
       JSON.stringify({ title: sampleCase.title, description: sampleCase.description, status: statusLabel(sampleCase.status) }),
       [cast.admin, cast.maria, cast.james],
-      LABEL_MESSAGE,
     )
     const { number: caseNumber } = await services.settings.generateCaseNumber({
       prefix: SAMPLE_ENTITY_TYPE.numberPrefix,
@@ -265,7 +265,7 @@ export async function seedSampleDataset(
       const author = reader(step.author)
       const createdAt = ago(step.hoursAgo)
       if (step.kind === 'comment') {
-        const comment = sealForReaders(JSON.stringify({ text: step.text }), [cast.admin, cast.maria, cast.james], LABEL_MESSAGE)
+        const comment = sealCaseForReaders('comment', JSON.stringify({ text: step.text }), [cast.admin, cast.maria, cast.james])
         await services.cases.createInteraction(record.id, author.pubkey, {
           interactionType: 'comment',
           encryptedContent: comment.encryptedContent,

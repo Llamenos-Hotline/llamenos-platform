@@ -169,120 +169,77 @@ final class CryptoServiceTests: XCTestCase {
         XCTAssertEqual(decrypted, payload)
     }
 
-    // MARK: - Record Data Encryption (case summaries/fields — #1025)
+    // MARK: - Case records + case comments (sealed per purpose — #1025, #2499)
+    //
+    // `sealCase` / `openCase` take a purpose and no label: the crate decides
+    // the label and AAD. The old tests here passed `LABEL_MESSAGE` /
+    // `LABEL_NOTE_KEY` to the opener to prove it refused them; that input no
+    // longer exists, so the equivalent property is that no purpose opens
+    // another purpose's ciphertext. The cross-platform half — that these bytes
+    // are the server-persisted format — is `CaseRecordVectorTests`.
 
-    func testRecordDataEncryptDecryptRoundTrip() throws {
+    func testCaseCiphertextRoundTripsForEveryPurpose() throws {
         let author = CryptoService()
         _ = try author.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
         let payload = "{\"title\":\"Case A\",\"description\":\"details\"}"
 
-        let result = try author.encryptRecordData(
-            jsonPayload: payload,
-            readerPubkeys: [],
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
-
-        // The caller's own device gets an envelope even when readerPubkeys is empty
-        let envelope = try XCTUnwrap(result.envelopes.first(where: { $0.pubkey == author.encryptionPubkeyHex }))
-        let decrypted = try author.decryptRecordData(
-            ciphertextHex: result.ciphertextHex,
-            enc: envelope.enc,
-            ct: envelope.ct,
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
-        XCTAssertEqual(decrypted, payload)
+        for purpose in [CasePurpose.summary, .fields, .comment] {
+            // The caller's own device gets an envelope even when readerPubkeys is empty
+            let result = try author.sealCase(purpose: purpose, plaintext: payload, readerPubkeys: [])
+            XCTAssertEqual(result.envelopes.map(\.pubkey), [try XCTUnwrap(author.encryptionPubkeyHex)])
+            let decrypted = try author.openCase(purpose: purpose, encryptedContent: result.encryptedContent, envelopes: result.envelopes)
+            XCTAssertEqual(decrypted, payload)
+        }
     }
 
-    func testRecordDataWireEnvelopesAreHex() throws {
+    func testCaseWireEnvelopesAreHex() throws {
         let author = CryptoService()
         _ = try author.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
 
-        let result = try author.encryptRecordData(
-            jsonPayload: "{\"title\":\"t\"}",
-            readerPubkeys: [],
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
+        let result = try author.sealCase(purpose: .summary, plaintext: "{\"title\":\"t\"}", readerPubkeys: [])
 
         for env in result.envelopes {
             XCTAssertEqual(env.enc.count, 64, "wire enc must be 32-byte hex, not base64url")
+            XCTAssertEqual(env.ct.count, 96, "wire ct must be 48-byte hex")
             XCTAssertTrue(env.enc.allSatisfy(\.isHexDigit), "wire enc must be valid hex")
             XCTAssertTrue(env.ct.allSatisfy(\.isHexDigit), "wire ct must be valid hex")
         }
     }
 
-    func testRecordDataRejectsMismatchedLabel() throws {
+    func testCasePurposesDoNotCrossOpen() throws {
         let author = CryptoService()
         _ = try author.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
 
-        let result = try author.encryptRecordData(
-            jsonPayload: "{\"title\":\"t\"}",
-            readerPubkeys: [],
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
-        let envelope = result.envelopes.first!
-
-        // The #1025 defect: sealed under one label, opened expecting another.
-        // The Albrecht label check must reject before any key is tried.
-        XCTAssertThrowsError(try author.decryptRecordData(
-            ciphertextHex: result.ciphertextHex,
-            enc: envelope.enc,
-            ct: envelope.ct,
-            label: CryptoLabels.LABEL_MESSAGE
-        ))
-        XCTAssertThrowsError(try author.decryptRecordData(
-            ciphertextHex: result.ciphertextHex,
-            enc: envelope.enc,
-            ct: envelope.ct,
-            label: CryptoLabels.LABEL_NOTE_KEY
-        ))
+        let purposes: [CasePurpose] = [.summary, .fields, .comment]
+        for sealedAs in purposes {
+            let sealed = try author.sealCase(purpose: sealedAs, plaintext: "{\"title\":\"t\"}", readerPubkeys: [])
+            for openedAs in purposes where openedAs != sealedAs {
+                XCTAssertThrowsError(
+                    try author.openCase(purpose: openedAs, encryptedContent: sealed.encryptedContent, envelopes: sealed.envelopes),
+                    "\(sealedAs) opened as \(openedAs)"
+                )
+            }
+        }
     }
 
-    func testRecordDataSummaryAndFieldsLabelsDoNotCrossOpen() throws {
-        let author = CryptoService()
-        _ = try author.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
-
-        let summary = try author.encryptRecordData(
-            jsonPayload: "{\"title\":\"t\"}",
-            readerPubkeys: [],
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
-        let envelope = summary.envelopes.first!
-
-        XCTAssertThrowsError(try author.decryptRecordData(
-            ciphertextHex: summary.ciphertextHex,
-            enc: envelope.enc,
-            ct: envelope.ct,
-            label: CryptoLabels.LABEL_CASE_FIELDS
-        ))
-    }
-
-    func testRecordDataSealedForAnotherReaderIsNotOpenableByUs() throws {
+    func testCaseCiphertextSealedForAnotherReaderIsNotOpenableByUs() throws {
         // Seal to a different device first — the Rust crypto state is global,
         // so `other` must seal before `author` replaces the loaded device key.
         let other = CryptoService()
         _ = try other.generateDeviceKeys(deviceId: UUID().uuidString, pin: "11111111")
-        let result = try other.encryptRecordData(
-            jsonPayload: "{\"title\":\"t\"}",
-            readerPubkeys: [],
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        )
-        let envelope = try XCTUnwrap(result.envelopes.first)
+        let result = try other.sealCase(purpose: .summary, plaintext: "{\"title\":\"t\"}", readerPubkeys: [])
 
         let author = CryptoService()
         _ = try author.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
 
-        XCTAssertThrowsError(try author.decryptRecordData(
-            ciphertextHex: result.ciphertextHex,
-            enc: envelope.enc,
-            ct: envelope.ct,
-            label: CryptoLabels.LABEL_CASE_SUMMARY
-        ))
+        XCTAssertThrowsError(try author.openCase(purpose: .summary, encryptedContent: result.encryptedContent, envelopes: result.envelopes))
     }
 
-    func testRecordDataRequiresUnlocked() {
+    func testCaseOperationsRequireUnlocked() {
         let service = CryptoService()
-        XCTAssertThrowsError(try service.encryptRecordData(jsonPayload: "x", readerPubkeys: [], label: CryptoLabels.LABEL_CASE_SUMMARY))
-        XCTAssertThrowsError(try service.decryptRecordData(ciphertextHex: "aa", enc: "bb", ct: "cc", label: CryptoLabels.LABEL_CASE_SUMMARY))
+        service.lock()
+        XCTAssertThrowsError(try service.sealCase(purpose: .summary, plaintext: "x", readerPubkeys: []))
+        XCTAssertThrowsError(try service.openCase(purpose: .summary, encryptedContent: "aa", envelopes: []))
     }
 
     // MARK: - Hub Key Cache

@@ -510,24 +510,14 @@ describe('IdentityService.redeemInvite', () => {
     })
   })
 
-  it('falls back to the sole active hub for an invite that carries none', async () => {
+  it('refuses a hub-less invite even on a single-hub server — no hub is guessed (#2194)', async () => {
+    // Every invite is minted naming its hub; a row without one predates that.
+    // The old code admitted its redeemer to "the sole active hub", a hub the
+    // inviter never chose.
     const { db, service } = setup()
     const tx = makeRedeemTx({
       invite: makeInviteRow({ hubId: null }),
       activeHubs: [{ id: 'hub-only' }],
-      insertedUser: makeUserRow({ pubkey: 'pk-new' }),
-    })
-    ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
-
-    await service.redeemInvite({ code: 'invite-code-abc', pubkey: 'pk-new' })
-    expect(tx.$inserted[0]).toMatchObject({ hubRoles: [{ hubId: 'hub-only', roleIds: ['role-volunteer'] }] })
-  })
-
-  it('refuses a hub-less invite when the hub is ambiguous rather than granting a global role', async () => {
-    const { db, service } = setup()
-    const tx = makeRedeemTx({
-      invite: makeInviteRow({ hubId: null }),
-      activeHubs: [{ id: 'hub-a' }, { id: 'hub-b' }],
       insertedUser: makeUserRow({ pubkey: 'pk-new' }),
     })
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))

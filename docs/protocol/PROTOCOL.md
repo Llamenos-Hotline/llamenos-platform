@@ -221,6 +221,7 @@ Every HPKE/ECIES derivation, HKDF context, HMAC key, and signature binding uses 
 | `LABEL_CONTACT_PROFILE` | `llamenos:contact-profile` | Contact profile data encryption |
 | `LABEL_CASE_SUMMARY` | `llamenos:case-summary` | Case summary encryption |
 | `LABEL_CASE_FIELDS` | `llamenos:case-fields` | Case custom field encryption |
+| `LABEL_CASE_COMMENT` | `llamenos:case-comment` | Case comment (timeline interaction) encryption — §2.18 |
 
 #### HMAC Domain Separation
 
@@ -1429,6 +1430,86 @@ interface RecipientEnvelope {
 }
 ```
 
+### 2.18 Case Record and Case Comment Encryption
+
+A case record carries two client-sealed ciphertexts — its **summary**
+(`encryptedSummary` / `summaryEnvelopes`) and its custom-field values, the
+**fields** (`encryptedFields` / `fieldEnvelopes`) — and every **comment** on its
+timeline carries a third (`encryptedContent` / `contentEnvelopes` on an
+interaction of type `comment`). All three use one construction, differing only in
+the label:
+
+| Purpose | Label | Registry `labelId` |
+|---------|-------|--------------------|
+| summary | `LABEL_CASE_SUMMARY` (`llamenos:case-summary`) | 30 |
+| fields | `LABEL_CASE_FIELDS` (`llamenos:case-fields`) | 31 |
+| comment | `LABEL_CASE_COMMENT` (`llamenos:case-comment`) | 109 |
+
+```
+content_key      = random 32 bytes, fresh per ciphertext
+encryptedContent = hex(iv(12) || AES-256-GCM(content_key, plaintext, aad = UTF-8(label)) || tag(16))
+envelope         = { pubkey, enc, ct }                       all hex
+  pubkey = the reader's X25519 public key — the key the wrap is sealed to
+  enc    = the 32-byte HPKE encapsulated key
+  ct     = HPKE(info = label, aad = UTF-8(label + ":key-wrap")).Seal(content_key)   48 bytes
+```
+
+This is the **canonical** AAD convention (§2.3), on both layers. It is not the
+stored-record convention of §2.4: a stored message carries no AAD only because a
+conversation mixes client- and server-sealed messages with no format marker. A
+case ciphertext has one writer kind, so it takes the stronger binding. A case
+ciphertext MUST NOT be sealed under `LABEL_MESSAGE` or with an empty AAD on either
+layer, and a reader MUST NOT fall back to either. Each purpose has its own label so
+that a server cannot move a comment into a record's summary column (or swap
+summary and fields) and have it open: a ciphertext opens as no purpose but its own.
+
+**Readers.** The sealing device is always a reader. The other readers are X25519
+keys chosen by the caller (today: the hub's admin decryption key; assignee and
+edit-role readers are tracked separately in #1682/#1683). Readers are
+de-duplicated; an empty reader set is refused. A device's Ed25519 account key is
+never an envelope address and is never sealed to.
+
+#### Where the decision lives
+
+The label, both AADs, the envelope shape and the reader set's wire form are
+decided **once**, in `packages/crypto/src/case_record.rs`. Every platform reaches
+it through an operation that takes a *purpose* — `summary`, `fields` or
+`comment` — and **no label and no AAD**:
+
+| Platform | Seal | Open |
+|----------|------|------|
+| Desktop (Tauri IPC) | `seal_case_from_state` | `open_case_from_state` |
+| iOS / Android (UniFFI) | `mobile_seal_case` | `mobile_open_case` |
+| Server (`bun:ffi`) | `ffi_case_seal` (`caseSeal`) | `ffi_case_open` (`caseOpen`) — conformance only; the server holds no reader key |
+
+Three platforms once disagreed here — iOS sealed `LABEL_CASE_SUMMARY` with the
+canonical AAD, desktop and Android `LABEL_MESSAGE` with none, and Android sealed
+comments as notes and opened them as messages (#2499). That was possible only
+because each call site chose the label and AAD itself. A platform implementation
+MUST NOT compose a case ciphertext from the generic HPKE / AES primitives.
+
+#### Conformance vector
+
+`packages/crypto/tests/fixtures/case-record-vectors.json` holds one summary, one
+fields payload and one comment **as the server persisted them**:
+`packages/crypto/scripts/gen-case-record-vectors.ts` seals each through
+`case_record.rs`, sends it through the routes' request validators and
+`CasesService` into a PostgreSQL database, and records what reads back. They are
+sealed to the two fixed X25519 test keys of §2.4's vector. A conforming platform
+MUST open each record through its production reader to the recorded `plaintext`;
+MUST NOT open any of them as a stored message (`LABEL_MESSAGE`, empty AAD) or as
+another purpose; and its writer's output MUST open under the record's declared
+label and AAD. Pinned by `packages/crypto/tests/case_record_vectors.rs`,
+`apps/desktop/src/crypto.rs` (`case_record_conformance_tests`),
+`tests/crypto-interop.spec.ts` (the desktop test build), `CaseRecordVectorTests`
+(iOS), `CaseRecordVectorTest` (Android) and
+`apps/worker/__tests__/integration-bun/case-record-vectors.test.ts` (server).
+
+Case records and comments written before #2499 by desktop or Android
+(`LABEL_MESSAGE`, no AAD) and comments written by Android (sealed as notes) do not
+open under this construction. Pre-production: no migration or fallback reader is
+provided.
+
 ---
 
 ## 3. WebSocket Event Schema
@@ -1759,10 +1840,16 @@ Response: { "valid": true, "name": "...", "expiresAt": "..." }
 Rate limited: 5 attempts per IP
 
 POST /api/invites/redeem
-Body: { "code": "...", "pubkey": "hex64", "timestamp": ms, "token": "hex128" }
-Response: { "ok": true, "pubkey": "hex64", "roles": [...] }
+Body: { "code": "...", "pubkey": "hex64", "timestamp": ms, "token": "hex128", "nonce"?: "..." }
+Response: { "volunteer": User }
 Rate limited: 5 attempts per IP
+Audited: userAdded, with the redeemer as actor and the inviter in the details
+409: the invite names no hub (it predates #2194) — nothing is guessed for it
 ```
+
+`pubkey` is the redeeming device's own Ed25519 signing key, made on that device;
+the token proves possession. This is the only way a user is provisioned: no admin,
+server or client ever generates a key on someone else's behalf (#1231).
 
 #### Authenticated (Requires `invites:read`)
 
@@ -1772,9 +1859,13 @@ Permission: invites:read
 Response: { "invites": InviteCode[] }
 
 POST /api/invites
-Permission: invites:create
-Body: { "name": string, "phone": string (E.164), "roleIds": string[] }
-Response: { "code": "...", ... }
+Permission: invites:create (in the invite's hub)
+Body: { "name": string, "phone": string (E.164), "roleIds"?: string[], "hubId"?: string }
+Response: { "invite": InviteCode }
+An invite always names a hub and at least one role (#2194). An omitted hubId
+resolves to the sole active hub, else the caller's sole membership, else 400; a
+server with no hub yet answers 409. Omitted roleIds take the hub template's
+default member role; when it names none, 400.
 
 DELETE /api/invites/:code
 Permission: invites:revoke

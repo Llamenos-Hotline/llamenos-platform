@@ -1320,6 +1320,8 @@
     "hotlineName": "Magaca Khadka Taleefanka",
     "hotlineNameHelp": "Tan waxaa loo muujiyaa mutadawwiciinta abka. Amniga awgiis, PWA-du waxay isticmaashaa magac guud.",
     "hotlineNamePlaceholder": "Khadka Xiisadda Bulshada",
+    "hubUrlLabel": "URL-ka Xarunta",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Dooro magac iyo luqad khadka taleefankaaga xiisadda.",
     "identityTitle": "Magacaw Khadkaaga Taleefanka",
     "inactivityTimeout": "Wakhtiga Dhaqdhaqaaq La'aanta (daqiiqo)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Samee koodyo martiqaad ah kooxdaada. Kood kasta waa hal mar oo wuxuu dhammaadaa 7 maalmood.",
     "inviteNew": "Martiqaad Cusub",
     "inviteTitle": "Kumartibi Isticmaalayaal",
+    "launchHotline": "Bilow Khadka Taleefanka",
     "maxConcurrent": "Ugu Badnaan Isku Mar ee Mutadawwic Kasta",
     "messagingSettings": "Dejinta Fariimaha",
     "namePlaceholder": "Magaca mutadawwiciga",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "ikhtiyaari",
     "organization": "Ururka",
     "organizationPlaceholder": "Magaca Ururkaaga",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Geli PIN-kaaga si aad u sii waddo habeynta.",
     "primaryLanguage": "Luqadda Aasaasiga",
     "primaryLanguageHelp": "Luqadda asal ee bogga maamulka iyo codadka IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Habee adeegyada u shaqeeya kanaaladaada la doortay.",
     "providersTitle": "Habee Bixiyayaasha",
     "queueTimeout": "Wakhtiga Sugitaanka Safka (ilbiriqsiyo)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "Isku Xirka WhatsApp",
     "whatsappTwilio": "Twilio Adoo Isticmaalaya",
     "whatsappTwilioNote": "Fariimaha WhatsApp waxaa laga maamuli doonaa bixiyuhu taleefankaaga ee Twilio ee jira. Habeyn dheeraad ah looma baahna.",
-    "whatsappVerifyToken": "Furaha Xaqiijinta",
-    "hubUrlLabel": "URL-ka Xarunta",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Furaha Xaqiijinta"
   },
   "shifts": {
     "activeCalls": "{{count}} wicitaan(no) socda",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Firfircoon",
     "add": "Kudar Isticmaale",
-    "addVolunteer": "Kudar Isticmaale",
     "assignedShifts": "Wareegyada La Qoondeeyay",
     "changeRole": "Bedel doorka",
     "createInvite": "Samee Martiqaad",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Lambarka taleefanku waa khalad. Isticmaal qaabka E.164 (tusaale +12125551234)",
     "inviteCreated": "Martiqaaddii waa la sameeyay",
     "inviteExpires": "Waxay dhammaataa {{date}}",
-    "inviteGenerated": "Martiqaaddii waa la sameeyay! Furaha sirta ah si amaan ah u la wadaag.",
     "inviteLinkLabel": "Isku xirka martiqaadda",
     "inviteRevoked": "Martiqaaddii waa laga noqday",
     "inviteVolunteer": "Kumartibi Isticmaale",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Warbixiyaha",
     "roleReviewer": "Dib u Eegaha",
     "roleVolunteer": "Mutadawwic",
-    "secretKeyWarning": "Furahaan hal mar oo keliya ayaa la muujin doonaa. Si amaan ah ula wadaag mutadawwiciga.",
     "title": "Isticmaalayaal",
-    "unnamed": "Isticmaale Magac La'aan",
-    "userAdded": "Isticmaalaha si guul leh ayaa loo daray"
+    "unnamed": "Isticmaale Magac La'aan"
   },
   "webauthn": {
     "browserNotSupported": "Biraawsarkaagu kuma taageerayo furayaasha amniga.",

@@ -34,8 +34,6 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'get_device_pubkeys',
     // Panic wipe: zeroize CryptoState + delete the Stronghold vault file
     'wipe_keys',
-    // Ephemeral keypair for admin-created users (seed returned by design)
-    'generate_ephemeral_ed25519',
     // Auth token
     'create_auth_token_from_state',
     'create_nonceless_auth_token_from_state',
@@ -44,6 +42,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'hpke_seal_key',
     'hpke_open_from_state',
     'hpke_open_key_from_state',
+    'seal_case_from_state',
+    'open_case_from_state',
     // Ed25519 signing is purpose-bound (no generic signer); verification is public-key-only
     'sign_ws_challenge_from_state',
     'ed25519_verify',

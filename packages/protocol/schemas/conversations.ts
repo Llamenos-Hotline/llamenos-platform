@@ -3,6 +3,24 @@ import { pubkeySchema, paginationSchema, paginatedMeta, recipientEnvelopeSchema 
 
 // --- Response schemas ---
 
+/**
+ * What a conversation's `metadata` may hold. The server writes it (reports,
+ * call links) and a PATCH may merge into it, so both the write path and the
+ * response are bound to this one shape.
+ */
+export const conversationMetadataSchema = z.object({
+  linkedCallId: z.string().optional(),
+  reportId: z.string().optional(),
+  type: z.literal('report').optional(),
+  reportTitle: z.string().optional(),
+  reportCategory: z.string().optional(),
+  reportTypeId: z.string().optional(),
+  customFieldValues: z.string().optional(),
+  conversionStatus: z.enum(['pending', 'in_progress', 'completed']).optional(),
+})
+
+export type ConversationMetadata = z.infer<typeof conversationMetadataSchema>
+
 export const conversationResponseSchema = z.object({
   id: z.string(),
   channelType: z.string(),
@@ -13,16 +31,7 @@ export const conversationResponseSchema = z.object({
   updatedAt: z.string(),
   lastMessageAt: z.string().optional(),
   messageCount: z.number(),
-  metadata: z.object({
-    linkedCallId: z.string().optional(),
-    reportId: z.string().optional(),
-    type: z.literal('report').optional(),
-    reportTitle: z.string().optional(),
-    reportCategory: z.string().optional(),
-    reportTypeId: z.string().optional(),
-    customFieldValues: z.string().optional(),
-    conversionStatus: z.enum(['pending', 'in_progress', 'completed']).optional(),
-  }).optional(),
+  metadata: conversationMetadataSchema.optional(),
 })
 
 export type Conversation = z.infer<typeof conversationResponseSchema>
@@ -49,6 +58,14 @@ export type ConversationMessage = z.infer<typeof messageResponseSchema>
 
 // --- List/wrapper response schemas ---
 
+/**
+ * `GET /hubs/:hubId/conversations` — one page of the conversations the caller
+ * may see, for every caller. Permissions decide WHICH rows are visible
+ * (`conversations:read-all`: the whole hub; otherwise the caller's own plus the
+ * waiting queue on channels they may claim), never the shape: `total` counts
+ * that same visible set under the same filters, and `page`/`limit` are the
+ * query's own, so `total > page * limit` means there is another page.
+ */
 export const conversationListResponseSchema = z.object({
   conversations: z.array(conversationResponseSchema),
   ...paginatedMeta,
@@ -56,10 +73,13 @@ export const conversationListResponseSchema = z.object({
 
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
 
+/** `GET /hubs/:hubId/conversations/:id/messages` — one page, newest first. */
 export const messageListResponseSchema = z.object({
   messages: z.array(messageResponseSchema),
   ...paginatedMeta,
 })
+
+export type MessageListResponse = z.infer<typeof messageListResponseSchema>
 
 export const conversationStatsResponseSchema = z.object({
   waiting: z.number(),
@@ -154,11 +174,15 @@ export type AddAssigneeEnvelopesResponse = z.infer<typeof addAssigneeEnvelopesRe
 
 // --- Input schemas ---
 
+/**
+ * Filters for `GET /hubs/:hubId/conversations`. Omit `status` for every
+ * status. Reports are conversation rows too, but this endpoint never lists
+ * them — they are read through `/reports`, under the reports permissions.
+ */
 export const listConversationsQuerySchema = paginationSchema.extend({
   status: z.enum(['waiting', 'active', 'closed']).optional(),
   assignedTo: pubkeySchema.optional(),
   channel: z.enum(['sms', 'whatsapp', 'signal', 'rcs', 'web']).optional(),
-  type: z.enum(['report', 'conversation']).optional(),
   contactHash: z.string().optional(),
 })
 
@@ -178,7 +202,8 @@ export const sendMessageBodySchema = z.object({
 export const updateConversationBodySchema = z.object({
   status: z.enum(['waiting', 'active', 'closed']).optional(),
   assignedTo: pubkeySchema.optional().nullable(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Merged into the stored metadata, so it is held to the shape the response declares. */
+  metadata: conversationMetadataSchema.optional(),
 })
 
 export const claimConversationBodySchema = z.object({
@@ -190,5 +215,5 @@ export const createConversationBodySchema = z.object({
   contactIdentifierHash: z.string().optional().default(''),
   assignedTo: pubkeySchema.optional(),
   status: z.enum(['waiting', 'active', 'closed']).optional().default('waiting'),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: conversationMetadataSchema.optional(),
 })

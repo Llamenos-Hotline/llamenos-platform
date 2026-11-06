@@ -1,0 +1,28 @@
+# SHA-256 of each pinned prebuilt liblinphone desktop SDK artifact (#1770, plan Task 1).
+#
+# Version: 5.5.39
+# Precedent: apps/ios/linphone-sdk-checksums.txt (mobile pin, 5.5.23-novideo — a record).
+# Operator acceptance of prebuilt, digest-pinned artifacts: #1770, Task 0 comment.
+#
+# This file is a GATE, not a record: scripts/fetch-linphone-sdk.sh refuses any
+# artifact whose sha256 differs from the line below, and the desktop-voice CI job
+# re-verifies on every run. The pin is the digest; the URL only says where to look.
+# Bump the pin only in a dedicated commit that re-hashes every target listed here.
+#
+# Targets are named for what the artifact actually contains, verified at pin time:
+#   macos-arm64     linphone-sdk-macos-5.5.39.zip is Mach-O arm64 ONLY (not universal) —
+#                   Intel Macs have no upstream SDK in this release line.
+#   windows-x86_64  linphone-sdk-win64-5.5.39.zip, PE32+ x86-64.
+#
+# linux-x86_64 is DELIBERATELY ABSENT. Upstream publishes no Linux SDK
+# (download.linphone.org/releases/linux/ has only the app AppImage). The two
+# Linux binaries upstream does ship are not an SDK: the 5.5.39 Python wheel's
+# mediastreamer2 is built without ALSA or PulseAudio ("Alsa support not
+# available in this build") and needs an unbundled libmariadb.so.3; the app
+# AppImage bundles 5.5.36 libraries with no headers, and no 5.5.36 SDK exists to
+# take headers from. Which Linux source to pin is an operator decision on #1770;
+# the fetch script refuses linux-x86_64 until a line for it exists here.
+#
+# Format: <target>  <url>  <sha256>
+macos-arm64  https://download.linphone.org/releases/macosx/sdk/linphone-sdk-macos-5.5.39.zip  2d2c44376824ff715f348c73127c3bd00caf07019d4b2fdbd387bd34aa2657ad
+windows-x86_64  https://download.linphone.org/releases/windows/sdk/linphone-sdk-win64-5.5.39.zip  77dcb9007a9b304b568d9cf57ab69c9dab7c45f577d08366a747afcbef214e29

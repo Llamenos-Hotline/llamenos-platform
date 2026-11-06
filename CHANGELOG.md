@@ -404,6 +404,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.6 (2026-11-06)
+
+### Features
+
+- re-queue a PR once per head after an infra-timeout ejection — never on a failure (#2458) (#2511)
+
+## 0.21.5 (2026-11-06)
+
+### Fixes
+
+- every file has a hub and a typed parent; uploads and files are hub-scoped (#2462) (#2484)
+
 ## 0.21.4 (2026-11-05)
 
 ### Features

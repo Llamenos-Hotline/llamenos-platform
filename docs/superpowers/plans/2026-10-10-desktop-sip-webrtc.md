@@ -115,13 +115,45 @@ Add one line to the top of this plan's PR description (or a follow-up comment on
 
 Everything downstream assumes the crate exists; the crate assumes the artifact exists. This task produces and pins the artifact and answers the spec's open questions 1 and 2 (§9): are desktop prebuilts available, current and checksummable for all three targets, and is bindgen over `linphone/core.h` a days-not-months job. **If the answer to the first is no for any target, stop and report on #1770 — that is the spike's honest result, not a failure to route around.**
 
+#### Spike result (2026-11-05) — the stop condition fired for Linux
+
+Measured against `download.linphone.org` on 2026-11-05; every digest below was computed locally from the downloaded file.
+
+| Target | Upstream artifact | Verdict |
+|---|---|---|
+| Windows x86_64 | `releases/windows/sdk/linphone-sdk-win64-5.5.39.zip` — PE32+ x86-64, `include/linphone/core.h`, `bin/liblinphone.dll`, `lib/liblinphone.lib` | **Pinned** (`77dcb900…4e29`) |
+| macOS | `releases/macosx/sdk/linphone-sdk-macos-5.5.39.zip` — frameworks layout (`Frameworks/linphone.framework/Headers/core.h`), **Mach-O arm64 only, not universal** | **Pinned as `macos-arm64`** (`2d2c4437…57ad`). Intel Macs have no upstream SDK — and `tauri-release.yml` builds macOS as `x86_64-apple-darwin` today, so the macOS release target and the only macOS SDK do not overlap. |
+| Linux x86_64 | **No SDK published.** `releases/linux/` holds only the app AppImage; `snapshots/linux/sdk/` is empty; the Ubuntu apt snapshots carry only flexisip. | **Not pinned — operator decision on #1770.** |
+
+The two Linux binaries upstream does ship were examined and neither is an SDK:
+
+- **Python wheel** `releases/linphone-python/5.5/linux-x86_64/linphone-5.5.39-cp312-cp312-linux_x86_64.whl` (`f4d45f48…f9e3`): same 5.5.39 as the other two targets, `liblinphone.so.10` with `RUNPATH $ORIGIN` and 4348 exported `linphone_*` symbols, but **mediastreamer2 is built with no sound-card backend** (`"Alsa support not available in this build of mediastreamer2"`; no `libasound`/`libpulse` in `NEEDED`), it needs a `libmariadb.so.3` it does not bundle (linking fails without it), and it carries no headers. Usable at most for the headless Tier 2 harness; it cannot put a volunteer's microphone on a call.
+- **App AppImage** `releases/linux/app/Linphone-6.2.4-x86_64.AppImage` (`585c6cc4…6cf6c`): bundles liblinphone **5.5.36** with ALSA + PulseAudio linked, no headers — and no 5.5.36 SDK is published to take headers from. Consuming an application's private library directory against another release's headers is an unversioned ABI coupling, not a pin.
+
+Open question 2 (bindgen effort) — answered on Linux with a throwaway crate, not committed: bindgen 0.72 over the 5.5.39 `include/` (`core.h`, `factory.h`, `logging.h`) generated 3804 `linphone_*` functions and compiled clean; linked against the AppImage's 5.5.36 libraries it reported its version, created a Core with no config path, and enumerated 3 PulseAudio + 2 ALSA devices. **Bindgen is days, not months.** Three facts from that run that Tasks 2–3 must absorb:
+
+1. belr grammars (`vcard_grammar.belr`, `sip_grammar.belr`, …) are loaded at Core creation from `<top-resources>/belr/grammars`; a missing directory is `bctbx-fatal` (process abort). The shell must bundle the SDK's `share/belr/grammars` as a Tauri resource and call `linphone_factory_set_top_resources_dir` before creating the Core.
+2. A Core with no config path still opens `~/.local/share/linphone/linphone.db` and `x3dh.c25519.sqlite3` (the iOS client measured the same, `LinphoneService.swift` `prepareStateDirectory`). The "never touches disk" constraint therefore also needs the factory data/config dirs pointed at an app-owned directory and LIME X3DH disabled, exactly as iOS does.
+3. `linphone_core_start` returned `-2` when that data directory did not exist — the state directory must be created before `start`.
+
+Linux options for the operator, with what each costs:
+
+- **(a) Build linphone-sdk 5.5.39 for Linux once, locally, from a pinned Dockerfile**, with ALSA + PulseAudio, and pin the resulting tarball by digest like the other two (hosted wherever the operator publishes local builds). Keeps the plan's "never build liblinphone in CI" rule and the 5.5.39 dialect on all three targets; costs one CMake build per pin bump and a hosting choice. *Recommended.*
+- **(b) Distro packages** (`liblinphone-dev`, 5.2.0 on Ubuntu 24.04): three minor versions behind mobile, a different version on every distro, and a runtime dependency on the volunteer's package manager.
+- **(c) The AppImage's private libraries** + another release's headers: see above; no stable contract.
+- **(d) Defer Linux in-app audio past M1**, shipping macOS/Windows only: contradicts spec §1.3 ("Linux as a first-class target") and moves the Tier 2 harness off the only OS the CI fleet runs headlessly.
+
+The macOS gap needs its own answer: either the macOS desktop release moves to `aarch64-apple-darwin` (and Intel Macs get no in-app audio), or Intel needs a source like (a).
+
+What landed for Task 1 (PR refs #1770): the gate script, the two verified pins, a `bun test` that breaks the gate (tampered digest, incomplete artifact, malformed/duplicate/commented pin, the refused Linux target), and the `desktop-voice` workflow fetching each real pin on its own OS. **Tasks 2–13 wait on the Linux decision**: Task 2's `build.rs` and the Tier 2 job are Linux-first.
+
 **Files:**
 - Create: `scripts/fetch-linphone-sdk.sh`
 - Create: `apps/desktop/linphone-sdk-checksums.txt`
 - Create: `.github/workflows/desktop-voice.yml` (artifacts job only; the e2e job arrives in Task 5)
 
 **Interfaces:**
-- Produces: `apps/desktop/vendor/linphone-sdk/<target>/` containing `include/linphone/core.h` and `lib/` (gitignored), where `<target>` ∈ `{linux-x86_64, macos-universal, windows-x86_64}`.
+- Produces: `apps/desktop/vendor/linphone-sdk/<target>/` (gitignored) holding the upstream SDK root for that target plus `.sdk-sha256` (the digest it was verified against). Layouts differ per target and the fetch script checks each: `windows-x86_64` → `include/linphone/core.h`, `bin/`, `lib/`; `macos-arm64` → `Frameworks/linphone.framework/Headers/core.h`. *(Spike: `macos-universal` does not exist upstream — the macOS SDK is arm64-only; `linux-x86_64` has no upstream SDK. See "Spike result" above.)*
 - Produces: `LLAMENOS_LINPHONE_SDK_VERSION` — a single version string the fetch script, the checksums file header, and the SBOM entry all quote.
 - Consumed by: Task 2's `build.rs`, which hard-fails when the vendored tree for the host target is absent.
 

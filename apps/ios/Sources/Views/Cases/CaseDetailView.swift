@@ -954,9 +954,10 @@ private struct TimelineItemRow: View {
         guard envelopes.contains(where: { $0.pubkey == ourPubkey }) else { return }
 
         do {
-            let plaintext = try cryptoService.decryptMessage(
+            let plaintext = try cryptoService.openCase(
+                purpose: .comment,
                 encryptedContent: encrypted,
-                readerEnvelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
+                envelopes: envelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
             )
             // Content may be JSON with a "text" field, or raw text
             if let data = plaintext.data(using: .utf8),

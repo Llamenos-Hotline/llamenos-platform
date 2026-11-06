@@ -1320,6 +1320,8 @@
     "hotlineName": "የስልክ መስመር ስም",
     "hotlineNameHelp": "ይህ ለፈቃደኞች በመተግበሪያው ውስጥ ይታያል። ለደህንነት PWA ተለዋጭ ስም ይጠቀማል።",
     "hotlineNamePlaceholder": "የማህበረሰብ ቀውስ መስመር",
+    "hubUrlLabel": "የሃብ URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "ለቀውስ ስልክ መስመርዎ ስምና ቋንቋ ይምረጡ።",
     "identityTitle": "ስልክ መስመርዎን ይሰይሙ",
     "inactivityTimeout": "የቸልተኝነት ጊዜ ገደብ (ደቂቃዎች)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "ለቡድንዎ የግብዣ ኮዶች ይፍጠሩ። እያንዳንዱ ኮድ ለአንድ ጊዜ ብቻ ሲሆን በ7 ቀናት ያልቃል።",
     "inviteNew": "አዲስ ግብዣ",
     "inviteTitle": "ተጠቃሚዎች ይጋብዙ",
+    "launchHotline": "የስልክ መስመሩን ያስጀምሩ",
     "maxConcurrent": "ከፍተኛ ተመሳሳይ ጊዜ ውይይቶች በፈቃደኛ",
     "messagingSettings": "የመልዕክት ቅንብሮች",
     "namePlaceholder": "የፈቃደኛ ስም",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "አማራጭ",
     "organization": "ድርጅት",
     "organizationPlaceholder": "የድርጅትዎ ስም",
@@ -1371,6 +1375,7 @@
     "pinRequired": "ማዘጋጀቱን ለመቀጠል PIN ዎን ያስገቡ።",
     "primaryLanguage": "ዋና ቋንቋ",
     "primaryLanguageHelp": "ለአስተዳዳሪ በይነገጽና IVR ማሳሰቢያዎች ነባሪ ቋንቋ።",
+    "providerConnection": "Provider Connection",
     "providersDescription": "የተመረጡ ቻናሎችዎን የሚያንቁ አገልግሎቶችን ያዘጋጁ።",
     "providersTitle": "አቅራቢዎችን ያዋቅሩ",
     "queueTimeout": "የወረፋ ጊዜ ገደብ (ሰከንዶች)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "WhatsApp ውህደት",
     "whatsappTwilio": "በ Twilio በኩል",
     "whatsappTwilioNote": "WhatsApp መልዕክቶች ባለዎት Twilio የቴሌፎን አቅራቢ በኩል ይስተናገዳሉ። ተጨማሪ ውቅር አያስፈልግም።",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "የሃብ URL",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "activeCalls": "{{count}} ንቁ ጥሪ(ዎች)",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "ንቁ",
     "add": "ተጠቃሚ ጨምር",
-    "addVolunteer": "ተጠቃሚ ጨምር",
     "assignedShifts": "የተመደቡ ፈረቃዎች",
     "changeRole": "ሚና ቀይር",
     "createInvite": "ግብዣ ፍጠር",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "ልክ ያልሆነ ስልክ ቁጥር። E.164 ቅርጸት ይጠቀሙ (ለምሳሌ +12125551234)",
     "inviteCreated": "ግብዣ ተፈጥሯል",
     "inviteExpires": "ያልቃል {{date}}",
-    "inviteGenerated": "ግብዣ ተፈጥሯል! ሚስጥራዊ ቁልፉን በደህንነት ያጋሩ።",
     "inviteLinkLabel": "የግብዣ ማገናኛ",
     "inviteRevoked": "ግብዣ ተሰርዟል",
     "inviteVolunteer": "ተጠቃሚ ግብዣ",
@@ -1904,10 +1903,8 @@
     "roleReporter": "ሪፖርተር",
     "roleReviewer": "ገምጋሚ",
     "roleVolunteer": "ፈቃደኛ",
-    "secretKeyWarning": "ይህ ቁልፍ አንድ ጊዜ ብቻ ይታያል። ለፈቃደኛው በደህንነት ያጋሩት።",
     "title": "ተጠቃሚዎች",
-    "unnamed": "ስም የሌለው ተጠቃሚ",
-    "userAdded": "ተጠቃሚ በተሳካ ሁኔታ ተጨምሯል"
+    "unnamed": "ስም የሌለው ተጠቃሚ"
   },
   "webauthn": {
     "browserNotSupported": "አሳሽዎ የመለያ ቁልፎችን አይደግፍም።",

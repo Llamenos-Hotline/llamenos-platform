@@ -17,11 +17,11 @@ Feature: Admin Flow
     And I should see "Hub Settings" in the navigation
     And I should see "Settings" in the navigation
 
-  Scenario: Volunteer CRUD — add and delete volunteer
+  # An admin adds someone by inviting them; the volunteer's own device makes
+  # their key and redeems the invite. No admin ever holds it (#1231).
+  Scenario: Volunteer CRUD — invite a volunteer, who joins with their own key, then delete them
     When I navigate to the "Volunteers" page
-    And I add a new volunteer with a unique name and phone
-    Then I should see the generated device key
-    When I close the device key card
+    And I invite a new volunteer who joins with a key made on their own device
     Then the volunteer should appear in the list
     When I delete the volunteer
     Then the volunteer should be removed from the list
@@ -57,7 +57,7 @@ Feature: Admin Flow
 
   Scenario: Phone validation rejects bad numbers
     When I navigate to the "Volunteers" page
-    And I try to add a volunteer with an invalid phone number
+    And I try to invite a volunteer with an invalid phone number
     Then I should see an invalid phone error
 
   Scenario: Audit log shows entries

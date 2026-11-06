@@ -1320,6 +1320,8 @@
     "hotlineName": "Назва гарячої лінії",
     "hotlineNameHelp": "Це відображається волонтерам у застосунку. З міркувань безпеки PWA використовує загальну назву.",
     "hotlineNamePlaceholder": "Громадська кризова лінія",
+    "hubUrlLabel": "URL хабу",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Оберіть назву та мову для вашої кризової гарячої лінії.",
     "identityTitle": "Назвіть вашу гарячу лінію",
     "inactivityTimeout": "Таймаут неактивності (хвилин)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Згенеруйте коди запрошень для вашої команди. Кожен код одноразовий та діє 7 днів.",
     "inviteNew": "Нове запрошення",
     "inviteTitle": "Запросити користувачів",
+    "launchHotline": "Запустити гарячу лінію",
     "maxConcurrent": "Максимум одночасних розмов на волонтера",
     "messagingSettings": "Налаштування повідомлень",
     "namePlaceholder": "Імʼя волонтера",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "необовʼязково",
     "organization": "Організація",
     "organizationPlaceholder": "Назва вашої організації",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Введіть ваш PIN, щоб продовжити налаштування.",
     "primaryLanguage": "Основна мова",
     "primaryLanguageHelp": "Мова за замовчуванням для інтерфейсу адміністратора та голосових підказок IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Налаштуйте сервіси, що забезпечують роботу обраних каналів.",
     "providersTitle": "Налаштування провайдерів",
     "queueTimeout": "Таймаут черги (секунд)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "Інтеграція WhatsApp",
     "whatsappTwilio": "Через Twilio",
     "whatsappTwilioNote": "Повідомлення WhatsApp оброблятимуться через ваш існуючий провайдер телефонії Twilio. Додаткова конфігурація не потрібна.",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "URL хабу",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "activeCalls": "{{count}} активних дзвінків",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Активний",
     "add": "Додати користувача",
-    "addVolunteer": "Додати користувача",
     "assignedShifts": "Призначені зміни",
     "changeRole": "Змінити роль",
     "createInvite": "Створити запрошення",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Недійсний номер телефону. Використовуйте формат E.164 (напр. +380501234567)",
     "inviteCreated": "Запрошення створено",
     "inviteExpires": "Закінчується {{date}}",
-    "inviteGenerated": "Запрошення згенеровано! Передайте секретний ключ безпечним каналом.",
     "inviteLinkLabel": "Посилання запрошення",
     "inviteRevoked": "Запрошення відкликано",
     "inviteVolunteer": "Запросити користувача",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Репортер",
     "roleReviewer": "Рецензент",
     "roleVolunteer": "Волонтер",
-    "secretKeyWarning": "Цей ключ буде показано лише один раз. Передайте його волонтеру безпечним каналом.",
     "title": "Користувачі",
-    "unnamed": "Безіменний користувач",
-    "userAdded": "Користувача успішно додано"
+    "unnamed": "Безіменний користувач"
   },
   "webauthn": {
     "browserNotSupported": "Ваш браузер не підтримує ключі доступу.",

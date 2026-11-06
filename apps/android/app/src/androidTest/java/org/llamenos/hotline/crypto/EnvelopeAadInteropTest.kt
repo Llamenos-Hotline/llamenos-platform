@@ -5,13 +5,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.bouncycastle.crypto.generators.Argon2BytesGenerator
-import org.bouncycastle.crypto.params.Argon2Parameters
-import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
-import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -19,10 +14,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.protocol.CryptoLabels
 import org.llamenos.protocol.RecipientEnvelope
-import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * Open, through this app's production readers, stored records the server wrote.
@@ -206,76 +197,9 @@ class EnvelopeAadInteropTest {
         assertEquals(plaintext, String(hexToBytes(opened), Charsets.UTF_8))
     }
 
-    // ── Loading a fixture reader into the real mobile state ──────────────
-
-    /**
-     * A [CryptoService] unlocked as [reader], via the production `mobileUnlock`.
-     *
-     * The FFI deliberately has no "import a raw secret" call, so this builds the
-     * PIN-encrypted device-key blob `device_keys.rs` reads — AES-256-GCM, no AAD,
-     * under an Argon2id KEK, over `signing_seed || encryption_seed` — around the
-     * fixture's X25519 secret. The Argon2id parameters are taken from a blob the
-     * native library just generated, so this follows whichever KDF build
-     * (`test-kdf` or production) is loaded. If that blob format ever changes,
-     * unlock fails loudly here; it cannot pass vacuously.
-     */
-    private suspend fun unlockedAs(reader: FixtureReader): CryptoService {
-        val svc = CryptoService().also { services += it }
-        assertTrue(
-            "the native crypto library must be loaded — this test is worthless against a mock",
-            svc.nativeLibLoaded,
-        )
-        val params = svc.generateDeviceKeys("kdf-params-probe", PIN)
-        svc.lock()
-
-        val encryptionSeed = hexToBytes(reader.x25519SecretHex)
-        assertEquals(
-            "the fixture's published pubkey must be the one its secret derives",
-            reader.x25519PubkeyHex,
-            X25519PrivateKeyParameters(encryptionSeed, 0).generatePublicKey().encoded.toHex(),
-        )
-        val signingSeed = ByteArray(32) { SIGNING_SEED_BYTE }
-        val salt = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val nonce = ByteArray(12).also { SecureRandom().nextBytes(it) }
-        val kek = ByteArray(32)
-        Argon2BytesGenerator().apply {
-            init(
-                Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
-                    .withVersion(Argon2Parameters.ARGON2_VERSION_13)
-                    .withMemoryAsKB(params.argon2MCost.toInt())
-                    .withIterations(params.argon2TCost.toInt())
-                    .withParallelism(params.argon2PCost.toInt())
-                    .withSalt(salt)
-                    .build(),
-            )
-        }.generateBytes(PIN.toByteArray(Charsets.UTF_8), kek)
-        val ciphertext = Cipher.getInstance("AES/GCM/NoPadding").run {
-            init(Cipher.ENCRYPT_MODE, SecretKeySpec(kek, "AES"), GCMParameterSpec(128, nonce))
-            doFinal(signingSeed + encryptionSeed)
-        }
-
-        val state = svc.unlockWithPin(
-            EncryptedDeviceKeys(
-                kdfVersion = params.kdfVersion,
-                salt = salt.toHex(),
-                argon2MCost = params.argon2MCost,
-                argon2TCost = params.argon2TCost,
-                argon2PCost = params.argon2PCost,
-                nonce = nonce.toHex(),
-                ciphertext = ciphertext.toHex(),
-                state = DeviceKeyState(
-                    deviceId = "vector-${reader.name}",
-                    signingPubkeyHex = Ed25519PrivateKeyParameters(signingSeed, 0)
-                        .generatePublicKey().encoded.toHex(),
-                    encryptionPubkeyHex = reader.x25519PubkeyHex,
-                ),
-            ),
-            PIN,
-        )
-        assertEquals(reader.x25519PubkeyHex, state.encryptionPubkeyHex)
-        assertNotNull(svc.encryptionPubkeyHex)
-        return svc
-    }
+    private suspend fun unlockedAs(reader: FixtureReader): CryptoService =
+        unlockFixtureReader(reader.name, reader.x25519SecretHex, reader.x25519PubkeyHex)
+            .also { services += it }
 
     // ── Fixture shape (stored-record-vectors.json) ───────────────────────
 
@@ -326,11 +250,7 @@ class EnvelopeAadInteropTest {
     private fun hexToBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
-
     private companion object {
         const val FIXTURE_ASSET = "stored-record-vectors.json"
-        const val PIN = "24681357"
-        const val SIGNING_SEED_BYTE: Byte = 0x5a
     }
 }

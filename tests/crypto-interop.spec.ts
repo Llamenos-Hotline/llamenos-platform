@@ -25,10 +25,15 @@ import { CipherSuite, KemId, KdfId, AeadId } from 'hpke-js'
 import * as labels from '../packages/shared/crypto-labels'
 import { buildAuthMessage } from '../packages/shared/auth-message'
 import { NO_AAD, contentAad, keyWrapAad } from '../packages/shared/envelope-aad'
+import { caseLabelMock, openCaseMock, sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const VECTORS_PATH = resolve(__dirname, '../packages/crypto/tests/fixtures/test-vectors.json')
+const CASE_RECORD_VECTORS_PATH = resolve(
+  __dirname,
+  '../packages/crypto/tests/fixtures/case-record-vectors.json',
+)
 const STORED_RECORD_VECTORS_PATH = resolve(
   __dirname,
   '../packages/crypto/tests/fixtures/stored-record-vectors.json',
@@ -624,6 +629,74 @@ test.describe('Stored-record conformance fixture (#1927)', () => {
       expect(() =>
         decryptContent(record.encryptedContent, contentKey, contentAad(record.label)),
       ).toThrow()
+    }
+  })
+})
+
+/**
+ * Server-persisted case-record vectors (#2499): a case summary, case fields and
+ * a case comment sealed by `packages/crypto/src/case_record.rs`, stored by the
+ * real `CasesService` and read back. The desktop's production reader is the
+ * `open_case_from_state` Tauri command (pinned in `apps/desktop/src/crypto.rs`);
+ * in the Playwright build that command is `tests/mocks/case-record-mock.ts`,
+ * and this describe is what holds the mock to the crate.
+ */
+test.describe('Case-record conformance fixture (#2499)', () => {
+  const fixture = JSON.parse(readFileSync(CASE_RECORD_VECTORS_PATH, 'utf-8')) as {
+    readers: { name: string; x25519SecretHex: string; x25519PubkeyHex: string }[]
+    records: {
+      name: string
+      purpose: CasePurposeMock
+      label: string
+      aadHex: { content: string; keyWrap: string }
+      plaintext: string
+      encryptedContent: string
+      readerEnvelopes: { pubkey: string; enc: string; ct: string }[]
+    }[]
+  }
+
+  test('one record per purpose, each under its own label and the canonical AAD', () => {
+    expect(fixture.records.map(r => r.purpose).sort()).toEqual(['comment', 'fields', 'summary'])
+    for (const record of fixture.records) {
+      expect(record.label).toBe(caseLabelMock(record.purpose))
+      expect(record.aadHex.content).toBe(bytesToHex(contentAad(record.label)))
+      expect(record.aadHex.keyWrap).toBe(bytesToHex(keyWrapAad(record.label)))
+      expect(record.readerEnvelopes.map(e => e.pubkey)).toEqual(fixture.readers.map(r => r.x25519PubkeyHex))
+    }
+  })
+
+  for (const reader of fixture.readers) {
+    test(`the desktop test build opens every persisted case ciphertext as ${reader.name}`, async () => {
+      for (const record of fixture.records) {
+        const opened = await openCaseMock(record.purpose, record, { encryptionPubkeyHex: reader.x25519PubkeyHex }, reader.x25519SecretHex)
+        expect(opened).toBe(record.plaintext)
+      }
+    })
+  }
+
+  test('the pre-#2499 desktop reader (LABEL_MESSAGE, no AAD) opens none of them', async () => {
+    const reader = fixture.readers[0]
+    for (const record of fixture.records) {
+      const envelope = record.readerEnvelopes.find(e => e.pubkey === reader.x25519PubkeyHex)
+      expect(envelope).toBeDefined()
+      await expect(hpkeUnwrap(envelope as { ct: string; enc: string }, reader.x25519SecretHex, labels.LABEL_MESSAGE, NO_AAD)).rejects.toThrow()
+    }
+  })
+
+  test('what the desktop test build seals has the fixture shape and opens for the other reader', async () => {
+    const [volunteer, admin] = fixture.readers
+    const device = { encryptionPubkeyHex: volunteer.x25519PubkeyHex, signingPubkeyHex: 'ff'.repeat(32) }
+    for (const purpose of ['summary', 'fields', 'comment'] as const) {
+      const sealed = await sealCaseMock(purpose, `desktop ${purpose}`, [device.signingPubkeyHex, admin.x25519PubkeyHex], device)
+      expect(sealed.readerEnvelopes.map(e => e.pubkey)).toEqual([volunteer.x25519PubkeyHex, admin.x25519PubkeyHex])
+      for (const e of sealed.readerEnvelopes) {
+        expect(e.enc).toMatch(/^[0-9a-f]{64}$/)
+        expect(e.ct).toMatch(/^[0-9a-f]{96}$/)
+      }
+      // Opened with the independent JS reader (not openCaseMock), under the fixture's rule.
+      const envelope = sealed.readerEnvelopes[1]
+      const key = await hpkeUnwrap(envelope, admin.x25519SecretHex, caseLabelMock(purpose), keyWrapAad(caseLabelMock(purpose)))
+      expect(decryptContent(sealed.encryptedContent, key, contentAad(caseLabelMock(purpose)))).toBe(`desktop ${purpose}`)
     }
   })
 })

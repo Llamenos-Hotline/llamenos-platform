@@ -184,10 +184,14 @@ Then('the new case should appear in the case list', async ({ page }) => {
   await expect(caseCard.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the new case should be auto-selected in the detail panel', async ({ page }) => {
+Then('the new case should be auto-selected in the detail panel', async ({ page, casesWorld }) => {
   // A successful create closes the sheet and selects the new record (handleRecordCreated).
   await expect(page.getByRole('dialog')).toBeHidden({ timeout: Timeouts.ELEMENT })
   await expect(page.getByTestId('case-detail-header')).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The title renders only once the stored summary opens for this device: the
+  // record round-trips seal_case_from_state -> the server -> open_case_from_state
+  // (#2499). A header without it means the summary is unreadable.
+  await expect(page.getByTestId('case-detail-title')).toHaveText(casesWorld.createdCaseTitle, { timeout: Timeouts.ELEMENT })
 })
 
 When('I leave the case title empty', async ({ page }) => {

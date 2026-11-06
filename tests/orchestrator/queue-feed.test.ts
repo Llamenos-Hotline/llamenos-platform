@@ -3,12 +3,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
-  queueRunPr, latestQueueAttempts, attributeJob, ownDiffFailures,
+  queueRunPr, latestQueueAttempts,
   mergeQueueConfigFromRules, isEjectedOrNeverArmed, iosQueueBlock,
   reviewCoverageFor, runQueueFeedWith, renderQueueFeed,
-  QUEUE_ONLY_JOB_FLAGS, AGGREGATE_JOB_NAMES,
-  type QueueFeedDeps, type QueueFeedPr, type PlatformFlags, type MergeGroupRun,
+  type QueueFeedDeps, type QueueFeedPr, type MergeGroupRun,
 } from '../../orchestrator/src/queue-feed.js'
+import {
+  attributeJob, ownDiffFailures, QUEUE_ONLY_JOB_FLAGS, AGGREGATE_JOB_NAMES,
+  type PlatformFlags, type RunJob,
+} from '../../orchestrator/src/queue-attempt.js'
 import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-cache.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
@@ -60,11 +63,35 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     platformFlags: async () => ({ ...NO_FLAGS, backend: true }),
     readKnopeToml: async () => undefined,
     listMergeGroupRuns: async () => [],
-    failedJobNames: async () => [],
+    readRunJobs: async () => [],
+    readWorkflowFile: async () => undefined,
+    listRecentWorkflowRuns: async () => [],
+    listPrComments: async () => [],
+    postPrComment: async () => {},
     enableAutoMerge: async () => {},
     log: () => {},
     ...overrides,
   }
+}
+
+const GROUP_SHA = 'e'.repeat(40)
+
+/** A completed merge_group run of `pr`'s group — CI by default. */
+function mkRun(id: number, conclusion: string, overrides: Partial<MergeGroupRun> = {}): MergeGroupRun {
+  return {
+    id, conclusion,
+    headBranch: `gh-readonly-queue/main/pr-100-${'d'.repeat(40)}`,
+    headSha: GROUP_SHA,
+    path: '.github/workflows/ci.yml',
+    createdAt: '2026-11-05T15:15:19Z',
+    ...overrides,
+  }
+}
+
+/** A job that ran for `seconds`, ending at `end`. */
+function mkJob(name: string, conclusion: string, seconds: number, end = '2026-11-05T15:30:00Z'): RunJob {
+  const e = Date.parse(end)
+  return { name, conclusion, startedAt: new Date(e - seconds * 1000).toISOString(), completedAt: new Date(e).toISOString(), steps: [] }
 }
 
 describe('queueRunPr — the merge-group branch grammar', () => {
@@ -83,23 +110,41 @@ describe('queueRunPr — the merge-group branch grammar', () => {
   })
 })
 
-describe('latestQueueAttempts — newest first wins, per branch', () => {
+describe('latestQueueAttempts — the newest attempt wins, per branch, judged as ALL its runs', () => {
   const sha = 'd'.repeat(40)
   const runs: MergeGroupRun[] = [
-    { id: 3, headBranch: `gh-readonly-queue/main/pr-100-${sha}`, conclusion: 'failure' }, // newest
-    { id: 2, headBranch: `gh-readonly-queue/main/pr-100-${sha}`, conclusion: 'success' },
-    { id: 1, headBranch: `gh-readonly-queue/other/pr-100-${sha}`, conclusion: 'failure' }, // another base
+    mkRun(3, 'failure', { headSha: '3'.repeat(40), createdAt: '2026-11-05T17:00:00Z' }), // newest attempt
+    mkRun(2, 'success', { headSha: '2'.repeat(40), createdAt: '2026-11-05T16:00:00Z' }),
+    mkRun(1, 'failure', { headBranch: `gh-readonly-queue/other/pr-100-${sha}`, headSha: '1'.repeat(40) }), // another base
   ]
 
-  it('returns the newest run naming each PR on the branch', () => {
+  it('returns the newest attempt naming each PR on the branch', () => {
     const attempts = latestQueueAttempts(runs, 'main')
-    expect(attempts.get(100)?.id).toBe(3 - 1 + 1 - 1 + 1) // id 3, written so a sort-order flip fails loudly
-    expect(attempts.get(100)?.conclusion).toBe('failure')
+    expect(attempts.get(100)?.runs.map((r) => r.id)).toEqual([3])
+    expect(attempts.get(100)?.succeeded).toBe(false)
+  })
+
+  it('orders attempts by createdAt, never by list position', () => {
+    const attempts = latestQueueAttempts([...runs].reverse(), 'main')
+    expect(attempts.get(100)?.runs.map((r) => r.id)).toEqual([3])
   })
 
   it('ignores runs against a different base branch', () => {
-    expect(latestQueueAttempts(runs, 'other').get(100)?.id).toBe(1)
+    expect(latestQueueAttempts(runs, 'other').get(100)?.runs.map((r) => r.id)).toEqual([1])
     expect(latestQueueAttempts(runs, 'main').has(7)).toBe(false)
+  })
+
+  it('an attempt is EVERY run of its group commit — a green CodeQL run never stands for a red CI run', () => {
+    // The live #2467 shape: one group commit, ~7 workflows, CI cancelled.
+    const group = [
+      mkRun(11, 'success', { path: '.github/workflows/codeql.yml' }),
+      mkRun(12, 'cancelled'),
+      mkRun(13, 'success', { path: '.github/workflows/fleet-verify.yml' }),
+    ]
+    const attempt = latestQueueAttempts(group, 'main').get(100)
+    expect(attempt?.runs.map((r) => r.id).sort()).toEqual([11, 12, 13])
+    expect(attempt?.succeeded).toBe(false)
+    expect(latestQueueAttempts([group[0] as MergeGroupRun, group[2] as MergeGroupRun], 'main').get(100)?.succeeded).toBe(true)
   })
 })
 
@@ -445,10 +490,8 @@ describe('runQueueFeedWith — the pass', () => {
       readPr: async () => mkPr(),
       readPrFiles: async () => ['apps/worker/routes/x.ts'],
       platformFlags: async () => ({ ...NO_FLAGS, backend: true }),
-      listMergeGroupRuns: async () => [
-        { id: 42, headBranch: `gh-readonly-queue/main/pr-100-${sha}`, conclusion: 'failure' },
-      ],
-      failedJobNames: async () => ['backend-bdd'],
+      listMergeGroupRuns: async () => [mkRun(42, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}` })],
+      readRunJobs: async () => [mkJob('backend-bdd', 'failure', 300), mkJob('ci-status', 'failure', 7)],
       verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
       enableAutoMerge,
     })
@@ -465,10 +508,10 @@ describe('runQueueFeedWith — the pass', () => {
       readPr: async () => mkPr(),
       readPrFiles: async () => ['apps/worker/routes/x.ts'],
       platformFlags: async () => ({ ...NO_FLAGS, backend: true }),
-      listMergeGroupRuns: async () => [
-        { id: 42, headBranch: `gh-readonly-queue/main/pr-100-${sha}`, conclusion: 'failure' },
+      listMergeGroupRuns: async () => [mkRun(42, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}` })],
+      readRunJobs: async () => [ // the live #2425 shape
+        mkJob('ios-build-test', 'failure', 600), mkJob('ios-e2e / build (mac)', 'failure', 900), mkJob('ci-status', 'failure', 7),
       ],
-      failedJobNames: async () => ['ios-build-test', 'ios-e2e / build (mac)'], // the live #2425 shape
       verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
       enableAutoMerge: async (p) => { armed.push(p) },
     })
@@ -483,10 +526,8 @@ describe('runQueueFeedWith — the pass', () => {
     const deps = mkDeps({
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
       readPr: async () => mkPr(),
-      listMergeGroupRuns: async () => [
-        { id: 42, headBranch: `gh-readonly-queue/main/pr-100-${sha}`, conclusion: 'failure' },
-      ],
-      failedJobNames: async () => undefined,
+      listMergeGroupRuns: async () => [mkRun(42, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}` })],
+      readRunJobs: async () => undefined,
       enableAutoMerge,
     })
     const result = await runQueueFeedWith(deps)

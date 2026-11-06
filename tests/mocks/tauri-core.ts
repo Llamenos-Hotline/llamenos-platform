@@ -47,6 +47,7 @@ import {
   SAS_SALT,
 } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
 
 /** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
 const PROVISIONING_BUNDLE_VERSION = 1
@@ -657,9 +658,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
     // Test-only hook: onboarding generates the seed inside this mock, so a
     // spec that needs to act as the same user from a SECOND client (e.g. the
-    // sigchain read-back gate in #1050) cannot otherwise reach it. Mirrors
-    // window.__last_vol_seed_hex in users.tsx. Never present outside
-    // PLAYWRIGHT_TEST builds (this module throws at load otherwise).
+    // sigchain read-back gate in #1050) cannot otherwise reach it. Never
+    // present outside PLAYWRIGHT_TEST builds (this module throws at load
+    // otherwise).
     ;(window as unknown as Record<string, unknown>).__TEST_LAST_DEVICE_SEED_HEX = bytesToHex(signingSeed)
 
     return result
@@ -798,6 +799,23 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return bytesToHex(plaintext)
   },
 
+  // --- Case records + case comments (#2499) ---
+  // Mirrors apps/desktop/src/crypto.rs seal_case_from_state / open_case_from_state,
+  // which call packages/crypto/src/case_record.rs. The browser has no Rust, so
+  // ./case-record-mock re-states the rule — and is pinned to the
+  // server-persisted vectors by tests/crypto-interop.spec.ts.
+
+  seal_case_from_state: async (a) =>
+    await sealCaseMock(a.purpose as CasePurposeMock, a.plaintext as string, a.readerPubkeys as string[], requireDeviceState()),
+
+  open_case_from_state: async (a) =>
+    await openCaseMock(
+      a.purpose as CasePurposeMock,
+      { encryptedContent: a.encryptedContent as string, readerEnvelopes: a.envelopes as CaseCiphertextMock['readerEnvelopes'] },
+      requireDeviceState(),
+      bytesToHex(requireSecrets().encryptionSeed),
+    ),
+
   // --- PUK (Per-User Key) ---
   // Mirrors apps/desktop/src/crypto.rs puk_* commands over packages/crypto
   // puk.rs, via the Rust-mirroring primitives in ./sigchain-mock.
@@ -907,17 +925,6 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockEncryptedKeys = result
 
     return result
-  },
-
-  // --- Ephemeral Ed25519 keypair (for admin-created users) ---
-
-  generate_ephemeral_ed25519: () => {
-    const seed = randomBytes(32)
-    const pubkey = deriveEd25519Pubkey(seed)
-    return {
-      signingPubkeyHex: bytesToHex(pubkey),
-      seedHex: bytesToHex(seed),
-    }
   },
 
   // --- Backup generation / restore (v4 container) ---

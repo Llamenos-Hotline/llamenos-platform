@@ -32,8 +32,7 @@ import { test, expect, type APIRequestContext, type Browser, type ConsoleMessage
 import {
   loginAsAdmin,
   loginAsVolunteer,
-  createUserAndGetDeviceKey,
-  dismissDeviceKeyCard,
+  inviteVolunteerAndJoin,
   TestIds,
 } from './helpers'
 import {
@@ -171,8 +170,7 @@ async function volunteerWithUnclaimedMessage(
   // Created through the admin UI so the volunteer lands in this hub with the
   // Volunteer role, exactly as a real invite would.
   const volunteerName = `DecryptVol-${Date.now()}`
-  const volunteerSeed = await createUserAndGetDeviceKey(adminPage, volunteerName, uniquePhone())
-  await dismissDeviceKeyCard(adminPage)
+  const volunteerSeed = await inviteVolunteerAndJoin(adminPage, volunteerName, uniquePhone())
 
   await pinHubBeforeLoad(page, hubId)
   await loginAsVolunteer(page, volunteerSeed)

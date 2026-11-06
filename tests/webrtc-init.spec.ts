@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, uniquePhone, Timeouts } from './helpers'
+import { loginAsAdmin, loginAsVolunteer, inviteVolunteerAndJoin, uniquePhone, Timeouts } from './helpers'
 import { apiGet, createHubViaApi, deleteHubViaApi } from './api-helpers'
 
 // Issue #1147: `@twilio/voice-sdk` is not a dependency anywhere in this repo,
@@ -34,8 +34,7 @@ test.describe('WebRTC init never claims a client SDK that is not installed (#114
 
     try {
       await loginAsAdmin(page)
-      const volunteerSeedHex = await createUserAndGetDeviceKey(page, `WebRTC-Vol-${Date.now()}`, uniquePhone())
-      await dismissDeviceKeyCard(page)
+      const volunteerSeedHex = await inviteVolunteerAndJoin(page, `WebRTC-Vol-${Date.now()}`, uniquePhone())
 
       // Provider claims in-app audio is possible (Twilio) and issues a token —
       // exactly the state that used to reach the unresolvable dynamic import.

@@ -9,7 +9,7 @@ import {
   type EntityTypeDefinition,
   type CreateRecordBody,
 } from '@/lib/api'
-import { encryptMessage } from '@/lib/platform'
+import { sealCase } from '@/lib/platform'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -76,15 +76,15 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
         description: '',
         status: selectedType.statuses.find(s => s.value === selectedType.defaultStatus)?.label ?? selectedType.defaultStatus,
       })
-      const encryptedSummary = await encryptMessage(summary, readerPubkeys)
+      const encryptedSummary = await sealCase('summary', summary, readerPubkeys)
 
       const nonEmptyFields = Object.entries(fieldValues).filter(
         ([, v]) => v !== '' && v !== undefined && v !== false,
       )
-      let encryptedFields: Awaited<ReturnType<typeof encryptMessage>> | undefined
+      let encryptedFields: Awaited<ReturnType<typeof sealCase>> | undefined
       if (nonEmptyFields.length > 0) {
         const fieldsPayload = JSON.stringify(Object.fromEntries(nonEmptyFields))
-        encryptedFields = await encryptMessage(fieldsPayload, readerPubkeys)
+        encryptedFields = await sealCase('fields', fieldsPayload, readerPubkeys)
       }
 
       const body: CreateRecordBody = {

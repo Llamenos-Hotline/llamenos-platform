@@ -15,13 +15,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import org.llamenos.core.CasePurpose
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
-import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
-import org.llamenos.hotline.ui.notes.noteRecipientPubkeys
 import org.llamenos.hotline.model.AssignRecordRequest
 import org.llamenos.hotline.model.AssignResponse
 import org.llamenos.hotline.model.CaseRecord
@@ -455,17 +454,18 @@ class CaseManagementViewModel @Inject constructor(
             _uiState.update { it.copy(isAddingComment = true, actionError = null) }
             try {
                 sessionState.ensureAdminPubkeyLoaded(apiService)
-                val authorPubkey = cryptoService.encryptionPubkeyHex
-                    ?: throw CryptoException("No encryption key loaded")
-                val encrypted = cryptoService.encryptNote(
+                // Sealed as a case comment, not a note: the crate supplies the label
+                // and AAD, and this device is always a reader (#2499).
+                val encrypted = cryptoService.sealCase(
+                    CasePurpose.COMMENT,
                     comment,
-                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                    sessionState.adminPubkeys,
                 )
                 val envelopes = encrypted.envelopes.map { env ->
                     CreateInteractionBodyContentEnvelope(
-                        pubkey = env.recipientPubkey,
-                        ct = env.hpkeEnvelope.ct,
-                        enc = env.hpkeEnvelope.enc,
+                        pubkey = env.pubkey,
+                        ct = env.ct,
+                        enc = env.enc,
                     )
                 }
                 val request = CreateInteractionBody(
@@ -652,13 +652,16 @@ class CaseManagementViewModel @Inject constructor(
      * JSON to extract title and description fields.
      */
     fun decryptSummary(record: Record) {
-        val pubkey = cryptoService.pubkey ?: return
-        val envelope = record.summaryEnvelopes.find { it.pubkey == pubkey } ?: return
+        if (record.summaryEnvelopes.isEmpty()) return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isDecryptingSummary = true) }
             try {
-                val plaintext = cryptoService.decryptMessage(record.encryptedSummary, listOf(envelope.toRecipientEnvelope()))
+                val plaintext = cryptoService.openCase(
+                    CasePurpose.SUMMARY,
+                    record.encryptedSummary,
+                    record.summaryEnvelopes.map { it.toRecipientEnvelope() },
+                )
                 if (plaintext != null) {
                     val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                     val summary = DecryptedSummary(
@@ -687,15 +690,17 @@ class CaseManagementViewModel @Inject constructor(
      * a map of field name -> value string.
      */
     fun decryptFields(record: Record) {
-        val pubkey = cryptoService.pubkey ?: return
-        val envelopes = record.fieldEnvelopes ?: return
-        val envelope = envelopes.find { it.pubkey == pubkey } ?: return
+        val envelopes = record.fieldEnvelopes?.takeIf { it.isNotEmpty() } ?: return
         val encryptedFields = record.encryptedFields ?: return
 
         viewModelScope.launch {
             _uiState.update { it.copy(isDecryptingFields = true) }
             try {
-                val plaintext = cryptoService.decryptMessage(encryptedFields, listOf(envelope.toRecipientEnvelope()))
+                val plaintext = cryptoService.openCase(
+                    CasePurpose.FIELDS,
+                    encryptedFields,
+                    envelopes.map { it.toRecipientEnvelope() },
+                )
                 if (plaintext != null) {
                     val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                     val fields = jsonObj.mapValues { (_, value) ->
@@ -720,17 +725,23 @@ class CaseManagementViewModel @Inject constructor(
      * Decrypt an interaction's encrypted content.
      */
     fun decryptInteraction(interaction: Interaction) {
-        val pubkey = cryptoService.pubkey ?: return
+        if (interaction.interactionType != InteractionType.Comment) return
         val encryptedContent = interaction.encryptedContent ?: return
-        val envelopes = interaction.contentEnvelopes ?: return
-        val envelope = envelopes.find { it.pubkey == pubkey } ?: return
+        val envelopes = interaction.contentEnvelopes?.takeIf { it.isNotEmpty() } ?: return
 
         // Skip if already decrypted
         if (_uiState.value.decryptedInteractions.containsKey(interaction.id)) return
 
         viewModelScope.launch {
             try {
-                val plaintext = cryptoService.decryptMessage(encryptedContent, listOf(envelope.toRecipientEnvelope()))
+                // Opened as a case comment — the same purpose addComment seals with.
+                // Android used to seal comments as notes and open them as messages,
+                // so it could not read a comment it wrote itself (#2499).
+                val plaintext = cryptoService.openCase(
+                    CasePurpose.COMMENT,
+                    encryptedContent,
+                    envelopes.map { it.toRecipientEnvelope() },
+                )
                 if (plaintext != null) {
                     _uiState.update {
                         it.copy(
@@ -748,16 +759,18 @@ class CaseManagementViewModel @Inject constructor(
      * Decrypt summaries for list records to show titles.
      */
     fun decryptRecordTitles(records: List<Record>) {
-        val pubkey = cryptoService.pubkey ?: return
-
         viewModelScope.launch {
             for (record in records) {
                 // Skip if already decrypted
                 if (_uiState.value.decryptedRecordTitles.containsKey(record.id)) continue
+                if (record.summaryEnvelopes.isEmpty()) continue
 
-                val envelope = record.summaryEnvelopes.find { it.pubkey == pubkey } ?: continue
                 try {
-                    val plaintext = cryptoService.decryptMessage(record.encryptedSummary, listOf(envelope.toRecipientEnvelope()))
+                    val plaintext = cryptoService.openCase(
+                        CasePurpose.SUMMARY,
+                        record.encryptedSummary,
+                        record.summaryEnvelopes.map { it.toRecipientEnvelope() },
+                    )
                     if (plaintext != null) {
                         val jsonObj = json.decodeFromString<JsonObject>(plaintext)
                         val title = jsonObj["title"]?.jsonPrimitive?.contentOrNull

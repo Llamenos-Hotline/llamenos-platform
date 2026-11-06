@@ -323,3 +323,75 @@ describe('desktop IPC boundary', () => {
     expect(storeGrants).toEqual([])
   })
 })
+
+/**
+ * #1231: an admin creating a volunteer used to call `generate_ephemeral_ed25519`,
+ * which handed the new volunteer's raw Ed25519 signing seed back over IPC into
+ * the webview — where it was rendered with a copy button. Whoever provisioned a
+ * volunteer could then sign as them, and the audit log's "volunteer X did this"
+ * meant nothing. A device's private key is made on that device and never leaves
+ * Rust; the webview only ever sees public keys.
+ *
+ * Static, like the checks above: the property is what the registered command
+ * functions put in their return values, which lives in the Rust source.
+ */
+describe('no command hands a private key to the webview (#1231)', () => {
+  /** A returned field name that would carry key material out of Rust. */
+  const SECRET_FIELD = /seed|secret|private|nsec/i
+
+  const rustSources = () =>
+    readdirSync(path.join(ROOT, 'apps/desktop/src'))
+      .filter(f => f.endsWith('.rs'))
+      .map(f => read(`apps/desktop/src/${f}`))
+
+  /** Each `#[tauri::command]` function's source, by name, up to its closing brace. */
+  function commandFunctions(): Map<string, string> {
+    const fns = new Map<string, string>()
+    for (const src of rustSources()) {
+      for (const m of src.matchAll(/#\[tauri::command\][\s\S]*?\bfn\s+([a-z0-9_]+)[\s\S]*?\n\}/g)) {
+        fns.set(m[1], m[0])
+      }
+    }
+    return fns
+  }
+
+  /** Field names of every struct declared in the desktop crate, by struct name. */
+  function structFields(): Map<string, string[]> {
+    const structs = new Map<string, string[]>()
+    for (const src of rustSources()) {
+      for (const m of src.matchAll(/\bstruct\s+([A-Za-z0-9_]+)\s*\{([\s\S]*?)\n\}/g)) {
+        structs.set(m[1], [...m[2].matchAll(/^\s*(?:pub\s+)?([a-z0-9_]+)\s*:/gm)].map(f => f[1]))
+      }
+    }
+    return structs
+  }
+
+  it('finds the registered commands it is checking', () => {
+    const fns = commandFunctions()
+    for (const name of registeredCommands()) expect(fns.has(name), `${name} has no #[tauri::command] fn`).toBe(true)
+  })
+
+  it('no registered command returns a field named for a seed, secret or private key', () => {
+    const fns = commandFunctions()
+    const structs = structFields()
+    const offenders: string[] = []
+    for (const name of registeredCommands()) {
+      const src = fns.get(name) ?? ''
+      // Keys of `serde_json::json!({ … })` literals the command builds.
+      for (const key of src.matchAll(/"([A-Za-z_]+)"\s*:/g)) {
+        if (SECRET_FIELD.test(key[1])) offenders.push(`${name} → "${key[1]}"`)
+      }
+      // Fields of a struct it returns.
+      const returned = src.match(/->\s*(?:Result<\s*)?([A-Za-z0-9_]+)/)?.[1]
+      for (const field of (returned && structs.get(returned)) || []) {
+        if (SECRET_FIELD.test(field)) offenders.push(`${name} → ${returned}.${field}`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the frontend has no call that asks Rust to mint a key for someone else', () => {
+    expect(invokedCommands().has('generate_ephemeral_ed25519')).toBe(false)
+    expect(registeredCommands().has('generate_ephemeral_ed25519')).toBe(false)
+  })
+})

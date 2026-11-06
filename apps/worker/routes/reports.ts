@@ -15,6 +15,7 @@ import { verifyReportAccess, isReport } from '../lib/report-access'
 import { linkCaseToReportBodySchema } from '@protocol/schemas/report-links'
 import { hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
+import { toConversationResponse } from '../services/conversations'
 
 /**
  * Normalize conversation metadata — Drizzle bun-sql may double-serialize JSONB
@@ -119,7 +120,7 @@ reports.get('/',
       data.total = data.conversations.length
     }
 
-    return c.json(data)
+    return c.json({ conversations: data.conversations.map(toConversationResponse), total: data.total })
   },
 )
 
@@ -190,7 +191,7 @@ reports.post('/',
       category: body.category,
     }, undefined, conversation.hubId)
 
-    return c.json(conversation, 201)
+    return c.json(toConversationResponse(conversation), 201)
   },
 )
 
@@ -293,7 +294,7 @@ reports.get('/:id',
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    return c.json(report)
+    return c.json(toConversationResponse(report))
   },
 )
 
@@ -457,7 +458,7 @@ reports.post('/:id/assign',
       assignedTo: body.assignedTo,
     }, updated.hubId)
 
-    return c.json(updated)
+    return c.json(toConversationResponse(updated))
   },
 )
 
@@ -497,7 +498,7 @@ reports.patch('/:id',
     const updated = await services.conversations.update(id, patchBody)
 
     await audit(services.audit, 'reportUpdated', pubkey, { reportId: id, ...body }, undefined, updated.hubId)
-    return c.json(updated)
+    return c.json(toConversationResponse(updated))
   },
 )
 

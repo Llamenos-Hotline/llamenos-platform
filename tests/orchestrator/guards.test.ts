@@ -624,7 +624,10 @@ describe('rail: pr-why is read-only (#2469)', () => {
     './gh.js': ['REPO', 'describeGhFailure', 'gh'],
     './board.js': ['CODEOWNERS_QUERY', 'codeOwnersOf', 'codeOwnersTextFrom', 'deriveBranchRuleset', 'parseCodeOwners', 'type BranchRuleset', 'type CodeOwnerRule', 'type CodeOwnersResponse'],
     './missing-checks.js': ['defaultMissingChecksDeps', 'diagnosePrHead', 'type Carrier', 'type HeadDiagnosis', 'type MissingChecksDeps'],
-    './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'laneIdFromBranch', 'reviewOutcomeToken'],
+    // #2490: `reviewOutcomeFromAnnotations` is the ONE reader of the
+    // fleet/review outcome annotation, pure — shared with board so the two
+    // cannot drift on where the token lives.
+    './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'laneIdFromBranch', 'reviewOutcomeFromAnnotations', 'reviewOutcomeToken', 'type CheckRunAnnotation', 'type ReviewOutcomeRead'],
     // #2480: the queue-branch grammar, pure — shared so the two cannot drift.
     './queue-sweep.js': ['parseQueueBranch'],
   }

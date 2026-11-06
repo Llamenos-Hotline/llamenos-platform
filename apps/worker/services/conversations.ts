@@ -5,7 +5,7 @@
  * file records, contact identifiers, volunteer load, and contact summaries.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, desc, sql, count, isNotNull, ne, inArray } from 'drizzle-orm'
+import { eq, and, or, desc, sql, count, isNotNull, ne, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   caseRecords,
@@ -28,6 +28,12 @@ import { listAdminPubkeys } from '../lib/hub-admin'
 import { mayRewrapHistoryTo } from '@shared/history-rewrap-gate'
 import { ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
+import {
+  conversationMetadataSchema,
+  type Conversation,
+  type ConversationMessage,
+  type ConversationMetadata,
+} from '@protocol/schemas/conversations'
 
 const logger = createLogger('services.conversations')
 
@@ -43,6 +49,14 @@ export interface ConversationFilters {
   type?: 'report' | 'conversation'
   contactHash?: string
   authorPubkey?: string
+  /**
+   * Restrict the list to what one member may see without
+   * `conversations:read-all`: their own conversations, plus the waiting queue
+   * on the channels in `waitingChannels`. An empty `waitingChannels` means no
+   * waiting conversation at all — never "every channel". Applied in the same
+   * WHERE as every other filter, so `total` and the page agree.
+   */
+  visibleTo?: { pubkey: string; waitingChannels: readonly string[] }
   limit?: number
   offset?: number
 }
@@ -153,6 +167,98 @@ type ConversationRow = typeof conversations.$inferSelect
 type MessageRow = typeof messages.$inferSelect
 type FileRow = typeof files.$inferSelect
 
+// ---------------------------------------------------------------------------
+// Wire serialization (#2118)
+// ---------------------------------------------------------------------------
+//
+// A row is not a response. Postgres hands back `null` for every unset column
+// and `Date` for timestamps; `conversationResponseSchema` and
+// `messageResponseSchema` declare optional fields as ABSENT and timestamps as
+// ISO strings. Returning the row let the server emit a shape its own schema
+// rejects (`assignedTo: null` on every waiting conversation), so every
+// conversation and message leaves the server through these two functions,
+// whose return types ARE the schemas.
+
+const CONVERSATION_STATUSES = ['active', 'waiting', 'closed'] as const satisfies readonly NonNullable<Conversation['status']>[]
+const MESSAGE_DIRECTIONS = ['inbound', 'outbound'] as const satisfies readonly NonNullable<ConversationMessage['direction']>[]
+
+function isOneOf<T extends string>(values: readonly T[], value: string): value is T {
+  return (values as readonly string[]).includes(value)
+}
+
+/**
+ * Stored metadata, as the schema declares it. Bun's SQL driver can hand a
+ * jsonb object back as its JSON text (see `list`), so the string form is
+ * parsed first.
+ *
+ * Every write path is bound to `conversationMetadataSchema`, but a row written
+ * before it was (PATCH used to accept any record) may not satisfy it. Such a
+ * row is served WITHOUT its metadata and logged as an error naming the row —
+ * never thrown: one bad row must not take the whole list down for every
+ * member of the hub, which is what a throw here would do.
+ */
+function metadataResponse(rowId: string, stored: unknown): ConversationMetadata | undefined {
+  if (stored === null || stored === undefined) return undefined
+  let value: unknown = stored
+  if (typeof stored === 'string') {
+    try {
+      value = JSON.parse(stored)
+    } catch {
+      logger.error('Conversation metadata is not JSON — served without it', { conversationId: rowId })
+      return undefined
+    }
+  }
+  const parsed = conversationMetadataSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  logger.error('Conversation metadata does not satisfy conversationMetadataSchema — served without it', {
+    conversationId: rowId,
+    issues: parsed.error.issues.map(i => ({ path: i.path.join('.'), message: i.message })),
+  })
+  return undefined
+}
+
+export function toConversationResponse(row: ConversationRow): Conversation {
+  if (!isOneOf(CONVERSATION_STATUSES, row.status)) {
+    throw new Error(`conversation ${row.id} has unknown status "${row.status}"`)
+  }
+  const metadata = metadataResponse(row.id, row.metadata)
+  return {
+    id: row.id,
+    channelType: row.channelType,
+    contactIdentifierHash: row.contactIdentifierHash,
+    ...(row.assignedTo !== null && { assignedTo: row.assignedTo }),
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    ...(row.lastMessageAt !== null && { lastMessageAt: row.lastMessageAt.toISOString() }),
+    messageCount: row.messageCount,
+    ...(metadata !== undefined && { metadata }),
+  }
+}
+
+export function toMessageResponse(row: MessageRow): ConversationMessage {
+  if (!isOneOf(MESSAGE_DIRECTIONS, row.direction)) {
+    throw new Error(`message ${row.id} has unknown direction "${row.direction}"`)
+  }
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    direction: row.direction,
+    ...(row.authorPubkey !== null && { authorPubkey: row.authorPubkey }),
+    encryptedContent: row.encryptedContent,
+    readerEnvelopes: row.readerEnvelopes as RecipientEnvelope[],
+    createdAt: row.createdAt.toISOString(),
+    ...(row.status !== null && { status: row.status }),
+    ...(row.hasAttachments !== null && { hasAttachments: row.hasAttachments }),
+    attachmentIds: row.attachmentIds,
+    ...(row.deliveredAt !== null && { deliveredAt: row.deliveredAt.toISOString() }),
+    ...(row.readAt !== null && { readAt: row.readAt.toISOString() }),
+    ...(row.failureReason !== null && { failureReason: row.failureReason }),
+    ...(row.retryCount !== null && { retryCount: row.retryCount }),
+    ...(row.externalId !== null && { externalId: row.externalId }),
+  }
+}
+
 /**
  * A file row read through its hub. `hub_id` / `owner_kind` are nullable in the
  * database for one expand/contract release only (the previous release never
@@ -239,6 +345,15 @@ export class ConversationsService {
     if (filters.authorPubkey) {
       conditions.push(eq(conversations.contactIdentifierHash, filters.authorPubkey))
     }
+    if (filters.visibleTo) {
+      const own = eq(conversations.assignedTo, filters.visibleTo.pubkey)
+      const { waitingChannels } = filters.visibleTo
+      conditions.push(
+        waitingChannels.length === 0
+          ? own
+          : or(own, and(eq(conversations.status, 'waiting'), inArray(conversations.channelType, [...waitingChannels])))!,
+      )
+    }
 
     // Filter by type using metadata JSONB.
     // Drizzle bun-sql double-serializes JSONB objects in insert .values(), storing
@@ -253,8 +368,8 @@ export class ConversationsService {
           ELSE NULL
         END
       ) = 'report'`)
-    } else if (!filters.type) {
-      // Default: exclude reports
+    } else {
+      // `type: 'conversation'` and the default both exclude reports
       conditions.push(
         sql`(
           ${conversations.metadata} IS NULL

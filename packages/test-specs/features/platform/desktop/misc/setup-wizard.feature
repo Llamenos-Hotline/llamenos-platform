@@ -80,22 +80,27 @@ Feature: Setup Wizard
     Then I should see "Messaging Settings"
     And I should see "Auto-Response Template"
 
-  Scenario: Step 5 - generate invite for a volunteer
-    Given I am on the invite step
-    When I fill in the volunteer name
-    And I fill in the volunteer phone
-    Then the "Generate Invite" button should be enabled
-    When I click "Generate Invite"
-    Then I should see "Generated Invites"
-    And the volunteer name should appear with an invite code
-
-  Scenario: Step 6 - summary displays configured values
+  Scenario: Step 5 - summary displays configured values
     Given I have completed all wizard steps
     Then I should see "Review & Launch"
     And I should see the configured hotline name
     And I should see the selected channels
-    And I should see a "Go to Dashboard" button
+    And I should see a "Launch Hotline" button
     And the "Next" button should not be visible
+    And the "Back" button should not be visible
+
+  # Inviting comes after launch: an invite admits someone into a hub, and the
+  # hub only exists once setup completes (#2194).
+  Scenario: Step 6 - after launch, invite a volunteer into the new hub
+    Given I have launched the hotline from the setup wizard
+    When I fill in the volunteer name
+    And I fill in the volunteer phone
+    And I choose the volunteer role in the form
+    Then the "Generate Invite" button should be enabled
+    When I click "Generate Invite"
+    Then I should see "Generated Invites"
+    And the volunteer name should appear with an invite code
+    And the invite should name the hub the wizard launched and the role chosen
     And the "Back" button should not be visible
 
   Scenario: Step 1 - next disabled with empty hotline name
@@ -117,5 +122,6 @@ Feature: Setup Wizard
 
   Scenario: Complete setup - full flow to dashboard
     When I complete the entire setup wizard
+    And I click "Launch Hotline"
     And I click "Go to Dashboard"
     Then I should be redirected to the dashboard
