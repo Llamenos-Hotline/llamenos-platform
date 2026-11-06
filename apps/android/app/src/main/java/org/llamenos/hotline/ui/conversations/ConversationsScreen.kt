@@ -17,9 +17,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MarkChatRead
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -93,12 +95,13 @@ fun ConversationsScreen(
                                 Text(
                                     text = when (filter) {
                                         ConversationFilter.ACTIVE -> stringResource(R.string.filter_active)
+                                        ConversationFilter.WAITING -> stringResource(R.string.conversation_status_waiting)
                                         ConversationFilter.CLOSED -> stringResource(R.string.filter_closed)
                                         ConversationFilter.ALL -> stringResource(R.string.filter_all)
                                     },
                                 )
                             },
-                            modifier = Modifier.testTag("filter-${filter.queryParam}"),
+                            modifier = Modifier.testTag("filter-${filter.tag}"),
                         )
                     }
                 }
@@ -119,6 +122,18 @@ fun ConversationsScreen(
                 )
 
                 val displayedConversations = viewModel.filteredConversations()
+                val loadError = uiState.error
+
+                // Rows from an earlier load are still this hub's: keep them, and say the
+                // refresh failed above them.
+                if (loadError != null && uiState.conversations.isNotEmpty()) {
+                    org.llamenos.hotline.ui.components.ErrorCard(
+                        error = loadError,
+                        onDismiss = { viewModel.dismissError() },
+                        onRetry = { viewModel.loadConversations() },
+                        testTag = "conversations-error",
+                    )
+                }
 
                 when {
                     uiState.isLoading && uiState.conversations.isEmpty() -> {
@@ -130,6 +145,16 @@ fun ConversationsScreen(
                         ) {
                             CircularProgressIndicator()
                         }
+                    }
+
+                    // Nothing listed because the load FAILED — never the empty state, which
+                    // would tell a volunteer there is no one to answer (#2118). No dismiss:
+                    // dismissing would leave exactly that empty state behind.
+                    loadError != null && uiState.conversations.isEmpty() -> {
+                        ConversationsLoadFailed(
+                            error = loadError,
+                            onRetry = { viewModel.loadConversations() },
+                        )
                     }
 
                     displayedConversations.isEmpty() && !uiState.isLoading -> {
@@ -170,15 +195,53 @@ fun ConversationsScreen(
                     }
                 }
 
-                // Error message
-                if (uiState.error != null) {
-                    org.llamenos.hotline.ui.components.ErrorCard(
-                        error = uiState.error ?: "",
-                        onDismiss = { viewModel.dismissError() },
-                        onRetry = { viewModel.loadConversations() },
-                        testTag = "conversations-error",
-                    )
-                }
+            }
+        }
+    }
+}
+
+/**
+ * The list could not be loaded — not "there are no conversations". Shown in place of the
+ * list, with the reason and a retry.
+ */
+@Composable
+private fun ConversationsLoadFailed(
+    error: String,
+    onRetry: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp)
+            .testTag("conversations-error"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Filled.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(48.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.conversations_error_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.testTag("conversations-error-title"),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("conversations-error-message"),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = onRetry,
+                modifier = Modifier.testTag("conversations-error-retry"),
+            ) {
+                Text(stringResource(R.string.common_retry))
             }
         }
     }

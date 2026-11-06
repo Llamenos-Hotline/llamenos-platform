@@ -34,7 +34,7 @@ class ConversationSteps : BaseSteps() {
     @Then("the filter chips should be visible")
     fun theFilterChipsShouldBeVisible() {
         assertAnyTagDisplayed(
-            "filter-active", "filter-closed", "filter-all",
+            "filter-active", "filter-waiting", "filter-closed", "filter-all",
             "conversation-filters", "conversations-empty",
         )
     }
@@ -43,6 +43,7 @@ class ConversationSteps : BaseSteps() {
     fun iShouldSeeTheFilterChip(filterName: String) {
         val tag = when (filterName) {
             "Active" -> "filter-active"
+            "Waiting" -> "filter-waiting"
             "Closed" -> "filter-closed"
             "All" -> "filter-all"
             else -> return
@@ -54,6 +55,7 @@ class ConversationSteps : BaseSteps() {
     fun theFilterShouldBeSelected(filterName: String) {
         val tag = when (filterName) {
             "Active" -> "filter-active"
+            "Waiting" -> "filter-waiting"
             "Closed" -> "filter-closed"
             "All" -> "filter-all"
             else -> return
@@ -73,6 +75,7 @@ class ConversationSteps : BaseSteps() {
     fun iTapTheFilterChip(filterName: String) {
         val tag = when (filterName) {
             "Active" -> "filter-active"
+            "Waiting" -> "filter-waiting"
             "Closed" -> "filter-closed"
             "All" -> "filter-all"
             else -> return

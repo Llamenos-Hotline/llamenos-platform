@@ -3,6 +3,7 @@ package org.llamenos.hotline.ui.conversations
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,11 +35,18 @@ import javax.inject.Inject
 
 /**
  * Filter options for the conversations list.
+ *
+ * [status] is the `status` the server's `listConversationsQuerySchema` accepts
+ * (`waiting | active | closed`); [ALL] sends none, which is how the server is asked
+ * for every status — it has no `all` and answers one with a 400 (#2118). A newly
+ * arrived conversation is `waiting` until someone claims it, so [WAITING] is the only
+ * filter that reaches it besides [ALL].
  */
-enum class ConversationFilter(val queryParam: String) {
-    ACTIVE("active"),
-    CLOSED("closed"),
-    ALL("all"),
+enum class ConversationFilter(val tag: String, val status: String?) {
+    ACTIVE("active", "active"),
+    WAITING("waiting", "waiting"),
+    CLOSED("closed", "closed"),
+    ALL("all", null),
 }
 
 data class ConversationsUiState(
@@ -98,6 +106,9 @@ class ConversationsViewModel @Inject constructor(
      * from, not whichever hub is active by the time the user taps.
      */
     private var loadedHubId: String? = null
+
+    /** The hub [ConversationsUiState.conversations] was listed from, so a failed load never shows another hub's rows. */
+    private var listedHubId: String? = null
 
     private fun conversationsPath(path: String = ""): String {
         val hubId = checkNotNull(loadedHubId) { "Conversations are hub-scoped, but no hub is loaded" }
@@ -164,12 +175,13 @@ class ConversationsViewModel @Inject constructor(
             }
 
             try {
-                val filter = _uiState.value.filter
+                val status = _uiState.value.filter.status
                 val response = apiService.request<ConversationListResponse>(
                     "GET",
-                    conversationsPath() + "?status=${filter.queryParam}",
+                    conversationsPath() + (status?.let { "?status=$it" } ?: ""),
                 )
 
+                listedHubId = hubId
                 _uiState.update {
                     it.copy(
                         conversations = response.conversations,
@@ -178,12 +190,21 @@ class ConversationsViewModel @Inject constructor(
                         totalConversations = response.total.toInt(),
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                // A response we could not decode is a failure, never an empty list (#2118):
+                // "the server has no conversations" and "I could not understand the server"
+                // must not look alike. The error state replaces the list; rows already on
+                // screen stay only if they are this hub's.
+                val keep = listedHubId == hubId
                 _uiState.update {
                     it.copy(
+                        conversations = if (keep) it.conversations else emptyList(),
+                        totalConversations = if (keep) it.totalConversations else 0,
                         isLoading = false,
                         isRefreshing = false,
-                        error = e.message ?: "Failed to load conversations",
+                        error = e.message ?: e::class.simpleName ?: "Failed to load conversations",
                     )
                 }
             }
