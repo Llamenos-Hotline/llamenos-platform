@@ -287,8 +287,11 @@ conversations.get('/:id/messages',
 
 /**
  * POST /conversations/:id/messages — send outbound message
- * Body: { encryptedContent, readerEnvelopes, plaintextForSending? }
- * If plaintext is provided, it's sent via the messaging adapter then discarded.
+ * Body: { encryptedContent, readerEnvelopes, plaintextForSending }
+ * On an external channel (SMS/WhatsApp/Signal/RCS) `plaintextForSending` is REQUIRED:
+ * it is what the carrier transmits, and the server keeps no plaintext to rebuild it
+ * from. It is handed to the messaging adapter and then discarded — never stored or
+ * logged. A request without it is refused 422 before anything is written (#2500).
  */
 conversations.post('/:id/messages',
   describeRoute({
@@ -303,6 +306,7 @@ conversations.post('/:id/messages',
           },
         },
       },
+      422: { description: 'Refused: an external-channel send needs plaintextForSending (code plaintext_for_sending_required), or a client-sealed message names no admin reader. Nothing is stored.' },
       ...authErrors,
       ...notFoundError,
     },

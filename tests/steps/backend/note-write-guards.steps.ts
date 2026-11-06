@@ -228,7 +228,15 @@ async function sendMessage(
   const res = await apiPost(
     request,
     `/hubs/${hub}/conversations/${s(world).conversationId}/messages`,
-    { encryptedContent, readerEnvelopes: [{ pubkey: recipient.pubkeyHex, ...envelope }] },
+    {
+      encryptedContent,
+      readerEnvelopes: [{ pubkey: recipient.pubkeyHex, ...envelope }],
+      // The conversation is on an external channel: the carrier transmits the
+      // plaintext, the sealed copy is for the hub's readers, and the server
+      // refuses a send without it (#2500) — so the admin-key guard under test
+      // is what decides this request, not the missing plaintext.
+      plaintextForSending: 'a client-sealed reply',
+    },
     ADMIN_SEED,
   )
   s(world).lastStatus = res.status
