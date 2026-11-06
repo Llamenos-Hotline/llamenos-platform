@@ -13,7 +13,9 @@
  *  - the desktop client's Rust `create_auth_token` always signs a nonce, which
  *    the route dropped, so a nonce-signed redemption could never verify.
  *
- * Only the rate limiter is stubbed. Invite, user and auth-nonce rows are real.
+ * Only the rate limiter is stubbed. Invite, user, auth-nonce and audit rows are
+ * real: a successful redemption is audited as the redeemer's own act (#1231),
+ * so a replay that got past authentication would also leave a second entry.
  *
  * Requires postgres at DATABASE_URL (default: local dev postgres). Each run
  * uses an isolated schema that is dropped on teardown.
@@ -32,6 +34,7 @@ import type { AppEnv } from '@worker/types'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { IdentityService } from '../../services/identity'
+import { AuditService } from '../../services/audit'
 import { ServiceError } from '../../services/settings'
 import { buildAuthMessage } from '../../lib/auth'
 
@@ -90,6 +93,17 @@ const DDL = `
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'active'
   );
+  CREATE TABLE ${TEST_SCHEMA}.audit_log (
+    id TEXT PRIMARY KEY,
+    hub_id TEXT,
+    action TEXT NOT NULL,
+    actor_pubkey TEXT NOT NULL,
+    details JSONB,
+    previous_entry_hash TEXT,
+    entry_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    erased_at TIMESTAMPTZ
+  );
 `
 
 const JSONB_TYPE = {
@@ -113,10 +127,12 @@ let adminSql: ReturnType<typeof postgres>
 let testSql: ReturnType<typeof postgres>
 let db: Database
 let identity: IdentityService
+let audit: AuditService
 
 async function makeApp() {
   const services = {
     identity,
+    audit,
     settings: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
   }
   const { default: invites } = await import('@worker/routes/invites')
@@ -190,6 +206,11 @@ async function seedInvite(): Promise<string> {
 
 const inviteRow = async (code: string) =>
   (await testSql`SELECT used_by FROM invite_codes WHERE code = ${code}`)[0] as { used_by: string | null }
+/** Join entries for a redeemer: the act is theirs, in the invite's hub. */
+const joinEntries = async (pubkey: string) =>
+  (await testSql`
+    SELECT hub_id FROM audit_log WHERE action = 'userAdded' AND actor_pubkey = ${pubkey}
+  `) as unknown as { hub_id: string | null }[]
 const userCount = async (pubkey: string) =>
   Number((await testSql`SELECT count(*)::int AS n FROM users WHERE pubkey = ${pubkey}`)[0].n)
 
@@ -204,6 +225,7 @@ beforeAll(async () => {
   })
   db = drizzle({ client: testSql, schema }) as unknown as Database
   identity = new IdentityService(db)
+  audit = new AuditService(db)
 })
 
 afterAll(async () => {
@@ -213,7 +235,7 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE users, invite_codes, auth_nonces, hubs CASCADE`
+  await testSql`TRUNCATE TABLE users, invite_codes, auth_nonces, hubs, audit_log CASCADE`
 })
 
 describe('POST /api/invites/redeem — replay protection (#1367)', () => {
@@ -227,6 +249,7 @@ describe('POST /api/invites/redeem — replay protection (#1367)', () => {
     expect(res.status).toBe(200)
     expect((await inviteRow(code)).used_by).toBe(device.pubkey)
     expect(await userCount(device.pubkey)).toBe(1)
+    expect(await joinEntries(device.pubkey)).toEqual([{ hub_id: 'hub-replay' }])
   })
 
   it('rejects a token whose nonce was altered after signing', async () => {
@@ -257,6 +280,7 @@ describe('POST /api/invites/redeem — replay protection (#1367)', () => {
       expect(replay.status).toBe(401)
       expect(await replay.json()).toEqual({ error: 'Authentication failed' })
       expect(await userCount(device.pubkey)).toBe(1)
+      expect(await joinEntries(device.pubkey), 'a replay was audited as a second join').toHaveLength(1)
     })
 
     it(`a ${form} token refused by the invite service cannot be replayed onto another invite`, async () => {
@@ -276,6 +300,7 @@ describe('POST /api/invites/redeem — replay protection (#1367)', () => {
       expect(replay.status).toBe(401)
       expect((await inviteRow(target)).used_by).toBeNull()
       expect(await userCount(device.pubkey)).toBe(0)
+      expect(await joinEntries(device.pubkey)).toHaveLength(0)
     })
   }
 })
