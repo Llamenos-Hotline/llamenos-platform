@@ -326,9 +326,13 @@ class ConversationsViewModel @Inject constructor(
                     )
                 }
 
+                // A reply carries TWO things (#2500): the sealed copy for the hub's
+                // readers, and the plaintext the carrier transmits. The server keeps
+                // no plaintext and refuses an external-channel send without it.
                 val request = SendMessageRequest(
                     encryptedContent = encrypted.ciphertextHex,
                     readerEnvelopes = envelopes,
+                    plaintextForSending = text,
                 )
 
                 apiService.request<Message>(
@@ -522,6 +526,7 @@ class ConversationsViewModel @Inject constructor(
                     channelType = channelType,
                     createdAt = message.createdAt,
                     isRead = message.readAt != null,
+                    deliveryFailed = message.status == "failed",
                 )
             } else {
                 null

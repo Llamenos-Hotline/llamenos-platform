@@ -54,7 +54,8 @@
       "callSite": "apps/ios/Sources/ViewModels/ConversationsViewModel.swift",
       "optionalKeys": [
         "encryptedContent",
-        "readerEnvelopes"
+        "readerEnvelopes",
+        "plaintextForSending"
       ]
     },
     {
@@ -256,7 +257,8 @@
             "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "pubkey": "abababababababababababababababababababababababababababababababab"
           }
-        ]
+        ],
+        "plaintext_for_sending": "We hear you. Help is on the way."
       },
       "wire": {
         "encryptedContent": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
@@ -266,7 +268,8 @@
             "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "pubkey": "abababababababababababababababababababababababababababababababab"
           }
-        ]
+        ],
+        "plaintextForSending": "We hear you. Help is on the way."
       }
     },
     "createContact": {
