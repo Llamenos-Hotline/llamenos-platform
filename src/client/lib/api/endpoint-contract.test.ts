@@ -5,9 +5,10 @@
  * no longer reported as "no recovery group".
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { setActiveHub, ApiError } from './client'
+import { setActiveHub, ApiError, NoActiveHubError } from './client'
 import { getRecoveryGroup } from './recovery'
-import { updateDirectoryContact, uploadEntityFile } from './directory'
+import { updateDirectoryContact } from './directory'
+import { initUpload, completeUpload, getFileEnvelopes } from './files'
 import { createRolesFromTemplate } from './cms'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
 
@@ -68,10 +69,27 @@ describe('directory', () => {
     await updateDirectoryContact('c-1', {})
     expect(calls).toEqual([{ method: 'PATCH', url: '/api/hubs/hub-1/directory/c-1' }])
   })
+})
 
-  it('uploads an entity file to the unscoped route even when a hub is active', async () => {
-    await uploadEntityFile(new File(['x'], 'x.bin'))
-    expect(calls).toEqual([{ method: 'POST', url: '/api/uploads/entity-file' }])
+// Uploads and files exist only under /hubs/:hubId (#2462): a file belongs to the
+// hub of what it is attached to, and an unscoped request has no hub to belong to.
+describe('files', () => {
+  it('starts, completes and reads uploads inside the active hub', async () => {
+    await initUpload({ totalSize: 1, totalChunks: 1, owner: { kind: 'entity_field' } })
+    await completeUpload('u-1')
+    await getFileEnvelopes('f-1')
+    expect(calls).toEqual([
+      { method: 'POST', url: '/api/hubs/hub-1/uploads/init' },
+      { method: 'POST', url: '/api/hubs/hub-1/uploads/u-1/complete' },
+      { method: 'GET', url: '/api/hubs/hub-1/files/f-1/envelopes' },
+    ])
+  })
+
+  it('refuses to upload with no hub selected rather than calling an unscoped route', async () => {
+    setActiveHub(null)
+    await expect(initUpload({ totalSize: 1, totalChunks: 1, owner: { kind: 'entity_field' } }))
+      .rejects.toBeInstanceOf(NoActiveHubError)
+    expect(calls).toEqual([])
   })
 })
 

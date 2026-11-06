@@ -55,10 +55,8 @@ export function FileUpload({ conversationId, recipientPubkeys, onUploadComplete,
         ))
 
         const result = await chunkedUpload({
-          encryptedContent: encrypted.encryptedContent,
-          conversationId,
-          recipientEnvelopes: encrypted.recipientEnvelopes,
-          encryptedMetadata: encrypted.encryptedMetadata,
+          encrypted,
+          owner: { kind: 'conversation', conversationId },
           onProgress: (completed, total) => {
             setUploads(prev => prev.map((u, idx) =>
               idx === uploadIndex ? { ...u, completedChunks: completed, totalChunks: total } : u

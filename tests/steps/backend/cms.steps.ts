@@ -841,8 +841,18 @@ Then('the interactions should be in chronological order', async ({ world }) => {
 // EVIDENCE STEPS (Epic 325)
 // ============================================================
 
+/**
+ * The hub of the record under test. A file is attached to a record inside the
+ * record's own hub (#2462); a record with no hub cannot have one.
+ */
+function recordHubId(world: Record<string, unknown>): string {
+  const hubId = getCmsState(world).lastRecord?.hubId
+  if (typeof hubId !== 'string') throw new Error('The record under test has no hub, so no file can be attached to it')
+  return hubId
+}
+
 When('the admin uploads evidence to the record', async ({ request, world }) => {
-  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
+  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: recordHubId(world) })
 })
 
 Then('the evidence should have a generated UUID id', async ({ world }) => {
@@ -860,7 +870,7 @@ Then('the evidence should have an integrity hash', async ({ world }) => {
 })
 
 Given('evidence exists on the record', async ({ request, world }) => {
-  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: getScenarioState(world).hubId })
+  getCmsState(world).lastEvidence = await uploadEvidenceViaApi(request, getCmsState(world).lastRecord!.id as string, { hubId: recordHubId(world) })
 })
 
 When('the admin gets the custody chain for the evidence', async ({ request, world }) => {

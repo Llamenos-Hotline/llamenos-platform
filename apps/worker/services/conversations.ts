@@ -8,6 +8,7 @@
 import { eq, and, desc, sql, count, isNotNull, ne, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
+  caseRecords,
   conversations,
   messages,
   files,
@@ -17,7 +18,7 @@ import {
 } from '../db/schema'
 import type { ConversationStatus, MessageDeliveryStatus } from '../types'
 import type { IncomingMessage, MessageStatusUpdate } from '../messaging/adapter'
-import type { MessagingChannelType, FileKeyEnvelope } from '@shared/types'
+import type { MessagingChannelType, FileKeyEnvelope, FileOwner } from '@shared/types'
 import type { RecipientEnvelope } from '@shared/types'
 import { encryptMessageForStorage, encryptContactIdentifier, decryptContactIdentifier } from '../lib/crypto'
 import type { HpkeRecipientPubkey } from '../lib/hpke-recipient'
@@ -82,8 +83,10 @@ export interface MessagePagination {
 
 export interface CreateFileInput {
   id: string
-  conversationId: string
-  messageId?: string
+  /** The path hub of the upload — the file's hub. */
+  hubId: string
+  /** The file's parent inside `hubId` (#2462). */
+  owner: FileOwner
   uploadedBy: string
   recipientEnvelopes: FileKeyEnvelope[]
   encryptedMetadata: Array<{
@@ -149,6 +152,13 @@ export interface ContactSummary {
 type ConversationRow = typeof conversations.$inferSelect
 type MessageRow = typeof messages.$inferSelect
 type FileRow = typeof files.$inferSelect
+
+/**
+ * A file row read through its hub. `hub_id` / `owner_kind` are nullable in the
+ * database for one expand/contract release only (the previous release never
+ * names them); a row read by hub has both by construction.
+ */
+export type HubFileRow = FileRow & { hubId: string; ownerKind: NonNullable<FileRow['ownerKind']> }
 
 // ---------------------------------------------------------------------------
 // Service
@@ -928,13 +938,38 @@ export class ConversationsService {
 
   // --- File management ---
 
-  async createFile(input: CreateFileInput): Promise<FileRow> {
+  /**
+   * Record a new upload. The owner must exist inside `input.hubId`: the
+   * composite (parent id, hub_id) foreign keys refuse anything else, and this
+   * check turns that refusal into the same 404 a missing parent gets, so a
+   * parent of another hub is indistinguishable from one that does not exist.
+   */
+  async createFile(input: CreateFileInput): Promise<HubFileRow> {
+    const { owner, hubId } = input
+    if (owner.kind === 'conversation') {
+      const [parent] = await this.db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.id, owner.conversationId), eq(conversations.hubId, hubId)))
+        .limit(1)
+      if (!parent) throw new ServiceError(404, 'Conversation not found')
+    } else if (owner.kind === 'case_record') {
+      const [parent] = await this.db
+        .select({ id: caseRecords.id })
+        .from(caseRecords)
+        .where(and(eq(caseRecords.id, owner.caseRecordId), eq(caseRecords.hubId, hubId)))
+        .limit(1)
+      if (!parent) throw new ServiceError(404, 'Case record not found')
+    }
+
     const [row] = await this.db
       .insert(files)
       .values({
         id: input.id,
-        conversationId: input.conversationId,
-        messageId: input.messageId,
+        hubId,
+        ownerKind: owner.kind,
+        conversationId: owner.kind === 'conversation' ? owner.conversationId : null,
+        caseRecordId: owner.kind === 'case_record' ? owner.caseRecordId : null,
         uploadedBy: input.uploadedBy,
         recipientEnvelopes: input.recipientEnvelopes,
         encryptedMetadata: input.encryptedMetadata,
@@ -945,39 +980,42 @@ export class ConversationsService {
       })
       .returning()
 
-    return row
+    return inHub(row, hubId)
   }
 
-  async getFile(id: string): Promise<FileRow> {
+  /**
+   * A file of `hubId`. A file of another hub — or one with no hub — answers
+   * exactly like a missing one, so nothing outside the hub learns it exists.
+   */
+  async getFileInHub(id: string, hubId: string): Promise<HubFileRow> {
     const [row] = await this.db
       .select()
       .from(files)
-      .where(eq(files.id, id))
+      .where(and(eq(files.id, id), eq(files.hubId, hubId)))
       .limit(1)
 
     if (!row) throw new ServiceError(404, 'File not found')
-    return row
+    return inHub(row, hubId)
   }
 
-  async updateFileStatus(
-    id: string,
-    update: { completedChunks?: number; status?: string; completedAt?: Date },
-  ): Promise<FileRow> {
-    const updates: Record<string, unknown> = {}
-    if (update.completedChunks !== undefined) {
-      updates.completedChunks = update.completedChunks
-    }
-    if (update.status !== undefined) updates.status = update.status
-    if (update.completedAt !== undefined) updates.completedAt = update.completedAt
-
+  /**
+   * The file a case record's evidence entry names: it must have been uploaded
+   * TO that case record (#2462). Its hub is the record's hub — the composite
+   * (case_record_id, hub_id) foreign key admits nothing else.
+   */
+  async getCaseRecordFile(id: string, caseRecordId: string): Promise<HubFileRow> {
     const [row] = await this.db
-      .update(files)
-      .set(updates)
-      .where(eq(files.id, id))
-      .returning()
+      .select()
+      .from(files)
+      .where(and(
+        eq(files.id, id),
+        eq(files.ownerKind, 'case_record'),
+        eq(files.caseRecordId, caseRecordId),
+      ))
+      .limit(1)
 
-    if (!row) throw new ServiceError(404, 'File not found')
-    return row
+    if (!row || row.hubId === null) throw new ServiceError(404, 'File not found')
+    return inHub(row, row.hubId)
   }
 
   async markChunkComplete(id: string): Promise<FileRow> {
@@ -993,18 +1031,17 @@ export class ConversationsService {
     return row
   }
 
-  async markFileComplete(id: string): Promise<FileRow> {
+  /** Mark an upload complete; returns the completion time it recorded. */
+  async markFileComplete(id: string): Promise<Date> {
+    const completedAt = new Date()
     const [row] = await this.db
       .update(files)
-      .set({
-        status: 'complete',
-        completedAt: new Date(),
-      })
+      .set({ status: 'complete', completedAt })
       .where(eq(files.id, id))
-      .returning()
+      .returning({ id: files.id })
 
     if (!row) throw new ServiceError(404, 'File not found')
-    return row
+    return completedAt
   }
 
   async addFileRecipient(
@@ -1053,17 +1090,19 @@ export class ConversationsService {
     return row
   }
 
-  async listFiles(conversationId?: string): Promise<FileRow[]> {
-    const conditions = [eq(files.status, 'complete')]
-    if (conversationId) {
-      conditions.push(eq(files.conversationId, conversationId))
-    }
-
-    return this.db
+  /** The completed attachments of one conversation of `hubId`. */
+  async listConversationFiles(conversationId: string, hubId: string): Promise<HubFileRow[]> {
+    const rows = await this.db
       .select()
       .from(files)
-      .where(and(...conditions))
+      .where(and(
+        eq(files.status, 'complete'),
+        eq(files.hubId, hubId),
+        eq(files.ownerKind, 'conversation'),
+        eq(files.conversationId, conversationId),
+      ))
       .orderBy(desc(files.createdAt))
+    return rows.map(row => inHub(row, hubId))
   }
 
   // --- Volunteer load ---
@@ -1251,4 +1290,12 @@ export class ConversationsService {
     await this.db.delete(messages)
     await this.db.delete(conversations)
   }
+}
+
+/** Narrow a row the query already bound to `hubId`; anything else is a server bug. */
+function inHub(row: FileRow | undefined, hubId: string): HubFileRow {
+  if (!row || row.hubId !== hubId || row.ownerKind === null) {
+    throw new ServiceError(500, 'File row is not bound to its hub')
+  }
+  return { ...row, hubId: row.hubId, ownerKind: row.ownerKind }
 }

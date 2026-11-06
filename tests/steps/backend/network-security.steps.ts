@@ -18,7 +18,11 @@ import {
   uniquePhone,
   uniqueName,
   getMeViaApi,
+  ADMIN_SEED,
+  authHeaders,
+  uploadFileViaApi,
 } from '../../api-helpers'
+import { getScenarioState } from './common.steps'
 import {
   simulateIncomingMessage,
 } from '../../simulation-helpers'
@@ -240,33 +244,31 @@ Then('the redemption should fail with {int}', async ({ world }, _expectedStatus:
 // ── Upload Ownership Steps ──────────────────────────────────────
 
 Given('volunteer A uploads a file chunk', async ({ request, world }) => {
-  const volA = await createVolunteerViaApi(request, { name: uniqueName('Upload A') })
+  // A real upload by a member of the scenario hub, through the hub-scoped
+  // chunked path (#2462) — the subject of the ownership check must exist.
+  const hubId = getScenarioState(world).hubId
+  const volA = await createVolunteerViaApi(request, { name: uniqueName('Upload A'), hubId })
   getNetworkSecState(world).volANsec = volA.deviceKey
-  // Simulate a file upload start
-  const { data } = await apiPost<{ uploadId?: string }>(
-    request,
-    '/uploads/start',
-    { filename: 'test.txt', contentType: 'text/plain', totalSize: 1024 },
-    volA.deviceKey,
-  )
-  getNetworkSecState(world).uploadChunkIdA = (data as Record<string, unknown>)?.uploadId as string ?? 'test-upload-id'
+  const file = await uploadFileViaApi(request, { hubId, owner: { kind: 'entity_field' } }, volA.deviceKey)
+  getNetworkSecState(world).uploadChunkIdA = file.fileId
 })
 
 When("volunteer B tries to access volunteer A's upload status", async ({ request, world }) => {
-  const volB = await createVolunteerViaApi(request, { name: uniqueName('Upload B') })
+  const hubId = getScenarioState(world).hubId
+  const volB = await createVolunteerViaApi(request, { name: uniqueName('Upload B'), hubId })
   getNetworkSecState(world).volBNsec = volB.deviceKey
-  // Try to access volA's upload from volB's session
+  // Same hub, same role — only ownership separates them.
   const res = await apiGet(
     request,
-    `/uploads/${getNetworkSecState(world).uploadChunkIdA}/status`,
+    `/hubs/${hubId}/uploads/${getNetworkSecState(world).uploadChunkIdA}/status`,
     getNetworkSecState(world).volBNsec,
   )
   getNetworkSecState(world).webhookResult = { status: res.status, data: null }
 })
 
-Then('the request should be rejected with {int}', async ({ world }, _expectedStatus: number) => {
+Then('the request should be rejected with {int}', async ({ world }, expectedStatus: number) => {
   expect(getNetworkSecState(world).webhookResult).toBeDefined()
-  expect(getNetworkSecState(world).webhookResult!.status).toBeGreaterThanOrEqual(400)
+  expect(getNetworkSecState(world).webhookResult!.status).toBe(expectedStatus)
 })
 
 // ── Reporter Role Steps ─────────────────────────────────────────
@@ -570,25 +572,22 @@ Then('the server should reject with a validation error about HTTPS', async ({ wo
 // ── Upload Size Steps ────────────────────────────────────────────
 
 When('uploading a file of {int}MB', async ({ request, world }, sizeMB: number) => {
-  // Try to upload a chunk that's too large
-  const largeBody = Buffer.alloc(sizeMB * 1024 * 1024, 'x')
-  try {
-    const res = await request.post(`${BASE_URL}/api/uploads/chunk`, {
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'X-Upload-Id': 'test-oversized',
-        'X-Chunk-Index': '0',
-      },
-      data: largeBody,
-    })
-    getNetworkSecState(world).webhookResult = { status: res.status(), data: null }
-  } catch {
-    // Request may be rejected at the transport level
-    getNetworkSecState(world).webhookResult = { status: 413, data: null }
-  }
+  // A real upload whose single chunk is over the 10 MB per-chunk cap.
+  const hubId = getScenarioState(world).hubId
+  const size = sizeMB * 1024 * 1024
+  const init = await apiPost<{ uploadId?: string }>(request, `/hubs/${hubId}/uploads/init`, {
+    totalSize: size, totalChunks: 1, owner: { kind: 'entity_field' },
+  })
+  expect(init.status).toBe(200)
+  const path = `/api/hubs/${hubId}/uploads/${init.data.uploadId}/chunks/0`
+  const res = await request.put(path, {
+    headers: { ...authHeaders(ADMIN_SEED, 'PUT', path), 'Content-Type': 'application/octet-stream' },
+    data: Buffer.alloc(size, 'x'),
+  })
+  getNetworkSecState(world).webhookResult = { status: res.status(), data: null }
 })
 
-Then('the server should reject with {int} Payload Too Large', async ({ world }, _expectedStatus: number) => {
+Then('the server should reject with {int} Payload Too Large', async ({ world }, expectedStatus: number) => {
   expect(getNetworkSecState(world).webhookResult).toBeDefined()
-  expect(getNetworkSecState(world).webhookResult!.status).toBeGreaterThanOrEqual(400)
+  expect(getNetworkSecState(world).webhookResult!.status).toBe(expectedStatus)
 })

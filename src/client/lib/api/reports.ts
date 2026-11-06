@@ -112,5 +112,5 @@ export async function archiveReportType(id: string) {
 }
 
 export async function getReportFiles(id: string) {
-  return request<{ files: import('@shared/types').FileRecord[] }>(activeHubPath(`/reports/${id}/files`))
+  return request<import('@protocol/schemas').ReportFilesResponse>(activeHubPath(`/reports/${id}/files`))
 }

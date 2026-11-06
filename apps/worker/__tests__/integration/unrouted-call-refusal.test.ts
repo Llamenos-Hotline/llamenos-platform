@@ -122,8 +122,13 @@ describe('a call to a number no active hub owns is refused (#2460)', () => {
     const incidents = await platformRouting()
     expect(incidents).toHaveLength(1)
     expect(incidents[0]).toMatchObject({ severity: 'notify', counts: { unrouted_number: 1 } })
-    // Neither number reaches the incident.
-    expect(JSON.stringify(incidents[0])).not.toMatch(/\+?\d{7,}/)
+    // Neither number reaches the incident: nothing number-shaped outside the
+    // row's own random UUID (whose hex runs to 7+ decimal digits in ~15% of
+    // ids), and neither number's digits anywhere at all.
+    const { id: _id, ...rest } = incidents[0]
+    expect(JSON.stringify(rest)).not.toMatch(/\+?\d{7,}/)
+    const whole = JSON.stringify(incidents[0])
+    for (const digits of ['15550100001', '15550109999']) expect(whole).not.toContain(digits)
   })
 
   it("refuses a suspended hub's number instead of rerouting its callers", async () => {

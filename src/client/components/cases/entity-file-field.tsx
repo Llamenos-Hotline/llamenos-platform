@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Upload, X, File as FileIcon } from 'lucide-react'
 import { encryptFile } from '@/lib/file-crypto'
-import { uploadEntityFile } from '@/lib/api'
+import { chunkedUpload } from '@/lib/chunked-upload'
 import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import type { FileFieldValue } from '@protocol/schemas/entity-schema'
@@ -43,12 +43,15 @@ export function EntityFileField({
         recipients.push(adminDecryptionPubkey)
       }
       const encrypted = await encryptFile(file, recipients)
-      setProgress(50)
-      const encBlob = new Blob([encrypted.encryptedContent as Uint8Array<ArrayBuffer>])
-      const { fileId, uploadedAt } = await uploadEntityFile(
-        new File([encBlob], file.name, { type: 'application/octet-stream' }),
-      )
-      setProgress(100)
+      setProgress(30)
+      // A file row of the active hub, with its envelopes, through the same
+      // chunked path as every other file (#2462). Its parent is the hub: the
+      // entity this field belongs to may not exist yet.
+      const { fileId, completedAt: uploadedAt } = await chunkedUpload({
+        encrypted,
+        owner: { kind: 'entity_field' },
+        onProgress: (completed, total) => setProgress(30 + Math.round((completed / total) * 70)),
+      })
 
       // Build first metadata envelope for encryptedName (if available)
       const firstMeta = encrypted.encryptedMetadata[0]

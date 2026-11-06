@@ -17,7 +17,9 @@ import { devSurfaceSecret, devSurfaceHeaders, harnessClientHeaders } from './dev
 import { simulateCallForNote } from './simulation-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { sha256 } from '@noble/hashes/sha2.js'
+import type { FileOwner, UploadCompleteResponse } from '@protocol/schemas'
+import { LABEL_NOTE_KEY, LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { sealCaseMock, type CasePurposeMock } from './mocks/case-record-mock'
 import {
@@ -67,7 +69,8 @@ function createEd25519AuthToken(
   return { pubkey, timestamp, token: bytesToHex(sig), nonce }
 }
 
-function authHeaders(seedHex: string, method: string, path: string): Record<string, string> {
+/** Signed request headers for `path` (the full `/api/...` path) — for requests the JSON helpers cannot make. */
+export function authHeaders(seedHex: string, method: string, path: string): Record<string, string> {
   // Strip query params — server verifies against url.pathname (no query string)
   const pathWithoutQuery = path.split('?')[0]
   const token = createEd25519AuthToken(seedHex, method, pathWithoutQuery)
@@ -2053,38 +2056,132 @@ export async function listInteractionsViaApi(
   return data
 }
 
+// ── Files (#2462) ──────────────────────────────────────────────────
+
+export interface UploadedTestFile extends UploadCompleteResponse {
+  /** The ciphertext as stored — what the server hashes and serves back. */
+  ciphertext: Uint8Array
+  /** The plaintext the ciphertext opens to under `contentKey`. */
+  plaintext: string
+  contentKey: Uint8Array
+}
+
+/**
+ * Upload a REAL encrypted file through the chunked path a client uses:
+ * `POST /hubs/:hubId/uploads/init` → `PUT …/chunks/0` → `POST …/complete`.
+ *
+ * The content is AES-256-GCM under a fresh key, HPKE-wrapped (LABEL_FILE_KEY)
+ * to the uploader and to the admin — the same envelope set the desktop sends —
+ * with an encrypted metadata entry per recipient. There is no way to get a file
+ * id out of this module without uploading one: a fixture that can name a file
+ * that does not exist is how evidence stayed green with its subject absent.
+ */
+export async function uploadFileViaApi(
+  request: APIRequestContext,
+  options: { hubId: string; owner: FileOwner; plaintextBytes?: number },
+  seedHex: string = ADMIN_SEED,
+): Promise<UploadedTestFile> {
+  const plaintext = 'f'.repeat(options.plaintextBytes ?? 1024)
+  const contentKey = generateContentKey()
+  const ciphertext = hexToBytes(encryptContent(plaintext, contentKey, LABEL_FILE_KEY))
+  const recipientSeeds = seedHex === ADMIN_SEED ? [ADMIN_SEED] : [seedHex, ADMIN_SEED]
+  const recipientEnvelopes = await Promise.all(
+    recipientSeeds.map(seed => realEnvelope(contentKey, seed, LABEL_FILE_KEY)),
+  )
+  const encryptedMetadata = await Promise.all(recipientSeeds.map(async seed => {
+    const metaKey = generateContentKey()
+    const envelope = await realEnvelope(metaKey, seed, LABEL_FILE_METADATA)
+    return {
+      ...envelope,
+      encryptedContent: encryptContent(
+        JSON.stringify({ originalName: 'fixture.bin', mimeType: 'application/octet-stream', size: plaintext.length, checksum: '' }),
+        metaKey,
+        LABEL_FILE_METADATA,
+      ),
+    }
+  }))
+
+  const base = `/hubs/${options.hubId}/uploads`
+  const init = await apiPost<{ uploadId?: string }>(request, `${base}/init`, {
+    totalSize: ciphertext.length,
+    totalChunks: 1,
+    owner: options.owner,
+    recipientEnvelopes,
+    encryptedMetadata,
+  }, seedHex)
+  if (init.status !== 200 || !init.data?.uploadId) {
+    throw new Error(`uploadFileViaApi: init returned ${init.status} ${JSON.stringify(init.data)}`)
+  }
+  const uploadId = init.data.uploadId
+
+  const chunkPath = `/api${base}/${uploadId}/chunks/0`
+  const chunk = await request.put(chunkPath, {
+    headers: { ...authHeaders(seedHex, 'PUT', chunkPath), 'Content-Type': 'application/octet-stream' },
+    data: Buffer.from(ciphertext),
+  })
+  if (chunk.status() !== 200) {
+    throw new Error(`uploadFileViaApi: chunk returned ${chunk.status()} ${await chunk.text()}`)
+  }
+
+  const done = await apiPost<UploadCompleteResponse>(request, `${base}/${uploadId}/complete`, {}, seedHex)
+  if (done.status !== 200) {
+    throw new Error(`uploadFileViaApi: complete returned ${done.status} ${JSON.stringify(done.data)}`)
+  }
+  return { ...done.data, ciphertext, plaintext, contentKey }
+}
+
+/** `GET /hubs/:hubId/files/:id/content` as `seedHex`: the status and the stored bytes. */
+export async function downloadFileViaApi(
+  request: APIRequestContext,
+  hubId: string,
+  fileId: string,
+  seedHex: string = ADMIN_SEED,
+): Promise<{ status: number; bytes: Uint8Array }> {
+  const path = `/api/hubs/${hubId}/files/${fileId}/content`
+  const res = await request.get(path, { headers: authHeaders(seedHex, 'GET', path) })
+  return { status: res.status(), bytes: new Uint8Array(await res.body()) }
+}
+
 // ── Case Management: Evidence (Epic 325) ──────────────────────────
 
+/**
+ * Upload a real file to the case record, then register it as evidence.
+ *
+ * `hubId` is the RECORD's hub: a file belongs to the hub of the record it is
+ * attached to (#2462). The size and integrity hash are those of the stored
+ * ciphertext, as the desktop computes them.
+ */
 export async function uploadEvidenceViaApi(
   request: APIRequestContext,
   caseId: string,
   options: {
-    fileId?: string
+    hubId: string
     filename?: string
     mimeType?: string
-    sizeBytes?: number
     classification?: string
-    integrityHash?: string
-    hubId: string
   },
   seedHex = ADMIN_SEED,
 ): Promise<Record<string, unknown>> {
-  const hash = options?.integrityHash ?? 'a'.repeat(64)
+  const file = await uploadFileViaApi(
+    request,
+    { hubId: options.hubId, owner: { kind: 'case_record', caseRecordId: caseId } },
+    seedHex,
+  )
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
     hubOwnedPath(`/records/${caseId}/evidence`, options.hubId),
     {
-      fileId: options?.fileId ?? `file_${Date.now()}`,
-      filename: options?.filename ?? `test_evidence_${Date.now()}.jpg`,
-      mimeType: options?.mimeType ?? 'image/jpeg',
-      sizeBytes: options?.sizeBytes ?? 1024,
-      classification: options?.classification ?? 'photo',
-      integrityHash: hash,
+      fileId: file.fileId,
+      filename: options.filename ?? `test_evidence_${Date.now()}.jpg`,
+      mimeType: options.mimeType ?? 'image/jpeg',
+      sizeBytes: file.ciphertext.length,
+      classification: options.classification ?? 'photo',
+      integrityHash: bytesToHex(sha256(file.ciphertext)),
       source: 'volunteer_upload',
     },
     seedHex,
   )
-  if (status !== 201 && status !== 200) throw new Error(`Failed to upload evidence: ${status}`)
+  if (status !== 201 && status !== 200) throw new Error(`Failed to upload evidence: ${status} ${JSON.stringify(data)}`)
   return data
 }
 
@@ -2493,26 +2590,6 @@ export async function createCaseFromReportViaApi(
   // linkId is the caseId from the row, which equals recordId.
   const linkData = data as { caseId?: string; reportId?: string }
   return { recordId, linkId: linkData.caseId ?? recordId }
-}
-
-/**
- * Upload an entity field file (encrypted blob) via POST /uploads/entity-file.
- * Returns the fileId and uploadedAt on success (201).
- */
-export async function uploadEntityFileViaApi(
-  request: APIRequestContext,
-  blobSizeBytes: number = 1024,
-  seedHex: string = ADMIN_SEED,
-): Promise<{ fileId: string; uploadedAt: string }> {
-  const fullPath = '/api/uploads/entity-file'
-  // Use auth headers without Content-Type — Playwright sets multipart/form-data automatically
-  const { 'Content-Type': _ct, ...headers } = authHeaders(seedHex, 'POST', fullPath)
-  const res = await request.post(fullPath, {
-    headers,
-    multipart: { file: { name: 'entity-field.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(blobSizeBytes, 0xab) } },
-  })
-  if (res.status() !== 201) throw new Error(`uploadEntityFileViaApi failed: ${res.status()}`)
-  return res.json() as Promise<{ fileId: string; uploadedAt: string }>
 }
 
 /**
