@@ -131,6 +131,13 @@ function sourceFiles(dir: string, extension: string): string[] {
 const SWIFT_CALL = /method:\s*"([A-Z]+)"\s*,\s*path:\s*(?:hp\(|(?:apiService\.)?(activeHubPath)\()?"([^"]*)"/g
 
 /**
+ * iOS: `apiService.getHubOwned("/api/ring-groups", as: ...)` — a GET of a hub-owned
+ * resource in the active hub (#2478). Like `activeHubPath(...)`, it always calls the
+ * hub-scoped route, so that is the route checked.
+ */
+const SWIFT_HUB_OWNED_GET = /getHubOwned\(\s*"([^"]*)"/g
+
+/**
  * Android: `apiService.request<T>("PATCH", "/api/settings/spam", body)` and
  * `requestNoContent("POST", hubPath("/api/shifts"), body)`.
  */
@@ -169,19 +176,26 @@ function normalise(raw: string): string | null {
   return resolved
 }
 
-function scan(dir: string, extension: string, pattern: RegExp) {
+/** A call-site pattern, and how a match reads as `[method, wrapper, raw path]`. */
+type CallPattern = { pattern: RegExp; read: (match: RegExpMatchArray) => [string, string | undefined, string] }
+
+const literalCall = (pattern: RegExp): CallPattern => ({ pattern, read: ([, method, wrapper, raw]) => [method, wrapper, raw] })
+
+function scan(dir: string, extension: string, patterns: CallPattern[]) {
   const resolvable: CallSite[] = []
   let skipped = 0
   for (const file of sourceFiles(dir, extension)) {
     const source = readFileSync(file, 'utf8')
-    for (const match of source.matchAll(new RegExp(pattern.source, 'g'))) {
-      const [, method, wrapper, raw] = match
-      const path = normalise(raw)
-      if (path === null) {
-        skipped++
-        continue
+    for (const { pattern, read } of patterns) {
+      for (const match of source.matchAll(new RegExp(pattern.source, 'g'))) {
+        const [method, wrapper, raw] = read(match)
+        const path = normalise(raw)
+        if (path === null) {
+          skipped++
+          continue
+        }
+        resolvable.push({ method, path: wrapper === 'activeHubPath' ? toHubPath(path) : path, file: relative(REPO_ROOT, file) })
       }
-      resolvable.push({ method, path: wrapper === 'activeHubPath' ? toHubPath(path) : path, file: relative(REPO_ROOT, file) })
     }
   }
   return { resolvable, skipped }
@@ -190,8 +204,11 @@ function scan(dir: string, extension: string, pattern: RegExp) {
 type Platform = 'iOS' | 'Android'
 
 const scanned: Record<Platform, ReturnType<typeof scan>> = {
-  iOS: scan('apps/ios/Sources', '.swift', SWIFT_CALL),
-  Android: scan('apps/android/app/src/main/java', '.kt', KOTLIN_CALL),
+  iOS: scan('apps/ios/Sources', '.swift', [
+    literalCall(SWIFT_CALL),
+    { pattern: SWIFT_HUB_OWNED_GET, read: ([, raw]) => ['GET', 'activeHubPath', raw] },
+  ]),
+  Android: scan('apps/android/app/src/main/java', '.kt', [literalCall(KOTLIN_CALL)]),
 }
 
 /** Deduplicated `METHOD path`, with one example call site each. */

@@ -1275,3 +1275,5 @@ enum HubOwnedRead<Response> {
         return false
     }
 }
+
+extension HubOwnedRead: Sendable where Response: Sendable {}
