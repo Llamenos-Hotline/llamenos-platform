@@ -61,10 +61,13 @@
  *    The latest by `started_at` decides, and `check-carrier-ambiguous` says
  *    the second carrier exists instead of silently picking one.
  *  - `fleet/review`'s outcome token (`NO-VERDICT:tree-changed`, …) is NOT in
- *    the check run's `output.title` — the job has no `checks: write`. It is
- *    the message of the annotation titled `fleet/review outcome` (see
- *    `fleet-review.yml`'s "Name this run's outcome" step), read here through
- *    GraphQL.
+ *    the check run's `output.title` — the job has no `checks: write`. Where
+ *    it IS lives in exactly one place, ci.ts's `reviewOutcomeFromAnnotations`,
+ *    which `board` reads through too (#2490): this module fetches the
+ *    annotations (GraphQL — the REST annotations path is barred by the
+ *    forgery rail in forgery-rails.ts) and holds no knowledge of the token's location
+ *    of its own. That reader's `read: false` — an annotation list it could
+ *    not finish — is `unknown` here, never "no outcome".
  */
 
 import { REPO, gh, describeGhFailure } from './gh.js'
@@ -76,7 +79,7 @@ import {
   defaultMissingChecksDeps, diagnosePrHead,
   type Carrier, type HeadDiagnosis, type MissingChecksDeps,
 } from './missing-checks.js'
-import { QUEUE_CLEARED_LABEL, REVIEW_JOB, laneIdFromBranch, reviewOutcomeToken } from './ci.js'
+import { QUEUE_CLEARED_LABEL, REVIEW_JOB, laneIdFromBranch, reviewOutcomeFromAnnotations, reviewOutcomeToken, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
 import { parseQueueBranch } from './queue-sweep.js'
 
 // ---------------------------------------------------------------------------
@@ -181,12 +184,10 @@ export interface ReviewRun {
   status: string
   conclusion: string | null
   startedAt: string
-  /** The `fleet/review outcome` annotation's message (`TOKEN — detail`), or
-   *  `undefined` when the run carries none. */
-  outcome: string | undefined
-  /** The annotation list was cut off by its page — an absent outcome is
-   *  then unproven rather than absent. */
-  annotationsTruncated: boolean
+  /** The run's recorded outcome, through ci.ts's one reader — including its
+   *  third state, `read: false`, when the annotation page was cut off before
+   *  an outcome was found. */
+  outcome: ReviewOutcomeRead
 }
 
 /** A non-terminal `merge_group` workflow run — a merge group being built. */
@@ -596,10 +597,15 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
     ))
     return
   }
-  const token = reviewOutcomeToken(latest.outcome)
+  if (!latest.outcome.read) {
+    v.push(unknown(`the ${REVIEW_JOB} outcome annotation`, `run ${latest.id}: ${latest.outcome.detail}`))
+    return
+  }
+  const message = latest.outcome.message
+  const token = reviewOutcomeToken(message)
   const evidence = [
     `${REVIEW_JOB} run ${latest.id} concluded ${latest.conclusion ?? latest.status} at ${latest.startedAt}`,
-    `outcome annotation: ${latest.outcome ?? '(none)'}`,
+    `outcome annotation: ${message ?? '(none)'}`,
   ]
   if (token === 'NO-VERDICT:tree-changed') {
     v.push({
@@ -617,10 +623,6 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
       evidence: [...evidence, 'requested_reviewers is empty — a push never starts a review, and a re-run republishes the same no-verdict'],
       remedy: `request a review from llamenos-auto on #${s.number}`,
     })
-    return
-  }
-  if (token === undefined && latest.annotationsTruncated) {
-    v.push(unknown(`the ${REVIEW_JOB} outcome annotation`, `run ${latest.id}'s annotation list was truncated before an outcome was found`))
     return
   }
   v.push({
@@ -947,16 +949,13 @@ query($owner: String!, $name: String!, $sha: GitObjectID!, $check: String!) {
   }
 }`.trim()
 
-/** The annotation title `fleet-review.yml` names its outcome under. */
-export const REVIEW_OUTCOME_ANNOTATION = `${REVIEW_JOB} outcome`
-
 interface GqlReviewRuns {
   data?: { repository?: { object?: { checkSuites?: {
     pageInfo: { hasNextPage: boolean }
     nodes: { checkRuns: {
       pageInfo: { hasNextPage: boolean }
       nodes: { databaseId: number; status: string; conclusion: string | null; startedAt: string | null
-        annotations: { pageInfo: { hasNextPage: boolean }; nodes: { title: string | null; message: string | null }[] } }[]
+        annotations: { pageInfo: { hasNextPage: boolean }; nodes: CheckRunAnnotation[] } }[]
     } }[]
   } } | null } | null } | null
   errors?: unknown
@@ -974,14 +973,12 @@ export function reviewRunsFrom(raw: unknown): ReviewRun[] {
   for (const suite of suites.nodes) {
     if (suite.checkRuns.pageInfo.hasNextPage) throw new Error('a check suite holds more review runs than one page')
     for (const r of suite.checkRuns.nodes) {
-      const outcome = r.annotations.nodes.find((a) => a.title === REVIEW_OUTCOME_ANNOTATION)?.message ?? undefined
       out.push({
         id: r.databaseId,
         status: r.status.toLowerCase(),
         conclusion: r.conclusion === null ? null : r.conclusion.toLowerCase(),
         startedAt: r.startedAt ?? '',
-        outcome: outcome ?? undefined,
-        annotationsTruncated: r.annotations.pageInfo.hasNextPage,
+        outcome: reviewOutcomeFromAnnotations(r.annotations.nodes, { complete: !r.annotations.pageInfo.hasNextPage }),
       })
     }
   }
