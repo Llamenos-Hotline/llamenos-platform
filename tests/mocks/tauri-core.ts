@@ -47,6 +47,7 @@ import {
   SAS_SALT,
 } from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
 
 /** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
 const PROVISIONING_BUNDLE_VERSION = 1
@@ -797,6 +798,23 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (plaintext.length !== 32) throw new Error('Unwrapped key must be 32 bytes')
     return bytesToHex(plaintext)
   },
+
+  // --- Case records + case comments (#2499) ---
+  // Mirrors apps/desktop/src/crypto.rs seal_case_from_state / open_case_from_state,
+  // which call packages/crypto/src/case_record.rs. The browser has no Rust, so
+  // ./case-record-mock re-states the rule — and is pinned to the
+  // server-persisted vectors by tests/crypto-interop.spec.ts.
+
+  seal_case_from_state: async (a) =>
+    await sealCaseMock(a.purpose as CasePurposeMock, a.plaintext as string, a.readerPubkeys as string[], requireDeviceState()),
+
+  open_case_from_state: async (a) =>
+    await openCaseMock(
+      a.purpose as CasePurposeMock,
+      { encryptedContent: a.encryptedContent as string, readerEnvelopes: a.envelopes as CaseCiphertextMock['readerEnvelopes'] },
+      requireDeviceState(),
+      bytesToHex(requireSecrets().encryptionSeed),
+    ),
 
   // --- PUK (Per-User Key) ---
   // Mirrors apps/desktop/src/crypto.rs puk_* commands over packages/crypto
