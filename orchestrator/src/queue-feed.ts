@@ -13,6 +13,10 @@ import { releasePrShape } from './release-shape.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } from './specialist.js'
 import { checkHalt } from './killswitch.js'
+import {
+  classifyAttempt, newAttemptReadCache, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
+  type AttemptReadDeps, type AttemptReadCache, type PlatformFlags, type RunJob, type TimeoutEvidence,
+} from './queue-attempt.js'
 
 /**
  * `llamenos-fleet queue-feed` — the durable owner of the merge queue's
@@ -147,16 +151,27 @@ export interface MergeQueueConfig {
 export interface MergeGroupRun {
   id: number
   headBranch: string
+  /** The merge-group commit the run executed — unique per queue attempt. */
+  headSha: string
+  /** The workflow file the run executed (`.github/workflows/ci.yml`). */
+  path: string
   conclusion: string
+  /** ISO timestamp. Attempts are ordered by this, never by list position. */
+  createdAt: string
 }
 
-/** The platform flags `detect-changed-platforms.sh` computes for a diff. */
-export interface PlatformFlags {
-  ios: boolean
-  android: boolean
-  desktop: boolean
-  backend: boolean
-  crypto: boolean
+/**
+ * One queue attempt: EVERY workflow run of one merge-group commit. A group
+ * runs ~7 workflows (CI, Fleet Verify, Fleet Review, CodeQL, …); judging one
+ * of them — whichever the list happened to put first — let a green CodeQL
+ * run stand for an attempt whose CI failed on the PR's own diff.
+ */
+export interface QueueAttempt {
+  headBranch: string
+  headSha: string
+  runs: MergeGroupRun[]
+  /** Every run passed. */
+  succeeded: boolean
 }
 
 export interface QueueFeedDeps {
@@ -189,10 +204,20 @@ export interface QueueFeedDeps {
   platformFlags(files: readonly string[]): Promise<PlatformFlags | undefined>
   /** The base checkout's knope.toml — read only for a release-branch PR. */
   readKnopeToml(): Promise<string | undefined>
-  /** Recent COMPLETED merge_group runs for a base branch, newest first. */
+  /** Recent COMPLETED merge_group runs for a base branch. */
   listMergeGroupRuns(branch: string): Promise<MergeGroupRun[] | undefined>
-  /** The names of a run's FAILED jobs (`failure`/`timed_out` conclusions). */
-  failedJobNames(runId: number): Promise<string[] | undefined>
+  /** A run's jobs with conclusions and timestamps. `undefined` on failure. */
+  readRunJobs: AttemptReadDeps['readRunJobs']
+  /** A workflow file's raw text at a commit. `undefined` on failure. */
+  readWorkflowFile: AttemptReadDeps['readWorkflowFile']
+  /** Recent completed runs of one workflow file, newest first — the
+   *  "normal duration" sample. `undefined` on failure. */
+  listRecentWorkflowRuns: AttemptReadDeps['listRecentWorkflowRuns']
+  /** Every comment body on the PR. `undefined` on ANY failure — an
+   *  unreadable comment list is never "no prior re-queue" (the cap). */
+  listPrComments(pr: number): Promise<string[] | undefined>
+  /** Posts a PR comment. THROWS on failure. */
+  postPrComment(pr: number, body: string): Promise<void>
   /** cli.ts's `enableAutoMerge` — the fleet's one arming call, injected so
    *  this module never adds a second `gh pr merge --auto` call site (the
    *  guards.test.ts rail). */
@@ -214,67 +239,39 @@ export function queueRunPr(headBranch: string): { base: string; pr: number } | u
   return { base: m[1] ?? '', pr: Number(m[2]) }
 }
 
+const PASSING_RUN_CONCLUSIONS: readonly string[] = ['success', 'skipped', 'neutral']
+
 /**
- * The latest queue attempt per PR, from newest-first runs. Only runs NAMING
- * the PR are attempts of its own group tail; a PR ejected as a non-tail
- * member of a failed group leaves no run naming it, which is the "sibling
- * failed the group" case — eligible, exactly as intended.
+ * The latest queue attempt per PR. Only runs NAMING the PR are attempts of
+ * its own group tail; a PR ejected as a non-tail member of a failed group
+ * leaves no run naming it, which is the "sibling failed the group" case —
+ * eligible, exactly as intended. An attempt is every run of one merge-group
+ * commit, and the latest is the one whose newest run was created last —
+ * ordered by `createdAt`, because the list's own order is not chronological.
  */
-export function latestQueueAttempts(runs: readonly MergeGroupRun[], branch: string): Map<number, MergeGroupRun> {
-  const out = new Map<number, MergeGroupRun>()
+export function latestQueueAttempts(runs: readonly MergeGroupRun[], branch: string): Map<number, QueueAttempt> {
+  const byCommit = new Map<string, { pr: number; attempt: QueueAttempt; newest: number }>()
   for (const run of runs) {
     const parsed = queueRunPr(run.headBranch)
     if (parsed === undefined || parsed.base !== branch) continue
-    if (!out.has(parsed.pr)) out.set(parsed.pr, run) // newest first: first wins
+    const created = Date.parse(run.createdAt)
+    const at = Number.isNaN(created) ? Number.NEGATIVE_INFINITY : created
+    const key = `${parsed.pr}:${run.headSha}`
+    const hit = byCommit.get(key)
+    if (hit === undefined) {
+      byCommit.set(key, { pr: parsed.pr, newest: at, attempt: { headBranch: run.headBranch, headSha: run.headSha, runs: [run], succeeded: false } })
+    } else {
+      hit.attempt.runs.push(run)
+      hit.newest = Math.max(hit.newest, at)
+    }
   }
-  return out
-}
-
-/** Flags a failed job's name maps to. ci.yml job names are prefixed onto
- *  called-workflow inner jobs (`ios-e2e / build (mac)`), so the key is the
- *  name up to the first ` / `. Bound to ci.yml by a test: every job gated
- *  on `revalidate` in ci.yml must appear here with exactly its other
- *  `needs.changes.outputs` flags. */
-export const QUEUE_ONLY_JOB_FLAGS: Record<string, readonly (keyof PlatformFlags)[]> = {
-  'e2e': ['desktop', 'backend'],
-  'desktop-e2e': ['desktop', 'backend'],
-  'backend-bdd': ['backend'],
-  'backend-bdd-opt-in': ['backend'],
-  'android-build-test': ['android'],
-  'android-e2e': ['android'],
-  'ios-build-test': ['ios'],
-  'ios-e2e': ['ios'],
-}
-
-/** Jobs whose failure names no culprit: `ci-status` fails because a member
- *  failed; `changes` classifies, it does not judge. */
-export const AGGREGATE_JOB_NAMES: readonly string[] = ['ci-status', 'changes']
-
-export type JobAttribution =
-  | { kind: 'aggregate' }
-  | { kind: 'platforms'; flags: readonly (keyof PlatformFlags)[] }
-  | { kind: 'unknown' }
-
-export function attributeJob(jobName: string): JobAttribution {
-  const key = jobName.split(' / ')[0] ?? jobName
-  if ((AGGREGATE_JOB_NAMES as readonly string[]).includes(key)) return { kind: 'aggregate' }
-  const flags = QUEUE_ONLY_JOB_FLAGS[key]
-  if (flags !== undefined) return { kind: 'platforms', flags }
-  return { kind: 'unknown' }
-}
-
-/**
- * The failed jobs a candidate's own diff could have scheduled. An `unknown`
- * job attributes to every candidate (fail closed): a job this map does not
- * know is not proof the candidate is innocent.
- */
-export function ownDiffFailures(failedJobs: readonly string[], flags: PlatformFlags): string[] {
-  return failedJobs.filter((job) => {
-    const a = attributeJob(job)
-    if (a.kind === 'aggregate') return false
-    if (a.kind === 'unknown') return true
-    return a.flags.some((f) => flags[f])
-  })
+  const latest = new Map<number, { attempt: QueueAttempt; newest: number }>()
+  for (const { pr, attempt, newest } of byCommit.values()) {
+    attempt.succeeded = attempt.runs.every((r) => PASSING_RUN_CONCLUSIONS.includes(r.conclusion))
+    const cur = latest.get(pr)
+    if (cur === undefined || newest > cur.newest) latest.set(pr, { attempt, newest })
+  }
+  return new Map([...latest].map(([pr, v]) => [pr, v.attempt]))
 }
 
 /** Parses the `merge_queue` rule out of a branch's raw ruleset. */
@@ -297,7 +294,10 @@ export function mergeQueueConfigFromRules(rules: unknown): MergeQueueConfig | un
 
 /** The eject detector itself — see the module comment. `queued` is the set
  *  of PR numbers currently in the merge queue. */
-export function isEjectedOrNeverArmed(pr: Pick<QueueFeedPr, 'number' | 'mergeStateStatus' | 'autoMergeRequest'>, queued: ReadonlySet<number>): boolean {
+export function isEjectedOrNeverArmed(pr: Pick<QueueFeedPr, 'number' | 'mergeStateStatus' | 'autoMergeRequest' | 'isDraft'>, queued: ReadonlySet<number>): boolean {
+  // GitHub reports a draft as DRAFT, never CLEAN — this term holds that
+  // independently of how the state is spelled.
+  if (pr.isDraft) return false
   if (pr.mergeStateStatus !== 'CLEAN') return false
   if (pr.autoMergeRequest !== null && pr.autoMergeRequest !== undefined) return false
   return !queued.has(pr.number)
@@ -314,11 +314,16 @@ export interface BranchFeedResult {
   queuedBefore: number
   armed: number[]
   armFailed: number[]
+  /** PRs armed BECAUSE their last attempt was an infrastructure ejection
+   *  (#2458) — a subset of `armed`, each with the evidence that triggered it. */
+  infraRequeued: InfraRequeue[]
   skipped: Skip[]
   notes: string[]
 }
 
 export interface Skip { pr: number; reason: string }
+
+export interface InfraRequeue { pr: number; head: string; runIds: number[]; evidence: TimeoutEvidence[] }
 
 export interface QueueFeedResult {
   halted: boolean
@@ -330,7 +335,7 @@ export interface QueueFeedResult {
 }
 
 const emptyBranch = (branch: string, outcome: BranchFeedResult['outcome'], queuedBefore = 0): BranchFeedResult =>
-  ({ branch, outcome, queuedBefore, armed: [], armFailed: [], skipped: [], notes: [] })
+  ({ branch, outcome, queuedBefore, armed: [], armFailed: [], infraRequeued: [], skipped: [], notes: [] })
 
 /**
  * The `fleet/review` coverage check — requirement 2. The artifact cache is
@@ -507,6 +512,7 @@ async function feedBranch(
     deps.log(`queue-feed: recent merge_group runs for ${branch} could not be read — a failed-on-its-own-diff PR is indistinguishable from an ejected one, deciding nothing`)
     return emptyBranch(branch, 'unreadable', queued.size)
   }
+  const attemptCache: AttemptReadCache = newAttemptReadCache()
 
   const selectedFiles = new Set<string>()
   for (const ref of [...candidates].sort((a, b) => a.number - b.number)) {
@@ -528,28 +534,58 @@ async function feedBranch(
     }
 
     // The not-a-retry guard: a PR whose latest queue attempt failed on its
-    // OWN diff is a defect to fix, not a retry.
+    // OWN diff is a defect to fix, not a retry; one whose attempt was only
+    // cancelled is re-queued solely when the cancellation was provably an
+    // infrastructure timeout, at most once per head (#2458).
     const attempt = attempts.get(pr.number)
-    if (attempt !== undefined && attempt.conclusion !== 'success') {
-      const failedJobs = await deps.failedJobNames(attempt.id)
-      if (failedJobs === undefined) {
-        result.skipped.push({ pr: pr.number, reason: `its last queue attempt (run ${attempt.id}) failed and the failing jobs could not be read — cannot rule out its own diff` })
-        continue
-      }
+    let infra: InfraRequeue | undefined
+    if (attempt !== undefined && !attempt.succeeded) {
+      const runIds = attempt.runs.map((r) => r.id)
+      const runLabel = `run${runIds.length === 1 ? '' : 's'} ${runIds.join(', ')}`
       const flagsForAttribution = await deps.platformFlags(files)
       if (flagsForAttribution === undefined) {
         result.skipped.push({ pr: pr.number, reason: 'its platform flags could not be computed — the last queue attempt\'s failure cannot be attributed' })
         continue
       }
-      const own = ownDiffFailures(failedJobs, flagsForAttribution)
-      if (own.length > 0) {
+      const verdict = await classifyAttempt(attempt.runs, flagsForAttribution, deps, attemptCache)
+      if (verdict.kind === 'unreadable') {
+        result.skipped.push({ pr: pr.number, reason: `its last queue attempt (${runLabel}) did not pass and ${verdict.reason}` })
+        continue
+      }
+      if (verdict.kind === 'own-diff') {
         result.skipped.push({
           pr: pr.number,
-          reason: `its last queue attempt (run ${attempt.id}) failed on shard(s) its own diff schedules (${own.join(', ')}) — a defect to fix, not a retry`,
+          reason: `its last queue attempt (${runLabel}) failed on shard(s) its own diff schedules (${verdict.jobs.join(', ')}) — a defect to fix, not a retry`,
         })
         continue
       }
-      result.notes.push(`pr ${pr.number}: last queue attempt failed on shard(s) its diff does not touch (${failedJobs.join(', ') || 'none recorded'}) — ejected by a sibling or a flake, eligible`)
+      if (verdict.kind === 'not-infra') {
+        const reason = `its last queue attempt (${runLabel}) was ejected by a cancellation that is not provably infrastructure — left for a human: ${verdict.reason}`
+        result.skipped.push({ pr: pr.number, reason })
+        deps.log(`queue-feed: pr ${pr.number}: NOT re-queued — ${reason}`)
+        continue
+      }
+      if (verdict.kind === 'sibling') {
+        result.notes.push(`pr ${pr.number}: last queue attempt failed on shard(s) its diff does not touch (${verdict.failed.join(', ')}) — ejected by a sibling or a flake, eligible`)
+      } else {
+        // verdict.kind === 'infra-timeout' — the cap, read from the PR itself.
+        const comments = await deps.listPrComments(pr.number)
+        if (comments === undefined) {
+          result.skipped.push({ pr: pr.number, reason: `its last queue attempt (${runLabel}) was an infrastructure ejection, but its comments could not be read — the one-per-head cap is unverifiable, so it is not re-queued` })
+          continue
+        }
+        const prior = priorInfraRequeue(comments, pr.headRefOid)
+        if (prior !== undefined) {
+          const reason = runIds.includes(prior.runId)
+            ? `already re-queued once automatically after this same ejection (run ${prior.runId}) on head ${pr.headRefOid.slice(0, 12)} and the re-queue did not take — left for a human`
+            : `a SECOND infrastructure ejection on head ${pr.headRefOid.slice(0, 12)} (${runLabel}; the first, run ${prior.runId}, was already re-queued automatically) — a signal, not noise; left for a human. ` +
+              verdict.evidence.map(describeEvidence).join('; ')
+          result.skipped.push({ pr: pr.number, reason })
+          deps.log(`queue-feed: pr ${pr.number}: NOT re-queued — ${reason}`)
+          continue
+        }
+        infra = { pr: pr.number, head: pr.headRefOid, runIds, evidence: verdict.evidence }
+      }
     }
 
     const headTree = await deps.readHeadTree(pr.headRefOid)
@@ -579,11 +615,26 @@ async function feedBranch(
       continue
     }
 
+    // An infrastructure re-queue is recorded on the PR BEFORE arming: the
+    // comment is the cap's ledger, so an unrecorded re-queue could repeat.
+    // Recording first fails closed — a comment that lands with no arm after
+    // it consumes the cap, and the PR is left for a human.
+    if (infra !== undefined) {
+      try {
+        await deps.postPrComment(pr.number, renderInfraRequeueComment(infra.head, infra.runIds, infra.evidence))
+      } catch (e) {
+        result.skipped.push({ pr: pr.number, reason: `an infrastructure re-queue could not be recorded on the PR (${describeGhFailure(e)}) — without the record the one-per-head cap is unenforceable, so it is not re-queued` })
+        continue
+      }
+      deps.log(`queue-feed: pr ${pr.number}: INFRA RE-QUEUE (1 of 1 for head ${infra.head.slice(0, 12)}) — merge-group run(s) ${infra.runIds.join(', ')} ejected by timeout only: ${infra.evidence.map(describeEvidence).join('; ')}`)
+    }
+
     // Selected. Arm through the one existing arming call — no bypass flags,
     // GitHub still enforces every required check on the exact head SHA.
     try {
       await deps.enableAutoMerge(String(pr.number))
       result.armed.push(pr.number)
+      if (infra !== undefined) result.infraRequeued.push(infra)
       for (const f of files) selectedFiles.add(f)
       deps.log(`queue-feed: armed pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
       if (flags.ios) break // an iOS-UI-test PR is the whole group — stop the pass here
@@ -615,12 +666,18 @@ export function renderQueueFeed(result: QueueFeedResult): string {
     lines.push(head)
     for (const n of b.notes) lines.push(`  note: ${n}`)
     for (const pr of b.armed) lines.push(`  ARMED     #${pr}`)
+    for (const r of b.infraRequeued) {
+      lines.push(`  INFRA-REQUEUE #${r.pr} (head ${r.head.slice(0, 12)}, run ${r.runIds.join(', ')}) — ${r.evidence.map(describeEvidence).join('; ')}`)
+    }
     for (const pr of b.armFailed) lines.push(`  ARM-FAIL  #${pr}`)
     for (const s of b.skipped) lines.push(`  skip      #${s.pr} — ${s.reason}`)
   }
   if (result.branches.length === 0 && !result.halted) lines.push('queue-feed: no open PRs')
   return lines.join('\n')
 }
+
+/** A workflow file path as the runs API reports it. */
+const WORKFLOW_PATH_RE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
 
 const SWEEP_PR_FIELDS = 'number,headRefOid,headRefName,baseRefName,mergeStateStatus,autoMergeRequest,isDraft,labels,title,body,author'
 
@@ -773,25 +830,73 @@ export function defaultQueueFeedDeps(
       }
     },
     listMergeGroupRuns: async (_branch) => {
-      const data = await ghJson<{ workflow_runs?: { id?: number; head_branch?: string; conclusion?: string | null }[] }>(
-        ['api', `repos/${REPO}/actions/runs?event=merge_group&status=completed&per_page=50`], 60_000,
+      const data = await ghJson<{ workflow_runs?: {
+        id?: number; head_branch?: string; head_sha?: string; path?: string; conclusion?: string | null; created_at?: string
+      }[] }>(
+        ['api', `repos/${REPO}/actions/runs?event=merge_group&status=completed&per_page=100`], 60_000,
         (d) => log(`queue-feed: listing merge_group runs failed: ${d}`),
       )
       if (data === undefined || !Array.isArray(data.workflow_runs)) return undefined
       return data.workflow_runs.flatMap((r) =>
-        typeof r.id === 'number' && typeof r.head_branch === 'string'
-          ? [{ id: r.id, headBranch: r.head_branch, conclusion: r.conclusion ?? '' }]
+        typeof r.id === 'number' && typeof r.head_branch === 'string' && typeof r.head_sha === 'string' &&
+        typeof r.path === 'string' && typeof r.created_at === 'string'
+          ? [{ id: r.id, headBranch: r.head_branch, headSha: r.head_sha, path: r.path, conclusion: r.conclusion ?? '', createdAt: r.created_at }]
           : [])
     },
-    failedJobNames: async (runId) => {
-      const pages = await ghJson<{ jobs?: { name?: string; conclusion?: string | null }[] }[]>(
+    readRunJobs: async (runId) => {
+      const pages = await ghJson<{ jobs?: {
+        name?: string; conclusion?: string | null; started_at?: string | null; completed_at?: string | null
+        steps?: { name?: string; conclusion?: string | null; completed_at?: string | null }[]
+      }[] }[]>(
         ['api', '--paginate', '--slurp', `repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`], 60_000,
         (d) => log(`queue-feed: reading run ${runId}'s jobs failed: ${d}`),
       )
       if (pages === undefined) return undefined
-      return pages.flatMap((p) => p.jobs ?? [])
-        .filter((j) => j.conclusion === 'failure' || j.conclusion === 'timed_out')
-        .flatMap((j) => (typeof j.name === 'string' ? [j.name] : []))
+      return pages.flatMap((p) => p.jobs ?? []).flatMap((j): RunJob[] => (typeof j.name === 'string'
+        ? [{
+            name: j.name, conclusion: j.conclusion ?? '',
+            startedAt: j.started_at ?? undefined, completedAt: j.completed_at ?? undefined,
+            steps: (j.steps ?? []).map((st) => ({ name: st.name ?? '', conclusion: st.conclusion ?? '', completedAt: st.completed_at ?? undefined })),
+          }]
+        : []))
+    },
+    readWorkflowFile: async (path, ref) => {
+      // Both segments are API-path data: a workflow path is exactly
+      // `.github/workflows/<file>.y(a)ml` and a ref a 40-hex commit.
+      if (!WORKFLOW_PATH_RE.test(path)) return undefined
+      let sha: string
+      try {
+        sha = commitSha(ref)
+      } catch {
+        return undefined
+      }
+      try {
+        return await gh(['api', '-H', 'Accept: application/vnd.github.raw', `repos/${REPO}/contents/${path}?ref=${sha}`], 30_000)
+      } catch (e) {
+        log(`queue-feed: reading ${path} at ${sha.slice(0, 8)} failed: ${describeGhFailure(e)}`)
+        return undefined
+      }
+    },
+    listRecentWorkflowRuns: async (path) => {
+      if (!WORKFLOW_PATH_RE.test(path)) return undefined
+      const file = path.slice(path.lastIndexOf('/') + 1)
+      const data = await ghJson<{ workflow_runs?: { id?: number }[] }>(
+        ['api', `repos/${REPO}/actions/workflows/${file}/runs?status=completed&per_page=50`], 60_000,
+        (d) => log(`queue-feed: listing recent ${file} runs failed: ${d}`),
+      )
+      if (data === undefined || !Array.isArray(data.workflow_runs)) return undefined
+      return data.workflow_runs.flatMap((r) => (typeof r.id === 'number' ? [r.id] : []))
+    },
+    listPrComments: async (pr) => {
+      const pages = await ghJson<{ body?: string | null }[][]>(
+        ['api', '--paginate', '--slurp', `repos/${REPO}/issues/${pr}/comments?per_page=100`], 60_000,
+        (d) => log(`queue-feed: reading PR #${pr}'s comments failed: ${d}`),
+      )
+      if (pages === undefined || !Array.isArray(pages)) return undefined
+      return pages.flat().map((c) => c.body ?? '')
+    },
+    postPrComment: async (pr, body) => {
+      await gh(['pr', 'comment', String(pr), '--body', body], 30_000)
     },
     enableAutoMerge,
     log,
