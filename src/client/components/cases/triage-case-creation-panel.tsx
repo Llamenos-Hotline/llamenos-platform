@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
 import { Lock, Loader2, Plus, ArrowRight } from 'lucide-react'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 interface TriageCaseCreationPanelProps {
   reportId: string
@@ -28,7 +29,7 @@ interface TriageCaseCreationPanelProps {
  */
 export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseCreationPanelProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
 
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
@@ -67,9 +68,8 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
     setSubmitting(true)
     try {
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await hubAdminReaders())
 
       const summary = JSON.stringify({
         title: title.trim(),
@@ -110,7 +110,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
     } finally {
       setSubmitting(false)
     }
-  }, [selectedType, title, fieldValues, hasDeviceKey, publicKey, adminDecryptionPubkey, reportId, toast, t, onCaseCreated])
+  }, [selectedType, title, fieldValues, hasDeviceKey, publicKey, reportId, toast, t, onCaseCreated])
 
   const handleAtomicConvert = useCallback(async () => {
     if (!selectedTypeId) return

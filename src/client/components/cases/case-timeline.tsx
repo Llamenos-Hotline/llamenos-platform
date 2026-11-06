@@ -27,6 +27,7 @@ import {
   History,
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 // --- Filter types for dropdown ---
 
@@ -63,7 +64,7 @@ export function CaseTimeline({
   computeTypeHash,
 }: CaseTimelineProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
 
   // --- State ---
@@ -142,8 +143,9 @@ export function CaseTimeline({
     setSending(true)
     try {
       const readers = [...readerPubkeys]
-      if (adminDecryptionPubkey && !readers.includes(adminDecryptionPubkey)) {
-        readers.push(adminDecryptionPubkey)
+      // Every admin of the hub, not one env-configured key (#1035).
+      for (const admin of await hubAdminReaders()) {
+        if (!readers.includes(admin)) readers.push(admin)
       }
       if (!readers.includes(publicKey)) {
         readers.push(publicKey)
@@ -172,7 +174,7 @@ export function CaseTimeline({
     } finally {
       setSending(false)
     }
-  }, [commentText, hasDeviceKey, publicKey, adminDecryptionPubkey, readerPubkeys, recordId, computeTypeHash, t, toast])
+  }, [commentText, hasDeviceKey, publicKey, readerPubkeys, recordId, computeTypeHash, t, toast])
 
   // --- Render ---
 

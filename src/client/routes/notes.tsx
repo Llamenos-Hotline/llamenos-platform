@@ -5,8 +5,8 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { listNotes, NoActiveHubError, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
-import { adminHpkeRecipient } from '@/lib/admin-recipient'
-import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
+import { hubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
+import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport, noteEnvelopeForThisDevice } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { resolveCallHubId } from '@/lib/call-hubs'
 import { useToast } from '@/lib/toast'
@@ -43,7 +43,7 @@ interface DecryptedNote extends EncryptedNote {
 
 function NotesPage() {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate({ from: '/notes' })
   const { page, callId, search } = Route.useSearch()
@@ -141,11 +141,9 @@ function NotesPage() {
           } else if (isTranscription) {
             payload = { text: note.encryptedContent }
           } else if (canDecrypt) {
-            // Decrypt per-note HPKE envelope
-            const myPubkey = publicKey ?? ''
-            const envelope = isAdmin
-              ? note.adminEnvelopes?.find(e => e.pubkey === myPubkey) ?? note.adminEnvelopes?.[0]
-              : note.authorEnvelope
+            // Decrypt the per-note HPKE envelope addressed to this device —
+            // its own admin envelope among the hub's admins, or the author's.
+            const envelope = await noteEnvelopeForThisDevice(note)
             if (envelope) {
               const decryptedJson = await decryptNote(note.encryptedContent, envelope)
               payload = decryptedJson ? JSON.parse(decryptedJson) : { text: '[Decryption failed]' }
@@ -179,21 +177,18 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      // Without an admin recipient this note would be wrapped to the author
-      // twice and readable by no admin at all (#1468). Refuse, don't substitute.
-      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
-      if (!adminPub) {
-        toast(t('notes.noAdminRecipient'), 'error')
-        return
-      }
-      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
+      // Sealed to every admin of the active hub, where the edit is written
+      // (#1035). With none, no admin could read it: refused, never wrapped to
+      // the author instead (#1468) — the catch says why.
+      const admins = await hubAdminReaders()
+      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, admins)
       const res = await updateNote(noteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => prev.map(n =>
         n.id === noteId ? { ...res.note, decrypted: text, payload, isTranscription: n.isTranscription } : n
       ))
       setEditingId(null)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      toast(err instanceof NoAdminReaderError ? t('notes.noAdminRecipient') : t('common.error'), 'error')
     } finally {
       setSaving(false)
     }
@@ -208,13 +203,9 @@ function NotesPage() {
       const payload: NotePayload = { text }
       if (Object.keys(fields).length > 0) payload.fields = fields
       const authorPub = publicKey
-      // See handleSaveEdit: no admin recipient means no admin reader (#1468).
-      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
-      if (!adminPub) {
-        toast(t('notes.noAdminRecipient'), 'error')
-        return
-      }
-      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
+      // Sealed to every admin of the CALL's hub (#1035); see handleSaveEdit.
+      const admins = await hubAdminReaders(hubId)
+      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, admins)
       const res = await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
       // This list, and the edit/reply actions on it, are scoped to the active hub. A note
       // filed to another hub's call is stored correctly but does not belong on this page
@@ -225,8 +216,8 @@ function NotesPage() {
         setTotal(prev => prev + 1)
       }
       setShowNewNote(false)
-    } catch {
-      toast(t('common.error'), 'error')
+    } catch (err) {
+      toast(err instanceof NoAdminReaderError ? t('notes.noAdminRecipient') : t('common.error'), 'error')
     } finally {
       setSaving(false)
     }
@@ -280,10 +271,8 @@ function NotesPage() {
     if (!replyText.trim() || !hasDeviceKey || !publicKey) return
     setSendingReply(true)
     try {
-      const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // The replier's own devices and every admin of the hub (#1035).
+      const readerPubkeys = [publicKey, ...await hubAdminReaders()]
       const encrypted = await encryptMessage(replyText.trim(), readerPubkeys)
       const res = await createNoteReply(noteId, {
         encryptedContent: encrypted.encryptedContent,

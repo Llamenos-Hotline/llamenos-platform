@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback } from 'react'
 import { listContacts, NoActiveHubError, getContactTimeline, type ContactSummary, type EncryptedNote, type Conversation } from '@/lib/api'
-import { decryptNote, decryptLegacyNote } from '@/lib/platform'
+import { decryptNote, decryptLegacyNote, noteEnvelopeForThisDevice } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { useToast } from '@/lib/toast'
 import type { NotePayload } from '@shared/types'
@@ -25,7 +25,7 @@ export const Route = createFileRoute('/contacts')({
 function ContactsPage() {
   const { t } = useTranslation()
   const navigate = useNavigate({ from: '/contacts' })
-  const { hasDeviceKey, publicKey, isAdmin } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
   const { page } = Route.useSearch()
   const [contacts, setContacts] = useState<ContactSummary[]>([])
@@ -64,9 +64,7 @@ function ContactsPage() {
       if (hasDeviceKey && keyManager.isUnlocked() && publicKey) {
         const newDecrypted = new Map<string, string>()
         for (const note of res.notes) {
-          const envelope = isAdmin
-            ? note.adminEnvelopes?.find(e => e.pubkey === publicKey) ?? note.adminEnvelopes?.[0]
-            : note.authorEnvelope
+          const envelope = await noteEnvelopeForThisDevice(note)
           if (envelope) {
             const json = await decryptNote(note.encryptedContent, envelope)
             if (json) {
