@@ -7,7 +7,7 @@
     which adds localhost and LAN exceptions.
 
     Certificate pinning strategy (dual-layer):
-    1. OS-level (this file): <pin-set> below pins ISRG Root X1/X2 for llamenos-hotline.org deployments.
+    1. OS-level (this file): <pin-set> below pins ISRG Root X1/X2/YR/YE for llamenos-hotline.org deployments.
        Self-hosters MUST update the <domain> and pin hashes to match their TLS certificate chain.
     2. App-level: ApiService.configurePinning() applies an OkHttp CertificatePinner for any
        configured hub hostname, covering operator-customised deployments at runtime.
@@ -34,34 +34,48 @@
     </base-config>
 
     <!--
-        Production certificate pins — Let's Encrypt ISRG Root X1 (RSA 4096) and
-        ISRG Root X2 (ECDSA P-384). Pinning root CAs means routine leaf-cert
-        renewals do not break pinning. Two independent roots provide backup in
-        case one root is deprecated (RFC 7469 §2.5 recommendation).
+        Production certificate pins — the four Let's Encrypt roots:
+          ISRG Root X1 (RSA 4096), ISRG Root X2 (ECDSA P-384),
+          ISRG Root YR (RSA 4096), ISRG Root YE (ECDSA P-384).
+        Pinning roots means routine leaf and intermediate renewals do not break pinning.
+        Let's Encrypt's Gen-Y roots (YR / YE) are served cross-signed by X1 / X2 today, so the
+        validated chain still ends at X1 / X2. Once a platform trust store anchors Root YR / YE,
+        the chain ends there instead, and a client that pinned only X1 / X2 would hard-fail on
+        every connection while the web stayed healthy (#2505). A chain containing ANY of the four
+        is accepted. The same four are pinned by ApiService.DEFAULT_PIN_HASHES, the iOS
+        CertificatePins and the desktop ISRG_ROOT_PINS — change them together.
 
         IMPORTANT FOR SELF-HOSTERS: Replace "llamenos-hotline.org" (the default) with your hub's
         hostname and update the pin hashes to match your TLS chain's root CA.
-        Regenerate hashes via:
+        Derive each hash from the published certificate, never from a web page:
           curl -s https://letsencrypt.org/certs/isrgrootx1.pem \
             | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der \
             | openssl dgst -sha256 -binary | base64
+        (Gen-Y: https://letsencrypt.org/certs/gen-y/root-yr.pem and .../root-ye.pem.)
+        CertificatePinDerivationTest re-derives every pin below from the real certificates.
 
         TLS TERMINATION REQUIREMENT: the pinned host must serve a Let's Encrypt-chained
         certificate with TLS terminating at the operator's own server. If a CDN/proxy
         (e.g. Cloudflare) terminates TLS in front of the hub, the presented chain is the
         CDN's and pinning hard-fails — the app cannot connect at all.
 
-        Pin expiration: review and extend before 2027-01-01.
+        Pin expiration: once it passes, Android stops enforcing this <pin-set> (the OkHttp
+        CertificatePinner in ApiService still does). Review and extend before 2028-01-01.
           ISRG Root X1 certificate expires: 2035-06-04
           ISRG Root X2 certificate expires: 2040-09-17
+          ISRG Root YR / YE certificates expire: 2045-09-02
     -->
     <domain-config>
         <domain includeSubdomains="true">llamenos-hotline.org</domain>
-        <pin-set expiration="2027-01-01">
+        <pin-set expiration="2028-01-01">
             <!-- ISRG Root X1 — RSA 4096 -->
             <pin digest="SHA-256">C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=</pin>
-            <!-- ISRG Root X2 — ECDSA P-384 backup root -->
+            <!-- ISRG Root X2 — ECDSA P-384 -->
             <pin digest="SHA-256">diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=</pin>
+            <!-- ISRG Root YR — RSA 4096, Gen-Y -->
+            <pin digest="SHA-256">fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=</pin>
+            <!-- ISRG Root YE — ECDSA P-384, Gen-Y -->
+            <pin digest="SHA-256">sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=</pin>
         </pin-set>
     </domain-config>
 </network-security-config>
