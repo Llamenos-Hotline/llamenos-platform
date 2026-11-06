@@ -3857,6 +3857,8 @@
     "hotlineName": "Hotline Name",
     "hotlineNameHelp": "This is shown to volunteers in the app. For security, the PWA uses a generic name.",
     "hotlineNamePlaceholder": "Community Crisis Line",
+    "hubUrlLabel": "Hub URL",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Choose a name and language for your crisis hotline.",
     "identityTitle": "Name Your Hotline",
     "inactivityTimeout": "Inactivity Timeout (minutes)",
@@ -3865,6 +3867,7 @@
     "inviteDescription": "Generate invite codes for your team. Each code is single-use and expires in 7 days.",
     "inviteNew": "New Invite",
     "inviteTitle": "Invite Volunteers",
+    "launchHotline": "हेल्पलाइन शुरू करें",
     "maxConcurrent": "Max Concurrent Per Volunteer",
     "messagingSettings": "Messaging Settings",
     "namePlaceholder": "Volunteer name",
@@ -3967,9 +3970,7 @@
     "whatsappProvider": "WhatsApp Integration",
     "whatsappTwilio": "Via Twilio",
     "whatsappTwilioNote": "WhatsApp messages will be handled through your existing Twilio telephony provider. No additional configuration needed.",
-    "whatsappVerifyToken": "Verify Token",
-    "hubUrlLabel": "Hub URL",
-    "hubUrlPlaceholder": "https://hub.example.org"
+    "whatsappVerifyToken": "Verify Token"
   },
   "shifts": {
     "active": {
@@ -4607,7 +4608,6 @@
   "users": {
     "active": "सक्रिय",
     "add": "Add Volunteer",
-    "addVolunteer": "स्वयंसेवक जोड़ें",
     "assignedShifts": "Assigned Shifts",
     "changeRole": "Change role",
     "createInvite": "Create Invite",
@@ -4620,7 +4620,6 @@
     "invalidPhone": "अमान्य फ़ोन नंबर। E.164 प्रारूप का उपयोग करें (जैसे +919876543210)",
     "inviteCreated": "Invite created",
     "inviteExpires": "Expires {{date}}",
-    "inviteGenerated": "निमंत्रण बनाया गया! गुप्त कुंजी सुरक्षित रूप से साझा करें।",
     "inviteLinkLabel": "Invite link",
     "inviteRevoked": "Invite revoked",
     "inviteVolunteer": "Invite Volunteer",
@@ -4643,10 +4642,8 @@
     "roleReporter": "Reporter",
     "roleReviewer": "Reviewer",
     "roleVolunteer": "स्वयंसेवक",
-    "secretKeyWarning": "यह कुंजी केवल एक बार दिखाई जाएगी। इसे स्वयंसेवक के साथ सुरक्षित रूप से साझा करें।",
     "title": "स्वयंसेवक",
-    "unnamed": "Unnamed Volunteer",
-    "userAdded": "स्वयंसेवक सफलतापूर्वक जोड़ा गया"
+    "unnamed": "Unnamed Volunteer"
   },
   "verificationCodeLabel": "Verification Code",
   "verificationMethodLabel": "Verification Method",

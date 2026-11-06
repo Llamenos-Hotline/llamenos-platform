@@ -119,18 +119,23 @@ Feature: Crypto Interop
     Then the public key hex should be 64 characters
     And the public key should only contain hex characters [0-9a-f]
 
+  # The app never exports a signing seed (#1231). The only seed a device
+  # imports is the one the operator's bootstrap script printed, so the import
+  # must reproduce the public keys the server was configured with.
   @desktop
-  Scenario: Importing the same signing seed yields the same device identity
-    When I generate a device keypair and keep its signing seed
-    And I import that signing seed into a fresh device
-    Then the imported signing public key should match the original
-    And the imported encryption public key should match the original
+  Scenario: Importing an operator-issued signing seed reproduces the published identity
+    When I import a signing seed issued by the admin bootstrap script
+    And I import the same seed into a fresh device under a different PIN
+    Then the imported signing public key should be the one the bootstrap script published
+    And the imported encryption public key should be the one the bootstrap script published
+    And both imports should yield the same device identity
 
   @desktop
-  Scenario: Ephemeral keypair generation for device linking
-    When I generate an ephemeral keypair
-    Then the ephemeral public key should be 64 hex characters
-    And generating another ephemeral keypair should produce a different public key
+  Scenario: Each device-linking session uses a fresh ephemeral key
+    When I open a device-linking session
+    Then the session public key should be 64 hex characters
+    And the session public key should not be the device's own encryption key
+    And opening another device-linking session should produce a different public key
 
   # ── Envelope encryption via the app crypto path (desktop) ────────────
 

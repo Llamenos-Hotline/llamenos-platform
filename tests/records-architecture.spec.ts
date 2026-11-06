@@ -9,7 +9,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { simulateCallForNote } from './simulation-helpers'
-import { loginAsAdmin, loginAsVolunteer, createUserAndGetDeviceKey, dismissDeviceKeyCard, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
+import { loginAsAdmin, loginAsVolunteer, inviteVolunteerAndJoin, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
 
 /**
  * A real call in the hub the page is acting in. The server refuses a note filed
@@ -145,8 +145,7 @@ test.describe('Records Architecture', () => {
 
   test('volunteer cannot see contacts nav link', async ({ page }) => {
     // Create a volunteer first
-    volunteerNsec = await createUserAndGetDeviceKey(page, `Vol-${Date.now()}`, uniquePhone())
-    await dismissDeviceKeyCard(page)
+    volunteerNsec = await inviteVolunteerAndJoin(page, `Vol-${Date.now()}`, uniquePhone())
 
     // Login as volunteer
     await loginAsVolunteer(page, volunteerNsec)

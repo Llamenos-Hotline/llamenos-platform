@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { createInvite, type InviteCode } from '@/lib/api'
+import { createInvite, listRoles, type InviteCode, type RoleDefinition } from '@/lib/api'
 import { getHubOrigin } from '@/lib/api-config'
 import { buildInviteLink } from '@/lib/invite-code'
 import { Input } from '@/components/ui/input'
@@ -15,27 +15,49 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { UserPlus, Copy, Loader2, Check } from 'lucide-react'
+import { UserPlus, Copy, Loader2, Check, ArrowRight } from 'lucide-react'
 
 interface Props {
+  /**
+   * The hub the wizard just created. This step runs only after `POST
+   * /api/setup/complete` has created it: an invite admits someone into a hub,
+   * and one minted before the hub existed admitted them into none (#2194).
+   */
+  hubId: string | null
+  onFinish: () => void
   headingRef?: React.RefObject<HTMLHeadingElement | null>
 }
 
-export function StepInvite({ headingRef }: Props = {}) {
+export function StepInvite({ hubId, onFinish, headingRef }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [roleId, setRoleId] = useState<string>('role-volunteer')
+  // The roles this hub offers — user-defined permission bundles, never a
+  // hardcoded list. Nothing is preselected: an empty choice means the hub
+  // template's default member role, as on the users page.
+  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [roleId, setRoleId] = useState('')
   const [generating, setGenerating] = useState(false)
   const [invites, setInvites] = useState<InviteCode[]>([])
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
+
+  useEffect(() => {
+    listRoles()
+      .then(res => setRoles(res.roles))
+      .catch(() => toast(t('common.error'), 'error'))
+  }, [t, toast])
 
   async function handleGenerate() {
     if (!name.trim() || !phone.trim()) return
     setGenerating(true)
     try {
-      const { invite } = await createInvite({ name: name.trim(), phone: phone.trim(), roleIds: [roleId] })
+      const { invite } = await createInvite({
+        name: name.trim(),
+        phone: phone.trim(),
+        roleIds: roleId ? [roleId] : undefined,
+        ...(hubId ? { hubId } : {}),
+      })
       setInvites(prev => [invite, ...prev])
       setName('')
       setPhone('')
@@ -45,6 +67,12 @@ export function StepInvite({ headingRef }: Props = {}) {
     } finally {
       setGenerating(false)
     }
+  }
+
+  function roleNames(invite: InviteCode): string {
+    return invite.roleIds
+      .map(id => roles.find(r => r.id === id)?.name ?? id)
+      .join(', ')
   }
 
   // A link on the hub's own address (#1128) — the volunteer pastes it into the
@@ -75,6 +103,7 @@ export function StepInvite({ headingRef }: Props = {}) {
             <Label htmlFor="invite-name">{t('users.name')}</Label>
             <Input
               id="invite-name"
+              data-testid="invite-name-input"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder={t('setup.namePlaceholder')}
@@ -84,6 +113,7 @@ export function StepInvite({ headingRef }: Props = {}) {
             <Label htmlFor="invite-phone">{t('users.phone')}</Label>
             <Input
               id="invite-phone"
+              data-testid="invite-phone-input"
               value={phone}
               onChange={e => setPhone(e.target.value)}
               placeholder="+12125551234"
@@ -92,14 +122,15 @@ export function StepInvite({ headingRef }: Props = {}) {
         </div>
 
         <div className="space-y-1">
-          <Label>{t('users.role')}</Label>
+          <Label htmlFor="setup-invite-role">{t('users.role')}</Label>
           <Select value={roleId} onValueChange={setRoleId}>
-            <SelectTrigger>
-              <SelectValue />
+            <SelectTrigger id="setup-invite-role" data-testid="user-form-role-select">
+              <SelectValue placeholder={t('users.roleHubDefault')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="role-volunteer">{t('users.roleVolunteer')}</SelectItem>
-              <SelectItem value="role-super-admin">{t('users.roleAdmin')}</SelectItem>
+              {roles.map(role => (
+                <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.name}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -109,6 +140,7 @@ export function StepInvite({ headingRef }: Props = {}) {
           disabled={generating || !name.trim() || !phone.trim()}
           aria-busy={generating}
           className="w-full"
+          data-testid="setup-generate-invite-btn"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
           {generating ? t('common.loading') : t('setup.generateInvite')}
@@ -129,7 +161,7 @@ export function StepInvite({ headingRef }: Props = {}) {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{invite.name}</span>
                     <Badge variant="outline" className="text-[10px]">
-                      {invite.roleIds?.includes('role-super-admin') ? t('users.roleAdmin') : t('users.roleVolunteer')}
+                      {roleNames(invite)}
                     </Badge>
                   </div>
                   <p className="font-mono text-xs text-muted-foreground">{invite.code}</p>
@@ -152,6 +184,11 @@ export function StepInvite({ headingRef }: Props = {}) {
           </div>
         </div>
       )}
+
+      <Button onClick={onFinish} className="w-full" size="lg" data-testid="setup-finish-btn">
+        {t('setup.goToDashboard')}
+        <ArrowRight className="h-4 w-4" />
+      </Button>
     </div>
   )
 }

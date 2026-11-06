@@ -1840,10 +1840,16 @@ Response: { "valid": true, "name": "...", "expiresAt": "..." }
 Rate limited: 5 attempts per IP
 
 POST /api/invites/redeem
-Body: { "code": "...", "pubkey": "hex64", "timestamp": ms, "token": "hex128" }
-Response: { "ok": true, "pubkey": "hex64", "roles": [...] }
+Body: { "code": "...", "pubkey": "hex64", "timestamp": ms, "token": "hex128", "nonce"?: "..." }
+Response: { "volunteer": User }
 Rate limited: 5 attempts per IP
+Audited: userAdded, with the redeemer as actor and the inviter in the details
+409: the invite names no hub (it predates #2194) — nothing is guessed for it
 ```
+
+`pubkey` is the redeeming device's own Ed25519 signing key, made on that device;
+the token proves possession. This is the only way a user is provisioned: no admin,
+server or client ever generates a key on someone else's behalf (#1231).
 
 #### Authenticated (Requires `invites:read`)
 
@@ -1853,9 +1859,13 @@ Permission: invites:read
 Response: { "invites": InviteCode[] }
 
 POST /api/invites
-Permission: invites:create
-Body: { "name": string, "phone": string (E.164), "roleIds": string[] }
-Response: { "code": "...", ... }
+Permission: invites:create (in the invite's hub)
+Body: { "name": string, "phone": string (E.164), "roleIds"?: string[], "hubId"?: string }
+Response: { "invite": InviteCode }
+An invite always names a hub and at least one role (#2194). An omitted hubId
+resolves to the sole active hub, else the caller's sole membership, else 400; a
+server with no hub yet answers 409. Omitted roleIds take the hub template's
+default member role; when it names none, 400.
 
 DELETE /api/invites/:code
 Permission: invites:revoke

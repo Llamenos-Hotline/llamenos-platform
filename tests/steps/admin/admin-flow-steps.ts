@@ -8,41 +8,21 @@
  */
 import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
-import { TestIds, uniquePhone, Timeouts, chooseFormRole } from '../../helpers'
+import { TestIds, uniquePhone, Timeouts, inviteVolunteerAndJoin } from '../../helpers'
 import {
   listVolunteersViaApi,
   listShiftsViaApi,
   listBansViaApi,
+  seedHexToPubkey,
 } from '../../api-helpers'
 
 // --- Volunteer CRUD ---
 
-When('I add a new volunteer with a unique name and phone', async ({ page, adminWorld }) => {
-  const phone = uniquePhone()
+When('I invite a new volunteer who joins with a key made on their own device', async ({ page, adminWorld }) => {
   adminWorld.lastUserName = `Vol ${Date.now()}`
-  adminWorld.lastPhone = phone
-  await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
-  await page.getByLabel('Name').fill(adminWorld.lastUserName)
-  await page.getByLabel('Phone Number').fill(phone)
-  await page.getByLabel('Phone Number').blur()
-  await chooseFormRole(page)
-  await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-})
-
-Then('I should see the generated device key', async ({ page }) => {
-  const deviceKeyCode = page.getByTestId(TestIds.VOLUNTEER_DEVICE_KEY_CODE)
-  await expect(deviceKeyCode).toBeVisible({ timeout: 15000 })
-  // Verify the key looks valid: either bech32 nsec1 or hex seed (v3 API)
-  const deviceKeyText = await deviceKeyCode.textContent()
-  expect(deviceKeyText).toBeTruthy()
-  const isNsec = deviceKeyText!.startsWith('nsec1')
-  const isHexSeed = /^[0-9a-f]{64}$/i.test(deviceKeyText!.trim())
-  expect(isNsec || isHexSeed).toBe(true)
-})
-
-When('I close the device key card', async ({ page }) => {
-  await page.getByTestId(TestIds.DISMISS_DEVICE_KEY).click()
-  await expect(page.getByTestId(TestIds.DISMISS_DEVICE_KEY)).not.toBeVisible({ timeout: 5000 })
+  adminWorld.lastPhone = uniquePhone()
+  const seedHex = await inviteVolunteerAndJoin(page, adminWorld.lastUserName, adminWorld.lastPhone)
+  adminWorld.lastUserPubkey = seedHexToPubkey(seedHex)
 })
 
 Then('the volunteer should appear in the list', async ({ page, backendRequest, adminWorld }) => {
@@ -55,7 +35,9 @@ Then('the volunteer should appear in the list', async ({ page, backendRequest, a
   const volunteers = await listVolunteersViaApi(backendRequest)
   const found = volunteers.find(v => v.name === adminWorld.lastUserName)
   expect(found).toBeTruthy()
-  adminWorld.lastUserPubkey = found!.pubkey
+  // The account is the key the volunteer's own device made — the invite fixed
+  // nothing about it but the hub and role it admits into.
+  expect(found!.pubkey).toBe(adminWorld.lastUserPubkey)
 })
 
 When('I delete the volunteer', async ({ page, adminWorld }) => {
@@ -182,12 +164,12 @@ Then('the phone number should no longer appear', async ({ page, backendRequest, 
 
 // --- Phone validation ---
 
-When('I try to add a volunteer with an invalid phone number', async ({ page }) => {
-  await page.getByTestId(TestIds.VOLUNTEER_ADD_BTN).click()
-  await page.getByLabel('Name').fill('Bad Phone')
-  await page.getByLabel('Phone Number').fill('+12')
-  await page.getByLabel('Phone Number').blur()
-  await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
+When('I try to invite a volunteer with an invalid phone number', async ({ page }) => {
+  await page.getByTestId(TestIds.INVITE_BTN).click()
+  await page.getByTestId(TestIds.INVITE_NAME_INPUT).fill('Bad Phone')
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).fill('+12')
+  await page.getByTestId(TestIds.INVITE_PHONE_INPUT).blur()
+  await page.getByTestId(TestIds.CREATE_INVITE_BTN).click()
 })
 
 Then('I should see an invalid phone error', async ({ page }) => {

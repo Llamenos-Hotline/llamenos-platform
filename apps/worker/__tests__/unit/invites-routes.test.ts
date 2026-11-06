@@ -87,7 +87,10 @@ function createApp(
   const services = {
     identity: {
       validateInvite: vi.fn().mockResolvedValue({ valid: true, name: 'Test Invite' }),
-      redeemInvite: vi.fn().mockResolvedValue({ ok: true }),
+      redeemInvite: vi.fn().mockResolvedValue({
+        volunteer: { pubkey: 'new-user' },
+        admission: { hubId: 'hub-1', roleIds: ['role-volunteer'], invitedBy: 'creator-pk' },
+      }),
       createInvite: vi.fn().mockResolvedValue({ code: 'INV-123', name: 'New Invite' }),
       revokeInvite: vi.fn().mockResolvedValue(undefined),
       getInvites: vi.fn().mockResolvedValue({ invites: [] }),
@@ -167,6 +170,29 @@ describe('invites routes', () => {
       }, defaultEnv)
 
       expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ volunteer: { pubkey: 'new-user' } })
+    })
+
+    it('audits the join as the volunteer\'s own act, in the invite\'s hub (#1231)', async () => {
+      // The redemption is signed with a key only the volunteer's device holds,
+      // so this entry is attributable to them and nobody else.
+      const { app } = createApp()
+
+      const res = await app.request('/invites/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'INV-123', pubkey: 'new-user', timestamp: Date.now(), token: 'valid-sig' }),
+      }, defaultEnv)
+
+      expect(res.status).toBe(200)
+      expect(mockAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        'userAdded',
+        'new-user',
+        expect.objectContaining({ target: 'new-user', via: 'invite', invitedBy: 'creator-pk', roles: ['role-volunteer'] }),
+        undefined,
+        'hub-1',
+      )
     })
 
     it('rejects invalid signature', async () => {
@@ -241,7 +267,10 @@ describe('invites routes', () => {
   })
 
   describe('POST /invites (create)', () => {
-    it('creates an invite without roleIds, granting none when no template names a default', async () => {
+    it('refuses an invite that would grant no role (#2194)', async () => {
+      // Neither the inviter nor the hub's template named a role. Such an
+      // invite admits someone who can do nothing and whom no shift or ring
+      // group will ever pick up: refuse it rather than mint it.
       const { app, services } = createApp()
 
       const res = await app.request('/invites', {
@@ -250,15 +279,9 @@ describe('invites routes', () => {
         body: JSON.stringify({ name: 'New Invite' }),
       }, defaultEnv)
 
-      expect(res.status).toBe(201)
-      expect(services.identity.createInvite).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'New Invite',
-          createdBy: 'creator-pk',
-          roleIds: [],
-          hubId: 'hub-1',
-        }),
-      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toContain('role')
+      expect(services.identity.createInvite).not.toHaveBeenCalled()
     })
 
     it('stamps the sole active hub onto an invite that names none', async () => {
@@ -316,9 +339,10 @@ describe('invites routes', () => {
       )
     })
 
-    it('allows a hub-less invite before any hub exists — the setup wizard', async () => {
-      // Step 5 of the wizard invites a volunteer; step 6 creates the hub. The
-      // invite legitimately predates its hub, and redemption resolves it.
+    it('refuses an invite before any hub exists (#2194)', async () => {
+      // An invite admits someone into a hub. With none to name, the invite
+      // would produce a user with no membership — so it is never minted, and
+      // the setup wizard invites only once it has created the hub.
       const { app, services } = createApp(['*'])
       services.settings.getHubs.mockResolvedValue({ hubs: [] })
 
@@ -328,11 +352,8 @@ describe('invites routes', () => {
         body: JSON.stringify({ name: 'New Invite', roleIds: ['role-volunteer'] }),
       }, defaultEnv)
 
-      expect(res.status).toBe(201)
-      expect(services.identity.createInvite).toHaveBeenCalledWith(
-        expect.objectContaining({ hubId: null, roleIds: ['role-volunteer'] }),
-      )
-      expect(services.settings.getHub).not.toHaveBeenCalled()
+      expect(res.status).toBe(409)
+      expect(services.identity.createInvite).not.toHaveBeenCalled()
     })
 
     it('honours an explicitly named hub when the server has several', async () => {
@@ -484,7 +505,7 @@ describe('invites routes', () => {
       expect(services.identity.createInvite).toHaveBeenCalledWith(expect.objectContaining({ hubId: 'hub-1' }))
     })
 
-    it('refuses a hub-less invite from anyone without instance-level authority', async () => {
+    it('refuses an invite before any hub exists, whoever asks', async () => {
       const { app, services } = createApp([], HUB_ADMIN_OF_HUB_1)
       services.settings.getHubs.mockResolvedValue({ hubs: [] })
 
@@ -494,7 +515,7 @@ describe('invites routes', () => {
         body: JSON.stringify({ name: 'New', roleIds: ['role-volunteer'] }),
       }, defaultEnv)
 
-      expect(res.status).toBe(403)
+      expect(res.status).toBe(409)
       expect(services.identity.createInvite).not.toHaveBeenCalled()
     })
   })

@@ -82,7 +82,6 @@ export type TauriIpcCommand =
   | 'recovery_group_reconstruct_from_shares'
   | 'recovery_group_decrypt'
   | 'device_import_and_load'
-  | 'generate_ephemeral_ed25519'
   | 'generate_backup_from_state'
   | 'generate_recovery_key'
   | 'backup_verify_credential'
@@ -858,16 +857,6 @@ export interface GenerateAndLoadResult extends PublicKeyPair {
   encryptedKeyData: EncryptedKeyData
 }
 
-/** @deprecated Removed in v3 — no more Nostr npub. */
-export interface EphemeralKeyPair {
-  publicKey: string
-  npub: string
-  /** Raw 32-byte Ed25519 seed as hex (64 chars). Use this for deviceImportAndLoad. */
-  deviceKey: string
-  /** Raw 32-byte Ed25519 seed as hex (64 chars). Use this for deviceImportAndLoad. */
-  seedHex: string
-}
-
 /** @deprecated High-level encryption results. */
 export interface EncryptedNoteResult {
   encryptedContent: string
@@ -1450,18 +1439,6 @@ export async function restoreBackupAndLoad(
     })
   }
   throw new Error('WASM backup restore not yet implemented')
-}
-
-/**
- * Generate an ephemeral Ed25519 keypair for admin-created users.
- * Returns the hex-encoded signing seed. The public key is the Ed25519 signing pubkey hex.
- */
-export async function generateEphemeralKeypair(): Promise<EphemeralKeyPair> {
-  if (useTauri) {
-    const result = await tauriInvoke<{ signingPubkeyHex: string; seedHex: string }>('generate_ephemeral_ed25519')
-    return { publicKey: result.signingPubkeyHex, npub: '', deviceKey: result.seedHex, seedHex: result.seedHex }
-  }
-  throw new Error('WASM ephemeral keypair not yet implemented')
 }
 
 // ── Device provisioning (device key NEVER enters the webview) ────────────

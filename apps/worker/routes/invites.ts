@@ -11,7 +11,7 @@ import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
-import { callerIsSuperAdmin, hubsWithPermission } from '../lib/hub-scope'
+import { hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { ServiceError } from '../services/settings'
 
@@ -21,17 +21,12 @@ const invites = new Hono<AppEnv>()
  * The hub an invite admits into when the client did not name one.
  *
  * `'ambiguous'` means there is a real choice to make and the caller has to
- * make it; `null` means there is nothing to choose from yet. Nothing here
- * guesses: admitting a volunteer into a hub nobody chose is the failure #1037
- * is about.
+ * make it; `null` means there is no hub at all yet. Nothing here guesses:
+ * admitting a volunteer into a hub nobody chose is the failure #1037 is about.
  *
  *  - exactly one active hub — the R1 shape, and the same rule `GET /api/config`
  *    uses for `defaultHubId`
  *  - several, but the creator belongs to exactly one of them
- *  - NO active hub yet: the setup wizard invites a volunteer at step 5 and
- *    creates the hub at step 6, so the invite legitimately predates its hub.
- *    It is stored without one and `redeemInvite` resolves it at redemption,
- *    by which time the wizard has finished.
  *  - otherwise ambiguous
  */
 async function resolveInviteHubId(
@@ -130,8 +125,17 @@ invites.post('/redeem',
     const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
-    const result = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
-    return c.json(result)
+    const { volunteer, admission } = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
+    // A volunteer joining a hub is audited like any other addition — and this
+    // entry is the volunteer's own act, signed with a key only their device
+    // holds, so "volunteer X joined" is attributable to X alone (#1231).
+    await audit(services.audit, 'userAdded', body.pubkey, {
+      target: body.pubkey,
+      roles: admission.roleIds,
+      via: 'invite',
+      invitedBy: admission.invitedBy,
+    }, undefined, admission.hubId)
+    return c.json({ volunteer })
   },
 )
 
@@ -158,7 +162,7 @@ invites.get('/',
   }),
   async (c) => {
     const identity = c.get('services').identity
-    // A super-admin sees every invite, including one that names no hub yet;
+    // A super-admin sees every hub's invites;
     // anyone else sees the invites of the hubs they may read them in.
     const hubIds = hubsWithPermission(c, 'invites:read')
     if (hubIds === null) return c.json(await identity.getInvites())
@@ -192,63 +196,62 @@ invites.post('/',
     const user = c.get('user')
     const allRoles = c.get('allRoles') as Role[]
 
-    // Every invite names a hub. Without one, redemption produced a user with
-    // no hub membership — invisible to the operator, unschedulable, unrungable
-    // (#1037). This route is not mounted under /hubs/:hubId, and the desktop
-    // dialog does not yet send a hub, so resolve it here and refuse rather
-    // than mint a hub-less invite.
+    // Every invite names a hub. Without one, redemption produced a user with no hub
+    // membership — invisible to the operator, unschedulable, unrungable
+    // (#1037). This route is not mounted under /hubs/:hubId, so a client that
+    // does not send a hub has it resolved here — and when there is no hub to
+    // resolve, the invite is refused rather than minted hub-less (#2194): the
+    // setup wizard invites only after it has created the hub.
     const resolved = body.hubId ?? await resolveInviteHubId(services, user)
     if (resolved === 'ambiguous') {
       return c.json({
         error: 'hubId is required: this server has several hubs and none is implied by your membership',
       }, 400)
     }
-    const hubId: string | null = resolved
+    if (resolved === null) {
+      return c.json({ error: 'This server has no hub yet — create one before inviting anyone' }, 409)
+    }
+    const hubId: string = resolved
 
-    // The authority the creator invites with: their permissions IN the invite's
-    // hub — a hub admin's grant lives in `hubRoles` only, and a super-admin holds
-    // everything in every hub. An invite that predates any hub (the setup
-    // wizard) has no hub to resolve in, so only a super-admin may mint one.
-    let creatorPermissions = c.get('permissions') as string[]
-
-    // The hub must exist, and the creator must be able to invite within it.
-    if (hubId) {
-      try {
-        await services.settings.getHub(hubId)
-      } catch (err) {
-        if (err instanceof ServiceError && err.status === 404) {
-          return c.json({ error: 'Hub not found' }, 404)
-        }
-        throw err
+    // The hub must exist, and the creator must be able to invite within it —
+    // with their permissions IN that hub: a hub admin's grant lives in
+    // `hubRoles` only, and a super-admin holds everything in every hub.
+    try {
+      await services.settings.getHub(hubId)
+    } catch (err) {
+      if (err instanceof ServiceError && err.status === 404) {
+        return c.json({ error: 'Hub not found' }, 404)
       }
-      const hubPermissions = resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, hubId)
-      if (!permissionGranted(hubPermissions, 'invites:create')) {
-        return c.json({ error: 'Access denied' }, 403)
-      }
-      creatorPermissions = hubPermissions
-    } else if (!callerIsSuperAdmin(c)) {
-      return c.json({ error: 'Forbidden', required: 'invites:create' }, 403)
+      throw err
+    }
+    const creatorPermissions = resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, hubId)
+    if (!permissionGranted(creatorPermissions, 'invites:create')) {
+      return c.json({ error: 'Access denied' }, 403)
     }
 
     // Roles the redeemer gets. The inviter's explicit choice wins; otherwise
-    // the hub's template decides, and a template naming none grants none.
+    // the hub's template decides.
     const requested = body.roleIds ?? []
-    const roleIds = requested.length > 0 || !hubId
+    const roleIds = requested.length > 0
       ? requested
       : await resolveHubDefaultMemberRoles(services.settings, hubId)
+    // An invite names the role it grants (#2194). A member with none can do
+    // nothing and is picked up by no shift or ring group, so an invite that
+    // would grant none is refused and the inviter chooses one.
+    if (roleIds.length === 0) {
+      return c.json({ error: 'Choose a role for this invite: neither the request nor the hub template names one' }, 400)
+    }
 
     // Validate that the creator can grant all requested roles (prevent privilege escalation)
-    if (roleIds.length > 0) {
-      if (!permissionGranted(creatorPermissions, '*')) {
-        for (const roleId of roleIds) {
-          const role = allRoles.find(r => r.id === roleId)
-          if (!role) {
-            return c.json({ error: `Unknown role: ${roleId}` }, 400)
-          }
-          for (const perm of role.permissions) {
-            if (!permissionGranted(creatorPermissions, perm)) {
-              return c.json({ error: `Cannot grant role '${role.name}' — you lack permission '${perm}'` }, 403)
-            }
+    if (!permissionGranted(creatorPermissions, '*')) {
+      for (const roleId of roleIds) {
+        const role = allRoles.find(r => r.id === roleId)
+        if (!role) {
+          return c.json({ error: `Unknown role: ${roleId}` }, 400)
+        }
+        for (const perm of role.permissions) {
+          if (!permissionGranted(creatorPermissions, perm)) {
+            return c.json({ error: `Cannot grant role '${role.name}' — you lack permission '${perm}'` }, 403)
           }
         }
       }

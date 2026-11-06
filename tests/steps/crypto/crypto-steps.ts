@@ -44,6 +44,7 @@ import * as clientLabels from '@shared/crypto-labels'
 import { buildAuthMessage } from '@shared/auth-message'
 import { keyWrapAadHex } from '@shared/envelope-aad'
 import { bytesToHex } from '@shared/encoding'
+import { generateAdminKeys } from '../../../scripts/bootstrap-admin'
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
 const CRYPTO_LABELS_JSON = resolve(__dirname_, '../../../packages/protocol/crypto-labels.json')
@@ -166,82 +167,114 @@ Then('the public key should only contain hex characters [0-9a-f]', async ({ page
   expect(d.signingPubkeyHex).toMatch(/^[0-9a-f]+$/)
 })
 
-// ─── Signing-seed import determinism ────────────────────────────────────
+// ─── Operator-issued signing seed import ────────────────────────────────
 //
-// The seed is generated inside the mock/Rust and handed back only so that a
-// second device can be derived from it. It is stashed on the page for the
-// next step and never asserted on, logged, or printed.
+// The app never hands a signing seed out: device keys are generated in Rust
+// (the mock here) and stay there, and the admin-side `generate_ephemeral_ed25519`
+// that used to mint a seed for someone else's device is gone (#1231). The one
+// remaining way a seed enters a device is the operator importing the seed that
+// `scripts/bootstrap-admin.ts` printed (`signIn` -> `deviceImportAndLoad`). The
+// server is configured with the two public keys that script derived, so the
+// import must reproduce exactly those — and must not depend on the PIN or the
+// deviceId it is imported under.
 
-When('I generate a device keypair and keep its signing seed', async ({ page }) => {
+When('I import a signing seed issued by the admin bootstrap script', async ({ page }) => {
   await ensureAppLoaded(page)
-  const result = await page.evaluate(async () => {
-    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      generateEphemeralKeypair(): Promise<{ publicKey: string; seedHex: string }>
-      deviceImportAndLoad(s: string, pin: string, d: string): Promise<EncryptedDeviceKeys>
-    }
-    const eph = await p.generateEphemeralKeypair()
-    const imported = await p.deviceImportAndLoad(eph.seedHex, '12345678', crypto.randomUUID())
-    // Keep the seed only in page memory for the follow-up import step.
-    ;(window as unknown as Record<string, unknown>).__test_seed = eph.seedHex
-    return imported.state
-  })
-  await setStash(page, '__test_device', result)
-})
-
-When('I import that signing seed into a fresh device', async ({ page }) => {
-  const result = await page.evaluate(async () => {
+  const issued = generateAdminKeys()
+  const state = await page.evaluate(async (seedHex) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       deviceImportAndLoad(s: string, pin: string, d: string): Promise<EncryptedDeviceKeys>
     }
-    const seed = (window as unknown as Record<string, unknown>).__test_seed as string
-    // A different deviceId and a different PIN: the derived identity must
-    // depend only on the seed, not on either of those.
-    const imported = await p.deviceImportAndLoad(seed, '87654321', crypto.randomUUID())
-    return imported.state
+    return (await p.deviceImportAndLoad(seedHex, '12345678', crypto.randomUUID())).state
+  }, issued.seedHex)
+  // The seed is kept only so the next step can import it a second time; it is
+  // never asserted on, logged, or printed.
+  await setStash(page, '__test_issued', {
+    seedHex: issued.seedHex,
+    identityPubkey: issued.identityPubkey,
+    decryptionPubkey: issued.decryptionPubkey,
   })
-  await setStash(page, '__test_device_reimported', result)
+  await setStash(page, '__test_device', state)
 })
 
-Then('the imported signing public key should match the original', async ({ page }) => {
-  const orig = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  const re = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_reimported')
-  expect(re.signingPubkeyHex).toMatch(HEX64)
-  expect(re.signingPubkeyHex).toBe(orig.signingPubkeyHex)
-})
-
-Then('the imported encryption public key should match the original', async ({ page }) => {
-  const orig = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  const re = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_reimported')
-  // The X25519 encryption key is HKDF-derived from the same signing seed, so
-  // re-importing must reproduce it too — otherwise a re-imported device could
-  // not open envelopes wrapped for the original.
-  expect(re.encryptionPubkeyHex).toBe(orig.encryptionPubkeyHex)
-})
-
-// ─── Ephemeral keypair (device linking) ─────────────────────────────────
-
-When('I generate an ephemeral keypair', async ({ page }) => {
-  await ensureAppLoaded(page)
-  const pair = await page.evaluate(async () => {
+When('I import the same seed into a fresh device under a different PIN', async ({ page }) => {
+  const { seedHex } = await stash<{ seedHex: string }>(page, '__test_issued')
+  const state = await page.evaluate(async (seed) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      generateEphemeralKeypair(): Promise<{ publicKey: string }>
+      deviceImportAndLoad(s: string, pin: string, d: string): Promise<EncryptedDeviceKeys>
     }
-    const a = await p.generateEphemeralKeypair()
-    const b = await p.generateEphemeralKeypair()
-    return { a: a.publicKey, b: b.publicKey }
+    return (await p.deviceImportAndLoad(seed, '87654321', crypto.randomUUID())).state
+  }, seedHex)
+  await setStash(page, '__test_device_reimported', state)
+})
+
+Then('the imported signing public key should be the one the bootstrap script published', async ({ page }) => {
+  const issued = await stash<{ identityPubkey: string }>(page, '__test_issued')
+  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
+  expect(d.signingPubkeyHex).toMatch(HEX64)
+  // ADMIN_PUBKEY: the server verifies this device's auth tokens against it.
+  expect(d.signingPubkeyHex).toBe(issued.identityPubkey)
+})
+
+Then('the imported encryption public key should be the one the bootstrap script published', async ({ page }) => {
+  const issued = await stash<{ decryptionPubkey: string }>(page, '__test_issued')
+  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
+  expect(d.encryptionPubkeyHex).toMatch(HEX64)
+  // ADMIN_DECRYPTION_PUBKEY: envelopes the server wraps for the admin are
+  // addressed to this key. A mismatch means the admin decrypts nothing.
+  expect(d.encryptionPubkeyHex).toBe(issued.decryptionPubkey)
+})
+
+Then('both imports should yield the same device identity', async ({ page }) => {
+  const a = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
+  const b = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_reimported')
+  expect(b.deviceId).not.toBe(a.deviceId)
+  expect(b.signingPubkeyHex).toBe(a.signingPubkeyHex)
+  expect(b.encryptionPubkeyHex).toBe(a.encryptionPubkeyHex)
+})
+
+// ─── Device-linking session key ─────────────────────────────────────────
+//
+// Device linking runs over an ephemeral X25519 key that the NEW device creates
+// for the provisioning room (`provisionCreateSession`); its secret stays in
+// CryptoState and only the public half reaches the webview. Each session must
+// get a fresh key, and it must never be the device's long-term encryption key.
+
+When('I open a device-linking session', async ({ page }) => {
+  await ensureAppLoaded(page)
+  const keys = await page.evaluate(async () => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      provisionCreateSession(): Promise<string>
+      getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
+    }
+    const first = await p.provisionCreateSession()
+    const second = await p.provisionCreateSession()
+    const device = await p.getDevicePubkeys()
+    return { first, second, deviceEncryptionPubkey: device.encryptionPubkeyHex }
   })
-  await setStash(page, '__test_eph', pair)
+  await setStash(page, '__test_link_session', keys)
 })
 
-Then('the ephemeral public key should be 64 hex characters', async ({ page }) => {
-  const { a } = await stash<{ a: string; b: string }>(page, '__test_eph')
-  expect(a).toMatch(HEX64)
+Then('the session public key should be 64 hex characters', async ({ page }) => {
+  const { first } = await stash<{ first: string }>(page, '__test_link_session')
+  expect(first).toMatch(HEX64)
 })
 
-Then('generating another ephemeral keypair should produce a different public key', async ({ page }) => {
-  const { a, b } = await stash<{ a: string; b: string }>(page, '__test_eph')
-  expect(b).toMatch(HEX64)
-  expect(b).not.toBe(a)
+Then("the session public key should not be the device's own encryption key", async ({ page }) => {
+  const { first, second, deviceEncryptionPubkey } = await stash<{
+    first: string
+    second: string
+    deviceEncryptionPubkey: string
+  }>(page, '__test_link_session')
+  expect(deviceEncryptionPubkey).toMatch(HEX64)
+  expect(first).not.toBe(deviceEncryptionPubkey)
+  expect(second).not.toBe(deviceEncryptionPubkey)
+})
+
+Then('opening another device-linking session should produce a different public key', async ({ page }) => {
+  const { first, second } = await stash<{ first: string; second: string }>(page, '__test_link_session')
+  expect(second).toMatch(HEX64)
+  expect(second).not.toBe(first)
 })
 
 // ─── Envelope encryption through the app crypto path ────────────────────

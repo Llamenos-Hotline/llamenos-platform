@@ -68,12 +68,12 @@ function freshPubkey(): string {
   return `${(++pubkeyCounter).toString(16).padStart(2, '0')}`.repeat(32)
 }
 
-async function invite(hubId: string | null, roleIds: string[]): Promise<string> {
+async function invite(hubId: string, roleIds: string[]): Promise<string> {
   const { invite: created } = await identity.createInvite({
     name: `Volunteer ${pubkeyCounter}`,
     phone: '+10000000000',
     roleIds,
-    hubId: hubId as string,
+    hubId,
     createdBy: 'operator-pk',
   })
   return created.code
@@ -248,19 +248,25 @@ describe('redeemInvite grants hub membership', () => {
     expect(active.map(a => a.pubkey)).not.toContain(pubkey)
   })
 
-  it('falls back to the sole active hub for an invite that carries none', async () => {
-    // Invites minted before they carried a hub. On a single-hub deployment —
-    // the R1 shape — there is exactly one answer.
-    // The hubs the tests above created are still active, so retire them: "the
-    // sole active hub" has to actually be sole for this to mean anything.
-    await sql`UPDATE hubs SET status = 'archived'`
-    const soleHub = await createHub()
-    const pubkey = freshPubkey()
-    const code = await invite(null, ['role-volunteer'])
+  // Every invite is minted naming its hub (#2194). A row without one predates
+  // that; these strip the hub off a real invite to stand in for it.
+  async function hublessInvite(roleIds: string[]): Promise<string> {
+    const code = await invite(await createHub(), roleIds)
     await sql`UPDATE invite_codes SET hub_id = NULL WHERE code = ${code}`
+    return code
+  }
 
-    const { volunteer } = await identity.redeemInvite({ code, pubkey })
-    expect(volunteer.hubRoles).toEqual([{ hubId: soleHub, roleIds: ['role-volunteer'] }])
+  it('refuses a hub-less invite on a single-hub server rather than guessing the hub (#2194)', async () => {
+    // Redemption used to admit the redeemer into "the sole active hub" — a hub
+    // the inviter never named. The hubs the tests above created are still
+    // active, so retire them: the hub has to actually be sole for this to test
+    // that no guess is made.
+    await sql`UPDATE hubs SET status = 'archived'`
+    const pubkey = freshPubkey()
+    const code = await hublessInvite(['role-volunteer'])
+
+    await expect(identity.redeemInvite({ code, pubkey })).rejects.toMatchObject({ status: 409 })
+    expect((await sql`SELECT pubkey FROM users WHERE pubkey = ${pubkey}`).length).toBe(0)
   })
 
   it('refuses a hub-less invite when the hub is ambiguous, instead of granting a global role', async () => {
@@ -269,27 +275,15 @@ describe('redeemInvite grants hub membership', () => {
     // no hub (#2153). A missing hub must never widen authority: refuse.
     await sql`UPDATE hubs SET status = 'archived'`
     await createHub()
-    await createHub()
     const pubkey = freshPubkey()
-    const code = await invite(null, ['role-hub-admin'])
-    await sql`UPDATE invite_codes SET hub_id = NULL WHERE code = ${code}`
+    const code = await hublessInvite(['role-hub-admin'])
 
     await expect(identity.redeemInvite({ code, pubkey })).rejects.toMatchObject({ status: 409 })
 
     const rows = await sql`SELECT pubkey FROM users WHERE pubkey = ${pubkey}`
     expect(rows.length, 'a refused redemption still created a user').toBe(0)
-    // The refusal rolled back the claim: the invite is redeemable once a hub exists.
+    // The refusal rolled back the claim rather than spending the code.
     expect((await identity.validateInvite(code)).valid).toBe(true)
-  })
-
-  it('refuses a hub-less invite when there is no active hub at all', async () => {
-    await sql`UPDATE hubs SET status = 'archived'`
-    const pubkey = freshPubkey()
-    const code = await invite(null, ['role-hub-admin'])
-    await sql`UPDATE invite_codes SET hub_id = NULL WHERE code = ${code}`
-
-    await expect(identity.redeemInvite({ code, pubkey })).rejects.toMatchObject({ status: 409 })
-    expect((await sql`SELECT pubkey FROM users WHERE pubkey = ${pubkey}`).length).toBe(0)
   })
 
   it('keeps the configured platform admin a super-admin when they redeem an invite', async () => {

@@ -153,7 +153,7 @@ export function StepSummary({ data, onComplete, saving, headingRef }: Props) {
         {saving ? (
           <><Loader2 className="h-4 w-4 animate-spin" /> {t('common.loading')}</>
         ) : (
-          <><Rocket className="h-4 w-4" /> {t('setup.goToDashboard')}</>
+          <><Rocket className="h-4 w-4" /> {t('setup.launchHotline')}</>
         )}
       </Button>
     </div>

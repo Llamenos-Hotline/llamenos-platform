@@ -1320,6 +1320,8 @@
     "hotlineName": "Sivi de Línea de Ayuda",
     "hotlineNameHelp": "Yóꞌo naꞌa nu̱ú voluntario nu̱ú app. Ña seguridad, PWA kuniñúꞌú iin sivi genérico.",
     "hotlineNamePlaceholder": "Línea de Crisis Comunitaria",
+    "hubUrlLabel": "URL de Hub",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "Kaji iin sivi ji tu̱ꞌun ña línea de ayuda de crisis miíún.",
     "identityTitle": "Chikaa Sivi Línea de Ayuda Miíún",
     "inactivityTimeout": "Tiempo de Inactividad (minuto)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "Savaꞌa código de invitación ña equipo miíún. Iin iin código kúu iin vuelta kuiti ta ndíꞌi nu̱ú 7 ki̱vi̱.",
     "inviteNew": "Invitación Saa̱",
     "inviteTitle": "Invitar Ña̱yivi",
+    "launchHotline": "Kíxáꞌá Línea de Ayuda",
     "maxConcurrent": "Ka̱a Concurrente iin Voluntario",
     "messagingSettings": "Configuración de Mensaje",
     "namePlaceholder": "Sivi de voluntario",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "opcional",
     "organization": "Organización",
     "organizationPlaceholder": "Sivi de Organización Miíún",
@@ -1371,6 +1375,7 @@
     "pinRequired": "Chikaa PIN miíún ña kuaꞌan noꞌó ji configuración.",
     "primaryLanguage": "Tu̱ꞌun Principal",
     "primaryLanguageHelp": "Tu̱ꞌun predeterminado ña interfaz de admin ji tu̱ꞌun IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "Configurar servicio ña koo chiꞌña nu̱ú canal kaji miíún.",
     "providersTitle": "Configurar Proveedor",
     "queueTimeout": "Tiempo de Espera de Fila (segundo)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "Integración de WhatsApp",
     "whatsappTwilio": "Ji Twilio",
     "whatsappTwilioNote": "Mensaje de WhatsApp koo kúñaꞌa ji proveedor Twilio de telefonía xa̱ íyo miíún. Ña xíni̱ñúꞌú configuración extra.",
-    "whatsappVerifyToken": "Token de Verificación",
-    "hubUrlLabel": "URL de Hub",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "Token de Verificación"
   },
   "shifts": {
     "activeCalls": "{{count}} llamada activa",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "Activo",
     "add": "Chikaa Ña̱yivi",
-    "addVolunteer": "Chikaa Ña̱yivi",
     "assignedShifts": "Turno Asignado",
     "changeRole": "Nasama rol",
     "createInvite": "Savaꞌa Invitación",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "Número de teléfono ña va̱ꞌa. Kuniñúꞌú formato E.164 (ejemplo +12125551234)",
     "inviteCreated": "Ni̱ savaꞌa invitación",
     "inviteExpires": "Ndíꞌi {{date}}",
-    "inviteGenerated": "¡Ni̱ savaꞌa invitación! Tají llave secreta de modo seguro.",
     "inviteLinkLabel": "Enlace de invitación",
     "inviteRevoked": "Ni̱ revocar invitación",
     "inviteVolunteer": "Invitar Ña̱yivi",
@@ -1904,10 +1903,8 @@
     "roleReporter": "Reportero",
     "roleReviewer": "Revisor",
     "roleVolunteer": "Voluntario",
-    "secretKeyWarning": "Llave yóꞌo soo naꞌa iin vuelta. Tají de modo seguro nu̱ú voluntario.",
     "title": "Ña̱yivi",
-    "unnamed": "Ña̱yivi Ñá Íyo Sivi",
-    "userAdded": "Ni̱ chikaa ña̱yivi va̱ꞌa"
+    "unnamed": "Ña̱yivi Ñá Íyo Sivi"
   },
   "webauthn": {
     "browserNotSupported": "Navegador miíún ña xáꞌnda chiꞌña ji passkey.",

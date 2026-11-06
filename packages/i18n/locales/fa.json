@@ -1320,6 +1320,8 @@
     "hotlineName": "نام خط اضطراری",
     "hotlineNameHelp": "این نام به داوطلبان در برنامه نمایش داده می‌شود. PWA برای امنیت از نام عمومی استفاده می‌کند.",
     "hotlineNamePlaceholder": "خط بحران جامعه",
+    "hubUrlLabel": "نشانی هاب",
+    "hubUrlPlaceholder": "https://hub.example.org",
     "identityDescription": "نام و زبانی برای خط اضطراری بحران خود انتخاب کنید.",
     "identityTitle": "نام‌گذاری خط اضطراری",
     "inactivityTimeout": "مهلت عدم فعالیت (دقیقه)",
@@ -1328,6 +1330,7 @@
     "inviteDescription": "کدهای دعوت برای تیم خود ایجاد کنید. هر کد یکبار مصرف است و پس از ۷ روز منقضی می‌شود.",
     "inviteNew": "دعوت جدید",
     "inviteTitle": "دعوت از کاربران",
+    "launchHotline": "راه‌اندازی خط اضطراری",
     "maxConcurrent": "حداکثر مکالمات همزمان برای هر داوطلب",
     "messagingSettings": "تنظیمات پیام‌رسانی",
     "namePlaceholder": "نام داوطلب",
@@ -1348,6 +1351,7 @@
       "retry": "Retry {{provider}}",
       "stillPending": "Authorization still pending"
     },
+    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
     "optional": "اختیاری",
     "organization": "سازمان",
     "organizationPlaceholder": "نام سازمان شما",
@@ -1371,6 +1375,7 @@
     "pinRequired": "PIN خود را برای ادامه راه‌اندازی وارد کنید.",
     "primaryLanguage": "زبان اصلی",
     "primaryLanguageHelp": "زبان پیش‌فرض برای رابط مدیریت و پیام‌های IVR.",
+    "providerConnection": "Provider Connection",
     "providersDescription": "سرویس‌هایی که کانال‌های انتخابی شما را پشتیبانی می‌کنند راه‌اندازی کنید.",
     "providersTitle": "پیکربندی ارائه‌دهندگان",
     "queueTimeout": "مهلت صف انتظار (ثانیه)",
@@ -1428,11 +1433,7 @@
     "whatsappProvider": "ادغام WhatsApp",
     "whatsappTwilio": "از طریق Twilio",
     "whatsappTwilioNote": "پیام‌های WhatsApp از طریق ارائه‌دهنده تلفن موجود Twilio شما مدیریت می‌شوند. نیاز به پیکربندی اضافی نیست.",
-    "whatsappVerifyToken": "توکن تایید",
-    "hubUrlLabel": "نشانی هاب",
-    "hubUrlPlaceholder": "https://hub.example.org",
-    "oauthOrCredentials": "Connect via OAuth or enter API credentials above.",
-    "providerConnection": "Provider Connection"
+    "whatsappVerifyToken": "توکن تایید"
   },
   "shifts": {
     "activeCalls": "{{count}} تماس فعال",
@@ -1868,7 +1869,6 @@
   "users": {
     "active": "فعال",
     "add": "افزودن کاربر",
-    "addVolunteer": "افزودن کاربر",
     "assignedShifts": "شیفت‌های اختصاص داده شده",
     "changeRole": "تغییر نقش",
     "createInvite": "ایجاد دعوتنامه",
@@ -1881,7 +1881,6 @@
     "invalidPhone": "شماره تلفن نامعتبر. از فرمت E.164 استفاده کنید (مثلا +12125551234)",
     "inviteCreated": "دعوتنامه ایجاد شد",
     "inviteExpires": "منقضی می‌شود {{date}}",
-    "inviteGenerated": "دعوتنامه تولید شد! کلید محرمانه را به صورت امن به اشتراک بگذارید.",
     "inviteLinkLabel": "لینک دعوت",
     "inviteRevoked": "دعوتنامه لغو شد",
     "inviteVolunteer": "دعوت از کاربر",
@@ -1904,10 +1903,8 @@
     "roleReporter": "گزارشگر",
     "roleReviewer": "بازبین",
     "roleVolunteer": "داوطلب",
-    "secretKeyWarning": "این کلید فقط یک بار نمایش داده می‌شود. آن را به صورت امن با داوطلب به اشتراک بگذارید.",
     "title": "کاربران",
-    "unnamed": "کاربر بدون نام",
-    "userAdded": "کاربر با موفقیت اضافه شد"
+    "unnamed": "کاربر بدون نام"
   },
   "webauthn": {
     "browserNotSupported": "مرورگر شما از کلیدهای عبور پشتیبانی نمی‌کند.",
