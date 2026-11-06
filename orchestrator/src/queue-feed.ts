@@ -94,17 +94,34 @@ import {
  *
  * THE NOT-A-RETRY GUARD. A PR whose last queue attempt failed on its OWN
  * diff is a defect to fix, not a retry. A `merge_group` run's branch names
- * its group's tail PR (`gh-readonly-queue/<base>/pr-<N>-<sha>`); for a
- * candidate whose latest such attempt concluded failure, the failed jobs
- * are read and attributed by the same platform flags that scheduled them
- * (`QUEUE_ONLY_JOB_FLAGS`, bound to ci.yml by a test): a failed job the
- * candidate's own diff would have scheduled means the candidate broke it —
- * skipped. A failed job its diff could never schedule (an iOS shard failing
- * under a backend-only PR) is a sibling's failure or a flake — the exact
- * ejection this feed exists to recover from. Aggregate jobs (`ci-status`,
- * `changes`) never attribute: `ci-status` fails BECAUSE a member failed, so
- * it names no culprit. Any OTHER failed job (one the map does not know)
- * attributes to EVERY candidate — the closed direction.
+ * its group's tail PR (`gh-readonly-queue/<base>/pr-<N>-<sha>`); the latest
+ * ATTEMPT is every workflow run of the newest such merge-group commit (CI,
+ * Fleet Verify, CodeQL, … — judging one run let a green CodeQL run stand for
+ * a red CI run). `classifyAttempt` (queue-attempt.ts) gives it one verdict:
+ *
+ *  - `own-diff` — a failure-class job the candidate's own diff would have
+ *    scheduled (`QUEUE_ONLY_JOB_FLAGS`, bound to ci.yml by a test); a job
+ *    the map does not know attributes to EVERY candidate, the closed
+ *    direction. Skipped.
+ *  - `sibling` — failure-class jobs only on shards its diff could never
+ *    schedule (an iOS shard under a backend-only PR): a sibling's failure,
+ *    the ejection this feed was built to recover from (#2036). Eligible.
+ *  - `infra-timeout` (#2458) — NO job failed, and every job that ejected the
+ *    group was cancelled by its own `timeout-minutes` while blocked, not
+ *    slow (killed at its configured limit; its slowest recent success at
+ *    most a third of that limit). Eligible ONCE per PR per head: the
+ *    re-queue is recorded as a marker comment on the PR before arming, and
+ *    a second infra ejection on the same head is skipped and left for a
+ *    human — a signal, not noise. An unreadable comment list, or a comment
+ *    that cannot be posted, re-queues nothing.
+ *  - `not-infra` — cancelled, but not provably by infrastructure (a human,
+ *    a concurrency rule, a job killed nowhere near its limit, a limit or a
+ *    normal duration that cannot be established). Skipped, with the evidence
+ *    logged. Before #2458 every cancellation-only ejection re-armed
+ *    uncapped, because cancelled jobs were never read at all.
+ *
+ * Aggregate jobs (`ci-status`, `changes`) never attribute: `ci-status` fails
+ * BECAUSE a member failed, so it names no culprit.
  *
  * What this never does: no bypass flag, ever; no arming a PR whose head is
  * not CLEAN; no queueing when the fleet is halted (the halt switches are

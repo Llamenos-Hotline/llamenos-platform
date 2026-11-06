@@ -102,7 +102,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing`, `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
-| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, files disjoint from the queue and the same pass's picks, iOS-UI-test PRs alone), and never re-queues a PR whose last queue attempt failed on its own diff. Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
+| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, files disjoint from the queue and the same pass's picks, iOS-UI-test PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
 ### `queue-feed`: the queue had no owner (#2036)
 
@@ -141,6 +141,49 @@ are attributed by the same platform flags that scheduled them
 test); a failed shard the diff could never schedule is the ejection this
 feed exists to recover from; a shard the map does not know attributes to
 every candidate — the closed direction.
+
+### Infrastructure ejections: re-queued once, never a failure (#2458)
+
+A job killed by its own `timeout-minutes` cannot retry itself, and an
+external rerun is refused (`403: The workflow run containing this job is
+already running`) until `ci-status` has concluded and the group ref is gone —
+so no job-level retry can save a merge group. The recovery has to happen
+after the ejection, by re-queueing the PR. `classifyAttempt`
+(`orchestrator/src/queue-attempt.ts`) decides whether an ejection was
+infrastructure, and the predicate is:
+
+1. **No job in the attempt is in the failure class** (`failure`, `timed_out`,
+   an unset or unknown conclusion — anything but `success`/`skipped`/`neutral`/
+   `cancelled`), the rollup aside. A transient stall can surface as a genuine
+   `failure` (#2479), indistinguishable from a real assertion failure, so a
+   failure is **never** re-queued as infrastructure — the failure verdict is
+   decided before any cancellation is read.
+2. The ejection's **causes** are the cancelled jobs that ended no later than
+   the rollup's own failure (a job cancelled afterwards is the sweep cleaning
+   up, not a cause), and there is at least one.
+3. Each cause was **killed at its configured limit**: the end of its first
+   `cancelled` step, measured from the job's start, within
+   [limit − 10 s, limit + 60 s]. The limit is the job's literal
+   `timeout-minutes` in the workflow file **at the run's own commit**
+   (reusable workflows followed). GitHub reports a timeout as `cancelled`,
+   so conclusion alone cannot separate it from a human cancel. The job's own
+   end is not the measure: a stalled runner's post-steps ran 300 s past the
+   kill on 2026-11-05.
+4. Each cause was **blocked, not slow**: at least 3 recent successful runs of
+   the same job in the same workflow, and the slowest took at most a third
+   of the limit.
+
+Every unreadable input is "not proven", never "proven". **The cap** is one
+automatic re-queue per PR per head SHA, recorded as a marker comment on the
+PR *before* arming (rule V: visible; and the record survives the host). A
+second infrastructure ejection on the same head is skipped with the evidence
+logged and left for a human. The fleet log line reads
+`queue-feed: pr N: INFRA RE-QUEUE (1 of 1 for head <sha12>) — merge-group
+run(s) R ejected by timeout only: "<job>" (run R) killed S s after it
+started, against its configured timeout-minutes: M (…s); normally a–b s
+(median m s over n successful runs) — k× its slowest normal run`. An
+infrastructure re-queue still passes every other feed condition, and re-enters
+at the back of the queue.
 
 The feed arms through the tick's one existing arming call (`gh pr merge
 --auto --squash`, no bypass flags), so the guards rail — exactly one arming
