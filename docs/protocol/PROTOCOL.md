@@ -1078,7 +1078,7 @@ On member departure:
 
 ### 2.8 WebSocket Event Encryption
 
-> **Note:** "Events" in this section refers to real-time WebSocket messages (call rings, presence updates, settings pushes). This is distinct from the deprecated `/api/events` REST endpoint group (Section 4.32), which was a calendar/scheduling data type now superseded by entity types with `category:"event"` in the Records API.
+> **Note:** "Events" in this section refers to real-time WebSocket messages (call rings, presence updates, settings pushes). This is distinct from the deprecated `/api/hubs/:hubId/events` REST endpoint group (Section 4.32), which was a calendar/scheduling data type now superseded by entity types with `category:"event"` in the Records API.
 
 #### Hub-Wide Broadcasts
 
@@ -2101,7 +2101,7 @@ ref = "pr_" + hex(HMAC-SHA256(key, UTF-8(providerId)))[0..16]
 ```
 
 - The structured logger writes any `callId`, `callSid`, `parentCallSid`, `legSid`, `recordingSid`, `messageSid`, `callUuid`, `callControlId`, `providerCallId` or `providerMessageId` field as `<field>Ref`, and replaces any Twilio/SignalWire SID (`[A-Z]{2}` + 32 hex) in a message or value with its ref. `AuditService.log` does the same to `details` before the hash chain commits to them.
-- A request is logged by its matched route (`/api/calls/:callId/answer`), never its URL.
+- A request is logged by its matched route (`/api/hubs/:hubId/calls/:callId/answer`), never its URL.
 - Debugging one call: take the id from the provider's console or CDR, run `bun run provider-ref <id>` where the app runs (`docker compose exec app bun scripts/provider-ref.ts <id>`), and grep the logs for the ref. Someone with only the logs, or only the provider's records, cannot make that link without `HMAC_SECRET`. Rotating `HMAC_SECRET` changes every ref.
 - Kept raw, because the server needs them to act: `active_calls.call_id`, `call_records.call_id`, `call_tokens.call_sid`, `provider_recordings.call_id` / `recording_sid` (the handle is handed back to the provider to delete the recording), the call id in API paths and bodies, relay events and VoIP push payloads, and the object-storage key of a sealed recording. A call's id **is** the provider's id for it; separating the two (an internal call id, with the provider id a stored attribute) is a larger change and is not part of this one.
 
@@ -3275,7 +3275,7 @@ Hub-scoped: `/api/hubs/:hubId/records/*`
 
 Events are now configurable entity types with `category:"event"`. Use the Records API (Section 4.31) with an `entityTypeId` corresponding to an event entity type — dates, locations, and all other event fields are stored as encrypted record content.
 
-The deprecated `/api/events` and `/api/hubs/:hubId/events` endpoints remain available through the sunset date and return the sunset response headers listed above, but no new features will be added. Implementors encountering references to `/api/events` should migrate to Section 4.31 Records.
+The deprecated `/api/hubs/:hubId/events` endpoints remain available through the sunset date and return the sunset response headers listed above, but no new features will be added. Implementors encountering references to `/api/events` should migrate to Section 4.31 Records.
 
 ### 4.33 Evidence
 
@@ -4291,43 +4291,40 @@ Response: { "subAccountId": string }
 
 ### 4.55 Hub-Scoped Routes
 
-All of the following routes are also available with a `/api/hubs/:hubId/` prefix, which scopes them to a specific hub:
+The following groups are served under a `/api/hubs/:hubId/` prefix, which scopes them to a specific hub.
+
+Hub-only — there is no unscoped `/api/<group>` mount; a request outside `/hubs/:hubId` answers `404`:
 
 ```
 /api/hubs/:hubId/shifts/*
-/api/hubs/:hubId/bans/*
 /api/hubs/:hubId/notes/*
 /api/hubs/:hubId/calls/*
 /api/hubs/:hubId/audit/*
 /api/hubs/:hubId/conversations/*
 /api/hubs/:hubId/reports/*
-/api/hubs/:hubId/blasts/*
 /api/hubs/:hubId/contacts/*
-/api/hubs/:hubId/directory/*
 /api/hubs/:hubId/records/*
-/api/hubs/:hubId/settings/cms/*
-/api/hubs/:hubId/analytics/*
-/api/hubs/:hubId/messaging/signal/*
-/api/hubs/:hubId/provider-setup/*
-/api/hubs/:hubId/retention/*
+/api/hubs/:hubId/records/:id/evidence, /api/hubs/:hubId/evidence/*
+/api/hubs/:hubId/events/*
 /api/hubs/:hubId/mls/*
-/api/hubs/:hubId/firehose/*
 /api/hubs/:hubId/onboard/*
 /api/hubs/:hubId/ring-groups/*
 /api/hubs/:hubId/teams/*
 /api/hubs/:hubId/tags/*
 ```
 
-When using hub-scoped routes, the `hubContext` middleware resolves hub-specific permissions for the user and scopes all queries to the specified hub.
+Also mounted unscoped at `/api/<group>/*`:
+
+```
+/api/hubs/:hubId/bans/*
+/api/hubs/:hubId/blasts/*
+/api/hubs/:hubId/directory/*
+/api/hubs/:hubId/settings/cms/*
+/api/hubs/:hubId/analytics/*
 /api/hubs/:hubId/messaging/signal/*
 /api/hubs/:hubId/provider-setup/*
 /api/hubs/:hubId/retention/*
 /api/hubs/:hubId/firehose/*
-/api/hubs/:hubId/mls/*
-/api/hubs/:hubId/onboard/*
-/api/hubs/:hubId/ring-groups/*
-/api/hubs/:hubId/teams/*
-/api/hubs/:hubId/tags/*
 ```
 
 When using hub-scoped routes, the `hubContext` middleware resolves hub-specific permissions for the user and scopes all queries to the specified hub.
@@ -4345,12 +4342,12 @@ GET    /api/directory
 
 #### Records & Entity Schema (CMS)
 ```
-GET    /api/records
-POST   /api/records
-GET    /api/records/:id
-PATCH  /api/records/:id
-DELETE /api/records/:id
-POST   /api/records/:id/assign
+GET    /api/hubs/:hubId/records
+POST   /api/hubs/:hubId/records
+GET    /api/hubs/:hubId/records/:id
+PATCH  /api/hubs/:hubId/records/:id
+DELETE /api/hubs/:hubId/records/:id
+POST   /api/hubs/:hubId/records/:id/assign
 GET    /api/settings/cms         # entity schema definitions
 POST   /api/settings/cms
 ```
@@ -4394,11 +4391,13 @@ DELETE /api/hubs/:hubId/teams/:id
 
 #### Ring Groups
 ```
-GET    /api/ring-groups
-POST   /api/ring-groups
-PATCH  /api/ring-groups/:id
-DELETE /api/ring-groups/:id
 GET    /api/hubs/:hubId/ring-groups
+POST   /api/hubs/:hubId/ring-groups
+GET    /api/hubs/:hubId/ring-groups/:id
+PUT    /api/hubs/:hubId/ring-groups/:id
+DELETE /api/hubs/:hubId/ring-groups/:id
+POST   /api/hubs/:hubId/ring-groups/:id/members
+DELETE /api/hubs/:hubId/ring-groups/:id/members
 ```
 
 #### Retention & Erasure
@@ -4566,7 +4565,7 @@ Hub-scoped: `/api/hubs/:hubId/directory/*`
 
 ### 4.25 Records (Case Management)
 
-> See **Section 4.31 Records** for the full endpoint reference. Section 4.31 is the canonical and complete documentation for all `/api/records` endpoints.
+> See **Section 4.31 Records** for the full endpoint reference. Section 4.31 is the canonical and complete documentation for all `/api/hubs/:hubId/records` endpoints.
 
 ### 4.26 Entity Schema (Case Management Configuration)
 
@@ -4985,13 +4984,13 @@ POST   /api/hubs/:hubId/mls/key-packages?deviceId=
 The following endpoints are also implemented. See `apps/worker/routes/` for full details:
 
 - **`/api/admin/security-events`** — Admin security event log (see Section 4.26)
-- **`/api/events/*`** — Deprecated calendar/scheduling events (Sunset: 2026-07-01); migrate to Records API (Section 4.31)
+- **`/api/hubs/:hubId/events/*`** — Deprecated calendar/scheduling events (Sunset: 2026-07-01); migrate to Records API (Section 4.31)
 - **`/api/system/*`** — System status and health diagnostics
 - **`/api/analytics/*`** — Usage analytics and metrics
 - **`/api/account/*`** — Account-level operations
 - **`/api/provider-setup/*`** — Telephony/messaging provider configuration
 - **`/api/provider-templates/*`** — Provider template management
-- **`/api/ring-groups/*`** — Call ring group management
+- **`/api/hubs/:hubId/ring-groups/*`** — Call ring group management
 - **`/api/bans/platform/*`** — Platform-level ban management
 - **`/api/settings/platform/*`** — Platform-level settings
 - **`/api/signal-notification/*`** — Signal notifier integration
@@ -5126,7 +5125,7 @@ For incoming call notifications on iOS, a VoIP push is sent via APNs with a 30-s
 4. If the user answers, prompt for PIN to unlock the identity key.
 5. Use the identity key to authenticate and answer the call via REST API.
 
-**The push names the call by an opaque reference, never by the call's id (#2374).** The VoIP push body is `{ "type": "incoming_call", "call-id": <ref>, "hub-id": <hub> }` on both APNs and ntfy, and nothing else — no caller digits. A call's id is the telephony provider's identifier for it (the webhook's `CallSid`, or the UUID the other providers issue): a key into the provider's CDR, which holds the caller's number, and a push leaves our systems for Apple and the ntfy relay. `<ref>` is 128 random bits minted per call (`active_calls.push_ref`), unrelated to the call's id. The wire key stays `call-id` because the clients and liblinphone read that key; its value is a reference, not an id usable in the API. A client resolves it to the call by matching `pushRef` on `GET /api/calls/active` (hub-scoped by the push's `hub-id`), and the `call:ring` relay event carries the same `pushRef` next to its `callId`. The reference is deleted with the call's live row when the call ends.
+**The push names the call by an opaque reference, never by the call's id (#2374).** The VoIP push body is `{ "type": "incoming_call", "call-id": <ref>, "hub-id": <hub> }` on both APNs and ntfy, and nothing else — no caller digits. A call's id is the telephony provider's identifier for it (the webhook's `CallSid`, or the UUID the other providers issue): a key into the provider's CDR, which holds the caller's number, and a push leaves our systems for Apple and the ntfy relay. `<ref>` is 128 random bits minted per call (`active_calls.push_ref`), unrelated to the call's id. The wire key stays `call-id` because the clients and liblinphone read that key; its value is a reference, not an id usable in the API. A client resolves it to the call by matching `pushRef` on `GET /api/hubs/:hubId/calls/active`, with `:hubId` the push's `hub-id`, and the `call:ring` relay event carries the same `pushRef` next to its `callId`. The reference is deleted with the call's live row when the call ends.
 
 ### 5.5 Hub Routing for Push Notifications
 
