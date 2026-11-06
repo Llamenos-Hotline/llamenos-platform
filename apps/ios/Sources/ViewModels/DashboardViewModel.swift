@@ -514,18 +514,15 @@ final class DashboardViewModel {
 
     private func fetchRecentNotes() async {
         do {
-            let response: NotesListResponse = try await apiService.request(
-                method: "GET",
-                path: apiService.activeHubPath("/api/notes") + "?page=1&limit=3"
-            )
+            // No hub is no recent notes — never the last hub's (#2461, #2478).
+            let read = try await apiService.getHubOwned("/api/notes?page=1&limit=3", as: NotesListResponse.self)
 
-            recentNoteCount = response.total
+            recentNoteCount = read.response?.total ?? 0
 
             // Decrypt the recent notes for preview using HPKE envelopes
-            recentNotes = response.notes.prefix(3).compactMap(decryptRecentNote)
+            recentNotes = read.rows(\.notes).prefix(3).compactMap(decryptRecentNote)
         } catch {
-            // Expected with no hub to browse (`APIError.isNoHub`); otherwise
-            // don't overwrite the shift error either
+            // Don't overwrite the shift error
         }
     }
 

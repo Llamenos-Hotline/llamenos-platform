@@ -164,3 +164,104 @@ final class NoActiveHubListTests: XCTestCase {
         assertNoUnscopedHubOwnedRequest()
     }
 }
+
+/// Answers hub A's ring groups, fallback group and join requests; 404 for anything else.
+private final class HubAStubURLProtocol: URLProtocol {
+    static let host = "hub-a-rows.test"
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == host
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let body: String?
+        switch path {
+        case "/api/hubs/hub-A/ring-groups":
+            body = #"{"ringGroups":[{"id":"rg-a","hubId":"hub-A","encryptedName":"Northside night crew","memberCount":3,"createdAt":"2026-11-01T00:00:00.000Z"}]}"#
+        case "/api/hubs/hub-A/shifts/fallback":
+            body = #"{"userPubkeys":["pk-hub-a-fallback"]}"#
+        case "/api/hubs/hub-A/shifts/requests":
+            body = #"{"requests":[{"id":"req-a","hubId":"hub-A","shiftId":"shift-a","userPubkey":"pk-a","type":"join","status":"pending","reviewedBy":null,"reviewedAt":null,"createdAt":"2026-11-01T00:00:00.000Z"}]}"#
+        default:
+            body = nil
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: body == nil ? 404 : 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data((body ?? #"{"error":"Not Found"}"#).utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// A screen already holding hub A's rows when the active hub is cleared (#2478).
+///
+/// The reload has no hub to ask, so it sends nothing — and the rows it was showing are
+/// another hub's. They must go, not stay on screen outside any hub.
+@MainActor
+final class HubOwnedRowsClearTests: XCTestCase {
+
+    private func makeViewModel() throws -> (ShiftAdminViewModel, HubContext) {
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HubAStubURLProtocol.self]
+        let hubContext = HubContext()
+        hubContext.setActiveHub("hub-A")
+        let api = APIService(
+            cryptoService: CryptoService(),
+            hubContext: hubContext,
+            sessionConfiguration: configuration
+        )
+        try api.configure(hubURLString: "https://\(HubAStubURLProtocol.host)")
+        return (ShiftAdminViewModel(apiService: api, hubContext: hubContext), hubContext)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        super.tearDown()
+    }
+
+    func testRingGroupsOfHubAAreGoneOnceTheHubIsCleared() async throws {
+        let (viewModel, hubContext) = try makeViewModel()
+        await viewModel.loadRingGroups()
+        XCTAssertEqual(viewModel.ringGroups.map(\.id), ["rg-a"], "precondition: hub A's ring groups are on screen")
+
+        hubContext.clearActiveHub()
+        await viewModel.loadRingGroups()
+
+        XCTAssertEqual(viewModel.ringGroups.map(\.id), [], "hub A's ring groups stayed on screen with no hub")
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testFallbackGroupOfHubAIsGoneOnceTheHubIsCleared() async throws {
+        let (viewModel, hubContext) = try makeViewModel()
+        await viewModel.loadFallback()
+        XCTAssertEqual(viewModel.fallbackPubkeys, ["pk-hub-a-fallback"], "precondition")
+
+        hubContext.clearActiveHub()
+        await viewModel.loadFallback()
+
+        XCTAssertEqual(viewModel.fallbackPubkeys, [], "hub A's fallback group stayed on screen with no hub")
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testJoinRequestsOfHubAAreGoneOnceTheHubIsCleared() async throws {
+        let (viewModel, hubContext) = try makeViewModel()
+        await viewModel.loadRequests()
+        XCTAssertEqual(viewModel.requests.map(\.id), ["req-a"], "precondition")
+
+        hubContext.clearActiveHub()
+        await viewModel.loadRequests()
+
+        XCTAssertEqual(viewModel.requests.map(\.id), [], "hub A's join requests stayed on screen with no hub")
+        XCTAssertNil(viewModel.errorMessage)
+    }
+}

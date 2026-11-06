@@ -495,6 +495,17 @@ final class APIService: @unchecked Sendable {
         return Self.hubPath(hubId, path)
     }
 
+    /// GET a hub-owned resource from the active hub (#2478).
+    ///
+    /// With no hub there is nothing to ask, and the answer is `.noHub` — a value the
+    /// caller assigns through, not an error it can swallow while the last hub's rows
+    /// stay on screen. `path` is the unscoped `/api/...` path, query string included.
+    func getHubOwned<T: Decodable>(_ path: String, as _: T.Type = T.self) async throws -> HubOwnedRead<T> {
+        guard baseURL != nil, let hubId = hubContext.activeHubId else { return .noHub }
+        let response: T = try await request(method: "GET", path: Self.hubPath(hubId, path))
+        return .loaded(response)
+    }
+
     /// Scope an `/api/...` path to the given hub.
     ///
     /// The server mounts hub-scoped routes at `/api/hubs/:hubId/...`, so
@@ -1127,3 +1138,29 @@ final class CertificatePinningDelegate: NSObject, URLSessionDelegate {
     }
 }
 
+/// What a hub-owned read answered: the active hub's response, or that no hub is active.
+///
+/// "No hub" is not "nothing changed": a list that kept its rows on `.noHub` would be
+/// showing another hub's records outside any hub. `rows(_:)` makes the empty answer
+/// flow through the same assignment as a loaded one.
+enum HubOwnedRead<Response> {
+    case noHub
+    case loaded(Response)
+
+    /// The rows to show: the active hub's, or none.
+    func rows<Row>(_ extract: (Response) -> [Row]) -> [Row] {
+        if case .loaded(let response) = self { return extract(response) }
+        return []
+    }
+
+    /// The response, when there was a hub to ask.
+    var response: Response? {
+        if case .loaded(let response) = self { return response }
+        return nil
+    }
+
+    var isNoHub: Bool {
+        if case .noHub = self { return true }
+        return false
+    }
+}
