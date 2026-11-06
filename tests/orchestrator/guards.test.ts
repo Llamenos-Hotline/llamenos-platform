@@ -4669,10 +4669,13 @@ exit 99`)
 
   it('a shard that executes tests behaves exactly as before the retry: same argv, same output, same exit code', () => {
     const r = runStep(['fail'])
-    // The invocation that existed before #2403 — word-splitting of shard-args.txt included.
+    // The invocation that existed before #2403 — word-splitting of shard-args.txt included —
+    // plus a -derivedDataPath under RUNNER_TEMP: without one, every shard left a plist-less
+    // ~/Library/Developer/Xcode/DerivedData entry of coverage .profraw on the internal volume.
     expect(r.argv).toEqual([
       'test-without-building',
       '-xctestrun', `${r.root}/llamenos-build/Build/Products/x.xctestrun`,
+      '-derivedDataPath', `${r.root}/llamenos-test-derived-data`,
       '-destination', 'platform=iOS Simulator,id=FAKE-UDID',
       '-parallel-testing-enabled', 'NO',
       '-test-timeouts-enabled', 'YES',
