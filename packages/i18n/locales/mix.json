@@ -214,8 +214,8 @@
     "phoneNumber": "Número de Teléfono",
     "reason": "Xa̱ꞌa̱ ndí",
     "remove": "Tava Bloqueo",
-    "removeConfirmMessage": "This caller will be able to reach the hotline again. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
-    "removeConfirmTitle": "Remove this ban?",
+    "removeConfirmMessage": "Ña̱yivi kána yóꞌo podrá volver a comunicarse con la línea de ayuda. Solo se conserva un hash unidireccional del número, así que solo podrás volver a bloquearlo si todavía tienes el número. La eliminación queda registrada en el Registro de Auditoría.",
+    "removeConfirmTitle": "¿Tava bloqueo yóꞌo?",
     "removeNumber": "Desbloquear Número",
     "title": "Lista de Bloqueo"
   },
@@ -1567,8 +1567,8 @@
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
-    "deleteConfirmTitle": "Delete this shift?",
-    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
+    "deleteConfirmTitle": "¿Xíta turno yóꞌo?",
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer."
   },
   "shortcuts": {
     "answerCall": "Nakuiin llamada",
@@ -3233,7 +3233,7 @@
     "archived": "Archivado",
     "fields": "Custom Fields",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "¿Archivar tipo de reporte yóꞌo? Los reportes existentes conservarán su referencia de tipo, pero ya no estará disponible para reportes nuevos.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -3250,8 +3250,8 @@
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
     "updated": "Report type updated",
-    "archiveTitle": "Archive Report Type",
-    "archiveAction": "Archive"
+    "archiveTitle": "Archivar Tipo de Reporte",
+    "archiveAction": "Archivar"
   },
   "actionRetry": "Náku̱ún inka vuelta",
   "retry": "Náku̱ún inka vuelta",
@@ -3414,8 +3414,8 @@
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
     "totalCount": "{{count}} total bans",
-    "removeConfirmTitle": "Remove this platform ban?",
-    "removeConfirmMessage": "This caller will be able to reach every hub on this deployment again, not only one. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log."
+    "removeConfirmTitle": "¿Tava bloqueo de plataforma yóꞌo?",
+    "removeConfirmMessage": "Ña̱yivi kána yóꞌo podrá volver a comunicarse con todos los hub de esta instalación, no solo con uno. Solo se conserva un hash unidireccional del número, así que solo podrás volver a bloquearlo si todavía tienes el número. La eliminación queda registrada en el Registro de Auditoría."
   },
   "badge": {
     "onShift": "Nu̱ú Turno",

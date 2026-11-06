@@ -214,8 +214,8 @@
     "phoneNumber": "Rajilab'al Teléfono",
     "reason": "Ruma ri",
     "remove": "Teleq'aj Q'atoj",
-    "removeConfirmMessage": "This caller will be able to reach the hotline again. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
-    "removeConfirmTitle": "Remove this ban?",
+    "removeConfirmMessage": "Re oyonel re' kaqatikir chik kayon pa ri oyonem tzij. Xa xe jun hash ri nik'oj rech ri ajilab'al kakoj, rumal wa' xa xe kaqatikir kaq'at chik we k'o chik ri ajilab'al awik'in. Ri teleq'ab'äl kakoj pa Ucholajil Tz'etoj.",
+    "removeConfirmTitle": "¿Teleq'aj re q'atoj re'?",
     "removeNumber": "Tijaqax Ajilab'al",
     "title": "Ucholajil Q'atal taq Ajilab'al"
   },
@@ -1567,8 +1567,8 @@
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
-    "deleteConfirmTitle": "Delete this shift?",
-    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
+    "deleteConfirmTitle": "¿Tiyuj re samaj re'?",
+    "deleteConfirmMessage": "Ri aj samajela' pa re samaj re' man kekoj ta chik oyonem chupam ri q'ij re'. We man k'o jun chik samaj kakoj chupam ri q'ij, ri oyonem kebe pa Molaj rech K'ayewal, o man k'o ta jun kataqe we man k'o. Man kakiq'ax ta chik wa'."
   },
   "shortcuts": {
     "answerCall": "Tik'ulux oyonik",
@@ -2179,7 +2179,7 @@
     "fields": "Custom Fields",
     "title": "Taq Ruwach Rutzijol",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "¿Tiyakoj re ruwach rutzijol re'? Ri taq rutzijol ri k'o chik kekanaj rik'in ri ruwach, xa xe man kakoj ta chik pa k'ak'a' taq rutzijol.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -2196,8 +2196,8 @@
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
     "updated": "Report type updated",
-    "archiveTitle": "Archive Report Type",
-    "archiveAction": "Archive"
+    "archiveTitle": "Tiyakoj Ruwach Rutzijol",
+    "archiveAction": "Tiyakoj"
   },
   "roles": {
     "default": "Ruyonil",
@@ -3834,8 +3834,8 @@
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
     "totalCount": "{{count}} total bans",
-    "removeConfirmTitle": "Remove this platform ban?",
-    "removeConfirmMessage": "This caller will be able to reach every hub on this deployment again, not only one. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log."
+    "removeConfirmTitle": "¿Teleq'aj re q'atoj pa ronojel Platform?",
+    "removeConfirmMessage": "Re oyonel re' kaqatikir chik kayon pa ronojel taq Hub chupam re Platform re', man xa xe ta pa jun. Xa xe jun hash ri nik'oj rech ri ajilab'al kakoj, rumal wa' xa xe kaqatikir kaq'at chik we k'o chik ri ajilab'al awik'in. Ri teleq'ab'äl kakoj pa Ucholajil Tz'etoj."
   },
   "erasure": {
     "admin": {
