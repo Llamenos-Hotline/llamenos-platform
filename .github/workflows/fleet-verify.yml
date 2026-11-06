@@ -114,6 +114,33 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # #2483 — the bounded-retry policy for the two merge_group reads below
+      # (the PR-context resolver and the #1894 queue guard) lives in ONE
+      # file, `.github/scripts/gh-read.sh`, shared with fleet/review's queue
+      # arm (#2482) rather than copied into a second implementation that
+      # would drift. Both reads run BEFORE the trusted base checkout, so that
+      # one file is fetched here on its own: a sparse, depth-1 checkout into
+      # a scratch directory, consumed before "Checkout the PR BASE (trusted)"
+      # replaces the workspace.
+      #
+      # From the merge-group HEAD, not the base — the same commit whose
+      # workflow file is executing, so it is exactly as trusted as the `run:`
+      # scripts that source it (a PR able to change this file could change
+      # those scripts directly), and the helper is live on the PR that
+      # introduces it, as the guard itself is. Nothing else from the head is
+      # read here; it still arrives only as data, below. merge_group only:
+      # on pull_request neither read happens.
+      - name: Fetch the shared gh-read retry helper (merge_group)
+        if: github.event_name == 'merge_group'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.head_sha }}
+          path: .gh-read
+          fetch-depth: 1
+          sparse-checkout: .github/scripts/gh-read.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       # One step resolves what every later step and the CLI itself need,
       # regardless of which event triggered this run — nothing past this
       # point branches on `github.event_name` again.
@@ -139,6 +166,8 @@ jobs:
           MQ_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           MQ_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           MQ_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          REPO: ${{ github.repository }}
+          GH_READ_LIB: ${{ github.workspace }}/.gh-read/.github/scripts/gh-read.sh
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
@@ -146,10 +175,28 @@ jobs:
           else
             pr=$(echo "$MQ_HEAD_REF" | grep -oE 'pr-[0-9]+-' | grep -oE '[0-9]+' || true)
             if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
-              echo "::error::could not parse a numeric PR number out of merge_group.head_ref: $MQ_HEAD_REF"
+              echo "::error::fleet/verify FAILED: queue-ref-unparseable — could not parse a numeric PR number out of merge_group.head_ref: $MQ_HEAD_REF"
               exit 1
             fi
-            branch=$(gh api "repos/${{ github.repository }}/pulls/$pr" --jq '.head.ref')
+            # The PR's branch is a READ, so it goes through the shared
+            # bounded retry (#2483): this exact read used to be a bare
+            # single-shot `$(gh api ...)`, which under `-e` ejected the whole
+            # merge group on one API hiccup with nothing but gh's raw stderr.
+            # A 200 is an answer and is never retried; an exhausted or
+            # non-retryable read fails CLOSED as `queue-pr-lookup` — "could
+            # not ask", never mistakable for the guard's own refusal below.
+            if [ ! -r "$GH_READ_LIB" ]; then
+              echo "::error::fleet/verify FAILED: gh-read-helper-missing — $GH_READ_LIB is not readable; the 'Fetch the shared gh-read retry helper' step must run before this one"
+              exit 1
+            fi
+            # shellcheck source=/dev/null
+            . "$GH_READ_LIB"
+            if ! gh_read "gh api .../pulls/$pr" "repos/$REPO/pulls/$pr" --jq '.head.ref'; then
+              echo "::error::fleet/verify FAILED: queue-pr-lookup — could not resolve the branch of PR #$pr behind queue entry $MQ_HEAD_REF; this is an API failure, not a verdict on the PR: re-queue it"
+              printf '%s\n' "$GH_READ_ERR"
+              exit 1
+            fi
+            branch="$GH_READ_OUT"
             base_sha="$MQ_BASE_SHA"; head_sha="$MQ_HEAD_SHA"
           fi
           {
@@ -184,9 +231,10 @@ jobs:
       # Human branches (and `release`, dependabot, salvage branches) are not
       # gated: nothing about how a person queues their own PR changes.
       #
-      # Fails CLOSED: the PR read failing (API outage, narrowed permission)
-      # exits non-zero under `set -e` — an entry whose provenance cannot be
-      # established is not admitted on a guess. Known residual, stated so it
+      # Fails CLOSED: the PR read failing (API outage past the bounded
+      # retries, a narrowed permission) exits non-zero as `queue-pr-lookup` —
+      # an entry whose provenance cannot be established is not admitted on a
+      # guess. Known residual, stated so it
       # is never mistaken for covered: workers and the supervisor share one
       # GitHub identity, so a worker that deliberately arms auto-merge ITSELF
       # (`gh pr merge --auto`) satisfies signal 1. That is a two-step
@@ -202,6 +250,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ steps.ctx.outputs.pr }}
           BRANCH: ${{ steps.ctx.outputs.branch }}
+          GH_READ_LIB: ${{ github.workspace }}/.gh-read/.github/scripts/gh-read.sh
         run: |
           set -euo pipefail
           if [[ ! "$BRANCH" =~ ^fleet/[^/]+/[^/]+$ ]]; then
@@ -210,16 +259,33 @@ jobs:
           fi
           # ONE live read of the queue-relevant facts, never the event
           # payload: a label or an auto-merge arm applied after this entry
-          # formed still counts. Guarded capture (`if !`), for the same
-          # reason the fleet/review queue arm's reads are: under `-e` a bare
-          # assignment dies on the first API hiccup with nothing but gh's raw
-          # stderr, and this step must fail CLOSED with the reason printed.
-          if ! pr_facts="$(gh api "repos/$REPO/pulls/$PR" \
-            --jq '[(.auto_merge != null), ([.labels[].name] | join(" "))] | @tsv' 2>&1)"; then
-            echo "::error::queue-guard FAILED: queue-pr-lookup — could not read PR #$PR to establish this entry's provenance; refusing to admit on a guess:"
-            printf '%s\n' "$pr_facts"
+          # formed still counts.
+          #
+          # The read goes through the shared bounded retry (#2483,
+          # `.github/scripts/gh-read.sh` — the policy fleet/review's queue arm
+          # adopted in #2482, sourced, not copied). Before it, one transient
+          # API failure here ejected the merge group exactly as #2481 did on
+          # fleet/review. The two refusals below stay DISJOINT tokens, and
+          # both fail CLOSED:
+          #   queue-pr-lookup         — "I could not ask": the read failed
+          #                             non-retryably or exhausted its retries.
+          #   queue-entry-unsignalled — "I asked, and nothing signalled this
+          #                             landing": a real answer, judged once.
+          # Only the read is retried — a 200 is an answer, whatever it says,
+          # so an unsignalled entry can never be retried into admission.
+          if [ ! -r "$GH_READ_LIB" ]; then
+            echo "::error::queue-guard FAILED: gh-read-helper-missing — $GH_READ_LIB is not readable; the 'Fetch the shared gh-read retry helper' step must run before this one"
             exit 1
           fi
+          # shellcheck source=/dev/null
+          . "$GH_READ_LIB"
+          if ! gh_read "gh api .../pulls/$PR" "repos/$REPO/pulls/$PR" \
+            --jq '[(.auto_merge != null), ([.labels[].name] | join(" "))] | @tsv'; then
+            echo "::error::queue-guard FAILED: queue-pr-lookup — could not read PR #$PR to establish this entry's provenance; refusing to admit on a guess. This is an API failure, not a verdict on the PR: re-queue it."
+            printf '%s\n' "$GH_READ_ERR"
+            exit 1
+          fi
+          pr_facts="$GH_READ_OUT"
           armed="$(printf '%s' "$pr_facts" | cut -f1)"
           labels=" $(printf '%s' "$pr_facts" | cut -f2- ) "
           if [[ "$armed" == "true" ]]; then
