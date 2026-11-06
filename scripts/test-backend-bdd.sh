@@ -197,14 +197,8 @@ fi
 # Uses --no-deps to skip the bootstrap Playwright project (we bootstrapped via API above).
 # Backend BDD tests use per-scenario hub isolation (workerHub fixture).
 # Worker count is controlled by playwright.config.ts (CI=4, local=3).
-if reporter_run_step "backend-bdd" bunx playwright test --project=backend-bdd --no-deps; then
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-else
-  overall_result="fail"
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-fi
+reporter_run_step "backend-bdd" bunx playwright test --project=backend-bdd --no-deps || overall_result="fail"
+reporter_record_step_results "backend-bdd" playwright
 
 # Step 7: Run @global-setting scenarios in their own serial project (#676).
 # These mutate a server-wide system setting (e.g. requireForAdmins) — tagged
@@ -212,14 +206,8 @@ fi
 # fullyParallel alongside it. workers:1 in playwright.config.ts forces this
 # project to execute one scenario at a time; each step file resets the
 # setting it touches via an `After` hook (not a separate teardown project).
-if reporter_run_step "backend-bdd-global-setting" bunx playwright test --project=backend-bdd-global-setting --no-deps; then
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd-global-setting" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-else
-  overall_result="fail"
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd-global-setting" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-fi
+reporter_run_step "backend-bdd-global-setting" bunx playwright test --project=backend-bdd-global-setting --no-deps || overall_result="fail"
+reporter_record_step_results "backend-bdd-global-setting" playwright
 
 # Step 8: Run @simulated-telephony scenarios. Serial, and NOT opt-in.
 #
@@ -230,28 +218,16 @@ fi
 # server this script talks to already satisfies — it is the same condition that lets the
 # suite call POST /api/test-reset-no-admin at all. So they run every time, and they fail
 # loudly (never skip) if the mock turns out not to be selectable.
-if reporter_run_step "backend-bdd-simulated-telephony" bunx playwright test --project=backend-bdd-simulated-telephony --no-deps; then
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd-simulated-telephony" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-else
-  overall_result="fail"
-  parse_playwright_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "backend-bdd-simulated-telephony" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-fi
+reporter_run_step "backend-bdd-simulated-telephony" bunx playwright test --project=backend-bdd-simulated-telephony --no-deps || overall_result="fail"
+reporter_record_step_results "backend-bdd-simulated-telephony" playwright
 
 # Step 9: Run @signed-webhooks scenarios (#1036) — opt-in. They need a server started with the
 # env-var Twilio provider (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER) and the
 # same values exported to this process so the test can sign webhooks like Twilio does. They fail
 # loudly (never skip) if that environment is missing.
 if [[ "${BDD_SIGNED_WEBHOOKS:-false}" == "true" ]]; then
-  if reporter_run_step "backend-bdd-signed-webhooks" bunx playwright test --project=backend-bdd-signed-webhooks --no-deps; then
-    parse_playwright_results "$REPORTER_LOG_FILE"
-    reporter_record_suite "backend-bdd-signed-webhooks" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-  else
-    overall_result="fail"
-    parse_playwright_results "$REPORTER_LOG_FILE"
-    reporter_record_suite "backend-bdd-signed-webhooks" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-  fi
+  reporter_run_step "backend-bdd-signed-webhooks" bunx playwright test --project=backend-bdd-signed-webhooks --no-deps || overall_result="fail"
+  reporter_record_step_results "backend-bdd-signed-webhooks" playwright
 fi
 
 reporter_summary "$overall_result"
