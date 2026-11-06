@@ -172,7 +172,7 @@ try {
 
   const fixture = {
     description:
-      'Case records and case comments exactly as the server PERSISTED them (PROTOCOL.md §2.11): ' +
+      'Case records and case comments exactly as the server PERSISTED them (PROTOCOL.md §2.18): ' +
       'sealed by packages/crypto/src/case_record.rs, sent through the routes\' request validators ' +
       'and CasesService into PostgreSQL, and read back. Each purpose has its own label and the ' +
       'canonical AAD on both layers (content: UTF-8(label); key wrap: UTF-8(label + ":key-wrap")); ' +

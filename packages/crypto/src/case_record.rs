@@ -47,7 +47,8 @@
 //! operator ruled the iOS convention canonical on 2026-11-05 (#2499).
 //!
 //! The server-persisted vectors in `tests/fixtures/case-record-vectors.json`
-//! pin the format; every platform opens them through its production reader.
+//! pin the format (PROTOCOL.md §2.18); every platform opens them through its
+//! production reader.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;

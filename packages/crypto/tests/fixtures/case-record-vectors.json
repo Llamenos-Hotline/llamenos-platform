@@ -1,5 +1,5 @@
 {
-  "description": "Case records and case comments exactly as the server PERSISTED them (PROTOCOL.md §2.11): sealed by packages/crypto/src/case_record.rs, sent through the routes' request validators and CasesService into PostgreSQL, and read back. Each purpose has its own label and the canonical AAD on both layers (content: UTF-8(label); key wrap: UTF-8(label + \":key-wrap\")); envelopes are addressed to the reader's X25519 key, all hex. Every platform must open these bytes through its production reader, and the stored-message format (LABEL_MESSAGE, no AAD) must not. Regenerate with packages/crypto/scripts/gen-case-record-vectors.ts — never edit by hand.",
+  "description": "Case records and case comments exactly as the server PERSISTED them (PROTOCOL.md §2.18): sealed by packages/crypto/src/case_record.rs, sent through the routes' request validators and CasesService into PostgreSQL, and read back. Each purpose has its own label and the canonical AAD on both layers (content: UTF-8(label); key wrap: UTF-8(label + \":key-wrap\")); envelopes are addressed to the reader's X25519 key, all hex. Every platform must open these bytes through its production reader, and the stored-message format (LABEL_MESSAGE, no AAD) must not. Regenerate with packages/crypto/scripts/gen-case-record-vectors.ts — never edit by hand.",
   "generator": "packages/crypto/src/case_record.rs via bun:ffi → createRecordBodySchema / createInteractionBodySchema → CasesService.create / createInteraction → CasesService.get / listInteractions",
   "readers": [
     {
@@ -23,17 +23,17 @@
         "keyWrap": "6c6c616d656e6f733a636173652d73756d6d6172793a6b65792d77726170"
       },
       "plaintext": "{\"title\":\"Vivienda — desalojo\",\"description\":\"case-record vector\",\"status\":\"Open\"}",
-      "encryptedContent": "d22e3727324d3f6c4c9072ee51658d68363459abaa49d3efef65de29b904a0ed837483a9bd3fb197e6b044ee047884ab1cb1dab6ee7dd2ac9de6e1874731f343fbdfadd4bd69620918e4d3d0ece0f46d785e0649f4aaa738e76130582fa26ac84379c2b48bd79886f3ca53026092074e",
+      "encryptedContent": "3cf1e258051e4c87a2d6bfd1bd2225564fc29217bdd0e7a38b5d6887082aa7421de50ceb373e5a74e5b55dc58bc9d66ce74a43803e33b286b8ec092c50cc954b90c8fb8f2565cbd8291581ac7f24732a90b334adde75605117ecae92f73def8299236668ac544c404420a560f1047b3f",
       "readerEnvelopes": [
         {
           "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
-          "enc": "519627dd9aedafda959c5bfc99e63253456207dee18552219aa260f62ec26309",
-          "ct": "5beb261937f69c390ebe77118c39ec5645a9c9ce5a832136f94a90e97014baf4492b957fd3eeb1fb063e9ca36ddeecc2"
+          "enc": "8d056b399eb66e72b6535c096ea09a78b0995a97b9b0f61f07f54c4f6fa4e469",
+          "ct": "2d4f8543a2f85051bdc6d418a0e0f0afc789c5a43ca8b79470e88a0521ef74589d90506ef2130ecca9431ab28495bf01"
         },
         {
           "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
-          "enc": "6a6f05f4dbd8eb3da10fb21d1cb64f072d66f5c0f17fccb1bcf9115967934050",
-          "ct": "7681e2e90f3ab4ccadc45676d7abd3499a2c320f2d0c11a0a239251f48498c8c52fbc2b967a8f35813744498f14556d0"
+          "enc": "01ea25a6f2b98cebbb1eee0780675eb065f545f0c9212383e2fceda00b11e47f",
+          "ct": "b3308cfdb366dce26418be9ab71beb64d5aca40c630bed1378dcb510f8096f15a5cc5a88ef1b00bdc5b4c72b5c20a5ca"
         }
       ]
     },
@@ -46,17 +46,17 @@
         "keyWrap": "6c6c616d656e6f733a636173652d6669656c64733a6b65792d77726170"
       },
       "plaintext": "{\"housing_status\":\"at risk\",\"household_size\":\"3\"}",
-      "encryptedContent": "cada37da652d731dd22355e0540b3905c7e9558965cb767749cfcc76b1dce81c5c802c303c89948def4ed277ca73ec7123b82f999fab853941ff2192d49ee81c0232376f1e420b66ff5dba1149",
+      "encryptedContent": "b4ee5c4f6485f32333ccc05214dbd051addcebf2f2947f8ef73e33fe5279a3b8a3c447913fc2c495d316c224d6fb3ed6a63873d86b56867f743bb26fd5687de28720baae33e5acf165def5dcee",
       "readerEnvelopes": [
         {
           "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
-          "enc": "80c88f9e22316a80ccca37ab72771d5544a11e567fb074cb4d270370add4ad37",
-          "ct": "857164c25c6769df7065a80dd55497d334ce408ac41dcce0ad60819a3fa131b6d37fd4f3885b9d6b6bda27d2c7257549"
+          "enc": "931702f951ce435d0c391bd4689775c96767522bc8dcc46953b19b6e1ec9367a",
+          "ct": "034dde719dcc5a977cb837c4e5651f8cb232e571c7c973b64e6e2d8f36eaf6eaeb462602359b5122f1a1da945027349d"
         },
         {
           "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
-          "enc": "9a2a851139dd585a9a45a39e8c715d96f59111cf2c552c9d6ffad4da0457297f",
-          "ct": "75873fed992a29a4df1b2897ec1702833961b66e39546007ed0eb71a992a0ce091bfe9288eefb609418317e4287d8f71"
+          "enc": "d119119dcbb667e063330fdfab21c7b9cf6588125e1dde4f0440e94d68372a5b",
+          "ct": "1ea3119403b36d6e311033008f2bb8a381a58ebad7e04bdc23ef9ba9e260fbc68ec16d562681f7c1bc63958c78fe5269"
         }
       ]
     },
@@ -69,17 +69,17 @@
         "keyWrap": "6c6c616d656e6f733a636173652d636f6d6d656e743a6b65792d77726170"
       },
       "plaintext": "Llamó de nuevo; ¿necesita intérprete? — case-comment vector",
-      "encryptedContent": "05d0bcb786115149b01e36e63545b6200c6ec0d7901ccf3f6b604580427939137e57c454ee76e5861c86c7f520bed4491de89b4ae2bccbac4c4e77d83b8e39a30a601aeb8c1c390367e8e8606f84fa54a4c28f55053db52e1054c562",
+      "encryptedContent": "ce45d3dfb07ff7231491d292bcb31aac17b69d34754e9662aea9f75821c471545367386f257a06fa5a7cbdc62af95e3c3087d76471879d449c9822b0e1f30115ee18f76738eef3c1e84f809a128be9c42b66ba9278a292b816f50d64",
       "readerEnvelopes": [
         {
           "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
-          "enc": "e315937e83241c35de76e7947c3829a34f12a79e43be1c42303373bcebf13272",
-          "ct": "b4492ca3894fe880fea10432d1f64dbfcf459145616e8a5ef8bc8cdcd5ed12673fb3733ab1324dee74485c0e6a745f3a"
+          "enc": "0202b714b87b652ea528a8d4bf8692843fef648a3792fa7a18d388858c18de4f",
+          "ct": "1245e4784b93aa100a8533f8f86a1f885fc12bd2c14cb8a1f952e3d23433a94b47c5b9bb959a5de384b62d12191fd2a7"
         },
         {
           "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
-          "enc": "2fbdf5e4ad0f2a12112ecafcde92cf8ea77712182d6bbd7a77e5dbdd0dca0105",
-          "ct": "86bf74bc4b26a78cd0d255a4beac3730f7cd8376f2362357c5f13500ea90c140da146bf37582214545afaf153c8491d5"
+          "enc": "4581cb0977d0e1d857a6889de231f8dc243c844035ef7f7cf75b797e092fe318",
+          "ct": "851ac6b4bb605c4c68cfcfc8c02aef8c1c2e8f2c612076b0a32516f6e9bd1a80d8fd3e7d1fea1325448770c303bdc603"
         }
       ]
     }
