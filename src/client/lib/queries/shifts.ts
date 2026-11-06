@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   listShifts,
   createShift,
@@ -30,7 +30,7 @@ import {
   type Shift,
 } from '@/lib/api'
 import { z } from 'zod'
-import { useConfig } from '@/lib/config'
+import { useHubQuery } from '@/lib/hub-owned'
 import { createShiftBodySchema } from '@protocol/schemas/shifts'
 
 // ---------------------------------------------------------------------------
@@ -43,8 +43,6 @@ export const shiftKeys = {
   fallback: () => [...shiftKeys.all, 'fallback'] as const,
   /** Prefix of every hub's my-status entry — what clock-in/out invalidate. */
   myStatus: () => [...shiftKeys.all, 'my-status'] as const,
-  /** my-status is hub-scoped (`/hubs/<id>/shifts/my-status`), so it is cached per hub. */
-  myStatusFor: (hubId: string) => [...shiftKeys.myStatus(), hubId] as const,
   active: () => [...shiftKeys.all, 'active'] as const,
   ringGroups: {
     all: ['ring-groups'] as const,
@@ -58,10 +56,14 @@ export const shiftKeys = {
 
 // ---------------------------------------------------------------------------
 // Queries
+//
+// Every one of these is hub-owned (#2461): `useHubQuery` appends the active hub
+// to the key, so the cache never hands one hub's rows to another or to no hub.
+// The keys above are prefixes — invalidating one covers every hub's entry.
 // ---------------------------------------------------------------------------
 
 export function useShifts() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.list(),
     queryFn: async () => {
       const { shifts } = await listShifts()
@@ -72,7 +74,7 @@ export function useShifts() {
 }
 
 export function useFallbackGroup() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.fallback(),
     queryFn: async () => {
       const { userPubkeys } = await getFallbackGroup()
@@ -89,18 +91,16 @@ export function useFallbackGroup() {
  * resolution and report an on-shift volunteer as "Off Shift" — #1708).
  */
 export function useMyShiftStatus() {
-  const { currentHubId } = useConfig()
-  return useQuery({
-    queryKey: shiftKeys.myStatusFor(currentHubId ?? ''),
+  return useHubQuery({
+    queryKey: shiftKeys.myStatus(),
     queryFn: getMyShiftStatus,
-    enabled: !!currentHubId,
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   })
 }
 
 export function useActiveShifts() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.active(),
     queryFn: async () => {
       const { activeShifts } = await listActiveShifts()
@@ -112,7 +112,7 @@ export function useActiveShifts() {
 }
 
 export function useRingGroups() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.ringGroups.list(),
     queryFn: async () => {
       const { ringGroups } = await listRingGroups()
@@ -123,7 +123,7 @@ export function useRingGroups() {
 }
 
 export function useRingGroupDetail(id: string) {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.ringGroups.detail(id),
     queryFn: () => getRingGroup(id),
     enabled: !!id,
@@ -132,7 +132,7 @@ export function useRingGroupDetail(id: string) {
 }
 
 export function useShiftOverrides(from: string, to: string) {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.overrides(from, to),
     queryFn: async () => {
       const { overrides } = await listShiftOverrides(from, to)
@@ -143,7 +143,7 @@ export function useShiftOverrides(from: string, to: string) {
 }
 
 export function useMyAvailabilityBlocks() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.myAvailability(),
     queryFn: async () => {
       const { blocks } = await listMyAvailabilityBlocks()
@@ -154,7 +154,7 @@ export function useMyAvailabilityBlocks() {
 }
 
 export function useShiftRequests() {
-  return useQuery({
+  return useHubQuery({
     queryKey: shiftKeys.requests(),
     queryFn: async () => {
       const { requests } = await listShiftRequests()

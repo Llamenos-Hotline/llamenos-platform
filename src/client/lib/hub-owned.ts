@@ -27,48 +27,66 @@ export interface HubOwned<T> {
   /** No hub is active: nothing can be asked, and the view must say a hub is needed. */
   noHub: boolean
   loading: boolean
-  /** Ask again, in whichever hub is active now. */
-  reload: () => void
+  /**
+   * Ask again, in whichever hub is active now. `background` is a poll: it does not
+   * flip `loading`, and its error reaches `onError` flagged as background.
+   */
+  reload: (opts?: { background?: boolean }) => void
   /** Update the loaded rows locally; dropped if the hub they were loaded in is no longer active. */
   setData: (update: (prev: T) => T) => void
 }
 
 interface Loaded<T> {
-  hubId: string
+  /** The hub the rows were loaded in, or `PLATFORM` for deployment-level rows. */
+  owner: string
   value: T
 }
+
+/** Owner tag for deployment-level rows (the platform audit chain): no hub's, so no hub change clears them. */
+const PLATFORM = '\u0000platform'
 
 /**
  * Load hub-owned rows for a view. `load` must be stable (`useCallback`) — a new
  * `load` re-runs it, exactly as a change of active hub does. Errors other than
  * "no hub" go to `onError`; the rows already loaded in this same hub stay, since
  * they are still this hub's.
+ *
+ * `ownedBy: 'platform'` is for a view that shows deployment-level rows through
+ * the same screen as a hub's (the audit page's platform chain). Those belong to
+ * no hub, so they neither need one nor are cleared when it changes.
  */
 export function useHubOwned<T>(
   load: () => Promise<T>,
-  { empty, onError }: { empty: T; onError: (err: unknown) => void },
+  { empty, onError, ownedBy = 'active-hub' }: {
+    empty: T
+    onError: (err: unknown, ctx: { background: boolean }) => void
+    ownedBy?: 'active-hub' | 'platform'
+  },
 ): HubOwned<T> {
   const hubId = useActiveHubId()
+  const owner = ownedBy === 'platform' ? PLATFORM : hubId
   const [loaded, setLoaded] = useState<Loaded<T> | null>(null)
-  const [loading, setLoading] = useState(hubId !== null)
+  const [loading, setLoading] = useState(owner !== null)
   const generation = useRef(0)
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
+  const currentOwner = useCallback(() => (ownedBy === 'platform' ? PLATFORM : getActiveHub()), [ownedBy])
 
-  const reload = useCallback(() => {
+  const reload = useCallback((opts?: { background?: boolean }) => {
+    const background = opts?.background ?? false
     const gen = ++generation.current
-    const askedIn = getActiveHub()
+    const askedIn = currentOwner()
     if (!askedIn) {
       setLoaded(null)
       setLoading(false)
       return
     }
-    setLoading(true)
+    if (!background) setLoading(true)
     load().then(
       (value) => {
         // An answer for a hub that is no longer active is not this view's answer.
-        if (gen !== generation.current || getActiveHub() !== askedIn) return
-        setLoaded({ hubId: askedIn, value })
+        if (gen !== generation.current || currentOwner() !== askedIn) return
+        setLoaded({ owner: askedIn, value })
       },
       (err: unknown) => {
         if (gen !== generation.current) return
@@ -76,23 +94,24 @@ export function useHubOwned<T>(
           setLoaded(null)
           return
         }
-        onErrorRef.current(err)
+        onErrorRef.current(err, { background })
       },
     ).finally(() => {
       if (gen === generation.current) setLoading(false)
     })
-  }, [load, hubId])
+    // `owner` is a dependency so that a change of active hub asks again.
+  }, [load, owner, currentOwner])
 
   useEffect(() => { reload() }, [reload])
 
   const setData = useCallback((update: (prev: T) => T) => {
-    setLoaded(prev => (prev && prev.hubId === getActiveHub() ? { ...prev, value: update(prev.value) } : prev))
-  }, [])
+    setLoaded(prev => (prev && prev.owner === currentOwner() ? { ...prev, value: update(prev.value) } : prev))
+  }, [currentOwner])
 
   // Bound at render, not only when the next load settles: the frame after the hub
   // changes must not show the previous hub's rows either.
-  const current = hubId !== null && loaded?.hubId === hubId ? loaded.value : empty
-  return { data: current, noHub: hubId === null, loading: hubId !== null && loading, reload, setData }
+  const current = owner !== null && loaded?.owner === owner ? loaded.value : empty
+  return { data: current, noHub: owner === null, loading: owner !== null && loading, reload, setData }
 }
 
 /**

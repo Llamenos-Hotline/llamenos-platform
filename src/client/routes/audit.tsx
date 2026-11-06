@@ -2,7 +2,9 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { listAuditLog, listPlatformAuditLog, listUsers, NoActiveHubError, type AuditLogEntry, type User } from '@/lib/api'
+import { listAuditLog, listPlatformAuditLog, listUsers, type AuditLogEntry, type User } from '@/lib/api'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { useToast } from '@/lib/toast'
 import { ScrollText, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -44,13 +46,12 @@ function getEventCategoryColor(action: string): string {
  * `hub` is the active hub's chain. `platform` is the deployment-level chain, which
  * has its own route and permission (`system:view-audit`) — no hub's entries (#2395).
  */
+const EMPTY_AUDIT_PAGE: { entries: AuditLogEntry[]; total: number } = { entries: [], total: 0 }
+
 export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
   const { t } = useTranslation()
   const { isAdmin } = useAuth()
-  const [entries, setEntries] = useState<AuditLogEntry[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState<User[]>([])
   const [searchText, setSearchText] = useState('')
   const [eventType, setEventType] = useState('all')
@@ -65,9 +66,8 @@ export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
   }, [t, toast])
 
   const fetchEntries = useCallback(() => {
-    setLoading(true)
     const list = scope === 'platform' ? listPlatformAuditLog : listAuditLog
-    list({
+    return list({
       page,
       limit,
       eventType: eventType !== 'all' ? eventType : undefined,
@@ -75,15 +75,13 @@ export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
       dateTo: dateTo || undefined,
       search: searchText || undefined,
     })
-      .then(r => { setEntries(r.entries); setTotal(r.total) })
-      // No hub to browse is an empty chain, not a failure to load one (#2405).
-      .catch(err => { if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error') })
-      .finally(() => setLoading(false))
-  }, [scope, page, eventType, dateFrom, dateTo, searchText, t, toast])
-
-  useEffect(() => {
-    fetchEntries()
-  }, [fetchEntries])
+  }, [scope, page, eventType, dateFrom, dateTo, searchText])
+  const { data: { entries, total }, noHub, loading } = useHubOwned(fetchEntries, {
+    empty: EMPTY_AUDIT_PAGE,
+    onError: () => toast(t('common.error'), 'error'),
+    // The platform chain is the deployment's, not a hub's (#2395).
+    ownedBy: scope === 'platform' ? 'platform' : 'active-hub',
+  })
 
   // Reset to page 1 when filters change
   useEffect(() => {
@@ -175,7 +173,9 @@ export function AuditPage({ scope = 'hub' }: { scope?: 'hub' | 'platform' }) {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {noHub ? (
+            <NoActiveHubNotice />
+          ) : loading ? (
             <div className="divide-y divide-border">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-4 px-6 py-3">
