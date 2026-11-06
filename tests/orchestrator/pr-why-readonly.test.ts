@@ -63,6 +63,7 @@ function cannedGitHub(args: string[]): string {
   }
   if (joined.includes(`/commits/${HEAD}/status`)) return JSON.stringify([{ statuses: [] }])
   if (joined.includes(`actions/runs?head_sha=${HEAD}`)) return JSON.stringify([{ workflow_runs: [] }])
+  if (joined.includes('actions/runs?event=merge_group&status=')) return JSON.stringify({ total_count: 0, workflow_runs: [] })
   throw new Error(`unexpected gh call: ${joined.slice(0, 200)}`)
 }
 
@@ -90,7 +91,11 @@ describe('pr-why\'s whole default path is read-only', () => {
     expect(joined.some((a) => a.includes('/check-runs'))).toBe(true)
     expect(joined.some((a) => a.includes('actions/runs?head_sha='))).toBe(true)
     expect(joined.some((a) => a.includes('pullRequest(number'))).toBe(true)
-    expect(spawned.length).toBeGreaterThanOrEqual(9)
+    // #2480: the second membership probe, one read per live run status.
+    for (const status of ['requested', 'waiting', 'pending', 'queued', 'in_progress']) {
+      expect(joined.some((a) => a.includes(`actions/runs?event=merge_group&status=${status}&`)), status).toBe(true)
+    }
+    expect(spawned.length).toBeGreaterThanOrEqual(14)
     for (const s of spawned) {
       expect(s.file).toBe('gh')
       expect(() => assertReadOnlyGhArgs(s.args), s.args.join(' ').slice(0, 120)).not.toThrow()
@@ -103,7 +108,7 @@ describe('pr-why\'s whole default path is read-only', () => {
   })
 
   it('a 502 from GitHub on any one read makes the exit 2, never 0 or 1', async () => {
-    for (const marker of ['pullRequest(number', 'checkSuites', '/check-runs', 'actions/runs?head_sha=', '/pulls/2470/files', '/rules/branches/main', 'object(expression']) {
+    for (const marker of ['pullRequest(number', 'checkSuites', '/check-runs', 'actions/runs?head_sha=', 'actions/runs?event=merge_group', '/pulls/2470/files', '/rules/branches/main', 'object(expression']) {
       respond = (args) => {
         if (args.join(' ').includes(marker)) throw Object.assign(new Error('Command failed'), { code: 1, stderr: 'HTTP 502: Bad Gateway' })
         return cannedGitHub(args)

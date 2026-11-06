@@ -45,10 +45,18 @@
  *  - ONE PR per query. `gh pr list`'s `mergeStateStatus` has been stale, and
  *    many aliased `pullRequest` fields in one GraphQL query have answered
  *    BLOCKED for all of them. Both produced wrong diagnoses here.
- *  - Queue membership is the authority on "queued", read off the PR itself
- *    (`mergeQueueEntry`, cross-checked against `isInMergeQueue`). Auto-merge
- *    is CONSUMED on entry — a queued PR reads `autoMergeRequest: null` — so a
- *    populated request is never evidence of being queued.
+ *  - Queue membership is the UNION of two probes (#2480): the PR's own entry
+ *    (`mergeQueueEntry`, cross-checked against `isInMergeQueue`), OR a
+ *    non-terminal `merge_group` workflow run on
+ *    `gh-readonly-queue/<base>/pr-<N>-<sha>`. GitHub's entry fields have been
+ *    observed to omit an entry once its group starts building — two PRs read
+ *    absent from `mergeQueue.entries` while their groups' runs were live — so
+ *    "no entry" alone is not "not queued". Neither probe may be read as a
+ *    negative when it failed: either failing, with the other negative, is
+ *    `unknown`. Auto-merge is CONSUMED on entry — a queued PR reads
+ *    `autoMergeRequest: null` — so a populated request is never evidence of
+ *    being queued; CLEAN + populated + absent from BOTH probes is the
+ *    `automerge-stale` signature.
  *  - Two runs can carry one check name on one head (a re-run, a second app).
  *    The latest by `started_at` decides, and `check-carrier-ambiguous` says
  *    the second carrier exists instead of silently picking one.
@@ -69,6 +77,7 @@ import {
   type Carrier, type HeadDiagnosis, type MissingChecksDeps,
 } from './missing-checks.js'
 import { QUEUE_CLEARED_LABEL, REVIEW_JOB, laneIdFromBranch, reviewOutcomeToken } from './ci.js'
+import { parseQueueBranch } from './queue-sweep.js'
 
 // ---------------------------------------------------------------------------
 // The read-only runner
@@ -180,6 +189,21 @@ export interface ReviewRun {
   annotationsTruncated: boolean
 }
 
+/** A non-terminal `merge_group` workflow run — a merge group being built. */
+export interface LiveQueueRun {
+  id: number
+  name: string
+  /** `requested` | `waiting` | `pending` | `queued` | `in_progress` */
+  status: string
+  /** `gh-readonly-queue/<base>/pr-<N>-<sha>` for a group whose tail is PR N. */
+  headBranch: string
+}
+
+/** The run statuses GitHub reports for a run that has not finished, in
+ *  lifecycle order. They are read in this order so a run that advances
+ *  between two reads (queued → in_progress) is caught by the later one. */
+export const LIVE_RUN_STATUSES: readonly string[] = ['requested', 'waiting', 'pending', 'queued', 'in_progress']
+
 export interface PrWhyFacts {
   pr: number
   state: Observed<PrState>
@@ -191,6 +215,9 @@ export interface PrWhyFacts {
   /** `missing-checks`'s diagnosis of the head. */
   checks: Observed<HeadDiagnosis>
   reviewRuns: Observed<ReviewRun[]>
+  /** The second membership probe: live `merge_group` runs on this PR's
+   *  `gh-readonly-queue/<base>/pr-<N>-<sha>` branch. Empty = none live. */
+  queueRuns: Observed<LiveQueueRun[]>
   /** The head re-read AFTER every other read. */
   headAfter: Observed<string>
 }
@@ -236,6 +263,17 @@ const MERGEABLE_STATES: ReadonlySet<string> = new Set(['CLEAN', 'UNSTABLE', 'HAS
 function unknown(what: string, reason: string, remedy = `re-run llamenos-fleet pr-why once ${what} is readable`): Verdict {
   return { name: 'unknown', severity: 'unknown', evidence: [`could not observe ${what}: ${reason}`], remedy }
 }
+
+/** Pure. The live runs whose queue branch names `pr` on `base` — the
+ *  branch grammar is `queue-sweep`'s, so the two cannot drift. */
+export function queueRunsNaming(runs: readonly LiveQueueRun[], base: string, pr: number): LiveQueueRun[] {
+  return runs.filter((r) => {
+    const q = parseQueueBranch(r.headBranch)
+    return q !== undefined && q.base === base && q.pr === pr
+  })
+}
+
+const renderQueueRun = (r: LiveQueueRun): string => `run ${r.id} (${r.name}) ${r.status} on ${r.headBranch}`
 
 function renderCarrierBrief(c: Carrier): string {
   const when = c.startedAt === '' ? 'no started_at' : c.startedAt
@@ -302,11 +340,25 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
     baseRefName: s.baseRefName,
     headRefOid: s.headRefOid,
     mergeStateStatus: s.mergeStateStatus,
-    queue: s.mergeQueueEntry === null ? 'absent' : `${s.mergeQueueEntry.state} at position ${s.mergeQueueEntry.position}`,
+    queue: s.mergeQueueEntry !== null
+      ? `${s.mergeQueueEntry.state} at position ${s.mergeQueueEntry.position}`
+      : s.state !== 'OPEN'
+        ? 'absent'
+        : !facts.queueRuns.ok
+          ? 'no entry; merge_group run probe unreadable'
+          : facts.queueRuns.value.length > 0
+            ? `building (no entry) — ${facts.queueRuns.value.map(renderQueueRun).join(', ')}`
+            : 'absent',
     autoMerge: s.autoMergeRequest === null ? 'not armed' : `armed ${s.autoMergeRequest.enabledAt} by ${s.autoMergeRequest.enabledBy}`,
   }
   const v: Verdict[] = []
   const done = (): PrWhyReport => ({ pr: facts.pr, summary, verdicts: rank(v) })
+  const finishWithNotes = (): PrWhyReport => {
+    const guard = fleetGuardVerdict(s)
+    if (guard !== undefined) v.push(guard)
+    v.push(...carrierNotes(facts.checks))
+    return done()
+  }
 
   if (s.state === 'MERGED') {
     v.push({ name: 'merged', severity: 'ok', evidence: [`state=MERGED`], remedy: 'none' })
@@ -338,16 +390,19 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
     v.push({ name: 'draft', severity: 'blocker', evidence: ['isDraft=true'], remedy: `gh pr ready ${s.number}` })
   }
 
-  // Queue membership first, and authoritatively.
-  if ((s.mergeQueueEntry !== null) !== s.isInMergeQueue) {
-    v.push(unknown('queue membership', `mergeQueueEntry is ${s.mergeQueueEntry === null ? 'null' : 'set'} but isInMergeQueue=${String(s.isInMergeQueue)} — GitHub's two answers disagree`))
-    return done()
-  }
-  if (s.mergeQueueEntry !== null) {
+  // Queue membership first, and authoritatively: the UNION of the entry
+  // fields and a live merge_group run naming this PR (#2480).
+  const entered = s.mergeQueueEntry !== null && s.isInMergeQueue
+  const fieldsAgree = (s.mergeQueueEntry !== null) === s.isInMergeQueue
+  const building = facts.queueRuns.ok ? facts.queueRuns.value : []
+  const runEvidence = building.map((r) => `live merge_group ${renderQueueRun(r)}`)
+  const autoMergeEvidence = `autoMergeRequest=${s.autoMergeRequest === null ? 'null (consumed on entry — expected)' : 'still populated'}`
+  if (entered && s.mergeQueueEntry !== null) {
     const e = s.mergeQueueEntry
     const evidence = [
       `in the ${s.baseRefName} merge queue: state=${e.state}, position ${e.position}, enqueued ${e.enqueuedAt}`,
-      `autoMergeRequest=${s.autoMergeRequest === null ? 'null (consumed on entry — expected)' : 'still populated'}`,
+      ...runEvidence,
+      autoMergeEvidence,
     ]
     if (e.state === 'UNMERGEABLE') {
       v.push({
@@ -360,10 +415,38 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
     } else {
       v.push({ name: 'queued-ok', severity: 'ok', evidence, remedy: 'wait — the queue owns it now' })
     }
-    const guard = fleetGuardVerdict(s)
-    if (guard !== undefined) v.push(guard)
-    v.push(...carrierNotes(facts.checks))
+    return finishWithNotes()
+  }
+  if (building.length > 0) {
+    v.push({
+      name: 'queued-ok',
+      severity: 'ok',
+      evidence: [
+        ...runEvidence,
+        `the entry fields read mergeQueueEntry=${s.mergeQueueEntry === null ? 'null' : 'set'}, isInMergeQueue=${String(s.isInMergeQueue)} — ` +
+          'GitHub omits an entry from its queue fields once its group starts building (#2480); the live group run is the membership evidence',
+        autoMergeEvidence,
+      ],
+      remedy: 'wait — the queue owns it now; do NOT re-queue (that would discard a gate run already in flight)',
+    })
+    return finishWithNotes()
+  }
+  if (!fieldsAgree) {
+    v.push(unknown('queue membership', `mergeQueueEntry is ${s.mergeQueueEntry === null ? 'null' : 'set'} but isInMergeQueue=${String(s.isInMergeQueue)} — GitHub's two answers disagree, and no live merge_group run settles it${facts.queueRuns.ok ? '' : ` (the run probe itself failed: ${facts.queueRuns.reason})`}`))
     return done()
+  }
+  if (!facts.queueRuns.ok) {
+    // The entry fields say "absent", but they say that about a building
+    // group too — without the run probe, absence proves nothing.
+    v.push(unknown(
+      'queue membership',
+      `no queue entry, but the live merge_group run probe failed (${facts.queueRuns.reason}) — a building group is absent from the entry fields (#2480), so "no entry" alone is not "not queued"`,
+    ))
+    if (MERGEABLE_STATES.has(s.mergeStateStatus)) {
+      // not-queued / automerge-stale are claims about membership; with
+      // membership unobserved, neither may be made.
+      return finishWithNotes()
+    }
   }
 
   // Not queued.
@@ -381,6 +464,7 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
     const evidence = [
       `mergeStateStatus=${s.mergeStateStatus} (single-PR query)`,
       `not in the ${s.baseRefName} merge queue (mergeQueueEntry=null, isInMergeQueue=false)`,
+      `no live merge_group run on gh-readonly-queue/${s.baseRefName}/pr-${s.number}-<sha> — no group is building it`,
     ]
     if (s.autoMergeRequest !== null) {
       v.push({
@@ -397,10 +481,7 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
         remedy: `gh pr merge ${s.number} --auto --squash`,
       })
     }
-    const guard = fleetGuardVerdict(s)
-    if (guard !== undefined) v.push(guard)
-    v.push(...carrierNotes(facts.checks))
-    return done()
+    return finishWithNotes()
   }
 
   // BLOCKED, BEHIND, UNKNOWN, DRAFT, or anything else GitHub invents: derive
@@ -681,6 +762,9 @@ export interface PrWhyDeps {
   readFiles(pr: number): Promise<string[]>
   /** THROWS on failure. Every `fleet/review` run on `sha`. */
   readReviewRuns(sha: string): Promise<ReviewRun[]>
+  /** THROWS on failure. EVERY non-terminal `merge_group` run in the repo —
+   *  the caller picks out the ones naming the PR. */
+  readLiveQueueRuns(): Promise<LiveQueueRun[]>
   /** THROWS on failure. `null` when the branch has no CODEOWNERS. */
   readCodeOwners(branch: string): Promise<string | null>
   /** The `missing-checks` fetchers this command composes with. */
@@ -717,12 +801,12 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
     return {
       pr, state,
       ruleset: notRead(skipped), codeOwners: notRead(skipped), files: notRead(skipped),
-      checks: notRead(skipped), reviewRuns: notRead(skipped), headAfter: notRead(skipped),
+      checks: notRead(skipped), reviewRuns: notRead(skipped), queueRuns: notRead(skipped), headAfter: notRead(skipped),
     }
   }
   const s = state.value
 
-  const [rulesetRead, files, reviewRuns] = await Promise.all([
+  const [rulesetRead, files, reviewRuns, queueRuns] = await Promise.all([
     observe(async () => {
       const fact = deriveBranchRuleset(s.baseRefName, await deps.checks.fetchBranchRules(s.baseRefName))
       if (!fact.ok) throw new Error(fact.reason)
@@ -730,6 +814,7 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
     }),
     observe(() => deps.readFiles(pr)),
     observe(() => deps.readReviewRuns(s.headRefOid)),
+    observe(async () => queueRunsNaming(await deps.readLiveQueueRuns(), s.baseRefName, pr)),
   ])
 
   const codeOwners: Observed<CodeOwnerRule[] | null> = !rulesetRead.ok
@@ -749,7 +834,7 @@ export async function gatherPrWhyFacts(deps: PrWhyDeps, pr: number): Promise<PrW
   const checks: Observed<HeadDiagnosis> = diagnosis.ok ? { ok: true, value: diagnosis.diagnosis } : { ok: false, reason: diagnosis.reason }
 
   const headAfter = await observe(() => deps.readHead(pr))
-  return { pr, state, ruleset: rulesetRead, codeOwners, files, checks, reviewRuns, headAfter }
+  return { pr, state, ruleset: rulesetRead, codeOwners, files, checks, reviewRuns, queueRuns, headAfter }
 }
 
 const PR_QUERY = `
@@ -903,6 +988,30 @@ export function reviewRunsFrom(raw: unknown): ReviewRun[] {
   return out
 }
 
+interface GhRunsPage {
+  total_count?: number
+  workflow_runs?: { id?: number; name?: string | null; status?: string | null; head_branch?: string | null }[]
+}
+
+/** Pure. One `actions/runs?event=merge_group&status=<s>` page → its runs,
+ *  THROWING when the page does not hold every match: a live run on an
+ *  unread page would turn "building" into "not queued". */
+export function liveQueueRunsFrom(raw: unknown, status: string): LiveQueueRun[] {
+  const page = raw as GhRunsPage
+  if (typeof page.total_count !== 'number' || !Array.isArray(page.workflow_runs)) {
+    throw new Error(`GET actions/runs (merge_group, ${status}) did not return a run page`)
+  }
+  if (page.total_count > page.workflow_runs.length) {
+    throw new Error(`${page.total_count} ${status} merge_group runs, one page read ${page.workflow_runs.length} — a live group run may be unread`)
+  }
+  return page.workflow_runs.map((r) => {
+    if (typeof r.id !== 'number' || typeof r.head_branch !== 'string' || typeof r.status !== 'string') {
+      throw new Error(`a ${status} merge_group run came back without id/head_branch/status`)
+    }
+    return { id: r.id, name: r.name ?? '(unnamed)', status: r.status, headBranch: r.head_branch }
+  })
+}
+
 interface GhPrFile { filename?: string }
 
 export function defaultPrWhyDeps(): PrWhyDeps {
@@ -923,6 +1032,16 @@ export function defaultPrWhyDeps(): PrWhyDeps {
     readReviewRuns: async (sha) => reviewRunsFrom(JSON.parse(await ghRead([
       'api', 'graphql', '-f', `query=${REVIEW_RUNS_QUERY}`, ...vars, '-f', `sha=${sha}`, '-f', `check=${REVIEW_JOB}`,
     ]))),
+    readLiveQueueRuns: async () => {
+      // One read per live status, in lifecycle order (see LIVE_RUN_STATUSES);
+      // a run seen twice across reads is kept once.
+      const byId = new Map<number, LiveQueueRun>()
+      for (const status of LIVE_RUN_STATUSES) {
+        const raw = JSON.parse(await ghRead(['api', `repos/${REPO}/actions/runs?event=merge_group&status=${status}&per_page=100`])) as unknown
+        for (const r of liveQueueRunsFrom(raw, status)) byId.set(r.id, r)
+      }
+      return [...byId.values()]
+    },
     readCodeOwners: async (branch) => codeOwnersTextFrom(JSON.parse(await ghRead([
       'api', 'graphql', '-f', `query=${CODEOWNERS_QUERY}`,
       '-f', `owner=${owner ?? ''}`, '-f', `repo=${name ?? ''}`,
