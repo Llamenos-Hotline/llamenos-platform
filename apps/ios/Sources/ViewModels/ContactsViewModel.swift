@@ -44,21 +44,18 @@ final class ContactsViewModel {
         errorMessage = nil
 
         do {
-            var path = try apiService.activeHubPath("/api/contacts") + "?page=1&limit=50"
+            var path = "/api/contacts?page=1&limit=50"
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactTimelineListResponse = try await apiService.request(
-                method: "GET",
-                path: path
-            )
-            contacts = response.contacts
-            total = Int(response.total)
+            // No hub is no contacts — never the last hub's (#2461, #2478).
+            let read = try await apiService.getHubOwned(path, as: ContactTimelineListResponse.self)
+            contacts = read.rows(\.contacts)
+            total = read.response.map { Int($0.total) } ?? 0
             currentPage = 1
         } catch {
-            // No hub to browse is an empty list, not a failure
-            if contacts.isEmpty && !APIError.isNoHub(error) {
+            if contacts.isEmpty {
                 errorMessage = error.localizedDescription
             }
         }
@@ -113,8 +110,7 @@ final class ContactsViewModel {
             total = matched.count
             currentPage = 1
         } catch {
-            // No hub to browse is an empty list, not a failure
-            if contacts.isEmpty && !APIError.isNoHub(error) {
+            if contacts.isEmpty {
                 errorMessage = error.localizedDescription
             }
         }
@@ -132,15 +128,15 @@ final class ContactsViewModel {
         var seen = Set<String>()
         var page = 1
         while true {
-            var path = try apiService.activeHubPath("/api/contacts") + "?page=\(page)&limit=\(pageSize)"
+            var path = "/api/contacts?page=\(page)&limit=\(pageSize)"
             if let contactType = selectedContactType {
                 let encoded = contactType.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? contactType
                 path += "&contactType=\(encoded)"
             }
-            let response: ContactTimelineListResponse = try await apiService.request(
-                method: "GET",
-                path: path
-            )
+            // No hub is no contacts — the search matches nothing (#2461, #2478).
+            guard let response = try await apiService.getHubOwned(path, as: ContactTimelineListResponse.self).response else {
+                return []
+            }
             let fresh = response.contacts.filter { seen.insert($0.contactHash).inserted }
             all.append(contentsOf: fresh)
             if fresh.isEmpty || Double(all.count) >= response.total { return all }

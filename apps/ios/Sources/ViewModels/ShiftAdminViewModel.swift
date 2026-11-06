@@ -95,14 +95,10 @@ final class ShiftAdminViewModel {
     /// Load shifts for the override scope picker and request shift-name lookup.
     func loadShifts() async {
         do {
-            let response: ShiftsListResponse = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/shifts")
-            )
-            shifts = response.shifts
+            // No hub is no shifts — never the last hub's (#2461, #2478).
+            shifts = try await apiService.getHubOwned("/api/shifts", as: ShiftsListResponse.self).rows(\.shifts)
         } catch {
-            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-            if !APIError.isNoHub(error), errorMessage == nil { errorMessage = error.localizedDescription }
+            if errorMessage == nil { errorMessage = error.localizedDescription }
         }
     }
 
@@ -118,14 +114,10 @@ final class ShiftAdminViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let response: RingGroupListResponse = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/ring-groups")
-            )
-            ringGroups = response.ringGroups
+            // No hub is no ring groups — never the last hub's (#2461, #2478).
+            ringGroups = try await apiService.getHubOwned("/api/ring-groups", as: RingGroupListResponse.self).rows(\.ringGroups)
         } catch {
-            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
+            errorMessage = error.localizedDescription
         }
         isLoading = false
     }
@@ -249,14 +241,10 @@ final class ShiftAdminViewModel {
     func loadFallback() async {
         errorMessage = nil
         do {
-            let response: FallbackGroup = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/shifts/fallback")
-            )
-            fallbackPubkeys = response.userPubkeys
+            // No hub is no fallback group — never the last hub's (#2461, #2478).
+            fallbackPubkeys = try await apiService.getHubOwned("/api/shifts/fallback", as: FallbackGroup.self).rows(\.userPubkeys)
         } catch {
-            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -288,14 +276,13 @@ final class ShiftAdminViewModel {
         do {
             let from = DateFormatting.wireDateString(from: overrideFrom)
             let to = DateFormatting.wireDateString(from: overrideTo)
-            let response: ShiftOverrideListResponse = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/shifts/overrides?from=\(from)&to=\(to)")
-            )
-            overrides = response.overrides.sorted { $0.date < $1.date }
+            // No hub is no overrides — never the last hub's (#2461, #2478).
+            overrides = try await apiService
+                .getHubOwned("/api/shifts/overrides?from=\(from)&to=\(to)", as: ShiftOverrideListResponse.self)
+                .rows(\.overrides)
+                .sorted { $0.date < $1.date }
         } catch {
-            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
+            errorMessage = error.localizedDescription
         }
         isLoading = false
     }
@@ -359,14 +346,10 @@ final class ShiftAdminViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let response: ShiftJoinRequestListResponse = try await apiService.request(
-                method: "GET",
-                path: try apiService.activeHubPath("/api/shifts/requests")
-            )
-            requests = response.requests
+            // No hub is no requests — never the last hub's (#2461, #2478).
+            requests = try await apiService.getHubOwned("/api/shifts/requests", as: ShiftJoinRequestListResponse.self).rows(\.requests)
         } catch {
-            // No hub to browse is an empty list, not a failure to load one (#2405, #2461).
-            if !APIError.isNoHub(error) { errorMessage = error.localizedDescription }
+            errorMessage = error.localizedDescription
         }
         isLoading = false
     }
