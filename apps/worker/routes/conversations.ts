@@ -19,7 +19,6 @@ import { incCounter } from './metrics'
 import type { Services } from '../services'
 import { createLogger } from '../lib/logger'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
@@ -334,43 +333,34 @@ conversations.post('/:id/messages',
     if (body.encryptedContent) {
       encryptedContent = body.encryptedContent
     } else if (plaintextForSending) {
-      // #1283: the admin reader is the X25519 HPKE recipient or nothing. The
-      // old `|| c.env.ADMIN_PUBKEY` sealed this message to an Ed25519 signing
-      // key, which no secret key can open.
+      // Sealed to the hub's admin readers (`readersFor`, the hub admins'
+      // registered devices and its escrow key) and the author's own devices.
+      // Never the instance-wide `ADMIN_DECRYPTION_PUBKEY`: the platform
+      // operator is not a reader of hub content (D1, #1034).
       //
       // #1140 follow-on: `pubkey` is `c.get('pubkey')`, the caller's Ed25519
-      // *identity* key — not an HPKE recipient. Sealing to it produced a second,
-      // permanently unopenable envelope beside the admin's working one, which is
-      // the #1283 defect repeated here. The server has no X25519 key for any
-      // user (`users` carries only `pubkey`; `devices.x25519_pubkey` is never
-      // populated), so it cannot substitute the right one — and must not invent
-      // one. Clients that hold their own device key send `encryptedContent` and
-      // `readerEnvelopes` instead and take the branch above; the desktop does.
-      const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
-      // `pubkey` is the sender's Ed25519 *identity* key, not a recipient key.
-      // Resolve the X25519 keys of the devices they actually registered.
-      const authorRecipients = await c.get('services').identity.getHpkeRecipients(pubkey)
+      // *identity* key — not an HPKE recipient. Sealing to it produced a
+      // permanently unopenable envelope (#1283). The author's readable copy
+      // comes from the X25519 keys of the devices they registered.
+      const adminReaders = await services.identity.readersFor(conv.hubId, 'admin')
+      const authorRecipients = await services.identity.getHpkeRecipients(pubkey)
       if (authorRecipients.length === 0) {
         // Loud, but the message still goes: an author who cannot re-read their
         // own sent copy is bad; a hotline that refuses to send the reply is
-        // worse, and that is what every client with no registered key would
-        // get — iOS registers no X25519 key at all today. Never silent, and
-        // never a substituted key.
+        // worse. Never silent, and never a substituted key.
         logger.error('author has no registered X25519 device key; their own copy of this message will not be readable', {
           conversationId: id,
         })
       }
-      const readerPubkeys = messageReaders(adminDecryptionPubkey, authorRecipients)
+      const readerPubkeys = messageReaders(adminReaders, authorRecipients)
 
-      // An EMPTY reader list — no admin decryption key configured AND the
-      // author has no registered device — is a deployment-level failure, and
-      // the contract (see `messageReaders`) is loud-but-stored: the reply
-      // still goes to the contact and a record is still persisted. Throwing
-      // here instead would drop a crisis reply entirely — nothing sent,
-      // nothing stored, nothing queued. No plaintext is stored: the record
-      // carries no content until a reader exists.
+      // An EMPTY reader list — no hub admin reader AND the author has no
+      // registered device — means the stored copy can have no reader. The
+      // reply still goes to the contact: refusing would drop a crisis reply
+      // entirely, and unlike an inbound message there is nobody to redeliver
+      // it. No plaintext is stored: the record carries no content.
       if (readerPubkeys.length === 0) {
-        logger.error('no HPKE recipient for outbound message (no admin decryption key, author has no registered device) — sending and storing an unreadable record rather than dropping the reply', {
+        logger.error('no HPKE recipient for outbound message (no hub admin reader, author has no registered device) — sending and storing an unreadable record rather than dropping the reply', {
           conversationId: id,
         })
         encryptedContent = ''
@@ -395,7 +385,7 @@ conversations.post('/:id/messages',
     }
 
     // A client-sealed message is readable by exactly the envelopes it brought.
-    // Server-sealed ones (the branch above) always include the admin reader, so
+    // Server-sealed ones (the branch above) include the hub's admin readers, so
     // only the client-supplied set can leave the admins out (#2113).
     if (body.encryptedContent) {
       await assertAdminCanRead(services, c.env, conv.hubId, body.readerEnvelopes, 'A message', { conversationId: id })

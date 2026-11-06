@@ -41,6 +41,41 @@ const logger = createLogger('services.conversations')
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * An inbound message for a hub whose `admin` reader set is empty: no member
+ * holding the admin minimum in the hub has a registered device key, and the hub
+ * has no escrow key. Nothing could seal it so that an admin can read it.
+ *
+ * The decision (#1034): REFUSE, visibly — never accept-and-drop. Before this,
+ * the message was sealed to the instance-wide `ADMIN_DECRYPTION_PUBKEY`; on a
+ * wizard deployment, where that is unset, the record was stored with no content
+ * and no reader and the webhook answered 200, so the text was gone while the
+ * provider believed it delivered. Refusal is the A8 rule ("zero readers is an
+ * invariant violation: refuse and alert, no fallback") and matches the note
+ * write guard (`assertAdminCanRead`, 503). Queueing it instead would mean
+ * holding the text server-readable until a reader appeared, which the server
+ * must never do (it discards inbound plaintext on receipt).
+ *
+ * Status 503: the webhook router releases its replay slot, so the provider's
+ * redelivery is processed rather than answered as a duplicate, and the
+ * provider's own delivery log keeps the message and shows the failure. It is
+ * thrown before anything is written, so a refused message leaves no empty
+ * conversation behind.
+ *
+ * The setup wizard makes this unreachable on a fresh deployment: the hub it
+ * creates is founded by an admin whose device key is already registered
+ * (`POST /api/setup/complete`).
+ */
+export class InboundUnreadableError extends ServiceError {
+  constructor(readonly hubId: string) {
+    super(
+      503,
+      "Inbound message refused: this hub has no admin able to read it. A hub admin must register a device or set the hub's escrow key",
+    )
+    this.name = 'InboundUnreadableError'
+  }
+}
+
 export interface ConversationFilters {
   hubId: string
   status?: ConversationStatus
@@ -881,12 +916,13 @@ export class ConversationsService {
      */
     contactHash: string,
     /**
-     * The platform admin's X25519 HPKE recipient, or `undefined` when the
-     * deployment has none. Typed as a brand so an Ed25519 auth key — which is
-     * also 64 hex characters, and which the messaging router used to pass here
-     * — cannot be supplied by mistake (#1283).
+     * The hub's `admin` reader set — `readersFor(hubId, 'admin')`, resolved by
+     * the caller before it acts on the message so a refusal happens ahead of
+     * every side effect. Branded, so an Ed25519 auth key cannot be supplied by
+     * mistake (#1283). Never the instance-wide `ADMIN_DECRYPTION_PUBKEY`: the
+     * platform operator is not a reader of hub content (D1, #1034).
      */
-    adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
+    adminReaders: readonly HpkeRecipientPubkey[],
     /** The hub the webhook URL named; the router refuses a message that names none (#2395). */
     hubId: string,
   ): Promise<{
@@ -898,6 +934,9 @@ export class ConversationsService {
     if (!this.serverKek) {
       throw new ServiceError(500, 'Server KEK not configured')
     }
+    // Refused BEFORE anything is written: no conversation stub, no contact
+    // identifier, no empty message row. See `InboundUnreadableError`.
+    if (adminReaders.length === 0) throw new InboundUnreadableError(hubId)
 
     // Find this sender's existing conversation on this channel, in this hub.
     const whereConditions = [
@@ -951,8 +990,7 @@ export class ConversationsService {
       )
     }
 
-    // Encrypt the message content using envelope pattern. An absent admin
-    // recipient means one fewer reader, never a substituted key (#1283).
+    // Sealed to the hub's admin readers and the assignee's devices.
     //
     // #1021: `conversations.assigned_to` holds the assignee's Ed25519 *identity*
     // pubkey — the key that signs their auth tokens (see `claim()` and
@@ -973,32 +1011,15 @@ export class ConversationsService {
     if (conv.assignedTo && assigneeRecipients.length === 0) {
       // Never silent: the assigned volunteer will not be able to read this
       // message, and the only way they ever will is by registering a device.
-      // The message is still stored — dropping an inbound crisis message
-      // would be worse than one an admin has to relay.
-      logger.error('assigned volunteer has no X25519 device key; inbound message is readable by admins only', {
+      // The hub's admins can, and can relay it.
+      logger.error('assigned volunteer has no X25519 device key; inbound message is readable by hub admins only', {
         conversationId: conv.id,
       })
     }
-    const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
-
-    // An EMPTY reader list — no admin decryption key configured AND nobody
-    // with a registered device — is a deployment-level failure, and the
-    // contract (see `messageReaders`) is loud-but-stored, never dropped: a
-    // thrown error here escapes the webhook handler as a 500, after the
-    // replay-guard has already consumed the delivery slot, so the provider's
-    // retry is answered with an idempotent 200 and the crisis message is
-    // silently lost. Store the record with no content instead: no plaintext
-    // is persisted, the conversation shows the message arrived, and the error
-    // log above is the operator's signal to fix the deployment.
-    let encrypted: { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] }
-    if (readerPubkeys.length === 0) {
-      logger.error('no HPKE recipient for inbound message (no admin decryption key, no registered device) — storing an unreadable record rather than dropping it', {
-        conversationId: conv.id,
-      })
-      encrypted = { encryptedContent: '', readerEnvelopes: [] }
-    } else {
-      encrypted = encryptMessageForStorage(incoming.body ?? '', readerPubkeys)
-    }
+    const encrypted = encryptMessageForStorage(
+      incoming.body ?? '',
+      messageReaders(adminReaders, assigneeRecipients),
+    )
 
     const msg = await this.addMessage({
       conversationId: conv.id,

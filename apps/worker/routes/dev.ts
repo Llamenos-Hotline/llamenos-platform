@@ -31,7 +31,6 @@ import {
 } from '../messaging/signal/failover'
 import type { SignalConfig } from '@shared/types'
 import type { BridgeHealthStatus } from '../messaging/signal/health'
-import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { devSurfacesEnabled, devSurfaceSecretPresented, type DevSurfacesEnv } from '../lib/dev-surfaces'
 
 /**
@@ -1042,14 +1041,16 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   const channel: MessagingChannelType = body.channel || 'sms'
   const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
-  const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
+  // The same reader set, and the same refusal, as the real webhook (#1034): an
+  // empty hub admin reader set surfaces as `InboundUnreadableError` (503).
+  const adminReaders = await services.identity.readersFor(body.hubId, 'admin')
   const result = await services.conversations.handleIncoming({
     channelType: channel,
     externalId: crypto.randomUUID(),
     senderIdentifier: body.senderNumber,
     body: body.body,
     timestamp: new Date().toISOString(),
-  }, senderHash, adminDecryptionPubkey, body.hubId)
+  }, senderHash, adminReaders, body.hubId)
 
   // Publish to the conversation's hub (mirrors real messaging webhook flow)
   publishEvent(c.env, KIND_MESSAGE_NEW, {

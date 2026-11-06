@@ -49,34 +49,28 @@ export async function getUserHpkeRecipients(
 }
 
 /**
- * The readers of one message: the platform admin, plus every device the author
- * or assignee has registered.
+ * The readers of one message: the hub's `admin` reader set (`readersFor`,
+ * `lib/readers.ts`), plus every device the author or assignee has registered.
  *
- * Both write paths (`handleIncoming` and `POST /conversations/:id/messages`)
- * build this list, and building it twice is how the Ed25519 substitution came
- * to exist at two sites (#1283, #1466). Deduplicated, because an admin who is
- * also the author would otherwise be sealed to twice.
+ * Both server-sealing write paths (`handleIncoming` and
+ * `POST /conversations/:id/messages`) build this list, and building it twice
+ * is how the Ed25519 substitution came to exist at two sites (#1283, #1466).
+ * Deduplicated, because a hub admin who is also the author would otherwise be
+ * sealed to twice. Admin readers come first, in `readersFor` order.
  *
- * An empty `userRecipients` yields the admin alone, and both callers log that
- * case as an error before calling. The message is still written: a reply the
- * author cannot re-read is a bad outcome, but refusing to send a crisis reply —
- * which is what any client with no registered key would get, iOS included — is
- * a far worse one.
- *
- * When the admin recipient is absent too, the result is an EMPTY reader list.
- * That is a deployment-level failure (no admin decryption key configured, no
- * device registered anywhere), and the contract for it is loud-but-stored:
- * the callers log an error an operator must see and persist the message
- * anyway — never a substituted key, and never a silent drop.
- * `encryptMessageForStorage` still refuses an empty list, so the callers
- * branch before reaching it.
+ * The admin set is the hub's own — the devices of the members who hold the
+ * admin minimum in that hub, and its escrow key — never the instance-wide
+ * `ADMIN_DECRYPTION_PUBKEY` (D1: the platform operator is not a reader of hub
+ * content; #1034). Whether an EMPTY admin set may be written under is the
+ * caller's decision, and the two callers decide differently: an inbound
+ * message is refused (`handleIncoming`), an outbound reply is still sent.
  */
 export function messageReaders(
-  adminRecipient: HpkeRecipientPubkey | undefined,
+  adminReaders: readonly HpkeRecipientPubkey[],
   userRecipients: readonly HpkeRecipientPubkey[],
 ): HpkeRecipientPubkey[] {
-  const readers: HpkeRecipientPubkey[] = adminRecipient ? [adminRecipient] : []
-  for (const recipient of userRecipients) {
+  const readers: HpkeRecipientPubkey[] = []
+  for (const recipient of [...adminReaders, ...userRecipients]) {
     if (!readers.includes(recipient)) readers.push(recipient)
   }
   return readers

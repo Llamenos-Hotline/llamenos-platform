@@ -144,7 +144,7 @@ async function inbound(body: string, sender: string): Promise<{ conversationId: 
       timestamp: new Date().toISOString(),
     },
     `hash-${suite}-${sender}`,
-    admin.recipient as HpkeRecipientPubkey,
+    [admin.recipient as HpkeRecipientPubkey],
     HUB_ID,
   )
   if (!createdConversations.includes(r.conversationId)) createdConversations.push(r.conversationId)

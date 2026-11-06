@@ -3,6 +3,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { devSurfaceSecret, devSurfaceHeaders } from './dev-surface-secret'
+import { adminHpkeRecipient } from './crypto-helpers'
 const BACKEND_URL = process.env.TEST_HUB_URL || 'http://localhost:3000'
 
 function loadDevVarsSecret(): string | undefined {
@@ -151,6 +152,42 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
 }
 
 /**
+ * Register the admin's device encryption key, as the desktop does on unlock
+ * and the setup wizard does before it completes setup (#1034).
+ *
+ * The admin is a hub's READER only through a registered device: inbound
+ * messages, notes and reports are sealed to `readersFor(hub, 'admin')`, the
+ * device X25519 keys of the hub's admins — never to an env-configured key. And
+ * `POST /api/setup/complete` refuses to found a hub for an admin with no
+ * registered device. The body matches `registerDeviceKeyViaApi` exactly, so
+ * this and the per-worker hub fixture upsert the same device row.
+ */
+async function registerAdminDevice(baseUrl: string): Promise<void> {
+  const path = '/api/devices/register'
+  const token = makeBootstrapToken(ADMIN_SEED, 'POST', path)
+  const x25519Pubkey = adminHpkeRecipient().pubkeyHex
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${JSON.stringify(token)}`,
+      ...devSurfaceHeaders(),
+    },
+    body: JSON.stringify({
+      platform: 'ios',
+      pushToken: `test-device-${ADMIN_SEED.slice(0, 16)}`,
+      wakeKeyPublic: x25519Pubkey,
+      ed25519Pubkey: token.pubkey,
+      x25519Pubkey,
+      deviceName: 'backend-bdd',
+    }),
+  })
+  if (!res.ok) {
+    throw new Error(`[global-setup] Registering the admin device failed: ${res.status} ${await res.text()}`)
+  }
+}
+
+/**
  * Put a fresh server through the FIRST-RUN WIZARD, which is how a real
  * deployment gets its first admin and its first hub.
  *
@@ -161,7 +198,9 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
  *
  *   1. creates the default hub if none exists, named from HOTLINE_NAME with
  *      TWILIO_PHONE_NUMBER attached
- *   2. assigns the calling admin to it with role-super-admin
+ *   2. founds it with the calling admin as its hub admin — the role the
+ *      catalog designates by permission — which requires the admin's device
+ *      to be registered first (`registerAdminDevice`, #1034)
  *   3. records setupCompleted, so the app stops presenting the wizard
  *
  * An earlier version of this function called `POST /api/hubs` instead. That
@@ -270,6 +309,7 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   await resetTestState(BACKEND_URL)
   await bootstrapAdmin(BACKEND_URL)
   await verifyAdminAccess(BACKEND_URL)
+  await registerAdminDevice(BACKEND_URL)
   await completeFirstRunSetup(BACKEND_URL)
   console.log('[global-setup] Test state initialized successfully')
 }

@@ -115,31 +115,33 @@ describe('decideDeviceRegistration keys on the device identity', () => {
 })
 
 describe('messageReaders', () => {
-  const admin = hpkeRecipientPubkey('ab'.repeat(32))!
+  // Two hub admins' devices (the hub's `admin` reader set, #1034) and two
+  // devices of the author/assignee.
+  const admin1 = hpkeRecipientPubkey('ab'.repeat(32))!
+  const admin2 = hpkeRecipientPubkey('cd'.repeat(32))!
   const deviceA = hpkeRecipientPubkey('11'.repeat(32))!
   const deviceB = hpkeRecipientPubkey('22'.repeat(32))!
 
-  it('seals to the admin and to every device the user registered', () => {
-    expect(messageReaders(admin, [deviceA, deviceB])).toEqual([admin, deviceA, deviceB])
+  it("seals to every one of the hub's admin readers and every device the user registered", () => {
+    expect(messageReaders([admin1, admin2], [deviceA, deviceB])).toEqual([admin1, admin2, deviceA, deviceB])
   })
 
-  it('deduplicates a user who is also the admin', () => {
-    expect(messageReaders(admin, [admin, deviceA])).toEqual([admin, deviceA])
+  it('deduplicates a user who is also a hub admin', () => {
+    expect(messageReaders([admin1, admin2], [admin2, deviceA])).toEqual([admin1, admin2, deviceA])
   })
 
-  it('yields the admin alone when the user has registered nothing', () => {
-    // The message is still written — see the function's own comment. What must
-    // never happen is a substituted key or an extra, unopenable envelope.
-    expect(messageReaders(admin, [])).toEqual([admin])
+  it('yields the hub admins alone when the user has registered nothing', () => {
+    // What must never happen is a substituted key or an extra, unopenable envelope.
+    expect(messageReaders([admin1], [])).toEqual([admin1])
   })
 
-  it('yields the user alone on a deployment with no env-configured admin', () => {
-    // `transitionalInstanceRecipient` returns undefined during desktop bootstrap; an
-    // absent admin means one fewer reader, never a substituted one (#1283).
-    expect(messageReaders(undefined, [deviceA])).toEqual([deviceA])
+  it('yields the user alone when the hub has no admin reader', () => {
+    // Whether that may be written under is the caller's decision (an inbound
+    // message is refused); this never invents an admin (#1283).
+    expect(messageReaders([], [deviceA])).toEqual([deviceA])
   })
 
   it('yields nothing rather than inventing a reader', () => {
-    expect(messageReaders(undefined, [])).toEqual([])
+    expect(messageReaders([], [])).toEqual([])
   })
 })

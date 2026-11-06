@@ -1,6 +1,6 @@
 import { type APIRequestContext } from '@playwright/test'
 import { test as base, createBdd } from 'playwright-bdd'
-import { createHubViaApi, ensureAdminRole, type RoleDefinition } from '../api-helpers'
+import { ADMIN_SEED, createHubViaApi, ensureAdminRole, registerDeviceKeyViaApi, type RoleDefinition } from '../api-helpers'
 import type { SeededConversation } from '../conversation-seeding'
 import { devSurfaceHeaders } from '../dev-surface-secret'
 
@@ -215,6 +215,11 @@ export const test = base.extend<
     // can race with test-reset, leaving the admin with role-volunteer which
     // causes cascading 403 failures on all hub-scoped and permission-guarded routes.
     await ensureAdminRole(ctx)
+    // The admin founds this hub, and is its admin READER only through a
+    // registered device key (#1034): inbound messages, notes and reports are
+    // sealed to the hub admins' devices. Idempotent — global-setup registered
+    // the same row, but a concurrent test-reset can have wiped it.
+    await registerDeviceKeyViaApi(ctx, ADMIN_SEED)
     const name = `test-hub-${workerInfo.workerIndex}-${Date.now()}`
     const hubId = await createHubViaApi(ctx, name)
     // Verify admin has hub membership — without this, all hub-scoped API calls

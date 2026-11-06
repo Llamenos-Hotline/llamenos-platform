@@ -1,17 +1,19 @@
 /**
  * The empty-reader crisis contract on POST /conversations/:id/messages.
  *
- * When the deployment has no admin decryption key AND the author has no
- * registered X25519 device, `messageReaders` returns an empty list. The
+ * When the hub has no admin reader (`readersFor(hub, 'admin')` is empty) AND
+ * the author has no registered X25519 device, `messageReaders` returns an
+ * empty list. The
  * documented contract (see `apps/worker/lib/device-recipients.ts`) is
  * loud-but-stored: the reply still goes to the contact and a record is still
  * persisted — never a substituted key, never a silent drop. Before this was
  * handled, `encryptMessageForStorage` threw on the empty list, so the reply
  * was neither sent nor stored: a dropped crisis message.
  *
- * The mock env in the test helper sets no ADMIN_DECRYPTION_PUBKEY, and the
- * identity service below resolves the author to zero devices — together the
- * empty-reader case, through the real route.
+ * The identity service below resolves the hub to zero admin readers and the
+ * author to zero devices — together the empty-reader case, through the real
+ * route. (An INBOUND message in the same position is refused instead; that is
+ * covered by messaging-router-admin-envelope.test.ts.)
  */
 import { describe, it, expect, vi } from 'vitest'
 import conversationsRoutes from '../../routes/conversations'
@@ -52,7 +54,7 @@ function createSmsServices() {
       addMessage,
       getContactIdentifier,
     },
-    identity: { getHpkeRecipients },
+    identity: { getHpkeRecipients, readersFor: vi.fn().mockResolvedValue([]) },
     audit: { log: vi.fn().mockResolvedValue(undefined) },
   }
   return { services: services as never, addMessage, getContactIdentifier, getHpkeRecipients }
