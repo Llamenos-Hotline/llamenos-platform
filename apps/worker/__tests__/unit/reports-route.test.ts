@@ -35,6 +35,26 @@ type ConvLike = {
 
 type ReportTypeLike = { id: string; allowCaseConversion: boolean; isArchived?: boolean }
 
+/**
+ * A fixture as the full row the service returns — nulls and Dates — since the
+ * route serializes rows into the wire shape (#2118).
+ */
+function asRow(conv: ConvLike) {
+  const at = new Date('2026-11-01T12:00:00.000Z')
+  return {
+    hubId: 'hub-1',
+    channelType: 'web',
+    status: 'waiting',
+    createdAt: at,
+    updatedAt: at,
+    lastMessageAt: at,
+    messageCount: 1,
+    ...conv,
+    assignedTo: conv.assignedTo ?? null,
+    metadata: conv.metadata ?? null,
+  }
+}
+
 function makeApp(opts: {
   permissions?: string[]
   pubkey?: string
@@ -64,14 +84,18 @@ function makeApp(opts: {
 
   const mockAudit = { log: vi.fn().mockResolvedValue(undefined) }
   const mockConversations = {
-    list: vi.fn().mockResolvedValue({ conversations, total: conversations.length }),
+    list: vi.fn().mockResolvedValue({ conversations: conversations.map(asRow), total: conversations.length }),
     // The hub guard (#2011) is its own fetch; the handler's getById stays the
     // mock these tests override per case.
-    getByIdForHub: vi.fn().mockResolvedValue(conversation),
-    getById: vi.fn().mockResolvedValue(conversation),
-    create: vi.fn().mockResolvedValue(conversation),
-    addMessage: vi.fn().mockResolvedValue({ id: 'msg-1' }),
-    update: vi.fn().mockResolvedValue(conversation),
+    getByIdForHub: vi.fn().mockResolvedValue(asRow(conversation)),
+    getById: vi.fn().mockResolvedValue(asRow(conversation)),
+    create: vi.fn().mockResolvedValue(asRow(conversation)),
+    addMessage: vi.fn().mockResolvedValue({
+      id: 'msg-1', conversationId: 'report-1', direction: 'outbound', authorPubkey: null, externalId: null,
+      encryptedContent: 'cafe', readerEnvelopes: [], hasAttachments: false, attachmentIds: [], status: 'sent',
+      deliveredAt: null, readAt: null, failureReason: null, retryCount: 0, createdAt: new Date('2026-11-01T12:00:00.000Z'),
+    }),
+    update: vi.fn().mockResolvedValue(asRow(conversation)),
     listMessages: vi.fn().mockResolvedValue({ messages: [], total: 0 }),
     listFiles: vi.fn().mockResolvedValue([]),
   }
@@ -171,7 +195,7 @@ describe('GET /reports', () => {
       { id: 'r2', contactIdentifierHash: 'p2', metadata: { type: 'report', conversionStatus: 'completed' } },
     ]
     const { app, mockConversations } = makeApp({ permissions: ['reports:read-all'], conversations: convs })
-    mockConversations.list.mockResolvedValueOnce({ conversations: convs, total: 2 })
+    mockConversations.list.mockResolvedValueOnce({ conversations: convs.map(asRow), total: 2 })
     const res = await app.request('/?page=1&limit=10&conversionStatus=pending')
     expect(res.status).toBe(200)
     const body = await res.json() as { conversations: ConvLike[] }
@@ -206,7 +230,7 @@ describe('GET /reports?conversionEnabled — hub scoping', () => {
       conversations: convs,
       reportTypesByHub,
     })
-    mockConversations.list.mockResolvedValueOnce({ conversations: convs, total: convs.length })
+    mockConversations.list.mockResolvedValueOnce({ conversations: convs.map(asRow), total: convs.length })
     const res = await app.request('/?page=1&limit=10&conversionEnabled=true')
     const body = await res.json() as { conversations: ConvLike[]; total: number }
     return { res, body, mockSettings }
@@ -239,11 +263,11 @@ describe('GET /reports?conversionEnabled — hub scoping', () => {
 describe('GET /reports/:id', () => {
   it('returns 404 when conversation is not a report', async () => {
     const { app, mockConversations } = makeApp()
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'conv-1',
       contactIdentifierHash: 'someone',
       metadata: { type: 'conversation' },
-    })
+    }))
     const res = await app.request('/conv-1')
     expect(res.status).toBe(404)
   })
@@ -253,12 +277,12 @@ describe('GET /reports/:id', () => {
       permissions: ['reports:create'],
       pubkey: 'stranger-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter-pub',
       assignedTo: 'vol-pub',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-1')
     expect(res.status).toBe(403)
   })
@@ -268,11 +292,11 @@ describe('GET /reports/:id', () => {
       permissions: ['reports:create'],
       pubkey: 'reporter-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter-pub',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-1')
     expect(res.status).toBe(200)
   })
@@ -291,23 +315,23 @@ describe('GET /reports/:id', () => {
       permissions: ['reports:read-assigned'],
       pubkey: 'vol-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter',
       assignedTo: 'vol-pub',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-1')
     expect(res.status).toBe(200)
   })
 
   it('handles double-serialized JSONB metadata gracefully', async () => {
     const { app, mockConversations } = makeApp({ permissions: ['reports:read-all'] })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter',
       metadata: JSON.stringify({ type: 'report' }),
-    })
+    }))
     const res = await app.request('/report-1')
     expect(res.status).toBe(200)
   })
@@ -338,11 +362,11 @@ describe('POST /reports/:id/messages', () => {
       permissions: ['reports:send-message-own'],
       pubkey: 'reporter-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter-pub',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -356,12 +380,12 @@ describe('POST /reports/:id/messages', () => {
       permissions: ['reports:send-message-own'],
       pubkey: 'reporter-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-2',
       contactIdentifierHash: 'someone-else',
       assignedTo: 'vol',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-2/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -375,12 +399,12 @@ describe('POST /reports/:id/messages', () => {
       permissions: ['reports:create'],
       pubkey: 'assigned-vol',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter',
       assignedTo: 'assigned-vol',
       metadata: { type: 'report' },
-    })
+    }))
     const res = await app.request('/report-1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -394,11 +418,11 @@ describe('POST /reports/:id/messages', () => {
       permissions: ['reports:send-message'],
       pubkey: 'vol-pub',
     })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'report-1',
       contactIdentifierHash: 'reporter-pub', // NOT the same as pubkey
       metadata: { type: 'report' },
-    })
+    }))
     await app.request('/report-1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -411,11 +435,11 @@ describe('POST /reports/:id/messages', () => {
 
   it('returns 404 for non-report conversation', async () => {
     const { app, mockConversations } = makeApp({ permissions: ['reports:send-message'] })
-    mockConversations.getById.mockResolvedValueOnce({
+    mockConversations.getById.mockResolvedValueOnce(asRow({
       id: 'conv-1',
       contactIdentifierHash: 'p',
       metadata: { type: 'conversation' },
-    })
+    }))
     const res = await app.request('/conv-1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

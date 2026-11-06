@@ -266,11 +266,52 @@ describe('conversations route', () => {
         hubId: 'hub-1',
         status: 'active',
         channelType: 'sms',
+        // Reports are never listed here, whatever the query says.
+        type: 'conversation',
         limit: 10,
         offset: 10,
       }))
       expect(body.page).toBe(2)
       expect(body.limit).toBe(10)
+    })
+
+    it('serves stored metadata in its declared shape, including the JSON-text form Bun can return', async () => {
+      const listSpy = vi.fn().mockResolvedValue({
+        conversations: [
+          convRow({ id: 'conv-obj', metadata: { linkedCallId: 'call-1' } }),
+          convRow({ id: 'conv-text', metadata: JSON.stringify({ linkedCallId: 'call-2' }) }),
+        ],
+        total: 2,
+      })
+      const app = createTestApp({ permissions: ['conversations:read-all'], services: { conversations: { list: listSpy } } })
+      const body = conversationListResponseSchema.parse(await (await app.request('/')).json())
+      expect(body.conversations.map(c => c.metadata)).toEqual([{ linkedCallId: 'call-1' }, { linkedCallId: 'call-2' }])
+    })
+
+    it('serves a row whose stored metadata the schema rejects without that metadata, and still lists the rest', async () => {
+      // PATCH used to accept any record. One such row must not 500 the hub's whole list.
+      const listSpy = vi.fn().mockResolvedValue({
+        conversations: [convRow({ id: 'conv-bad', metadata: { linkedCallId: 5 } }), convRow({ id: 'conv-good' })],
+        total: 2,
+      })
+      const app = createTestApp({ permissions: ['conversations:read-all'], services: { conversations: { list: listSpy } } })
+      const res = await app.request('/')
+      expect(res.status).toBe(200)
+      const body = conversationListResponseSchema.parse(await res.json())
+      expect(body.conversations.map(c => c.id)).toEqual(['conv-bad', 'conv-good'])
+      expect(body.conversations[0].metadata).toBeUndefined()
+    })
+
+    it('refuses a PATCH whose metadata the response schema could not serve', async () => {
+      const updateSpy = vi.fn()
+      const app = createTestApp({ permissions: ['conversations:update'], services: { conversations: { update: updateSpy } } })
+      const res = await app.request('/conv-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: { linkedCallId: 5 } }),
+      })
+      expect(res.status).toBe(400)
+      expect(updateSpy).not.toHaveBeenCalled()
     })
 
     it('refuses status=all: omitting the status is how a client asks for every status', async () => {

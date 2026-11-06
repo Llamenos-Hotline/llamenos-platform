@@ -127,7 +127,8 @@ conversations.get('/',
       status: query.status,
       channelType: query.channel,
       assignedTo: query.assignedTo,
-      type: query.type,
+      // Never reports: those are listed by /reports under the reports permissions.
+      type: 'conversation',
       contactHash: query.contactHash,
       visibleTo: checkPermission(permissions, 'conversations:read-all')
         ? undefined

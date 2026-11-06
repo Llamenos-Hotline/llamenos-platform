@@ -189,21 +189,39 @@ function isOneOf<T extends string>(values: readonly T[], value: string): value i
 /**
  * Stored metadata, as the schema declares it. Bun's SQL driver can hand a
  * jsonb object back as its JSON text (see `list`), so the string form is
- * parsed first. Anything that does not satisfy `conversationMetadataSchema`
- * throws: the write path is bound to the same schema, so a mismatch is a
- * server defect to surface, not a field to drop.
+ * parsed first.
+ *
+ * Every write path is bound to `conversationMetadataSchema`, but a row written
+ * before it was (PATCH used to accept any record) may not satisfy it. Such a
+ * row is served WITHOUT its metadata and logged as an error naming the row —
+ * never thrown: one bad row must not take the whole list down for every
+ * member of the hub, which is what a throw here would do.
  */
-function metadataResponse(stored: unknown): ConversationMetadata | undefined {
+function metadataResponse(rowId: string, stored: unknown): ConversationMetadata | undefined {
   if (stored === null || stored === undefined) return undefined
-  const value: unknown = typeof stored === 'string' ? JSON.parse(stored) : stored
-  return conversationMetadataSchema.parse(value)
+  let value: unknown = stored
+  if (typeof stored === 'string') {
+    try {
+      value = JSON.parse(stored)
+    } catch {
+      logger.error('Conversation metadata is not JSON — served without it', { conversationId: rowId })
+      return undefined
+    }
+  }
+  const parsed = conversationMetadataSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  logger.error('Conversation metadata does not satisfy conversationMetadataSchema — served without it', {
+    conversationId: rowId,
+    issues: parsed.error.issues.map(i => ({ path: i.path.join('.'), message: i.message })),
+  })
+  return undefined
 }
 
 export function toConversationResponse(row: ConversationRow): Conversation {
   if (!isOneOf(CONVERSATION_STATUSES, row.status)) {
     throw new Error(`conversation ${row.id} has unknown status "${row.status}"`)
   }
-  const metadata = metadataResponse(row.metadata)
+  const metadata = metadataResponse(row.id, row.metadata)
   return {
     id: row.id,
     channelType: row.channelType,

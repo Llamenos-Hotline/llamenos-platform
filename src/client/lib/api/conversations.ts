@@ -6,6 +6,7 @@ import type {
   Conversation,
   ConversationListResponse,
   ConversationMessage,
+  MessageListResponse,
 } from '@protocol/schemas'
 
 export type { Conversation, ConversationMessage }
@@ -34,12 +35,7 @@ export async function listConversations(hubId: string, params?: {
   if (params?.channel) qs.set('channel', params.channel)
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  const res = await request<{
-    conversations: Conversation[]
-    total?: number
-    assignedCount?: number
-    waitingCount?: number
-  }>(hubPath(hubId, `/conversations?${qs}`))
+  const res = await request<ConversationListResponse>(hubPath(hubId, `/conversations?${qs}`))
   return { ...res, conversations: res.conversations.map((c): HubConversation => ({ ...c, hubId })) }
 }
 
@@ -47,7 +43,7 @@ export async function getConversationMessages(hubId: string, id: string, params?
   const qs = new URLSearchParams()
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
-  return request<{ messages: ConversationMessage[]; total: number }>(hubPath(hubId, `/conversations/${id}/messages?${qs}`))
+  return request<MessageListResponse>(hubPath(hubId, `/conversations/${id}/messages?${qs}`))
 }
 
 export async function sendConversationMessage(hubId: string, id: string, data: {

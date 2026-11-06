@@ -174,11 +174,15 @@ export type AddAssigneeEnvelopesResponse = z.infer<typeof addAssigneeEnvelopesRe
 
 // --- Input schemas ---
 
+/**
+ * Filters for `GET /hubs/:hubId/conversations`. Omit `status` for every
+ * status. Reports are conversation rows too, but this endpoint never lists
+ * them — they are read through `/reports`, under the reports permissions.
+ */
 export const listConversationsQuerySchema = paginationSchema.extend({
   status: z.enum(['waiting', 'active', 'closed']).optional(),
   assignedTo: pubkeySchema.optional(),
   channel: z.enum(['sms', 'whatsapp', 'signal', 'rcs', 'web']).optional(),
-  type: z.enum(['report', 'conversation']).optional(),
   contactHash: z.string().optional(),
 })
 
