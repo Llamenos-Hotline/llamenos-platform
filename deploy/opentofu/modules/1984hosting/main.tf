@@ -25,7 +25,7 @@
 #       upload of its own.
 #
 #   (b) TLS TERMINATES ON OUR OWN BOX, with a Let's Encrypt (ISRG-chained)
-#       certificate. The Android client pins ISRG Root X1/X2 with HARD FAIL
+#       certificate. The Android client pins ISRG Root X1/X2/YR/YE with HARD FAIL
 #       (apps/android/app/src/main/res/xml/network_security_config.xml). A CDN,
 #       reverse-proxy product or "managed TLS" in front of the VPS presents a
 #       different chain and breaks Android connectivity entirely. Do not proxy

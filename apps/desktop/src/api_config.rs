@@ -220,6 +220,21 @@ pub fn configured_pins(app: &AppHandle) -> Result<Option<Vec<String>>, String> {
     Ok(Some(pins))
 }
 
+/// Overwrites the stored pin set, leaving the stored origin untouched.
+pub fn store_pins(app: &AppHandle, pins: &[String]) -> Result<(), String> {
+    let store = app
+        .store(CONFIG_STORE)
+        .map_err(|e| format!("could not open config store: {e}"))?;
+    store.set(
+        CONFIG_PINS_KEY,
+        serde_json::to_value(pins)
+            .map_err(|e| format!("could not serialize certificate pins: {e}"))?,
+    );
+    store
+        .save()
+        .map_err(|e| format!("could not save config store: {e}"))
+}
+
 /// A base64 (standard) SHA-256 digest is always 44 characters — 43
 /// alphanumeric/`+`/`/` plus one trailing `=` pad. Mirrors
 /// `scripts/extract-cert-pins.sh`'s own `validate_pin`.
