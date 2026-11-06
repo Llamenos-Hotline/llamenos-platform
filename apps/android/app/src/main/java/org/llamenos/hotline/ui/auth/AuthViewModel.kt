@@ -523,11 +523,31 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
-     * Reset all auth state (for logout or starting over).
+     * Destroy this device's identity: clear the stored keys, the hub keys and the unlocked
+     * state. Irreversible — in the single-device model the only way back is a new invite.
+     *
+     * Requires a [DestructionConfirmed], which only [DestructionConfirmed.Dialog] mints, so
+     * no caller can reach this without the user having confirmed (#2123).
+     *
      * Storage is cleared before the keys are dropped, so whatever observes the lock sees
      * an identity that no longer exists (login), not one to unlock.
      */
-    fun resetAuthState() {
+    @Suppress("UNUSED_PARAMETER") // the parameter is the guarantee, not an input
+    fun destroyIdentity(confirmation: DestructionConfirmed) {
+        clearLocalIdentity()
+    }
+
+    /**
+     * Drop the residue of a lockout wipe: too many wrong PINs already destroyed the keys
+     * ([PinLockoutState.Wiped]), so there is nothing left to confirm destroying. A no-op
+     * unless the lockout wipe actually happened — it is not a way around [destroyIdentity].
+     */
+    fun acknowledgeLockoutWipe() {
+        if (!_uiState.value.isWiped) return
+        clearLocalIdentity()
+    }
+
+    private fun clearLocalIdentity() {
         keystoreService.clear()
         cryptoService.clearHubKeys()
         cryptoService.lock()

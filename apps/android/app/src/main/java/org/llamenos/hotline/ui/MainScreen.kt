@@ -29,6 +29,7 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.ui.auth.DestructionConfirmed
 import org.llamenos.hotline.ui.components.OfflineBanner
 import org.llamenos.hotline.ui.incidents.IncidentBanner
 import org.llamenos.hotline.ui.incidents.IncidentsViewModel
@@ -81,7 +82,7 @@ private enum class MainTab(
  * @param webSocketService Injected WebSocket service for connection state
  * @param keystoreService Injected keystore for hub URL
  * @param onLock Callback to lock the app (clears key from memory)
- * @param onLogout Callback to fully logout (clears all data)
+ * @param onLogout Callback to fully logout (clears all data); receives the user's confirmation
  * @param onNavigateToNoteDetail Callback to navigate to note detail screen
  * @param onNavigateToNoteCreate Callback to open the note editor on a call (id and its hub id), or on none
  * @param onNavigateToConversationDetail Callback to navigate to conversation detail screen
@@ -95,8 +96,8 @@ fun MainScreen(
     networkMonitor: NetworkMonitor,
     offlineQueue: OfflineQueue,
     onLock: () -> Unit,
-    onLogout: () -> Unit,
-    onPanicWipe: () -> Unit,
+    onLogout: (DestructionConfirmed) -> Unit,
+    onPanicWipe: (DestructionConfirmed) -> Unit,
     onNavigateToNoteDetail: (String) -> Unit,
     onNavigateToNoteCreate: (callId: String?, hubId: String?) -> Unit,
     onNavigateToConversationDetail: (String) -> Unit,

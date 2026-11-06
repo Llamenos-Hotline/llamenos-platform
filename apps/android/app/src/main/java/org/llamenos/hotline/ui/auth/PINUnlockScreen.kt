@@ -67,6 +67,9 @@ fun PINUnlockScreen(
 
     val uiState by viewModel.uiState.collectAsState()
     var localPin by remember { mutableStateOf("") }
+    // Reset identity destroys the stored keys — never on a single tap of a link that sits
+    // beside the PIN pad (#2123).
+    var showResetIdentityDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     // Mutable (not a one-shot `remember`): a tap that discovers the biometric
     // key was invalidated (device biometrics changed) must hide this button
@@ -101,6 +104,18 @@ fun PINUnlockScreen(
         showPad = true
         delay(100)
         showActions = true
+    }
+
+    if (showResetIdentityDialog) {
+        DestructionConfirmed.Dialog(
+            action = IdentityDestruction.RESET_IDENTITY,
+            onConfirmed = { confirmed ->
+                showResetIdentityDialog = false
+                viewModel.destroyIdentity(confirmed)
+                onResetIdentity()
+            },
+            onDismiss = { showResetIdentityDialog = false },
+        )
     }
 
     // Navigate to dashboard when authenticated
@@ -149,7 +164,8 @@ fun PINUnlockScreen(
 
                 OutlinedButton(
                     onClick = {
-                        viewModel.resetAuthState()
+                        // The lockout already destroyed the keys; there is nothing left to confirm.
+                        viewModel.acknowledgeLockoutWipe()
                         onResetIdentity()
                     },
                     modifier = Modifier
@@ -326,10 +342,7 @@ fun PINUnlockScreen(
 
                         // Reset identity link
                         TextButton(
-                            onClick = {
-                                viewModel.resetAuthState()
-                                onResetIdentity()
-                            },
+                            onClick = { showResetIdentityDialog = true },
                             modifier = Modifier.testTag("reset-identity"),
                         ) {
                             Icon(

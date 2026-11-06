@@ -45,6 +45,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -56,6 +59,8 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.telephony.rememberMicrophoneRequest
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.util.DateFormatUtils
+import org.llamenos.hotline.ui.auth.DestructionConfirmed
+import org.llamenos.hotline.ui.auth.IdentityDestruction
 import org.llamenos.hotline.ui.notes.DecryptedNote
 import org.llamenos.hotline.ui.notes.NotesViewModel
 
@@ -70,7 +75,9 @@ import org.llamenos.hotline.ui.notes.NotesViewModel
  * @param viewModel Hilt-injected ViewModel for dashboard state
  * @param notesViewModel Shared NotesViewModel for recent notes preview
  * @param onLock Callback to lock the app (clears key from memory, navigates to PIN unlock)
- * @param onLogout Callback to fully logout (clears stored keys, navigates to login)
+ * @param onLogout Callback to fully logout (clears stored keys, navigates to login). It takes a
+ *   [DestructionConfirmed], which only the confirmation dialog this screen shows can produce:
+ *   the top-bar icon must never destroy the device key on a single tap (#2123)
  * @param onNavigateToNotes Callback to switch to the Notes tab
  * @param onNavigateToNoteCreate Callback to open the note editor on a call (or none)
  * @param onNavigateToNoteDetail Callback to navigate to a specific note detail screen
@@ -81,7 +88,7 @@ fun DashboardScreen(
     viewModel: DashboardViewModel,
     notesViewModel: NotesViewModel,
     onLock: () -> Unit,
-    onLogout: () -> Unit,
+    onLogout: (DestructionConfirmed) -> Unit,
     onNavigateToNotes: () -> Unit,
     /** Opens the note editor on a call (id, the call's own hub id), or on no call when null. */
     onNavigateToNoteCreate: (callId: String?, hubId: String?) -> Unit,
@@ -102,6 +109,18 @@ fun DashboardScreen(
     val uiState by viewModel.uiState.collectAsState()
     val notesUiState by notesViewModel.uiState.collectAsState()
     val requestMicrophone = rememberMicrophoneRequest()
+    var showLogoutDialog by remember { mutableStateOf(false) }
+
+    if (showLogoutDialog) {
+        DestructionConfirmed.Dialog(
+            action = IdentityDestruction.LOGOUT,
+            onConfirmed = {
+                showLogoutDialog = false
+                onLogout(it)
+            },
+            onDismiss = { showLogoutDialog = false },
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -146,9 +165,12 @@ fun DashboardScreen(
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
-                    // Logout button
+                    // Keep the destructive control well clear of Lock App, which a volunteer
+                    // taps many times a shift: adjacent 48dp targets invite the wrong tap.
+                    Spacer(Modifier.width(24.dp))
+                    // Logout button — asks first; it destroys the device key
                     IconButton(
-                        onClick = onLogout,
+                        onClick = { showLogoutDialog = true },
                         modifier = Modifier.testTag("logout-button"),
                     ) {
                         Icon(

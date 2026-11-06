@@ -57,7 +57,7 @@ class KeystoreServiceWipeTest {
     }
 
     @Test
-    fun `resetAuthState clears hub keys and locks crypto`() {
+    fun `destroyIdentity clears hub keys and locks crypto`() {
         val cryptoService = CryptoService()
         val store = InMemoryKeyValueStore()
 
@@ -65,7 +65,7 @@ class KeystoreServiceWipeTest {
         store.store(KeystoreService.KEY_ENCRYPTED_KEYS, "data")
         store.store(KeystoreService.KEY_HUB_URL, "url")
 
-        // Simulate what resetAuthState does
+        // Simulate what AuthViewModel.destroyIdentity does
         cryptoService.clearHubKeys()
         cryptoService.lock()
         store.clear()

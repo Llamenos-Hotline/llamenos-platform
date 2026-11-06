@@ -734,15 +734,15 @@ private fun NavigationTree(
                 offlineQueue = offlineQueue,
                 // The unlockedState observer above moves the UI to the unlock screen.
                 onLock = { cryptoService.lock() },
-                onLogout = {
-                    authViewModel.resetAuthState()
+                onLogout = { confirmed ->
+                    authViewModel.destroyIdentity(confirmed)
                     inviteViewModel.reset()
                     navController.navigate(LlamenosRoute.Login.route) {
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                onPanicWipe = {
-                    authViewModel.resetAuthState()
+                onPanicWipe = { confirmed ->
+                    authViewModel.destroyIdentity(confirmed)
                     inviteViewModel.reset()
                     navController.navigate(LlamenosRoute.Login.route) {
                         popUpTo(0) { inclusive = true }

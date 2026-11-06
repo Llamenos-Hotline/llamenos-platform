@@ -278,12 +278,10 @@ class PinSteps : BaseSteps() {
 
     @When("I confirm the reset")
     fun iConfirmTheReset() {
-        try {
-            onNodeWithTag("reset-identity").performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // Reset button not available
-        }
+        // Reset Identity asks first (#2123): the link only opens the dialog, and the keys
+        // go when its destructive button is pressed.
+        onNodeWithTag("confirm-reset-identity-button").performClick()
+        composeRule.waitForIdle()
     }
 
     @Then("no stored keys should remain")
