@@ -112,7 +112,7 @@ reporter_record_suite "build" 1 0 0
 
 # Step 4: Unit tests
 # Use the tee + grep pattern from MEMORY.md for reliable output
-UNIT_LOG="/tmp/test-ios-unit-$(date +%Y%m%d-%H%M%S).log"
+UNIT_LOG="$(reporter_step_log "LlamenosTests")"
 
 echo -e "${CYAN:-}--- Unit Tests ---${RESET:-}"
 
@@ -121,7 +121,7 @@ xcodebuild test -project "$IOS_DIR/Llamenos.xcodeproj" -scheme Llamenos \
   -destination "$DESTINATION" \
   -only-testing:LlamenosTests \
   CODE_SIGNING_ALLOWED=NO 2>&1 | \
-  tee "$UNIT_LOG" "$REPORTER_LOG_FILE" | \
+  tee -a "$REPORTER_LOG_FILE" "$UNIT_LOG" | \
   grep --line-buffered -E '(Test Case|Test Suite|Executed|error:|Build Failed)' || unit_exit=$?
 
 # Check if grep produced empty output (common issue)
@@ -136,7 +136,7 @@ if [[ "$unit_exit" -ne 0 ]]; then
 fi
 
 parse_xcodebuild_results "$UNIT_LOG"
-reporter_record_suite "LlamenosTests" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
+reporter_record_parsed "LlamenosTests" "$UNIT_LOG"
 
 # Step 5: UI tests
 # Reset server state before UI tests for a clean baseline.
@@ -147,7 +147,7 @@ if ! curl -sf -X POST "${TEST_HUB_URL}/api/test-reset" -H "X-Test-Secret: ${RESE
   echo "WARNING: test-reset failed (backend may not have DEV_RESET_SECRET set)"
 fi
 
-UI_LOG="/tmp/test-ios-ui-$(date +%Y%m%d-%H%M%S).log"
+UI_LOG="$(reporter_step_log "LlamenosUITests")"
 
 echo -e "${CYAN:-}--- UI Tests ---${RESET:-}"
 
@@ -156,7 +156,7 @@ xcodebuild test -project "$IOS_DIR/Llamenos.xcodeproj" -scheme Llamenos \
   -destination "$DESTINATION" \
   -only-testing:LlamenosUITests \
   CODE_SIGNING_ALLOWED=NO 2>&1 | \
-  tee "$UI_LOG" -a "$REPORTER_LOG_FILE" | \
+  tee -a "$REPORTER_LOG_FILE" "$UI_LOG" | \
   grep --line-buffered -E '(Test Case|Test Suite|Executed|error:|Build Failed|FAILED)' || ui_exit=$?
 
 if [[ ! -s "$UI_LOG" ]]; then
@@ -170,7 +170,7 @@ if [[ "$ui_exit" -ne 0 ]]; then
 fi
 
 parse_xcodebuild_results "$UI_LOG"
-reporter_record_suite "LlamenosUITests" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
+reporter_record_parsed "LlamenosUITests" "$UI_LOG"
 
 reporter_summary "$overall_result"
 

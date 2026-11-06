@@ -42,18 +42,9 @@ if [[ "$NO_CODEGEN" != "true" ]]; then
 fi
 
 # Step 2: cargo test with mobile features
-echo "" >> "$REPORTER_LOG_FILE"
-if reporter_run_step "cargo test --features mobile" \
-  cargo test --manifest-path packages/crypto/Cargo.toml --features mobile; then
-
-  # Parse results from log
-  parse_cargo_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "cargo test" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-else
-  overall_result="fail"
-  parse_cargo_results "$REPORTER_LOG_FILE"
-  reporter_record_suite "cargo test" "$PARSED_PASSED" "$PARSED_FAILED" "$PARSED_SKIPPED"
-fi
+reporter_run_step "cargo test" \
+  cargo test --manifest-path packages/crypto/Cargo.toml --features mobile || overall_result="fail"
+reporter_record_step_results "cargo test" cargo
 
 # Step 3: cargo clippy
 if reporter_run_step "cargo clippy" \
