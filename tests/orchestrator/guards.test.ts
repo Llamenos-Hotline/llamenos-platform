@@ -625,6 +625,8 @@ describe('rail: pr-why is read-only (#2469)', () => {
     './board.js': ['CODEOWNERS_QUERY', 'codeOwnersOf', 'codeOwnersTextFrom', 'deriveBranchRuleset', 'parseCodeOwners', 'type BranchRuleset', 'type CodeOwnerRule', 'type CodeOwnersResponse'],
     './missing-checks.js': ['defaultMissingChecksDeps', 'diagnosePrHead', 'type Carrier', 'type HeadDiagnosis', 'type MissingChecksDeps'],
     './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'laneIdFromBranch', 'reviewOutcomeToken'],
+    // #2480: the queue-branch grammar, pure — shared so the two cannot drift.
+    './queue-sweep.js': ['parseQueueBranch'],
   }
   const MUTATING_ARGV = /\[\s*['"`](?:pr|run|issue|label|repo|workflow|release|gist|secret|variable|cache)['"`]\s*,\s*['"`](?:merge|edit|close|reopen|ready|review|cancel|rerun|create|delete|comment|lock|unlock|dispatch|run|set|enable|disable|transfer|add|remove)['"`]/
 

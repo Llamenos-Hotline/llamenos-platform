@@ -4,8 +4,8 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   diagnosePrWhy, exitCodeFor, renderPrWhy, renderPrWhyPorcelain, gatherPrWhyFacts, prStateFrom, reviewRunsFrom,
-  latestReviewRun, runPrWhy, VERDICT_NAMES,
-  type PrState, type PrWhyFacts, type ReviewRun, type VerdictName, type PrWhyDeps,
+  latestReviewRun, runPrWhy, VERDICT_NAMES, liveQueueRunsFrom, queueRunsNaming, LIVE_RUN_STATUSES,
+  type PrState, type PrWhyFacts, type ReviewRun, type VerdictName, type PrWhyDeps, type LiveQueueRun,
 } from '../../orchestrator/src/pr-why.js'
 import { diagnoseHead, defaultMissingChecksDeps, type HeadCheckRun, type HeadWorkflowRun, type MissingChecksDeps } from '../../orchestrator/src/missing-checks.js'
 import type { BranchRuleset, CodeOwnerRule } from '../../orchestrator/src/board.js'
@@ -78,6 +78,7 @@ function facts(over: Partial<Omit<PrWhyFacts, 'state'>> & { state?: Partial<PrSt
     files: { ok: true, value: [OWNED_FILE] },
     checks: { ok: true, value: head(greenRuns()) },
     reviewRuns: { ok: true, value: [reviewRun()] },
+    queueRuns: { ok: true, value: [] },
     headAfter: { ok: true, value: s.headRefOid },
     ...rest,
   }
@@ -486,6 +487,113 @@ describe('rendering', () => {
 })
 
 // ---------------------------------------------------------------------------
+// #2480: a building group is absent from the entry fields
+// ---------------------------------------------------------------------------
+
+/** The live shape observed 2026-11-05 ~17:20Z: #2472's group building, its
+ *  PR OPEN/CLEAN, auto-merge consumed, and NO entry on GitHub's queue fields. */
+const BASE_SHA = 'c7a6f2b0161d54b8d14080263c6c71daaf233955'
+const groupRun = (pr: number, over: Partial<LiveQueueRun> = {}): LiveQueueRun => ({
+  id: 42073399205, name: 'CI', status: 'in_progress', headBranch: `gh-readonly-queue/main/pr-${pr}-${BASE_SHA}`, ...over,
+})
+const buildingNoEntry = { mergeStateStatus: 'CLEAN', autoMergeRequest: null, mergeQueueEntry: null, isInMergeQueue: false }
+
+describe('queue membership is the union of the entry and a live group run (#2480)', () => {
+  it('no entry + a live gh-readonly-queue/main/pr-<N>-<sha> run → queued-ok, exit 0', () => {
+    const r = expectVerdict(facts({ state: buildingNoEntry, queueRuns: { ok: true, value: [groupRun(4242)] } }), 'queued-ok')
+    expect(r.verdicts.map((v) => v.name)).toEqual(['queued-ok'])
+    expect(r.verdicts[0]?.evidence.join('\n')).toContain(`run 42073399205 (CI) in_progress on gh-readonly-queue/main/pr-4242-${BASE_SHA}`)
+    expect(r.verdicts[0]?.remedy).toContain('do NOT re-queue')
+    expect(r.summary?.queue).toContain('building')
+    expect(exitCodeFor(r)).toBe(0)
+  })
+  it('flips: remove the run → not-queued', () => {
+    expect(names(facts({ state: buildingNoEntry, queueRuns: { ok: true, value: [] } }))).toEqual(['not-queued'])
+  })
+  it('flips: an armed request with neither probe positive → automerge-stale; with a live run it is still queued-ok', () => {
+    expect(names(facts({ state: { ...buildingNoEntry, autoMergeRequest: ARMED } }))).toEqual(['automerge-stale'])
+    expect(names(facts({ state: { ...buildingNoEntry, autoMergeRequest: ARMED }, queueRuns: { ok: true, value: [groupRun(4242)] } }))).toEqual(['queued-ok'])
+  })
+  it('a queued-not-yet-built entry (no run) is still queued-ok on the entry alone', () => {
+    expect(names(facts({ state: { mergeStateStatus: 'CLEAN', mergeQueueEntry: QUEUED, isInMergeQueue: true }, queueRuns: { ok: true, value: [] } }))).toEqual(['queued-ok'])
+  })
+  it('a live group run beats a BLOCKED merge state and a red head check, exactly as an entry does', () => {
+    const f = facts({
+      state: { mergeQueueEntry: null, isInMergeQueue: false },
+      queueRuns: { ok: true, value: [groupRun(4242)] },
+      checks: { ok: true, value: head([run({ name: 'ci-status', id: 100, conclusion: 'failure' })]) },
+    })
+    expect(names(f)).toEqual(['queued-ok'])
+  })
+  it('a live run settles the two entry fields disagreeing', () => {
+    expect(names(facts({ state: { mergeQueueEntry: null, isInMergeQueue: true }, queueRuns: { ok: true, value: [groupRun(4242)] } }))).toEqual(['queued-ok'])
+  })
+  it('a failed run probe with no entry is unknown — NEVER not-queued or automerge-stale', () => {
+    for (const autoMergeRequest of [null, ARMED]) {
+      const r = expectVerdict(facts({ state: { ...buildingNoEntry, autoMergeRequest }, queueRuns: { ok: false, reason: 'HTTP 502: Bad Gateway' } }), 'unknown')
+      expect(r.verdicts.map((v) => v.name)).toEqual(['unknown'])
+      expect(r.verdicts[0]?.evidence[0]).toContain('HTTP 502')
+      expect(exitCodeFor(r)).toBe(2)
+    }
+  })
+  it('a failed run probe is irrelevant when the entry is present — membership is already proven', () => {
+    expect(names(facts({ state: { mergeQueueEntry: QUEUED, isInMergeQueue: true }, queueRuns: { ok: false, reason: 'HTTP 502' } }))).toEqual(['queued-ok'])
+  })
+  it('a failed run probe on a BLOCKED PR is unknown, and the head\'s own blockers are still reported', () => {
+    const r = diagnosePrWhy(facts({ queueRuns: { ok: false, reason: 'HTTP 502' } }))
+    expect(r.verdicts.map((v) => v.name)).toEqual(['unknown', 'codeowner-approval-missing'])
+    expect(exitCodeFor(r)).toBe(2)
+  })
+  it('the header names an unreadable probe only on an open PR — a merged PR\'s probe is skipped, not failed', () => {
+    expect(diagnosePrWhy(facts({ state: buildingNoEntry, queueRuns: { ok: false, reason: 'HTTP 502' } })).summary?.queue).toContain('unreadable')
+    expect(diagnosePrWhy(facts({ state: { state: 'MERGED' }, queueRuns: { ok: false, reason: 'not read' } })).summary?.queue).toBe('absent')
+  })
+  it('the entry fields disagreeing with a failed run probe is unknown', () => {
+    expect(names(facts({ state: { mergeQueueEntry: null, isInMergeQueue: true }, queueRuns: { ok: false, reason: 'HTTP 502' } }))).toEqual(['unknown'])
+  })
+})
+
+describe('queueRunsNaming', () => {
+  const runs = [
+    groupRun(2472),
+    groupRun(2467, { id: 42073545442, status: 'queued' }),
+    groupRun(24720, { id: 3 }),
+    groupRun(247, { id: 4 }),
+    { id: 5, name: 'CI', status: 'in_progress', headBranch: `gh-readonly-queue/release/pr-2472-${BASE_SHA}` },
+    { id: 6, name: 'CI', status: 'in_progress', headBranch: `gh-readonly-queue/main/${BASE_SHA}` },
+    { id: 7, name: 'CI', status: 'in_progress', headBranch: 'feat/pr-2472' },
+  ]
+  it('picks only the runs whose queue branch names this PR on this base', () => {
+    expect(queueRunsNaming(runs, 'main', 2472).map((r) => r.id)).toEqual([42073399205])
+    expect(queueRunsNaming(runs, 'main', 2467).map((r) => r.id)).toEqual([42073545442])
+    expect(queueRunsNaming(runs, 'release', 2472).map((r) => r.id)).toEqual([5])
+    expect(queueRunsNaming(runs, 'main', 9999)).toEqual([])
+  })
+})
+
+describe('liveQueueRunsFrom', () => {
+  const page = (total: number, n: number) => ({
+    total_count: total,
+    workflow_runs: Array.from({ length: n }, (_, i) => ({ id: i + 1, name: 'CI', status: 'in_progress', head_branch: `gh-readonly-queue/main/pr-${i + 1}-${BASE_SHA}` })),
+  })
+  it('parses a complete page', () => {
+    expect(liveQueueRunsFrom(page(2, 2), 'in_progress').map((r) => r.headBranch)).toEqual([
+      `gh-readonly-queue/main/pr-1-${BASE_SHA}`, `gh-readonly-queue/main/pr-2-${BASE_SHA}`,
+    ])
+  })
+  it('throws on a truncated page — a live run on an unread page is not "no run"', () => {
+    expect(() => liveQueueRunsFrom(page(101, 100), 'queued')).toThrow('may be unread')
+  })
+  it('throws on a body that is not a run page, or a run missing its branch', () => {
+    expect(() => liveQueueRunsFrom({ message: 'Server Error' }, 'queued')).toThrow('did not return a run page')
+    expect(() => liveQueueRunsFrom({ total_count: 1, workflow_runs: [{ id: 1, status: 'queued' }] }, 'queued')).toThrow('without id/head_branch/status')
+  })
+  it('covers every non-terminal status GitHub reports, in lifecycle order', () => {
+    expect(LIVE_RUN_STATUSES).toEqual(['requested', 'waiting', 'pending', 'queued', 'in_progress'])
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Gathering: a failed read is unknown, never a verdict about nothing
 // ---------------------------------------------------------------------------
 
@@ -500,6 +608,7 @@ function fakeDeps(over: Partial<PrWhyDeps> = {}, checks: Partial<MissingChecksDe
     readFiles: async () => [OWNED_FILE],
     readReviewRuns: async () => [reviewRun()],
     readCodeOwners: async () => `packages/crypto/ @${OWNER}\n`,
+    readLiveQueueRuns: async () => [],
     sleep: async () => {},
     checks: {
       listPrs: async () => { throw new Error('pr-why never lists PRs') },
@@ -550,6 +659,22 @@ describe('gatherPrWhyFacts', () => {
     let reads = 0
     await gatherPrWhyFacts(fakeDeps({ readPr: async () => { reads++; return prState({ mergeStateStatus: 'UNKNOWN', mergeQueueEntry: QUEUED, isInMergeQueue: true }) } }), 4242)
     expect(reads).toBe(1)
+  })
+
+  it('#2480 end to end: no entry + a live group run naming the PR → queued-ok; no run → not-queued', async () => {
+    const clean = { readPr: async () => prState({ ...approvedByOwner, mergeStateStatus: 'CLEAN' }) }
+    const live = [groupRun(4242), groupRun(4243, { id: 2 })]
+    expect(names(await gatherPrWhyFacts(fakeDeps({ ...clean, readLiveQueueRuns: async () => live }), 4242))).toEqual(['queued-ok'])
+    expect(names(await gatherPrWhyFacts(fakeDeps({ ...clean, readLiveQueueRuns: async () => [groupRun(4243, { id: 2 })] }), 4242))).toEqual(['not-queued'])
+  })
+
+  it('a 502 on the live-run probe is unknown — NOT not-queued', async () => {
+    const f = await gatherPrWhyFacts(fakeDeps({
+      readPr: async () => prState({ ...approvedByOwner, mergeStateStatus: 'CLEAN' }),
+      readLiveQueueRuns: async () => { throw Object.assign(new Error('x'), { code: 1, stderr: 'HTTP 502: Bad Gateway' }) },
+    }), 4242)
+    expect(names(f)).toEqual(['unknown'])
+    expect(diagnosePrWhy(f).verdicts[0]?.evidence[0]).toContain('HTTP 502')
   })
 
   it('a head that moves during the reads is head-moved', async () => {
