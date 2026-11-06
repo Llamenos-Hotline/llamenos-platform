@@ -50,16 +50,22 @@
 //!
 //! ## What is pinned
 //!
-//! **ISRG Root X1 and X2** — the same two SPKI hashes Android pins
-//! (`ApiService.kt`, `network_security_config.xml`, `docs/security/CERTIFICATE_PINS.md`).
+//! **ISRG Root X1, X2, YR and YE** — the same four SPKI hashes Android and iOS
+//! pin (`ApiService.kt`, `network_security_config.xml`, `CertificatePinning.swift`,
+//! `docs/security/CERTIFICATE_PINS.md`).
 //! Deployments terminate TLS on the origin host with Caddy and a Let's Encrypt
 //! certificate, with no CDN or proxy in front (`deploy/ansible/roles/llamenos-caddy`);
-//! Let's Encrypt chains end in one of those two roots. Roots are pinned rather
+//! Let's Encrypt chains end in one of those roots. Since 2026-05-13 Let's Encrypt
+//! issues under the Generation-Y roots (YR/YE), served cross-signed by X1/X2, so
+//! the path webpki builds still ends at X1/X2 *while the Mozilla bundle lacks YR/YE*.
+//! The day it holds them, path building stops at YR/YE and a client pinning only
+//! X1/X2 would refuse every genuine chain (#2505). Roots are pinned rather
 //! than Let's Encrypt's intermediates because the intermediates rotate and are
 //! shared by every Let's Encrypt site, so pinning one authenticates nothing
 //! specific and breaks on a routine rotation. Both roots are always pinned so
 //! Let's Encrypt moving a deployment between its RSA and ECDSA hierarchies does
-//! not lock out an installed client (RFC 7469 §2.5 backup pin).
+//! not lock out an installed client (RFC 7469 §2.5 backup pin). A chain containing
+//! ANY pinned key on the validated path is accepted; one containing none is refused.
 //!
 //! A backend whose chain does not end in an ISRG root (a self-signed
 //! certificate, a private CA, another public CA) is refused at configuration
@@ -71,10 +77,10 @@
 //!
 //! The pins are persisted next to `apiBaseUrl` in the same store entry and
 //! enforced on every `net_fetch`/`net_ws_connect` call from then on
-//! (`net::PinnedNet`). `api_config_clear` deletes both together. Pins persisted
-//! by the earlier TOFU scheme are leaf/intermediate hashes; they are still
-//! enforced as pins on the validated path, so a stored leaf pin keeps working
-//! until the leaf rotates, after which the user reconfigures the backend.
+//! (`net::PinnedNet`). `api_config_clear` deletes both together. At startup
+//! `net::load_or_reset_pinned_net` enforces the *compiled-in* set and refreshes the
+//! stored copy to match, so an installed app picks up newly added roots (#2505) with
+//! the update rather than waiting for the user to re-enter the server address.
 //!
 //! ## Rotation
 //!
@@ -101,13 +107,46 @@ use url::Url;
 
 use crate::api_config;
 
-/// Base64 SHA-256 SPKI hashes of ISRG Root X1 (RSA 4096) and ISRG Root X2
-/// (ECDSA P-384). Identical to `ISRG_ROOT_X1_HASH` / `ISRG_ROOT_X2_HASH` in
-/// `ApiService.kt` and the table in `docs/security/CERTIFICATE_PINS.md`.
-const ISRG_ROOT_PINS: [&str; 2] = [
+/// Base64 SHA-256 SPKI hashes of the four Let's Encrypt roots: ISRG Root X1
+/// (RSA 4096), ISRG Root X2 (ECDSA P-384), and the Generation-Y roots ISRG Root
+/// YR (RSA 4096) and ISRG Root YE (ECDSA P-384, #2505). Identical to
+/// `DEFAULT_PIN_HASHES` in `ApiService.kt`, `CertificatePins.pinned` in
+/// `CertificatePinning.swift` and the table in `docs/security/CERTIFICATE_PINS.md`.
+///
+/// Every value is derived from the certificate Let's Encrypt publishes
+/// (`curl https://letsencrypt.org/certs/gen-y/root-yr.pem | openssl x509 -pubkey -noout
+/// | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64`);
+/// `the_pins_are_the_spki_hashes_of_the_published_roots` re-derives each one from
+/// the DER under `testdata/lets-encrypt/`.
+const ISRG_ROOT_PINS: [&str; 4] = [
+    // ISRG Root X1
     "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=",
+    // ISRG Root X2
     "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=",
+    // ISRG Root YR (self-signed and cross-signed copies share this key)
+    "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=",
+    // ISRG Root YE (self-signed and cross-signed copies share this key)
+    "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=",
 ];
+
+/// The pin set every `https://` backend is held to.
+pub fn production_pins() -> Vec<String> {
+    ISRG_ROOT_PINS.iter().map(|p| p.to_string()).collect()
+}
+
+/// The pin set to enforce for a backend whose persisted set is `stored`.
+///
+/// A non-empty stored set is whatever production set the build that configured the
+/// backend compiled in, so it goes stale the moment a root is added. The compiled-in set
+/// is enforced instead (#2505). An empty set is the debug-only loopback `http://`
+/// backend, which has no TLS to pin, and stays empty.
+pub fn enforced_pins(stored: &[String]) -> Vec<String> {
+    if stored.is_empty() {
+        Vec::new()
+    } else {
+        production_pins()
+    }
+}
 
 fn supported_algorithms() -> WebPkiSupportedAlgorithms {
     static ALGS: OnceLock<WebPkiSupportedAlgorithms> = OnceLock::new();
@@ -147,9 +186,9 @@ impl TrustPolicy {
         }
     }
 
-    /// Mozilla roots, pinned to ISRG Root X1/X2.
+    /// Mozilla roots, pinned to the four Let's Encrypt roots.
     fn isrg() -> Self {
-        Self::with_pins(ISRG_ROOT_PINS.iter().map(|p| p.to_string()).collect())
+        Self::with_pins(production_pins())
     }
 }
 
@@ -447,7 +486,7 @@ mod tests {
 
     // -----------------------------------------------------------------
     // A throwaway PKI. Production trusts the Mozilla roots and pins ISRG
-    // Root X1/X2, none of whose private keys a test has, so every test that
+    // Root X1/X2/YR/YE, none of whose private keys a test has, so every test that
     // needs a *genuine* chain builds its own root and trusts it through
     // `TrustPolicy`, which is the only thing the production policy differs by.
     // -----------------------------------------------------------------
@@ -849,18 +888,78 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // The production policy: Mozilla roots, ISRG Root X1/X2 pins
+    // The production policy: Mozilla roots, ISRG Root X1/X2/YR/YE pins
     // -----------------------------------------------------------------
 
+    // Real Let's Encrypt certificates (testdata/lets-encrypt/, DER). The roots are
+    // from https://letsencrypt.org/certs/ (X1, X2) and .../certs/gen-y/ (YR, YE and
+    // their cross-signed copies); the leaves + YR1/YE1 were served by
+    // valid-isrgrootx1/x2.letsencrypt.org on 2026-11-06 (valid until 2027-01/02).
+    const ROOT_X1: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-x1.der");
+    const ROOT_X2: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-x2.der");
+    const ROOT_YR: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-yr.der");
+    const ROOT_YE: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-ye.der");
+    const ROOT_YR_BY_X1: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-yr-by-x1.der");
+    const ROOT_YE_BY_X2: &[u8] = include_bytes!("../testdata/lets-encrypt/isrg-root-ye-by-x2.der");
+    const LEAF_YR: &[u8] = include_bytes!("../testdata/lets-encrypt/le-leaf-yr.der");
+    const INT_YR1: &[u8] = include_bytes!("../testdata/lets-encrypt/le-int-yr1.der");
+    const LEAF_YE: &[u8] = include_bytes!("../testdata/lets-encrypt/le-leaf-ye.der");
+    const INT_YE1: &[u8] = include_bytes!("../testdata/lets-encrypt/le-int-ye1.der");
+    const HOST_YR: &str = "valid-isrgrootx1.letsencrypt.org";
+    const HOST_YE: &str = "valid-isrgrootx2.letsencrypt.org";
+    /// 2026-11-20T00:00:00Z — inside every fixture certificate's validity window.
+    const VERIFY_AT: u64 = 1_795_132_800;
+
+    fn der(bytes: &'static [u8]) -> CertificateDer<'static> {
+        CertificateDer::from(bytes)
+    }
+
     #[test]
-    fn the_production_roots_contain_both_isrg_roots_under_the_documented_pins() {
-        // Ties the constants to the trust store: if either pin were mistyped, or
-        // the root program dropped a root, the production policy could never
-        // accept a genuine Let's Encrypt chain.
+    fn the_pins_are_the_spki_hashes_of_the_published_roots() {
+        // Derived from the certificates, not re-typed: a mistyped constant cannot
+        // agree with a hash computed from the real root (#1593).
+        let derived: Vec<String> = [ROOT_X1, ROOT_X2, ROOT_YR, ROOT_YE]
+            .into_iter()
+            .map(|d| pin_of(&der(d)))
+            .collect();
+        assert_eq!(derived, ISRG_ROOT_PINS);
+        // The cross-signed copies the server presents today carry the same keys, so
+        // one pin matches the root in both of its forms.
+        assert_eq!(pin_of(&der(ROOT_YR_BY_X1)), ISRG_ROOT_PINS[2]);
+        assert_eq!(pin_of(&der(ROOT_YE_BY_X2)), ISRG_ROOT_PINS[3]);
+    }
+
+    #[test]
+    fn a_pin_set_stored_by_an_older_build_is_replaced_by_the_compiled_in_one() {
+        // An install configured before Root YR/YE were pinned persisted only X1/X2 (or, from
+        // the TOFU scheme, a leaf hash). Enforcing that copy would leave the updated app
+        // refusing the first chain a trust store anchors at YR/YE (#2505).
+        let x1_x2_only = ISRG_ROOT_PINS[..2]
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(enforced_pins(&x1_x2_only), production_pins());
+        let legacy_leaf = vec![ISRG_ROOT_PINS[0].replace('C', "D")];
+        assert_eq!(enforced_pins(&legacy_leaf), production_pins());
+        assert_eq!(enforced_pins(&production_pins()), production_pins());
+    }
+
+    #[test]
+    fn a_loopback_http_backend_stays_unpinned() {
+        assert!(enforced_pins(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_mozilla_bundle_anchors_isrg_root_x1_and_x2() {
+        // Ties the X1/X2 constants to the trust store: if either pin were mistyped,
+        // or the root program dropped a root, the production policy could never
+        // accept a chain ending at it. Root YR/YE are deliberately NOT required here:
+        // they are pinned ahead of the root programs adding them (#2505), which is
+        // the whole point.
         let policy = TrustPolicy::isrg();
-        for pin in ISRG_ROOT_PINS {
+        for pin in &ISRG_ROOT_PINS[..2] {
             assert!(
-                policy.roots.iter().any(|anchor| anchor_pin(anchor) == pin),
+                policy.roots.iter().any(|anchor| anchor_pin(anchor) == *pin),
                 "no trust anchor in the Mozilla root program hashes to the pin {pin}"
             );
         }
@@ -868,11 +967,150 @@ mod tests {
     }
 
     fn isrg_root_der(pin: &str) -> CertificateDer<'static> {
-        webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        [ROOT_X1, ROOT_X2, ROOT_YR, ROOT_YE]
+            .into_iter()
+            .map(der)
+            .find(|d| pin_of(d) == pin)
+            .expect("a published ISRG root under testdata/lets-encrypt")
+    }
+
+    /// Runs the production verifier over a presented chain, trusting only `anchor`.
+    fn verify_real_chain(
+        host: &str,
+        presented: &[&'static [u8]],
+        anchor: &'static [u8],
+        pins: Vec<String>,
+    ) -> Result<(), TlsError> {
+        let anchor = webpki::anchor_from_trusted_cert(&der(anchor))
+            .expect("root as anchor")
+            .to_owned();
+        let verifier = PinningVerifier::new(TrustPolicy {
+            roots: StdArc::new(vec![anchor]),
+            pins,
+        });
+        let leaf = der(presented[0]);
+        let rest: Vec<CertificateDer<'static>> = presented[1..].iter().map(|d| der(d)).collect();
+        verifier
+            .verify_server_cert(
+                &leaf,
+                &rest,
+                &ServerName::try_from(host.to_string()).expect("server name"),
+                &[],
+                UnixTime::since_unix_epoch(Duration::from_secs(VERIFY_AT)),
+            )
+            .map(|_| ())
+    }
+
+    fn assert_is_pin_mismatch(result: Result<(), TlsError>, why: &str) {
+        match result {
+            Err(TlsError::General(message)) if message.contains("pin mismatch") => {}
+            other => panic!("{why}: expected a pin mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_chain_anchored_by_any_pinned_root_is_accepted() {
+        // Gen-Y as served today: cross-signed, so the path ends at X1 / X2.
+        // Gen-Y once a trust store anchors YR / YE: the path ends there instead.
+        // Both, for both hierarchies, against the production pin set.
+        struct Case {
+            name: &'static str,
+            presented: &'static [&'static [u8]],
+            anchor: &'static [u8],
+            host: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "anchored at ISRG Root X1",
+                presented: &[LEAF_YR, INT_YR1, ROOT_YR_BY_X1],
+                anchor: ROOT_X1,
+                host: HOST_YR,
+            },
+            Case {
+                name: "anchored at ISRG Root X2",
+                presented: &[LEAF_YE, INT_YE1, ROOT_YE_BY_X2],
+                anchor: ROOT_X2,
+                host: HOST_YE,
+            },
+            Case {
+                name: "anchored at ISRG Root YR",
+                presented: &[LEAF_YR, INT_YR1],
+                anchor: ROOT_YR,
+                host: HOST_YR,
+            },
+            Case {
+                name: "anchored at ISRG Root YE",
+                presented: &[LEAF_YE, INT_YE1],
+                anchor: ROOT_YE,
+                host: HOST_YE,
+            },
+        ];
+        for Case {
+            name,
+            presented,
+            anchor,
+            host,
+        } in cases
+        {
+            verify_real_chain(host, presented, anchor, production_pins())
+                .unwrap_or_else(|e| panic!("a chain {name} must be accepted: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn a_chain_anchored_by_an_unpinned_root_is_refused() {
+        // Same valid chains, but the pin set holds no key from them: the chain
+        // validates and is still refused. Adding roots must never turn into "accept
+        // any valid chain".
+        let unrelated = vec![pin_of(&der(ROOT_X2)), pin_of(&der(ROOT_YE))];
+        assert_is_pin_mismatch(
+            verify_real_chain(HOST_YR, &[LEAF_YR, INT_YR1], ROOT_YR, unrelated.clone()),
+            "Root YR anchor, pins X2+YE",
+        );
+        let unrelated = vec![pin_of(&der(ROOT_X1)), pin_of(&der(ROOT_YR))];
+        assert_is_pin_mismatch(
+            verify_real_chain(HOST_YE, &[LEAF_YE, INT_YE1], ROOT_YE, unrelated),
+            "Root YE anchor, pins X1+YR",
+        );
+    }
+
+    #[test]
+    fn the_gen_y_pins_are_what_accept_a_y_anchored_chain() {
+        // The #2505 outage in miniature. With only X1 / X2 pinned, the chain a trust
+        // store anchors at Root YR / YE carries no pinned key.
+        let legacy = ISRG_ROOT_PINS[..2]
             .iter()
-            .find(|der| pin_of(der) == pin)
-            .expect("ISRG root in the Mozilla program")
-            .clone()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>();
+        assert_is_pin_mismatch(
+            verify_real_chain(HOST_YR, &[LEAF_YR, INT_YR1], ROOT_YR, legacy.clone()),
+            "legacy pins, Y-anchored RSA chain",
+        );
+        assert_is_pin_mismatch(
+            verify_real_chain(HOST_YE, &[LEAF_YE, INT_YE1], ROOT_YE, legacy.clone()),
+            "legacy pins, Y-anchored ECDSA chain",
+        );
+        // ... while the cross-signed chains served today still pass them.
+        verify_real_chain(
+            HOST_YR,
+            &[LEAF_YR, INT_YR1, ROOT_YR_BY_X1],
+            ROOT_X1,
+            legacy.clone(),
+        )
+        .expect("cross-signed chain under the legacy pins");
+        verify_real_chain(HOST_YE, &[LEAF_YE, INT_YE1, ROOT_YE_BY_X2], ROOT_X2, legacy)
+            .expect("cross-signed chain under the legacy pins");
+    }
+
+    #[test]
+    fn a_real_chain_for_another_host_is_refused_whatever_it_is_pinned_to() {
+        let result = verify_real_chain(
+            "api.example.org",
+            &[LEAF_YR, INT_YR1],
+            ROOT_YR,
+            production_pins(),
+        );
+        assert!(result.is_err(), "chain validity is bound to the host name");
     }
 
     #[test]
@@ -887,12 +1125,8 @@ mod tests {
                 captured.is_err(),
                 "capture must refuse a forged chain carrying ISRG root {pin}"
             );
-            let pins = ISRG_ROOT_PINS
-                .iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>();
             assert_refused(
-                get_health(TrustPolicy::with_pins(pins), &origin),
+                get_health(TrustPolicy::with_pins(production_pins()), &origin),
                 "enforcement must refuse a forged chain carrying an ISRG root",
             );
         }
@@ -915,14 +1149,8 @@ mod tests {
             "valid-isrgrootx1.letsencrypt.org",
             "valid-isrgrootx2.letsencrypt.org",
         ] {
-            let ctx = build_enforcing_context(
-                &ISRG_ROOT_PINS
-                    .iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>(),
-                Duration::from_secs(10),
-            )
-            .expect("pinned context");
+            let ctx = build_enforcing_context(&production_pins(), Duration::from_secs(10))
+                .expect("pinned context");
             let outcome = block_on(async move {
                 let connector = tokio_rustls::TlsConnector::from(ctx.ws_connector.clone());
                 let tcp = tokio::net::TcpStream::connect((host, 443))

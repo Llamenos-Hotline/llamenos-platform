@@ -115,6 +115,22 @@ pub fn load_or_reset_pinned_net(app: &AppHandle) -> Result<Option<String>, Strin
             return Ok(None);
         }
     };
+    // A non-empty stored set is, by construction, whatever production set the build that
+    // configured the backend compiled in (`capture_pins` returns it verbatim; there is no
+    // trust-on-first-use any more). Enforcing the *stored* copy would freeze an install on
+    // the roots of the day it was configured: when Let's Encrypt moves chains to roots added
+    // later (Gen-Y, #2505), an updated app would keep refusing the new chain with no way to
+    // learn the new pin short of the user re-entering the server address. So the compiled-in
+    // set is what is enforced, and the stored copy is refreshed to match. An empty set (the
+    // debug-only loopback `http://` backend) has no TLS to pin and stays empty.
+    let enforced = cert_pin::enforced_pins(&pins);
+    if enforced != pins
+        && let Err(e) = api_config::store_pins(app, &enforced)
+    {
+        api_config::warn_and_clear(app, &e)?;
+        return Ok(None);
+    }
+    let pins = enforced;
     match cert_pin::build_enforcing_context(&pins, REQUEST_TIMEOUT) {
         Ok(ctx) => {
             app.state::<PinnedNet>().set(ctx);
