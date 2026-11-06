@@ -84,7 +84,11 @@ fn the_fixture_states_one_label_and_the_canonical_aad_per_purpose() {
             .iter()
             .map(|r| r.x25519_pubkey_hex.as_str())
             .collect();
-        assert_eq!(addresses, readers, "{}: envelopes address X25519 keys", rec.name);
+        assert_eq!(
+            addresses, readers,
+            "{}: envelopes address X25519 keys",
+            rec.name
+        );
     }
 }
 
