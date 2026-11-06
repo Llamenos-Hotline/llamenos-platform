@@ -4,6 +4,7 @@ import type { AppEnv } from '@worker/types'
 import conversationsRoute from '@worker/routes/conversations'
 import * as wsEvents from '@worker/lib/ws-events'
 import * as serviceFactories from '@worker/lib/service-factories'
+import * as metrics from '@worker/routes/metrics'
 import { ServiceError } from '@worker/services/settings'
 import type { conversations as conversationsTable, messages as messagesTable } from '@worker/db/schema'
 import { conversationListResponseSchema, messageListResponseSchema } from '@protocol/schemas/conversations'
@@ -460,11 +461,17 @@ describe('conversations route', () => {
   })
 
   describe('POST /:id/messages', () => {
-    it('sends outbound message for assigned volunteer', async () => {
+    it('sends outbound message for assigned volunteer on the web channel', async () => {
+      const getSpy = vi.fn().mockResolvedValue(convRow({
+        id: 'conv-1',
+        assignedTo: 'test-pubkey-' + '0'.repeat(50),
+        status: 'active',
+        channelType: 'web',
+      }))
       const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
         permissions: ['conversations:read-assigned'],
-        services: { conversations: { addMessage: addSpy } },
+        services: { conversations: { getById: getSpy, addMessage: addSpy } },
       })
 
       const res = await app.request('/conv-1/messages', {
@@ -484,6 +491,111 @@ describe('conversations route', () => {
       }))
     })
 
+    // #2500: the mobile clients sealed the reply and sent no plaintext, so the
+    // server stored it as `pending` and no provider ever received it. An
+    // external-channel send without `plaintextForSending` is refused, before the
+    // adapter is resolved and before anything is written.
+    describe.each(['sms', 'whatsapp', 'signal', 'rcs'])('external channel %s without plaintextForSending (#2500)', (channelType) => {
+      const sealedOnly = {
+        encryptedContent: 'encrypted123',
+        readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+      }
+
+      function setup() {
+        const getSpy = vi.fn().mockResolvedValue(convRow({
+          id: 'conv-1',
+          assignedTo: 'test-pubkey-' + '0'.repeat(50),
+          status: 'active',
+          channelType,
+        }))
+        const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
+        const identifierSpy = vi.fn().mockResolvedValue('+15551234567')
+        const adapterSpy = vi.spyOn(serviceFactories, 'getMessagingAdapterFromService')
+        adapterSpy.mockClear()
+        const app = createTestApp({
+          permissions: ['conversations:read-assigned'],
+          services: {
+            conversations: { getById: getSpy, addMessage: addSpy, getContactIdentifier: identifierSpy },
+            // `smsContentMode` defaults to 'notification-only' (the carrier is
+            // handed a generic line, not the reply); 'full' is what lets the
+            // adapter boundary show the reply text itself.
+            settings: {
+              getMessagingConfig: vi.fn().mockResolvedValue({
+                enabledChannels: ['sms', 'whatsapp', 'signal', 'rcs'],
+                smsContentMode: 'full',
+                preferSignalDelivery: false,
+                signal: null,
+              }),
+            },
+          },
+        })
+        return { app, addSpy, identifierSpy, adapterSpy }
+      }
+
+      async function post(app: ReturnType<typeof createTestApp>, payload: Record<string, unknown>) {
+        return app.request('/conv-1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+      }
+
+      it.each([
+        ['only the sealed copy (the mobile shape)', sealedOnly],
+        ['an empty plaintextForSending', { ...sealedOnly, plaintextForSending: '' }],
+        ['a whitespace-only plaintextForSending', { ...sealedOnly, plaintextForSending: '  \n\t ' }],
+        ['an empty body alias', { ...sealedOnly, body: '' }],
+        ['neither sealed copy nor plaintext', {}],
+      ])('refuses (422) a request with %s and writes nothing', async (_name, payload) => {
+        const { app, addSpy, identifierSpy, adapterSpy } = setup()
+
+        const res = await post(app, payload)
+
+        expect(res.status).toBe(422)
+        const body = await res.json()
+        expect(body.code).toBe('plaintext_for_sending_required')
+        expect(body.error).toContain('plaintextForSending')
+        // Nothing stored-then-failed, nothing handed to a carrier.
+        expect(addSpy).not.toHaveBeenCalled()
+        expect(identifierSpy).not.toHaveBeenCalled()
+        expect(adapterSpy).not.toHaveBeenCalled()
+      })
+
+      it('counts the refusal so it is visible (rule V)', async () => {
+        const { app } = setup()
+        const counter = vi.spyOn(metrics, 'incCounter')
+
+        await post(app, sealedOnly)
+
+        expect(counter).toHaveBeenCalledWith('llamenos_outbound_message_refused_total', {
+          reason: 'no_plaintext',
+          channel: channelType,
+        })
+      })
+
+      it('hands the carrier the plaintext, and stores the sealed copy beside it', async () => {
+        const { app, addSpy, adapterSpy } = setup()
+        const sendSpy = vi.fn().mockResolvedValue({ success: true, externalId: 'ext-1' })
+        adapterSpy.mockResolvedValue({ sendMessage: sendSpy } as never)
+
+        const res = await post(app, { ...sealedOnly, plaintextForSending: 'We hear you.' })
+
+        expect(res.status).toBe(201)
+        expect(sendSpy).toHaveBeenCalledWith(expect.objectContaining({
+          body: 'We hear you.',
+          recipientIdentifier: '+15551234567',
+        }))
+        const stored = addSpy.mock.calls[0][0]
+        expect(stored).toEqual(expect.objectContaining({
+          encryptedContent: 'encrypted123',
+          readerEnvelopes: sealedOnly.readerEnvelopes,
+          status: 'sent',
+        }))
+        // The plaintext is for the carrier only: it is never on the stored record.
+        expect(JSON.stringify(stored)).not.toContain('We hear you.')
+      })
+    })
+
     it('refuses (422) a client-sealed message whose envelopes name no admin key', async () => {
       const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
       const app = createTestApp({
@@ -497,6 +609,7 @@ describe('conversations route', () => {
         body: JSON.stringify({
           encryptedContent: 'encrypted123',
           readerEnvelopes: [{ pubkey: 'c'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          plaintextForSending: 'Hello',
         }),
       })
       expect(res.status).toBe(422)
@@ -513,7 +626,7 @@ describe('conversations route', () => {
       const res = await app.request('/conv-1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ encryptedContent: 'encrypted123', readerEnvelopes: [] }),
+        body: JSON.stringify({ encryptedContent: 'encrypted123', readerEnvelopes: [], plaintextForSending: 'Hello' }),
       })
       expect(res.status).toBe(422)
       expect(addSpy).not.toHaveBeenCalled()

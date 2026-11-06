@@ -381,7 +381,15 @@ struct MessageBubbleView: View {
                         .font(.brand(.caption2))
                         .foregroundStyle(message.isOutbound ? Color.white.opacity(0.7) : Color.brandMutedForeground)
 
-                    if message.isOutbound && message.isRead {
+                    if message.isOutbound && message.deliveryFailed {
+                        Label(
+                            NSLocalizedString("conversations_failed", comment: "Failed to send"),
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.brand(.caption2))
+                        .foregroundStyle(.white)
+                        .accessibilityIdentifier("message-failed-\(message.id)")
+                    } else if message.isOutbound && message.isRead {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.7))
@@ -423,7 +431,10 @@ struct MessageBubbleView: View {
         let direction = message.isInbound
             ? NSLocalizedString("message_inbound", comment: "Received")
             : NSLocalizedString("message_outbound", comment: "Sent")
-        return "\(direction): \(message.text). \(message.fullDateDisplay)"
+        let failed = message.isOutbound && message.deliveryFailed
+            ? ". \(NSLocalizedString("conversations_failed", comment: "Failed to send"))"
+            : ""
+        return "\(direction): \(message.text). \(message.fullDateDisplay)\(failed)"
     }
 }
 

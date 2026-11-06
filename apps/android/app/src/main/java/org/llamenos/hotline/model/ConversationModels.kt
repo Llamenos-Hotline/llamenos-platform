@@ -26,4 +26,10 @@ data class DecryptedMessage(
     val channelType: String,
     val createdAt: String,
     val isRead: Boolean,
+    /**
+     * The server could not hand this outbound message to the carrier
+     * (`status == "failed"`). The thread must say so: a reply that looks sent
+     * when the provider never got it is how a caller in crisis goes unanswered.
+     */
+    val deliveryFailed: Boolean = false,
 )

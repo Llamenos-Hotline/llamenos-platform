@@ -167,9 +167,17 @@ struct ConversationMessage: Codable, Identifiable, Sendable {
     let readerEnvelopes: [RecipientEnvelope]
     let createdAt: String
     let readAt: String?
+    /// Delivery state of an outbound message — `pending`, `sent`, `delivered`, `read` or
+    /// `failed`. The server sets `failed` when the carrier refused the message.
+    let status: String?
 
     /// Whether the message has been read.
     var isRead: Bool { readAt != nil }
+
+    /// Whether the server could not hand this outbound message to the carrier. The thread
+    /// has to say so (#2500): a reply that looks sent when the provider never took it is
+    /// how a caller in crisis goes unanswered.
+    var deliveryFailed: Bool { status == "failed" }
 
     /// Whether this is an inbound message.
     var isInbound: Bool { direction == "inbound" }
@@ -195,6 +203,12 @@ struct ConversationMessagesResponse: Codable, Sendable {
 // MARK: - SendMessageRequest
 
 /// Request body for `POST /api/conversations/:id/messages`.
+///
+/// An outbound message on an SMS / WhatsApp / Signal conversation carries TWO things
+/// (#2500): the sealed copy for the hub's readers (`encryptedContent` + `readerEnvelopes`)
+/// and the plaintext the carrier transmits (`plaintextForSending`). The server keeps no
+/// plaintext, so it cannot rebuild the second from the first, and refuses (422) a send
+/// without it. A required `let` — not an optional — so no call site can leave it out.
 struct SendMessageRequest: Encodable, Sendable {
     let encryptedContent: String
     /// #1633: `sendMessageBodySchema` (packages/protocol/schemas/conversations.ts)
@@ -202,4 +216,6 @@ struct SendMessageRequest: Encodable, Sendable {
     /// schema does not declare — and since it is `.optional()`, one the validator
     /// dropped instead of rejecting.
     let readerEnvelopes: [RecipientEnvelope]
+    /// What the carrier transmits. The server hands it to the provider and discards it.
+    let plaintextForSending: String
 }
