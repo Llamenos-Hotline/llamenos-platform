@@ -20,6 +20,36 @@ import XCTest
 enum TestAdminAPI {
     static let seedHex = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7" // gitleaks:allow
 
+    /// The X25519 key the same admin is addressed by (ci.yml `TEST_ADMIN_DECRYPTION_PUBKEY`), derived
+    /// from `seedHex` by tests/crypto-helpers.ts `adminHpkeRecipient()`. It is not the Ed25519
+    /// signing pubkey and is never derived from it (#1283).
+    static let x25519Hex = "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
+
+    /// Register the admin's device, so the admin is a READER of the hubs it creates.
+    ///
+    /// The server seals inbound content to `readersFor(hub, 'admin')` — the registered device
+    /// keys of the hub's admins — and refuses an inbound message with a 503 ("this hub has no
+    /// admin able to read it") when that set is empty. `POST /api/hubs` makes the admin the
+    /// hub's founder, but a founder with no registered device reads nothing, so a class hub
+    /// built without this step is the hub that refusal exists to reject. The desktop registers
+    /// its device on unlock and the setup wizard before it founds the hub (#1034); this is the
+    /// same `POST /api/devices/register`, idempotent per `pushToken`.
+    static func registerDevice(baseURL: String,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        guard let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: Data(hexString: seedHex)) else {
+            XCTFail("The test admin seed is not a valid Ed25519 key", file: file, line: line)
+            return
+        }
+        send("POST", "/api/devices/register", [
+            "platform": "ios",
+            "pushToken": "test-device-ui-admin",
+            "wakeKeyPublic": x25519Hex,
+            "ed25519Pubkey": key.publicKey.rawRepresentation.hexString,
+            "x25519Pubkey": x25519Hex,
+            "deviceName": "ios-ui-tests admin",
+        ], baseURL: baseURL, file: file, line: line)
+    }
+
     /// Enable (or disable) case management for a hub.
     static func setCaseManagement(enabled: Bool, hubId: String, baseURL: String,
                                   file: StaticString = #filePath, line: UInt = #line) {
