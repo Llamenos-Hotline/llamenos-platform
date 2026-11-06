@@ -767,6 +767,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_lock(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_open_case(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_create(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_derive_state(
@@ -776,6 +778,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_seal_case(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_set_hub_key(
     ): Short
@@ -944,6 +948,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_load_wake_key(`secretHex`: Rust
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_lock(uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+external fun uniffi_llamenos_core_fn_func_mobile_open_case(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_create(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_derive_state(`seedHex`: RustBuffer.ByValue,`generation`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -953,6 +959,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_rotate(`oldSeedHex`: RustBu
 external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_seal_case(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_set_hub_key(`hubId`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1293,6 +1301,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_lock() != 62527.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1306,6 +1317,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956.toShort()) {
@@ -1749,6 +1763,55 @@ public object FfiConverterTypeDevicePukEnvelope: FfiConverterRustBuffer<DevicePu
     override fun write(value: DevicePukEnvelope, buf: ByteBuffer) {
             FfiConverterString.write(value.`deviceId`, buf)
             FfiConverterTypeHpkeEnvelope.write(value.`envelope`, buf)
+    }
+}
+
+
+
+/**
+ * A sealed case ciphertext in wire form: `encryptedContent` plus one envelope
+ * per reader. Maps directly onto `encryptedSummary`/`summaryEnvelopes`,
+ * `encryptedFields`/`fieldEnvelopes` and `encryptedContent`/`contentEnvelopes`.
+ */
+data class EncryptedCaseCiphertext (
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    val `encryptedContent`: kotlin.String
+    , 
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    val `readerEnvelopes`: List<RecipientKeyEnvelope>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEncryptedCaseCiphertext: FfiConverterRustBuffer<EncryptedCaseCiphertext> {
+    override fun read(buf: ByteBuffer): EncryptedCaseCiphertext {
+        return EncryptedCaseCiphertext(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeRecipientKeyEnvelope.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EncryptedCaseCiphertext) = (
+            FfiConverterString.allocationSize(value.`encryptedContent`) +
+            FfiConverterSequenceTypeRecipientKeyEnvelope.allocationSize(value.`readerEnvelopes`)
+    )
+
+    override fun write(value: EncryptedCaseCiphertext, buf: ByteBuffer) {
+            FfiConverterString.write(value.`encryptedContent`, buf)
+            FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`readerEnvelopes`, buf)
     }
 }
 
@@ -2611,6 +2674,60 @@ public object FfiConverterTypeSigchainVerifiedState: FfiConverterRustBuffer<Sigc
             FfiConverterSequenceString.write(value.`activeDevicePubkeys`, buf)
     }
 }
+
+
+
+/**
+ * What a case ciphertext is. The only choice a caller of this module makes —
+ * it names the thing being sealed, never how. Every binding carries it as a
+ * closed type: a UniFFI enum (Swift/Kotlin), a lowercase string the Tauri IPC
+ * deserialises into this enum (`"summary"`/`"fields"`/`"comment"`), and a byte
+ * on the server's C ABI.
+ *
+ * `repr(u8)` because the server's C ABI carries it as a byte; the mapping is
+ * closed ([`CasePurpose::from_u8`] rejects anything else).
+ */
+
+enum class CasePurpose(val value: kotlin.UByte) {
+    
+    /**
+     * A case record's summary (title, description, status display).
+     */
+    SUMMARY(0u),
+    /**
+     * A case record's custom-field values.
+     */
+    FIELDS(1u),
+    /**
+     * A comment interaction on a case record's timeline.
+     */
+    COMMENT(2u);
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeCasePurpose: FfiConverterRustBuffer<CasePurpose> {
+    override fun read(buf: ByteBuffer) = try {
+        CasePurpose.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: CasePurpose) = 4UL
+
+    override fun write(value: CasePurpose, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -3965,6 +4082,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Open a case ciphertext as this device. Takes all of its envelopes; Rust
+         * picks the one addressed to this device's X25519 key. Neither the device key
+         * nor the content key reaches Swift or Kotlin.
+         */
+    @Throws(CryptoException::class) fun `mobileOpenCase`(`purpose`: CasePurpose, `encryptedContent`: kotlin.String, `envelopes`: List<RecipientKeyEnvelope>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_case(
+    
+        FfiConverterTypeCasePurpose.lower(`purpose`),FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Create the initial PUK (generation 1), wrapped to the device's X25519 pubkey.
          * Returns JSON: { pukState, seedHex, envelope }
          */
@@ -4029,6 +4162,26 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal a case ciphertext — a record's summary or fields, or a comment — as
+         * this device, for this device plus `reader_pubkeys` (X25519, hex).
+         *
+         * There is no label and no AAD argument: `crate::case_record` derives both
+         * from `purpose`, so Swift and Kotlin cannot seal a case record under
+         * `LABEL_MESSAGE` or without its AAD (the #2499 split). The result maps onto
+         * the API's `encrypted*` / `*Envelopes` pair unchanged.
+         */
+    @Throws(CryptoException::class) fun `mobileSealCase`(`purpose`: CasePurpose, `plaintext`: kotlin.String, `readerPubkeys`: List<kotlin.String>): EncryptedCaseCiphertext {
+            return FfiConverterTypeEncryptedCaseCiphertext.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_seal_case(
+    
+        FfiConverterTypeCasePurpose.lower(`purpose`),FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
 }
     )
     }

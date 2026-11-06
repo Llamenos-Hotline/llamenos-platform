@@ -1,0 +1,87 @@
+{
+  "description": "Case records and case comments exactly as the server PERSISTED them (PROTOCOL.md §2.11): sealed by packages/crypto/src/case_record.rs, sent through the routes' request validators and CasesService into PostgreSQL, and read back. Each purpose has its own label and the canonical AAD on both layers (content: UTF-8(label); key wrap: UTF-8(label + \":key-wrap\")); envelopes are addressed to the reader's X25519 key, all hex. Every platform must open these bytes through its production reader, and the stored-message format (LABEL_MESSAGE, no AAD) must not. Regenerate with packages/crypto/scripts/gen-case-record-vectors.ts — never edit by hand.",
+  "generator": "packages/crypto/src/case_record.rs via bun:ffi → createRecordBodySchema / createInteractionBodySchema → CasesService.create / createInteraction → CasesService.get / listInteractions",
+  "readers": [
+    {
+      "name": "volunteer",
+      "x25519SecretHex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "x25519PubkeyHex": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252"
+    },
+    {
+      "name": "admin",
+      "x25519SecretHex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "x25519PubkeyHex": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a"
+    }
+  ],
+  "records": [
+    {
+      "name": "case-summary",
+      "purpose": "summary",
+      "label": "llamenos:case-summary",
+      "aadHex": {
+        "content": "6c6c616d656e6f733a636173652d73756d6d617279",
+        "keyWrap": "6c6c616d656e6f733a636173652d73756d6d6172793a6b65792d77726170"
+      },
+      "plaintext": "{\"title\":\"Vivienda — desalojo\",\"description\":\"case-record vector\",\"status\":\"Open\"}",
+      "encryptedContent": "d22e3727324d3f6c4c9072ee51658d68363459abaa49d3efef65de29b904a0ed837483a9bd3fb197e6b044ee047884ab1cb1dab6ee7dd2ac9de6e1874731f343fbdfadd4bd69620918e4d3d0ece0f46d785e0649f4aaa738e76130582fa26ac84379c2b48bd79886f3ca53026092074e",
+      "readerEnvelopes": [
+        {
+          "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+          "enc": "519627dd9aedafda959c5bfc99e63253456207dee18552219aa260f62ec26309",
+          "ct": "5beb261937f69c390ebe77118c39ec5645a9c9ce5a832136f94a90e97014baf4492b957fd3eeb1fb063e9ca36ddeecc2"
+        },
+        {
+          "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+          "enc": "6a6f05f4dbd8eb3da10fb21d1cb64f072d66f5c0f17fccb1bcf9115967934050",
+          "ct": "7681e2e90f3ab4ccadc45676d7abd3499a2c320f2d0c11a0a239251f48498c8c52fbc2b967a8f35813744498f14556d0"
+        }
+      ]
+    },
+    {
+      "name": "case-fields",
+      "purpose": "fields",
+      "label": "llamenos:case-fields",
+      "aadHex": {
+        "content": "6c6c616d656e6f733a636173652d6669656c6473",
+        "keyWrap": "6c6c616d656e6f733a636173652d6669656c64733a6b65792d77726170"
+      },
+      "plaintext": "{\"housing_status\":\"at risk\",\"household_size\":\"3\"}",
+      "encryptedContent": "cada37da652d731dd22355e0540b3905c7e9558965cb767749cfcc76b1dce81c5c802c303c89948def4ed277ca73ec7123b82f999fab853941ff2192d49ee81c0232376f1e420b66ff5dba1149",
+      "readerEnvelopes": [
+        {
+          "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+          "enc": "80c88f9e22316a80ccca37ab72771d5544a11e567fb074cb4d270370add4ad37",
+          "ct": "857164c25c6769df7065a80dd55497d334ce408ac41dcce0ad60819a3fa131b6d37fd4f3885b9d6b6bda27d2c7257549"
+        },
+        {
+          "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+          "enc": "9a2a851139dd585a9a45a39e8c715d96f59111cf2c552c9d6ffad4da0457297f",
+          "ct": "75873fed992a29a4df1b2897ec1702833961b66e39546007ed0eb71a992a0ce091bfe9288eefb609418317e4287d8f71"
+        }
+      ]
+    },
+    {
+      "name": "case-comment",
+      "purpose": "comment",
+      "label": "llamenos:case-comment",
+      "aadHex": {
+        "content": "6c6c616d656e6f733a636173652d636f6d6d656e74",
+        "keyWrap": "6c6c616d656e6f733a636173652d636f6d6d656e743a6b65792d77726170"
+      },
+      "plaintext": "Llamó de nuevo; ¿necesita intérprete? — case-comment vector",
+      "encryptedContent": "05d0bcb786115149b01e36e63545b6200c6ec0d7901ccf3f6b604580427939137e57c454ee76e5861c86c7f520bed4491de89b4ae2bccbac4c4e77d83b8e39a30a601aeb8c1c390367e8e8606f84fa54a4c28f55053db52e1054c562",
+      "readerEnvelopes": [
+        {
+          "pubkey": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+          "enc": "e315937e83241c35de76e7947c3829a34f12a79e43be1c42303373bcebf13272",
+          "ct": "b4492ca3894fe880fea10432d1f64dbfcf459145616e8a5ef8bc8cdcd5ed12673fb3733ab1324dee74485c0e6a745f3a"
+        },
+        {
+          "pubkey": "db48257e1237976a74ad8cfedca00213408fe89ac6251f1b930245f242b5c31a",
+          "enc": "2fbdf5e4ad0f2a12112ecafcde92cf8ea77712182d6bbd7a77e5dbdd0dca0105",
+          "ct": "86bf74bc4b26a78cd0d255a4beac3730f7cd8376f2362357c5f13500ea90c140da146bf37582214545afaf153c8491d5"
+        }
+      ]
+    }
+  ]
+}

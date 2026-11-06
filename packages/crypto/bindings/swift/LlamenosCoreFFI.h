@@ -435,6 +435,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event(RustBuffer ciph
 RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(RustBuffer encrypted_hex, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_HUB_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_HUB_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(RustBuffer packed_hex, RustBuffer hub_id, RustBuffer label, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_DECRYPT_MESSAGE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_decrypt_message(RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
@@ -463,6 +468,11 @@ int8_t uniffi_llamenos_core_fn_func_mobile_ed25519_verify(RustBuffer message_hex
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ENCRYPT_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ENCRYPT_DRAFT
 RustBuffer uniffi_llamenos_core_fn_func_mobile_encrypt_draft(RustBuffer plaintext, RustBuffer hub_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ENCRYPT_HUB_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ENCRYPT_HUB_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_encrypt_hub_field(RustBuffer plaintext, RustBuffer hub_id, RustBuffer label, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_ENCRYPT_MESSAGE
@@ -577,6 +587,11 @@ void uniffi_llamenos_core_fn_func_mobile_lock(RustCallStatus *_Nonnull out_statu
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_CASE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_CASE
+RustBuffer uniffi_llamenos_core_fn_func_mobile_open_case(RustBuffer purpose, RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_puk_create(RustCallStatus *_Nonnull out_status
@@ -602,6 +617,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(RustBuffer envelo
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RANDOM_BYTES_HEX
 RustBuffer uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
+RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_case(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SET_HUB_KEY
@@ -1142,6 +1162,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_HUB_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_HUB_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_DECRYPT_MESSAGE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_decrypt_message(void
@@ -1175,6 +1201,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_ed25519_verify(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ENCRYPT_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ENCRYPT_DRAFT
 uint16_t uniffi_llamenos_core_checksum_func_mobile_encrypt_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ENCRYPT_HUB_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_ENCRYPT_HUB_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_encrypt_hub_field(void
     
 );
 #endif
@@ -1304,6 +1336,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_lock(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_CASE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_CASE
+uint16_t uniffi_llamenos_core_checksum_func_mobile_open_case(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_puk_create(void
@@ -1331,6 +1369,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RANDOM_BYTES_HEX
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RANDOM_BYTES_HEX
 uint16_t uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
+uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_case(void
     
 );
 #endif
