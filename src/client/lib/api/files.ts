@@ -1,4 +1,4 @@
-import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY, activeHubPath } from './client'
+import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError, isRetryable, MAX_RETRIES, BASE_RETRY_DELAY, activeHubPath, hubPath } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
 import type {
@@ -16,14 +16,22 @@ import type {
 // Uploads and files are mounted only under /hubs/:hubId (#2462): a file belongs
 // to the hub of the record it is attached to, which is the hub being browsed.
 
-export async function initUpload(data: UploadInitBody) {
-  return request<UploadInitResponse>(activeHubPath('/uploads/init'), {
+/**
+ * An upload's path in `hubId` — the hub of the record or entity it is attached
+ * to — or, when none is given, in the hub being browsed.
+ */
+function uploadHubPath(hubId: string | undefined, path: string): string {
+  return hubId ? hubPath(hubId, path) : activeHubPath(path)
+}
+
+export async function initUpload(data: UploadInitBody, hubId?: string) {
+  return request<UploadInitResponse>(uploadHubPath(hubId, '/uploads/init'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function uploadChunk(uploadId: string, chunkIndex: number, data: ArrayBuffer) {
+export async function uploadChunk(uploadId: string, chunkIndex: number, data: ArrayBuffer, hubId?: string) {
   const maxRetries = 2
   let lastError: Error | null = null
 
@@ -34,7 +42,7 @@ export async function uploadChunk(uploadId: string, chunkIndex: number, data: Ar
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
-      const path = activeHubPath(`/uploads/${uploadId}/chunks/${chunkIndex}`)
+      const path = uploadHubPath(hubId, `/uploads/${uploadId}/chunks/${chunkIndex}`)
       const headers = {
         ...await getAuthHeaders('PUT', path),
         'Content-Type': 'application/octet-stream',
@@ -68,8 +76,8 @@ export async function uploadChunk(uploadId: string, chunkIndex: number, data: Ar
   throw lastError ?? new Error('Upload chunk failed')
 }
 
-export async function completeUpload(uploadId: string) {
-  return request<UploadCompleteResponse>(activeHubPath(`/uploads/${uploadId}/complete`), { method: 'POST' })
+export async function completeUpload(uploadId: string, hubId?: string) {
+  return request<UploadCompleteResponse>(uploadHubPath(hubId, `/uploads/${uploadId}/complete`), { method: 'POST' })
 }
 
 export async function getUploadStatus(uploadId: string) {

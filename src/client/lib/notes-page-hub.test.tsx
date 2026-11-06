@@ -28,6 +28,7 @@ vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: () => {} }) }))
 vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true }))
 vi.mock('@/lib/admin-recipient', () => ({
   hubAdminReaders: async () => ['pk-admin'],
+  activeHubAdminReaders: async () => ['pk-admin'],
   NoAdminReaderError: class NoAdminReaderError extends Error {},
 }))
 vi.mock('@/lib/platform', () => ({

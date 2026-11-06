@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { listNotes, NoActiveHubError, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
-import { hubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
+import { hubAdminReaders, activeHubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
 import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport, noteEnvelopeForThisDevice } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { resolveCallHubId } from '@/lib/call-hubs'
@@ -180,7 +180,7 @@ function NotesPage() {
       // Sealed to every admin of the active hub, where the edit is written
       // (#1035). With none, no admin could read it: refused, never wrapped to
       // the author instead (#1468) — the catch says why.
-      const admins = await hubAdminReaders()
+      const admins = await activeHubAdminReaders()
       const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, admins)
       const res = await updateNote(noteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       setNotes(prev => prev.map(n =>
@@ -272,7 +272,7 @@ function NotesPage() {
     setSendingReply(true)
     try {
       // The replier's own devices and every admin of the hub (#1035).
-      const readerPubkeys = [publicKey, ...await hubAdminReaders()]
+      const readerPubkeys = [publicKey, ...await activeHubAdminReaders()]
       const encrypted = await encryptMessage(replyText.trim(), readerPubkeys)
       const res = await createNoteReply(noteId, {
         encryptedContent: encrypted.encryptedContent,

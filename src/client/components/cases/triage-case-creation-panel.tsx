@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
 import { Lock, Loader2, Plus, ArrowRight } from 'lucide-react'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface TriageCaseCreationPanelProps {
   reportId: string
@@ -69,7 +69,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
     try {
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const summary = JSON.stringify({
         title: title.trim(),

@@ -7,8 +7,14 @@ const DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024 // 5MB
 export interface ChunkedUploadOptions {
   /** The output of `encryptFile`: ciphertext plus its key and metadata envelopes. */
   encrypted: EncryptedFileUpload
-  /** What the file is attached to, inside the active hub (#2462). */
+  /** What the file is attached to (#2462). */
   owner: FileOwner
+  /**
+   * The hub the file belongs to: the hub of the record it is attached to. Omit
+   * it only for a file that belongs to the hub being browsed (a new row, a
+   * conversation of the active hub).
+   */
+  hubId?: string
   chunkSize?: number
   onProgress?: (completed: number, total: number) => void
 }
@@ -30,16 +36,16 @@ export async function chunkedUpload(options: ChunkedUploadOptions): Promise<Uplo
     owner: options.owner,
     recipientEnvelopes: encrypted.recipientEnvelopes,
     encryptedMetadata: encrypted.encryptedMetadata,
-  })
+  }, options.hubId)
 
   for (let i = 0; i < totalChunks; i++) {
     const start = i * chunkSize
     const end = Math.min(start + chunkSize, totalSize)
     const chunk = encrypted.encryptedContent.slice(start, end).buffer as ArrayBuffer
 
-    await uploadChunk(uploadId, i, chunk)
+    await uploadChunk(uploadId, i, chunk, options.hubId)
     options.onProgress?.(i + 1, totalChunks)
   }
 
-  return completeUpload(uploadId)
+  return completeUpload(uploadId, options.hubId)
 }
