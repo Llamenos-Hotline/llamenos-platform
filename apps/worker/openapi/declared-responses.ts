@@ -28,6 +28,18 @@
  * captured is reported as a violation of its own, so the check cannot go blind
  * that way again without saying so.
  *
+ * It also CONFORMS the response before judging it — see `conformBody`. The
+ * server's persistence layer speaks `null` for "no value" (a nullable column);
+ * the protocol schemas speak "absent" (`.optional()`), and Swift/Kotlin are
+ * generated from the schema. Every route that returned a raw row crossed that
+ * gap on its own, so most of the first 78 ledger entries were the same
+ * `null`-where-absent defect repeated per route (#2521). The one place that
+ * sees both the body and the declaration is here, so the translation lives
+ * here: a `null` the schema rejects, where dropping the key makes the schema
+ * accept it, is sent as an absent key. A `null` the schema ACCEPTS
+ * (`.nullable()`) is never touched, and a `null` in a required field stays and
+ * is reported — the server has no value to send, which is a real violation.
+ *
  * What a violation does, per request:
  *  - `enforce` — the response is replaced by a 500 naming the route and the
  *    failing paths, so the test that exercised the route fails on it. A
@@ -39,7 +51,9 @@
  *    routes the backend suite does not, and their violations have not been
  *    measured yet, so they are reported rather than failed.
  *  - `off` — production. The check is a development and test instrument;
- *    production must not turn a schema drift into an outage.
+ *    production must not turn a schema drift into an outage. Conforming still
+ *    runs (only on a body containing a `null`): it is how the response gets
+ *    its declared shape, not a check on it.
  * A violation listed in `declared-response-ledger.ts` — measured when this
  * check landed, each owned by an issue — is logged as a warning and passes in
  * every mode, so the ledger can only shrink.
@@ -197,39 +211,117 @@ export interface ResponseViolation {
   issues: { path: string; message: string }[]
 }
 
+function issueSegments(issue: SchemaIssue): PropertyKey[] {
+  return (issue.path ?? []).map(seg => (typeof seg === 'object' && seg !== null ? seg.key : seg))
+}
+
 function issuePath(issue: SchemaIssue): string {
-  return (issue.path ?? [])
-    .map(seg => String(typeof seg === 'object' && seg !== null ? seg.key : seg))
-    .join('.')
+  return issueSegments(issue).map(String).join('.')
+}
+
+function isPlainObject(value: unknown): value is Record<PropertyKey, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** The object holding the value at `path`, and the key it sits under. */
+function locate(body: unknown, path: readonly PropertyKey[]): { parent: Record<PropertyKey, unknown>; key: PropertyKey } | undefined {
+  if (path.length === 0) return undefined
+  let parent: unknown = body
+  for (const seg of path.slice(0, -1)) {
+    if (typeof parent !== 'object' || parent === null) return undefined
+    parent = (parent as Record<PropertyKey, unknown>)[seg]
+  }
+  if (!isPlainObject(parent)) return undefined
+  return { parent, key: path[path.length - 1] }
+}
+
+/** Dropping `null`s the schema rejects can expose more of them one level in. */
+const MAX_CONFORM_PASSES = 8
+
+/**
+ * Translate persistence `null` into the protocol's "absent", driven by the
+ * schema itself. Validates `body`; for every issue sitting on a `null` object
+ * member, drops the key and validates again. A drop that did not satisfy the
+ * schema (the field is required, so absent is no better than `null`) is
+ * undone, leaving the body as the route sent it and the issue reported.
+ *
+ * Mutates `body` in place. Returns the issues that remain and whether any
+ * key stayed dropped.
+ */
+export async function conformBody(validate: Validate, body: unknown): Promise<{ issues: readonly SchemaIssue[]; conformed: boolean }> {
+  const dropped: { parent: Record<PropertyKey, unknown>; key: PropertyKey; path: string }[] = []
+  let result = await validate(body)
+  for (let pass = 0; pass < MAX_CONFORM_PASSES && result.issues?.length; pass++) {
+    let progressed = false
+    for (const issue of result.issues) {
+      const segments = issueSegments(issue)
+      const at = locate(body, segments)
+      if (at && at.parent[at.key] === null) {
+        delete at.parent[at.key]
+        dropped.push({ ...at, path: segments.map(String).join('.') })
+        progressed = true
+      }
+    }
+    if (!progressed) break
+    result = await validate(body)
+  }
+  if (result.issues?.length && dropped.length > 0) {
+    const failing = new Set(result.issues.map(issuePath))
+    const useless = dropped.filter(d => failing.has(d.path))
+    for (const d of useless) d.parent[d.key] = null
+    if (useless.length > 0) result = await validate(body)
+    return { issues: result.issues ?? [], conformed: dropped.length > useless.length }
+  }
+  return { issues: result.issues ?? [], conformed: dropped.length > 0 }
+}
+
+/** A copy of `res` carrying `body`, with every header but the now-wrong length. */
+function withBody(res: Response, body: unknown): Response {
+  const headers = new Headers(res.headers)
+  headers.delete('content-length')
+  return new Response(JSON.stringify(body), { status: res.status, statusText: res.statusText, headers })
 }
 
 /**
- * Check one finished response against its route's declaration. Undefined when
- * it conforms, when the route declared nothing for this status, or when the
- * body is not JSON.
+ * Conform the finished response to the schema its route declared for its
+ * status (replacing `c.res` when keys were dropped), then judge it. Undefined
+ * when it conforms, when the route declared nothing for this status, or when
+ * the body is not JSON. `report` is false in `off` mode, which conforms but
+ * does not judge.
  */
-export async function checkDeclaredResponse(c: Context): Promise<ResponseViolation | undefined> {
+export async function checkDeclaredResponse(c: Context, opts: { report?: boolean } = {}): Promise<ResponseViolation | undefined> {
+  const report = opts.report ?? true
   const res = c.res
   if (!res.headers.get('content-type')?.includes('application/json')) return undefined
   const declared = declaredResponse(c, res.status)
   if (!declared) return undefined
   const where = { method: c.req.method, route: declared.route, status: res.status }
   if (!declared.validate) {
-    return { ...where, issues: [{ path: '', message: 'route declares a JSON response schema that registerDeclaredResponses never captured' }] }
+    return report
+      ? { ...where, issues: [{ path: '', message: 'route declares a JSON response schema that registerDeclaredResponses never captured' }] }
+      : undefined
   }
 
+  let text: string
+  try {
+    text = await res.clone().text()
+  } catch {
+    return report ? { ...where, issues: [{ path: '', message: 'body is not valid JSON' }] } : undefined
+  }
+  // Without a `null` anywhere there is nothing to conform; when only
+  // conforming (production) there is nothing to do.
+  if (!report && !text.includes('null')) return undefined
   let body: unknown
   try {
-    body = await res.clone().json()
+    body = JSON.parse(text)
   } catch {
-    return { ...where, issues: [{ path: '', message: 'body is not valid JSON' }] }
+    return report ? { ...where, issues: [{ path: '', message: 'body is not valid JSON' }] } : undefined
   }
-  const result = await declared.validate(body)
-  if (!result.issues) return undefined
-  return {
-    ...where,
-    issues: result.issues.map(i => ({ path: issuePath(i), message: i.message })),
-  }
+
+  const { issues, conformed } = await conformBody(declared.validate, body)
+  if (conformed) c.res = withBody(res, body)
+  if (!report || issues.length === 0) return undefined
+  return { ...where, issues: issues.map(i => ({ path: issuePath(i), message: i.message })) }
 }
 
 /**
@@ -241,8 +333,7 @@ export function enforceDeclaredResponses(): MiddlewareHandler {
   return async (c, next) => {
     await next()
     const mode = declaredResponseMode(c)
-    if (mode === 'off') return
-    const violation = await checkDeclaredResponse(c)
+    const violation = await checkDeclaredResponse(c, { report: mode !== 'off' })
     if (!violation) return
     const known = await knownViolation(violation, c.res)
     if (known) {

@@ -59,14 +59,90 @@ describe('enforceDeclaredResponses', () => {
     expect(body.violation.issues.map(i => i.path).sort()).toEqual(['limit', 'page'])
   })
 
-  it('fails a field of the wrong type (null where the schema declares absent)', async () => {
-    const strict = new Hono()
-    strict.get('/',
-      describeRoute({ responses: { 200: { description: 'x', content: { 'application/json': { schema: resolver(z.object({ assignedTo: z.string().optional() })) } } } } }),
-      c => c.json({ assignedTo: null }),
-    )
-    const res = await appWith(strict).request('/api/hubs/h1/things')
-    expect(res.status).toBe(500)
+  describe('null where the schema declares the field absent (#2521)', () => {
+    /** A route returning `body` against `schema`, the way a handler returning a raw DB row does. */
+    function routeReturning(schema: z.ZodType, body: unknown) {
+      const r = new Hono()
+      r.get('/',
+        describeRoute({ responses: { 200: { description: 'x', content: { 'application/json': { schema: resolver(schema) } } } } }),
+        c => c.json(body),
+      )
+      return appWith(r)
+    }
+
+    it('sends an absent key for a `null` an optional field cannot carry', async () => {
+      const res = await routeReturning(
+        z.object({ id: z.string(), closedAt: z.string().optional(), parentId: z.uuid().optional(), fields: z.array(z.string()).optional() }),
+        { id: 'r1', closedAt: null, parentId: null, fields: null },
+      ).request('/api/hubs/h1/things')
+      expect(res.status).toBe(200)
+      const body = await res.json() as Record<string, unknown>
+      expect(body).toEqual({ id: 'r1' })
+      expect('closedAt' in body).toBe(false)
+    })
+
+    it('reaches nested objects and list items', async () => {
+      const res = await routeReturning(
+        z.object({ items: z.array(z.object({ id: z.string(), note: z.string().optional() })), meta: z.object({ cursor: z.string().optional() }) }),
+        { items: [{ id: 'a', note: null }, { id: 'b', note: 'kept' }], meta: { cursor: null } },
+      ).request('/api/hubs/h1/things')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ items: [{ id: 'a' }, { id: 'b', note: 'kept' }], meta: {} })
+    })
+
+    it('never touches a `null` the schema declares it accepts', async () => {
+      const res = await routeReturning(
+        z.object({ id: z.string(), approvedAt: z.string().nullable(), note: z.string().nullable().optional() }),
+        { id: 'r1', approvedAt: null, note: null },
+      ).request('/api/hubs/h1/things')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ id: 'r1', approvedAt: null, note: null })
+    })
+
+    it('leaves a `null` in a REQUIRED field alone and still reports it', async () => {
+      const res = await routeReturning(
+        z.object({ id: z.string(), name: z.string() }),
+        { id: 'r1', name: null },
+      ).request('/api/hubs/h1/things')
+      expect(res.status).toBe(500)
+      const body = await res.json() as { violation: { issues: { path: string }[] } }
+      expect(body.violation.issues.map(i => i.path)).toEqual(['name'])
+    })
+
+    it('conforms what it can of a body that is still non-conforming, and reports only the rest', async () => {
+      const r = routeReturning(
+        z.object({ name: z.string(), closedAt: z.string().optional() }),
+        { name: null, closedAt: null },
+      )
+      const res = await r.requestPlain('/api/hubs/h1/things')
+      // report mode: the response goes out with the conformable key dropped and the genuine violation intact.
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ name: null })
+    })
+
+    it('conforms in production too, where the check itself is off', async () => {
+      const r = new Hono()
+      r.get('/',
+        describeRoute({ responses: { 200: { description: 'x', content: { 'application/json': { schema: resolver(z.object({ closedAt: z.string().optional(), n: z.number() })) } } } } }),
+        c => c.json({ closedAt: null, n: 1 }),
+      )
+      const res = await appWith(r, { ENVIRONMENT: 'production' }).request('/api/hubs/h1/things')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ n: 1 })
+    })
+
+    it('keeps the status and headers of the response it rewrites', async () => {
+      const r = new Hono()
+      r.post('/',
+        describeRoute({ responses: { 201: { description: 'x', content: { 'application/json': { schema: resolver(z.object({ a: z.string().optional() })) } } } } }),
+        c => { c.header('X-Probe', 'kept'); return c.json({ a: null }, 201) },
+      )
+      const app = appWith(r)
+      const res = await app.app.request('/api/hubs/h1/things', { method: 'POST' }, { ENVIRONMENT: 'development' })
+      expect(res.status).toBe(201)
+      expect(res.headers.get('X-Probe')).toBe('kept')
+      expect(await res.json()).toEqual({})
+    })
   })
 
   it('passes a conforming response through unchanged', async () => {

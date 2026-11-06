@@ -143,6 +143,18 @@ describe('per-user audit key — wired', () => {
     expect(JSON.parse(plaintext)).toEqual({ topic: 'call-secret-2' })
   })
 
+  it('list() names the window it cut — the page and limit auditListResponseSchema requires (#2521)', async () => {
+    const audit = wiredAudit([reader().pubkey])
+    const user = 'cd'.repeat(32)
+    for (let i = 0; i < 3; i++) await audit.log('shiftCreated', user, { shiftId: `window-${i}` }, 'hub-ak-window')
+
+    expect(await audit.list('hub-ak-window', { limit: 2, page: 2 })).toMatchObject({ total: 3, page: 2, limit: 2 })
+    expect((await audit.list('hub-ak-window', { limit: 2, page: 2 })).entries).toHaveLength(1)
+    // An offset-addressed caller still gets the page its offset falls on.
+    expect(await audit.list('hub-ak-window', { limit: 2, offset: 2 })).toMatchObject({ page: 2, limit: 2 })
+    expect(await audit.list('hub-ak-window')).toMatchObject({ page: 1, limit: 50 })
+  })
+
   it('list() returns decrypted details; entryHash commits to the plaintext', async () => {
     const admin = reader()
     const audit = wiredAudit([admin.pubkey])

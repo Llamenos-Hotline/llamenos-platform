@@ -483,7 +483,7 @@ export class AuditService {
   async list(
     chain: string | null,
     filters: AuditListFilters = {},
-  ): Promise<{ entries: AuditEntry[]; total: number }> {
+  ): Promise<{ entries: AuditEntry[]; total: number; page: number; limit: number }> {
     const {
       action,
       actorPubkey,
@@ -496,6 +496,9 @@ export class AuditService {
       offset: rawOffset,
     } = filters
     const offset = page != null ? (page - 1) * limit : (rawOffset ?? 0)
+    // The list shape every paginated endpoint declares (`paginatedMeta`): the
+    // page and limit the rows were cut with, so a client can page on.
+    const window = { page: Math.floor(offset / limit) + 1, limit }
 
     const conditions = []
 
@@ -559,7 +562,7 @@ export class AuditService {
           matched.push({ ...row, details })
         }
       }
-      return { entries: matched.slice(offset, offset + limit), total: matched.length }
+      return { entries: matched.slice(offset, offset + limit), total: matched.length, ...window }
     }
 
     const [rows, [{ total }]] = await Promise.all([
@@ -577,14 +580,14 @@ export class AuditService {
     ])
 
     if (!this.cryptoDeps) {
-      return { entries: rows, total: Number(total) }
+      return { entries: rows, total: Number(total), ...window }
     }
     const keyCache = new Map<string, Uint8Array | null>()
     const entries: AuditEntry[] = []
     for (const row of rows) {
       entries.push({ ...row, details: await this.openDetails(row, keyCache) })
     }
-    return { entries, total: Number(total) }
+    return { entries, total: Number(total), ...window }
   }
 
   /**

@@ -143,7 +143,7 @@ blasts.get('/subscribers',
       offset: (query.page - 1) * query.limit,
     })
 
-    return c.json(result)
+    return c.json({ ...result, page: query.page, limit: query.limit })
   },
 )
 
