@@ -70,6 +70,17 @@ import { parse as parseYaml } from 'yaml'
  * never turns a refusal into a re-queue: the job counts as undeclared, and an
  * own-diff verdict that rested on one is reported `unreadable`, not asserted.
  *
+ * THE DECLARATION IS NOT AUTHENTICATED, AND THAT IS BOUNDED. A workflow
+ * command's annotation has no path and no step, and a PR can print any text a
+ * workflow step can, so a PR could print the sentence and fail on purpose. What
+ * that buys it: ONE visible re-queue of its own head (the cap comment is posted
+ * before arming, rule V), after which the second ejection is left for a human —
+ * and GitHub still enforces every required check on the merge group. It cannot
+ * merge anything, only spend one queue attempt; a PR that can edit the workflow
+ * files already controls its own CI outright. Requiring "no other failure
+ * annotation" was rejected: the real disk-wait step prints several `::error::`
+ * lines of its own, so the rule would refuse the very case it exists for.
+ *
  * The converse is the point of the skip: a genuine test failure carries no
  * such declaration, so it stays `own-diff` and stays refused. Declared jobs
  * re-queue under the same one-per-head cap as a timeout, because a runner that
