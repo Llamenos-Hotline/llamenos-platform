@@ -46,6 +46,7 @@ import type { MessagingAdapter, IncomingMessage } from '../../messaging/adapter'
 import { guardOutbound, SUPPRESSED_SEND_ERROR } from '../../messaging/suppression-guard'
 import { processBlastBatch } from '../../lib/blast-delivery-worker'
 import { freshHubDb } from './hub-shred-helpers'
+import { insertHubFounder } from '../helpers/hub-founder'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 vi.mock('@worker/lib/service-factories')
@@ -91,14 +92,26 @@ function incoming(body: string, sender: string, overrides: Partial<IncomingMessa
   return { channelType: 'sms', externalId: `SM-${crypto.randomUUID()}`, senderIdentifier: sender, body, timestamp: new Date().toISOString(), ...overrides }
 }
 
+async function ensureHub(hubId: string): Promise<void> {
+  const [existing] = await fresh.db.select({ id: schema.hubs.id }).from(schema.hubs).where(eq(schema.hubs.id, hubId))
+  if (existing) return
+  const now = new Date().toISOString()
+  await services.settings.createHub(
+    { id: hubId, name: hubId, slug: hubId, status: 'active', createdBy: 'a'.repeat(64), createdAt: now, updatedAt: now } as never,
+    await insertHubFounder(fresh.db),
+  )
+}
+
 async function webhook(
   hubId: string,
   body: string,
   sender: string = SENDER,
   overrides: Partial<IncomingMessage> = {},
 ): Promise<{ status: number }> {
-  // The hub the URL names exists: the webhook refuses one that names no hub (#2395).
-  await fresh.db.insert(schema.hubs).values({ id: hubId, name: hubId, slug: hubId, createdBy: 'a'.repeat(64) }).onConflictDoNothing()
+  // The hub the URL names exists (the webhook refuses one that names no hub,
+  // #2395), founded as every hub is: by an admin whose registered device makes
+  // them its reader. A hub with no admin reader refuses inbound messages (#1034).
+  await ensureHub(hubId)
   vi.mocked(getMessagingAdapterFromService).mockResolvedValue({
     validateWebhook: vi.fn().mockResolvedValue(true),
     parseIncomingMessage: vi.fn().mockResolvedValue(incoming(body, sender, overrides)),
