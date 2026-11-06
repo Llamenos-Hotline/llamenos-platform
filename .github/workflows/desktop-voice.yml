@@ -1,0 +1,94 @@
+# Desktop in-app audio (#1770): the pinned liblinphone SDK artifacts.
+#
+# Plan: docs/superpowers/plans/2026-10-10-desktop-sip-webrtc.md, Task 1.
+#
+# `gate` proves scripts/fetch-linphone-sdk.sh refuses what it claims to refuse
+# (a tampered digest, an incomplete artifact, a malformed or missing pin) by
+# feeding it those defects. `artifacts` then fetches each REAL pin on a runner
+# of that OS through the same gate, so a pin that no longer matches upstream —
+# a re-uploaded or replaced zip — fails here, not in a release build.
+#
+# Builds and gates only; it publishes nothing (CLAUDE.md "Publishing vs
+# deploying"). The bindgen crate's build + smoke steps join `artifacts` in plan
+# Task 2, and the Linux headless e2e job in Task 5.
+#
+# linux-x86_64 has no pin yet: upstream publishes no Linux SDK, and the Linux
+# source is an open operator decision on #1770 (see the checksums file header).
+name: desktop-voice
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/desktop/linphone-sdk-checksums.txt"
+      - "scripts/fetch-linphone-sdk.sh"
+      - "scripts/fetch-linphone-sdk.test.ts"
+      - ".github/workflows/desktop-voice.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/linphone-sdk-checksums.txt"
+      - "scripts/fetch-linphone-sdk.sh"
+      - "scripts/fetch-linphone-sdk.test.ts"
+      - ".github/workflows/desktop-voice.yml"
+  workflow_dispatch:
+
+concurrency:
+  # A superseded push cancels its own PR run (#2094); every other event gets a per-SHA group that nothing can cancel.
+  group: ${{ github.event_name == 'pull_request' && format('desktop-voice-pr-{0}', github.ref) || format('desktop-voice-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}  # deny-all; per-job permissions below
+
+env:
+  BUN_VERSION: "1.3.5"
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Test the checksum gate by breaking it
+        run: bun test scripts/fetch-linphone-sdk.test.ts
+
+  artifacts:
+    needs: gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: macos-arm64 }
+          - { os: windows-latest, target: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch pinned liblinphone SDK (checksum-gated)
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/fetch-linphone-sdk.sh "$TARGET"
+      - name: The installed tree records the digest it was verified against
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          recorded="$(cat "apps/desktop/vendor/linphone-sdk/$TARGET/.sdk-sha256")"
+          pinned="$(awk -v t="$TARGET" '!/^[[:space:]]*#/ && $1 == t { print $3 }' apps/desktop/linphone-sdk-checksums.txt)"
+          echo "recorded=$recorded pinned=$pinned"
+          [ -n "$pinned" ] && [ "$recorded" = "$pinned" ]

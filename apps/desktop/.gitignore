@@ -1,2 +1,4 @@
 target/
 gen/
+# Pinned liblinphone SDK, installed by scripts/fetch-linphone-sdk.sh (#1770)
+vendor/
