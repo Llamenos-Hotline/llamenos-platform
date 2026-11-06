@@ -131,13 +131,14 @@ export const files = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    // Nullable for ONE release only (expand/contract, docs/runbooks/migrations.md):
-    // the release this replaces never names these columns on INSERT, so they
-    // cannot be NOT NULL until it is gone. Every write of this release sets both,
-    // the hub-scoped routes refuse a row whose hub is not the path hub, and the
-    // next release tightens both to NOT NULL with a `constrain` annotation.
-    hubId: text('hub_id').references(() => hubs.id, { onDelete: 'cascade' }),
-    ownerKind: text('owner_kind', { enum: FILE_OWNER_KINDS }),
+    // NOT NULL is what makes the composite foreign keys below enforce anything
+    // (#2486): Postgres FKs are MATCH SIMPLE, so a NULL hub_id switches the
+    // (parent id, hub_id) check off, and a NULL owner_kind makes
+    // files_owner_check evaluate to NULL, which a CHECK admits.
+    hubId: text('hub_id')
+      .notNull()
+      .references(() => hubs.id, { onDelete: 'cascade' }),
+    ownerKind: text('owner_kind', { enum: FILE_OWNER_KINDS }).notNull(),
     conversationId: text('conversation_id').references(() => conversations.id, { onDelete: 'cascade' }),
     caseRecordId: text('case_record_id'),
     messageId: text('message_id'),
