@@ -98,6 +98,33 @@
 # volume hit zero, so free space when they started was ~10 GiB. A 12 GiB
 # threshold would have refused them, which is the outcome this issue asks for.
 #
+# WHICH VOLUME IT MEASURES, AND WHY THAT IS CHECKED, NOT ASSUMED
+# ---------------------------------------------------------------
+# The threshold is only meaningful on the filesystem the job writes to. It
+# measures VOLUME (/System/Volumes/Data), and `guard` first proves that every
+# path a job writes is on that same filesystem: RUNNER_TEMP (DerivedData and
+# build products), RUNNER_WORKSPACE (the checkout), the runner's own `_diag`
+# (the write that crashed the agent in #1665) and the CoreSimulator device set.
+# If any of them resolves elsewhere - a symlink onto the external
+# /Volumes/CIScratch SSD is the realistic way - the job is REFUSED, because a
+# guard reading 15 GiB free on the internal disk says nothing about the disk
+# the build is filling.
+#
+# Refused rather than measured-as-well, because on this host such a path is
+# broken twice over (measured 2026-11-05):
+#   * the runner service cannot read the external drive at all. macOS TCC
+#     "Removable Volumes" records the runner's node binary as DENIED, and a
+#     launchd-started process gets EPERM on /Volumes/CIScratch while an ssh
+#     session is allowed - so every shell-side check looks healthy. On
+#     2026-10-21 a DerivedData symlink there wedged this script's own
+#     directory walk for 36 minutes per job.
+#   * any grant would not survive: the runner self-updates into a new
+#     `externals.<version>/` directory, which changes the binary TCC keys on.
+# The runners start from launchd at boot, before an external mount is
+# guaranteed, too. CI's build data therefore stays on the internal volume, and
+# out-of-CI builds over ssh use the SSD instead (scripts/lib/ios-build-data.sh).
+# docs/runbooks/mac-ci-runner-disk.md has the layout and the operator options.
+#
 # MAC_DISK_WARN_FREE_GIB (default 16) is the band where the host still runs but
 # is drifting toward the refusal, emitted as a `::warning::` so it is visible
 # before it costs anybody a queue cycle.
@@ -109,7 +136,7 @@
 # USAGE
 #   mac-runner-disk-guard.sh report    # measure and print; never fails
 #   mac-runner-disk-guard.sh reclaim   # prune CI-owned space; never fails
-#   mac-runner-disk-guard.sh guard     # report, reclaim, re-measure, then gate
+#   mac-runner-disk-guard.sh guard     # check write paths, report, reclaim, re-measure, then gate
 #   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
@@ -564,6 +591,66 @@ reclaim_derived_data() {
   done
 }
 
+# ── write paths ─────────────────────────────────────────────────────────────
+
+# Mount point of the filesystem holding an existing path (follows symlinks, so
+# a symlinked directory reports where its data really goes). Mount points may
+# contain spaces: join every field from the 6th on. Empty when df cannot stat
+# the path, which on this host is what TCC's EPERM looks like.
+mount_point_of() {
+  df -P "$1" 2>/dev/null | awk 'NR==2 { s=$6; for (i=7; i<=NF; i++) s = s " " $i; print s }'
+}
+
+# Prints the marker line `write paths OK:` on success; the workflow's watchdog
+# fallback looks for it, so a hang INSIDE this check is a refusal, not a pass.
+check_write_paths() {
+  local want entry label path mp bad=0 runner_root
+  local -a paths
+  want="$(mount_point_of "$VOLUME")"
+  if [ -z "$want" ]; then
+    log "::error::ios runner REFUSED to run: disk-guard cannot read the filesystem of ${VOLUME}, the volume it measures. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+    return 1
+  fi
+
+  paths=("CoreSimulator device set|$SIM_DEVICES")
+  if [ -n "${RUNNER_TEMP:-}" ]; then
+    paths+=("RUNNER_TEMP (DerivedData, build products)|$RUNNER_TEMP")
+  fi
+  if [ -n "${RUNNER_WORKSPACE:-}" ]; then
+    paths+=("RUNNER_WORKSPACE (checkout)|$RUNNER_WORKSPACE")
+    runner_root="${RUNNER_WORKSPACE%%/_work/*}"
+    if [ "$runner_root" != "$RUNNER_WORKSPACE" ]; then
+      paths+=("runner _diag (the agent's own log)|$runner_root/_diag")
+    fi
+  fi
+
+  log "── write paths (must be on ${want}, the volume this guard measures) ──"
+  for entry in "${paths[@]}"; do
+    label="${entry%%|*}"
+    path="${entry#*|}"
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+      log "  absent, nothing to check: $label ($path)"
+      continue
+    fi
+    # Printed BEFORE the df, so a df that blocks on an unreadable volume
+    # leaves the path it blocked on as the last line of the log.
+    log "  checking: $label ($path)"
+    mp="$(mount_point_of "$path")"
+    if [ -z "$mp" ]; then
+      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on a filesystem this runner cannot even stat. On this host that is macOS TCC 'Removable Volumes' denying the runner service access to an external drive (a symlink onto /Volumes/CIScratch is the usual cause). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. CI build data must stay on ${want}; see docs/runbooks/mac-ci-runner-disk.md."
+      bad=1
+    elif [ "$mp" != "$want" ]; then
+      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on ${mp}, but this guard's ${MIN_FREE_GIB} GiB floor measures ${want}, so its verdict would say nothing about the disk this job fills. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. The runner service cannot use an external drive (TCC 'Removable Volumes'; launchd starts it before external mounts), so move that path back onto ${want}; see docs/runbooks/mac-ci-runner-disk.md."
+      bad=1
+    else
+      log "  ok: on $mp"
+    fi
+  done
+  [ "$bad" -eq 0 ] || return 1
+  log "write paths OK: every path this job writes is on ${want}"
+  log ""
+}
+
 # ── gate ────────────────────────────────────────────────────────────────────
 
 gate() {
@@ -740,6 +827,42 @@ EOF
     fi
   done
 
+  log "── selftest: write paths must be on the measured volume ──"
+  # /dev is its own filesystem (devfs on macOS, devtmpfs on Linux) on every
+  # host this runs on, so it stands in for "a path on another disk" without
+  # needing a mount. Subshells keep the overrides from leaking.
+  mkdir -p "$sandbox/write-same"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="$sandbox/write-same"; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  ok    accepts write paths on the measured volume"
+  else
+    log "  FAIL  refused write paths that are on the measured volume"
+    fails=$((fails + 1))
+  fi
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="/dev"; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted RUNNER_TEMP on a different filesystem from the measured volume"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses RUNNER_TEMP on a different filesystem"
+  fi
+  ln -s /dev "$sandbox/write-symlink"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-symlink"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted a device set SYMLINKED onto a different filesystem"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses a write path symlinked onto a different filesystem"
+  fi
+  ln -s "$sandbox/does-not-exist" "$sandbox/write-dangling"
+  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-dangling"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
+       check_write_paths ) >/dev/null 2>&1; then
+    log "  FAIL  accepted a DANGLING symlink as a write path (an unmounted drive looks like this)"
+    fails=$((fails + 1))
+  else
+    log "  ok    refuses a dangling symlink (what an unmounted drive leaves behind)"
+  fi
+
   log ""
   if [ "$fails" -ne 0 ]; then
     log "::error::mac-runner-disk-guard selftest FAILED: $fails case(s). Do not ship this script."
@@ -819,6 +942,12 @@ case "$MODE" in
   reclaim)  reclaim ;;
   install-timer) install_timer ;;
   guard)
+    # First, and before anything that walks a directory: if a write path is on
+    # an unreadable volume, report/reclaim would wedge on it (2026-10-21).
+    if ! check_write_paths; then
+      summarize "REFUSED: a path this job writes is not on ${VOLUME}, the volume the disk floor measures. Environmental, not this PR."
+      exit 1
+    fi
     report
     reclaim
     if gate; then

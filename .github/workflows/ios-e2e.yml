@@ -264,6 +264,11 @@ jobs:
       # normal short attempt. A genuinely starved host still blocks; a host
       # with room no longer waits on a path that is not about room.
       #
+      # The fallback is only taken once the guard has proved (its
+      # `write paths OK:` line) that RUNNER_TEMP, the checkout, the runner's
+      # _diag and the simulator device set are all on the volume df reads;
+      # without that, a df number is about a disk the job is not using.
+      #
       # DISK_MIN_FREE_GIB is exported to the script as MAC_DISK_MIN_FREE_GIB,
       # so the script's gate and the watchdog's df fallback cannot disagree.
       # Nothing here signals a process group: only the guard's own pid and
@@ -323,6 +328,16 @@ jobs:
               echo "::group::disk guard output before it hung (attempt $attempt)"
               cat "$guard_log"
               echo "::endgroup::"
+              # The guard checks that this job's write paths are on the volume
+              # it measures BEFORE it walks anything, and prints the marker on
+              # success. A hang before the marker is a hang on one of those
+              # paths (an external drive the runner cannot read), so the df
+              # fallback below would be measuring the wrong disk: refuse.
+              if ! grep -q '^write paths OK:' "$guard_log"; then
+                echo "::error::disk guard hung (attempt $attempt) while checking that this job's write paths are on ${volume} (last output: '${last_line}'). A path this job writes is on a filesystem the runner service cannot read (macOS TCC 'Removable Volumes' denies it the external drive), so no free-space reading here would describe it. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. See docs/runbooks/mac-ci-runner-disk.md."
+                printf 'REFUSED: guard hung checking write paths (%s). Environmental, not this PR.\n' "$last_line" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                exit 1
+              fi
               if awk -v f="$free_gib" -v m="$DISK_MIN_FREE_GIB" 'BEGIN { exit !(f >= m) }'; then
                 echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on ${volume}, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
                 printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df fallback: **%s GiB free**, need %s GiB. Proceeded without reclaim.\n\n' \
