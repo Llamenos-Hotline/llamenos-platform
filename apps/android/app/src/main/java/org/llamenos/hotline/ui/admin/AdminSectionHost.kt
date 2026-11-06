@@ -49,7 +49,7 @@ fun AdminSectionHost(
                 isLoading = uiState.isLoadingCategories,
                 error = uiState.categoriesError,
                 onAddCategory = { viewModel.showAddCategoryDialog() },
-                onDeleteCategory = { viewModel.deleteReportCategory(it) },
+                onDeleteCategory = { id, confirmation -> viewModel.deleteReportCategory(id, confirmation) },
                 modifier = Modifier.padding(16.dp),
             )
             "firehose" -> Text(stringResource(R.string.admin_nav_items_firehose))

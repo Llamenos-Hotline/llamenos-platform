@@ -214,6 +214,8 @@
     "phoneNumber": "Номер телефону",
     "reason": "Причина",
     "remove": "Зняти блокування",
+    "removeConfirmMessage": "Цей абонент знову зможе додзвонитися на лінію. Зберігається лише незворотний хеш номера, тому заблокувати його знову можна, лише якщо номер у вас залишився. Зняття блокування записується в журнал аудиту.",
+    "removeConfirmTitle": "Зняти це блокування?",
     "removeNumber": "Розблокувати номер",
     "title": "Список блокувань"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки."
+    "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки.",
+    "deleteConfirmTitle": "Видалити цю зміну?",
+    "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати."
   },
   "shortcuts": {
     "answerCall": "Відповісти на дзвінок",
@@ -2558,7 +2562,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "Зняти це блокування платформи?",
+    "removeConfirmMessage": "Цей абонент знову зможе додзвонитися до всіх хабів цієї інсталяції, а не лише до одного. Зберігається лише незворотний хеш номера, тому заблокувати його знову можна, лише якщо номер у вас залишився. Зняття блокування записується в журнал аудиту."
   },
   "hubOnboarding": {
     "channelEmail": "Електронна пошта",
@@ -4062,7 +4068,7 @@
     "fields": "Custom Fields",
     "default": "За замовчуванням",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "Архівувати цей тип звіту? Наявні звіти збережуть свій тип, але він стане недоступним для нових звітів.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -4078,7 +4084,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "Архівувати тип звіту",
+    "archiveAction": "Архівувати"
   },
   "roles": {
     "description": "Опис",

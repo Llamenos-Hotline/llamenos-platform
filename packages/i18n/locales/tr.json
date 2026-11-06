@@ -214,6 +214,8 @@
     "phoneNumber": "Telefon Numarası",
     "reason": "Sebep",
     "remove": "Engeli Kaldır",
+    "removeConfirmMessage": "Bu arayan kişi hatta yeniden ulaşabilecek. Numaranın yalnızca geri döndürülemez bir özeti saklanır; bu yüzden numarayı yeniden engelleyebilmeniz için numaranın hâlâ elinizde olması gerekir. Kaldırma işlemi denetim günlüğüne kaydedilir.",
+    "removeConfirmTitle": "Bu engel kaldırılsın mı?",
     "removeNumber": "Engeli Kaldır",
     "title": "Engel Listesi"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "Gelen aramaları almayı bırakacaksınız."
+    "clockOutMessage": "Gelen aramaları almayı bırakacaksınız.",
+    "deleteConfirmTitle": "Bu vardiya silinsin mi?",
+    "deleteConfirmMessage": "Bu vardiyadaki gönüllüler, vardiya saatleri boyunca arama almayı bırakacak. Bu saatleri başka bir vardiya kapsamıyorsa aramalar yedek gruba gider; yedek grup yoksa yanıtsız kalır. Bu işlem geri alınamaz."
   },
   "shortcuts": {
     "answerCall": "Aramayı cevapla",
@@ -3598,7 +3602,7 @@
     "name": "Ad",
     "archived": "Arşivlenmiş",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "Bu rapor türü arşivlensin mi? Mevcut raporlar türünü korur ancak yeni raporlar için kullanılamaz.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -3614,7 +3618,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "Rapor türünü arşivle",
+    "archiveAction": "Arşivle"
   },
   "roles": {
     "description": "Açıklama",
@@ -3918,7 +3924,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "Bu platform engeli kaldırılsın mı?",
+    "removeConfirmMessage": "Bu arayan kişi yalnızca bir merkeze değil, bu kurulumdaki tüm merkezlere yeniden ulaşabilecek. Numaranın yalnızca geri döndürülemez bir özeti saklanır; bu yüzden numarayı yeniden engelleyebilmeniz için numaranın hâlâ elinizde olması gerekir. Kaldırma işlemi denetim günlüğüne kaydedilir."
   },
   "timeline": {
     "errorTitle": "Yüklenemedi",

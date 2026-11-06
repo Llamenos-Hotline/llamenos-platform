@@ -563,6 +563,8 @@
     "phoneNumber": "Номер телефона",
     "reason": "Причина",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Этот абонент снова сможет дозвониться на линию. Хранится только необратимый хеш номера, поэтому заблокировать его снова можно, только если номер у вас остался. Снятие блокировки записывается в журнал аудита.",
+    "removeConfirmTitle": "Снять эту блокировку?",
     "removeNumber": "Разблокировать номер",
     "title": "Чёрный список"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Этот абонент снова сможет дозвониться во все хабы этой установки, а не только в один. Хранится только необратимый хеш номера, поэтому заблокировать его снова можно, только если номер у вас остался. Снятие блокировки записывается в журнал аудита.",
+    "removeConfirmTitle": "Снять эту блокировку платформы?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "Архивировать",
+    "archiveConfirm": "Архивировать этот тип отчёта? Существующие отчёты сохранят свой тип, но он станет недоступен для новых отчётов.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Архивировать тип отчёта",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "до",
     "users": "Волонтёры",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "Вы перестанете получать входящие звонки."
+    "clockOutMessage": "Вы перестанете получать входящие звонки.",
+    "deleteConfirmTitle": "Удалить эту смену?",
+    "deleteConfirmMessage": "Волонтёры этой смены перестанут получать звонки в её часы. Если эти часы не покрывает другая смена, звонки пойдут в резервную группу или останутся без ответа, если она не задана. Это действие нельзя отменить."
   },
   "shortcuts": {
     "answerCall": "Ответить на звонок",

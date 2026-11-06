@@ -553,6 +553,8 @@
     "phoneNumber": "Phone Number",
     "reason": "Reason",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "This caller will be able to reach the hotline again. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
+    "removeConfirmTitle": "Remove this ban?",
     "removeNumber": "Unban Number",
     "title": "Ban List"
   },
@@ -2903,6 +2905,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "This caller will be able to reach every hub on this deployment again, not only one. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
+    "removeConfirmTitle": "Remove this platform ban?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3223,9 +3227,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
+    "archiveAction": "Archive",
     "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Archive Report Type",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -3946,7 +3952,9 @@
     "until": "until",
     "users": "Volunteers",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "Delete this shift?",
+    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
   },
   "shortcuts": {
     "answerCall": "Answer call",

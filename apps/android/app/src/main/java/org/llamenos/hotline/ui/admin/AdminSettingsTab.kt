@@ -115,7 +115,7 @@ fun AdminSettingsTab(
                     isLoading = uiState.isLoadingCategories,
                     error = uiState.categoriesError,
                     onAddCategory = { viewModel.showAddCategoryDialog() },
-                    onDeleteCategory = { viewModel.deleteReportCategory(it) },
+                    onDeleteCategory = { id, confirmation -> viewModel.deleteReportCategory(id, confirmation) },
                 )
 
                 // --- Telephony Section ---
@@ -249,9 +249,26 @@ internal fun ReportCategoriesSection(
     isLoading: Boolean,
     error: String?,
     onAddCategory: () -> Unit,
-    onDeleteCategory: (String) -> Unit,
+    onDeleteCategory: (String, DeletionConfirmed) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var categoryToDelete by remember { mutableStateOf<org.llamenos.hotline.model.ReportCategory?>(null) }
+
+    // The category is archived, and the app has no way to un-archive it: ask first (#2540). The
+    // dialog is the only thing that mints the confirmation `onDeleteCategory` requires.
+    categoryToDelete?.let { category ->
+        DeletionConfirmed.Dialog(
+            action = AdminDeletion.REPORT_CATEGORY,
+            targetId = category.id,
+            subject = category.name,
+            onConfirmed = {
+                categoryToDelete = null
+                onDeleteCategory(category.id, it)
+            },
+            onDismiss = { categoryToDelete = null },
+        )
+    }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -317,7 +334,7 @@ internal fun ReportCategoriesSection(
                             modifier = Modifier.weight(1f),
                         )
                         IconButton(
-                            onClick = { onDeleteCategory(category.id) },
+                            onClick = { categoryToDelete = category },
                             modifier = Modifier.testTag("delete-category-${category.id}"),
                         ) {
                             Icon(

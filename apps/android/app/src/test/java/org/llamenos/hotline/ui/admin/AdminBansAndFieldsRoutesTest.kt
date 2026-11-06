@@ -152,25 +152,9 @@ class AdminBansAndFieldsRoutesTest {
             assertEquals(bans.single().getValue("phoneHash").jsonPrimitive.content, shown.phoneHash)
         }
 
-    @Test
-    fun `removing a ban unbans by the row's phoneHash`() = runTest(UnconfinedTestDispatcher()) {
-        bans += ban("+15551234567", "spam")
-        val vm = viewModel()
-        vm.loadBans()
-        advanceUntilIdle()
-        val shown = vm.uiState.value.bans.single()
-
-        vm.removeBan(shown.id)
-        advanceUntilIdle()
-
-        assertTrue(
-            "expected DELETE /api/hubs/hub-a/bans/<phoneHash>, saw ${routes.seen()}",
-            routes.seen().contains("DELETE /api/hubs/hub-a/bans/${shown.phoneHash}"),
-        )
-        assertNull(vm.uiState.value.bansError)
-        assertTrue("the server must no longer hold the ban", bans.isEmpty())
-        assertTrue("the reloaded list must be empty", vm.uiState.value.bans.isEmpty())
-    }
+    // Removing a ban and deleting a custom field are destructive, so they only run behind the
+    // confirmation dialog (#2540) and are asserted through the real tabs, route and all, in
+    // AdminDeletionConfirmationTest — a ViewModel call can no longer reach them without it.
 
     @Test
     fun `bulk import posts the phones and every one is banned`() = runTest(UnconfinedTestDispatcher()) {
@@ -230,25 +214,4 @@ class AdminBansAndFieldsRoutesTest {
             // The screen reloaded what the server now holds.
             assertEquals(listOf("age"), vm.uiState.value.customFields.map { it.name })
         }
-
-    @Test
-    fun `deleting a custom field saves the shorter list`() = runTest(UnconfinedTestDispatcher()) {
-        val vm = viewModel()
-        vm.saveCustomField(sampleField("f1", "age"))
-        advanceUntilIdle()
-        vm.saveCustomField(sampleField("f2", "city"))
-        advanceUntilIdle()
-        assertEquals(2, fields.size)
-
-        vm.deleteCustomField("f1")
-        advanceUntilIdle()
-
-        assertNull(vm.uiState.value.fieldsError)
-        assertEquals(listOf("city"), fields.map { it.jsonObject.getValue("name").jsonPrimitive.content })
-        assertEquals(listOf("city"), vm.uiState.value.customFields.map { it.name })
-        assertTrue(
-            "the 404 admin prefix must not be touched: ${routes.seen()}",
-            routes.seen().none { it.contains("/api/admin/") },
-        )
-    }
 }

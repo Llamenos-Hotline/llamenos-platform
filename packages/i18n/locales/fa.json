@@ -214,6 +214,8 @@
     "phoneNumber": "شماره تلفن",
     "reason": "دلیل",
     "remove": "حذف مسدودیت",
+    "removeConfirmMessage": "این تماس‌گیرنده دوباره می‌تواند به خط تماس برسد. فقط یک چکیدهٔ یک‌طرفهٔ شماره نگهداری می‌شود، پس فقط اگر هنوز شماره را داشته باشید می‌توانید دوباره آن را مسدود کنید. برداشتن مسدودسازی در گزارش ممیزی ثبت می‌شود.",
+    "removeConfirmTitle": "این مسدودسازی برداشته شود؟",
     "removeNumber": "رفع مسدودیت شماره",
     "title": "لیست مسدودی"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "دیگر تماس‌های ورودی را دریافت نخواهید کرد."
+    "clockOutMessage": "دیگر تماس‌های ورودی را دریافت نخواهید کرد.",
+    "deleteConfirmTitle": "این شیفت حذف شود؟",
+    "deleteConfirmMessage": "داوطلبان این شیفت در ساعات آن دیگر تماسی دریافت نخواهند کرد. اگر شیفت دیگری این ساعات را پوشش ندهد، تماس‌ها به گروه پشتیبان می‌روند یا اگر گروهی تعیین نشده باشد بی‌پاسخ می‌مانند. این کار قابل بازگشت نیست."
   },
   "shortcuts": {
     "answerCall": "پاسخ به تماس",
@@ -2564,7 +2568,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "این مسدودسازی پلتفرم برداشته شود؟",
+    "removeConfirmMessage": "این تماس‌گیرنده دوباره می‌تواند به همهٔ مراکز این استقرار برسد، نه فقط یکی. فقط یک چکیدهٔ یک‌طرفهٔ شماره نگهداری می‌شود، پس فقط اگر هنوز شماره را داشته باشید می‌توانید دوباره آن را مسدود کنید. برداشتن مسدودسازی در گزارش ممیزی ثبت می‌شود."
   },
   "import": {
     "deviceKeyLabel": "Device Key",
@@ -4219,7 +4225,7 @@
     "archived": "بایگانی شده",
     "name": "نام",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "این نوع گزارش بایگانی شود؟ گزارش‌های موجود نوع خود را حفظ می‌کنند، اما برای گزارش‌های جدید در دسترس نخواهد بود.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -4235,7 +4241,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "بایگانی نوع گزارش",
+    "archiveAction": "بایگانی"
   },
   "roles": {
     "description": "توضیحات",

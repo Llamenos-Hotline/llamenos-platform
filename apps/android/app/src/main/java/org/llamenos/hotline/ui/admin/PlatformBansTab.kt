@@ -57,6 +57,24 @@ fun PlatformBansTab(
     val uiState by viewModel.uiState.collectAsState()
     var addIdentifierHash by remember { mutableStateOf("") }
     var addReason by remember { mutableStateOf("") }
+    var banToRemove by remember { mutableStateOf<BanEntry?>(null) }
+
+    // Removing a platform ban re-admits the caller on every hub: ask first (#2540). The dialog is
+    // the only thing that mints the confirmation `removePlatformBan` requires, and the list and
+    // the search results share it.
+    banToRemove?.let { ban ->
+        DeletionConfirmed.Dialog(
+            action = AdminDeletion.PLATFORM_BAN,
+            targetId = ban.id,
+            subject = listOfNotNull(ban.identifierHash.take(16) + "...", ban.reason.takeIf { it.isNotBlank() })
+                .joinToString(" · "),
+            onConfirmed = {
+                banToRemove = null
+                viewModel.removePlatformBan(ban.id, it)
+            },
+            onDismiss = { banToRemove = null },
+        )
+    }
 
     // Add platform ban dialog
     if (uiState.showAddPlatformBanDialog) {
@@ -202,7 +220,7 @@ fun PlatformBansTab(
                             ) { ban ->
                                 PlatformBanCard(
                                     ban = ban,
-                                    onRemove = { viewModel.removePlatformBan(ban.id) },
+                                    onRemove = { banToRemove = ban },
                                 )
                             }
                         }
@@ -222,7 +240,7 @@ fun PlatformBansTab(
                         ) { ban ->
                             PlatformBanCard(
                                 ban = ban,
-                                onRemove = { viewModel.removePlatformBan(ban.id) },
+                                onRemove = { banToRemove = ban },
                             )
                         }
                     }

@@ -214,6 +214,8 @@
     "phoneNumber": "ስልክ ቁጥር",
     "reason": "ምክንያት",
     "remove": "እገዳ አስወግድ",
+    "removeConfirmMessage": "This caller will be able to reach the hotline again. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
+    "removeConfirmTitle": "Remove this ban?",
     "removeNumber": "ቁጥር ፈቅድ",
     "title": "የታገዱ ዝርዝር"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "Delete this shift?",
+    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
   },
   "shortcuts": {
     "answerCall": "ጥሪ መልስ",
@@ -3905,7 +3909,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "Archive Report Type",
+    "archiveAction": "Archive"
   },
   "roles": {
     "description": "መግለጫ",
@@ -4173,7 +4179,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "Remove this platform ban?",
+    "removeConfirmMessage": "This caller will be able to reach every hub on this deployment again, not only one. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log."
   },
   "no": "አይ",
   "inviteCreate": "ግብዣ ፍጠር",

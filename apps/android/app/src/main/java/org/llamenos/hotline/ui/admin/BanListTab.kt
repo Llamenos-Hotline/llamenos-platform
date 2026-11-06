@@ -61,6 +61,22 @@ fun BanListTab(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var banToRemove by remember { mutableStateOf<BanEntry?>(null) }
+
+    // Removing a ban re-admits the caller the hub excluded: ask first (#2540). The dialog is the
+    // only thing that mints the confirmation `removeBan` requires.
+    banToRemove?.let { ban ->
+        DeletionConfirmed.Dialog(
+            action = AdminDeletion.BAN,
+            targetId = ban.id,
+            subject = ban.reason.ifBlank { formatBanDate(ban.createdAt) },
+            onConfirmed = {
+                banToRemove = null
+                viewModel.removeBan(ban.id, it)
+            },
+            onDismiss = { banToRemove = null },
+        )
+    }
 
     // Add ban dialog
     if (uiState.showAddBanDialog) {
@@ -172,7 +188,7 @@ fun BanListTab(
                         ) { ban ->
                             BanCard(
                                 ban = ban,
-                                onRemove = { viewModel.removeBan(ban.id) },
+                                onRemove = { banToRemove = ban },
                             )
                         }
                     }
