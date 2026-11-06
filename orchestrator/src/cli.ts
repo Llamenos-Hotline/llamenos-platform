@@ -9,7 +9,11 @@ import { readAll, append, since, type RunRecord } from './ledger.js'
 import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt, quotaCooldowns } from './circuit.js'
 import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
-import { checkoutProvenance, ensureRuntimeCurrent, fleetRuntimeRoot, provenanceProblems } from './provenance.js'
+import {
+  assessRuntimeCurrency, checkoutProvenance, fleetRuntimeRoot, isFastForwardable, provenanceProblems,
+} from './provenance.js'
+import { describeSyncOutcome, liveRunPids, readSyncRecord } from './runtime-sync.js'
+import { expectedUnits, systemctlProbe, unitProblems, type UnitProbe } from './systemd-units.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
@@ -148,7 +152,18 @@ export function doctorHaltVerdict(halted: boolean, haltReason: string | undefine
   return { kind: 'halted-fail', fix: `halted: ${haltReason ?? 'halt file present'} — clear with: llamenos-fleet resume` }
 }
 
-export async function doctor(): Promise<number> {
+/** Seams for the checks that read the host rather than the repo, so tests can
+ *  point doctor at a fixture checkout and a fake systemd. */
+export interface DoctorDeps {
+  /** The checkout whose revision and shipped units are checked. Default: the runtime root. */
+  runtimeRoot?: string
+  /** Fleet state dir holding the run registry and the last sync record. */
+  stateDir?: string
+  probe?: UnitProbe
+}
+
+export async function doctor(deps: DoctorDeps = {}): Promise<number> {
+  const runtimeRoot = deps.runtimeRoot ?? REPO_ROOT
   const checks: [string, boolean, string][] = []
   // Declared here (not beside the lane-scope loop below, where it used to
   // live) so the fleet-env WARN case below and the lane-owned-path WARN case
@@ -157,6 +172,7 @@ export async function doctor(): Promise<number> {
   // A quota-shaped halt is printed as a WARN after the checks loop rather
   // than FAILing the `not halted` check inside it — see doctorHaltVerdict.
   let quotaHaltWarn: string | undefined
+  let runtimeWaitingWarn: string | undefined
   let ghOk = false
   try { execFileSync('gh', ['auth', 'status'], { stdio: 'pipe' }); ghOk = true } catch { /* not authed */ }
   checks.push(['gh authenticated', ghOk, 'run: gh auth login'])
@@ -277,13 +293,36 @@ export async function doctor(): Promise<number> {
   // condition silently disables merged code. Behind-ness names the commit
   // count AND the drifted orchestrator files, because "35 behind" does not
   // tell an operator that review-requesting is off.
-  const rt = checkoutProvenance(REPO_ROOT)
+  const rt = checkoutProvenance(runtimeRoot)
   const rtProblems = provenanceProblems(rt)
-  checks.push([
-    `fleet runtime current with origin/main (${rt.commit?.slice(0, 12) ?? '(unknown)'}${rt.branch !== undefined ? ` on ${rt.branch}` : ', detached'})`,
-    rtProblems.length === 0,
-    rtProblems.join('; '),
-  ])
+  // #2515: behind-ness that is ONLY waiting on an in-flight run is the one
+  // drift that heals itself (the wrapper's runtime-sync adopts it at the next
+  // idle run start), so it is a WARN like a quota halt — a FAIL would send the
+  // watchdog's repair agent at a condition that resolves when the run ends.
+  // Anything else, including behind-and-idle (the update should already have
+  // happened — the wrapper was bypassed or the sync step is broken), stays FAIL.
+  const liveRuns = liveRunPids(deps.stateDir, process.pid)
+  const rtWaiting = rtProblems.length > 0 && isFastForwardable(rt) && liveRuns.length > 0
+  if (rtWaiting) {
+    warnings++
+    runtimeWaitingWarn = `fleet runtime ${rt.commit?.slice(0, 12) ?? '?'} is ${rt.behindBy} commit(s) behind ${rt.upstream}` +
+      `${rt.driftedFiles.length > 0 ? ` (drifted: ${rt.driftedFiles.slice(0, 8).join(', ')})` : ''} — ` +
+      `update deferred behind in-flight fleet run(s) pid ${liveRuns.join(', ')}; the next run that starts idle adopts it`
+  } else {
+    checks.push([
+      `fleet runtime current with origin/main (${rt.commit?.slice(0, 12) ?? '(unknown)'}${rt.branch !== undefined ? ` on ${rt.branch}` : ', detached'})`,
+      rtProblems.length === 0,
+      rtProblems.join('; '),
+    ])
+  }
+
+  // #2515/#2512: the two other ways the fleet is inert while every check above
+  // is green — the units it expects are not scheduled, and the mover that
+  // keeps the checkout current has not run. WARN, not FAIL: a developer
+  // machine or CI runner legitimately has no fleet units.
+  const unitWarnings = unitProblems(expectedUnits(runtimeRoot), deps.probe ?? systemctlProbe)
+  warnings += unitWarnings.length
+  const syncRecord = readSyncRecord(deps.stateDir)
 
   // The dispatch dependency lives outside this repo (a symlink into the
   // claude-skills git repo, see paths.ts) and cannot be pinned by a llamenos
@@ -326,6 +365,17 @@ export async function doctor(): Promise<number> {
     warnings++
     process.stdout.write(` WARN  ${quotaHaltWarn}\n`)
   }
+  // Already counted in `warnings` where they were computed.
+  if (runtimeWaitingWarn !== undefined) process.stdout.write(` WARN  ${runtimeWaitingWarn}\n`)
+  for (const w of unitWarnings) process.stdout.write(` WARN  ${w}\n`)
+  if (syncRecord === undefined) {
+    warnings++
+    process.stdout.write(' WARN  no runtime-sync record on this host — bin/llamenos-fleet has never run the step that keeps this checkout current (#2515); ' +
+      'pull origin/main into the runtime checkout once, by hand, so the wrapper that carries it is the one in use\n')
+  } else if (syncRecord.outcome.kind === 'blocked' || syncRecord.outcome.kind === 'lock-timeout') {
+    warnings++
+    process.stdout.write(` WARN  last runtime-sync (${syncRecord.at}): ${describeSyncOutcome(syncRecord.outcome)}\n`)
+  }
 
   // F7: a lane's owned list being non-empty (checked above) says nothing
   // about whether the paths in it actually exist. A fragment can drift from
@@ -365,7 +415,7 @@ export async function doctor(): Promise<number> {
   // Issue #1801: the runtime's own revision is printed unconditionally, the
   // same way the dependency's is — an operator reading doctor output should
   // never have to wonder which checkout they are looking at.
-  process.stdout.write(`\nfleet runtime: ${REPO_ROOT}\n`)
+  process.stdout.write(`\nfleet runtime: ${runtimeRoot}\n`)
   process.stdout.write(
     `fleet runtime commit: ${rt.commit ?? '(unknown — not a readable git repo)'}` +
     `${rt.branch !== undefined ? ` on ${rt.branch}` : ' (detached HEAD)'}` +
@@ -813,13 +863,14 @@ function defaultIssueLinkDeps(): IssueLinkDeps {
 }
 
 async function runTick(): Promise<number> {
-  // Issue #1801: never dispatch yesterday's rails. The runtime checkout is
-  // fast-forwarded to origin/main when that is safe (on main, clean,
-  // verifiably behind); when it is not safe the pass is REFUSED outright —
-  // a fleet that stops and says so beats a fleet silently running code that
-  // was never reviewed into place. Runs before loadLanes so the pass reads
-  // lane fragments from the fresh tree when a fast-forward happened.
-  const currency = ensureRuntimeCurrent(REPO_ROOT, log)
+  // Issue #1801: never dispatch yesterday's rails. Moving the checkout to
+  // origin/main is the wrapper's job, before this process starts (#2515,
+  // runtime-sync.ts) — a pass must not swap files under itself or its peers.
+  // This gate only logs the revision and its distance from origin/main on
+  // every pass, and REFUSES when no automatic move can fix the checkout
+  // (dirty, detached, diverged, unverifiable): a fleet that stops and says so
+  // beats a fleet silently running code that was never reviewed into place.
+  const currency = assessRuntimeCurrency(REPO_ROOT, log)
   if (!currency.ok) {
     process.stderr.write(`ERROR: ${currency.reason ?? 'fleet runtime is not current'}\n`)
     return 1
