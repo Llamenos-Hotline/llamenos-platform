@@ -75,6 +75,11 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'bun.lockb',
   'lefthook.yml',
   '.github/workflows/',
+  // Sourced by fleet-verify.yml's merge_group reads, including the #1894
+  // queue guard, from the merge-group head (#2483): it is part of a required
+  // gate's logic, so it is owned like the workflow that sources it. Editing
+  // it must need the same review as editing the guard inline would.
+  '.github/scripts/gh-read.sh',
   'knope.toml',
   // The vitest configs. `fleet/verify` no longer loads a PR's copy of these
   // (verify.ts installs the base's bytes over it), but whatever lands on main
