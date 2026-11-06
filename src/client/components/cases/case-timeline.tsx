@@ -8,7 +8,7 @@ import {
   type CaseInteraction,
   type InteractionType,
 } from '@/lib/api'
-import { decryptMessage, encryptMessage } from '@/lib/platform'
+import { openCase, sealCase } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
 import { TimelineItem } from './timeline-item'
 import { Button } from '@/components/ui/button'
@@ -111,7 +111,8 @@ export function CaseTimeline({
       const newMap = new Map<string, string>()
       for (const interaction of interactions) {
         if (interaction.encryptedContent && interaction.contentEnvelopes?.length) {
-          const plaintext = await decryptMessage(
+          const plaintext = await openCase(
+            'comment',
             interaction.encryptedContent,
             interaction.contentEnvelopes,
           )
@@ -148,7 +149,7 @@ export function CaseTimeline({
         readers.push(publicKey)
       }
 
-      const encrypted = await encryptMessage(commentText.trim(), readers)
+      const encrypted = await sealCase('comment', commentText.trim(), readers)
 
       const typeHash = computeTypeHash?.('comment') ?? ''
 

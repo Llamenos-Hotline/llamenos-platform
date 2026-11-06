@@ -37,7 +37,7 @@ import {
   ChevronLeft, ChevronRight, GitMerge, Globe, CalendarDays, Table2,
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
-import { decryptMessage, encryptMessage } from '@/lib/platform'
+import { openCase, sealCase } from '@/lib/platform'
 import { useRecordFieldRecipients } from '@/lib/record-recipients'
 import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
@@ -603,7 +603,7 @@ function RecordCard({
     let cancelled = false
     const canDecrypt = hasDeviceKey && keyManager.isUnlocked()
     if (!canDecrypt || !record.encryptedSummary || !record.summaryEnvelopes?.length) return
-    decryptMessage(record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
+    openCase('summary', record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
       if (cancelled || !plaintext) return
       try {
         const summary = JSON.parse(plaintext)
@@ -753,7 +753,7 @@ function RecordDetail({
       setDecryptedSummary(null)
       return
     }
-    decryptMessage(record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
+    openCase('summary', record.encryptedSummary, record.summaryEnvelopes).then(plaintext => {
       if (cancelled || !plaintext) return
       try {
         setDecryptedSummary(JSON.parse(plaintext))
@@ -1018,7 +1018,7 @@ function DetailsTab({
       return
     }
     setDecrypting(true)
-    decryptMessage(record.encryptedFields, record.fieldEnvelopes).then(plaintext => {
+    openCase('fields', record.encryptedFields, record.fieldEnvelopes).then(plaintext => {
       if (cancelled) return
       if (plaintext) {
         try {
@@ -1058,7 +1058,7 @@ function DetailsTab({
           readerPubkeys.push(adminDecryptionPubkey)
         }
 
-        const encrypted = await encryptMessage(JSON.stringify(newValues), readerPubkeys)
+        const encrypted = await sealCase('fields', JSON.stringify(newValues), readerPubkeys)
         await updateRecord(record.id, {
           encryptedFields: encrypted.encryptedContent,
           fieldEnvelopes: encrypted.readerEnvelopes,

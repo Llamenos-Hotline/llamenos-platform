@@ -57,6 +57,8 @@ export type TauriIpcCommand =
   | 'hpke_open_from_state'
   | 'hpke_seal_key'
   | 'hpke_open_key_from_state'
+  | 'seal_case_from_state'
+  | 'open_case_from_state'
   | 'puk_create_from_state'
   | 'puk_rotate_from_state'
   | 'puk_unwrap_seed_from_state'
@@ -1118,6 +1120,65 @@ export async function decryptLegacyNote(
 ): Promise<import('@shared/types').NotePayload | null> {
   void packed
   return null
+}
+
+// ── Case records + case comments (sealed per purpose, #2499) ──────────
+
+/**
+ * What a case ciphertext is: a record's `summary`, its custom-field `fields`,
+ * or a timeline `comment`. It is the only choice the webview makes — the
+ * label, the AAD, the envelope addressing and the reader set's wire form are
+ * decided in `packages/crypto/src/case_record.rs` (the Tauri command
+ * deserialises this string into that crate's `CasePurpose`).
+ */
+export type CasePurpose = 'summary' | 'fields' | 'comment'
+
+/**
+ * Seal a case ciphertext as this device, for this device plus
+ * `readerPubkeys` (X25519). Passing this device's own Ed25519 account key is
+ * harmless: the crate recognises it as this device, which is always a reader.
+ *
+ * The desktop used to seal case records and comments with {@link encryptMessage}
+ * — `LABEL_MESSAGE`, no AAD — which iOS (and, for comments, nothing at all)
+ * could open. Now the webview cannot choose a label or AAD for a case
+ * ciphertext, because neither is an argument.
+ */
+export async function sealCase(
+  purpose: CasePurpose,
+  plaintext: string,
+  readerPubkeys: readonly string[],
+): Promise<EncryptedMessageResult> {
+  return tauriInvoke<EncryptedMessageResult>('seal_case_from_state', {
+    purpose,
+    plaintext,
+    readerPubkeys: [...readerPubkeys],
+  })
+}
+
+/**
+ * Open a case ciphertext as this device; Rust picks the envelope addressed to
+ * this device's X25519 key. Returns `null` when no envelope is addressed to
+ * this device (it is not a reader). An envelope that IS addressed to this
+ * device but does not open is reported, then `null` — it means the writer
+ * used another format, which is a defect to surface, not a permission boundary.
+ */
+export async function openCase(
+  purpose: CasePurpose,
+  encryptedContent: string,
+  readerEnvelopes: readonly RecipientEnvelope[],
+): Promise<string | null> {
+  const deviceState = await getDevicePubkeys()
+  if (!deviceState || !readerEnvelopes.some(e => e.pubkey === deviceState.encryptionPubkeyHex)) return null
+  try {
+    return await tauriInvoke<string>('open_case_from_state', {
+      purpose,
+      encryptedContent,
+      envelopes: readerEnvelopes,
+    })
+  } catch (err) {
+    reportEnvelopeOpenFailure(`case ${purpose}`, err)
+    return null
+  }
 }
 
 /**

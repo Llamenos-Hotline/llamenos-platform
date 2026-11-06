@@ -756,6 +756,77 @@ public func FfiConverterTypeDevicePukEnvelope_lower(_ value: DevicePukEnvelope) 
 
 
 /**
+ * A sealed case ciphertext in wire form: `encryptedContent` plus one envelope
+ * per reader. Maps directly onto `encryptedSummary`/`summaryEnvelopes`,
+ * `encryptedFields`/`fieldEnvelopes` and `encryptedContent`/`contentEnvelopes`.
+ */
+public struct EncryptedCaseCiphertext: Equatable, Hashable {
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    public let encryptedContent: String
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    public let readerEnvelopes: [RecipientKeyEnvelope]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * hex: iv(12) || ciphertext || tag(16)
+         */encryptedContent: String, 
+        /**
+         * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+         */readerEnvelopes: [RecipientKeyEnvelope]) {
+        self.encryptedContent = encryptedContent
+        self.readerEnvelopes = readerEnvelopes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension EncryptedCaseCiphertext: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEncryptedCaseCiphertext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EncryptedCaseCiphertext {
+        return
+            try EncryptedCaseCiphertext(
+                encryptedContent: FfiConverterString.read(from: &buf), 
+                readerEnvelopes: FfiConverterSequenceTypeRecipientKeyEnvelope.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: EncryptedCaseCiphertext, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.encryptedContent, into: &buf)
+        FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.readerEnvelopes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedCaseCiphertext_lift(_ buf: RustBuffer) throws -> EncryptedCaseCiphertext {
+    return try FfiConverterTypeEncryptedCaseCiphertext.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedCaseCiphertext_lower(_ value: EncryptedCaseCiphertext) -> RustBuffer {
+    return FfiConverterTypeEncryptedCaseCiphertext.lower(value)
+}
+
+
+/**
  * Encrypted device key blob for credential-protected storage.
  */
 public struct EncryptedDeviceKeys: Equatable, Hashable {
@@ -1962,6 +2033,99 @@ public func FfiConverterTypeSigchainVerifiedState_lower(_ value: SigchainVerifie
     return FfiConverterTypeSigchainVerifiedState.lower(value)
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * What a case ciphertext is. The only choice a caller of this module makes —
+ * it names the thing being sealed, never how. Every binding carries it as a
+ * closed type: a UniFFI enum (Swift/Kotlin), a lowercase string the Tauri IPC
+ * deserialises into this enum (`"summary"`/`"fields"`/`"comment"`), and a byte
+ * on the server's C ABI.
+ *
+ * `repr(u8)` because the server's C ABI carries it as a byte; the mapping is
+ * closed ([`CasePurpose::from_u8`] rejects anything else).
+ */
+
+public enum CasePurpose: UInt8, Equatable, Hashable {
+    
+    /**
+     * A case record's summary (title, description, status display).
+     */
+    case summary = 0
+    /**
+     * A case record's custom-field values.
+     */
+    case fields = 1
+    /**
+     * A comment interaction on a case record's timeline.
+     */
+    case comment = 2
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension CasePurpose: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCasePurpose: FfiConverterRustBuffer {
+    typealias SwiftType = CasePurpose
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CasePurpose {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .summary
+        
+        case 2: return .fields
+        
+        case 3: return .comment
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CasePurpose, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .summary:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .fields:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .comment:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCasePurpose_lift(_ buf: RustBuffer) throws -> CasePurpose {
+    return try FfiConverterTypeCasePurpose.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCasePurpose_lower(_ value: CasePurpose) -> RustBuffer {
+    return FfiConverterTypeCasePurpose.lower(value)
+}
+
+
 
 public enum CryptoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -2776,6 +2940,19 @@ public func mobileDecryptHubEventTrial(encryptedHex: String)throws  -> [String] 
 })
 }
 /**
+ * Open a field sealed by `mobile_encrypt_hub_field` (or the desktop
+ * `encrypt_hub_field`) under the stored hub key.
+ */
+public func mobileDecryptHubField(packedHex: String, hubId: String, label: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(
+        FfiConverterString.lower(packedHex),
+        FfiConverterString.lower(hubId),
+        FfiConverterString.lower(label),$0
+    )
+})
+}
+/**
  * Decrypt a conversation message (`LABEL_MESSAGE`) as this device, whether a
  * client or the server sealed it. Takes all of the message's reader envelopes.
  */
@@ -2849,6 +3026,20 @@ public func mobileEncryptDraft(plaintext: String, hubId: String)throws  -> Strin
     uniffi_llamenos_core_fn_func_mobile_encrypt_draft(
         FfiConverterString.lower(plaintext),
         FfiConverterString.lower(hubId),$0
+    )
+})
+}
+/**
+ * Seal a small hub-scoped field (tag label, tag category, team name) under the
+ * stored hub key. `label` is bound as AAD and must be a registered
+ * domain-separation label. The hub key never leaves Rust.
+ */
+public func mobileEncryptHubField(plaintext: String, hubId: String, label: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_encrypt_hub_field(
+        FfiConverterString.lower(plaintext),
+        FfiConverterString.lower(hubId),
+        FfiConverterString.lower(label),$0
     )
 })
 }
@@ -3116,6 +3307,20 @@ public func mobileLock()  {try! rustCall() {
 }
 }
 /**
+ * Open a case ciphertext as this device. Takes all of its envelopes; Rust
+ * picks the one addressed to this device's X25519 key. Neither the device key
+ * nor the content key reaches Swift or Kotlin.
+ */
+public func mobileOpenCase(purpose: CasePurpose, encryptedContent: String, envelopes: [RecipientKeyEnvelope])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_open_case(
+        FfiConverterTypeCasePurpose_lower(purpose),
+        FfiConverterString.lower(encryptedContent),
+        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
+    )
+})
+}
+/**
  * Create the initial PUK (generation 1), wrapped to the device's X25519 pubkey.
  * Returns JSON: { pukState, seedHex, envelope }
  */
@@ -3166,6 +3371,24 @@ public func mobilePukUnwrapSeed(envelope: HpkeEnvelope, expectedLabel: String, a
 public func mobileRandomBytesHex() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_llamenos_core_fn_func_mobile_random_bytes_hex($0
+    )
+})
+}
+/**
+ * Seal a case ciphertext — a record's summary or fields, or a comment — as
+ * this device, for this device plus `reader_pubkeys` (X25519, hex).
+ *
+ * There is no label and no AAD argument: `crate::case_record` derives both
+ * from `purpose`, so Swift and Kotlin cannot seal a case record under
+ * `LABEL_MESSAGE` or without its AAD (the #2499 split). The result maps onto
+ * the API's `encrypted*` / `*Envelopes` pair unchanged.
+ */
+public func mobileSealCase(purpose: CasePurpose, plaintext: String, readerPubkeys: [String])throws  -> EncryptedCaseCiphertext  {
+    return try  FfiConverterTypeEncryptedCaseCiphertext_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_seal_case(
+        FfiConverterTypeCasePurpose_lower(purpose),
+        FfiConverterString.lower(plaintext),
+        FfiConverterSequenceString.lower(readerPubkeys),$0
     )
 })
 }
@@ -3441,6 +3664,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial() != 46122) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field() != 13981) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3457,6 +3683,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_encrypt_draft() != 30232) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_encrypt_hub_field() != 34062) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_encrypt_message() != 47681) {
@@ -3522,6 +3751,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_lock() != 62527) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3535,6 +3767,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956) {

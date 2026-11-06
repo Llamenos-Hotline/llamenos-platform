@@ -213,6 +213,8 @@ pub fn run() {
             crypto::hpke_open_from_state,
             crypto::hpke_seal_key,
             crypto::hpke_open_key_from_state,
+            crypto::seal_case_from_state,
+            crypto::open_case_from_state,
             // PUK (Per-User Key — seed stays in Rust CryptoState)
             crypto::puk_create_from_state,
             crypto::puk_rotate_from_state,

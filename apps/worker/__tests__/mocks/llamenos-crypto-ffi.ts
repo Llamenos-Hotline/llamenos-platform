@@ -139,3 +139,55 @@ export function symmetricDecrypt(key: Uint8Array, data: Uint8Array, aad: Uint8Ar
   const cipher = gcm(key, nonce, aad)
   return cipher.decrypt(ciphertext)
 }
+
+// ---------------------------------------------------------------------------
+// Case records + case comments (#2499)
+// ---------------------------------------------------------------------------
+//
+// The real `caseSeal` / `caseOpen` run `packages/crypto/src/case_record.rs`.
+// This stand-in exists only so Node-side unit tests can import code that seals
+// case ciphertexts (the sample seeder). It is built on this file's simplified
+// HPKE, so its bytes are NOT the real wire format and nothing here may be read
+// as evidence of interop: the server's real case seal is pinned against the
+// server-persisted vectors by
+// `apps/worker/__tests__/integration-bun/case-record-vectors.test.ts`, on the
+// genuine native library.
+
+export const CasePurpose = { summary: 0, fields: 1, comment: 2 } as const
+export type CasePurpose = keyof typeof CasePurpose
+
+export interface EncryptedCaseCiphertext {
+  encryptedContent: string
+  readerEnvelopes: { pubkey: string; enc: string; ct: string }[]
+}
+
+const MOCK_CASE_LABEL: Record<CasePurpose, string> = {
+  summary: 'mock:case-summary',
+  fields: 'mock:case-fields',
+  comment: 'mock:case-comment',
+}
+
+const toHex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+const fromHex = (h: string) => new Uint8Array((h.match(/.{2}/g) ?? []).map(x => parseInt(x, 16)))
+
+export function caseSeal(purpose: CasePurpose, plaintext: string, readerPubkeys: readonly string[]): EncryptedCaseCiphertext {
+  const readers = [...new Set(readerPubkeys.map(p => p.toLowerCase()))]
+  if (readers.length === 0) throw new Error('case ciphertext has no readers')
+  const label = new TextEncoder().encode(MOCK_CASE_LABEL[purpose])
+  const key = randomBytes(32)
+  const encryptedContent = toHex(symmetricEncrypt(key, new TextEncoder().encode(plaintext), label))
+  const readerEnvelopes = readers.map((pubkey) => {
+    const sealed = hpkeSeal(fromHex(pubkey), key, label, label)
+    return { pubkey, enc: toHex(sealed.subarray(0, 32)), ct: toHex(sealed.subarray(32)) }
+  })
+  return { encryptedContent, readerEnvelopes }
+}
+
+export function caseOpen(purpose: CasePurpose, secretKey: Uint8Array, sealed: EncryptedCaseCiphertext): string {
+  const pubkey = toHex(x25519.getPublicKey(secretKey))
+  const env = sealed.readerEnvelopes.find(e => e.pubkey === pubkey)
+  if (!env) throw new Error('no envelope for this reader')
+  const label = new TextEncoder().encode(MOCK_CASE_LABEL[purpose])
+  const key = hpkeOpen(secretKey, concatBytes(fromHex(env.enc), fromHex(env.ct)), label, label)
+  return new TextDecoder().decode(symmetricDecrypt(key, fromHex(sealed.encryptedContent), label))
+}

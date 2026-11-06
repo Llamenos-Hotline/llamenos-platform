@@ -71,6 +71,24 @@ const lib = dlopen(LIB_PATH, {
     ],
     returns: FFIType.i32,
   },
+  ffi_case_seal: {
+    args: [
+      FFIType.u8,               // purpose
+      FFIType.ptr, FFIType.u64, // plaintext
+      FFIType.ptr, FFIType.u64, // readers (n x 32-byte X25519)
+      FFIType.ptr, FFIType.u64, // out (JSON)
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_case_open: {
+    args: [
+      FFIType.u8,               // purpose
+      FFIType.ptr, FFIType.u64, // secret key
+      FFIType.ptr, FFIType.u64, // sealed JSON
+      FFIType.ptr, FFIType.u64, // out (plaintext)
+    ],
+    returns: FFIType.i32,
+  },
 })
 
 class CryptoError extends Error {
@@ -251,4 +269,71 @@ export function buildAuthMessage(
   )
   if (written < 0) checkResult(written)
   return out.subarray(0, written)
+}
+
+// ── Case records + case comments (#2499) ─────────────────────────────
+
+/**
+ * What a case ciphertext is — the only choice a caller makes. The byte values
+ * are `packages/crypto/src/case_record.rs` `CasePurpose`; the label and AAD for
+ * each are decided in Rust, never here.
+ */
+export const CasePurpose = { summary: 0, fields: 1, comment: 2 } as const
+export type CasePurpose = keyof typeof CasePurpose
+
+/** A sealed case ciphertext in wire form (all hex). */
+export interface EncryptedCaseCiphertext {
+  encryptedContent: string
+  readerEnvelopes: { pubkey: string; enc: string; ct: string }[]
+}
+
+/**
+ * Seal a case record's summary or fields, or a case comment, for
+ * `readerPubkeys` (X25519, hex). Delegates to `case_record::seal`.
+ */
+export function caseSeal(
+  purpose: CasePurpose,
+  plaintext: string,
+  readerPubkeys: readonly string[],
+): EncryptedCaseCiphertext {
+  const pt = new TextEncoder().encode(plaintext)
+  const readers = new Uint8Array(readerPubkeys.length * 32)
+  readerPubkeys.forEach((pk, i) => {
+    const bytes = Uint8Array.from(Buffer.from(pk, 'hex'))
+    if (bytes.length !== 32) throw new CryptoError(-5, `case reader ${i} is not a 32-byte X25519 key`)
+    readers.set(bytes, i * 32)
+  })
+  // hex content (2 x (iv + pt + tag)) + per reader (64 pubkey + 64 enc + 96 ct
+  // hex + JSON punctuation) + the wrapper object.
+  const out = new Uint8Array(2 * (pt.length + 28) + readerPubkeys.length * 256 + 64)
+  const written = lib.symbols.ffi_case_seal(
+    CasePurpose[purpose],
+    pt.length ? ptr(pt) : null, pt.length,
+    ptr(readers), readers.length,
+    ptr(out), out.length,
+  )
+  if (written < 0) checkResult(written)
+  return JSON.parse(new TextDecoder().decode(out.subarray(0, written))) as EncryptedCaseCiphertext
+}
+
+/**
+ * Open a case ciphertext with a reader's X25519 secret. The server holds no
+ * reader secret for any case record; this exists so the server-persisted
+ * vectors are verified by the same library the clients run.
+ */
+export function caseOpen(
+  purpose: CasePurpose,
+  secretKey: Uint8Array,
+  sealed: EncryptedCaseCiphertext,
+): string {
+  const json = new TextEncoder().encode(JSON.stringify(sealed))
+  const out = new Uint8Array(json.length)
+  const written = lib.symbols.ffi_case_open(
+    CasePurpose[purpose],
+    ptr(secretKey), secretKey.length,
+    ptr(json), json.length,
+    ptr(out), out.length,
+  )
+  if (written < 0) checkResult(written)
+  return new TextDecoder().decode(out.subarray(0, written))
 }

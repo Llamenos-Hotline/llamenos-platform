@@ -731,6 +731,140 @@ pub extern "C" fn ffi_ed25519_pubkey_from_seed(
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
+// ── Case records + case comments, sealed per purpose (#2499) ─────────
+
+/// Seal a case ciphertext (a record's summary or fields, or a comment) for
+/// `readers` — `readers_len / 32` X25519 public keys, concatenated.
+///
+/// `purpose` is the closed [`crate::case_record::CasePurpose`] byte
+/// (0 summary, 1 fields, 2 comment). There is no label and no AAD argument:
+/// `crate::case_record` derives both, exactly as it does for every client.
+///
+/// Writes the sealed ciphertext as UTF-8 JSON
+/// `{"encryptedContent":hex,"readerEnvelopes":[{"pubkey","enc","ct"}]}` into
+/// `out`. Returns the number of bytes written, or a negative error code.
+#[no_mangle]
+pub extern "C" fn ffi_case_seal(
+    purpose: u8,
+    plaintext: *const u8,
+    pt_len: usize,
+    readers: *const u8,
+    readers_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(readers, out);
+    check_input_size!(pt_len, readers_len);
+
+    let purpose = match crate::case_record::CasePurpose::from_u8(purpose) {
+        Ok(p) => p,
+        Err(e) => {
+            set_error(&e.to_string());
+            return -5;
+        }
+    };
+    if readers_len == 0 || !readers_len.is_multiple_of(32) {
+        set_error("readers must be one or more concatenated 32-byte X25519 keys");
+        return -5;
+    }
+    let pt_slice = nullable_slice!(plaintext, pt_len);
+    let Ok(pt_str) = std::str::from_utf8(pt_slice) else {
+        set_error("case plaintext must be valid UTF-8");
+        return -5;
+    };
+    let reader_slice = unsafe { std::slice::from_raw_parts(readers, readers_len) };
+    let reader_pubkeys: Vec<String> = reader_slice.chunks_exact(32).map(hex::encode).collect();
+
+    let sealed = match crate::case_record::seal(purpose, pt_str, &reader_pubkeys) {
+        Ok(s) => s,
+        Err(e) => {
+            set_error(&format!("case seal failed: {e}"));
+            return -1;
+        }
+    };
+    let json = match serde_json::to_vec(&sealed) {
+        Ok(j) => j,
+        Err(e) => {
+            set_error(&format!("internal error serialising case ciphertext: {e}"));
+            return -1;
+        }
+    };
+    check_output_size!(out_len, json.len());
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, json.len()) };
+    out_slice.copy_from_slice(&json);
+    json.len() as i32
+}
+
+/// Open a case ciphertext with a reader's X25519 secret. `sealed_json` is the
+/// JSON [`ffi_case_seal`] writes (and the API stores). The envelope addressed
+/// to the secret's own public key is the one opened.
+///
+/// Writes the UTF-8 plaintext into `out`; returns bytes written, or a negative
+/// error code. The server holds no reader secret for any case record — this
+/// exists so the server-persisted vectors can be verified by the same library
+/// the clients run (`gen-case-record-vectors.ts`, the worker's conformance test).
+#[no_mangle]
+pub extern "C" fn ffi_case_open(
+    purpose: u8,
+    secret_key: *const u8,
+    sk_len: usize,
+    sealed_json: *const u8,
+    sealed_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(secret_key, sealed_json, out);
+    check_input_size!(sealed_len);
+
+    let purpose = match crate::case_record::CasePurpose::from_u8(purpose) {
+        Ok(p) => p,
+        Err(e) => {
+            set_error(&e.to_string());
+            return -5;
+        }
+    };
+    if sk_len != 32 {
+        set_error("case reader secret key must be 32 bytes");
+        return -5;
+    }
+    let mut sk = [0u8; 32];
+    sk.copy_from_slice(unsafe { std::slice::from_raw_parts(secret_key, 32) });
+    let sealed_slice = unsafe { std::slice::from_raw_parts(sealed_json, sealed_len) };
+    let sealed: crate::case_record::EncryptedCaseCiphertext =
+        match serde_json::from_slice(sealed_slice) {
+            Ok(s) => s,
+            Err(e) => {
+                sk.zeroize();
+                set_error(&format!("case ciphertext JSON is malformed: {e}"));
+                return -5;
+            }
+        };
+    let secret = x25519_dalek::StaticSecret::from(sk);
+    sk.zeroize();
+    let pubkey_hex = hex::encode(x25519_dalek::PublicKey::from(&secret).as_bytes());
+    let secret_hex = zeroize::Zeroizing::new(hex::encode(secret.to_bytes()));
+
+    let plaintext = match crate::case_record::open(
+        purpose,
+        &sealed.encrypted_content,
+        &sealed.reader_envelopes,
+        &pubkey_hex,
+        &secret_hex,
+    ) {
+        Ok(p) => zeroize::Zeroizing::new(p),
+        Err(_) => {
+            set_error("case open failed: decryption error");
+            return -1;
+        }
+    };
+    check_output_size!(out_len, plaintext.len());
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, plaintext.len()) };
+    out_slice.copy_from_slice(plaintext.as_bytes());
+    plaintext.len() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
