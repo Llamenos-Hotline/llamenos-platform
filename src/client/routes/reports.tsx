@@ -29,7 +29,7 @@ import {
   FileText, Plus, Lock, Send, Loader2, Clock,
   CheckCircle2, AlertCircle, UserCheck, X, Paperclip,
 } from 'lucide-react'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 export const Route = createFileRoute('/reports')({
   component: ReportsPage,
@@ -141,7 +141,7 @@ function ReportsPage() {
       // Build reader list: current user + admin decryption pubkey
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const encrypted = await encryptMessage(replyText.trim(), readerPubkeys)
 
@@ -164,7 +164,7 @@ function ReportsPage() {
       // Build reader list: current user + admin decryption pubkey
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const placeholder = t('reports.filesAttached', { defaultValue: '[Files attached]', count: fileIds.length })
       const encrypted = await encryptMessage(placeholder, readerPubkeys)

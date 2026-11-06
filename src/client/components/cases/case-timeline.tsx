@@ -4,11 +4,11 @@ import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 import {
   listInteractions,
-  createInteraction,
   type CaseInteraction,
   type InteractionType,
 } from '@/lib/api'
-import { openCase, sealCase } from '@/lib/platform'
+import { openCase } from '@/lib/platform'
+import { postCaseComment } from '@/lib/case-writes'
 import * as keyManager from '@/lib/key-manager'
 import { TimelineItem } from './timeline-item'
 import { Button } from '@/components/ui/button'
@@ -27,7 +27,6 @@ import {
   History,
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
-import { hubAdminReaders } from '@/lib/admin-recipient'
 
 // --- Filter types for dropdown ---
 
@@ -46,6 +45,8 @@ const FILTER_TYPES = [
 export interface CaseTimelineProps {
   /** Record ID to load interactions for */
   recordId: string
+  /** The record's own hub (`record.hubId`): comments are sealed to its admins and filed in it. */
+  hubId: string
   /** Map of pubkey -> display name for resolving author names */
   volunteerNames: Record<string, string>
   /** Reader pubkeys for encrypting new comments */
@@ -58,6 +59,7 @@ export interface CaseTimelineProps {
 
 export function CaseTimeline({
   recordId,
+  hubId,
   volunteerNames,
   readerPubkeys,
   statusLabels,
@@ -79,14 +81,14 @@ export function CaseTimeline({
   // --- Load interactions ---
   const loadInteractions = useCallback(async () => {
     try {
-      const result = await listInteractions(recordId, { limit: 200 })
+      const result = await listInteractions(recordId, { limit: 200 }, hubId)
       setInteractions(result.interactions)
     } catch {
       toast(t('cases.timeline.loadError', { defaultValue: 'Failed to load timeline' }), 'error')
     } finally {
       setLoading(false)
     }
-  }, [recordId, t, toast])
+  }, [recordId, hubId, t, toast])
 
   useEffect(() => {
     setLoading(true)
@@ -96,12 +98,12 @@ export function CaseTimeline({
   // Poll for updates
   useEffect(() => {
     const interval = setInterval(() => {
-      listInteractions(recordId, { limit: 200 })
+      listInteractions(recordId, { limit: 200 }, hubId)
         .then(result => setInteractions(result.interactions))
         .catch(() => { /* silent background refresh */ })
     }, 15_000)
     return () => clearInterval(interval)
-  }, [recordId])
+  }, [recordId, hubId])
 
   // --- Decrypt interaction content ---
   useEffect(() => {
@@ -142,25 +144,15 @@ export function CaseTimeline({
     if (!commentText.trim() || !hasDeviceKey || !publicKey) return
     setSending(true)
     try {
-      const readers = [...readerPubkeys]
-      // Every admin of the hub, not one env-configured key (#1035).
-      for (const admin of await hubAdminReaders()) {
-        if (!readers.includes(admin)) readers.push(admin)
-      }
-      if (!readers.includes(publicKey)) {
-        readers.push(publicKey)
-      }
-
-      const encrypted = await sealCase('comment', commentText.trim(), readers)
-
-      const typeHash = computeTypeHash?.('comment') ?? ''
-
-      const newInteraction = await createInteraction(recordId, {
-        interactionType: 'comment',
-        encryptedContent: encrypted.encryptedContent,
-        contentEnvelopes: encrypted.readerEnvelopes,
-        interactionTypeHash: typeHash,
-      })
+      // Sealed to the case's readers and every admin of the RECORD's hub
+      // (#1035) — not the hub being browsed — and filed in that hub.
+      const newInteraction = await postCaseComment(
+        { id: recordId, hubId },
+        commentText.trim(),
+        publicKey,
+        readerPubkeys,
+        computeTypeHash?.('comment') ?? '',
+      )
 
       setInteractions(prev => [newInteraction, ...prev])
       setDecryptedMap(prev => {
@@ -174,7 +166,7 @@ export function CaseTimeline({
     } finally {
       setSending(false)
     }
-  }, [commentText, hasDeviceKey, publicKey, readerPubkeys, recordId, computeTypeHash, t, toast])
+  }, [commentText, hasDeviceKey, publicKey, readerPubkeys, recordId, hubId, computeTypeHash, t, toast])
 
   // --- Render ---
 

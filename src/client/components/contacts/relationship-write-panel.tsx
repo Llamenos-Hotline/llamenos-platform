@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Input } from '@/components/ui/input'
 import { Trash2, Plus, Loader2 } from 'lucide-react'
 import { useToast } from '@/lib/toast'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface RelationshipWritePanelProps {
   contactId: string
@@ -34,7 +34,7 @@ export function RelationshipWritePanel({
     if (!targetContactId || !relType) return
     setSaving(true)
     try {
-      const readerPubkeys: string[] = await hubAdminReaders()
+      const readerPubkeys: string[] = await activeHubAdminReaders()
       const encrypted = await encryptMessage('', readerPubkeys)
       const rel = await createContactRelationship(contactId, {
         contactIdB: targetContactId,

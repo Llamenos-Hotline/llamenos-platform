@@ -316,7 +316,7 @@ describe('updating an existing record\'s fields', () => {
       return serverTiers([assignee.account])
     })
     const readers = await resolveRecordReaders({
-      recordId: 'rec-1', authorPubkey: editor.account,
+      recordId: 'rec-1', authorPubkey: editor.account, hubId: HUB_ID,
     })
     const sealed = await sealCaseMock('fields', '{"k":"v"}', readers.fields, {
       encryptionPubkeyHex: editor.device, signingPubkeyHex: editor.account,
@@ -329,7 +329,7 @@ describe('updating an existing record\'s fields', () => {
   it("falls back to author + the hub's admin readers when the lookup fails", async () => {
     mocks.getRecordEnvelopeRecipients.mockRejectedValue(new Error('offline'))
     const readers = await resolveRecordReaders({
-      recordId: 'rec-1', authorPubkey: editor.account,
+      recordId: 'rec-1', authorPubkey: editor.account, hubId: HUB_ID,
     })
     expect(readers.fields).toEqual([editor.account, admin.device, escrow.device])
   })

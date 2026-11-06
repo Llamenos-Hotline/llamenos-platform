@@ -83,35 +83,23 @@ export function composeReaders(
 interface ReaderParams {
   /** This user's account key (`useAuth().publicKey`); the sealing device is always a reader. */
   authorPubkey: string
-  /**
-   * The hub the record lives in — the hub whose admins must be able to read
-   * it. Defaults to the active hub, which is where a new record is created.
-   */
-  hubId?: string | null
-}
-
-/**
- * The hub's admin readers, resolved before the tier lookup: a hub with no
- * admin able to read refuses the write without spending the second round trip.
- */
-async function adminReadersOf(hubId: string | null | undefined): Promise<{ hubId: string; admins: AdminHpkeRecipient[] }> {
-  const hub = hubId ?? getActiveHub()
-  if (!hub) throw new NoActiveHubError('/readers')
-  return { hubId: hub, admins: await hubAdminReaders(hub) }
 }
 
 /**
  * Who may read a record that does not exist yet.
  *
  * `assignedTo` is the intended assignees' account keys (`records.assigned_to`
- * values), which the server resolves to their devices. The hub's admin
- * readers are resolved first: a hub with no admin able to read refuses the
- * write before the tier lookup.
+ * values), which the server resolves to their devices. A new record is filed in
+ * the hub being browsed, so it is sealed to THAT hub's admins. They are
+ * resolved first: a hub with no admin able to read refuses the write before the
+ * tier lookup.
  */
 export async function resolveCreationReaders(
   params: ReaderParams & { entityTypeId: string; assignedTo: string[] },
 ): Promise<RecordReaders> {
-  const { hubId, admins } = await adminReadersOf(params.hubId)
+  const hubId = getActiveHub()
+  if (!hubId) throw new NoActiveHubError('/readers')
+  const admins = await hubAdminReaders(hubId)
   return composeReaders(
     await lookupTiers({ entityTypeId: params.entityTypeId, assignedTo: params.assignedTo }),
     params.authorPubkey,
@@ -120,16 +108,23 @@ export async function resolveCreationReaders(
   )
 }
 
-/** Who may read an existing record, asked at write time (never from a cached hook value). */
+/**
+ * Who may read an existing record, asked at write time (never from a cached
+ * hook value).
+ *
+ * `hubId` is the RECORD's hub (`record.hubId`), never the hub being browsed: a
+ * record opened from the cross-hub list belongs to another hub, and sealing it
+ * to the browsed hub's admins hands one hub's case content to another's.
+ */
 export async function resolveRecordReaders(
-  params: ReaderParams & { recordId: string },
+  params: ReaderParams & { recordId: string; hubId: string },
 ): Promise<RecordReaders> {
-  const { hubId, admins } = await adminReadersOf(params.hubId)
+  const admins = await hubAdminReaders(params.hubId)
   return composeReaders(
-    await lookupTiers({ recordId: params.recordId }),
+    await lookupTiers({ recordId: params.recordId, hubId: params.hubId }),
     params.authorPubkey,
     admins,
-    hubId,
+    params.hubId,
   )
 }
 
@@ -167,12 +162,15 @@ async function lookupTiers(
  * `summary` is deliberately broader (every member who may see the case exists)
  * and `pii` deliberably narrower.
  *
+ * `hubId` is the record's own hub (`record.hubId`): a record opened from the
+ * cross-hub list is not in the hub being browsed.
+ *
  * Returns `[]` until the fetch resolves, and `[]` on failure. Callers must add
  * their own device key and the hub's admin readers themselves and must not treat an
  * empty list as "no readers" — a shorter list costs a reader, which is
  * recoverable; sealing to a key nobody holds is not.
  */
-export function useRecordFieldRecipients(recordId: string | undefined): string[] {
+export function useRecordFieldRecipients(recordId: string | undefined, hubId?: string): string[] {
   const [recipients, setRecipients] = useState<string[]>([])
 
   useEffect(() => {
@@ -183,7 +181,7 @@ export function useRecordFieldRecipients(recordId: string | undefined): string[]
     let cancelled = false
     void (async () => {
       try {
-        const tiers = await getRecordEnvelopeRecipients({ recordId })
+        const tiers = await getRecordEnvelopeRecipients({ recordId, hubId })
         if (!cancelled) setRecipients(tiers.fields)
       } catch {
         // A failed lookup must not block filing a comment or uploading
@@ -195,7 +193,7 @@ export function useRecordFieldRecipients(recordId: string | undefined): string[]
       }
     })()
     return () => { cancelled = true }
-  }, [recordId])
+  }, [recordId, hubId])
 
   return recipients
 }

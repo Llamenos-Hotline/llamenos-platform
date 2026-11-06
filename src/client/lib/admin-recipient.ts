@@ -79,22 +79,45 @@ export class NoAdminReaderError extends Error {
  * Every admin of `hubId` as an HPKE recipient: the hub's `admin` reader set.
  *
  * Seal hub content to ALL of them, so every admin — the second one included —
- * can read it. Defaults to the active hub, which is the hub every
- * `activeHubPath` write lands in; pass the record's own hub when it may differ
- * (a call or conversation in another member hub).
+ * can read it.
+ *
+ * `hubId` is required, and it must be the hub of the ROW being written
+ * (`record.hubId`, `call.hubId`, `conversation.hubId`) — never the hub being
+ * browsed. The active hub controls browsing context only; a record opened from
+ * the cross-hub list belongs to another hub, and sealing its content to the
+ * browsed hub's admins hands one hub's case content to another hub's admins.
+ * That is the defect this signature exists to make unwritable: there is no
+ * default to fall back on, so every caller states where its hub came from.
+ * For a row that does not exist yet, whose hub is the one the write will land
+ * in, use `activeHubAdminReaders()`.
  *
  * Throws `NoAdminReaderError` for an empty set rather than returning `[]`: a
- * record no admin can open cannot be repaired afterwards.
+ * record no admin can open cannot be repaired afterwards, and `NoActiveHubError`
+ * for a null hub.
  */
-export async function hubAdminReaders(hubId?: string | null): Promise<AdminHpkeRecipient[]> {
-  const hub = hubId ?? getActiveHub()
-  if (!hub) throw new NoActiveHubError('/readers')
-  const { recipients } = await getHubReaders(hub, 'admin')
+export async function hubAdminReaders(hubId: string | null): Promise<AdminHpkeRecipient[]> {
+  // A row with no hub (an instance with no hub scope) has no reader set to ask.
+  if (!hubId) throw new NoActiveHubError('/readers')
+  const { recipients } = await getHubReaders(hubId, 'admin')
   const readers: AdminHpkeRecipient[] = []
   for (const key of recipients) {
     const recipient = adminHpkeRecipient(key)
     if (recipient && !readers.includes(recipient)) readers.push(recipient)
   }
-  if (readers.length === 0) throw new NoAdminReaderError(hub)
+  if (readers.length === 0) throw new NoAdminReaderError(hubId)
   return readers
+}
+
+/**
+ * The admins of the hub a NEW row is being created in — the hub being browsed,
+ * because every create is filed through `activeHubPath` and so lands there.
+ *
+ * Only for a row that has no hub yet, and for pages that list the active hub's
+ * rows alone. Anything that edits, replies to, or attaches to an existing row
+ * must call `hubAdminReaders(row.hubId)` instead.
+ */
+export async function activeHubAdminReaders(): Promise<AdminHpkeRecipient[]> {
+  const hub = getActiveHub()
+  if (!hub) throw new NoActiveHubError('/readers')
+  return hubAdminReaders(hub)
 }

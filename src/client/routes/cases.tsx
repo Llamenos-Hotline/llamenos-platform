@@ -37,8 +37,8 @@ import {
   ChevronLeft, ChevronRight, GitMerge, Globe, CalendarDays, Table2,
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
-import { openCase, sealCase } from '@/lib/platform'
-import { NoAdminReaderError, resolveRecordReaders, useRecordFieldRecipients } from '@/lib/record-recipients'
+import { openCase } from '@/lib/platform'
+import { NoAdminReaderError, useRecordFieldRecipients } from '@/lib/record-recipients'
 import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
@@ -46,6 +46,7 @@ import { EntityTimelineView } from '@/components/entity-timeline-view'
 import { listEntitiesCrossHub } from '@/lib/api'
 import { useHubOwned } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
+import { saveRecordFields } from '@/lib/case-writes'
 
 export const Route = createFileRoute('/cases')({
   component: CasesPage,
@@ -741,7 +742,7 @@ function RecordDetail({
   // entity type's roles, the record's assignees and each member's permissions.
   // Passing `[publicKey]` here, as this did, made every timeline comment and
   // every piece of evidence unreadable by the volunteers assigned to the case.
-  const fieldRecipients = useRecordFieldRecipients(record.id)
+  const fieldRecipients = useRecordFieldRecipients(record.id, record.hubId)
 
   // Decrypt summary for title/description display
   const [decryptedSummary, setDecryptedSummary] = useState<{ title?: string; description?: string } | null>(null)
@@ -955,6 +956,7 @@ function RecordDetail({
         {activeTab === 'timeline' && (
           <CaseTimeline
             recordId={record.id}
+            hubId={record.hubId}
             volunteerNames={{}}
             readerPubkeys={fieldRecipients}
             statusLabels={Object.fromEntries(
@@ -972,6 +974,7 @@ function RecordDetail({
         {activeTab === 'evidence' && (
           <EvidenceTab
             recordId={record.id}
+            hubId={record.hubId}
             volunteerNames={{}}
             readerPubkeys={fieldRecipients}
           />
@@ -1052,17 +1055,10 @@ function DetailsTab({
       try {
         // Asked now, not read from the timeline's cached hook value: a save
         // REPLACES the envelope set, so one sealed before that fetch resolved
-        // would drop every co-assignee the record already had.
-        const readers = await resolveRecordReaders({
-          recordId: record.id,
-          authorPubkey: publicKey,
-        })
-
-        const encrypted = await sealCase('fields', JSON.stringify(newValues), readers.fields)
-        await updateRecord(record.id, {
-          encryptedFields: encrypted.encryptedContent,
-          fieldEnvelopes: encrypted.readerEnvelopes,
-        })
+        // would drop every co-assignee the record already had. Sealed to the
+        // admins of the RECORD's hub (#1035), not the hub being browsed — a
+        // record opened from the cross-hub list is in another one.
+        await saveRecordFields({ id: record.id, hubId: record.hubId }, newValues, publicKey)
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus(prev => prev === 'saved' ? 'idle' : prev), 2000)
       } catch (err) {
@@ -1075,7 +1071,7 @@ function DetailsTab({
         )
       }
     }, 800)
-  }, [publicKey, hasDeviceKey, canEdit, record.id, toast, t])
+  }, [publicKey, hasDeviceKey, canEdit, record.id, record.hubId, toast, t])
 
   if (entityType.fields.length === 0) {
     return (
@@ -1110,6 +1106,7 @@ function DetailsTab({
         onChange={handleFieldChange}
         readOnly={!canEdit}
         showAccessIndicators
+        hubId={record.hubId}
       />
     </div>
   )

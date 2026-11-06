@@ -16,7 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { Lock, Loader2, Send, FileText } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { CustomFieldInputs, validateCustomFields } from '@/components/notes/custom-field-inputs'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface ReportFormProps {
   open: boolean
@@ -112,7 +112,7 @@ export function ReportForm({ open, onOpenChange, onCreated }: ReportFormProps) {
       // Build reader list: reporter + admin decryption key
       const readerPubkeys = [publicKey]
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       // Encrypt body with custom field values as structured payload
       const nonEmptyFields = Object.entries(fieldValues).filter(([, v]) => v !== '' && v !== undefined)

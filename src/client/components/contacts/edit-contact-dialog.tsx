@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Loader2 } from 'lucide-react'
-import { hubAdminReaders } from '@/lib/admin-recipient'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface EditContactDialogProps {
   contact: DirectoryContact
@@ -41,7 +41,7 @@ export function EditContactDialog({ contact, open, onOpenChange, onUpdated }: Ed
     try {
       const readerPubkeys: string[] = publicKey ? [publicKey] : []
       // Every admin of the hub, not one env-configured key (#1035).
-      readerPubkeys.push(...await hubAdminReaders())
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const summary: DirectoryContactSummary = {
         displayName: displayName.trim(),

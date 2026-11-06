@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { createContext, useContext, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -35,7 +35,20 @@ interface SchemaFormProps {
   collapsedSections?: Set<string>
   /** Filter to only show fields at these access levels */
   visibleAccessLevels?: Set<string>
+  /**
+   * The hub the record being edited belongs to (`record.hubId`): a file attached
+   * to a field is sealed to that hub's admins and stored in it. Omit it only for
+   * a form that creates a new record in the hub being browsed.
+   */
+  hubId?: string
 }
+
+/**
+ * The hub of the record being edited, for the fields that store something in it
+ * (files). `undefined` for a form that creates a new record in the hub being
+ * browsed.
+ */
+const SchemaFormHubContext = createContext<string | undefined>(undefined)
 
 /**
  * Dynamic form renderer for entity type schemas.
@@ -53,6 +66,7 @@ export function SchemaForm({
   disabled = false,
   collapsedSections,
   visibleAccessLevels,
+  hubId,
 }: SchemaFormProps) {
   // Group fields by section
   const sections = useMemo(() => {
@@ -78,6 +92,7 @@ export function SchemaForm({
   }
 
   return (
+    <SchemaFormHubContext.Provider value={hubId}>
     <div data-testid="schema-form" className="space-y-4">
       {Array.from(sections.entries()).map(([sectionName, fields]) => (
         <SchemaSection
@@ -93,6 +108,7 @@ export function SchemaForm({
         />
       ))}
     </div>
+    </SchemaFormHubContext.Provider>
   )
 }
 
@@ -274,6 +290,7 @@ function FieldInput({
   readOnly: boolean
   disabled: boolean
 }) {
+  const formHubId = useContext(SchemaFormHubContext)
   switch (field.type) {
     case 'text':
       return (
@@ -468,6 +485,7 @@ function FieldInput({
       }
       return (
         <EntityFileField
+          hubId={formHubId}
           value={fileVal}
           onChange={(fv: FileFieldValue | null) => onChange(fv ? JSON.stringify(fv) : '')}
           disabled={disabled}
