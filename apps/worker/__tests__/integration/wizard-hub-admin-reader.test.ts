@@ -217,10 +217,12 @@ describe('an inbound message no hub admin can read is refused, never dropped (#1
   it('answers 503, writes nothing, and hands back the replay slot so a redelivery is processed', async () => {
     // A hub whose only admin has never registered a device, and no escrow key.
     const id = `hub-no-reader-${Math.random().toString(36).slice(2, 8)}`
+    const founder = await insertHubFounder(fresh.db)
+    await fresh.db.delete(schema.devices).where(eq(schema.devices.pubkey, founder.pubkey))
     await services.settings.createHub({
       id, name: id, slug: id, status: 'active', phoneNumber: '',
       createdBy: 'integration-test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    } as never, await insertHubFounder(fresh.db))
+    } as never, founder)
     expect(await services.identity.readersFor(id, 'admin')).toEqual([])
 
     const res = await inboundSms(id, 'please answer')
