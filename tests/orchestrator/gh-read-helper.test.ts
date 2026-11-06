@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 
 /**
  * Rails for `.github/scripts/gh-read.sh` — the ONE bounded-retry policy for a
@@ -68,6 +69,17 @@ describe('rail: one retry policy — fleet-review.yml\'s inline copy is byte-ide
     const drifted = shared.replace('5??|408|429) return 0 ;;', '5??|408|429|404) return 0 ;;')
     expect(drifted).not.toBe(shared)
     expect(policyBlock(drifted, 'mutated helper')).not.toEqual(policyBlock(readFileSync(FLEET_REVIEW_YML, 'utf8'), 'fleet-review.yml'))
+  })
+})
+
+describe('rail: the helper is owned like the workflow that sources it', () => {
+  // fleet-verify.yml sources this file from the merge-group head, so it is
+  // part of a required gate's logic. `.github/workflows/` is CODEOWNED and
+  // high-impact; a helper that was not would let a PR change the guard's
+  // behaviour without the review an inline edit needs.
+  it('is a HIGH_IMPACT_PATHS entry and a CODEOWNERS line', () => {
+    expect(HIGH_IMPACT_PATHS).toContain('.github/scripts/gh-read.sh')
+    expect(readFileSync(join(REPO_ROOT, 'CODEOWNERS'), 'utf8')).toMatch(/^\.github\/scripts\/gh-read\.sh\s+@/m)
   })
 })
 
