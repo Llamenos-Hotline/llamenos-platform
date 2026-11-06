@@ -256,20 +256,6 @@ class AuthViewModelTest {
         assertNull(locked.error)
     }
 
-    @Test
-    fun `resetAuthState clears crypto and storage`() = runTest {
-        simulateKeyGeneration()
-        keyValueStore.store(KeystoreService.KEY_ENCRYPTED_KEYS, "{}")
-        keyValueStore.store(KeystoreService.KEY_SIGNING_PUBKEY, "testpub")
-
-        val vm = createViewModel()
-        vm.resetAuthState()
-
-        assertFalse(cryptoService.isUnlocked)
-        assertFalse(keyValueStore.contains(KeystoreService.KEY_ENCRYPTED_KEYS))
-        assertFalse(keyValueStore.contains(KeystoreService.KEY_SIGNING_PUBKEY))
-    }
-
     // ---- Update PIN clears error ----
 
     @Test

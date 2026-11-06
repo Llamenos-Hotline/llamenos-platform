@@ -104,6 +104,8 @@ class DashboardSteps : BaseSteps() {
 
     @Then("the logout button should be visible in the top bar")
     fun theLogoutButtonShouldBeVisibleInTheTopBar() {
+        // Present, and inert on its own: it opens the confirmation (#2123), so the
+        // device key is untouched until "confirm-logout-button" is pressed.
         assertAnyTagDisplayed("logout-button", "dashboard-title")
     }
 

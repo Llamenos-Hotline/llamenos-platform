@@ -11,10 +11,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.screenshots.ScreenshotTestApp
 import org.llamenos.hotline.ui.auth.PIN_MAX_LENGTH
-import org.llamenos.hotline.ui.theme.LlamenosTheme
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
@@ -50,44 +48,7 @@ class SettingsBiometricPinDialogTest {
     val composeRule = createComposeRule()
 
     private fun setSettingsScreen(onBiometricEvent: (BiometricSectionEvent) -> Unit) {
-        composeRule.setContent {
-            LlamenosTheme {
-                SettingsScreen(
-                    signingPubkey = "npub1abc",
-                    encryptionPubkey = "npub1def",
-                    hubUrl = "https://llamenos.example.org",
-                    connectionState = WebSocketService.ConnectionState.CONNECTED,
-                    displayName = "Test Volunteer",
-                    phone = "+1 555 000 0000",
-                    selectedTheme = "dark",
-                    onUpdateProfile = { _, _ -> },
-                    onThemeChange = {},
-                    selectedLanguage = "en",
-                    onLanguageChange = {},
-                    spokenLanguages = setOf("en"),
-                    onSpokenLanguagesChange = {},
-                    notifyCalls = true,
-                    notifyShifts = true,
-                    notifyGeneral = false,
-                    onNotifyCallsChange = {},
-                    onNotifyShiftsChange = {},
-                    onNotifyGeneralChange = {},
-                    onLock = {},
-                    onLogout = {},
-                    onPanicWipe = {},
-                    transcriptionEnabled = true,
-                    transcriptionCanOptOut = true,
-                    onTranscriptionChange = {},
-                    autoLockMinutes = 5,
-                    onAutoLockChange = {},
-                    debugLogging = false,
-                    onDebugLoggingChange = {},
-                    onClearCache = {},
-                    onNavigateToAdmin = {},
-                    onBiometricEvent = onBiometricEvent,
-                )
-            }
-        }
+        composeRule.setContent { TestSettingsScreen(onBiometricEvent = onBiometricEvent) }
     }
 
     @Test

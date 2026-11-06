@@ -86,6 +86,8 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.BuildConfig
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.WebSocketService
+import org.llamenos.hotline.ui.auth.DestructionConfirmed
+import org.llamenos.hotline.ui.auth.IdentityDestruction
 import org.llamenos.hotline.ui.auth.PIN_MAX_LENGTH
 import org.llamenos.hotline.ui.components.PINPad
 
@@ -174,8 +176,8 @@ fun SettingsScreen(
     onNotifyShiftsChange: (Boolean) -> Unit,
     onNotifyGeneralChange: (Boolean) -> Unit,
     onLock: () -> Unit,
-    onLogout: () -> Unit,
-    onPanicWipe: () -> Unit,
+    onLogout: (DestructionConfirmed) -> Unit,
+    onPanicWipe: (DestructionConfirmed) -> Unit,
     transcriptionEnabled: Boolean,
     transcriptionCanOptOut: Boolean,
     onTranscriptionChange: (Boolean) -> Unit,
@@ -274,76 +276,24 @@ fun SettingsScreen(
     }
 
     if (showLogoutDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogoutDialog = false },
-            title = { Text(stringResource(R.string.common_logout)) },
-            text = {
-                Text(stringResource(R.string.settings_logout_confirm_message))
+        DestructionConfirmed.Dialog(
+            action = IdentityDestruction.LOGOUT,
+            onConfirmed = {
+                showLogoutDialog = false
+                onLogout(it)
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showLogoutDialog = false
-                        onLogout()
-                    },
-                    modifier = Modifier.testTag("confirm-logout-button"),
-                ) {
-                    Text(
-                        text = stringResource(R.string.common_logout),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showLogoutDialog = false },
-                    modifier = Modifier.testTag("cancel-logout-button"),
-                ) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-            modifier = Modifier.testTag("logout-confirmation-dialog"),
+            onDismiss = { showLogoutDialog = false },
         )
     }
 
     if (showPanicWipeDialog) {
-        AlertDialog(
-            onDismissRequest = { showPanicWipeDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Filled.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(32.dp),
-                )
+        DestructionConfirmed.Dialog(
+            action = IdentityDestruction.PANIC_WIPE,
+            onConfirmed = {
+                showPanicWipeDialog = false
+                onPanicWipe(it)
             },
-            title = { Text(stringResource(R.string.panic_wipe_title)) },
-            text = {
-                Text(stringResource(R.string.panic_wipe_message))
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showPanicWipeDialog = false
-                        onPanicWipe()
-                    },
-                    modifier = Modifier.testTag("confirm-panic-wipe-button"),
-                ) {
-                    Text(
-                        text = stringResource(R.string.panic_wipe_title),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showPanicWipeDialog = false },
-                    modifier = Modifier.testTag("cancel-panic-wipe-button"),
-                ) {
-                    Text(stringResource(android.R.string.cancel))
-                }
-            },
-            modifier = Modifier.testTag("panic-wipe-dialog"),
+            onDismiss = { showPanicWipeDialog = false },
         )
     }
 

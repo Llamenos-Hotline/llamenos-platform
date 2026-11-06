@@ -295,7 +295,7 @@ class GenericSteps : BaseSteps() {
             "add-ban-dialog",
             "drop-confirmation-dialog",
             "logout-confirmation-dialog",
-            "reset-identity",
+            "reset-identity-dialog",
             "create-invite-dialog",
         )
         if (!taggedDialogShown) {
