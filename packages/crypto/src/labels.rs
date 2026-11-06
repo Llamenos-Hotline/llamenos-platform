@@ -347,6 +347,14 @@ pub const LABEL_CALL_RECORDING_SEAL: &str = "llamenos:call-recording-seal:v1";
 /// (#2333). Its own label, so the key hashes nothing else the server hashes.
 pub const LABEL_PROVIDER_REF_KEY: &str = "llamenos:provider-ref-key:v1";
 
+/// Case comment — a comment interaction on a case record's timeline, sealed by
+/// a client for several readers with the canonical AAD (#2499). Its own label,
+/// not `LABEL_CASE_SUMMARY`: a comment and a summary have the same readers, so
+/// under one label a server could move a comment into a record's summary column
+/// and every reader would open it as the summary. Reached only through
+/// `case_record::{seal,open}_case_comment` — no platform supplies it.
+pub const LABEL_CASE_COMMENT: &str = "llamenos:case-comment";
+
 /// Erasure override co-approver signature — Ed25519 sig over (targetUserId || timestamp || justification)
 pub const LABEL_ERASURE_OVERRIDE_SIG: &str = "llamenos:erasure-override-sig:v1";
 
@@ -482,6 +490,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Index 101: Server seal of the per-user audit key (#2054)
 // Indices 102-104: Ban-list hashing and the live-call caller number seal (#2182)
 // Indices 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
+// Index 109: Case comment (#2499)
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -635,6 +644,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_CALL_RECORDING_SEAL, // 107
     // 108: Keyed reference to a provider identifier for logs and audit rows (#2333)
     LABEL_PROVIDER_REF_KEY, // 108
+    // 109: Case comment, sealed per purpose by `case_record` (#2499)
+    LABEL_CASE_COMMENT, // 109
 ];
 
 /// Look up a label string by its numeric ID.
@@ -838,12 +849,13 @@ mod tests {
         );
         assert_eq!(LABEL_CALL_RECORDING_SEAL, "llamenos:call-recording-seal:v1");
         assert_eq!(LABEL_PROVIDER_REF_KEY, "llamenos:provider-ref-key:v1");
+        assert_eq!(LABEL_CASE_COMMENT, "llamenos:case-comment");
     }
 
     /// Verify registry index stability.
     ///
     /// A hand-maintained spot-check of index -> CONSTANT, and partial: it names
-    /// 68 of the 109 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
+    /// 69 of the 110 indices (1-4, 6-15, 17-25, 27-40, 42-45 and 96 are absent),
     /// and it cannot see a changed label STRING behind an unchanged constant
     /// name. `label_registry_indices_are_append_only` below is the complete
     /// form — index -> string for every entry, pinned in a snapshot file. This
@@ -916,6 +928,7 @@ mod tests {
         assert_eq!(id_to_label(106), Some(LABEL_MESSAGING_CONTACT_HUB_KEY));
         assert_eq!(id_to_label(107), Some(LABEL_CALL_RECORDING_SEAL));
         assert_eq!(id_to_label(108), Some(LABEL_PROVIDER_REF_KEY));
+        assert_eq!(id_to_label(109), Some(LABEL_CASE_COMMENT));
     }
 
     /// Verify bidirectional lookup (skipping tombstoned indices).
