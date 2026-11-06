@@ -91,25 +91,42 @@ class ApiService @Inject constructor(
 
     companion object {
         /**
-         * Let's Encrypt ISRG Root X1 — RSA 4096, cross-signed by DST Root CA X3.
-         * Pin targets the intermediate CA SPKI (not the leaf), so routine cert
-         * renewal does not break pinning.
+         * Let's Encrypt ISRG Root X1 — RSA 4096.
          *
-         * Extracted via:
+         * The pin set is the four Let's Encrypt ROOTS, not an intermediate or the leaf, so routine
+         * leaf and intermediate rotation never breaks it. Four, because Let's Encrypt's Gen-Y
+         * hierarchy (Root YR / Root YE) is served cross-signed by X1 / X2 today, so the validated
+         * chain still ends at X1 / X2. The day a platform trust store anchors Root YR / Root YE,
+         * Android's chain builder stops there and X1 / X2 are no longer on the chain; without the
+         * Y pins every client would hard-fail while the web stayed healthy (#2505). A client
+         * accepts a chain that contains ANY pinned key.
+         *
+         * Every value was derived from the certificate Let's Encrypt publishes, never copied:
          *   curl -s https://letsencrypt.org/certs/isrgrootx1.pem \
          *     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der \
          *     | openssl dgst -sha256 -binary | base64
+         * `CertificatePinDerivationTest` re-derives all four from the PEM fixtures in
+         * `src/test/resources/certs/` on every run. Change iOS, desktop and
+         * `network_security_config.xml` together (docs/security/CERTIFICATE_PINS.md).
          */
         const val ISRG_ROOT_X1_HASH = "sha256/C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M="
 
-        /**
-         * Let's Encrypt ISRG Root X2 — ECDSA P-384 backup root.
-         * Minimum 2 distinct CA pins for backup (RFC 7469 §2.5 recommendation).
-         */
+        /** ISRG Root X2 — ECDSA P-384 (`isrg-root-x2.pem`). */
         const val ISRG_ROOT_X2_HASH = "sha256/diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
 
+        /** ISRG Root YR — RSA 4096, Gen-Y (`gen-y/root-yr.pem`; the cross-signed copy has the same key). */
+        const val ISRG_ROOT_YR_HASH = "sha256/fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88="
+
+        /** ISRG Root YE — ECDSA P-384, Gen-Y (`gen-y/root-ye.pem`; the cross-signed copy has the same key). */
+        const val ISRG_ROOT_YE_HASH = "sha256/sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+
         /** Default pin hashes applied to whichever hub host the user configures. */
-        val DEFAULT_PIN_HASHES = listOf(ISRG_ROOT_X1_HASH, ISRG_ROOT_X2_HASH)
+        val DEFAULT_PIN_HASHES = listOf(
+            ISRG_ROOT_X1_HASH,
+            ISRG_ROOT_X2_HASH,
+            ISRG_ROOT_YR_HASH,
+            ISRG_ROOT_YE_HASH,
+        )
 
         /**
          * Build a [CertificatePinner] for the given hostname with the provided
