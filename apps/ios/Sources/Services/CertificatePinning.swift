@@ -14,21 +14,31 @@ import Security
 
 /// The certificate pins every non-loopback connection is held to.
 ///
-/// The pins are Let's Encrypt's ISRG roots, not an intermediate or the leaf: Caddy on
-/// the origin host terminates TLS with a Let's Encrypt certificate and `acme_ca` has no
-/// fallback issuer, so every valid chain for a deployment leads to one of these roots,
-/// and routine leaf/intermediate rotation never breaks the pin. A CDN or proxy in front
-/// of the host presents its own chain and is refused — deliberately.
+/// The pins are Let's Encrypt's four ROOTS — ISRG Root X1, X2 and the Generation-Y roots
+/// YR, YE — not an intermediate or the leaf: Caddy on the origin host terminates TLS with
+/// a Let's Encrypt certificate and `acme_ca` has no fallback issuer, so every valid chain
+/// for a deployment leads to one of these roots, and routine leaf/intermediate rotation
+/// never breaks the pin. A CDN or proxy in front of the host presents its own chain and is
+/// refused — deliberately.
 ///
-/// These are the same two hashes the Android client pins
-/// (`apps/android/app/src/main/res/xml/network_security_config.xml` and
-/// `ApiService.ISRG_ROOT_X1_HASH`/`ISRG_ROOT_X2_HASH`). Change both platforms together.
+/// Why four (#2505): since 2026-05-13 Let's Encrypt issues under Root YR / Root YE, served
+/// cross-signed by X1 / X2. Apple's trust store anchors X1 / X2 only, so today the
+/// evaluated chain still ends there. The day a trust store adds YR / YE, path building
+/// stops at them, X1 / X2 are no longer on the chain, and a client that pinned only X1 / X2
+/// would refuse every connection with no in-app remedy — and this set is immutable, so the
+/// fix has to ship before then. A chain carrying ANY pinned key is accepted.
+///
+/// These are the same hashes Android pins (`network_security_config.xml` and
+/// `ApiService.DEFAULT_PIN_HASHES`) and desktop pins (`ISRG_ROOT_PINS` in `cert_pin.rs`).
+/// Change all platforms together.
 ///
 /// The set is immutable: there is no runtime pin update on iOS, so there is no code path
 /// that can empty it and turn pinning off.
 enum CertificatePins {
 
-    /// ISRG Root X1 (RSA 4096). Regenerate with:
+    /// ISRG Root X1 (RSA 4096). Every pin below is derived from the certificate Let's
+    /// Encrypt publishes — never copied from a page — and re-derived by
+    /// `CertificatePinningTests` from the fixtures. Regenerate with:
     ///   curl -s https://letsencrypt.org/certs/isrgrootx1.pem \
     ///     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der \
     ///     | openssl dgst -sha256 -binary | base64
@@ -37,9 +47,18 @@ enum CertificatePins {
     /// ISRG Root X2 (ECDSA P-384). Same procedure against `isrg-root-x2.pem`.
     static let isrgRootX2Hash = "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="
 
-    /// Two independent roots so one can be retired without locking clients out
+    /// ISRG Root YR (RSA 4096). Same procedure against `gen-y/root-yr.pem`; the copy
+    /// cross-signed by X1 (`gen-y/root-yr-by-x1.pem`) carries the same key, so one pin
+    /// matches the root in both forms.
+    static let isrgRootYRHash = "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88="
+
+    /// ISRG Root YE (ECDSA P-384). Same procedure against `gen-y/root-ye.pem`; the copy
+    /// cross-signed by X2 carries the same key.
+    static let isrgRootYEHash = "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w="
+
+    /// Four independent roots so any one can be retired without locking clients out
     /// (RFC 7469 §2.5).
-    static let pinned: Set<String> = [isrgRootX1Hash, isrgRootX2Hash]
+    static let pinned: Set<String> = [isrgRootX1Hash, isrgRootX2Hash, isrgRootYRHash, isrgRootYEHash]
 }
 
 /// Reads a certificate's SubjectPublicKeyInfo and computes its pin.
