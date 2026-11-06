@@ -15,6 +15,26 @@ REPO_ROOT="$(cd -P "$(dirname "$SELF")/../.." && pwd)"
 [ -f "$HOME/.llamenos-fleet/env" ] && set -a && . "$HOME/.llamenos-fleet/env" && set +a
 
 export FLEET_REPO_ROOT="$REPO_ROOT"
+
+# #2515: an orchestrator change that reaches origin/main must take effect on
+# the next run with no human step. This checkout is the only thing the fleet
+# executes and nothing else moves it, so move it HERE — before `exec`, so this
+# very run loads the new code. runtime-sync fast-forwards to origin/main only
+# when no other fleet run is in flight (it never swaps files under a live run),
+# never touches a dirty checkout, registers this process ($$ — `exec` keeps the
+# pid) as a live run, and records what it did where `doctor` reads it. It is a
+# standalone module on purpose: a revision whose cli.ts cannot load must still
+# be able to adopt the commit that fixes it, so a failure of the step itself is
+# reported and the run proceeds. Exit 3 is the exception: a wedged update lock
+# means another process may be mid-swap, and running into that is the race.
+sync_rc=0
+bun "$REPO_ROOT/orchestrator/src/runtime-sync.ts" --root "$REPO_ROOT" --register "$$" || sync_rc=$?
+if [ "$sync_rc" -eq 3 ]; then
+  echo "llamenos-fleet: runtime update lock is wedged; refusing to start (see $HOME/.llamenos-fleet/runtime-sync.lock)" >&2
+  exit 3
+elif [ "$sync_rc" -ne 0 ]; then
+  echo "llamenos-fleet: WARNING runtime-sync step failed (exit $sync_rc); running the code already on disk" >&2
+fi
 # dispatch-one.sh picks the repo to cut worktrees from as DISPATCH_REPO > the
 # cwd's repo > a hardcoded fallback, and the fleet never sets DISPATCH_REPO. Run
 # from the checkout this wrapper lives in so the cwd resolves to it whatever the

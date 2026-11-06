@@ -776,14 +776,65 @@ on `orchestrator/src/provenance.ts`:
   carry `rt:<sha>` alongside the existing `dep:<sha>`, so a worker's
   behaviour can be attributed to the exact orchestrator code that dispatched
   it after the fact.
-- **Currency is the default.** `tick` begins every pass with
-  `ensureRuntimeCurrent`: if the checkout is on `main`, clean, and simply
-  behind, it is fast-forwarded (`git merge --ff-only origin/main`) and the
-  update is logged — the already-running pass finishes on its in-memory
-  code, and everything it spawns (worker worktrees, briefs) comes from the
-  fresh tree. If a fast-forward is not safe (dirty, detached, diverged,
-  unverifiable), the pass is **refused** with the remedy printed — a fleet
-  that stops and says so beats a fleet silently running yesterday's rails.
+- **Currency is the default — and it is the wrapper's job (#2515).**
+  `bin/llamenos-fleet` runs `orchestrator/src/runtime-sync.ts` *before* it
+  `exec`s the orchestrator, so the run that starts is the run that loads the
+  new code: a change merged to `origin/main` takes effect on the next
+  scheduled run of any unit (tick, queue-feed, digest, watchdog) with no
+  human step. The step is deliberately standalone — it imports nothing but
+  `paths` and `provenance`, so a revision whose `cli.ts` cannot load can
+  still adopt the commit that fixes it. Its rules:
+  - **Only `git merge --ff-only origin/main`** — the gated tip, never another
+    ref, never a reset. A diverged checkout is reported, not "fixed".
+  - **Never under a run in progress.** Every wrapper invocation registers its
+    pid (`exec` keeps `$$`, so it is the orchestrator's pid) in
+    `~/.llamenos-fleet/runs/`, validated against the process start time so a
+    recycled pid is not a live run. Under one short lock the step reads that
+    registry, fast-forwards only if it is empty, then registers itself — a
+    concurrent starter either registered first (the update defers) or runs
+    the finished tree. A deferred update is adopted by the next run that
+    starts idle; `doctor` WARNs, naming the in-flight pids, in the meantime.
+    A wedged update lock (live holder past 120 s) makes the wrapper exit 3
+    rather than race a swap.
+  - **A dirty checkout is never touched** — someone may be mid-debug in it.
+    The run proceeds on what is on disk, the block is logged to
+    `fleet.log` and stderr, and `doctor` FAILs naming the dirty paths.
+    Detached HEAD, a branch other than `main`, a failed fetch and an
+    unreadable repo are blocked the same way.
+  - Every outcome lands in `~/.llamenos-fleet/runtime-sync.json` (read by
+    `doctor`) and, unless nothing happened, in `fleet.log`.
+
+  `tick` keeps a **read-only** currency gate (`assessRuntimeCurrency`): it
+  logs the revision and its distance from `origin/main` on every pass, and
+  **refuses** when no automatic move can fix the checkout (dirty, detached,
+  diverged, unverifiable). Merely-behind-and-fast-forwardable runs, loudly —
+  the wrapper deferred behind an in-flight run and that window closes on its
+  own. It no longer fast-forwards from inside a pass: that swapped files
+  under its peers, and the pass that did it ran the old code anyway.
+
+### Dormancy in `doctor` (#2512, #2515)
+
+`doctor` reports the two other ways the fleet is inert while every other
+check is green:
+
+- **A unit the orchestrator expects is not scheduled.** The expected set is
+  *read from `orchestrator/systemd/`* in the runtime checkout (so a unit added
+  there is checked with no other edit) and compared with
+  `systemctl --user show`. WARN lines name: not installed, installed but not
+  `enabled`, enabled but not `active`, active with **no next trigger**
+  (`is-enabled`/`is-active` both say yes while systemd schedules nothing), a
+  service whose last run failed, and a host copy that differs from the repo
+  copy (a merged unit change nobody re-installed). If systemd cannot be
+  queried at all that is one explicit finding, never a silent pass. They are
+  WARNs because a developer machine or CI runner legitimately has none of
+  these units; the watchdog's FAIL gate stays on the checkout.
+- **The checkout is behind `origin/main`** — a FAIL naming the commit count and
+  the drifted `orchestrator/` files, except when it is waiting only on an
+  in-flight run (WARN, self-healing). A host on which the wrapper has never
+  run the sync step WARNs that there is no `runtime-sync` record.
+
+To answer "is anything else dormant the same way?", run
+`llamenos-fleet doctor`.
 
 The runtime checkout must be on `main` tracking `origin/main` for the
 auto-update half to apply. If doctor FAILs this check, the remedy is:
@@ -837,8 +888,9 @@ The rules now:
 Unit files are at `orchestrator/systemd/llamenos-fleet-tick.{service,timer}`
 and `orchestrator/systemd/llamenos-fleet-queue-feed.{service,timer}` (plus
 the digest pair).
-**They are not installed or enabled by this plan** — that step is left to a
-human. The units are systemd *user* units: `%h` is the owner's home directory,
+**They are installed by a human, once** — and `llamenos-fleet doctor` WARNs
+if any unit in this directory is missing, disabled, inactive, unscheduled or
+stale on the host (#2512). The units are systemd *user* units: `%h` is the owner's home directory,
 and they run `%h/.local/bin/llamenos-fleet` — a symlink into this checkout
 (`llamenos-fleet doctor` prints the exact `ln -sf` command if it is missing).
 The wrapper `cd`s into the checkout itself, so no path to the checkout is

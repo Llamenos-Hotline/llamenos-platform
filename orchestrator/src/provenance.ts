@@ -17,11 +17,14 @@ import { gitFactsFor } from './dependency.js'
  * This module is the general check, built once rather than as three special
  * cases: one gatherer (`checkoutProvenance`) that reads a checkout's
  * revision against its upstream, one pure predicate (`provenanceProblems`)
- * that turns those facts into named problems, and one mutation point
- * (`ensureRuntimeCurrent`) used by the tick to fast-forward when that is
- * safe and refuse to dispatch when it is not.
+ * that turns those facts into named problems, and one read-only gate
+ * (`assessRuntimeCurrency`) the tick uses to refuse when no automatic move can
+ * fix the checkout. The move itself lives in `runtime-sync.ts` (#2515).
  *
- * Severity is deliberate: every condition below is a FAIL, never a WARN.
+ * Severity is deliberate: every condition below is a FAIL, never a WARN —
+ * with one exception in `doctor`, not here: a checkout that is clean, on
+ * main, and behind ONLY because a fleet run is still in flight (#2515) heals
+ * itself at the next idle run start, so doctor WARNs on that one.
  * doctor already emits standing warnings a reader learns to skim past, and
  * runtime drift silently disables merged code — it belongs with the
  * failures.
@@ -213,70 +216,65 @@ export function provenanceProblems(p: CheckoutProvenance): string[] {
   return problems
 }
 
+/**
+ * True when the ONLY thing between this checkout and `origin/main` is a
+ * fast-forward: on `main`, clean, readable, fetched, verifiably behind. This
+ * is the one state in which an automatic move is safe, so it is also the one
+ * state in which "behind" is a condition that heals by itself (the wrapper's
+ * `runtime-sync` step performs the move at the next idle run start) rather
+ * than one that needs an operator.
+ */
+export function isFastForwardable(p: CheckoutProvenance): boolean {
+  return p.isGitRepo && !p.unreadable && !p.dirty && p.branch === 'main' &&
+    p.fetchOk && p.upstreamKnown && (p.behindBy ?? 0) > 0
+}
+
 export interface CurrencyCheck {
+  /** False = the pass must not dispatch. */
   ok: boolean
-  /** HEAD after any fast-forward — the revision the upcoming pass actually
-   *  executes from (this process's already-imported modules excepted). */
+  /** HEAD — the revision the running orchestrator was started from. */
   commit?: string
-  /** True when a fast-forward was performed this call. */
-  updated: boolean
+  /** Commits behind `origin/main`, when measurable. */
+  behindBy?: number
+  /** True when the pass runs on code behind `origin/main` ONLY because the
+   *  wrapper deferred the update behind another in-flight run — loud, but
+   *  not a refusal. */
+  stale: boolean
   /** Why a refusal refused — problems joined, plus the operator remedy. */
   reason?: string
 }
 
 /**
- * The tick's currency gate (issue #1801, ask 3: make currency the default).
+ * The tick's currency gate (issue #1801), now READ-ONLY (#2515).
  *
- * Both halves of the issue's "one of" are implemented because each covers
- * the other's failure mode:
+ * It used to fast-forward the checkout itself, from inside the pass. That
+ * swapped files under whatever else was running, and the pass that did it
+ * still executed the old code. Moving the checkout is now the wrapper's job
+ * (`runtime-sync.ts`, before the orchestrator starts, behind a registry of
+ * live runs); this gate only decides whether the pass may dispatch on what
+ * it was started with, and reports the revision and its distance from
+ * `origin/main` so every pass says which code it ran.
  *
- * - **Fast-forward when safe**: the runtime checkout is on `main`, clean,
- *  and simply behind — `git merge --ff-only origin/main` moves it. A fleet
- *  that can heal itself keeps running (the operator's framing: "keeping the
- *  fleet running is essential"), and the NEXT pass executes the merged code
- *  instead of sitting halted until a human notices.
- * - **Refuse otherwise**: dirty, detached, diverged, or unverifiable — no
- *  automatic move is safe, and silently dispatching yesterday's rails is the
- *  incident this exists to prevent. A fleet that stops and says so is better
- *  than a fleet running stale code.
- *
- * Fast-forwarding under a running tick is safe for this process because its
- * modules are already imported; file READS later in the pass (lane
- * fragments, briefs) see the fresh tree, and dispatched workers get
- * worktrees cut from the fresh refs — which is exactly the desired effect.
+ * - **Refuse** when no automatic move can ever fix it: dirty, detached, on a
+ *   branch other than main, diverged, or unverifiable. Silently dispatching
+ *   yesterday's rails is the incident this exists to prevent.
+ * - **Run, loudly** when the checkout is merely behind and fast-forwardable:
+ *   the wrapper deferred the update because another run was in flight, and
+ *   refusing here would skip a pass over a window that closes on its own.
  */
-export function ensureRuntimeCurrent(root: string, log: (msg: string) => void): CurrencyCheck {
+export function assessRuntimeCurrency(root: string, log: (msg: string) => void): CurrencyCheck {
   const p = checkoutProvenance(root)
   const problems = provenanceProblems(p)
   if (problems.length === 0) {
-    return { ok: true, commit: p.commit, updated: false }
+    log(`fleet runtime ${p.commit?.slice(0, 12) ?? '?'} is current with ${p.upstream}`)
+    return { ok: true, commit: p.commit, behindBy: p.behindBy, stale: false }
   }
-
-  const ffable =
-    p.isGitRepo && !p.unreadable && !p.dirty && p.branch === 'main' &&
-    p.fetchOk && p.upstreamKnown && (p.behindBy ?? 0) > 0
-
-  if (ffable) {
-    let ffError: string | undefined
-    try {
-      execFileSync('git', ['-C', root, 'merge', '--ff-only', p.upstream], { stdio: ['ignore', 'pipe', 'pipe'] })
-    } catch (e) {
-      ffError = e instanceof Error ? e.message : String(e)
-    }
-    if (ffError === undefined) {
-      const after = gitFactsFor(root).commit
-      log(`fleet runtime fast-forwarded to ${p.upstream} (${p.commit?.slice(0, 12) ?? '?'} -> ${after?.slice(0, 12) ?? '?'}, was ${p.behindBy} commit(s) behind) — this pass's already-loaded code is the old revision; dispatched workers and the next pass run the new one`)
-      return { ok: true, commit: after, updated: true }
-    }
-    log(`fleet runtime fast-forward FAILED: ${ffError} — refusing to dispatch on a stale runtime`)
-    return {
-      ok: false, commit: p.commit, updated: false,
-      reason: `fast-forward to ${p.upstream} failed: ${ffError}`,
-    }
+  if (isFastForwardable(p)) {
+    log(`fleet runtime ${p.commit?.slice(0, 12) ?? '?'} is ${p.behindBy} commit(s) behind ${p.upstream} — this pass runs the old code; the update was deferred behind an in-flight run and the next idle run start adopts it`)
+    return { ok: true, commit: p.commit, behindBy: p.behindBy, stale: true }
   }
-
   return {
-    ok: false, commit: p.commit, updated: false,
+    ok: false, commit: p.commit, behindBy: p.behindBy, stale: false,
     reason:
       `fleet runtime is not current: ${problems.join('; ')}. ` +
       `Remedy: git -C ${root} checkout main && git -C ${root} pull --ff-only ` +
