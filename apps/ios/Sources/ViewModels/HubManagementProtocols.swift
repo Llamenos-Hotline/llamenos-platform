@@ -17,6 +17,32 @@ extension HubAPIServiceProtocol {
     func request<T: Decodable>(method: String, path: String) async throws -> T {
         try await request(method: method, path: path, body: nil as (any Encodable)?)
     }
+
+    /// GET a hub-owned resource from the active hub (#2478).
+    ///
+    /// With no hub there is nothing to ask, and the answer is `.noHub` — a value the
+    /// caller assigns through, not an error it can swallow while the last hub's rows
+    /// stay on screen. No hub URL configured is the same answer: nothing was asked.
+    /// `path` is the unscoped `/api/...` path, query string included.
+    func getHubOwned<T: Decodable>(_ path: String, as _: T.Type = T.self) async throws -> HubOwnedRead<T> {
+        let scoped: String
+        do {
+            scoped = try activeHubPath(path)
+        } catch APIError.noActiveHub {
+            return .noHub
+        }
+        return try await getHubOwned(scopedPath: scoped)
+    }
+
+    /// The GET itself, for a path `getHubOwned(_:as:)` has already scoped to the active hub.
+    private func getHubOwned<T: Decodable>(scopedPath: String) async throws -> HubOwnedRead<T> {
+        do {
+            let response: T = try await request(method: "GET", path: scopedPath)
+            return .loaded(response)
+        } catch APIError.noBaseURL {
+            return .noHub
+        }
+    }
 }
 
 // APIService conforms automatically — its getHubKey, hp, activeHubPath and request signatures match.
