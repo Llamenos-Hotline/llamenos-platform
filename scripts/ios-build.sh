@@ -16,6 +16,10 @@
 #                   name here — see the note on find_simulator_udid.
 #   MAC_SSH_HOST    SSH host alias for the Mac when running from Linux (default: mac)
 #   MAC_PROJECT     Project root on the Mac (default: ~/projects/llamenos)
+#   IOS_BUILD_DATA_ROOT / IOS_BUILD_DATA_VOLUME / IOS_BUILD_DATA_MIN_FREE_GIB
+#                   Where DerivedData and result bundles go — the external SSD
+#                   by default, never Xcode's default location on the internal
+#                   disk. See scripts/lib/ios-build-data.sh.
 
 set -euo pipefail
 
@@ -33,6 +37,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IOS_DIR="$PROJECT_ROOT/apps/ios"
 CRYPTO_DIR="$PROJECT_ROOT/packages/crypto"
+
+# shellcheck source=lib/ios-build-data.sh
+source "$SCRIPT_DIR/lib/ios-build-data.sh"
 
 XCODE_SCHEME="Llamenos"
 XCODE_PROJECT="$IOS_DIR/Llamenos.xcodeproj"
@@ -161,6 +168,9 @@ cmd_status() {
   echo ""
   echo "=== Selected Simulator ==="
   echo "  $DEV_SIM_NAME ($(find_simulator_udid))"
+  echo ""
+  echo "=== Build data (DerivedData, result bundles) ==="
+  ( ios_build_data_preflight "$PROJECT_ROOT" ) || echo "  build/test/uitest will refuse until this is fixed"
 }
 
 cmd_setup() {
@@ -209,6 +219,7 @@ cmd_xcframework() {
 
 cmd_build() {
   log "Building iOS app..."
+  ios_build_data_preflight "$PROJECT_ROOT"
   ensure_xcodeproj
 
   local sim_udid
@@ -220,6 +231,7 @@ cmd_build() {
     -project Llamenos.xcodeproj \
     -scheme "$XCODE_SCHEME" \
     -destination "platform=iOS Simulator,id=$sim_udid" \
+    -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
     -quiet \
     2>&1
 
@@ -228,6 +240,7 @@ cmd_build() {
 
 cmd_test() {
   log "Running iOS unit tests..."
+  ios_build_data_preflight "$PROJECT_ROOT"
   ensure_xcodeproj
 
   local sim_udid
@@ -240,6 +253,7 @@ cmd_test() {
     -scheme "$XCODE_SCHEME" \
     -only-testing:LlamenosTests \
     -destination "platform=iOS Simulator,id=$sim_udid" \
+    -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
     2>&1 | filter_xcodebuild
 
   log "Unit tests complete."
@@ -247,6 +261,7 @@ cmd_test() {
 
 cmd_uitest() {
   log "Running XCUITests on simulator (parallel, 4 workers)..."
+  ios_build_data_preflight "$PROJECT_ROOT"
   ensure_xcodeproj
 
   local sim_udid
@@ -294,6 +309,9 @@ cmd_uitest() {
     fi
   fi
 
+  local result_bundle
+  result_bundle="$IOS_RESULTS_DIR/uitest-$(date +%Y%m%d-%H%M%S).xcresult"
+
   cd "$IOS_DIR"
   set +e
   # Use UITesting configuration so the app is compiled with UI_TESTING=1, which
@@ -306,9 +324,10 @@ cmd_uitest() {
     -configuration UITesting \
     -only-testing:LlamenosUITests \
     -destination "platform=iOS Simulator,id=$sim_udid" \
+    -derivedDataPath "$IOS_DERIVED_DATA_PATH" \
     -parallel-testing-enabled YES \
     -parallel-testing-worker-count "$workers" \
-    -resultBundlePath /tmp/llamenos-uitest.xcresult \
+    -resultBundlePath "$result_bundle" \
     2>&1 | filter_xcodebuild
   local exit_code=$?
   set -e
@@ -322,7 +341,7 @@ cmd_uitest() {
 
   # Show test summary
   echo ""
-  log "Test result bundle: /tmp/llamenos-uitest.xcresult"
+  log "Test result bundle: $result_bundle"
 
   if [ $exit_code -ne 0 ]; then
     warn "Some UI tests failed (exit code $exit_code)"

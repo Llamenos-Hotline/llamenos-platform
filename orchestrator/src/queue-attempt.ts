@@ -54,6 +54,38 @@ import { parse as parseYaml } from 'yaml'
  * re-queued here is merely left for a human, which is the state it was in
  * before this feature existed.
  *
+ * REASON OVER SHARD (#2529). Term 1 used to be answered by shard identity
+ * alone: any failure-class job on a shard the diff schedules was "the diff's
+ * fault". That mislabels a job that FAILED ON PURPOSE for an environmental
+ * reason — the iOS disk-headroom guard refuses to run rather than let the
+ * runner agent die, and says so on the job in an `::error::` annotation
+ * carrying `ENVIRONMENTAL_DECLARATION`. Such a job is read for its declaration
+ * (its CheckRun annotations, read by the job's node id) BEFORE the shard map is
+ * consulted, and a failure-class job that declared itself environmental is an
+ * infrastructure signal, not a verdict on the code. The declaration is a
+ * sentence the workflow steps already print, so there is no second parser of
+ * step names: a step renamed tomorrow still declares itself. Only jobs the
+ * diff schedules are read — a job it cannot schedule is already "a sibling's
+ * failure", eligible without any declaration. An unreadable annotation list
+ * never turns a refusal into a re-queue: the job counts as undeclared, and an
+ * own-diff verdict that rested on one is reported `unreadable`, not asserted.
+ *
+ * THE DECLARATION IS NOT AUTHENTICATED, AND THAT IS BOUNDED. A workflow
+ * command's annotation has no path and no step, and a PR can print any text a
+ * workflow step can, so a PR could print the sentence and fail on purpose. What
+ * that buys it: ONE visible re-queue of its own head (the cap comment is posted
+ * before arming, rule V), after which the second ejection is left for a human —
+ * and GitHub still enforces every required check on the merge group. It cannot
+ * merge anything, only spend one queue attempt; a PR that can edit the workflow
+ * files already controls its own CI outright. Requiring "no other failure
+ * annotation" was rejected: the real disk-wait step prints several `::error::`
+ * lines of its own, so the rule would refuse the very case it exists for.
+ *
+ * The converse is the point of the skip: a genuine test failure carries no
+ * such declaration, so it stays `own-diff` and stays refused. Declared jobs
+ * re-queue under the same one-per-head cap as a timeout, because a runner that
+ * keeps refusing is a signal, not noise.
+ *
  * WHERE THE LIMIT COMES FROM: the workflow file the run actually executed —
  * the run's `path` read at the run's own `head_sha` (the merge-group commit),
  * never the base checkout, so a PR that edits its own `timeout-minutes` is
@@ -140,6 +172,9 @@ export interface RunStep {
 
 /** One job of a workflow run, as the jobs API reports it. */
 export interface RunJob {
+  /** The job's GraphQL node id (`CR_…`): a job IS a CheckRun, and this is the
+   *  key its annotations are read by. */
+  nodeId: string
   name: string
   /** `''` when the API reported none. */
   conclusion: string
@@ -357,6 +392,7 @@ export function normalDuration(samples: readonly number[]): NormalDuration | und
 }
 
 export interface TimeoutEvidence {
+  kind: 'timeout'
   job: string
   runId: number
   /** Seconds from the job's start to its kill (`killMomentSec`). */
@@ -366,6 +402,20 @@ export interface TimeoutEvidence {
   normal: NormalDuration
 }
 
+/** A failure-class job that said, itself, that it was not the code's fault. */
+export interface DeclaredEvidence {
+  kind: 'declared'
+  job: string
+  runId: number
+  /** The stable token the step named itself with (`disk-headroom`), else `unnamed`. */
+  reason: string
+  /** The start of the annotation, for the evidence line. */
+  excerpt: string
+}
+
+/** Why an ejection was infrastructure — either kind is capped once per head. */
+export type InfraEvidence = TimeoutEvidence | DeclaredEvidence
+
 export type CancelledJobJudgement =
   | { infra: true; evidence: TimeoutEvidence }
   | { infra: false; reason: string }
@@ -374,7 +424,10 @@ const fmtNormal = (n: NormalDuration): string =>
   `normally ${n.minSec}–${n.maxSec} s (median ${n.medianSec} s over ${n.samples} successful run${n.samples === 1 ? '' : 's'})`
 
 /** The evidence line — what the log and the PR comment say. */
-export function describeEvidence(e: TimeoutEvidence): string {
+export function describeEvidence(e: InfraEvidence): string {
+  if (e.kind === 'declared') {
+    return `"${e.job}" (run ${e.runId}) FAILED but declared itself environmental (${e.reason}): ${e.excerpt}`
+  }
   return `"${e.job}" (run ${e.runId}) killed ${e.killedAfterSec} s after it started, against its configured ` +
     `timeout-minutes: ${e.limitMinutes} (${e.limitMinutes * 60} s); ${fmtNormal(e.normal)} — ` +
     `${(e.limitMinutes * 60 / Math.max(e.normal.maxSec, 1)).toFixed(1)}× its slowest normal run`
@@ -399,7 +452,36 @@ export function judgeCancelledJob(job: AttemptJob, limit: LimitLookup, samples: 
   if (normal.maxSec * MIN_LIMIT_TO_NORMAL_RATIO > limitSec) {
     return no(`timed out at its ${limit.minutes}-min limit, but it is ${fmtNormal(normal)} — within ${MIN_LIMIT_TO_NORMAL_RATIO}× of the limit, so it was slow, not blocked`)
   }
-  return { infra: true, evidence: { job: job.name, runId: job.runId, killedAfterSec: killedAfter, limitMinutes: limit.minutes, limitSource: limit.source, normal } }
+  return { infra: true, evidence: { kind: 'timeout', job: job.name, runId: job.runId, killedAfterSec: killedAfter, limitMinutes: limit.minutes, limitSource: limit.source, normal } }
+}
+
+// ---------------------------------------------------------------------------
+// Declared environmental failures — the reason a job failed (#2529).
+// ---------------------------------------------------------------------------
+
+/** The sentence a CI step prints, in an `::error::`, when it fails because of
+ *  the runner and not the code (`mac-runner-disk-guard.sh`, ios-e2e.yml's
+ *  disk fallback and zero-tests guard). The apostrophe is matched in both
+ *  ASCII and typographic form. */
+export const ENVIRONMENTAL_DECLARATION = /THIS IS NOT A TEST FAILURE AND NOT THIS PR['\u2019]S FAULT/
+
+/** The stable tokens those steps name themselves with, in the order checked.
+ *  They label the evidence; the sentence above is what declares. */
+export const DECLARED_REASON_TOKENS: readonly string[] = ['disk-headroom', 'zero-tests-executed']
+
+const EXCERPT_CHARS = 160
+
+export interface EnvironmentalDeclaration { reason: string; excerpt: string }
+
+/** The declaration in a job's failure annotations, if any. */
+export function environmentalDeclaration(messages: readonly string[]): EnvironmentalDeclaration | undefined {
+  const hit = messages.find((m) => ENVIRONMENTAL_DECLARATION.test(m))
+  if (hit === undefined) return undefined
+  const oneLine = hit.replace(/\s+/g, ' ').trim()
+  return {
+    reason: DECLARED_REASON_TOKENS.find((t) => hit.includes(t)) ?? 'unnamed',
+    excerpt: oneLine.length > EXCERPT_CHARS ? `${oneLine.slice(0, EXCERPT_CHARS)}…` : oneLine,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +497,8 @@ export type AttemptVerdict =
   | { kind: 'sibling'; failed: string[] }
   /** Every cause timed out while blocked — the one re-queue this module adds. */
   | { kind: 'infra-timeout'; evidence: TimeoutEvidence[] }
+  /** Every failure-class job declared itself environmental (#2529). */
+  | { kind: 'infra-declared'; evidence: DeclaredEvidence[] }
   /** Cancelled, but not provably by infrastructure — left for a human. */
   | { kind: 'not-infra'; reason: string }
   /** A read the verdict needs failed. */
@@ -422,12 +506,34 @@ export type AttemptVerdict =
 
 const isAggregate = (name: string): boolean => attributeJob(name).kind === 'aggregate'
 
-/** Term 1: the failure verdicts, decided before any cancellation is read. */
-export function failureVerdict(jobs: readonly AttemptJob[], flags: PlatformFlags): AttemptVerdict | undefined {
-  const failed = jobs.filter((j) => isFailureClass(j.conclusion) && !isAggregate(j.name)).map((j) => j.name)
+/** The jobs of an attempt that are in the failure class, aggregates aside. */
+export function failedJobs(jobs: readonly AttemptJob[]): AttemptJob[] {
+  return jobs.filter((j) => isFailureClass(j.conclusion) && !isAggregate(j.name))
+}
+
+/** Term 1: the failure verdicts, decided before any cancellation is read.
+ *  `declared` holds the failed jobs that declared themselves environmental —
+ *  they are set aside before the shard map is consulted; what remains is the
+ *  genuine failures, attributed by shard as before. */
+export function failureVerdict(
+  jobs: readonly AttemptJob[],
+  flags: PlatformFlags,
+  declared: ReadonlyMap<AttemptJob, EnvironmentalDeclaration> = new Map(),
+): AttemptVerdict | undefined {
+  const failed = failedJobs(jobs)
   if (failed.length === 0) return undefined
-  const own = ownDiffFailures(failed, flags)
-  return own.length > 0 ? { kind: 'own-diff', jobs: own } : { kind: 'sibling', failed }
+  const genuine = failed.filter((j) => !declared.has(j)).map((j) => j.name)
+  if (genuine.length === 0) {
+    return {
+      kind: 'infra-declared',
+      evidence: failed.map((j): DeclaredEvidence => {
+        const d = declared.get(j)
+        return { kind: 'declared', job: j.name, runId: j.runId, reason: d?.reason ?? 'unnamed', excerpt: d?.excerpt ?? '' }
+      }),
+    }
+  }
+  const own = ownDiffFailures(genuine, flags)
+  return own.length > 0 ? { kind: 'own-diff', jobs: own } : { kind: 'sibling', failed: genuine }
 }
 
 /** Term 2: the cancelled jobs that could have caused the ejection — those
@@ -451,6 +557,9 @@ export interface AttemptReadDeps {
   readWorkflowFile(path: string, ref: string): Promise<string | undefined>
   /** Recent COMPLETED runs of one workflow file (any event), newest first. */
   listRecentWorkflowRuns(workflowPath: string): Promise<number[] | undefined>
+  /** The messages of a job's failure-level annotations (`::error::` lines).
+   *  `undefined` on any failure — never an empty list. */
+  readJobAnnotations(nodeId: string): Promise<string[] | undefined>
 }
 
 /** Per-pass memo, so N candidates share one read of each run, file and sample. */
@@ -458,9 +567,10 @@ export interface AttemptReadCache {
   jobs: Map<number, Promise<RunJob[] | undefined>>
   limits: Map<string, Promise<JobLimitEntry[] | undefined>>
   recentRuns: Map<string, Promise<number[] | undefined>>
+  annotations: Map<string, Promise<string[] | undefined>>
 }
 
-export const newAttemptReadCache = (): AttemptReadCache => ({ jobs: new Map(), limits: new Map(), recentRuns: new Map() })
+export const newAttemptReadCache = (): AttemptReadCache => ({ jobs: new Map(), limits: new Map(), recentRuns: new Map(), annotations: new Map() })
 
 function memo<K, V>(map: Map<K, Promise<V>>, key: K, load: () => Promise<V>): Promise<V> {
   const hit = map.get(key)
@@ -510,7 +620,24 @@ export async function classifyAttempt(
     for (const j of runJobs) jobs.push({ ...j, runId: run.id, workflowPath: run.path, headSha: run.headSha })
   }
 
-  const failure = failureVerdict(jobs, flags)
+  // Reason over shard: a failed job the diff schedules is read for a
+  // declaration of its own before the shard map judges it.
+  const declared = new Map<AttemptJob, EnvironmentalDeclaration>()
+  const unread: AttemptJob[] = []
+  const scheduled = new Set(ownDiffFailures(failedJobs(jobs).map((j) => j.name), flags))
+  for (const j of failedJobs(jobs).filter((f) => scheduled.has(f.name))) {
+    const messages = await memo(cache.annotations, j.nodeId, () => deps.readJobAnnotations(j.nodeId))
+    if (messages === undefined) { unread.push(j); continue }
+    const d = environmentalDeclaration(messages)
+    if (d !== undefined) declared.set(j, d)
+  }
+  const failure = failureVerdict(jobs, flags, declared)
+  if (failure?.kind === 'own-diff' && unread.length > 0) {
+    return {
+      kind: 'unreadable',
+      reason: `the annotations of ${unread.map((j) => `"${j.name}" (run ${j.runId})`).join(', ')} could not be read — whether it declared itself environmental is unknown, so it is not called a defect`,
+    }
+  }
   if (failure !== undefined) return failure
 
   const causes = ejectionCauses(jobs)
@@ -564,16 +691,18 @@ export function priorInfraRequeue(commentBodies: readonly string[], head: string
   return undefined
 }
 
-export function renderInfraRequeueComment(head: string, runIds: readonly number[], evidence: readonly TimeoutEvidence[]): string {
+export function renderInfraRequeueComment(head: string, runIds: readonly number[], evidence: readonly InfraEvidence[]): string {
   const lead = runIds[0] ?? 0
   return [
     infraRequeueMarker(head, lead),
     `**Automatic re-queue after an infrastructure ejection** (#2458) — head \`${head.slice(0, 12)}\`, merge-group run${runIds.length === 1 ? '' : 's'} ${runIds.join(', ')}.`,
     '',
-    'No job failed. Every job that ejected the group was cancelled by its own `timeout-minutes` while blocked, not slow:',
+    evidence.every((e) => e.kind === 'declared')
+      ? 'No job failed on its merits. Every failed job declared itself environmental — a step that refuses to run on a starved or broken runner, and says it is not this PR\'s fault:'
+      : 'No job failed on its merits. Every job that ejected the group was either cancelled by its own `timeout-minutes` while blocked, not slow, or declared itself environmental:',
     '',
     ...evidence.map((e) => `- ${describeEvidence(e)}`),
     '',
-    'This is the **one** automatic re-queue for this head. If it is ejected by infrastructure again, `queue-feed` stops and leaves it for a human — a second infra ejection on one head is a signal, not noise. A `failure` is never re-queued automatically.',
+    'This is the **one** automatic re-queue for this head. If it is ejected by infrastructure again, `queue-feed` stops and leaves it for a human — a second infra ejection on one head is a signal, not noise. A `failure` that did not declare itself environmental is never re-queued automatically.',
   ].join('\n')
 }

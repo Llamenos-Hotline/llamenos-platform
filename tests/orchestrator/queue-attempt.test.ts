@@ -3,12 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   isFailureClass, parseWorkflowJobs, jobNamePattern, loadJobLimits, limitFor,
-  killMomentSec, normalDuration, judgeCancelledJob, failureVerdict, ejectionCauses, classifyAttempt,
+  killMomentSec, normalDuration, environmentalDeclaration, judgeCancelledJob, failureVerdict, ejectionCauses, classifyAttempt,
   infraRequeueMarker, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
   TIMEOUT_EARLY_TOLERANCE_SEC, TIMEOUT_LATE_TOLERANCE_SEC, MIN_NORMAL_SAMPLES, MIN_LIMIT_TO_NORMAL_RATIO,
-  type AttemptJob, type AttemptReadDeps, type AttemptRun, type LimitLookup, type PlatformFlags, type RunJob,
+  type AttemptJob, type DeclaredEvidence, type AttemptReadDeps, type AttemptRun, type LimitLookup, type PlatformFlags, type RunJob,
 } from '../../orchestrator/src/queue-attempt.js'
-import { runQueueFeedWith, type QueueFeedDeps, type QueueFeedPr, type MergeGroupRun } from '../../orchestrator/src/queue-feed.js'
+import { runQueueFeedWith, attemptPredatesHead, type QueueFeedDeps, type QueueFeedPr, type MergeGroupRun, type QueueAttempt } from '../../orchestrator/src/queue-feed.js'
 
 const HEAD = 'b'.repeat(40)
 const GROUP_SHA = 'e'.repeat(40)
@@ -16,6 +16,8 @@ const TREE = 'a'.repeat(40)
 const NO_FLAGS: PlatformFlags = { ios: false, android: false, desktop: false, backend: false, crypto: false }
 const BACKEND: PlatformFlags = { ...NO_FLAGS, backend: true }
 
+/** Every fixture job shares one id; tests that read annotations key on it. */
+const JOB_ID = 'CR_7001'
 const START = '2026-11-05T15:00:00Z'
 const at = (sec: number): string => new Date(Date.parse(START) + sec * 1000).toISOString()
 
@@ -24,20 +26,20 @@ const at = (sec: number): string => new Date(Date.parse(START) + sec * 1000).toI
  * that many seconds in (the kill moment); `endedAt` is the job's own end,
  * which for a timeout includes the stalled runner's teardown.
  */
-function job(name: string, conclusion: string, opts: { killedAt?: number; endedAt: number; runId?: number }): AttemptJob {
+function job(name: string, conclusion: string, opts: { killedAt?: number; endedAt: number; runId?: number; id?: string }): AttemptJob {
   const steps = [{ name: 'Set up job', conclusion: 'success', completedAt: at(2) }]
   if (opts.killedAt !== undefined) {
     steps.push({ name: 'Checkout', conclusion: 'cancelled', completedAt: at(opts.killedAt) })
     steps.push({ name: 'Post Checkout', conclusion: 'success', completedAt: at(opts.endedAt) })
   }
   return {
-    name, conclusion, startedAt: START, completedAt: at(opts.endedAt), steps,
+    nodeId: opts.id ?? JOB_ID, name, conclusion, startedAt: START, completedAt: at(opts.endedAt), steps,
     runId: opts.runId ?? 42, workflowPath: '.github/workflows/ci.yml', headSha: GROUP_SHA,
   }
 }
 
 const sampleJob = (name: string, seconds: number): RunJob => ({
-  name, conclusion: 'success', startedAt: START, completedAt: at(seconds), steps: [],
+  nodeId: 'CR_sample', name, conclusion: 'success', startedAt: START, completedAt: at(seconds), steps: [],
 })
 
 const ok = (minutes: number): LimitLookup => ({ ok: true, minutes, source: `.github/workflows/ci.yml#x` })
@@ -83,6 +85,7 @@ function readDeps(attemptJobs: RunJob[] | undefined, overrides: Partial<AttemptR
     readRunJobs: async (id) => (id === 42 ? attemptJobs : normals[id]),
     readWorkflowFile: async (path) => (path === '.github/workflows/ci.yml' ? WORKFLOW : undefined),
     listRecentWorkflowRuns: async () => [42, 900, 901, 902, 903, 904],
+    readJobAnnotations: async () => [],
     ...overrides,
   }
 }
@@ -294,6 +297,200 @@ describe('classifyAttempt — the order is the safety property', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// #2529 — reason over shard, and the verdict is about ONE head.
+// ---------------------------------------------------------------------------
+
+const IOS: PlatformFlags = { ...NO_FLAGS, ios: true }
+
+/** The live disk-headroom annotation (mac-runner-disk-guard.sh). */
+const DISK_ANNOTATION =
+  "ios runner REFUSED to run: disk-headroom — only 7 GiB free on /System/Volumes/Data of the 12 GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Two concurrent iOS shards consume ~10 GiB."
+const DF_FALLBACK_ANNOTATION =
+  "disk guard did not finish within 90s (attempt 1) and the df fallback shows only 7 GiB free. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+
+const DISK_JOB_ID = 'CR_disk_build'
+const DISK_E2E_JOB_ID = 'CR_disk_e2e'
+const DISK_FAILED = (): AttemptJob[] => [
+  job('ios-build-test', 'failure', { endedAt: 90, id: DISK_JOB_ID }),
+  job('ios-e2e / build (mac)', 'failure', { endedAt: 95, id: DISK_E2E_JOB_ID }),
+  job('ci-status', 'failure', { endedAt: 100 }),
+]
+const diskDeps = (annotations: Record<string, string[] | undefined>): AttemptReadDeps =>
+  readDeps(DISK_FAILED(), { readJobAnnotations: async (id) => (id in annotations ? annotations[id] : []) })
+const DISK_DECLARED = { [DISK_JOB_ID]: [DISK_ANNOTATION], [DISK_E2E_JOB_ID]: [DF_FALLBACK_ANNOTATION] }
+
+describe('environmentalDeclaration — what a step says about its own failure', () => {
+  it('reads the sentence, and names the stable token when the step printed one', () => {
+    expect(environmentalDeclaration([DISK_ANNOTATION])?.reason).toBe('disk-headroom')
+    expect(environmentalDeclaration(["... zero-tests-executed — ... THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT: ..."])?.reason).toBe('zero-tests-executed')
+  })
+
+  it('the df fallback carries the sentence but no token: declared, labelled unnamed', () => {
+    expect(environmentalDeclaration([DF_FALLBACK_ANNOTATION])?.reason).toBe('unnamed')
+  })
+
+  it('accepts a typographic apostrophe', () => {
+    expect(environmentalDeclaration(['THIS IS NOT A TEST FAILURE AND NOT THIS PR\u2019S FAULT'])).toBeDefined()
+  })
+
+  it('a test failure, an exit code, or the token alone declares nothing', () => {
+    expect(environmentalDeclaration(['Process completed with exit code 1.'])).toBeUndefined()
+    expect(environmentalDeclaration(['XCTAssertEqual failed: ("a") is not equal to ("b")'])).toBeUndefined()
+    expect(environmentalDeclaration(['mentions disk-headroom in passing'])).toBeUndefined()
+    expect(environmentalDeclaration([])).toBeUndefined()
+  })
+
+  it('bounds the excerpt', () => {
+    const d = environmentalDeclaration([`${'x'.repeat(400)} THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT`])
+    expect(d?.excerpt.length).toBeLessThanOrEqual(161)
+  })
+})
+
+describe('classifyAttempt — reason outranks shard (#2529)', () => {
+  it('PINS REASON-OVER-SHARD: disk-headroom on shards the diff schedules is infrastructure, not a defect', async () => {
+    const deps = diskDeps(DISK_DECLARED)
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, deps)
+    expect(v.kind).toBe('infra-declared')
+    if (v.kind !== 'infra-declared') return
+    expect(v.evidence.map((e) => [e.job, e.reason])).toEqual([
+      ['ios-build-test', 'disk-headroom'],
+      ['ios-e2e / build (mac)', 'unnamed'],
+    ])
+    expect(describeEvidence(v.evidence[0] as DeclaredEvidence)).toContain('declared itself environmental (disk-headroom)')
+  })
+
+  it('PINS THE CONVERSE: a genuine test failure on a shard the diff schedules is still a defect', async () => {
+    const deps = diskDeps({ [DISK_JOB_ID]: ['XCTAssertTrue failed - ActiveCallUITests.testBanDialogShowsReasonField'] })
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, deps)
+    expect(v).toEqual({ kind: 'own-diff', jobs: ['ios-build-test', 'ios-e2e / build (mac)'] })
+  })
+
+  it('one job declared, one genuinely failed: the genuine failure still decides — never widened to infra', async () => {
+    const deps = diskDeps({ [DISK_JOB_ID]: [DISK_ANNOTATION] }) // the e2e build has no declaration
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, deps)
+    expect(v).toEqual({ kind: 'own-diff', jobs: ['ios-e2e / build (mac)'] })
+  })
+
+  it('a declared job beside a genuine failure on a shard the diff cannot schedule is a sibling case', async () => {
+    const jobs = [job('ios-build-test', 'failure', { endedAt: 90, id: DISK_JOB_ID }), job('backend-bdd', 'failure', { endedAt: 95 }), job('ci-status', 'failure', { endedAt: 100 })]
+    const deps = readDeps(jobs, { readJobAnnotations: async () => [DISK_ANNOTATION] })
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, deps)
+    // backend-bdd is not scheduled by an iOS-only diff, and it is the only genuine failure.
+    expect(v).toEqual({ kind: 'sibling', failed: ['backend-bdd'] })
+  })
+
+  it('reads annotations only for jobs the diff schedules', async () => {
+    const jobs = [job('backend-bdd', 'failure', { endedAt: 95, id: 'CR_9001' }), job('ci-status', 'failure', { endedAt: 100 })]
+    const reads: string[] = []
+    const deps = readDeps(jobs, { readJobAnnotations: async (id) => { reads.push(id); return [] } })
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, deps)
+    expect(v.kind).toBe('sibling')
+    expect(reads).toEqual([])
+  })
+
+  it('an unreadable annotation list never becomes a defect claim — and never a re-queue', async () => {
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, diskDeps({ [DISK_JOB_ID]: undefined, [DISK_E2E_JOB_ID]: undefined }))
+    expect(v.kind).toBe('unreadable')
+  })
+
+  it('an unreadable list beside a job that DID declare itself still cannot clear the other', async () => {
+    const v = await classifyAttempt([{ ...RUN, conclusion: 'failure' }], IOS, diskDeps({ [DISK_JOB_ID]: [DISK_ANNOTATION], [DISK_E2E_JOB_ID]: undefined }))
+    expect(v.kind).toBe('unreadable')
+  })
+
+  it('failureVerdict with nothing declared is the shard map, unchanged', () => {
+    expect(failureVerdict(DISK_FAILED(), IOS)).toEqual({ kind: 'own-diff', jobs: ['ios-build-test', 'ios-e2e / build (mac)'] })
+    expect(failureVerdict(DISK_FAILED(), BACKEND)).toEqual({ kind: 'sibling', failed: ['ios-build-test', 'ios-e2e / build (mac)'] })
+  })
+})
+
+describe('attemptPredatesHead — a verdict is about one head (#2529)', () => {
+  const attempt = (...created: string[]): QueueAttempt => ({
+    headBranch: groupRun.headBranch, headSha: GROUP_SHA, succeeded: false,
+    runs: created.map((createdAt, i) => ({ ...groupRun, id: 40 + i, createdAt })),
+  })
+  it('an attempt created before the head first appeared is an earlier head\'s', () => {
+    expect(attemptPredatesHead(attempt('2026-11-06T07:37:40Z'), '2026-11-06T08:14:53Z')).toBe(true)
+  })
+  it('an attempt created after the head first appeared is about it', () => {
+    expect(attemptPredatesHead(attempt('2026-11-06T09:00:00Z'), '2026-11-06T08:14:53Z')).toBe(false)
+  })
+  it('one run before the head makes the whole attempt an earlier head\'s', () => {
+    expect(attemptPredatesHead(attempt('2026-11-06T09:00:00Z', '2026-11-06T07:00:00Z'), '2026-11-06T08:14:53Z')).toBe(true)
+  })
+  it('an unparseable time proves nothing, so it is never stale', () => {
+    expect(attemptPredatesHead(attempt('not a date'), '2026-11-06T08:14:53Z')).toBe(false)
+    expect(attemptPredatesHead(attempt('2026-11-06T07:00:00Z'), 'not a date')).toBe(false)
+  })
+})
+
+describe('queue-feed — head-scoped, reason-first (#2529)', () => {
+  const FAILED_RUN = { runCreatedAt: '2026-11-06T07:37:40Z' }
+
+  it('PINS HEAD-SCOPING: an own-diff failure older than the current head produces no skip', async () => {
+    const h = harness([job('backend-bdd', 'failure', { endedAt: 95 }), job('ci-status', 'failure', { endedAt: 100 })], {
+      ...FAILED_RUN, headFirstSeen: '2026-11-06T08:14:53Z',
+    })
+    const result = await runQueueFeedWith(h.deps)
+    expect(h.armed).toEqual(['100'])
+    expect(result.branches[0]?.skipped).toEqual([])
+    expect(result.branches[0]?.notes.join('\n')).toMatch(/predates head bbbbbbbbbbbb.*not evidence about this one/)
+    expect(h.readRunJobs).not.toHaveBeenCalled() // a stale attempt is not even read
+  })
+
+  it('the same failure on the CURRENT head is still a defect to fix', async () => {
+    const h = harness([job('backend-bdd', 'failure', { endedAt: 95 }), job('ci-status', 'failure', { endedAt: 100 })], {
+      ...FAILED_RUN, headFirstSeen: '2026-11-06T07:00:00Z',
+    })
+    const result = await runQueueFeedWith(h.deps)
+    expect(h.armed).toEqual([])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/failed on shard\(s\) its own diff schedules \(backend-bdd\) — a defect to fix, not a retry/)
+  })
+
+  it('an unreadable head age keeps the attempt as evidence (the old behaviour), and says so', async () => {
+    const h = harness([job('backend-bdd', 'failure', { endedAt: 95 }), job('ci-status', 'failure', { endedAt: 100 })], {
+      ...FAILED_RUN, headFirstSeen: undefined,
+    })
+    await runQueueFeedWith(h.deps)
+    expect(h.armed).toEqual([])
+    expect(h.logs.some((l) => l.includes('first appeared could not be read'))).toBe(true)
+  })
+
+  it('PINS REASON-OVER-SHARD end to end: disk-headroom on an iOS diff re-queues once, visibly, with the cap recorded', async () => {
+    const h = harness(DISK_FAILED(), {
+      flags: IOS, headFirstSeen: '2026-11-05T14:00:00Z',
+      annotations: DISK_DECLARED,
+    })
+    const result = await runQueueFeedWith(h.deps)
+    expect(h.armed).toEqual(['100'])
+    expect(result.branches[0]?.infraRequeued.map((r) => [r.pr, r.head, r.runIds])).toEqual([[100, HEAD, [42]]])
+    expect(priorInfraRequeue(h.posted, HEAD)).toEqual({ runId: 42 })
+    expect(h.posted[0]).toContain('declared itself environmental')
+    expect(h.logs.find((l) => l.includes('INFRA RE-QUEUE'))).toContain('disk-headroom')
+  })
+
+  it('a declared infra ejection is capped once per head, like a timeout', async () => {
+    const first = harness(DISK_FAILED(), { flags: IOS, annotations: DISK_DECLARED })
+    await runQueueFeedWith(first.deps)
+    const second = harness(DISK_FAILED(), { flags: IOS, annotations: DISK_DECLARED, comments: first.posted })
+    const result = await runQueueFeedWith(second.deps)
+    expect(second.armed).toEqual([])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/already re-queued once automatically/)
+  })
+
+  it('PINS THE CONVERSE end to end: a genuine iOS test failure is still skipped as a defect', async () => {
+    const h = harness(DISK_FAILED(), {
+      flags: IOS, headFirstSeen: '2026-11-05T14:00:00Z',
+      annotations: { [DISK_JOB_ID]: ['XCTAssertTrue failed'], [DISK_E2E_JOB_ID]: ['XCTAssertTrue failed'] },
+    })
+    const result = await runQueueFeedWith(h.deps)
+    expect(h.armed).toEqual([])
+    expect(h.posted).toEqual([])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/its own diff schedules \(ios-build-test, ios-e2e \/ build \(mac\)\) — a defect to fix, not a retry/)
+  })
+})
+
 describe('the cap marker', () => {
   it('round-trips the head, and a marker for another head is no record for this one', () => {
     const body = renderInfraRequeueComment(HEAD, [42], [])
@@ -323,7 +520,18 @@ const groupRun: MergeGroupRun = {
 
 interface Harness { deps: QueueFeedDeps; armed: string[]; posted: string[]; logs: string[]; readRunJobs: ReturnType<typeof vi.fn> }
 
-function harness(attemptJobs: RunJob[], opts: { pr?: Partial<QueueFeedPr>; comments?: string[] | undefined; postFails?: boolean } = {}): Harness {
+interface HarnessOpts {
+  pr?: Partial<QueueFeedPr>
+  comments?: string[] | undefined
+  postFails?: boolean
+  flags?: PlatformFlags
+  /** Failure annotations by job id; an id absent from the map has none. */
+  annotations?: Record<string, string[] | undefined>
+  headFirstSeen?: string | undefined
+  runCreatedAt?: string
+}
+
+function harness(attemptJobs: RunJob[], opts: HarnessOpts = {}): Harness {
   const armed: string[] = []
   const posted: string[] = []
   const logs: string[] = []
@@ -341,12 +549,14 @@ function harness(attemptJobs: RunJob[], opts: { pr?: Partial<QueueFeedPr>; comme
     fetchBranchRules: async () => [{ type: 'merge_queue', parameters: { min_entries_to_merge: 1, max_entries_to_merge: 5, grouping_strategy: 'ALLGREEN' } }],
     verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
     resolveReviewer: async (name) => ({ ok: true, profile: { name } as never }),
-    platformFlags: async () => BACKEND,
+    platformFlags: async () => opts.flags ?? BACKEND,
     readKnopeToml: async () => undefined,
-    listMergeGroupRuns: async () => [groupRun],
+    listMergeGroupRuns: async () => [{ ...groupRun, createdAt: opts.runCreatedAt ?? groupRun.createdAt }],
     readRunJobs,
     readWorkflowFile: reads.readWorkflowFile,
     listRecentWorkflowRuns: reads.listRecentWorkflowRuns,
+    readJobAnnotations: async (id) => (opts.annotations !== undefined && id in opts.annotations ? opts.annotations[id] : []),
+    readHeadFirstSeen: async () => opts.headFirstSeen,
     listPrComments: async () => ('comments' in opts ? opts.comments : []),
     postPrComment: async (_pr, body) => {
       if (opts.postFails === true) throw new Error('HTTP 502')
@@ -469,7 +679,7 @@ describe('queue-feed + the infra discriminator — the five cases', () => {
 
   it('describeEvidence names the job, run, kill moment, limit and normal range', () => {
     expect(describeEvidence({
-      job: 'desktop-rust', runId: 42053092555, killedAfterSec: 1816, limitMinutes: 30, limitSource: 'ci.yml#desktop-rust',
+      kind: 'timeout', job: 'desktop-rust', runId: 42053092555, killedAfterSec: 1816, limitMinutes: 30, limitSource: 'ci.yml#desktop-rust',
       normal: { samples: 3, minSec: 190, medianSec: 193, maxSec: 200 },
     })).toBe('"desktop-rust" (run 42053092555) killed 1816 s after it started, against its configured timeout-minutes: 30 (1800 s); normally 190–200 s (median 193 s over 3 successful runs) — 9.0× its slowest normal run')
   })

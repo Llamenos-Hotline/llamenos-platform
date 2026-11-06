@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  checkoutProvenance, ensureRuntimeCurrent, provenanceProblems,
+  assessRuntimeCurrency, checkoutProvenance, provenanceProblems,
   type CheckoutProvenance,
 } from '../../orchestrator/src/provenance.js'
 import { doctor } from '../../orchestrator/src/cli.js'
@@ -192,28 +192,33 @@ describe('checkoutProvenance (gatherer, real git repos)', () => {
   })
 })
 
-describe('ensureRuntimeCurrent (the tick gate)', () => {
-  it('fast-forwards a clean main checkout that is behind, and reports the update', () => {
+describe('assessRuntimeCurrency (the tick gate — read-only since #2515)', () => {
+  it('NEVER moves the checkout: a clean main that is behind runs, flagged stale, HEAD untouched', () => {
+    // Moving it is the wrapper's runtime-sync step, behind a registry of live
+    // runs. A gate that fast-forwarded from inside a pass swapped files under
+    // its peers and still ran the old code itself.
     const f = makeFixture()
     pushUpstreamCommit(f, 'fix-1')
-    const upstreamTip = git(f.bareOrigin, ['rev-parse', 'main']).trim()
+    const before = git(f.runtime, ['rev-parse', 'HEAD']).trim()
     const logs: string[] = []
 
-    const r = ensureRuntimeCurrent(f.runtime, (m) => logs.push(m))
+    const r = assessRuntimeCurrency(f.runtime, (m) => logs.push(m))
     expect(r.ok).toBe(true)
-    expect(r.updated).toBe(true)
-    expect(r.commit).toBe(upstreamTip)
-    expect(git(f.runtime, ['rev-parse', 'HEAD']).trim()).toBe(upstreamTip)
-    expect(logs.join('\n')).toMatch(/fast-forwarded/)
+    expect(r.stale).toBe(true)
+    expect(r.behindBy).toBe(1)
+    expect(git(f.runtime, ['rev-parse', 'HEAD']).trim()).toBe(before)
+    expect(logs.join('\n')).toMatch(/1 commit\(s\) behind origin\/main/)
   })
 
-  it('is a no-op when already current', () => {
+  it('logs the revision on every pass, and is not stale when current', () => {
     const f = makeFixture()
     const head = git(f.runtime, ['rev-parse', 'HEAD']).trim()
-    const r = ensureRuntimeCurrent(f.runtime, () => {})
+    const logs: string[] = []
+    const r = assessRuntimeCurrency(f.runtime, (m) => logs.push(m))
     expect(r.ok).toBe(true)
-    expect(r.updated).toBe(false)
+    expect(r.stale).toBe(false)
     expect(r.commit).toBe(head)
+    expect(logs.join('\n')).toContain(head.slice(0, 12))
   })
 
   it('REFUSES when dirty and behind — no automatic move is safe, no dispatch proceeds', () => {
@@ -222,9 +227,8 @@ describe('ensureRuntimeCurrent (the tick gate)', () => {
     const before = git(f.runtime, ['rev-parse', 'HEAD']).trim()
     writeFileSync(join(f.runtime, 'orchestrator', 'src', 'cli.ts'), '// uncommitted\n')
 
-    const r = ensureRuntimeCurrent(f.runtime, () => {})
+    const r = assessRuntimeCurrency(f.runtime, () => {})
     expect(r.ok).toBe(false)
-    expect(r.updated).toBe(false)
     expect(r.reason).toMatch(/uncommitted changes/)
     expect(r.reason).toMatch(/pull --ff-only/)
     expect(git(f.runtime, ['rev-parse', 'HEAD']).trim()).toBe(before) // untouched
@@ -235,7 +239,7 @@ describe('ensureRuntimeCurrent (the tick gate)', () => {
     const head = git(f.runtime, ['rev-parse', 'HEAD']).trim()
     git(f.runtime, ['checkout', '-q', head])
 
-    const r = ensureRuntimeCurrent(f.runtime, () => {})
+    const r = assessRuntimeCurrency(f.runtime, () => {})
     expect(r.ok).toBe(false)
     expect(r.reason).toMatch(/detached HEAD/)
   })
