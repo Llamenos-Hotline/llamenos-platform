@@ -88,6 +88,9 @@ function authenticatedCall(run: string): string | undefined {
   const body = code(run)
   // `gh` as a command word: line start, or after a separator / `$(` / backtick.
   if (/(^|[\s;&|(`])gh\s+[a-z]/m.test(body)) return 'invokes gh'
+  // The shared bounded-retry helper (.github/scripts/gh-read.sh, #2483): its
+  // `gh_read` IS a `gh api` call, made from the step's own shell.
+  if (/(^|[\s;&|(`!])gh_read\s/m.test(body)) return 'calls gh_read, which invokes gh'
   // A CLI subcommand, not the bare usage probe (`cli.ts 2>&1`).
   const cli = /orchestrator\/src\/cli\.ts\s+([a-z][a-z-]*)/.exec(body)
   if (cli) return `runs the fleet CLI (${cli[1]}), which shells out to gh`
@@ -151,6 +154,7 @@ describe('rail: every fleet-verify step that reaches gh has the workflow token',
     // the gate itself (`cli.ts verify-ci`). The usage probe is not one.
     expect(reaching).toContain('Resolve the base/head SHAs and PR context for this event')
     expect(reaching).toContain('Verify')
+    expect(reaching).toContain('Reject a queue entry no supervisor signalled (#1894)')
     expect(reaching).not.toContain('Check the base provides the gate')
   })
 
@@ -185,6 +189,12 @@ describe('rail: every fleet-verify step that reaches gh has the workflow token',
     const violations = tokenViolations(doc)
     expect(violations).toHaveLength(1)
     expect(violations[0]).toContain('step "Some later step" invokes gh')
+  })
+
+  it('MUTATION: a NEW step reaching gh through the shared gh_read helper without a token is reported', () => {
+    const doc = clone(load())
+    verifyJob(doc).steps.push({ name: 'Helper read', run: 'set -eu\n. "$GH_READ_LIB"\nif ! gh_read "x" "repos/o/r/pulls/1"; then exit 1; fi\n' })
+    expect(tokenViolations(doc)).toEqual([expect.stringContaining('step "Helper read" calls gh_read')])
   })
 
   it('MUTATION: a new CLI subcommand step without a token is reported', () => {

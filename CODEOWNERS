@@ -107,6 +107,9 @@ lefthook.yml                        @rhonda-rodododo
 
 # ─── Supply chain, release, deployment ─────────────────────────────────
 .github/workflows/                  @rhonda-rodododo
+# Sourced by fleet-verify.yml's merge_group reads, including the #1894 queue
+# guard (#2483): gate logic outside the workflow file, so owned like it.
+.github/scripts/gh-read.sh          @rhonda-rodododo
 knope.toml                          @rhonda-rodododo
 
 # ─── scripts/: key generation, signing, installers, updater, and gates ──
