@@ -563,6 +563,8 @@
     "phoneNumber": "फ़ोन नंबर",
     "reason": "कारण",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "यह कॉलर हॉटलाइन तक फिर से पहुँच सकेगा। नंबर का केवल एक एकतरफ़ा हैश रखा जाता है, इसलिए आप उसे दोबारा तभी प्रतिबंधित कर सकते हैं जब नंबर अब भी आपके पास हो। हटाने की प्रक्रिया ऑडिट लॉग में दर्ज होती है।",
+    "removeConfirmTitle": "यह प्रतिबंध हटाएँ?",
     "removeNumber": "प्रतिबंध हटाएं",
     "title": "प्रतिबंध सूची"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "यह कॉलर इस डिप्लॉयमेंट के सभी हब तक फिर से पहुँच सकेगा, केवल एक तक नहीं। नंबर का केवल एक एकतरफ़ा हैश रखा जाता है, इसलिए आप उसे दोबारा तभी प्रतिबंधित कर सकते हैं जब नंबर अब भी आपके पास हो। हटाने की प्रक्रिया ऑडिट लॉग में दर्ज होती है।",
+    "removeConfirmTitle": "यह प्लेटफ़ॉर्म प्रतिबंध हटाएँ?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "संग्रहीत करें",
+    "archiveConfirm": "यह रिपोर्ट प्रकार संग्रहीत करें? मौजूदा रिपोर्टें अपना प्रकार बनाए रखेंगी, लेकिन यह नई रिपोर्टों के लिए उपलब्ध नहीं रहेगा।",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "रिपोर्ट प्रकार संग्रहीत करें",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "तक",
     "users": "स्वयंसेवक",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "आपको आने वाली कॉल मिलना बंद हो जाएगा।"
+    "clockOutMessage": "आपको आने वाली कॉल मिलना बंद हो जाएगा।",
+    "deleteConfirmTitle": "यह शिफ़्ट हटाएँ?",
+    "deleteConfirmMessage": "इस शिफ़्ट के स्वयंसेवकों को इसके समय के दौरान कॉल मिलना बंद हो जाएगा। यदि कोई और शिफ़्ट उन घंटों को कवर नहीं करती, तो कॉल बैकअप समूह को जाएँगी, या समूह न होने पर अनुत्तरित रहेंगी। इसे पूर्ववत नहीं किया जा सकता।"
   },
   "shortcuts": {
     "answerCall": "कॉल का उत्तर दें",

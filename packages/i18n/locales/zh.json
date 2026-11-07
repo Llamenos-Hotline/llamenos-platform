@@ -563,6 +563,8 @@
     "phoneNumber": "电话号码",
     "reason": "原因",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "该来电者将可以再次联系热线。系统只保存号码的单向哈希，因此只有在您仍持有该号码时才能再次封禁。解除操作会记录在审计日志中。",
+    "removeConfirmTitle": "解除此封禁？",
     "removeNumber": "解封号码",
     "title": "黑名单"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "该来电者将可以再次联系此部署下的所有中心，而不仅是一个。系统只保存号码的单向哈希，因此只有在您仍持有该号码时才能再次封禁。解除操作会记录在审计日志中。",
+    "removeConfirmTitle": "解除此平台封禁？",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "归档",
+    "archiveConfirm": "归档此报告类型？现有报告将保留其类型，但新报告将无法使用它。",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "归档报告类型",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "直到",
     "users": "志愿者",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "您将不再接收来电。"
+    "clockOutMessage": "您将不再接收来电。",
+    "deleteConfirmTitle": "删除此班次？",
+    "deleteConfirmMessage": "此班次的志愿者在班次时段内将不再接到来电。如果没有其他班次覆盖这些时段，来电将转到备用组；若未设置备用组，则无人接听。此操作无法撤销。"
   },
   "shortcuts": {
     "answerCall": "接听电话",

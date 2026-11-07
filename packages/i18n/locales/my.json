@@ -214,6 +214,8 @@
     "phoneNumber": "ဖုန်းနံပါတ်",
     "reason": "အကြောင်းပြချက်",
     "remove": "ပိတ်ပင်ချက် ဖယ်ရှားမည်",
+    "removeConfirmMessage": "ဤခေါ်ဆိုသူသည် ဟော့လိုင်းသို့ ပြန်လည်ခေါ်ဆိုနိုင်ပါလိမ့်မည်။ နံပါတ်၏ တစ်လမ်းသွား hash ကိုသာ သိမ်းထားသောကြောင့် နံပါတ်ကို ကိုင်ဆောင်ထားမှသာ ပြန်လည်ပိတ်ပင်နိုင်ပါမည်။ ဖယ်ရှားမှုကို စစ်ဆေးမှုမှတ်တမ်းတွင် မှတ်တမ်းတင်ထားပါသည်။",
+    "removeConfirmTitle": "ဤပိတ်ပင်ချက်ကို ဖယ်ရှားမလား?",
     "removeNumber": "ပိတ်ပင်ခြင်း ဖြေလျှော့မည်",
     "title": "ပိတ်ပင်စာရင်း"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "ဤအလှည့်ကို ဖျက်မလား?",
+    "deleteConfirmMessage": "ဤအလှည့်ရှိ စေတနာ့ဝန်ထမ်းများသည် ၎င်း၏ အချိန်များအတွင်း ဖုန်းခေါ်ဆိုမှုများ လက်ခံရရှိတော့မည် မဟုတ်ပါ။ အခြားအလှည့်တစ်ခုက ထိုအချိန်များကို မဖုံးအုပ်ပါက ခေါ်ဆိုမှုများသည် အရန်အဖွဲ့ထံ သွားမည်ဖြစ်ပြီး အရန်အဖွဲ့ မသတ်မှတ်ထားပါက ဖြေကြားမည့်သူ မရှိဘဲ ကျန်ခဲ့မည်။ ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍ မရပါ။"
   },
   "shortcuts": {
     "answerCall": "ခေါ်ဆိုမှု ဖြေမည်",
@@ -3029,7 +3033,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "ဤပလက်ဖောင်းပိတ်ပင်ချက်ကို ဖယ်ရှားမလား?",
+    "removeConfirmMessage": "ဤခေါ်ဆိုသူသည် ဤစနစ်ရှိ ဟပ်တစ်ခုတည်းသာမက ဟပ်အားလုံးသို့ ပြန်လည်ခေါ်ဆိုနိုင်ပါလိမ့်မည်။ နံပါတ်၏ တစ်လမ်းသွား hash ကိုသာ သိမ်းထားသောကြောင့် နံပါတ်ကို ကိုင်ဆောင်ထားမှသာ ပြန်လည်ပိတ်ပင်နိုင်ပါမည်။ ဖယ်ရှားမှုကို စစ်ဆေးမှုမှတ်တမ်းတွင် မှတ်တမ်းတင်ထားပါသည်။"
   },
   "blast": {
     "scheduleSection": "အချိန်ဇယား",
@@ -4077,7 +4083,7 @@
     "name": "အမည်",
     "title": "အစီရင်ခံစာ အမျိုးအစားများ",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "ဤအစီရင်ခံစာ အမျိုးအစားကို မော်ကွန်းတင်မလား? ရှိပြီးသား အစီရင်ခံစာများသည် ၎င်းတို့၏ အမျိုးအစားကိုးကားချက်ကို ဆက်လက်ထိန်းသိမ်းထားမည်ဖြစ်သော်လည်း အစီရင်ခံစာအသစ်များအတွက် မရရှိနိုင်တော့ပါ။",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -4093,7 +4099,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "အစီရင်ခံစာ အမျိုးအစားကို မော်ကွန်းတင်ရန်",
+    "archiveAction": "မော်ကွန်းတင်မည်"
   },
   "dismiss": "ပယ်မည်",
   "smsWebhook": "SMS Webhook",

@@ -214,6 +214,8 @@
     "phoneNumber": "Jimareya Têlefonê",
     "reason": "Sedem",
     "remove": "Qedexekirinê Rake",
+    "removeConfirmMessage": "Ev bangker dê dîsa karibe xeta alîkariyê bigire. Tenê hash-a yekalî ya jimareyê tê parastin, ji ber vê yekê tu tenê dikarî dîsa qedexe bikî heke jimare hê jî li cem te be. Rakirin di Têketina Çavdêriyê de tê tomarkirin.",
+    "removeConfirmTitle": "Ev qedexekirin were rakirin?",
     "removeNumber": "Qedexekirinê Rake",
     "title": "Lîsteya Qedexekirinê"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "Ev şift were jêbirin?",
+    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin."
   },
   "shortcuts": {
     "answerCall": "Bangê bersiv bide",
@@ -3540,7 +3544,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "Ev qedexekirina platformê were rakirin?",
+    "removeConfirmMessage": "Ev bangker dê dîsa karibe bigihîje hemû navendên li ser vê sazkirinê, ne tenê yekê. Tenê hash-a yekalî ya jimareyê tê parastin, ji ber vê yekê tu tenê dikarî dîsa qedexe bikî heke jimare hê jî li cem te be. Rakirin di Têketina Çavdêriyê de tê tomarkirin."
   },
   "call": {
     "filterAll": "All",
@@ -4051,7 +4057,7 @@
     "name": "Nav",
     "archived": "Arşîvkirî",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "Ev cureyê raporê were arşîvkirin? Raporên heyî dê referansa cureyê xwe biparêzin, lê ev cure dê ji bo raporên nû berdest nebe.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -4067,7 +4073,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "Cureyê Raporê Arşîv Bike",
+    "archiveAction": "Arşîv bike"
   },
   "error": {
     "emptyDisplayName": "Display name is required",

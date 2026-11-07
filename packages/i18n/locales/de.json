@@ -563,6 +563,8 @@
     "phoneNumber": "Telefonnummer",
     "reason": "Grund",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Diese anrufende Person kann die Hotline wieder erreichen. Es wird nur ein nicht umkehrbarer Hash der Nummer gespeichert – du kannst sie nur erneut sperren, wenn du die Nummer noch hast. Das Aufheben wird im Audit-Protokoll festgehalten.",
+    "removeConfirmTitle": "Diese Sperre aufheben?",
     "removeNumber": "Nummer entsperren",
     "title": "Sperrliste"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Diese anrufende Person kann wieder alle Hubs dieser Installation erreichen, nicht nur einen. Es wird nur ein nicht umkehrbarer Hash der Nummer gespeichert – du kannst sie nur erneut sperren, wenn du die Nummer noch hast. Das Aufheben wird im Audit-Protokoll festgehalten.",
+    "removeConfirmTitle": "Diese Plattformsperre aufheben?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "Archivieren",
+    "archiveConfirm": "Diesen Berichtstyp archivieren? Bestehende Berichte behalten ihren Typ, er steht aber für neue Berichte nicht mehr zur Verfügung.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Berichtstyp archivieren",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "bis",
     "users": "Freiwillige",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "Diese Schicht löschen?",
+    "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen."
   },
   "shortcuts": {
     "answerCall": "Anruf annehmen",

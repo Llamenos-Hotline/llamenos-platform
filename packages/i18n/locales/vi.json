@@ -563,6 +563,8 @@
     "phoneNumber": "Số điện thoại",
     "reason": "Lý do",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Người gọi này sẽ có thể gọi lại đường dây. Chỉ một mã băm một chiều của số được lưu, nên bạn chỉ có thể chặn lại nếu vẫn còn giữ số đó. Việc gỡ chặn được ghi vào nhật ký kiểm toán.",
+    "removeConfirmTitle": "Gỡ chặn này?",
     "removeNumber": "Bỏ chặn số",
     "title": "Danh sách chặn"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Người gọi này sẽ có thể gọi lại tất cả các hub trong hệ thống này, không chỉ một hub. Chỉ một mã băm một chiều của số được lưu, nên bạn chỉ có thể chặn lại nếu vẫn còn giữ số đó. Việc gỡ chặn được ghi vào nhật ký kiểm toán.",
+    "removeConfirmTitle": "Gỡ chặn nền tảng này?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "Lưu trữ",
+    "archiveConfirm": "Lưu trữ loại báo cáo này? Các báo cáo hiện có vẫn giữ loại của chúng, nhưng loại này sẽ không còn dùng được cho báo cáo mới.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Lưu trữ loại báo cáo",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "đến",
     "users": "Tình nguyện viên",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "Bạn sẽ ngừng nhận cuộc gọi đến."
+    "clockOutMessage": "Bạn sẽ ngừng nhận cuộc gọi đến.",
+    "deleteConfirmTitle": "Xóa ca trực này?",
+    "deleteConfirmMessage": "Các tình nguyện viên trong ca này sẽ không nhận cuộc gọi trong giờ của ca. Nếu không có ca nào khác phủ các giờ đó, cuộc gọi sẽ chuyển đến nhóm dự phòng, hoặc không được trả lời nếu chưa đặt nhóm nào. Không thể hoàn tác."
   },
   "shortcuts": {
     "answerCall": "Trả lời cuộc gọi",

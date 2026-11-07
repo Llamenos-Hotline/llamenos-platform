@@ -214,6 +214,8 @@
     "phoneNumber": "Lambarka Taleefanka",
     "reason": "Sababta",
     "remove": "Ka Saar Mamnuucidda",
+    "removeConfirmMessage": "Wacahan mar kale ayuu awoodi doonaa inuu gaaro khadka taleefanka. Waxa la keydiyaa oo keliya hash hal-jiho ah oo lambarka ka mid ah, sidaa darteed mar kale waad mamnuuci kartaa oo keliya haddii lambarka weli haysato. Ka saaristu waxay ku qoran tahay Diiwaanka Hubinta.",
+    "removeConfirmTitle": "Mamnuucidda ma laga saaraa?",
     "removeNumber": "Lambar Ka saar Mamnuucida",
     "title": "Liiska Mamnuucida"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya."
+    "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya.",
+    "deleteConfirmTitle": "Wareeggan ma tirtiraa?",
+    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo."
   },
   "shortcuts": {
     "answerCall": "Ka jawaab wicitaanka",
@@ -4227,7 +4231,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "Mamnuucidda Platform-ka ma laga saaraa?",
+    "removeConfirmMessage": "Wacahan mar kale ayuu awoodi doonaa inuu gaaro xarun kasta oo nidaamkan ku jirta, ee ma aha mid keliya. Waxa la keydiyaa oo keliya hash hal-jiho ah oo lambarka ka mid ah, sidaa darteed mar kale waad mamnuuci kartaa oo keliya haddii lambarka weli haysato. Ka saaristu waxay ku qoran tahay Diiwaanka Hubinta."
   },
   "conversation": {
     "statusClosed": "La xiray",
@@ -4276,7 +4282,7 @@
     "name": "Magac",
     "default": "Asal",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "Nooca warbixintan ma kaydisaa? Warbixinnada jira waxay haysan doonaan tixraaca nooca, laakiin looma heli doono warbixinno cusub.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -4292,7 +4298,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "Kaydi Nooca Warbixinta",
+    "archiveAction": "Kaydi"
   },
   "platformSettings": {
     "transcriptionEnabled": "Qoraal u rogid",

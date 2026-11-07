@@ -124,21 +124,26 @@ data class UpdateCustomFieldsRequest(
 // ---- Report Categories (Settings) ----
 
 /**
- * A report category with an ID and name, managed via admin settings.
+ * A report category with an ID and name, managed via admin settings. The server calls
+ * these report types; [isArchived] marks one an admin has retired (the server archives,
+ * it never hard-deletes — existing reports keep their type reference).
  */
 @Serializable
 data class ReportCategory(
     val id: String,
     val name: String,
     val createdAt: String? = null,
+    val isArchived: Boolean = false,
 )
 
 /**
- * Response from GET /api/settings/report-types.
+ * Response from GET /api/settings/report-types: `{ reportTypes: [...] }`
+ * (`reportTypeListResponseSchema`). It was decoded as `categories`, a key the server
+ * never sends, so the screen could not load a real server's list at all.
  */
 @Serializable
 data class ReportTypesResponse(
-    val categories: List<ReportCategory>,
+    val reportTypes: List<ReportCategory>,
 )
 
 /**

@@ -563,6 +563,8 @@
     "phoneNumber": "Nimewo Telefòn",
     "reason": "Rezon",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Moun k ap rele a ap kapab rele liy lan ankò. Se sèlman yon anprent ki pa ka dechifre nan nimewo a ki konsève, kidonk ou pa ka bloke l ankò sof si ou toujou gen nimewo a. Retire blokaj la anrejistre nan jounal odit la.",
+    "removeConfirmTitle": "Retire blokaj sa a?",
     "removeNumber": "Debloke Nimewo",
     "title": "Lis Blokaj"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Moun k ap rele a ap kapab rele tout ib nan deplwaman sa a ankò, pa sèlman yon sèl. Se sèlman yon anprent ki pa ka dechifre nan nimewo a ki konsève, kidonk ou pa ka bloke l ankò sof si ou toujou gen nimewo a. Retire blokaj la anrejistre nan jounal odit la.",
+    "removeConfirmTitle": "Retire blokaj platfòm sa a?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "Achive",
+    "archiveConfirm": "Achive kalite rapò sa a? Rapò ki deja egziste yo ap kenbe kalite yo, men l pap disponib pou nouvo rapò.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Achive kalite rapò",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "jiska",
     "users": "Volontè",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "Ou p ap resevwa apèl k ap antre ankò."
+    "clockOutMessage": "Ou p ap resevwa apèl k ap antre ankò.",
+    "deleteConfirmTitle": "Efase ekip travay sa a?",
+    "deleteConfirmMessage": "Volontè nan ekip travay sa a pap resevwa apèl ankò pandan lè li yo. Sof si yon lòt ekip kouvri lè sa yo, apèl yo ap ale nan gwoup ranplasman an, oswa yo pap jwenn repons si pa gen okenn. Pa gen fason pou defèt sa."
   },
   "shortcuts": {
     "answerCall": "Reponn apèl",

@@ -71,6 +71,22 @@ fun CustomFieldsTab(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var fieldToDelete by remember { mutableStateOf<CustomFieldDef?>(null) }
+
+    // Deleting a field removes the definition its notes' values are read through: ask first
+    // (#2540). The dialog is the only thing that mints the confirmation `deleteCustomField` requires.
+    fieldToDelete?.let { field ->
+        DeletionConfirmed.Dialog(
+            action = AdminDeletion.CUSTOM_FIELD,
+            targetId = field.id,
+            subject = field.label,
+            onConfirmed = {
+                fieldToDelete = null
+                viewModel.deleteCustomField(field.id, it)
+            },
+            onDismiss = { fieldToDelete = null },
+        )
+    }
 
     if (uiState.showCreateFieldDialog) {
         CustomFieldDialog(
@@ -151,7 +167,7 @@ fun CustomFieldsTab(
                             CustomFieldCard(
                                 field = field,
                                 onEdit = { viewModel.showEditFieldDialog(field) },
-                                onDelete = { viewModel.deleteCustomField(field.id) },
+                                onDelete = { fieldToDelete = field },
                             )
                         }
                     }

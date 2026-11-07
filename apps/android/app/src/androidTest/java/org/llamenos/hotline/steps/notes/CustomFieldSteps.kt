@@ -10,6 +10,7 @@ import androidx.compose.ui.test.performTextInput
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import org.llamenos.hotline.ui.admin.AdminDeletion
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
@@ -113,7 +114,8 @@ class CustomFieldSteps : BaseSteps() {
 
     @When("I confirm the deletion")
     fun iConfirmTheDeletion() {
-        // Custom field deletion is immediate (no confirmation dialog) — already done in delete click
+        onNodeWithTag(AdminDeletion.CUSTOM_FIELD.confirmTag).performClick()
+        composeRule.waitForIdle()
     }
 
     @Then("{string} should no longer appear in the field list")

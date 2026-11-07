@@ -468,7 +468,8 @@ class AdminViewModel @Inject constructor(
     }
 
     /** Unban by the ban's `phoneHash` — the key `DELETE /api/bans/:phoneHash` takes. */
-    fun removeBan(phoneHash: String) {
+    fun removeBan(phoneHash: String, confirmation: DeletionConfirmed) {
+        confirmation.requireFor(AdminDeletion.BAN, phoneHash)
         viewModelScope.launch {
             _uiState.update { it.copy(bansError = null) }
 
@@ -762,7 +763,8 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun deleteCustomField(fieldId: String) {
+    fun deleteCustomField(fieldId: String, confirmation: DeletionConfirmed) {
+        confirmation.requireFor(AdminDeletion.CUSTOM_FIELD, fieldId)
         viewModelScope.launch {
             _uiState.update { it.copy(fieldsError = null) }
             try {
@@ -886,7 +888,8 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun deleteShift(shiftId: String) {
+    fun deleteShift(shiftId: String, confirmation: DeletionConfirmed) {
+        confirmation.requireFor(AdminDeletion.SHIFT, shiftId)
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
@@ -1005,7 +1008,10 @@ class AdminViewModel @Inject constructor(
                     "GET", "/api/settings/report-types",
                 )
                 _uiState.update {
-                    it.copy(reportCategories = response.categories, isLoadingCategories = false)
+                    it.copy(
+                        reportCategories = response.reportTypes.filterNot { c -> c.isArchived },
+                        isLoadingCategories = false,
+                    )
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -1041,7 +1047,8 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun deleteReportCategory(categoryId: String) {
+    fun deleteReportCategory(categoryId: String, confirmation: DeletionConfirmed) {
+        confirmation.requireFor(AdminDeletion.REPORT_CATEGORY, categoryId)
         viewModelScope.launch {
             _uiState.update { it.copy(categoriesError = null) }
             try {
@@ -1578,7 +1585,8 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun removePlatformBan(banId: String) {
+    fun removePlatformBan(banId: String, confirmation: DeletionConfirmed) {
+        confirmation.requireFor(AdminDeletion.PLATFORM_BAN, banId)
         viewModelScope.launch {
             _uiState.update { it.copy(platformBansError = null) }
             try {

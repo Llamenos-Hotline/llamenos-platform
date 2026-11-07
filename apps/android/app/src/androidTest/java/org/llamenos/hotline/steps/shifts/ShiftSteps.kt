@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performTextInput
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import org.llamenos.hotline.ui.admin.AdminDeletion
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
@@ -169,6 +170,9 @@ class ShiftSteps : BaseSteps() {
             "delete" -> {
                 try {
                     onAllNodes(hasTestTagPrefix("delete-shift-")).onFirst().performClick()
+                    composeRule.waitForIdle()
+                    // Deleting a shift asks first (#2540); this step is the admin who answers yes.
+                    onNodeWithTag(AdminDeletion.SHIFT.confirmTag).performClick()
                     composeRule.waitForIdle()
                 } catch (_: Throwable) {
                     // No shifts with delete button

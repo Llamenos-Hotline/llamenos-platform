@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performTextInput
 import io.cucumber.java.en.Given
 import io.cucumber.java.en.Then
 import io.cucumber.java.en.When
+import org.llamenos.hotline.ui.admin.AdminDeletion
 import org.llamenos.hotline.steps.BaseSteps
 
 /**
@@ -111,6 +112,15 @@ class GenericSteps : BaseSteps() {
 
     @When("I click {string} in the dialog")
     fun iClickInTheDialog(buttonText: String) {
+        // An admin deletion dialog (#2540) is answered by its testids: its labels differ per
+        // action ("Remove Ban", "Delete Shift", "Archive"), so the feature's wording is not a key.
+        val adminDialog = AdminDeletion.entries.firstOrNull { isAnyTagDisplayed(it.dialogTag) }
+        if (adminDialog != null) {
+            val tag = if (buttonText.equals("Cancel", ignoreCase = true)) adminDialog.cancelTag else adminDialog.confirmTag
+            onNodeWithTag(tag).performClick()
+            composeRule.waitForIdle()
+            return
+        }
         try { onNode(isDialog()).assertIsDisplayed() } catch (_: Throwable) { return }
         try {
             onAllNodesWithText(buttonText, ignoreCase = true).onFirst().performClick()
@@ -293,6 +303,7 @@ class GenericSteps : BaseSteps() {
         // for untagged confirmations, any Compose dialog window. One of the two must show.
         val taggedDialogShown = isAnyTagDisplayed(
             "add-ban-dialog",
+            *AdminDeletion.entries.map { it.dialogTag }.toTypedArray(),
             "drop-confirmation-dialog",
             "logout-confirmation-dialog",
             "reset-identity-dialog",

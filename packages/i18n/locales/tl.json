@@ -563,6 +563,8 @@
     "phoneNumber": "Numero ng Telepono",
     "reason": "Dahilan",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Muling makakatawag ang tumatawag na ito sa hotline. Isang one-way na hash lang ng numero ang iniingatan, kaya maaari mo lang itong harangin muli kung nasa iyo pa ang numero. Itinatala ang pag-alis sa audit log.",
+    "removeConfirmTitle": "Alisin ang pagharang na ito?",
     "removeNumber": "I-unban ang Numero",
     "title": "Listahan ng Ban"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Muling makakatawag ang tumatawag na ito sa lahat ng hub sa deployment na ito, hindi lang sa isa. Isang one-way na hash lang ng numero ang iniingatan, kaya maaari mo lang itong harangin muli kung nasa iyo pa ang numero. Itinatala ang pag-alis sa audit log.",
+    "removeConfirmTitle": "Alisin ang platform ban na ito?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "I-archive",
+    "archiveConfirm": "I-archive ang uri ng ulat na ito? Mananatili ang uri ng mga kasalukuyang ulat, ngunit hindi na ito magagamit sa mga bagong ulat.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "I-archive ang uri ng ulat",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "hanggang",
     "users": "Mga Boluntaryo",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "Burahin ang shift na ito?",
+    "deleteConfirmMessage": "Titigil sa pagtanggap ng tawag ang mga boluntaryo sa shift na ito sa oras nito. Kung walang ibang shift na sasalo sa mga oras na iyon, mapupunta ang mga tawag sa fallback group, o hindi masasagot kung walang itinakda. Hindi na ito maibabalik."
   },
   "shortcuts": {
     "answerCall": "Sagutin ang tawag",

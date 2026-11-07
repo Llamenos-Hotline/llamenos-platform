@@ -563,6 +563,8 @@
     "phoneNumber": "رقم الهاتف",
     "reason": "السبب",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "سيتمكن هذا المتصل من الوصول إلى الخط الساخن مرة أخرى. يُحتفظ فقط ببصمة رقمية أحادية الاتجاه للرقم، لذا لا يمكنك حظره مجددًا إلا إذا كان الرقم لا يزال بحوزتك. يُسجَّل رفع الحظر في سجل التدقيق.",
+    "removeConfirmTitle": "هل تريد رفع هذا الحظر؟",
     "removeNumber": "إلغاء حظر رقم",
     "title": "قائمة الحظر"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "سيتمكن هذا المتصل من الوصول إلى جميع المراكز في هذا النشر، وليس مركزًا واحدًا فقط. يُحتفظ فقط ببصمة رقمية أحادية الاتجاه للرقم، لذا لا يمكنك حظره مجددًا إلا إذا كان الرقم لا يزال بحوزتك. يُسجَّل رفع الحظر في سجل التدقيق.",
+    "removeConfirmTitle": "هل تريد رفع حظر المنصة هذا؟",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "أرشفة",
+    "archiveConfirm": "هل تريد أرشفة نوع التقرير هذا؟ ستحتفظ التقارير الحالية بنوعها، لكنه لن يكون متاحًا للتقارير الجديدة.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "أرشفة نوع التقرير",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "حتى",
     "users": "المتطوعون",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "ستتوقف عن تلقي المكالمات الواردة."
+    "clockOutMessage": "ستتوقف عن تلقي المكالمات الواردة.",
+    "deleteConfirmTitle": "هل تريد حذف هذه المناوبة؟",
+    "deleteConfirmMessage": "سيتوقف المتطوعون في هذه المناوبة عن تلقي المكالمات خلال ساعاتها. وما لم تغطِّ مناوبة أخرى هذه الساعات، ستذهب المكالمات إلى المجموعة الاحتياطية أو تبقى دون رد إن لم تُحدَّد مجموعة. لا يمكن التراجع عن هذا الإجراء."
   },
   "shortcuts": {
     "answerCall": "الرد على المكالمة",

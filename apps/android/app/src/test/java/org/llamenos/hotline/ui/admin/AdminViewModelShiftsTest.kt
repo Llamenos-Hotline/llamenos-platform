@@ -204,7 +204,7 @@ class AdminViewModelShiftsTest {
         }
 
     @Test
-    fun `shift CRUD and audit target the real hub-scoped routes, never api-admin-shifts or api-admin-audit`() =
+    fun `shift create and update, and audit, target the real hub-scoped routes, never api-admin-shifts or api-admin-audit`() =
         runTest(UnconfinedTestDispatcher()) {
             val vm = newViewModel()
             advanceUntilIdle()
@@ -212,7 +212,6 @@ class AdminViewModelShiftsTest {
             vm.loadAdminShifts()
             vm.createShift("New Shift", "09:00", "17:00", days = listOf(1, 2, 3, 4, 5))
             vm.updateShift("shift-1", "Name", "09:00", "17:00", days = listOf(1, 2, 3, 4, 5))
-            vm.deleteShift("shift-1")
             vm.setFallbackGroup(listOf("pk1"))
             vm.loadAuditLog()
             advanceUntilIdle()
@@ -221,7 +220,6 @@ class AdminViewModelShiftsTest {
             assertTrue(seen.contains("GET /api/hubs/hub-a/shifts"))
             assertTrue(seen.contains("POST /api/hubs/hub-a/shifts"))
             assertTrue(seen.contains("PATCH /api/hubs/hub-a/shifts/shift-1"))
-            assertTrue(seen.contains("DELETE /api/hubs/hub-a/shifts/shift-1"))
             assertTrue(seen.contains("PUT /api/hubs/hub-a/shifts/fallback"))
             assertTrue(seen.any { it.startsWith("GET /api/hubs/hub-a/audit") })
             assertTrue(

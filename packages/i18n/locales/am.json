@@ -214,6 +214,8 @@
     "phoneNumber": "ስልክ ቁጥር",
     "reason": "ምክንያት",
     "remove": "እገዳ አስወግድ",
+    "removeConfirmMessage": "ይህ ደዋይ እንደገና ወደ ስልክ መስመሩ መደወል ይችላል። የቁጥሩ አንድ-አቅጣጫ ሃሽ ብቻ ስለሚቀመጥ፣ ቁጥሩ አሁንም ካለዎት ብቻ እንደገና ማገድ ይችላሉ። ማስወገዱ በኦዲት መዝገብ ውስጥ ይመዘገባል።",
+    "removeConfirmTitle": "ይህ እገዳ ይወገድ?",
     "removeNumber": "ቁጥር ፈቅድ",
     "title": "የታገዱ ዝርዝር"
   },
@@ -1564,7 +1566,9 @@
       "title": "Availability"
     },
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
-    "clockOutMessage": "You will stop receiving incoming calls."
+    "clockOutMessage": "You will stop receiving incoming calls.",
+    "deleteConfirmTitle": "ይህ ፈረቃ ይሰረዝ?",
+    "deleteConfirmMessage": "በዚህ ፈረቃ ላይ ያሉ ፈቃደኞች በፈረቃው ሰዓታት ጥሪ መቀበል ያቆማሉ። ሌላ ፈረቃ እነዚያን ሰዓታት ካልሸፈነ፣ ጥሪዎች ወደ ተተኪ ቡድን ይሄዳሉ፤ ተተኪ ቡድን ካልተመደበ ደግሞ ያለ መልስ ይቀራሉ። ይህ ሊመለስ አይችልም።"
   },
   "shortcuts": {
     "answerCall": "ጥሪ መልስ",
@@ -3889,7 +3893,7 @@
     "archived": "ከመዝገብ ቤት",
     "name": "ስም",
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveConfirm": "ይህ የሪፖርት ዓይነት ወደ መዝገብ ቤት ይግባ? ነባር ሪፖርቶች የዓይነት ማጣቀሻቸውን ይይዛሉ፣ ነገር ግን ለአዲስ ሪፖርቶች አይገኝም።",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
@@ -3905,7 +3909,9 @@
     "namePlaceholder": "e.g., Incident Report",
     "noFields": "No custom fields configured for this report type.",
     "updateError": "Failed to update report type",
-    "updated": "Report type updated"
+    "updated": "Report type updated",
+    "archiveTitle": "የሪፖርት ዓይነት ወደ መዝገብ ቤት አስገባ",
+    "archiveAction": "ወደ መዝገብ ቤት አስገባ"
   },
   "roles": {
     "description": "መግለጫ",
@@ -4173,7 +4179,9 @@
     "searchResults": "{{count}} results",
     "searchTitle": "Search All Bans",
     "title": "Platform Bans",
-    "totalCount": "{{count}} total bans"
+    "totalCount": "{{count}} total bans",
+    "removeConfirmTitle": "ይህ የመድረክ እገዳ ይወገድ?",
+    "removeConfirmMessage": "ይህ ደዋይ በዚህ ሲስተም ላይ ወዳሉ ሁሉም ሃቦች እንደገና መደወል ይችላል፤ ወደ አንዱ ብቻ አይደለም። የቁጥሩ አንድ-አቅጣጫ ሃሽ ብቻ ስለሚቀመጥ፣ ቁጥሩ አሁንም ካለዎት ብቻ እንደገና ማገድ ይችላሉ። ማስወገዱ በኦዲት መዝገብ ውስጥ ይመዘገባል።"
   },
   "no": "አይ",
   "inviteCreate": "ግብዣ ፍጠር",

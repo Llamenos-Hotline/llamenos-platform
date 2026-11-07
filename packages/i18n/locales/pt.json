@@ -563,6 +563,8 @@
     "phoneNumber": "Número de Telefone",
     "reason": "Motivo",
     "remove": "Remove Ban",
+    "removeConfirmMessage": "Quem ligou poderá voltar a contactar a linha. Apenas um hash irreversível do número é guardado, por isso só poderá bloqueá-lo novamente se ainda tiver o número. A remoção fica registada no registo de auditoria.",
+    "removeConfirmTitle": "Remover este bloqueio?",
     "removeNumber": "Desbloquear Número",
     "title": "Lista de Bloqueio"
   },
@@ -2967,6 +2969,8 @@
     "promotedFrom": "Promoted from hub",
     "reason": "Reason",
     "reasonPlaceholder": "Reason for ban",
+    "removeConfirmMessage": "Quem ligou poderá voltar a contactar todos os hubs desta instalação, e não apenas um. Apenas um hash irreversível do número é guardado, por isso só poderá bloqueá-lo novamente se ainda tiver o número. A remoção fica registada no registo de auditoria.",
+    "removeConfirmTitle": "Remover este bloqueio de plataforma?",
     "scopeHub": "Hub",
     "scopePlatform": "Platform",
     "searchPlaceholder": "Search bans by identifier hash...",
@@ -3381,9 +3385,11 @@
   },
   "reportTypes": {
     "addType": "Add Report Type",
-    "archiveConfirm": "Archive this report type? Existing reports will keep their type reference, but it won't be available for new reports.",
+    "archiveAction": "Arquivar",
+    "archiveConfirm": "Arquivar este tipo de relatório? Os relatórios existentes mantêm o seu tipo, mas ele deixa de estar disponível para novos relatórios.",
     "archiveError": "Failed to archive report type",
     "archiveSuccess": "Report type archived",
+    "archiveTitle": "Arquivar tipo de relatório",
     "archived": "Archived",
     "cannotArchiveLast": "Cannot archive the last active report type",
     "createError": "Failed to create report type",
@@ -4101,7 +4107,9 @@
     "until": "até",
     "users": "Voluntários",
     "weeklySchedule": "Weekly Schedule",
-    "clockOutMessage": "Você deixará de receber chamadas."
+    "clockOutMessage": "Você deixará de receber chamadas.",
+    "deleteConfirmTitle": "Excluir este turno?",
+    "deleteConfirmMessage": "Os voluntários deste turno deixarão de receber chamadas durante o seu horário. Se nenhum outro turno cobrir essas horas, as chamadas vão para o grupo de reserva ou ficam sem resposta se não houver nenhum. Esta ação não pode ser desfeita."
   },
   "shortcuts": {
     "answerCall": "Atender chamada",

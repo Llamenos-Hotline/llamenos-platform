@@ -69,6 +69,22 @@ fun ShiftScheduleTab(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var shiftToDelete by remember { mutableStateOf<ShiftResponse?>(null) }
+
+    // Deleting a shift can leave its hours with nobody on shift: ask first (#2540). The dialog is
+    // the only thing that mints the confirmation `deleteShift` requires.
+    shiftToDelete?.let { shift ->
+        DeletionConfirmed.Dialog(
+            action = AdminDeletion.SHIFT,
+            targetId = shift.id,
+            subject = "${shift.name} · ${shift.startTime} - ${shift.endTime}",
+            onConfirmed = {
+                shiftToDelete = null
+                viewModel.deleteShift(shift.id, it)
+            },
+            onDismiss = { shiftToDelete = null },
+        )
+    }
 
     if (uiState.showCreateShiftDialog) {
         ShiftDialog(
@@ -157,7 +173,7 @@ fun ShiftScheduleTab(
                                 shift = shift,
                                 onClick = { onNavigateToShiftDetail(shift.id) },
                                 onEdit = { viewModel.showEditShiftDialog(shift) },
-                                onDelete = { viewModel.deleteShift(shift.id) },
+                                onDelete = { shiftToDelete = shift },
                             )
                         }
                     }
