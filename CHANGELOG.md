@@ -404,6 +404,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.8 (2026-11-07)
+
+### Fixes
+
+- ban + hang up follows the server's answer; the UI test names the step that failed (#2531) (#2536)
+- five admin deletes require a confirmation token only their dialog mints (#2540) (#2543)
+
 ## 0.21.7 (2026-11-07)
 
 ### Fixes
