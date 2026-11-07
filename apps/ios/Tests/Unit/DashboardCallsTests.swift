@@ -356,6 +356,85 @@ final class DashboardCallsTests: XCTestCase {
         XCTAssertNotNil(vm.errorMessage)
     }
 
+    // MARK: - Ban + hang up (#2531)
+
+    private var banKey: String { "POST /api/hubs/\(hubA)/calls/mine-1/ban" }
+
+    private func vmOnMyCall(ban: (Int, String)) async throws -> DashboardViewModel {
+        let vm = try makeViewModel([
+            activeKey: active(call("mine-1", status: "in-progress", answeredBy: me)),
+            banKey: ban,
+        ])
+        await vm.loadDashboard()
+        XCTAssertEqual(vm.currentCall?.id, "mine-1", "precondition: the card is up")
+        // `shifts/my-status` is not stubbed here, so loading left its 404 behind. Clear it, so
+        // that an error after the ban is the ban's own and "no error" can be asserted.
+        vm.errorMessage = nil
+        return vm
+    }
+
+    /// The one transition #2531's UI test depends on: ban, then the card is gone and a note
+    /// is offered — and a `calls/active` read that still lists the call (it raced the end)
+    /// does not bring the card back.
+    func testBanAndHangupClearsTheCardAndAStaleListDoesNotBringItBack() async throws {
+        let vm = try await vmOnMyCall(ban: (200, #"{"banned":true,"hungUp":true}"#))
+        await vm.banAndHangup(reason: "Harassing caller")
+
+        XCTAssertTrue(DashboardCallsStubURLProtocol.requests().contains(banKey), "the ban is posted to the call's own hub")
+        XCTAssertNil(vm.currentCall, "the card clears once the call is banned and hung up")
+        XCTAssertEqual(vm.endedCall?.id, "mine-1", "and the volunteer is offered a note for it")
+        XCTAssertNil(vm.errorMessage)
+
+        // The server still lists the call: that read was taken before the end.
+        vm.dismissEndedCall()
+        await vm.refresh()
+        XCTAssertNil(vm.currentCall, "a banned, ended call is not brought back by a stale list")
+        XCTAssertNil(vm.endedCall, "nor is its prompt raised again")
+        XCTAssertEqual(vm.activeCallCount, 0)
+    }
+
+    func testBanAndHangupWithNoReasonStillBansAndEndsTheCall() async throws {
+        let vm = try await vmOnMyCall(ban: (200, #"{"banned":true,"hungUp":true}"#))
+        await vm.banAndHangup(reason: nil)
+
+        XCTAssertNil(vm.currentCall)
+        XCTAssertEqual(vm.endedCall?.id, "mine-1")
+    }
+
+    /// A refused ban (403 "Not your call", 404, a network error) leaves the call on screen:
+    /// nothing was banned and nothing was hung up.
+    func testARefusedBanLeavesTheCallAndSaysSo() async throws {
+        let vm = try await vmOnMyCall(ban: (403, #"{"error":"Not your call"}"#))
+        await vm.banAndHangup(reason: "Harassing caller")
+
+        XCTAssertEqual(vm.currentCall?.id, "mine-1")
+        XCTAssertNil(vm.endedCall)
+        XCTAssertNotNil(vm.errorMessage)
+    }
+
+    /// The server answers 200 with `hungUp: false` when the provider could not disconnect the
+    /// caller. The call is still live, so the card stays for a retry — clearing it would tell
+    /// the volunteer a connected caller is gone. (`hangup` answers 502 for the same fault.)
+    func testABanWhoseHangupFailedKeepsTheCardForARetry() async throws {
+        let vm = try await vmOnMyCall(ban: (200, #"{"banned":true,"hungUp":false}"#))
+        await vm.banAndHangup(reason: nil)
+
+        XCTAssertEqual(vm.currentCall?.id, "mine-1", "the caller is still connected")
+        XCTAssertNil(vm.endedCall)
+        XCTAssertNotNil(vm.errorMessage)
+    }
+
+    /// The call ended but the number could not be banned: the volunteer is told, because the
+    /// caller can ring straight back in.
+    func testABanThatDidNotLandIsReportedEvenThoughTheCallEnded() async throws {
+        let vm = try await vmOnMyCall(ban: (200, #"{"banned":false,"hungUp":true}"#))
+        await vm.banAndHangup(reason: nil)
+
+        XCTAssertNil(vm.currentCall)
+        XCTAssertEqual(vm.endedCall?.id, "mine-1")
+        XCTAssertNotNil(vm.errorMessage, "a ban that did not land is not silently dropped")
+    }
+
     // MARK: - Answering (Q2)
 
     func testAnswerPostsToTheCallsOwnHubAndA422MeansAnswerOnThePhone() async throws {

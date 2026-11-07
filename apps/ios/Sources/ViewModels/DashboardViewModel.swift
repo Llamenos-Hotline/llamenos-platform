@@ -303,18 +303,30 @@ final class DashboardViewModel {
     }
 
     /// Ban the caller and hang up (on the call's own hub).
+    ///
+    /// The server answers 200 with what it did, not with a refusal: `hungUp` is false when
+    /// the provider could not disconnect the caller (the call is still live, exactly as
+    /// `hangup` answers 502), `banned` is false when the number could not be banned. The card
+    /// follows `hungUp` — clearing it on a call that is still connected would leave the
+    /// volunteer believing the caller is gone — and a ban that did not land is said so,
+    /// not silently dropped, whether or not the call ended.
     func banAndHangup(reason: String?) async {
         guard let call = currentCall else { return }
         let path = APIService.hubPath(call.hubId, "/api/calls/\(call.id)/ban")
+        let body: [String: String]? = reason.map { ["reason": $0] }
+        let outcome: BanCallResponse
         do {
-            let body: [String: String]? = reason.map { ["reason": $0] }
-            if let body {
-                try await apiService.request(method: "POST", path: path, body: body)
-            } else {
-                try await apiService.request(method: "POST", path: path)
-            }
-            finish(call)
+            outcome = try await apiService.request(method: "POST", path: path, body: body)
         } catch {
+            errorMessage = NSLocalizedString("call_actions_ban_failed", comment: "Failed to ban caller")
+            return
+        }
+        guard outcome.hungUp else {
+            errorMessage = NSLocalizedString("calls_hangup_failed", comment: "Couldn't end the call. Try again.")
+            return
+        }
+        finish(call)
+        if !outcome.banned {
             errorMessage = NSLocalizedString("call_actions_ban_failed", comment: "Failed to ban caller")
         }
     }

@@ -105,7 +105,18 @@ final class ActiveCallUITests: BaseUITest {
             let reason = find("ban-reason-input")
             XCTAssertTrue(reason.waitForExistence(timeout: Self.eventBackstop), "The ban dialog should ask for a reason")
             typeText("Harassing caller", into: reason)
-            tapOnceHittable("ban-confirm-button")
+            // The real Button, not `find()`'s `Other` toolbar container: the container never
+            // reports Disabled, so waiting on it did not wait on the control being tapped.
+            tapWhenSettled(app.buttons["ban-confirm-button"].firstMatch, timeout: Self.eventBackstop)
+            // Confirming closes the dialog at once (the sheet's own state, before any request).
+            // A dialog still open means the confirm was never taken: no ban request left the
+            // app (#2531, run 42190010684 — the sheet was still up, with no POST /ban in the
+            // app log), so the call card was never asked to clear. Say that here, at the step
+            // that failed, instead of as "the card should clear" a minute later.
+            XCTAssertTrue(
+                find("ban-reason-input").waitForNonExistence(timeout: Self.eventBackstop),
+                "Confirming ban + hang up should close the dialog; it is still open, so the confirm tap was not taken and nothing was sent"
+            )
         }
         then("the call ends and the caller is banned") {
             XCTAssertTrue(waitForCallCardToClear(), "The call card should clear after ban + hang up")
