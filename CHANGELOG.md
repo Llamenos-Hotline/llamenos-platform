@@ -404,6 +404,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.7 (2026-11-07)
+
+### Fixes
+
+- ssh iOS builds put DerivedData on CIScratch behind a loud mount preflight; CI's data stays internal and its disk guard proves it (#2518)
+- a merged orchestrator change takes effect without a human; dormancy visible in doctor (#2515, #2512) (#2534)
+- queue-feed scopes verdicts to the head and reads why a job failed before which shard it was (#2529) (#2535)
+- destroying the device identity requires a confirmation token (#2123) (#2537)
+- conform responses to their declared schema — null becomes absent; ledger 74 → 35 (#2521 tranche 1) (#2539)
+- the test reporter derives each step's result from that step's own output (#2494) (#2520)
+
 ## 0.21.6 (2026-11-06)
 
 ### Features
