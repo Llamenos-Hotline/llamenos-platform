@@ -632,15 +632,19 @@ describe('#2579 — the XcodeGen spec is held when a trust setting moves, not wh
   }
   const ATS = '        NSAppTransportSecurity:\n          NSAllowsArbitraryLoads: false\n'
 
-  // #2577's diff to the spec, verbatim in effect: one test target's
-  // `sources` entry, plus comments. It moved no trust setting, and the
-  // whole-file rule held the fix for a repo-wide iOS outage on it.
+  // #2577's change to the spec: one test target's `sources` entry. It moved
+  // no trust setting, and the whole-file rule held the fix for a repo-wide iOS
+  // outage on it. The tracked spec is that change's RESULT, so the replay runs
+  // from the entry it replaced to the file as tracked. The anchor names the
+  // UI-test target's entry: the app target lists the same path, and a replay
+  // that landed there would be held. Its comment lines are the 'comments only'
+  // case below.
   it('lands #2577\'s change — a UI-test target sources entry — with no sign-off', async () => {
-    const after = edit(
-      '      - path: Resources/Localizable/en.lproj/Localizable.strings\n',
-      '      #\n      # This must be the SAME source path the app target uses.\n      - path: Resources/Localizable\n',
+    const before = edit(
+      '      - path: Resources/Localizable\n    dependencies:\n      - target: Llamenos\n',
+      '      - path: Resources/Localizable/en.lproj/Localizable.strings\n    dependencies:\n      - target: Llamenos\n',
     )
-    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: after }))
+    const rep = await gate(judged({ [SPEC]: before }, { [SPEC]: real }))
     expect(rep.reasons).toEqual([])
     expect(rep.trustAnchors).toBeUndefined()
   })
