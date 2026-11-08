@@ -394,7 +394,7 @@ jobs:
             dist/client/**/*.css
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           # Pin explicitly: the installer's own default happens to be
           # v3.0.6 today, but that default lives in the action, not here —
@@ -747,7 +747,7 @@ jobs:
           push-to-registry: true
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           # Same pin as the blob-signing job's "Install cosign" step, kept
           # in sync so both jobs always resolve the identical cosign
