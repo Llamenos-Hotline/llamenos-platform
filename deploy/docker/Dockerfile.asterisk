@@ -67,10 +67,25 @@ RUN menuselect/menuselect --disable-category MENUSELECT_RES menuselect.makeopts 
     && make -j"$(nproc)" res \
     && test -s res/res_resolver_unbound.so
 
+# ── Debian archive state: the cache key for the security upgrade ────────────
+# Same mechanism as deploy/docker/Dockerfile's `debian-archive-state` stage
+# (#2564): a cached `apt-get upgrade` layer never re-runs, so the mount of these
+# signed release files is what makes it re-run when Debian publishes a fix.
+FROM scratch AS debian-archive-state
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /trixie.InRelease
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates.InRelease
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
+
 # ── The vetted PBX image, plus the module ────────────────────────────────────
 # 22.10.1 — NOT below 22.10.0, see #1687
+# The digest pins the vetted Asterisk build; its Debian packages are upgraded on
+# top, as for the app image — a digest cannot move faster than upstream rebuilds.
 FROM andrius/asterisk@sha256:fa1d49e3826d3e85232e9a63bb1659a20088dabe8e41980ecc7948fb1da6efe6
-RUN apt-get update \
+RUN --mount=type=bind,from=debian-archive-state,target=/run/debian-archive-state \
+    . /etc/os-release \
+    && { [ "$VERSION_CODENAME" = trixie ] \
+         || { echo "base is Debian $VERSION_CODENAME; update the debian-archive-state suites" >&2; exit 1; }; } \
+    && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends libunbound8 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=resolver-builder --chown=asterisk:asterisk /usr/src/asterisk/res/res_resolver_unbound.so /usr/lib/asterisk/modules/res_resolver_unbound.so

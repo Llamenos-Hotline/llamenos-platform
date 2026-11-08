@@ -15,12 +15,29 @@ RUN bunx tsc --noEmit --project tsconfig.build.json
 # Build
 RUN bun build src/index.ts --outdir dist --target bun
 
+# Debian archive state: the cache key for the security upgrade below. Same
+# mechanism as deploy/docker/Dockerfile's `debian-archive-state` stage (#2564):
+# a cached `apt-get upgrade` layer never re-runs, so the mount of these signed
+# release files is what makes it re-run when Debian publishes a fix.
+FROM scratch AS debian-archive-state
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /trixie.InRelease
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates.InRelease
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
+
 # Production stage
 FROM oven/bun:1.3.5@sha256:e90cdbaf9ccdb3d4bd693aa335c3310a6004286a880f62f79b18f9b1312a8ec3
 WORKDIR /app
 
-# Install espeak-ng for local TTS support (used when TTS_ENGINE=espeak)
-RUN apt-get update && apt-get install -y --no-install-recommends espeak-ng && rm -rf /var/lib/apt/lists/*
+# Outstanding Debian security updates on top of the pinned base, as in
+# deploy/docker/Dockerfile's app-base, plus espeak-ng for local TTS support
+# (used when TTS_ENGINE=espeak).
+RUN --mount=type=bind,from=debian-archive-state,target=/run/debian-archive-state \
+    . /etc/os-release \
+    && { [ "$VERSION_CODENAME" = trixie ] \
+         || { echo "base is Debian $VERSION_CODENAME; update the debian-archive-state suites" >&2; exit 1; }; } \
+    && apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=base /app/dist/ dist/
 COPY --from=base /app/package.json ./

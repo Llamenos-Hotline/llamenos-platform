@@ -43,9 +43,26 @@ RUN cargo build --release --manifest-path packages/crypto/Cargo.toml --features 
     && mkdir -p packages/crypto/dist/server \
     && cp packages/crypto/target/release/libllamenos_core.so packages/crypto/dist/server/
 
+# Debian archive state: the cache key for the security upgrade below. Same
+# mechanism as deploy/docker/Dockerfile's `debian-archive-state` stage (#2564):
+# a cached `apt-get upgrade` layer never re-runs, so the mount of these signed
+# release files is what makes it re-run when Debian publishes a fix.
+FROM scratch AS debian-archive-state
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /trixie.InRelease
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates.InRelease
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
+
 # Stage 3: Production
 FROM node:26-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# Outstanding Debian security updates on top of the pinned base, as in
+# deploy/docker/Dockerfile's app-base.
+RUN --mount=type=bind,from=debian-archive-state,target=/run/debian-archive-state \
+    . /etc/os-release \
+    && { [ "$VERSION_CODENAME" = trixie ] \
+         || { echo "base is Debian $VERSION_CODENAME; update the debian-archive-state suites" >&2; exit 1; }; } \
+    && apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r llamenos && useradd -r -g llamenos -d /app -s /sbin/nologin llamenos
 WORKDIR /app
 COPY package.json ./
