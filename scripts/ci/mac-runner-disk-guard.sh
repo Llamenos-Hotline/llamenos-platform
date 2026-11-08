@@ -286,8 +286,19 @@ free_gib() {
 # allowed parent. Fails closed and loudly: a refusal here means this script
 # was asked to delete something it has no business deleting, which is a defect
 # worth seeing rather than silently skipping.
-# Exit status: 0 deleted, 2 nothing to delete, 1 refused (a defect in this
-# script's own target selection, deliberately fatal rather than skipped).
+#
+# A delete is proved, not assumed (#2566): the path counts as deleted only if
+# rm succeeded AND the path is gone afterwards. On 2026-11-07 /Volumes/CIScratch
+# answered unlink with EINTR while staying mounted: `rm -rf` exited 1 and the
+# tree was still there. Path presence is the discriminator on purpose: APFS
+# returns space asynchronously, so df straight after a GOOD delete can still
+# show the old figure. df lag therefore never makes a delete look failed, and
+# a failed delete never passes for df lag.
+#
+# Exit status: 0 deleted (verified gone), 2 nothing to delete, 3 delete
+# attempted but the path is still there (RM_ERROR says why), 1 refused (a
+# defect in this script's own target selection, deliberately fatal).
+RM_ERROR=""
 rm_ci_path() {
   local target="$1" parent allowed ok=0 deny
   [ -n "$target" ] || return 2
@@ -322,19 +333,52 @@ rm_ci_path() {
     return 1
   fi
 
-  [ -e "$target" ] || return 2
-  rm -rf "$target"
+  [ -e "$target" ] || [ -L "$target" ] || return 2
+  local err rc=0
+  err="$(rm -rf "$target" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -e "$target" ] || [ -L "$target" ]; then
+    if [ -n "$err" ]; then
+      RM_ERROR="$(printf '%s\n' "$err" | head -n 1)"
+    else
+      RM_ERROR="rm exited $rc but the path is still present"
+    fi
+    return 3
+  fi
+}
+
+# Deletes that were attempted and did not happen. Counted, named, and carried
+# to the gate's verdict; never added to anything reported as freed. A failed
+# delete is not fatal by itself: the gate decides on MEASURED free space, so a
+# job still runs when the disk really has room, and is refused (with these
+# paths named) when it does not.
+DELETE_FAILURES=0
+DELETE_FAILED_LIST=""
+
+# note_delete_failed <path> <what> [apparent-gib]
+# Deliberately does not `du` the survivor: on the volume that produced #2566,
+# readdir also returned EINTR and mkdir hung, so walking it here could wedge
+# the guard. Callers that measured the size before the delete pass it in.
+note_delete_failed() {
+  local size=""
+  [ -n "${3:-}" ] && size=" (${3} GiB apparent, NOT freed)"
+  DELETE_FAILURES=$((DELETE_FAILURES + 1))
+  DELETE_FAILED_LIST="${DELETE_FAILED_LIST}    $1: ${RM_ERROR}
+"
+  log "::warning::mac-runner-disk-guard delete FAILED — $2: '$1' is still on disk${size}: ${RM_ERROR}. Not counted as reclaimed; free space here is measured, never assumed (#2566)."
 }
 
 # prune <path> <message> — delete a CI-owned path and say so. A refusal from
 # rm_ci_path means this script targeted something it must not, which is a
-# defect: it aborts rather than continuing quietly.
+# defect: it aborts rather than continuing quietly. A delete the filesystem
+# would not perform is not this script's defect: it is named and counted, and
+# the rest of the reclaim still runs.
 prune() {
   local rc=0
   rm_ci_path "$1" || rc=$?
   case "$rc" in
     0) log "  $2"; deleted_any=1 ;;
     2) : ;;
+    3) note_delete_failed "$1" "$2" ;;
     *) exit 1 ;;
   esac
 }
@@ -576,7 +620,6 @@ reclaim() {
             deleted_any=1
           else
             prune "$dir" "removed orphaned CI simulator directory: $name ($udid)"
-            deleted_any=1
           fi
           ;;
       esac
@@ -618,7 +661,6 @@ reclaim() {
       else
         # simctl no longer knows the device; the directory is an orphan.
         prune "$dir" "removed orphaned stale simulator directory: $name ($udid)"
-        deleted_any=1
       fi
     done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${stale_min}" \
                -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
@@ -655,9 +697,15 @@ reclaim() {
   #    both agents died in the same second. Not routed through rm_ci_path:
   #    these are files under a runner install rather than leaves of a CI-owned
   #    parent, so the name pattern and age bound are the proof instead.
+  local err
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    rm -f "$p" && { log "  pruned stale runner log: ${p#"$HOME"/}"; deleted_any=1; }
+    if err="$(rm -f "$p" 2>&1)" && [ ! -e "$p" ]; then
+      log "  pruned stale runner log: ${p#"$HOME"/}"; deleted_any=1
+    else
+      RM_ERROR="${err:-rm exited 0 but the file is still present}"
+      note_delete_failed "$p" "stale runner log"
+    fi
   done < <(find "$HOME"/actions-runner-*/_diag -maxdepth 1 -type f \
              \( -name '*.log' -o -name '*.log.*' \) -mtime "+${DIAG_MAX_AGE_DAYS}" \
              -print 2>/dev/null || true)
@@ -673,6 +721,10 @@ reclaim() {
 
   after="$(free_kib)"
   freed=$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')
+  if [ "$DELETE_FAILURES" -gt 0 ]; then
+    log "::warning::mac-runner-disk-guard: ${DELETE_FAILURES} delete(s) FAILED and freed nothing; still on disk:"
+    printf '%s' "$DELETE_FAILED_LIST"
+  fi
   if awk -v f="$freed" 'BEGIN { exit !(f > 0) }'; then
     log "  reclaimed ${freed} GiB (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
   elif [ "$deleted_any" -gt 0 ]; then
@@ -681,6 +733,8 @@ reclaim() {
     # it). Saying "nothing left to reclaim" here is how #1861's report read
     # while a 3.86 GiB device sat deleted-but-unmeasured.
     log "  deletions issued; df shows no delta yet — APFS reclaims asynchronously, the space appears on a later read (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+  elif [ "$DELETE_FAILURES" -gt 0 ]; then
+    log "  nothing reclaimed: every delete attempted FAILED (listed above) (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
   else
     # Free space is a live number on a shared host; a non-positive delta means
     # there was nothing of CI's left to take, not that reclaim failed.
@@ -729,6 +783,7 @@ reclaim_derived_data() {
         log "  removed orphaned DerivedData $(basename "$dir") ($DD_REASON; ${age_min} min old); df available: $(awk -v k="$before" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after" 'BEGIN{printf "%.2f", k/1048576}') GiB (delta ${freed} GiB)"
         ;;
       2) : ;;
+      3) note_delete_failed "$dir" "orphaned DerivedData $(basename "$dir") ($DD_REASON)" "$apparent" ;;
       *) exit 1 ;;
     esac
   done
@@ -822,6 +877,11 @@ of size on this host, and read the script header before touching any of them:
   * /System/Volumes/VM/swapfile* — grows on demand, returned only by a reboot.
 
 EOF
+    if [ "$DELETE_FAILURES" -gt 0 ]; then
+      log "Reclaim also TRIED to free the ${DELETE_FAILURES} path(s) below and the filesystem refused. They are"
+      log "still on disk and none of their space is in the figure above. Fix the volume first (#2566):"
+      printf '%s' "$DELETE_FAILED_LIST"
+    fi
     return 1
   fi
 
@@ -1031,6 +1091,8 @@ EOF
 
   selftest_derived_data_ownership "$sandbox"
   fails=$((fails + SELFTEST_OWNERSHIP_FAILS))
+  selftest_failed_delete "$sandbox"
+  fails=$((fails + SELFTEST_FAILED_DELETE_FAILS))
 
   log ""
   if [ "$fails" -ne 0 ]; then
@@ -1148,6 +1210,88 @@ PLIST
   SELFTEST_OWNERSHIP_FAILS="$fails"
 }
 
+# A delete the filesystem refuses must be NAMED and must not count as freed
+# (#2566: /Volumes/CIScratch returned EINTR on unlink while staying mounted).
+# `rm` is shadowed by a function, inside a subshell, so the failure is the
+# exact shape that host produced (rm exits 1 with EINTR, the path survives)
+# on any filesystem and as any user. A second shim exits 0 and deletes
+# nothing: the verdict must come from the path, not from rm's exit code.
+selftest_failed_delete() {
+  local sandbox="$1" root out rc fails=0
+  local eintr="Llamenos-eintreintreintreintreintreintr" ghost="Llamenos-ghostghostghostghostghostghost"
+  local healthy="Llamenos-zzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+  root="$sandbox/actions-runner-8/_work/DerivedData"
+  mkdir -p "$root/$eintr/Build/Products" "$root/$ghost/Build" "$root/$healthy/Build/Products" "$sandbox/empty-host-dd"
+  dd if=/dev/urandom of="$root/$eintr/Build/Products/payload" bs=1048576 count=8 2>/dev/null
+  dd if=/dev/urandom of="$root/$healthy/Build/Products/payload" bs=1048576 count=8 2>/dev/null
+  find "$root" -exec touch -t 202001010000 {} +
+
+  log "── selftest: a delete that fails is named, never counted as freed (#2566) ──"
+  rc=0
+  out="$(
+    RUNNER_DD_GLOB="$sandbox/actions-runner-8/_work/DerivedData"
+    DERIVED_DATA="$sandbox/empty-host-dd"
+    DELETE_FAILURES=0; DELETE_FAILED_LIST=""
+    rm() {
+      case "$*" in
+        *"$eintr"*) printf 'rm: %s: Interrupted system call\n' "${!#}" >&2; return 1 ;;
+        *"$ghost"*) return 0 ;;
+        *) command rm "$@" ;;
+      esac
+    }
+    reclaim_all_derived_data
+    printf 'DELETE_FAILURES=%s\n' "$DELETE_FAILURES"
+  )" || rc=$?
+  log "$out"
+
+  # expect <label> <command...>: `if`, never a bare test, so a failing case is
+  # reported instead of tripping `set -e` and ending the selftest unreported.
+  expect() {
+    local label="$1"; shift
+    if "$@"; then log "  ok    $label"; else log "  FAIL  $label"; fails=$((fails + 1)); fi
+  }
+  # matches <string> <glob> / lacks <string> <glob>
+  matches() { [[ "$1" == $2 ]]; }
+  lacks() { [[ "$1" != $2 ]]; }
+
+  expect "reclaim survived the failed deletes (rc=$rc), it did not abort" [ "$rc" = "0" ]
+  expect "the EINTR entry is still on disk" [ -d "$root/$eintr" ]
+  expect "the rm-exited-0 entry is still on disk" [ -d "$root/$ghost" ]
+  expect "the healthy entry after them was still reclaimed" [ ! -e "$root/$healthy" ]
+  expect "the EINTR failure is named with its error and marked NOT freed" \
+    matches "$out" "*delete FAILED*$eintr*NOT freed*Interrupted system call*"
+  expect "an rm that exits 0 but leaves the path is a failure, not a delete" \
+    matches "$out" "*delete FAILED*$ghost*rm exited 0 but the path is still present*"
+  expect "the EINTR entry is not reported as removed" lacks "$out" "*removed orphaned DerivedData $eintr*"
+  expect "the rm-exited-0 entry is not reported as removed" lacks "$out" "*removed orphaned DerivedData $ghost*"
+  expect "the healthy entry is reported as removed" matches "$out" "*removed orphaned DerivedData $healthy*"
+  expect "exactly the two failed deletes are counted" matches "$out" "*DELETE_FAILURES=2*"
+
+  # The gate decides on measured space. Failures name themselves in a refusal,
+  # and do not by themselves refuse a disk that really has room.
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=999999; DELETE_FAILURES=1
+          DELETE_FAILED_LIST="    $root/$eintr: rm: Interrupted system call
+"
+          gate 2>&1 )" || rc=$?
+  expect "a refusal exits 1" [ "$rc" = "1" ]
+  expect "a refusal names the paths reclaim failed to free" \
+    matches "$out" "*TRIED to free*$root/$eintr*Interrupted system call*"
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=0; WARN_FREE_GIB=0; DELETE_FAILURES=1
+          DELETE_FAILED_LIST="    $root/$eintr: rm: Interrupted system call
+"
+          gate 2>&1 )" || rc=$?
+  expect "a failed delete does not fail closed when measured space is enough" \
+    matches "$rc:$out" "0:*disk headroom OK*"
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=0; WARN_FREE_GIB=0; DELETE_FAILURES=0; gate 2>&1 )" || rc=$?
+  expect "a healthy gate passes" matches "$rc:$out" "0:*disk headroom OK*"
+  expect "a healthy gate mentions no failures" lacks "$out" "*TRIED to free*"
+
+  SELFTEST_FAILED_DELETE_FAILS="$fails"
+}
+
 install_timer() {
   local launch_agents="$HOME/Library/LaunchAgents"
   local plist="$launch_agents/org.llamenos.mac-reclaim.plist"
@@ -1227,10 +1371,14 @@ case "$MODE" in
     fi
     report
     reclaim
+    failed_note=""
+    if [ "$DELETE_FAILURES" -gt 0 ]; then
+      failed_note=" ${DELETE_FAILURES} reclaim delete(s) FAILED and are not counted as freed (#2566)."
+    fi
     if gate; then
-      summarize "disk headroom OK — $(free_gib) GiB free (need ${MIN_FREE_GIB} GiB)"
+      summarize "disk headroom OK — $(free_gib) GiB free (need ${MIN_FREE_GIB} GiB).${failed_note}"
     else
-      summarize "REFUSED: only $(free_gib) GiB free, need ${MIN_FREE_GIB} GiB. Environmental, not this PR (#1665)."
+      summarize "REFUSED: only $(free_gib) GiB free, need ${MIN_FREE_GIB} GiB. Environmental, not this PR (#1665).${failed_note}"
       exit 1
     fi
     ;;

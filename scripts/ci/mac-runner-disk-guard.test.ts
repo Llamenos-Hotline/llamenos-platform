@@ -11,6 +11,11 @@
 //                compiled products, a host entry whose workspace exists, a
 //                foreign-named entry, a live headless build, and a hash dir that
 //                is not under any DerivedData root (rm_ci_path must refuse it).
+//
+// And the break-it for #2566: a delete the filesystem refuses (EINTR on unlink,
+// or rm exiting 0 with the path still present) is named, is never counted as
+// freed, does not abort the rest of the reclaim, and does not by itself refuse
+// a disk whose measured free space is enough.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -40,6 +45,21 @@ describe('mac-runner-disk-guard.sh selftest', () => {
     'host-root headless entry idle 90 min survives (could be a live test run)',
     'entry outside any DerivedData root survives',
     'rm_ci_path refuses a hash dir outside every DerivedData root',
+    'reclaim survived the failed deletes (rc=0), it did not abort',
+    'the EINTR entry is still on disk',
+    'the rm-exited-0 entry is still on disk',
+    'the healthy entry after them was still reclaimed',
+    'the EINTR failure is named with its error and marked NOT freed',
+    'an rm that exits 0 but leaves the path is a failure, not a delete',
+    'the EINTR entry is not reported as removed',
+    'the rm-exited-0 entry is not reported as removed',
+    'the healthy entry is reported as removed',
+    'exactly the two failed deletes are counted',
+    'a refusal exits 1',
+    'a refusal names the paths reclaim failed to free',
+    'a failed delete does not fail closed when measured space is enough',
+    'a healthy gate passes',
+    'a healthy gate mentions no failures',
   ])('asserts: %s', (label) => {
     // A case that silently stopped running would otherwise read as green.
     expect(out).toContain(`  ok    ${label}`)
