@@ -61,6 +61,8 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     verdictArtifactState: async () => 'absent',
     resolveReviewer: async (name) => ({ ok: true, profile: { name } as never }),
     platformFlags: async () => ({ ...NO_FLAGS, backend: true }),
+    readMergeBase: async () => undefined,
+    readFileAt: async () => undefined,
     readKnopeToml: async () => undefined,
     listMergeGroupRuns: async () => [],
     readRunJobs: async () => [],
@@ -220,23 +222,27 @@ describe('isEjectedOrNeverArmed — the eject detector, every term pinned', () =
   })
 })
 
-describe('iosQueueBlock — an iOS-UI-test PR forms its own group', () => {
-  const iosFlags: PlatformFlags = { ...NO_FLAGS, ios: true }
+describe('iosQueueBlock — an iOS-gate-risk PR forms its own group', () => {
+  const risky = { isolate: true as const, reasons: ['apps/ios/Tests/UI/X.swift: an iOS UI test or its harness'] }
 
-  it('a non-iOS PR is never blocked by this rule', () => {
-    expect(iosQueueBlock({ ...NO_FLAGS, backend: true }, 3, 2)).toBeUndefined()
+  it('a PR that does not schedule the iOS gate is never blocked by this rule', () => {
+    expect(iosQueueBlock(undefined, 3, 2)).toBeUndefined()
   })
 
-  it('an iOS PR may enter an EMPTY queue as the pass\'s ONLY selection', () => {
-    expect(iosQueueBlock(iosFlags, 0, 0)).toBeUndefined()
+  it('a PR that schedules the gate but cannot change its verdict is batched like any other (#2548)', () => {
+    expect(iosQueueBlock({ isolate: false, checked: ['apps/ios/Sources/App/Info.plist'] }, 3, 2)).toBeUndefined()
   })
 
-  it('an iOS PR is never batched behind work already queued', () => {
-    expect(iosQueueBlock(iosFlags, 1, 0)).toMatch(/never batched behind/)
+  it('an iOS-gate-risk PR may enter an EMPTY queue as the pass\'s ONLY selection', () => {
+    expect(iosQueueBlock(risky, 0, 0)).toBeUndefined()
   })
 
-  it('an iOS PR is never batched with this pass\'s other selections', () => {
-    expect(iosQueueBlock(iosFlags, 0, 1)).toMatch(/forms its own group/)
+  it('an iOS-gate-risk PR is never batched behind work already queued — and says which file made it risky', () => {
+    expect(iosQueueBlock(risky, 1, 0)).toMatch(/never batched behind.*apps\/ios\/Tests\/UI\/X\.swift/)
+  })
+
+  it('an iOS-gate-risk PR is never batched with this pass\'s other selections', () => {
+    expect(iosQueueBlock(risky, 0, 1)).toMatch(/forms its own group/)
   })
 })
 
@@ -594,7 +600,7 @@ describe('runQueueFeedWith — the pass', () => {
     expect(enableAutoMerge).not.toHaveBeenCalled()
   })
 
-  it('requirement 4: an iOS-UI-test PR is not batched behind a queue with entries', async () => {
+  it('requirement 4: an iOS-gate-risk PR is not batched behind a queue with entries', async () => {
     const enableAutoMerge = vi.fn(async () => {})
     const deps = mkDeps({
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 200, baseRefName: 'main' }],
@@ -610,7 +616,7 @@ describe('runQueueFeedWith — the pass', () => {
     expect(result.branches[0]?.skipped.some((s) => s.reason.includes('never batched behind'))).toBe(true)
   })
 
-  it('requirement 4: an iOS-UI-test PR queued into an EMPTY queue ends the pass\'s selections', async () => {
+  it('requirement 4: an iOS-gate-risk PR queued into an EMPTY queue ends the pass\'s selections', async () => {
     const armed: string[] = []
     // 100 is the iOS PR (lowest number → first), 101 is backend work.
     const deps = mkDeps({
@@ -626,6 +632,47 @@ describe('runQueueFeedWith — the pass', () => {
     const result = await runQueueFeedWith(deps)
     expect(armed).toEqual(['100']) // the iOS PR alone; 101 never even considered
     expect(result.branches[0]?.armed).toEqual([100])
+  })
+
+  it('requirement 4 (#2548): a PR that SCHEDULES the iOS gate but only bumps the version is batched behind queued work', async () => {
+    const armed: string[] = []
+    const plist = '<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>0.21.7</string>\n\t<key>CFBundleVersion</key>\n\t<string>1</string>\n</dict>\n'
+    const base = 'f'.repeat(40)
+    const deps = mkDeps({
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 101, baseRefName: 'main' }],
+      listQueueEntries: async () => ({ queue: true, prs: [200] }),
+      readPr: async (n) => mkPr({ number: n, headRefName: `fleet/x/${n}` }),
+      readPrFiles: async (n) => (n === 100 ? ['apps/ios/Sources/App/Info.plist', 'CHANGELOG.md'] : n === 101 ? ['apps/worker/routes/y.ts'] : ['apps/worker/routes/queued.ts']),
+      platformFlags: async (files) => files.some((f) => f.startsWith('apps/ios/')) ? { ...NO_FLAGS, ios: true } : { ...NO_FLAGS, backend: true },
+      readMergeBase: async () => base,
+      readFileAt: async (path, sha) => (path === 'apps/ios/Sources/App/Info.plist'
+        ? (sha === base ? plist : plist.replace('0.21.7', '0.21.8'))
+        : undefined),
+      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100', '101'])
+    expect(result.branches[0]?.notes.some((n) => n.startsWith('pr 100: schedules the iOS gate, but nothing in its diff can change'))).toBe(true)
+  })
+
+  it('requirement 4 (#2548): the same PR is isolated when its Info.plist change is more than the version', async () => {
+    const armed: string[] = []
+    const plist = '<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>0.21.7</string>\n</dict>\n'
+    const deps = mkDeps({
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
+      listQueueEntries: async () => ({ queue: true, prs: [200] }),
+      readPr: async (n) => mkPr({ number: n, headRefName: `fleet/x/${n}` }),
+      readPrFiles: async (n) => (n === 100 ? ['apps/ios/Sources/App/Info.plist'] : ['apps/worker/routes/queued.ts']),
+      platformFlags: async () => ({ ...NO_FLAGS, ios: true }),
+      readMergeBase: async () => 'f'.repeat(40),
+      readFileAt: async (_path, sha) => (sha === 'f'.repeat(40) ? plist : plist.replace('</dict>', '\t<key>NSAppTransportSecurity</key>\n\t<dict/>\n</dict>')),
+      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual([])
+    expect(result.branches[0]?.skipped.find((s) => s.pr === 100)?.reason).toMatch(/never batched behind.*Info\.plist: changes more than/)
   })
 
   it('a failed arming call is counted separately and changes nothing', async () => {

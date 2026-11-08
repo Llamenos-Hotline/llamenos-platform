@@ -13,6 +13,7 @@ import { releasePrShape } from './release-shape.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } from './specialist.js'
 import { checkHalt } from './killswitch.js'
+import { iosIsolationFor, isContentCheckedPath, type IosIsolation, type IosIsolationReads } from './ios-isolation.js'
 import {
   classifyAttempt, newAttemptReadCache, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
   type AttemptReadDeps, type AttemptReadCache, type PlatformFlags, type RunJob, type InfraEvidence,
@@ -69,12 +70,18 @@ import {
  *     c. Its file list is DISJOINT from every PR already queued and from
  *        every PR selected earlier in the same pass — under ALLGREEN one
  *        conflict fails the whole group.
- *     d. An iOS-UI-test PR (the shared path map,
- *        `.github/scripts/detect-changed-platforms.sh`, says `ios=true`)
- *        is queued only ALONE: into an empty queue, as the one selection of
- *        its pass. The iOS shards are the likeliest to fail a group, and
- *        under ALLGREEN an iOS entry batched behind non-iOS work takes the
- *        group down with it.
+ *     d. An iOS-gate-risk PR is queued only ALONE: into an empty queue, as
+ *        the one selection of its pass. The queue-only iOS jobs are the
+ *        likeliest to fail a group, and under ALLGREEN an iOS entry batched
+ *        behind other work takes the group down with it. "iOS-gate-risk" is
+ *        two questions (#2548, ios-isolation.ts): the shared path map
+ *        (`.github/scripts/detect-changed-platforms.sh`) says the diff
+ *        SCHEDULES the gate (`ios=true`), AND `iosIsolationFor` says the
+ *        diff changes something those jobs execute that no `pull_request`
+ *        check exercised. Scheduling alone isolated every release (knope's
+ *        `Info.plist` version bump), every string-adding PR and every
+ *        `scripts/` change — 7 of 9 open PRs — and left
+ *        `max_entries_to_merge` inert.
  *
  *  5. Arms each selected PR through the ONE existing arming call
  *     (`enableAutoMerge`, cli.ts — `gh pr merge --auto --squash`, no bypass
@@ -238,6 +245,12 @@ export interface QueueFeedDeps {
   resolveReviewer(name: string): Promise<ReviewerResolution>
   /** `detect-changed-platforms.sh` over the file list. `undefined` on failure. */
   platformFlags(files: readonly string[]): Promise<PlatformFlags | undefined>
+  /** The PR diff's merge base — read only for an iOS-scheduling PR whose
+   *  isolation turns on a file's content (ios-isolation.ts). */
+  readMergeBase: IosIsolationReads['readMergeBase']
+  /** A content-checked file at a commit (ios-isolation.ts's four shapes
+   *  only). `undefined` on failure or absence. */
+  readFileAt: IosIsolationReads['readFileAt']
   /** The base checkout's knope.toml — read only for a release-branch PR. */
   readKnopeToml(): Promise<string | undefined>
   /** Recent COMPLETED merge_group runs for a base branch. */
@@ -475,14 +488,16 @@ export async function reviewCoverageFor(
   )
 }
 
-/** Requirement 4 — an iOS-UI-test PR forms its own group, so it may be
- *  queued only into an EMPTY queue as the pass's ONLY selection. */
+/** Requirement 4 — an iOS-gate-risk PR forms its own group, so it may be
+ *  queued only into an EMPTY queue as the pass's ONLY selection. A PR that
+ *  merely schedules the gate (`isolate: false`) is batched like any other. */
 export function iosQueueBlock(
-  flags: PlatformFlags, queuedCount: number, selectedCount: number,
+  isolation: IosIsolation | undefined, queuedCount: number, selectedCount: number,
 ): string | undefined {
-  if (!flags.ios) return undefined
-  if (queuedCount > 0) return 'an iOS-UI-test PR is never batched behind work already in the queue — it forms its own group; retry when the queue is empty'
-  if (selectedCount > 0) return 'an iOS-UI-test PR forms its own group — deferred so this pass\'s other selections queue without it'
+  if (isolation === undefined || !isolation.isolate) return undefined
+  const why = `${isolation.reasons[0] ?? 'an iOS gate input'}${isolation.reasons.length > 1 ? ` (+${isolation.reasons.length - 1} more)` : ''}`
+  if (queuedCount > 0) return `an iOS-gate-risk PR is never batched behind work already in the queue — it forms its own group; retry when the queue is empty [${why}]`
+  if (selectedCount > 0) return `an iOS-gate-risk PR forms its own group — deferred so this pass's other selections queue without it [${why}]`
   return undefined
 }
 
@@ -670,7 +685,13 @@ async function feedBranch(
       result.skipped.push({ pr: pr.number, reason: 'its platform flags could not be computed' })
       continue
     }
-    const iosBlock = iosQueueBlock(flags, queued.size, result.armed.length)
+    // Question (1) answered no: a PR that does not schedule the iOS gate
+    // cannot fail it. Question (2) is asked only of the rest.
+    const isolation = flags.ios ? await iosIsolationFor(files, pr, deps) : undefined
+    if (isolation !== undefined && !isolation.isolate) {
+      result.notes.push(`pr ${pr.number}: schedules the iOS gate, but nothing in its diff can change the gate's verdict${isolation.checked.length > 0 ? ` (content-checked: ${isolation.checked.join(', ')})` : ''} — batchable`)
+    }
+    const iosBlock = iosQueueBlock(isolation, queued.size, result.armed.length)
     if (iosBlock !== undefined) {
       result.skipped.push({ pr: pr.number, reason: iosBlock })
       continue
@@ -707,7 +728,7 @@ async function feedBranch(
       if (infra !== undefined) result.infraRequeued.push(infra)
       for (const f of files) selectedFiles.add(f)
       deps.log(`queue-feed: armed pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
-      if (flags.ios) break // an iOS-UI-test PR is the whole group — stop the pass here
+      if (isolation?.isolate === true) break // an iOS-gate-risk PR is the whole group — stop the pass here
     } catch (e) {
       // Fail-closed: nothing merges, which is the safe direction; the PR
       // simply stays where it was. Counted separately from skips so a
@@ -893,6 +914,38 @@ export function defaultQueueFeedDeps(
         return parsePlatformFlags(await runPlatformMap(repoRoot, files))
       } catch (e) {
         log(`queue-feed: detect-changed-platforms.sh failed: ${describeGhFailure(e)}`)
+        return undefined
+      }
+    },
+    readMergeBase: async (baseRef, headSha) => {
+      let sha: string
+      try {
+        sha = commitSha(headSha)
+      } catch {
+        return undefined
+      }
+      if (!/^[A-Za-z0-9._/-]+$/.test(baseRef) || baseRef.includes('..')) return undefined
+      const data = await ghJson<{ merge_base_commit?: { sha?: string } }>(
+        ['api', `repos/${REPO}/compare/${encodeURIComponent(baseRef)}...${sha}`, '--jq', '{merge_base_commit: {sha: .merge_base_commit.sha}}'], 60_000,
+        (d) => log(`queue-feed: reading the merge base of ${sha.slice(0, 8)} with ${baseRef} failed: ${d}`),
+      )
+      const base = data?.merge_base_commit?.sha
+      return typeof base === 'string' && /^[0-9a-f]{40}$/.test(base) ? base : undefined
+    },
+    readFileAt: async (path, ref) => {
+      // Both segments are API-path data: only the content-checked shapes are
+      // served, and a ref is a 40-hex commit.
+      if (!isContentCheckedPath(path)) return undefined
+      let sha: string
+      try {
+        sha = commitSha(ref)
+      } catch {
+        return undefined
+      }
+      try {
+        return await gh(['api', '-H', 'Accept: application/vnd.github.raw', `repos/${REPO}/contents/${path}?ref=${sha}`], 30_000)
+      } catch (e) {
+        log(`queue-feed: reading ${path} at ${sha.slice(0, 8)} failed: ${describeGhFailure(e)}`)
         return undefined
       }
     },
