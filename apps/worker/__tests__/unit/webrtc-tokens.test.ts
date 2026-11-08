@@ -1,3 +1,4 @@
+import { createVerify, generateKeyPairSync } from 'node:crypto'
 import { describe, it, expect } from 'vitest'
 import { generateWebRtcToken, isWebRtcConfigured } from '@worker/telephony/webrtc-tokens'
 import type { TelephonyProviderConfig } from '@shared/types'
@@ -31,6 +32,22 @@ function signalwireConfig(overrides?: Partial<TelephonyProviderConfig>): Telepho
   }
 }
 
+/**
+ * Throwaway RS256 signing key for the Vonage token, generated per test run so no
+ * private key material is committed (#2560). The public half verifies the signature.
+ */
+const vonageSigningKey = (() => {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  return {
+    privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }) as string,
+    publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }) as string,
+  }
+})()
+
+function decodeJwtSegment(segment: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(segment, 'base64url').toString('utf-8'))
+}
+
 function vonageConfig(overrides?: Partial<TelephonyProviderConfig>): TelephonyProviderConfig {
   return {
     type: 'vonage',
@@ -39,7 +56,7 @@ function vonageConfig(overrides?: Partial<TelephonyProviderConfig>): TelephonyPr
     apiSecret: 'secret_test',
     applicationId: 'app_test',
     webrtcEnabled: true,
-    privateKey: `-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7AgEAAkEAsuKIsrjiTB7KSlR1\nKSVmxmDBsAavMr+Jou0Rt+J3P6byqjWy4e4WdXX/6acePk7IW/yjpjkO4ITHR5En\n7l/3hQIDAQABAkEAofbuIjO34Yf3TLmPowOUPIWamRBUTLSToAraAg5wPhYbF9Mf\n4TXGx5P4188OduKYPwxVo5TI5MdK4qJybZDi+QIhAOzk7OA37H42Ib2i3ryKqHu8\nBxFPHVGlSNN7yyNqKWPLAiEAwU/o2VdUP1vnUmMM3Xp0gf5uOuheL3vTm+FSZARb\nx+8CIFjtjyaUl8jBVWU08NxiSOE6MoUC6ASwQWhyfk1rGuKFAiAcD2ZkTgnbnJKK\nYfhXGdRZnj4P7PTm/Zls0hssi3lrHwIhAOu1tKW4Vv8eR0G7SXHeZe580grsprtX\nQOkrWxOz10cR\n-----END PRIVATE KEY-----`,
+    privateKey: vonageSigningKey.privateKeyPem,
     ...overrides,
   }
 }
@@ -261,6 +278,31 @@ describe('generateWebRtcToken', () => {
       expect(result.provider).toBe('vonage')
       const parts = result.token.split('.')
       expect(parts).toHaveLength(3)
+    })
+
+    it('signs the JWT with the configured RSA key (RS256), verifiable by its public key', async () => {
+      const result = await generateWebRtcToken(vonageConfig(), identity)
+      const [headerB64, payloadB64, sigB64] = result.token.split('.')
+
+      expect(decodeJwtSegment(headerB64)).toEqual({ typ: 'JWT', alg: 'RS256' })
+      const payload = decodeJwtSegment(payloadB64)
+      expect(payload.application_id).toBe('app_test')
+      expect(payload.sub).toBe(identity)
+      expect(payload.exp).toBe((payload.iat as number) + 3600)
+
+      const verifier = createVerify('RSA-SHA256')
+      verifier.update(`${headerB64}.${payloadB64}`)
+      expect(verifier.verify(vonageSigningKey.publicKeyPem, Buffer.from(sigB64, 'base64url'))).toBe(true)
+    })
+
+    it('produces a signature that does not verify under a different key', async () => {
+      const result = await generateWebRtcToken(vonageConfig(), identity)
+      const [headerB64, payloadB64, sigB64] = result.token.split('.')
+      const other = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey
+
+      const verifier = createVerify('RSA-SHA256')
+      verifier.update(`${headerB64}.${payloadB64}`)
+      expect(verifier.verify(other, Buffer.from(sigB64, 'base64url'))).toBe(false)
     })
 
     it('throws when applicationId is missing', async () => {
