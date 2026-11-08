@@ -380,7 +380,12 @@ export class RecordsService {
     return inserted.length
   }
 
-  async removeBan(phone: string, hubId?: string): Promise<void> {
+  /**
+   * Lift the ban on [phone] (the scope's keyed hash) in [hubId]'s list, or the
+   * platform list when no hub is given. Returns whether a ban was actually lifted, so
+   * the caller records an unban only when one happened (#2575).
+   */
+  async removeBan(phone: string, hubId?: string): Promise<boolean> {
     const conditions = [eq(bans.phone, phone)]
     if (hubId) {
       conditions.push(eq(bans.hubId, hubId))
@@ -388,9 +393,11 @@ export class RecordsService {
       conditions.push(sql`${bans.hubId} IS NULL`)
     }
 
-    await this.db
+    const removed = await this.db
       .delete(bans)
       .where(and(...conditions))
+      .returning({ id: bans.id })
+    return removed.length > 0
   }
 
   /**

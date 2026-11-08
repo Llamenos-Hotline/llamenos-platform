@@ -25,6 +25,7 @@ function createTestApp(opts: {
     settings: serviceMock.settings || {},
     activeShifts: serviceMock.activeShifts || {},
     shiftAvailability: serviceMock.shiftAvailability || {},
+    shiftOverrides: serviceMock.shiftOverrides || {},
     audit: serviceMock.audit || { log: vi.fn().mockResolvedValue(undefined) },
   }
 
@@ -350,6 +351,64 @@ describe('shifts routes', () => {
       const res = await app.request('/shifts/availability/blk-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
       expect(deleteSpy).toHaveBeenCalledWith('hub-1', 'blk-1')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Shift overrides — an override changes who is rung on a date, so making and
+  // removing one are both recorded in the hub's audit log (#2575)
+  // -------------------------------------------------------------------------
+
+  describe('shift override audit', () => {
+    const override = {
+      id: 'ov-1', hubId: 'hub-1', shiftId: 'shift-1', date: '2026-07-04', type: 'cancel',
+      userPubkeys: null, encryptedNote: 'ciphertext', createdBy: 'a'.repeat(64), createdAt: new Date(),
+    }
+
+    it('records the override it created, without its note', async () => {
+      const auditLog = vi.fn().mockResolvedValue(undefined)
+      const { app } = createTestApp({
+        permissions: ['shifts:manage-overrides'],
+        hubId: 'hub-1',
+        serviceMock: {
+          shiftOverrides: { create: vi.fn().mockResolvedValue(override) },
+          audit: { log: auditLog },
+        },
+      })
+
+      const res = await app.request('/shifts/overrides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: crypto.randomUUID(), date: '2026-07-04', type: 'cancel', shiftId: 'shift-1' }),
+      })
+      expect(res.status).toBe(200)
+      expect(auditLog).toHaveBeenCalledOnce()
+      expect(auditLog).toHaveBeenCalledWith(
+        'shiftOverrideCreated',
+        'a'.repeat(64),
+        { overrideId: 'ov-1', shiftId: 'shift-1', date: '2026-07-04', type: 'cancel' },
+        'hub-1',
+      )
+    })
+
+    it('records the override it deleted: which one, its date and its kind', async () => {
+      const auditLog = vi.fn().mockResolvedValue(undefined)
+      const deleteSpy = vi.fn().mockResolvedValue(override)
+      const { app } = createTestApp({
+        permissions: ['shifts:manage-overrides'],
+        hubId: 'hub-1',
+        serviceMock: { shiftOverrides: { delete: deleteSpy }, audit: { log: auditLog } },
+      })
+
+      const res = await app.request('/shifts/overrides/ov-1', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-1', 'ov-1')
+      expect(auditLog).toHaveBeenCalledWith(
+        'shiftOverrideDeleted',
+        'a'.repeat(64),
+        { overrideId: 'ov-1', shiftId: 'shift-1', date: '2026-07-04', type: 'cancel' },
+        'hub-1',
+      )
     })
   })
 

@@ -114,9 +114,12 @@ export class ShiftOverridesService {
     return row
   }
 
-  /** Delete a shift override */
-  async delete(hubId: string, overrideId: string): Promise<{ ok: true }> {
-    const result = await this.db
+  /**
+   * Delete a shift override, returning the row it removed so the caller can record
+   * what stopped applying (#2575).
+   */
+  async delete(hubId: string, overrideId: string): Promise<ShiftOverrideRow> {
+    const [row] = await this.db
       .delete(shiftOverrides)
       .where(
         and(
@@ -124,13 +127,13 @@ export class ShiftOverridesService {
           eq(shiftOverrides.hubId, hubId),
         ),
       )
-      .returning({ id: shiftOverrides.id })
+      .returning()
 
-    if (result.length === 0) {
+    if (!row) {
       throw new ServiceError(404, 'Shift override not found')
     }
 
-    return { ok: true }
+    return row
   }
 
   // =========================================================================

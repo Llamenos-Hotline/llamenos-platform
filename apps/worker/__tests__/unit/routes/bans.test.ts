@@ -252,7 +252,7 @@ describe('bans routes', () => {
 
   describe('DELETE /bans/:phoneHash', () => {
     it('refuses a raw E.164 number in the path: it would land in access logs', async () => {
-      const removeBanSpy = vi.fn().mockResolvedValue(undefined)
+      const removeBanSpy = vi.fn().mockResolvedValue(true)
       const { app, auditLogSpy } = createTestApp({
         permissions: ['bans:delete'],
         hubId: 'hub-1',
@@ -265,8 +265,8 @@ describe('bans routes', () => {
       expect(auditLogSpy).not.toHaveBeenCalled()
     })
 
-    it('unbans by the handle from the ban list', async () => {
-      const removeBanSpy = vi.fn().mockResolvedValue(undefined)
+    it('unbans by the handle from the ban list, and the audit entry names that handle', async () => {
+      const removeBanSpy = vi.fn().mockResolvedValue(true)
       const handle = banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY)
       const { app, auditLogSpy } = createTestApp({
         permissions: ['bans:delete'],
@@ -278,6 +278,27 @@ describe('bans routes', () => {
       expect(res.status).toBe(200)
       expect(removeBanSpy).toHaveBeenCalledWith(handle, 'hub-1')
       expect(auditLogSpy).toHaveBeenCalledOnce()
+      // The same handle `numberBanned` recorded, so the unban pairs with the ban it undid (#2575).
+      expect(auditLogSpy).toHaveBeenCalledWith(
+        'numberUnbanned',
+        expect.any(String),
+        expect.objectContaining({ phoneHash: handle }),
+        'hub-1',
+      )
+    })
+
+    it('records no unban when no ban was lifted', async () => {
+      const removeBanSpy = vi.fn().mockResolvedValue(false)
+      const handle = banHash('+12125551234', 'hub-1', TEST_BAN_HASH_KEY)
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['bans:delete'],
+        hubId: 'hub-1',
+        serviceMock: { records: { removeBan: removeBanSpy } },
+      })
+
+      const res = await app.request(`/bans/${handle}`, { method: 'DELETE' })
+      expect(res.status).toBe(404)
+      expect(auditLogSpy).not.toHaveBeenCalled()
     })
 
     it('returns 403 without bans:delete permission', async () => {
