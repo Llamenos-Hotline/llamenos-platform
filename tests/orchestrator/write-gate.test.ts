@@ -208,20 +208,24 @@ describe('trustAnchorFinding', () => {
     expect(trustAnchorFinding(NEW_CLIENT, 'val a = 1\n', 'val a = 2\n')).toBeUndefined()
   })
 
-  // The value of a plist key lives on the NEXT line, which carries no
+  // The value of a plist-style key lives on the NEXT line, which carries no
   // signature of its own — the case a line-by-line diff scan cannot see.
-  it('catches App Transport Security flipped open in Info.plist, and shows the old and new value', () => {
+  it('catches a trust value on the line after its key, and shows the old and new value', () => {
     const plist = (v: string) => `<key>NSAppTransportSecurity</key>\n<dict>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<${v}/>\n</dict>\n`
-    expect(trustAnchorFinding('apps/ios/Sources/App/Info.plist', plist('false'), plist('true'))).toBe(
+    expect(trustAnchorFinding('apps/ios/Sources/App/Other.plist', plist('false'), plist('true'))).toBe(
       'its diff changes an Apple Security trust API or App Transport Security key in shipped client source: ' +
       '`<key>NSAllowsArbitraryLoads</key> <false/> → <true/>`',
     )
   })
 
-  it('leaves a release version bump in Info.plist alone — knope makes one every release', () => {
-    const plist = (v: string) =>
-      `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n<key>NSAllowsArbitraryLoads</key>\n<false/>\n`
-    expect(trustAnchorFinding('apps/ios/Sources/App/Info.plist', plist('0.21.7'), plist('0.21.8'))).toBeUndefined()
+  it('lets knope\'s version bump through a registered Info.plist, and nothing else', () => {
+    const plist = (v: string, extra = '') =>
+      `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n<key>NSAllowsArbitraryLoads</key>\n<false/>\n${extra}`
+    const f = 'apps/ios/Sources/App/Info.plist'
+    expect(trustAnchorFinding(f, plist('0.21.7'), plist('0.21.8'))).toBeUndefined()
+    expect(trustAnchorFinding(f, plist('0.21.7'), plist('0.21.8', '<key>X</key>\n'))).toMatch(/^it is the iOS Info.plist/)
+    expect(trustAnchorFinding(f, undefined, plist('0.21.8'))).toMatch(/^it is the iOS Info.plist/)
+    expect(trustAnchorFinding(f, '<dict/>\n', plist('0.21.8'))).toMatch(/^it is the iOS Info.plist/)
   })
 
   it('reads a binary file\'s bytes — no diff hunks are needed to see a trust line', () => {

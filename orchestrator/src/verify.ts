@@ -1105,13 +1105,20 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // shipped-client root is judged by comparing its trust lines at the merge
   // base against the head (`trustAnchorFinding`), from blobs — never from
   // diff hunks, which a binary file does not have.
-  const shippedOthers = changedFiles.filter((f) => isShippedClientSource(f) && trustAnchorEntry(f) === undefined)
+  // Files whose earlier bytes the trust check compares: every changed
+  // shipped-client file outside the registry, and registered files knope
+  // bumps (`releaseBump`), whose version-only change is not held.
+  const shippedOthers = changedFiles.filter((f) => {
+    const entry = trustAnchorEntry(f)
+    return entry === undefined ? isShippedClientSource(f) : entry.releaseBump !== undefined
+  })
   const added = new Set(changedFilesFrom(addedRaw ?? ''))
   const mergeBase = shippedOthers.length === 0 ? undefined : (await runGit(worktree, ['merge-base', baseRef, branch]))?.trim()
   const baseBytes = mergeBase === undefined ? new Map<string, Buffer>() : await readHeadBlobs(worktree, mergeBase, shippedOthers)
   const trust: WriteFinding[] = []
   for (const f of changedFiles) {
-    if (shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
+    const unregistered = trustAnchorEntry(f) === undefined
+    if (unregistered && shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
       // The file existed before this diff but its earlier bytes cannot be
       // read, so a trust line it REMOVED would be invisible — hold it.
       trust.push({ file: f, why: 'its content at the merge base could not be read, so a removed trust line could not be ruled out' })

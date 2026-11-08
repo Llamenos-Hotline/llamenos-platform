@@ -238,15 +238,69 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
   const PIN_A = `"sha256/${'A'.repeat(43)}="`
   const PIN_B = `"sha256/${'B'.repeat(43)}="`
 
-  it('registers the five files #2556 names, and the iOS pin set', () => {
+  it('registers the five files #2556 names, the iOS pin set, and the build files that choose what ships', () => {
     expect(TRUST_ANCHOR_FILES.map((a) => a.path).sort()).toEqual([
+      'apps/android/app/src/main/AndroidManifest.xml',
       'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
       'apps/android/app/src/main/res/xml/network_security_config.xml',
       'apps/desktop/src/api_config.rs',
       'apps/desktop/src/cert_pin.rs',
       'apps/desktop/src/net.rs',
+      'apps/ios/Sources/App/Info.plist',
       'apps/ios/Sources/Services/CertificatePinning.swift',
+      'apps/ios/project.yml',
     ])
+  })
+
+  // The release-bump allowance must be knope's OWN pattern for that file,
+  // or it either holds every release PR or waves through a change knope
+  // never makes. Read from knope.toml, never restated.
+  it('every release-bump allowance is exactly the pattern knope.toml rewrites that file with', () => {
+    const toml = readFileSync(join(process.cwd(), 'knope.toml'), 'utf8')
+    const knope = new Map<string, string>()
+    for (const m of toml.matchAll(/\{\s*path\s*=\s*"([^"]+)",\s*regex\s*=\s*(?:'([^']*)'|"((?:[^"\\]|\\.)*)")\s*\}/g)) {
+      const basic = m[3]
+      knope.set(m[1] as string, m[2] ?? JSON.parse(`"${basic ?? ''}"`))
+    }
+    const bumped = TRUST_ANCHOR_FILES.filter((a) => a.releaseBump !== undefined)
+    expect(bumped.map((a) => a.path)).toEqual(['apps/ios/Sources/App/Info.plist'])
+    // `RegExp.source` keeps a literal TAB as itself but writes `\t` for an
+    // escaped one; normalise that one spelling difference, nothing else.
+    const norm = (src: string) => src.replaceAll('\t', '\\t')
+    for (const a of bumped) {
+      expect(knope.get(a.path), `${a.path} is not a knope-versioned file`).toBeDefined()
+      expect(norm(a.releaseBump?.source ?? '')).toBe(norm(new RegExp(knope.get(a.path) as string).source))
+      // An allowance that matches nothing in the real file allows nothing.
+      expect(a.releaseBump?.test(readFileSync(join(process.cwd(), a.path), 'utf8')), `${a.path}: pattern matches nothing`).toBe(true)
+    }
+    // ...and every registered file knope rewrites has an allowance.
+    for (const a of TRUST_ANCHOR_FILES) {
+      if (knope.has(a.path)) expect(a.releaseBump, `${a.path} is knope-versioned but has no release allowance`).toBeDefined()
+    }
+  })
+
+  describe('a knope release bump is not held — and nothing else rides along with one', () => {
+    const PLIST = 'apps/ios/Sources/App/Info.plist'
+    const plist = (version: string, ats: string) =>
+      `<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>${version}</string>\n` +
+      `\t<key>NSAppTransportSecurity</key>\n\t<dict>\n\t\t<key>NSAllowsArbitraryLoads</key>\n\t\t<${ats}/>\n\t</dict>\n</dict>\n`
+
+    it('lands the version-only change with no approval', async () => {
+      const rep = await gate(judged({ [PLIST]: plist('0.21.7', 'false') }, { [PLIST]: plist('0.21.8', 'false') }))
+      expect(rep.reasons).toEqual([])
+      expect(rep.trustAnchors).toBeUndefined()
+    })
+
+    it('holds a version bump that also flips App Transport Security', async () => {
+      const rep = await gate(judged({ [PLIST]: plist('0.21.7', 'false') }, { [PLIST]: plist('0.21.8', 'true') }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${PLIST} (it is the iOS Info.plist`)
+    })
+
+    it('holds any other edit to the file', async () => {
+      const rep = await gate(judged({ [PLIST]: plist('0.21.7', 'false') }, { [PLIST]: plist('0.21.7', 'true') }))
+      expect(rep.passed).toBe(false)
+    })
   })
 
   it('every registered trust anchor is a real tracked file — a registry over nothing is not a gate', () => {
@@ -339,7 +393,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
         { [f]: app('') },
       ))
       expect(rep.passed).toBe(false)
-      expect(trustLine(rep)).toContain(`${f} (its diff changes an Android network-security setting`)
+      expect(trustLine(rep)).toContain(`${f} (it is the Android manifest`)
     })
 
     it('refuses flipping App Transport Security open — a value on the line AFTER its key', async () => {
@@ -347,15 +401,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       const plist = (v: string) => `<key>NSAppTransportSecurity</key>\n<dict>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<${v}/>\n</dict>\n`
       const rep = await gate(judged({ [f]: plist('false') }, { [f]: plist('true') }))
       expect(rep.passed).toBe(false)
-      expect(trustLine(rep)).toContain('`<key>NSAllowsArbitraryLoads</key> <false/> → <true/>`')
-    })
-
-    it('does NOT hold the release version bump knope makes in the same Info.plist', async () => {
-      const f = 'apps/ios/Sources/App/Info.plist'
-      const plist = (v: string) =>
-        `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<false/>\n`
-      const rep = await gate(judged({ [f]: plist('0.21.7') }, { [f]: plist('0.21.8') }))
-      expect(rep.reasons).toEqual([])
+      expect(trustLine(rep)).toContain(`${f} (it is the iOS Info.plist`)
     })
 
     it('refuses a pin changed inside a file git treats as binary — bytes, not hunks', async () => {
@@ -381,13 +427,23 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       expect(rep.reasons).toEqual([])
     })
 
-    it.each<[string, string, string]>([
-      ['re-pointing Android resources', 'apps/android/app/build.gradle.kts', '    sourceSets {\n        getByName("main").res.srcDirs("src/overrides/res")\n    }\n'],
-      ['re-pointing the iOS Info.plist', 'apps/ios/project.yml', '    info:\n      path: Sources/App/Other.plist\n'],
-    ])('refuses %s — the indirection that swaps every setting at once', async (_what, f, body) => {
-      const rep = await gate(judged({ [f]: 'name: x\n' }, { [f]: `name: x\n${body}` }))
+    it('refuses re-pointing Android resources — the indirection that swaps every setting at once', async () => {
+      const f = 'apps/android/app/build.gradle.kts'
+      const body = '    sourceSets {\n        getByName("main").res.srcDirs("src/overrides/res")\n    }\n'
+      const rep = await gate(judged({ [f]: 'android {\n' }, { [f]: `android {\n${body}` }))
       expect(rep.passed).toBe(false)
       expect(trustLine(rep)).toContain(`${f} (its diff changes a build-wiring setting that chooses what ships`)
+    })
+
+    it.each([
+      ['block style', '    info:\n      path: Sources/App/Other.plist\n'],
+      ['flow style a line rule could never read', '    sources: [Sources, Extra]\n'],
+      ['an include', 'include: [extra.yml]\n'],
+    ])('refuses any XcodeGen change — %s', async (_style, body) => {
+      const f = 'apps/ios/project.yml'
+      const rep = await gate(judged({ [f]: 'name: x\n' }, { [f]: `name: x\n${body}` }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (it is the XcodeGen spec`)
     })
 
     // From the third automated security review of this PR.
@@ -402,7 +458,6 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
 
     it.each<[string, string, string]>([
       ['a new Gradle product flavour', 'apps/android/app/build.gradle.kts', '    productFlavors {\n        create("open") {}\n    }\n'],
-      ['a new XcodeGen source path', 'apps/ios/project.yml', '    sources:\n      - path: Extra\n'],
       ['a Swift file dropped into an iOS resource path XcodeGen compiles', 'apps/ios/Resources/Fonts/Trust.swift',
         'final class T: NSObject, URLSessionDelegate { func f(_ c: URLAuthenticationChallenge) { _ = c.protectionSpace.serverTrust } }\n'],
     ])('refuses %s', async (_what, f, body) => {
@@ -468,16 +523,12 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       'the URLSession challenge handler, delegating to CertificatePinValidator (registered CertificatePinning.swift)',
     'apps/ios/Sources/Services/LinphoneService.swift':
       'applies the SIP TLS trust anchor the hub publishes at runtime — nothing compiled in',
-    // Mixed files knope bumps on every release, so they cannot be registered
-    // whole-file; their trust lines (and each line's value) are compared.
-    'apps/android/app/src/main/AndroidManifest.xml':
-      'points the app at the registered network_security_config.xml (android:networkSecurityConfig)',
+    // Not registered whole-file: 10 non-release edits since 2026-08 (build and
+    // test wiring), so registering it would hold ~3 Android PRs a month. Its
+    // trust and build-wiring lines are compared instead — an operator call,
+    // stated in #2557.
     'apps/android/app/build.gradle.kts':
       'release versioning plus a test task that reads the release <pin-set>; a pin injected here ships',
-    'apps/ios/Sources/App/Info.plist':
-      'App Transport Security (NSAllowsArbitraryLoads) beside the release version keys',
-    'apps/ios/project.yml':
-      'XcodeGen source of the same App Transport Security keys',
   }
 
   it('every tracked shipped-client file carrying a trust signature is registered or a named call site', () => {

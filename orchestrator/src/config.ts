@@ -350,6 +350,16 @@ export interface TrustAnchorFile {
    *  in every fleet brief and in the worker rules, so it is written for the
    *  operator who has to decide whether to approve. */
   anchors: string
+  /**
+   * knope's own version-bump pattern for this file, when knope rewrites it on
+   * every release (`knope.toml`'s `versioned_files`). A diff whose ONLY
+   * difference is that version is not a trust change, so the release PR is
+   * not held for a human. Copied from `knope.toml` verbatim and pinned to it
+   * by `write-gate-properties.test.ts` — an allowance that drifted from what
+   * knope actually rewrites would either hold every release or wave through
+   * a change knope never makes.
+   */
+  releaseBump?: RegExp
 }
 
 /**
@@ -412,6 +422,28 @@ export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
     path: 'apps/desktop/src/net.rs',
     client: 'desktop',
     anchors: 'the desktop pinned HTTP client and WebSocket connector every backend request is built on',
+  },
+  // The build files that decide WHICH of the above ships. Whole-file, because
+  // their formats are not line-shaped: a plist key and its value sit on
+  // different lines inside nested dicts, the Android manifest is merged with
+  // `tools:remove`/`tools:replace` semantics, and XcodeGen YAML has flow
+  // style, `include:` and templates. A line-signature check over any of these
+  // would be a parser differential.
+  {
+    path: 'apps/android/app/src/main/AndroidManifest.xml',
+    client: 'android',
+    anchors: 'the Android manifest, which points the release build at its network security config and sets cleartext policy',
+  },
+  {
+    path: 'apps/ios/Sources/App/Info.plist',
+    client: 'ios',
+    anchors: 'the iOS Info.plist, which carries App Transport Security (NSAppTransportSecurity)',
+    releaseBump: /<key>CFBundleShortVersionString<\/key>\n\t<string>(?<version>[0-9]+[.][0-9]+[.][0-9]+)<\/string>/,
+  },
+  {
+    path: 'apps/ios/project.yml',
+    client: 'ios',
+    anchors: 'the XcodeGen spec the iOS app is built from — its sources, its Info.plist and the App Transport Security keys it writes',
   },
 ]
 

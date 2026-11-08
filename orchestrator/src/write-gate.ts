@@ -201,10 +201,10 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
     name: 'a build-wiring setting that chooses what ships',
     re: new RegExp([
       // Gradle: source sets, the variants they belong to, and injected values.
+      // (XcodeGen's `project.yml` is a registered whole-file anchor instead:
+      // YAML is not line-shaped, so no line rule could read it faithfully.)
       'sourceSets', 'srcDirs?\\(', 'setSrcDirs', 'manifest\\.srcFile', 'manifestPlaceholders', 'resValue\\(',
       'buildTypes', 'productFlavors', 'flavorDimensions', 'initWith\\(',
-      // XcodeGen: which Info.plist, and which sources, the target is built from.
-      'INFOPLIST_FILE', '^info:$', '^sources:$', '^- path:', '^excludes:', '^includes:', '^buildPhase:', '^configFiles:',
     ].join('|')),
   },
 ]
@@ -264,6 +264,30 @@ export function trustProjection(content: FileContent | undefined): TrustGroup[] 
   return out
 }
 
+/** The file's text with every knope version value replaced by a fixed
+ *  token, so two sides that differ ONLY in that value compare equal. */
+function maskReleaseVersions(text: string, bump: RegExp): string {
+  const re = new RegExp(bump.source, bump.flags.includes('g') ? bump.flags : `${bump.flags}g`)
+  return text.replace(re, (match: string, ...rest: unknown[]) => {
+    const groups = rest.at(-1) as Record<string, string> | undefined
+    const version = groups?.['version']
+    return version === undefined ? match : match.replace(version, '<version>')
+  })
+}
+
+/**
+ * True when a registered file's only change is knope's release version bump.
+ * Both sides must exist and the pattern must match on both — a file whose
+ * version line was deleted or added is not "only a bump".
+ */
+function isOnlyReleaseBump(entry: TrustAnchorFile, before?: FileContent, after?: FileContent): boolean {
+  if (entry.releaseBump === undefined || before === undefined || after === undefined) return false
+  const a = asText(before)
+  const b = asText(after)
+  if (a === b || !entry.releaseBump.test(a) || !entry.releaseBump.test(b)) return false
+  return maskReleaseVersions(a, entry.releaseBump) === maskReleaseVersions(b, entry.releaseBump)
+}
+
 const quote = (s: string): string => (s.length > MAX_QUOTED_LINE ? `${s.slice(0, MAX_QUOTED_LINE)}…` : s)
 
 /**
@@ -279,7 +303,10 @@ const quote = (s: string): string => (s.length > MAX_QUOTED_LINE ? `${s.slice(0,
  */
 export function trustAnchorFinding(file: string, before?: FileContent, after?: FileContent): string | undefined {
   const entry = trustAnchorEntry(file)
-  if (entry !== undefined) return `it is ${entry.anchors}`
+  if (entry !== undefined) {
+    if (isOnlyReleaseBump(entry, before, after)) return undefined
+    return `it is ${entry.anchors}`
+  }
   if (!isShippedClientSource(file)) return undefined
   const a = trustProjection(before)
   const b = trustProjection(after)

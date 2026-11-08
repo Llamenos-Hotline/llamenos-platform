@@ -50,6 +50,9 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   - `apps/desktop/src/cert_pin.rs`
   - `apps/desktop/src/api_config.rs`
   - `apps/desktop/src/net.rs`
+  - `apps/android/app/src/main/AndroidManifest.xml`
+  - `apps/ios/Sources/App/Info.plist` (knope's release version bump alone is not held)
+  - `apps/ios/project.yml`
 - **Everything else is writable** — including public certificates and annotated chains used
   as test input.
 
