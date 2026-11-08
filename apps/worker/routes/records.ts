@@ -13,6 +13,7 @@ import {
   assignBodySchema,
   unassignBodySchema,
   recordSchema,
+  recordAssigneesResponseSchema,
   recordListResponseSchema,
   recordContactSchema,
   recordContactListResponseSchema,
@@ -924,7 +925,7 @@ records.post('/:id/assign',
         description: 'Volunteers assigned',
         content: {
           'application/json': {
-            schema: resolver(recordSchema),
+            schema: resolver(recordAssigneesResponseSchema),
           },
         },
       },
@@ -941,7 +942,7 @@ records.post('/:id/assign',
     const body = c.req.valid('json')
 
     const record = await services.cases.get(id)
-    await services.cases.assign(id, body.pubkeys)
+    const result = await services.cases.assign(id, body.pubkeys)
 
     // Publish assignment event with enriched context (EP06-A3)
     publishEvent(c.env, KIND_RECORD_ASSIGNED, {
@@ -957,8 +958,7 @@ records.post('/:id/assign',
       assignedPubkeys: body.pubkeys,
     }, undefined, pathHubId(c))
 
-    // The record as it now stands — the declared answer, not just its assignee list.
-    return c.json(await services.cases.get(id))
+    return c.json(result)
   },
 )
 
@@ -972,7 +972,7 @@ records.post('/:id/unassign',
         description: 'Volunteer unassigned',
         content: {
           'application/json': {
-            schema: resolver(recordSchema),
+            schema: resolver(recordAssigneesResponseSchema),
           },
         },
       },
@@ -989,7 +989,7 @@ records.post('/:id/unassign',
     const body = c.req.valid('json')
 
     const unassignRecord = await services.cases.get(id)
-    await services.cases.unassign(id, body.pubkey)
+    const result = await services.cases.unassign(id, body.pubkey)
 
     // Publish assignment change event with enriched context (EP06-A3)
     publishEvent(c.env, KIND_RECORD_ASSIGNED, {
@@ -1005,7 +1005,7 @@ records.post('/:id/unassign',
       unassignedPubkey: body.pubkey,
     }, undefined, pathHubId(c))
 
-    return c.json(await services.cases.get(id))
+    return c.json(result)
   },
 )
 

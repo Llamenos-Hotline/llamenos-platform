@@ -136,6 +136,18 @@ export const unassignBodySchema = z.object({
 
 export type UnassignBody = z.infer<typeof unassignBodySchema>
 
+/**
+ * What `POST /records/:id/assign` and `/unassign` answer: the record's assignee
+ * list as it now stands — never the record. `cases:assign` does not imply read
+ * access (a volunteer can unassign themselves out of a record they could only
+ * read while assigned), so the mutation discloses only what the caller just set.
+ */
+export const recordAssigneesResponseSchema = z.object({
+  assignedTo: z.array(z.string()),
+})
+
+export type RecordAssigneesResponse = z.infer<typeof recordAssigneesResponseSchema>
+
 // --- Encrypted payloads (client-side only, for reference/codegen) ---
 
 /** Summary tier: title, description, status text, severity text, category text */
