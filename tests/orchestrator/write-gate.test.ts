@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
-import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS } from '../../orchestrator/src/key-material.js'
+import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS, textViews } from '../../orchestrator/src/key-material.js'
 import {
   secretFinding, secretRefusal, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal, trustProjection,
   SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
@@ -121,6 +121,26 @@ describe('findPrivateKeyMaterial — and nothing that is not a key', () => {
   })
 })
 
+describe('textViews', () => {
+  const text = 'serverTrust\n'
+  it.each<[string, Buffer]>([
+    ['UTF-16LE with a BOM', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])],
+    ['UTF-16BE with a BOM', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()])],
+    ['UTF-16LE with no BOM', Buffer.from(text.repeat(8), 'utf16le')],
+    ['UTF-32LE with a BOM', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]),
+      Buffer.from([...text].flatMap((c) => [c.charCodeAt(0), 0, 0, 0]))])],
+  ])('decodes %s alongside the latin1 view', (_name, b) => {
+    const views = textViews(b)
+    expect(views).toHaveLength(2)
+    expect(views[1]).toContain('serverTrust')
+  })
+
+  it('adds no decoded view for ASCII or for ordinary binary', () => {
+    expect(textViews(Buffer.from(text))).toHaveLength(1)
+    expect(textViews(randomBytes(2048))).toHaveLength(1)
+  })
+})
+
 describe('derPrivateKeyKind', () => {
   it('refuses anything whose outer SEQUENCE does not span the whole input', () => {
     const key = ed25519().privateKey.export({ type: 'pkcs8', format: 'der' })
@@ -204,6 +224,8 @@ describe('trustAnchorFinding', () => {
     for (const f of [
       'apps/android/app/src/test/java/org/llamenos/hotline/api/CertificatePinnerTest.kt',
       'apps/android/app/src/debug/res/xml/network_security_config.xml',
+      'apps/android/app/src/androidTest/java/org/llamenos/hotline/telephony/LiveSipRegistrationTest.kt',
+      'apps/android/app/src/testDebug/java/X.kt',
       'apps/ios/Tests/Unit/CertificatePinningTests.swift',
       'scripts/inject-cert-pins.ts',
     ]) expect(trustAnchorFinding(f, undefined, 'CertificatePinner.Builder()\n<pin-set>\n')).toBeUndefined()
@@ -217,6 +239,7 @@ describe('trustAnchorFinding', () => {
       'an Apple Security trust API or App Transport Security key': '<key>NSAllowsArbitraryLoads</key>',
       'a rustls/reqwest trust hook': 'impl ServerCertVerifier for Pinned {',
       'a SIP TLS trust anchor': 'applyTlsTrustAnchor(core, sip)',
+      'a build-wiring setting that chooses what ships': 'manifestPlaceholders["networkConfig"] = "open"',
     }
     expect(sample[s.name], `no sample line for signature "${s.name}"`).toBeDefined()
     expect(s.re.test(sample[s.name] as string)).toBe(true)

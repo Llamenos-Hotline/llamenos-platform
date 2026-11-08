@@ -2,7 +2,7 @@ import {
   CERTIFICATE_ONLY_PATTERNS, matchesPath, matchesSecretPath, publicCertificateVerdict,
 } from './fragments.js'
 import { SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type TrustAnchorFile } from './config.js'
-import { findPrivateKeyMaterial, latin1 } from './key-material.js'
+import { findPrivateKeyMaterial, latin1, textViews } from './key-material.js'
 
 /**
  * The write gate's classification of a changed file (#2556). Three answers,
@@ -106,15 +106,27 @@ export function secretFinding(
  * tooling are excluded: they do not ship, and their trust code is test input.
  */
 export const SHIPPED_CLIENT_SOURCE_ROOTS: readonly string[] = [
-  'apps/android/app/src/main/',
-  // The Android build script decides which resources and BuildConfig values
-  // ship, so a pin injected or a network config swapped there ships too.
+  // EVERY Android source set, not just `main/`: a `release/` (or flavour)
+  // source set overrides `main/` resources in the build that ships, so a
+  // `src/release/res/xml/network_security_config.xml` would replace the pin
+  // set without touching the registered file. The non-shipping sets are
+  // excluded by `ANDROID_NON_SHIPPING_SOURCE_SET` below.
+  'apps/android/app/src/',
+  // The Android build script decides which manifest, resources and
+  // BuildConfig values ship, so a pin injected or a config swapped there ships.
   'apps/android/app/build.gradle.kts',
   'apps/ios/Sources/',
-  // XcodeGen's spec writes Info.plist keys — App Transport Security included.
+  // XcodeGen's spec writes Info.plist keys — App Transport Security included —
+  // and says which Info.plist the app is built with.
   'apps/ios/project.yml',
   'apps/desktop/src/',
 ]
+
+/** Android source sets that never reach an installed release build: unit
+ *  and instrumentation tests, and debug variants (`src/debug/` carries its own
+ *  pin-free `network_security_config.xml` by design). Any other set —
+ *  `release`, a product flavour, a flavour+release combination — ships. */
+const ANDROID_NON_SHIPPING_SOURCE_SET = /^apps\/android\/app\/src\/(test|androidTest|debug|testFixtures)(?:[A-Z][A-Za-z0-9]*)?\//
 
 /** A line shape that carries a TLS trust decision in client source. */
 export interface TrustSignature {
@@ -148,8 +160,10 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
   {
     // The manifest's `networkSecurityConfig` pointer is as load-bearing as the
     // file it points at: deleting it silently drops every pin.
+    // The element itself, too: an override config with no pins at all is the
+    // shortest way to drop them.
     name: 'an Android network-security setting',
-    re: /<(pin-set|pin\b|trust-anchors|certificates\b)|networkSecurityConfig|usesCleartextTraffic|cleartextTrafficPermitted/,
+    re: /<(network-security-config|pin-set|pin\b|trust-anchors|certificates\b)|networkSecurityConfig|usesCleartextTraffic|cleartextTrafficPermitted/,
   },
   {
     name: 'an OkHttp/JSSE trust hook',
@@ -164,6 +178,13 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
     re: /ServerCertVerifier|RootCertStore|danger_accept_invalid|add_root_certificate|tls_built_in_root_certs|\.dangerous\(\)|with_custom_certificate_verifier|ClientConfig::builder|\bwebpki|rustls::|cert_pin::/,
   },
   { name: 'a SIP TLS trust anchor', re: /[Tt]lsTrustAnchor/ },
+  {
+    // Indirection: which manifest, resource directories and Info.plist the
+    // shipped build is made from. Re-pointing one swaps every setting above
+    // without changing a line that names them.
+    name: 'a build-wiring setting that chooses what ships',
+    re: /sourceSets|srcDirs?\(|setSrcDirs|manifest\.srcFile|manifestPlaceholders|resValue\(|INFOPLIST_FILE|^info:$/,
+  },
 ]
 
 export function trustAnchorEntry(file: string): TrustAnchorFile | undefined {
@@ -172,6 +193,7 @@ export function trustAnchorEntry(file: string): TrustAnchorFile | undefined {
 
 /** True for a file under `SHIPPED_CLIENT_SOURCE_ROOTS`. */
 export function isShippedClientSource(file: string): boolean {
+  if (ANDROID_NON_SHIPPING_SOURCE_SET.test(file)) return false
   return SHIPPED_CLIENT_SOURCE_ROOTS.some((r) => matchesPath(file, r))
 }
 
@@ -203,12 +225,17 @@ interface TrustGroup {
  */
 export function trustProjection(content: FileContent | undefined): TrustGroup[] {
   if (content === undefined) return []
-  const lines = asText(content).split('\n').map((l) => l.trim())
   const out: TrustGroup[] = []
-  lines.forEach((line, i) => {
-    const sig = TRUST_SIGNATURES.find((s) => s.re.test(line))
-    if (sig !== undefined) out.push({ name: sig.name, line, next: lines[i + 1] ?? '' })
-  })
+  // Every text view of the bytes (key-material.ts's `textViews`): a UTF-16
+  // re-encoding must not make a trust line vanish from the comparison.
+  const views = typeof content === 'string' ? [content] : textViews(content)
+  for (const view of views) {
+    const lines = view.split('\n').map((l) => l.trim())
+    lines.forEach((line, i) => {
+      const sig = TRUST_SIGNATURES.find((s) => s.re.test(line))
+      if (sig !== undefined) out.push({ name: sig.name, line, next: lines[i + 1] ?? '' })
+    })
+  }
   return out
 }
 

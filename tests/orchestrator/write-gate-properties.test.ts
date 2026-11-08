@@ -14,7 +14,7 @@ import { buildBrief, renderBrief, writeGateRules } from '../../orchestrator/src/
 import { buildGateTrace } from '../../orchestrator/src/trace.js'
 import { REVIEW_REQUEST_LOGIN } from '../../orchestrator/src/ci.js'
 import {
-  SECRET_REASON_PREFIX, SHIPPED_CLIENT_SOURCE_ROOTS, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES, trustAnchorEntry,
+  SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES, isShippedClientSource, trustAnchorEntry,
 } from '../../orchestrator/src/write-gate.js'
 import { ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { trackedFiles } from './codeowners.js'
@@ -168,6 +168,18 @@ describe('property 1 — a file holding a private key is never agent-writable', 
       expect(rep.passed).toBe(false)
       expect(secretLine(rep)).toMatch(new RegExp(`${path} \\(its content holds a (PEM ".*PRIVATE KEY" block|DER-encoded .*private key)`))
       expect(secretLine(rep)).toContain('A test key must be generated at test time')
+    })
+
+    it('refuses a key re-encoded as UTF-16, BOM or no BOM', async () => {
+      const key = throwawayPrivateKeyPem()
+      for (const bytes of [
+        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(key, 'utf16le')]),
+        Buffer.from(key, 'utf16le'),
+      ]) {
+        const rep = await gate(judged({}, { 'tests/fixtures/key.txt': bytes }))
+        expect(rep.passed).toBe(false)
+        expect(secretLine(rep)).toContain('tests/fixtures/key.txt (its content holds a PEM "PRIVATE KEY" block')
+      }
     })
 
     it('refuses a key appended to an otherwise public certificate chain', async () => {
@@ -354,6 +366,41 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       expect(trustLine(rep)).toContain(`${f} (its diff changes an SPKI pin literal`)
     })
 
+    // From the second automated security review of this PR: a variant source
+    // set overrides `main/` in the build that ships.
+    it('refuses a release-variant network config that replaces the pinned one — even with no pins in it', async () => {
+      const f = 'apps/android/app/src/release/res/xml/network_security_config.xml'
+      const rep = await gate(judged({}, { [f]: '<?xml version="1.0" encoding="utf-8"?>\n<network-security-config/>\n' }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes an Android network-security setting`)
+    })
+
+    it('does NOT hold the debug variant\'s own network config — debug builds do not ship', async () => {
+      const f = 'apps/android/app/src/debug/res/xml/network_security_config.xml'
+      const rep = await gate(judged({}, { [f]: '<network-security-config>\n<base-config cleartextTrafficPermitted="true"/>\n</network-security-config>\n' }))
+      expect(rep.reasons).toEqual([])
+    })
+
+    it.each<[string, string, string]>([
+      ['re-pointing Android resources', 'apps/android/app/build.gradle.kts', '    sourceSets {\n        getByName("main").res.srcDirs("src/overrides/res")\n    }\n'],
+      ['re-pointing the iOS Info.plist', 'apps/ios/project.yml', '    info:\n      path: Sources/App/Other.plist\n'],
+    ])('refuses %s — the indirection that swaps every setting at once', async (_what, f, body) => {
+      const rep = await gate(judged({ [f]: 'name: x\n' }, { [f]: `name: x\n${body}` }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes a build-wiring setting that chooses what ships`)
+    })
+
+    it('refuses removing a pinner from a call site re-encoded as UTF-16', async () => {
+      const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
+      const utf16 = (t: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(t, 'utf16le')])
+      const rep = await gate(judged(
+        { [f]: utf16('client.newBuilder()\n.certificatePinner(ApiService.buildPinner(host))\n.build()\n') },
+        { [f]: utf16('client.newBuilder()\n.build()\n') },
+      ))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(f)
+    })
+
     it('does NOT hold an ordinary edit to a call-site file that leaves its trust lines alone', async () => {
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
       const pinned = '    .certificatePinner(ApiService.buildPinner(host))\n'
@@ -403,7 +450,8 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
   }
 
   it('every tracked shipped-client file carrying a trust signature is registered or a named call site', () => {
-    const shipped = trackedFiles().filter((f) => SHIPPED_CLIENT_SOURCE_ROOTS.some((r) => f.startsWith(r)))
+    // The gate's own predicate, so the rail scans exactly what the gate holds.
+    const shipped = trackedFiles().filter(isShippedClientSource)
     expect(shipped.length, 'no shipped client source found — the scan would pass vacuously').toBeGreaterThan(100)
     const carriers = shipped.filter((f) => {
       const lines = readFileSync(join(process.cwd(), f), 'latin1').split('\n')
