@@ -19,6 +19,7 @@ This directory contains security documentation for Llamenos, a crisis response h
 | [Key Revocation Runbook](KEY_REVOCATION_RUNBOOK.md) | Device deauthorization via sigchain, hub key rotation, PUK rotation | Operators |
 | [Incident Response](INCIDENT_RESPONSE.md) | Server compromise, CI/CD compromise, account compromise, GDPR notification | Operators |
 | [Certificate Pins](CERTIFICATE_PINS.md) | iOS/Android certificate pinning (scaffolding — pins pending first deployment) | Mobile developers |
+| [TLS Trust Stores](OUTBOUND_TLS_TRUST.md) | Which root store each server image and client channel actually trusts, how each stays current, outbound pinning posture | Auditors, operators, DevOps |
 | [Security Gaps and Roadmap](SECURITY_GAPS_AND_ROADMAP.md) | Known gaps, incomplete implementations, planned improvements | Auditors, developers, operators |
 
 ### Historical Audit Reports

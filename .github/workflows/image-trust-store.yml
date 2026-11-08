@@ -1,0 +1,91 @@
+# Verify the TLS trust store every shipped image actually uses (#2582).
+#
+# The server's outbound calls (carriers, RCS, Signal, telephony APIs, the sidecars'
+# webhooks) carry caller phone numbers and message plaintext, and nothing pins them.
+# They are exactly as safe as the trust store the calling process consults. For the
+# Bun services that store is the one compiled into the Bun binary, not
+# /etc/ssl/certs. That is how signal-notifier and sip-bridge kept trusting the
+# compromised eMudhra hierarchy on Bun 1.3.5 while every Debian bundle in the repo was
+# already patched, and why Trivy (which scans packages, not a runtime's root store)
+# never saw it.
+#
+# scripts/check-image-trust-store.sh fails a leg when any store in the image accepts a
+# known-distrusted chain, when the effective compiled-in store trusts a root Mozilla
+# has since removed, or when the distro ca-certificates is older than the archive's.
+#
+# The weekly schedule exists because staleness happens without a commit. Mozilla
+# removes a root, or Debian publishes a ca-certificates update, and an image that was
+# fine at merge is no longer current. A red scheduled run means: bump the runtime
+# (Dependabot watches every shipped Dockerfile's directory) or rebuild.
+name: Image Trust Store
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/docker/Dockerfile'
+      - 'deploy/docker/Dockerfile.nodejs'
+      - 'deploy/docker/Dockerfile.asterisk'
+      - 'signal-notifier/Dockerfile'
+      - 'sip-bridge/Dockerfile'
+      - 'scripts/check-image-trust-store.sh'
+      - 'deploy/docker/distrusted-tls-chains/**'
+      - '.github/workflows/image-trust-store.yml'
+  schedule:
+    # Mondays 03:30 UTC.
+    - cron: '30 3 * * 1'
+  workflow_dispatch:
+
+permissions: {}  # deny-all; per-job permissions below
+
+concurrency:
+  group: image-trust-store-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trust-store:
+    # Release-PR exemption (#1817), as in security-audit.yml.
+    if: github.event_name != 'pull_request' || github.head_ref != 'release'
+    # GitHub-hosted, like every job a `pull_request` can reach; layer reuse comes
+    # from BuildKit's gha cache.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          # `store` is the trust store the image's outbound TLS clients actually
+          # verify against — see the header of scripts/check-image-trust-store.sh.
+          - { name: app, dockerfile: deploy/docker/Dockerfile, context: ., target: app, store: bun }
+          - { name: static, dockerfile: deploy/docker/Dockerfile, context: ., target: static, store: os }
+          - { name: signal-notifier, dockerfile: signal-notifier/Dockerfile, context: signal-notifier, target: '', store: bun }
+          - { name: sip-bridge, dockerfile: sip-bridge/Dockerfile, context: sip-bridge, target: '', store: bun }
+          - { name: nodejs, dockerfile: deploy/docker/Dockerfile.nodejs, context: ., target: '', store: node }
+          - { name: asterisk, dockerfile: deploy/docker/Dockerfile.asterisk, context: deploy/docker, target: '', store: os }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          target: ${{ matrix.image.target }}
+          push: false
+          load: true
+          tags: llamenos-trust:${{ matrix.image.name }}
+          # Own cache scope per leg. A full Actions-cache quota must degrade
+          # to an uncached build, never a failed check.
+          cache-from: type=gha,scope=image-trust-store-${{ matrix.image.name }}
+          cache-to: type=gha,scope=image-trust-store-${{ matrix.image.name }},mode=max,ignore-error=true
+
+      - name: Check the image's TLS trust stores
+        env:
+          IMAGE: llamenos-trust:${{ matrix.image.name }}
+          STORE: ${{ matrix.image.store }}
+        run: scripts/check-image-trust-store.sh "$IMAGE" "$STORE"

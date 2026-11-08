@@ -127,6 +127,7 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/check-db-identity.ts',
   'scripts/check-ecies-active.sh',
   'scripts/check-i18n-codegen-output.sh',
+  'scripts/check-image-trust-store.sh',
   'scripts/check-ipc-allowlist.sh',
   'scripts/check-label-count.sh',
   'scripts/check-migration-drift.sh',

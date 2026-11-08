@@ -1,4 +1,11 @@
-FROM oven/bun:1.3.5@sha256:e90cdbaf9ccdb3d4bd693aa335c3310a6004286a880f62f79b18f9b1312a8ec3 AS base
+# Set by BuildKit to the architecture being built (amd64/arm64); selects the
+# per-architecture runtime stage at the bottom (see "simdutf kernel pin").
+ARG TARGETARCH
+
+# Builder and runtime are the same Bun release, pinned to the same image and
+# digest as deploy/docker/Dockerfile's `deps` stage and independently of
+# .mise.toml's dev/CI tool pin (see that stage for why the two may diverge).
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS base
 WORKDIR /app
 
 # Install dependencies
@@ -24,8 +31,18 @@ ADD https://deb.debian.org/debian/dists/trixie/InRelease /trixie.InRelease
 ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates.InRelease
 ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
 
-# Production stage
-FROM oven/bun:1.3.5@sha256:e90cdbaf9ccdb3d4bd693aa335c3310a6004286a880f62f79b18f9b1312a8ec3
+# Production stage.
+#
+# Bun verifies TLS against the root store compiled into the binary and never
+# consults the container's /etc/ssl bundle (which the 1.3.5 base did not even
+# have), so the Bun release IS the bridge's outbound trust store — for WORKER_WEBHOOK_URL, ARI and
+# the Kamailio JSON-RPC whenever an operator points them at https://. 1.3.5
+# still trusted emSign ECC Root CA - G3 and accepted chains through the eMudhra
+# intermediates whose private keys were disclosed on 2026-10-20 (#2582); 1.4.4
+# drops that root and refuses those chains as revoked. Dependabot watches this
+# directory (.github/dependabot.yml); scripts/check-image-trust-store.sh is what
+# verifies the result.
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS runtime-base
 WORKDIR /app
 
 # Outstanding Debian security updates on top of the pinned base, as in
@@ -73,3 +90,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD bun -e "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 CMD ["bun", "run", "dist/index.js"]
+
+# simdutf kernel pin: Bun >= 1.4 picks its base64/UTF-8 kernel from CPUID and
+# ships no scalar fallback, so on a VPS whose virtual CPU model hides SSE4.2
+# (kvm64/qemu64) base64 and non-ASCII text silently come back empty — the
+# BRIDGE_SECRET HMAC and every webhook body among them. Same pin, same
+# reasoning and same exit condition as the "simdutf kernel pin" block in
+# deploy/docker/Dockerfile.
+FROM runtime-base AS runtime-amd64
+ENV SIMDUTF_FORCE_IMPLEMENTATION=westmere
+
+FROM runtime-base AS runtime-arm64
+
+FROM runtime-${TARGETARCH}
