@@ -60,12 +60,18 @@ describe('the rule knope applies', () => {
     expect(scopeIsProduct('fleet', scopes)).toBe(false)
   })
 
+  const eligible = (subject: string): boolean => {
+    const c = parseSubject(subject)
+    if (!c) throw new Error(`not a conventional subject: ${subject}`)
+    return isChangelogEligible(c)
+  }
+
   test('only feat, fix and breaking commits produce changelog entries', () => {
-    expect(isChangelogEligible(parseSubject('feat(ios): x')!)).toBe(true)
-    expect(isChangelogEligible(parseSubject('fix(ios): x')!)).toBe(true)
-    expect(isChangelogEligible(parseSubject('refactor(ios)!: x')!)).toBe(true)
-    expect(isChangelogEligible(parseSubject('test(worker): x')!)).toBe(false)
-    expect(isChangelogEligible(parseSubject('chore: prepare release 0.21.7 (#2538)')!)).toBe(false)
+    expect(eligible('feat(ios): x')).toBe(true)
+    expect(eligible('fix(ios): x')).toBe(true)
+    expect(eligible('refactor(ios)!: x')).toBe(true)
+    expect(eligible('test(worker): x')).toBe(false)
+    expect(eligible('chore: prepare release 0.21.7 (#2538)')).toBe(false)
   })
 })
 
