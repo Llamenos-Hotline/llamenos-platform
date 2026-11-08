@@ -61,6 +61,23 @@ RUN cargo build --release --manifest-path packages/crypto/Cargo.toml --features 
     && mkdir -p packages/crypto/dist/server \
     && cp packages/crypto/target/release/libllamenos_core.so packages/crypto/dist/server/
 
+# Debian archive state — the cache key for `apt-get upgrade` below (#2564).
+# A RUN layer is cached on its command text and parent layer alone, so once
+# BuildKit has cached the upgrade (locally, or in CI's gha cache) it never
+# re-runs: the archive gains a fix, the layer still holds the old package, and
+# image-scan stays red on a vulnerability the Dockerfile already "upgrades"
+# away (zlib1g 1:1.3.dfsg+really1.3.1-1+b1 → +deb13u1). BuildKit re-fetches a
+# remote ADD on every build and keys it on the CONTENT, so mounting these
+# signed release files into the upgrade step re-runs it exactly when Debian
+# publishes to one of the suites the base image's apt sources name, and keeps
+# it cached otherwise. The suite list must match the base image's sources —
+# the upgrade step asserts the codename, so a base-image move to a new Debian
+# release fails the build instead of keying on a dead suite.
+FROM scratch AS debian-archive-state
+ADD https://deb.debian.org/debian/dists/trixie/InRelease /trixie.InRelease
+ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates.InRelease
+ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
+
 # Stage 3: Production
 FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 AS app-base
 # Pinned independently of .mise.toml's dev/CI `bun = "1.3.5"` — see the
@@ -74,12 +91,18 @@ FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3
 # FIXABLE CRITICAL) goes red on a base the tag can't move off. Upgrading here
 # rebases onto the current debian-security archive (this landed for perl-base
 # 5.40.1-6 → 5.40.1-6+deb13u1: CVE-2026-13221, CVE-2026-42496, CVE-2026-8376).
+# The `debian-archive-state` mount is what makes this re-run when the archive
+# moves rather than once per cache lifetime — see that stage.
 #
 # espeak-ng is the one package added: the worker speaks every IVR prompt an
 # operator did not upload on the self-hosted PBXs (IvrSpeechService, #1347),
 # offline (ivr-speech/voices.ts lists the locales). ~30 MB; no recommends (no audio
 # output devices — it only ever writes WAV to a pipe).
-RUN apt-get update && apt-get upgrade -y \
+RUN --mount=type=bind,from=debian-archive-state,target=/run/debian-archive-state \
+    . /etc/os-release \
+    && { [ "$VERSION_CODENAME" = trixie ] \
+         || { echo "base is Debian $VERSION_CODENAME; update the debian-archive-state suites" >&2; exit 1; }; } \
+    && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
