@@ -1,3 +1,4 @@
+import type { DeletionConfirmed } from '@/lib/admin-deletion'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   listShifts,
@@ -193,7 +194,7 @@ export function useUpdateShift() {
 export function useDeleteShift() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => deleteShift(id),
+    mutationFn: ({ id, confirmed }: { id: string; confirmed: DeletionConfirmed }) => deleteShift(id, confirmed),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.list() })
       queryClient.invalidateQueries({ queryKey: shiftKeys.myStatus() })
@@ -236,7 +237,7 @@ export function useUpdateRingGroup() {
 export function useDeleteRingGroup() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => deleteRingGroup(id),
+    mutationFn: ({ id, confirmed }: { id: string; confirmed: DeletionConfirmed }) => deleteRingGroup(id, confirmed),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.ringGroups.all })
     },
@@ -303,7 +304,7 @@ export function useCreateShiftOverride() {
 export function useDeleteShiftOverride() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => deleteShiftOverride(id),
+    mutationFn: ({ id, confirmed }: { id: string; confirmed: DeletionConfirmed }) => deleteShiftOverride(id, confirmed),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.all })
     },

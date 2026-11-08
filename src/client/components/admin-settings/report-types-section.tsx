@@ -20,6 +20,7 @@ import {
   FileText, Plus, Save, Archive, Star,
 } from 'lucide-react'
 import { FieldDefinitionEditor, type EditableField } from './field-definition-editor'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 
 interface Props {
   expanded: boolean
@@ -34,6 +35,7 @@ export function ReportTypesSection({ expanded, onToggle, statusSummary }: Props)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Partial<ReportType> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirmingArchive, setConfirmingArchive] = useState<ReportType | null>(null)
 
   const loadTypes = useCallback(() => {
     getReportTypesAdmin()
@@ -98,10 +100,9 @@ export function ReportTypesSection({ expanded, onToggle, statusSummary }: Props)
     }
   }, [editing, handleCreate, handleUpdate])
 
-  const handleArchive = useCallback(async (id: string) => {
-    if (!confirm(t('reportTypes.archiveConfirm'))) return
+  const handleArchive = useCallback(async (id: string, confirmed: DeletionConfirmed) => {
     try {
-      await archiveReportType(id)
+      await archiveReportType(id, confirmed)
       loadTypes()
       toast(t('reportTypes.archiveSuccess'), 'success')
     } catch {
@@ -167,7 +168,7 @@ export function ReportTypesSection({ expanded, onToggle, statusSummary }: Props)
                     variant="ghost"
                     size="sm"
                     data-testid="report-type-archive-btn"
-                    onClick={() => handleArchive(rt.id)}
+                    onClick={() => setConfirmingArchive(rt)}
                     disabled={activeTypes.length <= 1}
                   >
                     <Archive className="h-4 w-4 text-destructive" />
@@ -292,6 +293,17 @@ export function ReportTypesSection({ expanded, onToggle, statusSummary }: Props)
             <p className="text-xs text-muted-foreground mt-2">{t('reportTypes.maxTypes')}</p>
           )}
         </>
+      )}
+
+      {confirmingArchive && (
+        <DeletionConfirmed.Dialog
+          action="reportCategory"
+          targetId={confirmingArchive.id}
+          subject={confirmingArchive.name}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingArchive(null) }}
+          onConfirmed={(confirmed) => handleArchive(confirmingArchive.id, confirmed)}
+        />
       )}
     </SettingsSection>
   )

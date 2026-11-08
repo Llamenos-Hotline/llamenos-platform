@@ -19,6 +19,7 @@ import {
   searchPlatformBans,
 } from '@/lib/api'
 import type { PlatformBan } from '@protocol/schemas/bans'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 
 interface Props {
   bans: PlatformBan[]
@@ -48,6 +49,7 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
   const [searching, setSearching] = useState(false)
 
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<PlatformBan | null>(null)
 
   async function handleCreate() {
     if (!newPhoneHash.trim() || !newReason.trim()) return
@@ -97,10 +99,10 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, confirmed: DeletionConfirmed) {
     setDeleting(id)
     try {
-      await deletePlatformBan(id)
+      await deletePlatformBan(id, confirmed)
       toast(t('platformBans.deleted'), 'success')
       onRefresh()
     } catch {
@@ -196,7 +198,7 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
                 variant="ghost"
                 size="sm"
                 data-testid={`platform-ban-delete-${ban.id}`}
-                onClick={() => handleDelete(ban.id)}
+                onClick={() => setConfirmingDelete(ban)}
                 disabled={deleting === ban.id}
               >
                 {deleting === ban.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4 text-destructive" />}
@@ -207,6 +209,17 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
             {t('platformBans.totalCount', { count: total })}
           </p>
         </div>
+      )}
+
+      {confirmingDelete && (
+        <DeletionConfirmed.Dialog
+          action="platformBan"
+          targetId={confirmingDelete.id}
+          subject={confirmingDelete.reason}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingDelete(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingDelete.id, confirmed)}
+        />
       )}
 
       {/* Actions */}

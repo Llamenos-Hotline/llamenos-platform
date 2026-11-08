@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import {
   listShiftOverrides,
   createShiftOverride,
@@ -39,6 +40,7 @@ export function OverridesPanel() {
   const [formDate, setFormDate] = useState(defaultFrom)
   const [formType, setFormType] = useState<'cancel' | 'substitute'>('cancel')
   const [saving, setSaving] = useState(false)
+  const [confirmingOverride, setConfirmingOverride] = useState<ShiftOverride | null>(null)
 
   useEffect(() => {
     listShiftOverrides(from, to)
@@ -62,9 +64,9 @@ export function OverridesPanel() {
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, confirmed: DeletionConfirmed) {
     try {
-      await deleteShiftOverride(id)
+      await deleteShiftOverride(id, confirmed)
       setOverrides(prev => prev.filter(o => o.id !== id))
     } catch {
       toast(t('common.error'), 'error')
@@ -73,6 +75,16 @@ export function OverridesPanel() {
 
   return (
     <div className="space-y-4">
+      {confirmingOverride && (
+        <DeletionConfirmed.Dialog
+          action="shiftOverride"
+          targetId={confirmingOverride.id}
+          subject={confirmingOverride.date}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingOverride(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingOverride.id, confirmed)}
+        />
+      )}
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label>{t('common.from')}</Label>
@@ -145,7 +157,7 @@ export function OverridesPanel() {
                   size="icon-xs"
                   className="text-destructive hover:text-destructive"
                   data-testid="override-delete-btn"
-                  onClick={() => handleDelete(ov.id)}
+                  onClick={() => setConfirmingOverride(ov)}
                   aria-label={t('a11y.deleteItem')}
                 >
                   <Trash2 className="h-3 w-3" />

@@ -225,6 +225,8 @@ export const ShiftPage = {
   async deleteShift(page: Page, name: string): Promise<void> {
     const card = this.getCard(page, name)
     await card.getByTestId(TestIds.SHIFT_DELETE_BTN).click()
+    // Deleting asks first (#2575).
+    await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
     await expect(page.getByText(name)).not.toBeVisible()
   },
 

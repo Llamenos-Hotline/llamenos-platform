@@ -304,9 +304,8 @@ Given('a custom field {string} exists', async ({ page, request }, fieldLabel: st
 })
 
 When('I click the delete button on {string}', async ({ page }, fieldLabel: string) => {
-  // Register dialog handler before the retry loop — page.once keeps it alive
-  // until the click actually triggers the browser confirm() dialog.
-  page.once('dialog', dialog => dialog.accept())
+  // The click only opens the admin-deletion dialog (#2575); "I confirm the deletion"
+  // answers it.
   // Wrap in toPass() to retry when the row detaches between Playwright's
   // internal visibility check and scrollIntoViewIfNeeded (component re-renders
   // during the delete flow in CI under load).
@@ -318,4 +317,5 @@ When('I click the delete button on {string}', async ({ page }, fieldLabel: strin
       .first()
       .click({ timeout: 3000 })
   }).toPass({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })

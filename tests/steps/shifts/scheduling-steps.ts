@@ -78,7 +78,10 @@ When('I click {string} on the shift', async ({ page }, buttonText: string) => {
   if (lowerText === 'edit') {
     await card.getByTestId(TestIds.SHIFT_EDIT_BTN).click()
   } else if (lowerText === 'delete') {
+    // Deleting a shift asks first (#2575); this step is the admin who answers yes.
     await card.getByTestId(TestIds.SHIFT_DELETE_BTN).click()
+    await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
+    await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).toBeHidden({ timeout: Timeouts.ELEMENT })
   } else {
     await card.getByRole('button', { name: new RegExp(buttonText, 'i') }).click()
   }

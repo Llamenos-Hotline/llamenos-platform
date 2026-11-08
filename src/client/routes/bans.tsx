@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { listBans, addBan, removeBan, bulkAddBans, type BanEntry } from '@/lib/api'
 import { useToast } from '@/lib/toast'
 import { ShieldBan, Plus, Upload, Trash2 } from 'lucide-react'
-import { ConfirmDialog } from '@/components/confirm-dialog'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -207,15 +207,15 @@ function BanRow({ ban, onRemoved }: {
         <Trash2 className="h-3 w-3" />
       </Button>
 
-      <ConfirmDialog
+      <DeletionConfirmed.Dialog
+        action="ban"
+        targetId={ban.phoneHash}
+        subject={ban.reason}
         open={showConfirm}
         onOpenChange={setShowConfirm}
-        title={t('banList.confirmUnban')}
-        description={ban.reason}
-        confirmLabel={t('banList.removeNumber')}
-        onConfirm={async () => {
+        onConfirmed={async (confirmed) => {
           try {
-            await removeBan(ban.phoneHash)
+            await removeBan(ban.phoneHash, confirmed)
             onRemoved()
           } catch {
             toast(t('common.error'), 'error')

@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request } from './client'
 import type { CustomFieldDefinition } from '@shared/types'
 
@@ -90,6 +91,22 @@ export async function updateMyAvailability(onBreak: boolean) {
 
 export async function getCustomFields() {
   return request<{ fields: CustomFieldDefinition[] }>('/settings/custom-fields')
+}
+
+/**
+ * Delete one custom field definition: PUTs [fields] without it, renumbered. Requires the
+ * admin's confirmation of exactly this field (#2575). Notes keep the values they hold.
+ */
+export async function deleteCustomField(
+  fields: CustomFieldDefinition[],
+  fieldId: string,
+  confirmed: DeletionConfirmed,
+) {
+  DeletionConfirmed.require(confirmed, 'customField', fieldId)
+  const remaining = fields
+    .filter(f => f.id !== fieldId)
+    .map((f, order) => ({ ...f, order }))
+  return updateCustomFields(remaining)
 }
 
 export async function updateCustomFields(fields: CustomFieldDefinition[]) {

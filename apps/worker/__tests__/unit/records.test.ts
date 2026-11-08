@@ -285,9 +285,16 @@ describe('RecordsService', () => {
   })
 
   describe('removeBan', () => {
-    it('removes ban by phone', async () => {
-      const { service } = setup()
-      await expect(service.removeBan(HASH_A)).resolves.toBeUndefined()
+    it('reports that a ban was lifted', async () => {
+      const { db, service } = setup()
+      db.$setDeleteResult([{ id: 'ban-1' }])
+      await expect(service.removeBan(HASH_A, 'hub-1')).resolves.toBe(true)
+    })
+
+    it('reports that nothing was lifted when no ban matched', async () => {
+      const { db, service } = setup()
+      db.$setDeleteResult([])
+      await expect(service.removeBan(HASH_A, 'hub-1')).resolves.toBe(false)
     })
   })
 

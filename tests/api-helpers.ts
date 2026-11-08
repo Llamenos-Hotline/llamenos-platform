@@ -778,7 +778,7 @@ export interface CreateShiftResult {
  * hub at all. A platform resource has its own helper with its own path; it is
  * never reached by leaving the hub out. Fails loudly instead of falling back.
  */
-function hubOwnedPath(base: string, hubId: string): string {
+export function hubOwnedPath(base: string, hubId: string): string {
   if (!hubId) throw new Error(`${base} belongs to a hub (#2461): pass the hub id`)
   return `/hubs/${hubId}${base}`
 }

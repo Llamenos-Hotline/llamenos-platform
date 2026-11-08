@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath } from './client'
 import type { Conversation, ConversationMessage } from '@protocol/schemas'
 
@@ -105,7 +106,9 @@ export async function updateReportType(id: string, data: Partial<import('@shared
   })
 }
 
-export async function archiveReportType(id: string) {
+/** Archive a report type. Requires the admin's confirmation of exactly this type (#2575). */
+export async function archiveReportType(id: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'reportCategory', id)
   return request<{ ok: boolean }>(`/settings/report-types/${id}`, {
     method: 'DELETE',
   })

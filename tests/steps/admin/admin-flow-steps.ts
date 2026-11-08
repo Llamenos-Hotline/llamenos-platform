@@ -105,6 +105,26 @@ Then('the updated shift name should appear', async ({ page, backendRequest, work
 When('I delete the shift', async ({ page, adminWorld }) => {
   const shiftCard = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: adminWorld.lastShiftName })
   await shiftCard.getByTestId(TestIds.SHIFT_DELETE_BTN).click()
+  await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
+  await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).toBeHidden({ timeout: Timeouts.ELEMENT })
+})
+
+// #2575: the delete button only asks. Cancelling must leave the shift on the server.
+When('I start deleting the shift but cancel', async ({ page, adminWorld }) => {
+  const shiftCard = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: adminWorld.lastShiftName })
+  await shiftCard.getByTestId(TestIds.SHIFT_DELETE_BTN).click()
+  const dialog = page.getByTestId(TestIds.CONFIRM_DIALOG)
+  await expect(dialog).toBeVisible({ timeout: Timeouts.ELEMENT })
+  // The dialog names the shift it is about to delete.
+  await expect(dialog.getByTestId(TestIds.DELETION_SUBJECT)).toHaveText(adminWorld.lastShiftName)
+  await page.getByTestId(TestIds.CONFIRM_DIALOG_CANCEL).click()
+  await expect(dialog).toBeHidden({ timeout: Timeouts.ELEMENT })
+})
+
+Then('the shift should still exist on the server', async ({ page, backendRequest, workerHub, adminWorld }) => {
+  await expect(page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: adminWorld.lastShiftName })).toBeVisible()
+  const shifts = await listShiftsViaApi(backendRequest, workerHub)
+  expect(shifts.find(s => s.encryptedName === adminWorld.lastShiftName)).toBeTruthy()
 })
 
 Then('the shift should no longer appear', async ({ page, backendRequest, workerHub, adminWorld }) => {

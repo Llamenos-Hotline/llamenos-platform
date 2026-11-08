@@ -11,6 +11,7 @@ import { getSharedState, setLastResponse } from './shared-state'
 import { getScenarioState } from './common.steps'
 import { devSurfaceHeaders } from '../../dev-surface-secret'
 import {
+  hubOwnedPath,
   apiGet,
   apiPost,
   apiPatch,
@@ -314,9 +315,13 @@ When('the {string} user sends {string} to the test ban endpoint', async ({ reque
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
+  // The ban was made in the scenario's hub, so the unban addresses that hub. The
+  // unscoped /bans path is the platform list: it used to answer 200 while lifting
+  // nothing, so "has access" passed without any ban being removed. An unban that
+  // lifts nothing is now a 404 (#2575).
   getSharedState(world).lastResponse = await apiDelete(
     request,
-    `/bans/${getPermMatrixState(world).testBanHash!}`,
+    hubOwnedPath(`/bans/${getPermMatrixState(world).testBanHash!}`, getScenarioState(world).hubId),
     user.deviceKey,
   )
 })

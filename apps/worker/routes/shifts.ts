@@ -7,6 +7,7 @@ import { createShiftBodySchema, updateShiftBodySchema, fallbackGroupSchema, shif
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { createEntityRouter } from '../lib/entity-router'
+import { audit } from '../services/audit'
 import {
   shiftOverrideResponseSchema,
   shiftOverrideListResponseSchema,
@@ -44,6 +45,11 @@ function mapOverride(row: {
     ...row,
     createdAt: row.createdAt.toISOString(),
   }
+}
+
+/** What an override audit entry records: which override, the date it governs, and its kind. */
+function overrideAuditDetails(row: { id: string; shiftId: string | null; date: string; type: string }) {
+  return { overrideId: row.id, shiftId: row.shiftId, date: row.date, type: row.type }
 }
 
 function mapAvailability(row: {
@@ -234,6 +240,10 @@ shifts.post('/overrides',
       encryptedNote: body.encryptedNote ?? null,
       createdBy: pubkey,
     })
+    // An override changes who is rung on a date — a cancel can leave it with nobody — so
+    // making one and removing one are both recorded (#2575). The note stays out: it is
+    // ciphertext, and the date and type are what an admin reading the log needs.
+    await audit(services.audit, 'shiftOverrideCreated', pubkey, overrideAuditDetails(row), undefined, hubId || null)
     return c.json(mapOverride(row))
   },
 )
@@ -252,8 +262,10 @@ shifts.delete('/overrides/:id',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
+    const pubkey = c.get('pubkey')
     const { id } = c.req.param()
-    await services.shiftOverrides.delete(hubId, id)
+    const removed = await services.shiftOverrides.delete(hubId, id)
+    await audit(services.audit, 'shiftOverrideDeleted', pubkey, overrideAuditDetails(removed), undefined, hubId || null)
     return c.json({ ok: true })
   },
 )

@@ -344,6 +344,7 @@ export const TestIds = {
   CONFIRM_DIALOG: 'confirm-dialog',
   CONFIRM_DIALOG_OK: 'confirm-dialog-ok',
   CONFIRM_DIALOG_CANCEL: 'confirm-dialog-cancel',
+  DELETION_SUBJECT: 'deletion-subject',
 
   // ============ Misc ============
   EMPTY_STATE: 'empty-state',

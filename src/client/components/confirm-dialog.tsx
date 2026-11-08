@@ -31,6 +31,7 @@ export function ConfirmDialog({
   cancelLabel,
   variant = 'destructive',
   onConfirm,
+  children,
 }: ConfirmDialogProps) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
@@ -52,6 +53,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
+        {children}
         <DialogFooter>
           <Button data-testid="confirm-dialog-cancel" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             {cancelLabel || t('common.cancel')}

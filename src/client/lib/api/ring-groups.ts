@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp } from './client'
 
 // --- Ring Groups ---
@@ -24,7 +25,9 @@ export async function updateRingGroup(id: string, data: { encryptedName: string 
   })
 }
 
-export async function deleteRingGroup(id: string) {
+/** Delete a ring group. Requires the admin's confirmation of exactly this group (#2575). */
+export async function deleteRingGroup(id: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'ringGroup', id)
   return request<{ ok: true }>(hp(`/ring-groups/${id}`), { method: 'DELETE' })
 }
 

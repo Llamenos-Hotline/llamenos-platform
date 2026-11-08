@@ -5,7 +5,7 @@ import { isValidE164 } from '../lib/helpers'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { createBanBodySchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema } from '@protocol/schemas/bans'
-import { authErrors } from '../openapi/helpers'
+import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
 import { banHash, PLATFORM_BAN_SCOPE } from '../lib/crypto'
@@ -121,6 +121,7 @@ bans.delete('/:phoneHash',
         },
       },
       ...authErrors,
+      ...notFoundError,
     },
   }),
   requirePermission('bans:delete'),
@@ -134,8 +135,14 @@ bans.delete('/:phoneHash',
     if (!/^[0-9a-f]{64}$/i.test(phoneHash)) {
       return c.json({ error: 'Invalid ban handle' }, 400)
     }
-    await services.records.removeBan(phoneHash, hubId)
-    await audit(services.audit, 'numberUnbanned', pubkey, {}, undefined, hubId ?? null)
+    // Lifting a ban re-admits a caller the hub deliberately excluded, so the audit entry
+    // names the same handle `numberBanned` recorded: an admin reading the log can pair
+    // the unban with the ban it undid (#2575). Nothing lifted, nothing recorded.
+    const removed = await services.records.removeBan(phoneHash, hubId)
+    if (!removed) {
+      return c.json({ error: 'Ban not found' }, 404)
+    }
+    await audit(services.audit, 'numberUnbanned', pubkey, { phoneHash }, undefined, hubId ?? null)
     return c.json({ ok: true })
   },
 )

@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp, hubPath } from './client'
 import type { BanEntry } from '@protocol/schemas'
 
@@ -23,7 +24,9 @@ export async function banAndHangup(callId: string, hubId: string, reason?: strin
   )
 }
 
-export async function removeBan(phoneHash: string) {
+/** Lift a hub ban. Requires the admin's confirmation of exactly this ban (#2575). */
+export async function removeBan(phoneHash: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'ban', phoneHash)
   return request<{ ok: true }>(hp(`/bans/${encodeURIComponent(phoneHash)}`), { method: 'DELETE' })
 }
 

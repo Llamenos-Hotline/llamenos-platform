@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { updateCustomFields } from '@/lib/api'
+import { updateCustomFields, deleteCustomField } from '@/lib/api'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import type { CustomFieldDefinition, CustomFieldContext } from '@shared/types'
 import { MAX_CUSTOM_FIELDS, CUSTOM_FIELD_CONTEXT_LABELS } from '@shared/types'
 import { SettingsSection } from '@/components/settings-section'
@@ -25,6 +26,7 @@ export function CustomFieldsSection({ fields, onChange, expanded, onToggle, stat
   const { toast } = useToast()
   const [editing, setEditing] = useState<Partial<CustomFieldDefinition> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState<CustomFieldDefinition | null>(null)
 
   async function handleReorder(index: number, direction: -1 | 1) {
     const next = [...fields]
@@ -35,12 +37,9 @@ export function CustomFieldsSection({ fields, onChange, expanded, onToggle, stat
     updateCustomFields(next).catch(() => toast(t('common.error'), 'error'))
   }
 
-  async function handleDelete(fieldId: string) {
-    if (!confirm(t('customFields.deleteConfirm'))) return
-    const next = fields.filter(f => f.id !== fieldId)
-    next.forEach((f, i) => f.order = i)
+  async function handleDelete(fieldId: string, confirmed: DeletionConfirmed) {
     try {
-      const res = await updateCustomFields(next)
+      const res = await deleteCustomField(fields, fieldId, confirmed)
       onChange(res.fields)
     } catch {
       toast(t('common.error'), 'error')
@@ -121,7 +120,7 @@ export function CustomFieldsSection({ fields, onChange, expanded, onToggle, stat
               <Button variant="ghost" size="sm" onClick={() => setEditing({ ...field })}>
                 {t('common.edit')}
               </Button>
-              <Button data-testid="custom-field-delete-btn" variant="ghost" size="sm" onClick={() => handleDelete(field.id)}>
+              <Button data-testid="custom-field-delete-btn" variant="ghost" size="sm" onClick={() => setConfirmingDelete(field)}>
                 <Trash2 className="h-4 w-4 text-destructive" />
               </Button>
             </div>
@@ -343,6 +342,17 @@ export function CustomFieldsSection({ fields, onChange, expanded, onToggle, stat
 
       {fields.length >= MAX_CUSTOM_FIELDS && (
         <p className="text-xs text-muted-foreground">{t('customFields.maxFields')}</p>
+      )}
+
+      {confirmingDelete && (
+        <DeletionConfirmed.Dialog
+          action="customField"
+          targetId={confirmingDelete.id}
+          subject={confirmingDelete.label}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingDelete(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingDelete.id, confirmed)}
+        />
       )}
     </SettingsSection>
   )
