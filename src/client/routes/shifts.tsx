@@ -43,6 +43,7 @@ import { listUsers, type Shift, type User } from '@/lib/api'
 import { z } from 'zod'
 import { createShiftBodySchema } from '@protocol/schemas/shifts'
 import { useToast } from '@/lib/toast'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { CalendarPlus, Clock, Users, Pencil, Trash2, LifeBuoy, UserPlus, UserMinus, ShieldCheck, CalendarX, CalendarOff, Activity, CheckCircle, XCircle, LogIn, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -185,6 +186,7 @@ function ScheduleTab({ isAdmin, toast, t }: { isAdmin: boolean; toast: ReturnTyp
   const [users, setUsers] = useState<User[]>([])
   const [showForm, setShowForm] = useState(false)
   const [editingShift, setEditingShift] = useState<Shift | null>(null)
+  const [confirmingShift, setConfirmingShift] = useState<Shift | null>(null)
 
   const { data: shifts = [], isLoading } = useShifts()
   const { data: fallback = [] } = useFallbackGroup()
@@ -207,6 +209,22 @@ function ScheduleTab({ isAdmin, toast, t }: { isAdmin: boolean; toast: ReturnTyp
 
   return (
     <div className="space-y-6">
+      {confirmingShift && (
+        <DeletionConfirmed.Dialog
+          action="shift"
+          targetId={confirmingShift.id}
+          subject={confirmingShift.encryptedName}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingShift(null) }}
+          onConfirmed={async (confirmed) => {
+            try {
+              await deleteShiftMutation.mutateAsync({ id: confirmingShift.id, confirmed })
+            } catch {
+              toast(t('common.error'), 'error')
+            }
+          }}
+        />
+      )}
       {isAdmin && (
         <div className="flex justify-end">
           <Button data-testid="shift-create-btn" onClick={() => { setShowForm(true); setEditingShift(null) }}>
@@ -288,13 +306,7 @@ function ScheduleTab({ isAdmin, toast, t }: { isAdmin: boolean; toast: ReturnTyp
                         size="icon-xs"
                         className="text-destructive hover:text-destructive"
                         aria-label={t('a11y.deleteItem')}
-                        onClick={async () => {
-                          try {
-                            await deleteShiftMutation.mutateAsync(shift.id)
-                          } catch {
-                            toast(t('common.error'), 'error')
-                          }
-                        }}
+                        onClick={() => setConfirmingShift(shift)}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -338,6 +350,7 @@ function RingGroupsTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast
   const [editingGroup, setEditingGroup] = useState<RingGroupDetail | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [nameInput, setNameInput] = useState('')
+  const [confirmingGroup, setConfirmingGroup] = useState<{ id: string; encryptedName: string } | null>(null)
 
   const { data: groups = [], isLoading } = useRingGroups()
   const createMutation = useCreateRingGroup()
@@ -363,9 +376,9 @@ function RingGroupsTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, confirmed: DeletionConfirmed) {
     try {
-      await deleteMutation.mutateAsync(id)
+      await deleteMutation.mutateAsync({ id, confirmed })
       if (editingGroup?.id === id) setEditingGroup(null)
     } catch {
       toast(t('common.error'), 'error')
@@ -394,6 +407,16 @@ function RingGroupsTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast
 
   return (
     <div className="space-y-4">
+      {confirmingGroup && (
+        <DeletionConfirmed.Dialog
+          action="ringGroup"
+          targetId={confirmingGroup.id}
+          subject={confirmingGroup.encryptedName}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingGroup(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingGroup.id, confirmed)}
+        />
+      )}
       <div className="flex justify-end">
         <Button data-testid="ring-group-create-btn" onClick={() => { setShowForm(true); setNameInput('') }}>
           <UserPlus className="h-4 w-4" />
@@ -462,7 +485,7 @@ function RingGroupsTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast
                     size="icon-xs"
                     className="text-destructive hover:text-destructive"
                     data-testid="ring-group-delete-btn"
-                    onClick={() => handleDelete(group.id)}
+                    onClick={() => setConfirmingGroup(group)}
                     aria-label={t('a11y.deleteItem')}
                   >
                     <Trash2 className="h-3 w-3" />
@@ -525,6 +548,7 @@ function OverridesTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast'
   const [showForm, setShowForm] = useState(false)
   const [formDate, setFormDate] = useState(defaultFrom)
   const [formType, setFormType] = useState<'cancel' | 'substitute'>('cancel')
+  const [confirmingOverride, setConfirmingOverride] = useState<{ id: string; date: string } | null>(null)
 
   const { data: overrides = [], isLoading } = useShiftOverrides(from, to)
   const createMutation = useCreateShiftOverride()
@@ -541,9 +565,9 @@ function OverridesTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast'
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, confirmed: DeletionConfirmed) {
     try {
-      await deleteMutation.mutateAsync(id)
+      await deleteMutation.mutateAsync({ id, confirmed })
     } catch {
       toast(t('common.error'), 'error')
     }
@@ -551,6 +575,16 @@ function OverridesTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast'
 
   return (
     <div className="space-y-4">
+      {confirmingOverride && (
+        <DeletionConfirmed.Dialog
+          action="shiftOverride"
+          targetId={confirmingOverride.id}
+          subject={confirmingOverride.date}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingOverride(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingOverride.id, confirmed)}
+        />
+      )}
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label>{t('common.from')}</Label>
@@ -621,7 +655,7 @@ function OverridesTab({ toast, t }: { toast: ReturnType<typeof useToast>['toast'
                   size="icon-xs"
                   className="text-destructive hover:text-destructive"
                   data-testid="override-delete-btn"
-                  onClick={() => handleDelete(ov.id)}
+                  onClick={() => setConfirmingOverride(ov)}
                   aria-label={t('a11y.deleteItem')}
                 >
                   <Trash2 className="h-3 w-3" />

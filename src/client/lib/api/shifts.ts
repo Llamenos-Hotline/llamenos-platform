@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp } from './client'
 import type { CreateShiftBody } from '@protocol/schemas/shifts'
 import type { Shift, ShiftStatus } from '@protocol/schemas'
@@ -30,7 +31,9 @@ export async function updateShift(id: string, data: Partial<Shift>) {
   })
 }
 
-export async function deleteShift(id: string) {
+/** Delete a shift. Requires the admin's confirmation of exactly this shift (#2575). */
+export async function deleteShift(id: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'shift', id)
   return request<{ ok: true }>(hp(`/shifts/${id}`), { method: 'DELETE' })
 }
 
@@ -78,7 +81,9 @@ export async function createShiftOverride(data: { id: string; shiftId?: string |
   })
 }
 
-export async function deleteShiftOverride(id: string) {
+/** Delete a shift override. Requires the admin's confirmation of exactly this override (#2575). */
+export async function deleteShiftOverride(id: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'shiftOverride', id)
   return request<{ ok: true }>(hp(`/shifts/overrides/${id}`), { method: 'DELETE' })
 }
 

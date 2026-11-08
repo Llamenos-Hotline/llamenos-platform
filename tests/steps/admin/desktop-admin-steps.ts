@@ -309,11 +309,19 @@ When('I confirm the deletion', async ({ page, adminWorld }) => {
   // hub's name is typed exactly. The old isVisible/catch cascade could silently skip
   // typing the name (leaving the button disabled) or skip clicking it outright.
   //
-  // This phrase is shared with custom-fields.feature, whose delete uses a native
-  // confirm() that "I click the delete button on {string}" already accepted — there is
-  // no in-page dialog to drive. Which flow this scenario is in is recorded state (the hub
-  // Given sets adminWorld.lastHubId), not a DOM probe.
-  if (!adminWorld.lastHubId) return
+  // This phrase is shared with custom-fields.feature, whose delete asks through the
+  // admin-deletion dialog (#2575): confirming it is what sends the PUT that drops the
+  // field. Which flow this scenario is in is recorded state (the hub Given sets
+  // adminWorld.lastHubId), not a DOM probe.
+  if (!adminWorld.lastHubId) {
+    const fieldsSaved = page.waitForResponse(
+      res => res.url().includes('/settings/custom-fields') && res.request().method() === 'PUT',
+      { timeout: Timeouts.API },
+    )
+    await page.getByTestId(TestIds.CONFIRM_DIALOG_OK).click()
+    expect((await fieldsSaved).ok(), 'PUT custom-fields request failed').toBe(true)
+    return
+  }
   const confirmName = page.getByTestId(TestIds.DELETE_HUB_CONFIRM_NAME)
   await expect(confirmName).toHaveText(adminWorld.lastHubName, { timeout: Timeouts.ELEMENT })
   await page.getByTestId(TestIds.DELETE_HUB_CONFIRM_INPUT).fill(adminWorld.lastHubName)

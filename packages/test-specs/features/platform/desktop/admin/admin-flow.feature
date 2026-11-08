@@ -43,6 +43,12 @@ Feature: Admin Flow
     And I delete the shift
     Then the shift should no longer appear
 
+  Scenario: Shift deletion asks first, and cancelling keeps the shift
+    When I navigate to the "Shifts" page
+    And I create a new shift with a unique name
+    And I start deleting the shift but cancel
+    Then the shift should still exist on the server
+
   Scenario: Ban list management — add ban
     When I navigate to the "Ban List" page
     And I ban a unique phone number with reason "E2E test ban"

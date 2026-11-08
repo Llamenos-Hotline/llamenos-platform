@@ -11,6 +11,7 @@ import { updateDirectoryContact } from './directory'
 import { initUpload, completeUpload, getFileEnvelopes } from './files'
 import { createRolesFromTemplate } from './cms'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
+import { confirmDeletionThroughDialog } from '../admin-deletion.test-helpers'
 
 const registerCredential = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/webauthn', () => ({ registerCredential }))
@@ -102,10 +103,14 @@ describe('deployment-wide settings', () => {
   })
 
   it('manages the admin report-type vocabulary on the unscoped settings route', async () => {
+    // Archiving takes the admin's confirmation (#2575), obtained from its dialog before
+    // the recorded calls start.
+    const confirmed = await confirmDeletionThroughDialog('reportCategory', 'rt-1')
+    calls = []
     await getReportTypesAdmin()
     await createReportType({ name: 'x' })
     await updateReportType('rt-1', {})
-    await archiveReportType('rt-1')
+    await archiveReportType('rt-1', confirmed)
     expect(calls).toEqual([
       { method: 'GET', url: '/api/settings/report-types' },
       { method: 'POST', url: '/api/settings/report-types' },

@@ -1,3 +1,4 @@
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp } from './client'
 import type {
   ErasureRequest,
@@ -104,7 +105,9 @@ export async function createPlatformBan(data: { phoneHash: string; reason: strin
   })
 }
 
-export async function deletePlatformBan(id: string) {
+/** Lift a platform ban. Requires the admin's confirmation of exactly this ban (#2575). */
+export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed) {
+  DeletionConfirmed.require(confirmed, 'platformBan', id)
   return request<{ ok: true }>(`/bans/platform/${id}`, { method: 'DELETE' })
 }
 

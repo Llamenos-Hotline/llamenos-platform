@@ -12,6 +12,7 @@ import {
   apiGet,
   apiPost,
   apiPatch,
+  apiDelete,
   createVolunteerViaApi,
   createShiftViaApi,
   createBanViaApi,
@@ -29,6 +30,8 @@ import {
   getCustomFieldsViaApi,
   updateCustomFieldsViaApi,
   listPlatformAuditLogViaApi,
+  listAuditLogViaApi,
+  hubOwnedPath,
   listNotesViaApi,
   listReportsViaApi,
   uniquePhone,
@@ -65,6 +68,10 @@ interface CrudState {
   reporterDeviceKey?: string
   reviewerPubkey?: string
   fallbackVolunteers: string[]
+  /** Status of the most recent repeated unban (#2575). */
+  repeatUnbanStatus?: number
+  /** The override the audit scenario made and removed (#2575). */
+  overrideId?: string
 }
 
 const CRUD_KEY = 'crud'
@@ -226,6 +233,62 @@ When('the admin removes the ban for {string}', async ({request, world}, phone: s
   const phoneHash = getScenarioState(world).phoneHashMap[phone]
   expect(phoneHash).toBeDefined()
   await removeBanViaApi(request, phoneHash, hubId)
+})
+
+// ── Rule V: lifting a ban and changing an override are observed (#2575) ──
+
+When('the admin removes the ban for {string} again', async ({ request, world }, phone: string) => {
+  const hubId = getScenarioState(world).hubId
+  const phoneHash = getScenarioState(world).phoneHashMap[phone]
+  expect(phoneHash).toBeDefined()
+  const { status } = await apiDelete(request, hubOwnedPath(`/bans/${phoneHash}`, hubId))
+  getCrudState(world).repeatUnbanStatus = status
+})
+
+Then('the repeated removal is refused as not found', ({ world }) => {
+  expect(getCrudState(world).repeatUnbanStatus).toBe(404)
+})
+
+Then('the hub audit log records exactly one unban, naming the ban on {string}', async ({ request, world }, phone: string) => {
+  const { hubId, phoneHashMap } = getScenarioState(world)
+  const phoneHash = phoneHashMap[phone]
+  expect(phoneHash).toBeDefined()
+  const { entries } = await listAuditLogViaApi(request, { hubId, eventType: 'numberUnbanned', limit: 100 })
+  const unbans = entries.filter(e => e.action === 'numberUnbanned')
+  expect(unbans).toHaveLength(1)
+  // The handle `numberBanned` recorded, so the unban pairs with the ban it lifted.
+  expect(unbans[0]!.details.phoneHash).toBe(phoneHash)
+  const { entries: bans } = await listAuditLogViaApi(request, { hubId, eventType: 'numberBanned', limit: 100 })
+  expect(bans.some(e => e.action === 'numberBanned' && e.details.phoneHash === phoneHash)).toBe(true)
+})
+
+When('an admin creates a cancel override for {string}', async ({ request, world }, date: string) => {
+  const hubId = getScenarioState(world).hubId
+  const { status, data } = await apiPost<{ id: string }>(
+    request,
+    hubOwnedPath('/shifts/overrides', hubId),
+    { id: crypto.randomUUID(), date, type: 'cancel' },
+  )
+  expect(status).toBe(200)
+  getCrudState(world).overrideId = data.id
+})
+
+When('the admin deletes that override', async ({ request, world }) => {
+  const hubId = getScenarioState(world).hubId
+  const overrideId = getCrudState(world).overrideId
+  expect(overrideId).toBeDefined()
+  const { status } = await apiDelete(request, hubOwnedPath(`/shifts/overrides/${overrideId}`, hubId))
+  expect(status).toBe(200)
+})
+
+Then('the hub audit log records {string} for the override on {string}', async ({ request, world }, action: string, date: string) => {
+  const hubId = getScenarioState(world).hubId
+  const overrideId = getCrudState(world).overrideId
+  const { entries } = await listAuditLogViaApi(request, { hubId, eventType: action, limit: 100 })
+  const entry = entries.find(e => e.action === action && e.details.overrideId === overrideId)
+  expect(entry, `${action} entry for override ${overrideId}`).toBeDefined()
+  expect(entry!.details.date).toBe(date)
+  expect(entry!.details.type).toBe('cancel')
 })
 
 When('an admin bulk imports bans for {int} phone numbers', async ({ request, world }, count: number) => {

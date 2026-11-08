@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
+import { DeletionConfirmed } from '@/lib/admin-deletion'
 import {
   listRingGroups,
   createRingGroup,
@@ -41,6 +42,7 @@ export function RingGroupsPanel() {
   const [showForm, setShowForm] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [saving, setSaving] = useState(false)
+  const [confirmingGroup, setConfirmingGroup] = useState<RingGroup | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -67,9 +69,9 @@ export function RingGroupsPanel() {
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(id: string, confirmed: DeletionConfirmed) {
     try {
-      await deleteRingGroup(id)
+      await deleteRingGroup(id, confirmed)
       setGroups(prev => prev.filter(g => g.id !== id))
     } catch {
       toast(t('common.error'), 'error')
@@ -109,6 +111,16 @@ export function RingGroupsPanel() {
 
   return (
     <div className="space-y-4">
+      {confirmingGroup && (
+        <DeletionConfirmed.Dialog
+          action="ringGroup"
+          targetId={confirmingGroup.id}
+          subject={confirmingGroup.encryptedName}
+          open
+          onOpenChange={(open) => { if (!open) setConfirmingGroup(null) }}
+          onConfirmed={(confirmed) => handleDelete(confirmingGroup.id, confirmed)}
+        />
+      )}
       <div className="flex justify-end">
         <Button data-testid="ring-group-create-btn" onClick={() => { setShowForm(true); setNameInput('') }}>
           <UserPlus className="h-4 w-4" />
@@ -170,7 +182,7 @@ export function RingGroupsPanel() {
                     size="icon-xs"
                     className="text-destructive hover:text-destructive"
                     data-testid="ring-group-delete-btn"
-                    onClick={() => handleDelete(group.id)}
+                    onClick={() => setConfirmingGroup(group)}
                     aria-label={t('a11y.deleteItem')}
                   >
                     <Trash2 className="h-3 w-3" />

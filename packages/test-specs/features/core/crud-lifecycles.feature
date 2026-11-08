@@ -43,6 +43,19 @@ Feature: CRUD Lifecycles
     When the admin removes the ban for "+15550001111"
     Then the ban list should not contain "+15550001111"
 
+  Scenario: Lifting a ban is recorded against the ban it lifted
+    When an admin bans phone "+15550001112"
+    And the admin removes the ban for "+15550001112"
+    And the admin removes the ban for "+15550001112" again
+    Then the repeated removal is refused as not found
+    And the hub audit log records exactly one unban, naming the ban on "+15550001112"
+
+  Scenario: Shift override changes are recorded in the hub audit log
+    When an admin creates a cancel override for "2026-07-04"
+    And the admin deletes that override
+    Then the hub audit log records "shiftOverrideCreated" for the override on "2026-07-04"
+    And the hub audit log records "shiftOverrideDeleted" for the override on "2026-07-04"
+
   Scenario: Bulk ban import
     When an admin bulk imports bans for 3 phone numbers
     Then the ban list should contain all 3 numbers
