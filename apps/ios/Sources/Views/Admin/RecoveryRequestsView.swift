@@ -42,7 +42,7 @@ struct RecoveryRequestsView: View {
         .refreshable {
             await loadRecoveryRequests()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await loadRecoveryRequests()
         }
     }

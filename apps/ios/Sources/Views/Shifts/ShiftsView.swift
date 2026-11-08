@@ -45,7 +45,7 @@ struct ShiftsView: View {
             .refreshable {
                 await vm.refresh()
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 await vm.loadShifts()
                 if appState.hasPermission("shifts:set-availability") {
                     await vm.loadAvailabilityBlocks()

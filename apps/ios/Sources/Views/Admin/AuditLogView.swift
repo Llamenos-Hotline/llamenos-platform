@@ -22,7 +22,7 @@ struct AuditLogView: View {
             viewModel.isLoadingAudit = false
             await viewModel.loadAuditLog()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadAuditLog()
         }
     }

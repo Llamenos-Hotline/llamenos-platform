@@ -28,7 +28,7 @@ struct UsersView: View {
             viewModel.isLoadingUsers = false
             await viewModel.loadUsers()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadUsers()
         }
     }

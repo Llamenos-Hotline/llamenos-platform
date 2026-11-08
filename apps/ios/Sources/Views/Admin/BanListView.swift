@@ -38,7 +38,7 @@ struct BanListView: View {
             viewModel.isLoadingBans = false
             await viewModel.loadBans()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadBans()
         }
     }

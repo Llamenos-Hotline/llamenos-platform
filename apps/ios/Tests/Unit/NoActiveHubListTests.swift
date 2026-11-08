@@ -45,6 +45,20 @@ private final class RecordingStubURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+/// No request may name a hub-owned resource outside `/api/hubs/:hubId`.
+private func assertNoUnscopedHubOwnedRequest(file: StaticString = #filePath, line: UInt = #line) {
+    let unscoped = RecordingStubURLProtocol.requests().filter { request in
+        [
+            "/api/reports", "/api/notes", "/api/contacts", "/api/audit",
+            // #2461: the server wrote these into hub "" and read any hub's row by id.
+            "/api/records", "/api/events", "/api/evidence", "/api/calls", "/api/shifts", "/api/ring-groups",
+        ].contains { prefix in
+            request.hasSuffix(" \(prefix)") || request.contains(" \(prefix)/")
+        }
+    }
+    XCTAssertEqual(unscoped, [], "A hub-owned list has no unscoped route to ask", file: file, line: line)
+}
+
 /// A hub-owned list with no active hub (#2405, #2461).
 ///
 /// Notes, reports, contacts and the audit log have no unscoped route (#2395), nor have
@@ -71,19 +85,6 @@ final class NoActiveHubListTests: XCTestCase {
         return api
     }
 
-    /// No request may name a hub-owned resource outside `/api/hubs/:hubId`.
-    private func assertNoUnscopedHubOwnedRequest(file: StaticString = #filePath, line: UInt = #line) {
-        let unscoped = RecordingStubURLProtocol.requests().filter { request in
-            [
-                "/api/reports", "/api/notes", "/api/contacts", "/api/audit",
-                // #2461: the server wrote these into hub "" and read any hub's row by id.
-                "/api/records", "/api/events", "/api/evidence", "/api/calls", "/api/shifts", "/api/ring-groups",
-            ].contains { prefix in
-                request.hasSuffix(" \(prefix)") || request.contains(" \(prefix)/")
-            }
-        }
-        XCTAssertEqual(unscoped, [], "A hub-owned list has no unscoped route to ask", file: file, line: line)
-    }
 
     func testNoHubIsAnAPIErrorThatMeansNothingToBrowse() {
         XCTAssertTrue(APIError.isNoHub(APIError.noActiveHub))
@@ -263,5 +264,94 @@ final class HubOwnedRowsClearTests: XCTestCase {
 
         XCTAssertEqual(viewModel.requests.map(\.id), [], "hub A's join requests stayed on screen with no hub")
         XCTAssertNil(viewModel.errorMessage)
+    }
+}
+
+/// No active hub because the hub could not be ASKED which hubs this user belongs to (#2478).
+///
+/// The session's hub-list fetch failed, so a nil active hub is not "a member of no hub" —
+/// the hub is unreachable. A hub-owned screen must say so. The ios-e2e shard caught the
+/// Shifts tab settling on an empty schedule, the same as a hub with nothing in it, for a
+/// hub that refused the connection. Nothing may be sent to an unscoped path either way.
+@MainActor
+final class MembershipUnavailableListTests: XCTestCase {
+
+    private let unreachable = APIError.networkError(URLError(.cannotConnectToHost))
+
+    private func makeAPI(membershipFailure: (any Error)?) throws -> (APIService, HubContext) {
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        RecordingStubURLProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RecordingStubURLProtocol.self]
+        let hubContext = HubContext()
+        XCTAssertNil(hubContext.activeHubId, "precondition: no hub is active")
+        hubContext.recordMembershipLoad(failure: membershipFailure)
+        let api = APIService(
+            cryptoService: CryptoService(),
+            hubContext: hubContext,
+            sessionConfiguration: configuration
+        )
+        try api.configure(hubURLString: "https://no-active-hub.test")
+        return (api, hubContext)
+    }
+
+    private func makeShifts(_ api: APIService, _ hubContext: HubContext) -> ShiftsViewModel {
+        ShiftsViewModel(
+            apiService: api,
+            hubContext: hubContext,
+            linphoneService: MockLinphoneService(),
+            shiftClockService: ShiftClockService(apiService: api)
+        )
+    }
+
+    func testShiftsReportAnUnreachableHubInsteadOfAnEmptySchedule() async throws {
+        let (api, hubContext) = try makeAPI(membershipFailure: unreachable)
+        let viewModel = makeShifts(api, hubContext)
+
+        await viewModel.loadShifts()
+
+        XCTAssertEqual(
+            viewModel.errorMessage, unreachable.errorDescription,
+            "The hub could not be reached — ShiftsView renders shifts-error from this"
+        )
+        XCTAssertTrue(viewModel.shifts.isEmpty, "No schedule could be loaded")
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    func testNotesReportAnUnreachableHubInsteadOfAnEmptyList() async throws {
+        let (api, _) = try makeAPI(membershipFailure: unreachable)
+        let viewModel = NotesViewModel(apiService: api, cryptoService: CryptoService())
+
+        await viewModel.loadNotes()
+
+        XCTAssertEqual(viewModel.errorMessage, unreachable.errorDescription)
+        XCTAssertTrue(viewModel.notes.isEmpty)
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    /// The hub list WAS fetched and names no hub: that is membership of none, and the
+    /// schedule is simply empty.
+    func testShiftsOfAMemberOfNoHubAreEmptyWithoutAnError() async throws {
+        let (api, hubContext) = try makeAPI(membershipFailure: nil)
+        let viewModel = makeShifts(api, hubContext)
+
+        await viewModel.loadShifts()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.shifts.isEmpty)
+        assertNoUnscopedHubOwnedRequest()
+    }
+
+    /// A screen keyed on the active hub alone never reloads when the hub list fails after
+    /// it loaded: the active hub is nil before and after. `browsing` changes.
+    func testAFailedMembershipLoadChangesWhatScreensReloadOn() {
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        let hubContext = HubContext()
+        let before = hubContext.browsing
+
+        hubContext.recordMembershipLoad(failure: unreachable)
+
+        XCTAssertNil(hubContext.activeHubId)
+        XCTAssertNotEqual(hubContext.browsing, before)
     }
 }

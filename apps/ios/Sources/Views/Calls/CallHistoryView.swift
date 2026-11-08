@@ -214,7 +214,7 @@ struct CallHistoryView: View {
             .refreshable {
                 await vm.refresh(hubId: hubContext.activeHubId)
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 guard canViewHistory else { return }
                 await vm.loadCallHistory(hubId: hubContext.activeHubId)
             }

@@ -490,8 +490,15 @@ final class APIService: @unchecked Sendable {
     ///
     /// Unlike `hp(_:)` it never falls back to the bare path — the server refuses that
     /// path, and a request with no hub in it would be a request for every hub's rows.
+    ///
+    /// With no hub active it throws why. "No hub" (`APIError.noActiveHub`) is an empty
+    /// list; but when the session could not fetch its hub list, nil does not mean the
+    /// user belongs to no hub — it means the hub could not be asked, and that failure is
+    /// what the screen must report, not an empty schedule (#2478).
     func activeHubPath(_ path: String) throws -> String {
-        guard let hubId = hubContext.activeHubId else { throw APIError.noActiveHub }
+        guard let hubId = hubContext.activeHubId else {
+            throw hubContext.membershipFailure ?? APIError.noActiveHub
+        }
         return Self.hubPath(hubId, path)
     }
 

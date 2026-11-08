@@ -224,6 +224,14 @@ final class AppState {
                 cryptoService.setMockIdentity()
             }
             isLocked = registering
+            // A launch that does not register is usable from here, so — standing in for
+            // unlock — it loads membership here, exactly as `didUnlock` does. Without it
+            // the session never asks which hubs it belongs to, and a hub that cannot be
+            // reached looks like membership of no hub (#2478). A registering launch loads
+            // in `finishTestRegistration`, once the server knows the device.
+            if !registering {
+                loadMemberHubs()
+            }
         }
 
         if args.contains("--test-admin") {

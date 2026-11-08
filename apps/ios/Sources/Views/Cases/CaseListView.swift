@@ -87,7 +87,7 @@ struct CaseListView: View {
                     }
                 }
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 await vm.loadInitial()
             }
             .refreshable {
