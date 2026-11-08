@@ -66,6 +66,20 @@ class HubMembershipUnavailableException(cause: Exception) :
     IllegalStateException(cause.message ?: "Hub membership unavailable", cause)
 
 /**
+ * A request was made while this device holds no hub URL: it was never enrolled, or its
+ * identity has just been destroyed (logout, panic wipe, remote wipe) while background work
+ * — a relay reconnect's re-read, a doorbell fetch — was still running.
+ *
+ * That is a state the app passes through on every logout, not a programming error, so it is
+ * an [IOException]: like a dropped connection, the request never reached a server, and every
+ * caller already degrades on that ("unavailable, state unchanged"). It is thrown before any
+ * request is built, so it is never queued for offline replay. As a bare
+ * `IllegalStateException` no caller modelled it, and a request racing logout crashed the
+ * app from the application scope (the M1 probe's `logout` flow, #2527).
+ */
+class HubNotConfiguredException : IOException("Hub URL not configured")
+
+/**
  * Request tag for public endpoints that prove identity in their body or not at all
  * (invite validation and redemption). [AuthInterceptor] sends these without a signature,
  * so they work before any device key exists, and they are never queued for offline replay.
@@ -570,7 +584,7 @@ class ApiService @Inject constructor(
     @PublishedApi
     internal fun getBaseUrl(): String {
         val url = keystoreService.retrieve(KeystoreService.KEY_HUB_URL)
-            ?: throw IllegalStateException("Hub URL not configured")
+            ?: throw HubNotConfiguredException()
 
         // Extract hostname and configure pinning if needed
         val hostname = try {
