@@ -13,6 +13,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.InviteRepository
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.BiometricKeyInvalidatedException
 import org.llamenos.hotline.crypto.BiometricKeyStore
 import org.llamenos.hotline.crypto.CryptoService
@@ -133,6 +134,7 @@ class AuthViewModel @Inject constructor(
     private val inviteRepository: InviteRepository,
     private val deviceRegistrationManager: DeviceRegistrationManager,
     private val pushRegistrationManager: PushRegistrationManager,
+    private val webSocketService: WebSocketService,
 ) : ViewModel() {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -529,8 +531,13 @@ class AuthViewModel @Inject constructor(
      * Requires a [DestructionConfirmed], which only [DestructionConfirmed.Dialog] mints, so
      * no caller can reach this without the user having confirmed (#2123).
      *
-     * Storage is cleared before the keys are dropped, so whatever observes the lock sees
-     * an identity that no longer exists (login), not one to unlock.
+     * The relay is closed first, so nothing it delivers afterwards — an `authenticated`
+     * reply to a handshake still in flight, a reconnect — acts for an identity that no
+     * longer exists. Waiting for the unlocked screens to be popped (which also disconnects)
+     * left a window in which the relay announced CONNECTED for the destroyed identity and
+     * its listeners re-read the server with no hub URL (#2527). Storage is cleared before
+     * the keys are dropped, so whatever observes the lock sees an identity that no longer
+     * exists (login), not one to unlock.
      */
     @Suppress("UNUSED_PARAMETER") // the parameter is the guarantee, not an input
     fun destroyIdentity(confirmation: DestructionConfirmed) {
@@ -548,6 +555,7 @@ class AuthViewModel @Inject constructor(
     }
 
     private fun clearLocalIdentity() {
+        webSocketService.disconnect()
         keystoreService.clear()
         cryptoService.clearHubKeys()
         cryptoService.lock()

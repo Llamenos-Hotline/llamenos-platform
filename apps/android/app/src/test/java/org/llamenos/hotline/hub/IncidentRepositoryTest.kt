@@ -4,8 +4,11 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,7 +22,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.llamenos.hotline.InMemoryKeyValueStore
+import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.RetryInterceptor
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.model.Hub
 import org.llamenos.hotline.model.HubsListResponse
@@ -192,6 +198,35 @@ class IncidentRepositoryTest {
 
         coVerify(exactly = 2) { apiService.getOpenIncidents("hub-A") }
         coVerify(exactly = 2) { apiService.getOpenIncidents("hub-B") }
+    }
+
+    /**
+     * #2527: logout clears the hub URL while the relay can still complete a handshake. Its
+     * CONNECTED re-read then reaches a REAL [ApiService] with no hub configured. That used to
+     * throw a bare IllegalStateException no caller modelled, which escaped the application
+     * scope and crashed the app (the M1 probe's `logout` flow).
+     */
+    @Test
+    fun `a relay reconnect after logout neither crashes nor touches the incidents`() = runTest(dispatcher) {
+        val uncaught = mutableListOf<Throwable>()
+        val loggedOutApp = CoroutineScope(SupervisorJob() + dispatcher + CoroutineExceptionHandler { _, e -> uncaught += e })
+        // The store as logout leaves it: no hub URL.
+        val loggedOutApi = ApiService(AuthInterceptor(mockk(relaxed = true)), RetryInterceptor(), InMemoryKeyValueStore(), mockk(relaxed = true))
+            .apply { ioDispatcher = dispatcher }
+        val relay = MutableStateFlow(WebSocketService.ConnectionState.CONNECTING)
+        val loggedOutRelay = mockk<WebSocketService> {
+            every { typedEvents } returns events
+            every { connectionState } returns relay
+        }
+        val repo = IncidentRepository(loggedOutApi, loggedOutRelay, loggedOutApp)
+
+        repo.beginSession()
+        relay.value = WebSocketService.ConnectionState.CONNECTED
+        repo.refresh("hub-A")
+
+        assertEquals(emptyList<Throwable>(), uncaught)
+        assertTrue(repo.state.value.incidents.isEmpty())
+        loggedOutApp.cancel()
     }
 
     @Test

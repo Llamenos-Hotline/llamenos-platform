@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -214,6 +213,8 @@ class WebSocketService @Inject constructor(
         scope.launch {
             intentionalDisconnect = false
             val relayUrl = resolveRelayUrl()
+            // disconnect() ran while the relay address was being resolved.
+            if (intentionalDisconnect) return@launch
             if (relayUrl == null) {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 scheduleReconnect()
@@ -274,7 +275,7 @@ class WebSocketService @Inject constructor(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                handleServerMessage(text)
+                handleSocketMessage(generation, text)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -298,13 +299,17 @@ class WebSocketService @Inject constructor(
 
     /**
      * Disconnect from the relay and cancel any pending reconnection.
+     *
+     * Synchronous on purpose: identity destruction (logout, panic wipe, remote wipe) calls
+     * this before it clears storage, so by the time the hub URL and keys are gone the socket
+     * is retired — its late frames are dropped ([socketGeneration]) and no reconnect can
+     * start a new handshake for the destroyed identity.
      */
     fun disconnect() {
         intentionalDisconnect = true
-        scope.launch {
-            reconnectJob?.cancelAndJoin()
-            reconnectJob = null
-        }
+        reconnectJob?.cancel()
+        reconnectJob = null
+        socketGeneration++
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         authenticated = false
@@ -312,6 +317,24 @@ class WebSocketService @Inject constructor(
         membershipReauthAttempted = emptySet()
         _connectionState.value = ConnectionState.DISCONNECTED
         reconnectAttempt = 0
+    }
+
+    /** The generation of the socket opened last; a frame from any other is stale. */
+    @VisibleForTesting
+    internal val currentSocketGeneration: Int get() = socketGeneration
+
+    /**
+     * A frame from the socket opened as [generation].
+     *
+     * A socket this service already closed keeps delivering whatever the server sent before
+     * its close frame — including an `authenticated` reply to a handshake that was in flight
+     * at logout. Acting on it would announce CONNECTED, and so re-read every hub, for an
+     * identity that no longer exists (#2527), so a superseded socket's frames are dropped.
+     */
+    @VisibleForTesting
+    internal fun handleSocketMessage(generation: Int, text: String) {
+        if (generation != socketGeneration) return
+        handleServerMessage(text)
     }
 
     @VisibleForTesting

@@ -43,7 +43,7 @@ import org.llamenos.protocol.RecipientEnvelope
  * The same real-[ApiService]-with-test-dispatcher strategy as
  * `ReportsViewModelCryptoLabelTest` is used: `ApiService.request` is
  * `suspend inline reified` and cannot be intercepted by MockK, and with no
- * hub URL configured it throws [IllegalStateException] AFTER the encryption
+ * hub URL configured it throws [org.llamenos.hotline.api.HubNotConfiguredException] AFTER the encryption
  * call — which is all these tests need to observe. The ViewModels catch that
  * exception into their error state, so it never fails the test.
  */
