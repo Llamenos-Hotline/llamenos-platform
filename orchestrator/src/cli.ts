@@ -22,7 +22,7 @@ import {
   DEFAULT_OPENCODE_MODEL, type EffortLevel,
 } from './engines.js'
 import { verifyMechanical } from './verify.js'
-import { trustAnchorApprovers } from './write-gate.js'
+import { signOffComments, trustAnchorApprovers } from './write-gate.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
   exportReviewSnapshot,
@@ -1985,8 +1985,11 @@ async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | unde
   const pull = await ghJson<{ head?: { sha?: string } | null; user?: { login?: string | null } | null }>(
     ['api', `repos/${REPO}/pulls/${ctx.pr}`], 30_000, fail('the head'),
   )
-  type RawReview = { user?: { login?: string | null } | null; state?: string; commit_id?: string | null; body?: string | null }
-  type RawComment = { user?: { login?: string | null } | null; body?: string | null; performed_via_github_app?: unknown }
+  type RawReview = { user?: { login?: string | null } | null; state?: string; commit_id?: string | null }
+  type RawComment = {
+    user?: { login?: string | null } | null; body?: string | null; performed_via_github_app?: unknown
+    created_at?: string; updated_at?: string; html_url?: string
+  }
   const reviews = await readAllPages<RawReview>(`repos/${REPO}/pulls/${ctx.pr}/reviews`, fail('the reviews'))
   const comments = await readAllPages<RawComment>(`repos/${REPO}/issues/${ctx.pr}/comments`, fail('the comments'))
   const head = pull?.head?.sha ?? undefined
@@ -1996,15 +1999,25 @@ async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | unde
     ciLog(`PR #${ctx.pr}'s head is now ${head}, not the judged ${ctx.headSha} — a sign-off on one is not a sign-off on the other`)
     return []
   }
+  const approvedSha = mergeGroup ? head : ctx.headSha
+  const parsed = comments.map((c) => ({
+    login: c.user?.login ?? undefined,
+    body: c.body ?? '',
+    viaApp: c.performed_via_github_app != null,
+    // An absent timestamp is read as edited: "could not tell" is not "unedited".
+    edited: c.created_at === undefined || c.updated_at === undefined || c.updated_at !== c.created_at,
+    url: c.html_url,
+  }))
+  // Every sign-off the gate accepts is named in its log, so the operator can
+  // see — and audit — exactly which comment cleared a trust anchor.
+  for (const c of signOffComments(parsed, approvedSha)) {
+    ciLog(`accepted a human sign-off on trust anchors: ${c.url ?? "(no url)"} by ${c.login} on ${approvedSha}`)
+  }
   return trustAnchorApprovers({
-    reviews: reviews.map((r) => ({
-      login: r.user?.login ?? undefined, state: r.state ?? '', commitId: r.commit_id ?? undefined, body: r.body ?? '',
-    })),
-    comments: comments.map((c) => ({
-      login: c.user?.login ?? undefined, body: c.body ?? '', viaApp: c.performed_via_github_app != null,
-    })),
+    reviews: reviews.map((r) => ({ login: r.user?.login ?? undefined, state: r.state ?? '', commitId: r.commit_id ?? undefined })),
+    comments: parsed,
     author: pull?.user?.login ?? undefined,
-    approvedSha: mergeGroup ? head : ctx.headSha,
+    approvedSha,
   })
 }
 

@@ -329,8 +329,6 @@ export interface PrReview {
   login: string | undefined
   state: string
   commitId: string | undefined
-  /** The review's own text — a COMMENTED review can carry a sign-off. */
-  body?: string
 }
 
 /** One conversation comment on a pull request (`GET /repos/{r}/issues/{n}/comments`). */
@@ -339,6 +337,13 @@ export interface PrComment {
   body: string
   /** Set when a GitHub App posted it — never a human's sign-off. */
   viaApp?: boolean
+  /** Set when the comment was edited after it was posted (`updated_at` is
+   *  later than `created_at`). An edited sign-off is refused: editing a
+   *  stale sign-off to name a new head is exactly the shortcut that would
+   *  turn "a human checked THIS commit" into "someone changed a number". */
+  edited?: boolean
+  /** Where it is, so the gate's log can name every sign-off it accepted. */
+  url?: string
 }
 
 /**
@@ -370,9 +375,11 @@ export function signedOffShas(body: string): string[] {
  * of two human acts:
  *
  * 1. a sign-off line (`TRUST_ANCHOR_SIGN_OFF`) naming `approvedSha`, in a PR
- *    comment or in the body of any review, written by an approver — the PR's
- *    author included, since that is who the operator is here. Never a
- *    comment a GitHub App posted.
+ *    conversation comment written by an approver — the PR's author included,
+ *    since that is who the operator is here. Never a comment a GitHub App
+ *    posted, and never one that was EDITED after posting. Review bodies are
+ *    not read: the REST API reports no edit time for them, so an edit there
+ *    could not be refused.
  * 2. an APPROVED review of exactly `approvedSha` by an approver who is not
  *    the author (GitHub would not record the author's). A login counts only
  *    when its LATEST decisive review (APPROVED, CHANGES_REQUESTED or
@@ -382,6 +389,15 @@ export function signedOffShas(body: string): string[] {
  * Either way the sign-off names one commit, and a push after it is a change
  * nobody signed off on.
  */
+/** The comments that ARE valid sign-offs on `approvedSha` — the same rule
+ *  `trustAnchorApprovers` applies, exposed so the caller can log each one it
+ *  accepted (a sign-off nobody can see is a defence nobody can audit). */
+export function signOffComments(comments: readonly PrComment[], approvedSha: string): PrComment[] {
+  return comments.filter((c) =>
+    c.login !== undefined && TRUST_ANCHOR_APPROVERS.includes(c.login) && c.viaApp !== true && c.edited !== true &&
+    signedOffShas(c.body).includes(approvedSha))
+}
+
 export function trustAnchorApprovers(input: {
   reviews: readonly PrReview[]
   comments?: readonly PrComment[]
@@ -391,13 +407,7 @@ export function trustAnchorApprovers(input: {
   const approvers = new Set<string>()
   const isApprover = (l: string | undefined): l is string => l !== undefined && TRUST_ANCHOR_APPROVERS.includes(l)
 
-  const signed = [
-    ...(input.comments ?? []).filter((c) => c.viaApp !== true),
-    ...input.reviews.map((r) => ({ login: r.login, body: r.body ?? '' })),
-  ]
-  for (const c of signed) {
-    if (isApprover(c.login) && signedOffShas(c.body).includes(input.approvedSha)) approvers.add(c.login)
-  }
+  for (const c of signOffComments(input.comments ?? [], input.approvedSha)) approvers.add(c.login as string)
 
   const latest = new Map<string, PrReview>()
   for (const r of input.reviews) {
@@ -460,6 +470,6 @@ export function trustAnchorRefusal(
   return `${TRUST_ANCHOR_REASON_PREFIX} — a shipped client's TLS trust decision, which lands only with a human ` +
     `sign-off: ${listFindings(findings)}. ${state}. A wrong value here disconnects every installed client and ` +
     'only a client release can undo it, so no automated review clears it: a human checks the change, then posts ' +
-    'a PR comment whose only content on one line is "trust-anchor sign-off:" followed by this full head SHA (or, ' +
+    'a NEW, unedited PR comment with a line reading "trust-anchor sign-off:" followed by this full head SHA (or, ' +
     'when they did not open the PR, approves this exact head), and re-requests review from llamenos-auto'
 }

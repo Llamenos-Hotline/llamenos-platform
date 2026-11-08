@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS, textViews } from '../../orchestrator/src/key-material.js'
 import {
-  secretFinding, secretRefusal, signedOffShas, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal,
+  secretFinding, secretRefusal, signOffComments, signedOffShas, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal,
   trustProjection, SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
 } from '../../orchestrator/src/write-gate.js'
 import { NEVER_WRITE_PATHS, TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
@@ -311,11 +311,23 @@ describe('the trust-anchor sign-off comment', () => {
     })).toEqual(['rhonda-rodododo'])
   })
 
-  it('accepts the same line in the body of a COMMENTED review', () => {
+  it('does not read review bodies — their edits cannot be seen, so they cannot be refused', () => {
     expect(trustAnchorApprovers({
-      reviews: [{ login: 'rhonda-rodododo', state: 'COMMENTED', commitId: OTHER, body: `trust-anchor sign-off: ${SHA}` }],
+      reviews: [{ login: 'rhonda-rodododo', state: 'COMMENTED', commitId: OTHER }],
+      comments: [], author: 'rhonda-rodododo', approvedSha: SHA,
+    })).toEqual([])
+  })
+
+  it('refuses an EDITED sign-off — a stale one rewritten to name the new head is the shortcut this blocks', () => {
+    expect(trustAnchorApprovers({
+      reviews: [], comments: [{ login: 'rhonda-rodododo', body: `trust-anchor sign-off: ${SHA}`, edited: true }],
       author: 'rhonda-rodododo', approvedSha: SHA,
-    })).toEqual(['rhonda-rodododo'])
+    })).toEqual([])
+  })
+
+  it('exposes exactly the comments it accepted, with their URLs, for the gate log', () => {
+    const ok = { login: 'rhonda-rodododo', body: `trust-anchor sign-off: ${SHA}`, url: 'https://x/1' }
+    expect(signOffComments([ok, { ...ok, edited: true, url: 'https://x/2' }], SHA).map((c) => c.url)).toEqual(['https://x/1'])
   })
 
   it.each<[string, ReturnType<typeof comment>]>([
