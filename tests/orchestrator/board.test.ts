@@ -941,6 +941,25 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
     expect(c.action).toBe('REQUEST_REVIEW')
   })
 
+  // #2559: the Review step refused it, so it is `substantive` — and without
+  // its own route it read as NEEDS_FIX "found a real problem".
+  it.each([[[] as string[]], [['llamenos-auto']]])(
+    'a red NO-VERDICT:sign-off-pending is OPERATOR naming the sign-off — never NEEDS_FIX or MERGE (requests: %j)',
+    (reviewRequests) => {
+      const c = classify(pr({
+        checks: [...cheapPassChecks(), reviewCheck({
+          state: 'FAIL',
+          reviewOutcome: { read: true, message: 'NO-VERDICT:sign-off-pending — the diff changes a shipped client\'s TLS trust anchors' },
+          reviewFailureKind: 'substantive',
+          runAttempt: 1,
+        })],
+        reviewRequests,
+      }))
+      expect(c.action).toBe('OPERATOR')
+      expect(c.reason).toContain('signs off on head')
+      expect(c.failingContexts).toContain(REVIEW_JOB)
+    })
+
   it('a red NO-VERDICT:unreviewed with a PENDING reviewer stays on the rerun tree — somebody HAS asked', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({

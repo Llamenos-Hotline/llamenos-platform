@@ -208,13 +208,22 @@ tests/orchestrator/                 @rhonda-rodododo
 # Mirrors SECRET_PATH_PATTERNS (orchestrator/src/config.ts). checkScope
 # already refuses to WRITE these; this is the second half, so a secret that
 # reaches a diff by a route the write gate did not cover still stops here.
+#
+# A bare gate pattern (no `*`) matches any file whose BASENAME STARTS WITH it
+# (`matchesPath`, orchestrator/src/fragments.ts), so `id_ed25519.bak` and
+# `vars-production.yml.orig` are secrets to the gate. The trailing `*` below
+# says the same thing in gitignore syntax. Two exceptions keep the exact form:
+# `.env` and `keystore.properties` are the gate's TEMPLATED patterns — their
+# committed `.example`/`.sample`/`.template` siblings (`deploy/docker/.env.example`
+# and friends) are writable lane work, and CODEOWNERS has no negation to carve
+# them out of a prefix rule. guards.test.ts pins every pattern to a rule here.
 **/.env                             @rhonda-rodododo
-**/.dev.vars                        @rhonda-rodododo
-**/.npmrc                           @rhonda-rodododo
-**/.pgpass                          @rhonda-rodododo
-**/authorized_keys                  @rhonda-rodododo
-**/id_rsa                           @rhonda-rodododo
-**/id_ed25519                       @rhonda-rodododo
+**/.dev.vars*                       @rhonda-rodododo
+**/.npmrc*                          @rhonda-rodododo
+**/.pgpass*                         @rhonda-rodododo
+**/authorized_keys*                 @rhonda-rodododo
+**/id_rsa*                          @rhonda-rodododo
+**/id_ed25519*                      @rhonda-rodododo
 **/keystore.properties              @rhonda-rodododo
 **/*.pem                            @rhonda-rodododo
 **/*.jks                            @rhonda-rodododo
@@ -224,3 +233,32 @@ tests/orchestrator/                 @rhonda-rodododo
 **/*.pfx                            @rhonda-rodododo
 **/*.key                            @rhonda-rodododo
 **/*.mobileprovision                @rhonda-rodododo
+# The real Ansible deployment inputs (#2556): vault-encrypted vars, inventories
+# holding host addresses this public repo must never carry, and the vault
+# password. `deploy/ansible/.gitignore` stops an accidental `git add`; these
+# stop a `git add -f`. The tracked `*.example.yml` templates are a different
+# prefix and stay unowned.
+**/vars-production.yml*             @rhonda-rodododo
+**/vars-staging.yml*                @rhonda-rodododo
+**/inventory-production.yml*        @rhonda-rodododo
+**/inventory-staging.yml*           @rhonda-rodododo
+**/.roundtrip-inventory.yml*        @rhonda-rodododo
+**/.vault-pass*                     @rhonda-rodododo
+**/*.vault-pass                     @rhonda-rodododo
+
+# ─── A shipped client's TLS trust anchors ──────────────────────────────
+# Mirrors TRUST_ANCHOR_FILES (orchestrator/src/config.ts), #2556. The fleet's
+# write gate holds a PR touching any of these until the operator signs off on
+# its exact head; this is the half GitHub enforces, so the operator sees the
+# change even on a route the fleet gate does not judge. A wrong pin here
+# disconnects every installed client, and only an app-store release undoes it.
+# guards.test.ts fails if a registry entry is not owned here.
+apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt @rhonda-rodododo
+apps/android/app/src/main/res/xml/network_security_config.xml @rhonda-rodododo
+apps/android/app/src/main/AndroidManifest.xml @rhonda-rodododo
+apps/ios/Sources/Services/CertificatePinning.swift @rhonda-rodododo
+apps/ios/Sources/App/Info.plist     @rhonda-rodododo
+apps/ios/project.yml                @rhonda-rodododo
+apps/desktop/src/cert_pin.rs        @rhonda-rodododo
+apps/desktop/src/api_config.rs      @rhonda-rodododo
+apps/desktop/src/net.rs             @rhonda-rodododo

@@ -352,15 +352,38 @@ describe('fleet/review in CI', () => {
     expect(approvals).toHaveBeenCalledTimes(1)
   })
 
-  it('reviews nothing when verify refuses a trust anchor — no model clears one', async () => {
+  const TRUST_REFUSAL = 'touched trust-anchor files — a shipped client\'s TLS trust decision, which lands only with a human sign-off: x'
+  const STRAY_REFUSAL = 'touched files outside lane "ios"\'s scope: apps/worker/x.ts'
+  const SECRET_REFUSAL = 'touched never-write paths — secret material, never agent-writable and not clearable by any approval: .env'
+  const held = { files: ['apps/desktop/src/net.rs'], approvedBy: [] }
+
+  // #2559: the token says which remedy applies. A held trust anchor and
+  // nothing else is `sign-off-pending`; it is still red and still reviews
+  // nothing — the name changes, the decision does not.
+  it('reviews nothing when verify holds a trust anchor, and names it sign-off-pending — no model clears one', async () => {
+    const refused: VerifyReport = { ...passing, passed: false, reasons: [TRUST_REFUSAL], trustAnchors: held }
+    const d = deps({ verify: vi.fn(async () => refused) })
+    const v = await runReviewCi(d)
+    expect(v).toMatchObject({ ok: false, result: 'sign-off-pending' })
+    expect(v.summary).toContain('touched trust-anchor files')
+    expect(d.secondOpinion).not.toHaveBeenCalled()
+  })
+
+  // A sign-off would not land these, so naming sign-off would send the
+  // operator to approve a PR that still cannot merge.
+  it.each([
+    ['also out of the lane\'s scope', [TRUST_REFUSAL, STRAY_REFUSAL], held],
+    ['also carrying secret material', [SECRET_REFUSAL, TRUST_REFUSAL], held],
+    ['signed off, but refused for another reason', [STRAY_REFUSAL], { files: held.files, approvedBy: ['rhonda-rodododo'] }],
+    ['a trust refusal with no structured trustAnchors on the report', [TRUST_REFUSAL], undefined],
+  ] as const)('a trust-anchor diff %s is scope, not sign-off-pending', async (_label, reasons, trustAnchors) => {
     const refused: VerifyReport = {
-      ...passing, passed: false,
-      reasons: ['touched trust-anchor files — a shipped client\'s TLS trust decision, which lands only with a human sign-off: x'],
+      ...passing, passed: false, reasons: [...reasons],
+      ...(trustAnchors === undefined ? {} : { trustAnchors: { files: [...trustAnchors.files], approvedBy: [...trustAnchors.approvedBy] } }),
     }
     const d = deps({ verify: vi.fn(async () => refused) })
     const v = await runReviewCi(d)
     expect(v).toMatchObject({ ok: false, result: 'scope' })
-    expect(v.summary).toContain('touched trust-anchor files')
     expect(d.secondOpinion).not.toHaveBeenCalled()
   })
 

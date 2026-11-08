@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, it, expect } from 'vitest'
 
 /**
@@ -73,19 +74,38 @@ describe('shared worker-rules fragment', () => {
  * That drift is a scope-DEFINITION error, and it fails in the direction that
  * does not show up as a red check: the gate lets the diff through while the
  * supervisor tells its worker the path is out of lane, so the worker
- * volunteers the partial fix. Pinning the assembled prefix to the fragment
- * catches it at the fragment edit, which is the only moment anyone is looking.
+ * volunteers the partial fix.
+ *
+ * The first version of this guard pinned only the lane fragment as a prefix.
+ * #2557 then rewrote the write-gate rules in `_worker-rules.md` — the second
+ * input — and all six assembled files kept describing the old gate while this
+ * test stayed green (#2559). So the guard now regenerates EVERY output from
+ * EVERY input (lane fragment, `_worker-rules.md`, `.claude/agents/shared/*`)
+ * with the build script's own `--check` mode and fails on any byte of drift.
+ * Running the real script, rather than re-implementing its concatenation
+ * here, means the test cannot agree with a layout the script does not produce.
  */
-describe('assembled agent definitions stay in sync with their fragments', () => {
+const BUILD_SCRIPT = join(FRAGMENTS_DIR, '..', 'build-agents.sh')
+
+describe('assembled agent definitions stay in sync with all of their sources', () => {
+  it('build-agents.sh --check finds no drift', () => {
+    const run = spawnSync('bash', [BUILD_SCRIPT, '--check'], { encoding: 'utf8' })
+    expect(run.error).toBeUndefined()
+    expect(
+      run.status,
+      `an assembled .claude/agents/<lane>-supervisor.md is stale — run \`bun run agents:build\` and commit the result:\n${run.stderr}`,
+    ).toBe(0)
+    // A check that built nothing compared nothing; pin that all six lanes were assembled.
+    expect(run.stdout).toContain('Check passed: 6 agent definitions match their sources.')
+  })
+
   it.each(['desktop', 'ios', 'android', 'backend', 'shared', 'infra'] as const)(
-    '%s-supervisor.md begins with its fragment verbatim',
+    '%s-supervisor.md carries the shared worker rules, not only its lane fragment',
     async (lane) => {
       const fragment = await readFile(join(FRAGMENTS_DIR, `${lane}-supervisor.md`), 'utf8')
+      const shared = await readFile(join(FRAGMENTS_DIR, SHARED_FRAGMENT), 'utf8')
       const assembled = await readFile(join(FRAGMENTS_DIR, '..', `${lane}-supervisor.md`), 'utf8')
-      expect(
-        assembled.startsWith(fragment),
-        `.claude/agents/${lane}-supervisor.md is stale — rerun .claude/agents/build-agents.sh after editing its fragment`,
-      ).toBe(true)
+      expect(assembled.startsWith(`${fragment}\n${shared}`)).toBe(true)
     },
   )
 })

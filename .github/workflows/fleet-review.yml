@@ -2476,6 +2476,12 @@ jobs:
                   partial-fail) token="REJECTED:partial" ;;
                   partial-pass) token="NO-VERDICT:partial-pass" ;;
                   scope) token="NO-VERDICT:scope" ;;
+                  # #2559: the pre-check's ONLY refusal is a trust-anchor
+                  # change with no human sign-off on this head (ci.ts's
+                  # `awaitsOnlyTrustAnchorSignOff`). Held exactly like
+                  # `scope` — red, no reviewer ran — but the remedy is a
+                  # person, not a code change, so it gets its own name.
+                  sign-off-pending) token="NO-VERDICT:sign-off-pending" ;;
                   review-set-unresolved) token="NO-VERDICT:review-set-unresolved" ;;
                   unknown-lane) token="NO-VERDICT:unknown-lane" ;;
                   review-disabled) token="NO-VERDICT:review-disabled" ;;
@@ -2519,7 +2525,8 @@ jobs:
             NO-VERDICT:carry-unreadable) detail="a push, and this PR's last verdict could not be read; re-run the job" ;;
             NO-VERDICT:not-requested) detail="this review request does not start the fleet review; the log names whom to ask" ;;
             NO-VERDICT:review-set-unresolved) detail="could not work out which reviews this PR needs; none ran" ;;
-            NO-VERDICT:scope) detail="the diff failed the lane scope / never-write pre-check; no reviewer ran" ;;
+            NO-VERDICT:scope) detail="the diff touched files outside the lane's scope or secret material no approval clears, or the pre-check could not run; no reviewer ran" ;;
+            NO-VERDICT:sign-off-pending) detail="the diff changes a shipped client's TLS trust anchors and no trust-anchor approver has signed off on this exact head; no reviewer ran — the operator checks the values, signs off on this head as the summary describes, then re-requests the review" ;;
             NO-VERDICT:unreadable) detail="a reviewer ran but left no readable verdict; re-request the review" ;;
             # Deliberately NOT "re-request": that re-runs the same diff under the same
             # budget and exhausts again — a loop costing a full session per attempt
@@ -2560,6 +2567,10 @@ jobs:
             REJECTED:*)
               level="error"
               meaning="A reviewer read this diff and rejected it. Its findings are on the PR as a comment naming the head it judged. Change the code: re-requesting a review of an unchanged diff restates the same verdict."
+              ;;
+            NO-VERDICT:sign-off-pending)
+              level="error"
+              meaning="Nothing judged this diff, and nothing is wrong with its scope. It changes a file that decides which certificates a shipped client accepts, and that class lands only once a human has signed off on the exact head commit: a wrong value disconnects every installed client, and only an app-store release undoes it. The summary above names each file and what it anchors. No code change and no re-run clears this, and a push voids any sign-off already given. The operator checks the values, signs off on this head, then re-requests the review."
               ;;
             NO-VERDICT:partial-pass)
               level="error"

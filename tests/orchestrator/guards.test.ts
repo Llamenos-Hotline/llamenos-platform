@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
-  LANES, NEVER_WRITE_PATHS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, loadLanes, readLaneModes, assertLiveLanesHaveScope,
+  LANES, NEVER_WRITE_PATHS, SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, loadLanes, readLaneModes,
+  assertLiveLanesHaveScope,
 } from '../../orchestrator/src/config.js'
+import { matchesSecretPath, TEMPLATED_SECRET_PATTERNS } from '../../orchestrator/src/fragments.js'
 import { throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
@@ -743,6 +745,14 @@ describe('rail: a shipped client\'s trust anchors always reach a human', () => {
     expect(classifyImpact([f], 1).impact).toBe('high')
   })
 
+  // #2559. The fleet's hold is one half; CODEOWNERS is the half GitHub
+  // applies. A registry file CODEOWNERS ignores can be merged by any route the
+  // fleet gate does not judge without the operator ever being asked.
+  it.each(TRUST_ANCHOR_FILES.map((a) => [a.path]))('%s is a tracked file CODEOWNERS owns', (f) => {
+    expect(trackedFiles(), `${f} is in TRUST_ANCHOR_FILES but not tracked`).toContain(f)
+    expect(codeownersMatcher().owns(f), `${f} is a trust anchor with no CODEOWNERS owner`).toBe(true)
+  })
+
   it('only a human may sign one off — never the fleet\'s own reviewer identity', () => {
     expect(TRUST_ANCHOR_APPROVERS.length).toBeGreaterThan(0)
     expect(TRUST_ANCHOR_APPROVERS).not.toContain(REVIEW_REQUEST_LOGIN)
@@ -764,6 +774,27 @@ describe('rail: a shipped client\'s trust anchors always reach a human', () => {
 })
 
 describe('rail: never-write binds even an unrestricted lane', () => {
+  // #2559. CODEOWNERS' key-material section mirrors SECRET_PATH_PATTERNS, and
+  // had silently fallen behind it: #2557 added seven Ansible patterns the gate
+  // refuses and GitHub ignored. Secrets are never tracked, so this cannot ask
+  // "is every matching tracked file owned" — it builds, for each pattern, the
+  // paths the GATE calls secret (checked with the gate's own matcher, so the
+  // sample cannot drift from the semantics) and asks CODEOWNERS about those.
+  // A bare pattern is a basename PREFIX to the gate, so its suffixed form is
+  // asked too — except for the templated patterns, whose committed
+  // `.example` siblings are writable and which CODEOWNERS (no negation)
+  // can only mirror exactly.
+  it.each(SECRET_PATH_PATTERNS.map((p) => [p]))('CODEOWNERS owns what the gate calls secret under `%s`', (pattern) => {
+    const name = pattern.replace('*', 'sample')
+    const samples = [name, `deploy/ansible/${name}`, `apps/android/app/${name}`]
+    if (!pattern.includes('*') && !TEMPLATED_SECRET_PATTERNS.includes(pattern)) samples.push(`deploy/${name}.orig`)
+    const owner = codeownersMatcher()
+    for (const f of samples) {
+      expect(matchesSecretPath(f, pattern), `test sample ${f} is not a secret to the gate — fix the sample`).toBe(true)
+      expect(owner.owns(f), `${f} is refused by the gate as \`${pattern}\` but has no CODEOWNERS owner`).toBe(true)
+    }
+  })
+
   it('forbids secrets for a lane with no declared scope', () => {
     expect(checkScope(['.env'], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual(['.env'])
   })

@@ -773,6 +773,21 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     }
   }
 
+  // #2559: a trust-anchor change held for a human. Its Review step is the
+  // one that refused it, so it would otherwise read as `substantive` — "found
+  // a real problem", which sends someone to change code that is not wrong.
+  // Neither a fix nor a rerun clears it; the operator signing off on this
+  // head does. OPERATOR: never auto-actionable, and never MERGE.
+  if (reviewToken === 'NO-VERDICT:sign-off-pending') {
+    return {
+      action: 'OPERATOR',
+      reason: `fleet/review is ${reviewToken}: the diff changes a shipped client's TLS trust anchors and lands only ` +
+        `once the operator checks the values and signs off on head ${pr.headRefOid}, then re-requests the review — ` +
+        'no code change or rerun clears it, and a push voids the sign-off',
+      failingContexts: [REVIEW_JOB],
+    }
+  }
+
   if (review.reviewFailureKind === 'substantive') {
     return {
       action: 'NEEDS_FIX',
