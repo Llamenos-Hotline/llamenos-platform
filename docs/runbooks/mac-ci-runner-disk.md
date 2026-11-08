@@ -64,6 +64,15 @@ Measured 2026-11-05:
   on purpose. Reclaim now removes exactly that shape (Logs/, TestResults/,
   Build/ProfileData/ only, no info.plist, nothing modified in 120 min). This
   covers leftovers from branches whose workflow predates the fix.
+- **A delete counts only when the path is gone afterwards** (#2566). On
+  2026-11-07 `/Volumes/CIScratch` returned `EINTR` on unlink while still
+  mounted: `rm -rf` failed and the tree stayed. The reclaim now logs
+  `delete FAILED — … is still on disk: <error>` for such a path, counts none
+  of its space as freed, and carries on with the rest of the reclaim. If the
+  gate then refuses, the refusal lists those paths. The gate always decides on
+  measured `df`, so a failed delete does not refuse a disk that has room.
+  APFS frees space asynchronously, so a good delete can leave `df` flat for a
+  moment; reclaim reports that as a lag, never as a failure.
 
 ### Out-of-CI builds (workers and people over ssh)
 

@@ -378,7 +378,7 @@ prune() {
   case "$rc" in
     0) log "  $2"; deleted_any=1 ;;
     2) : ;;
-    3) note_delete_failed "$1" "$2" ;;
+    3) note_delete_failed "$1" "not done: $2" ;;
     *) exit 1 ;;
   esac
 }
@@ -1210,6 +1210,26 @@ PLIST
   SELFTEST_OWNERSHIP_FAILS="$fails"
 }
 
+# selftest_reclaim_with_failing_rm <sandbox> <eintr-name> <ghost-name>
+# A SUBSHELL body, so the `rm` override dies with it. Kept out of a `$( )` on
+# purpose: macOS /bin/bash 3.2 (what the install-timer LaunchAgent runs)
+# misparses a `case` inside command substitution and echoes the source instead.
+selftest_reclaim_with_failing_rm() (
+  RUNNER_DD_GLOB="$1/actions-runner-8/_work/DerivedData"
+  DERIVED_DATA="$1/empty-host-dd"
+  SHIM_EINTR="$2"; SHIM_GHOST="$3"
+  DELETE_FAILURES=0; DELETE_FAILED_LIST=""
+  rm() {
+    case "$*" in
+      *"$SHIM_EINTR"*) printf 'rm: %s: Interrupted system call\n' "${!#}" >&2; return 1 ;;
+      *"$SHIM_GHOST"*) return 0 ;;
+      *) command rm "$@" ;;
+    esac
+  }
+  reclaim_all_derived_data
+  printf 'DELETE_FAILURES=%s\n' "$DELETE_FAILURES"
+)
+
 # A delete the filesystem refuses must be NAMED and must not count as freed
 # (#2566: /Volumes/CIScratch returned EINTR on unlink while staying mounted).
 # `rm` is shadowed by a function, inside a subshell, so the failure is the
@@ -1228,20 +1248,7 @@ selftest_failed_delete() {
 
   log "── selftest: a delete that fails is named, never counted as freed (#2566) ──"
   rc=0
-  out="$(
-    RUNNER_DD_GLOB="$sandbox/actions-runner-8/_work/DerivedData"
-    DERIVED_DATA="$sandbox/empty-host-dd"
-    DELETE_FAILURES=0; DELETE_FAILED_LIST=""
-    rm() {
-      case "$*" in
-        *"$eintr"*) printf 'rm: %s: Interrupted system call\n' "${!#}" >&2; return 1 ;;
-        *"$ghost"*) return 0 ;;
-        *) command rm "$@" ;;
-      esac
-    }
-    reclaim_all_derived_data
-    printf 'DELETE_FAILURES=%s\n' "$DELETE_FAILURES"
-  )" || rc=$?
+  out="$(selftest_reclaim_with_failing_rm "$sandbox" "$eintr" "$ghost")" || rc=$?
   log "$out"
 
   # expect <label> <command...>: `if`, never a bare test, so a failing case is
@@ -1251,7 +1258,9 @@ selftest_failed_delete() {
     if "$@"; then log "  ok    $label"; else log "  FAIL  $label"; fails=$((fails + 1)); fi
   }
   # matches <string> <glob> / lacks <string> <glob>
+  # shellcheck disable=SC2053  # the glob is the point
   matches() { [[ "$1" == $2 ]]; }
+  # shellcheck disable=SC2053  # the glob is the point
   lacks() { [[ "$1" != $2 ]]; }
 
   expect "reclaim survived the failed deletes (rc=$rc), it did not abort" [ "$rc" = "0" ]
