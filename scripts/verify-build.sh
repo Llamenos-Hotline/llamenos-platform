@@ -68,7 +68,12 @@ echo ""
 
 # ─── Determine version ──────────────────────────────────────────
 if [ -z "$VERSION" ]; then
-  VERSION=$(gh release list --repo "$REPO" --limit 1 --json tagName --jq '.[0].tagName')
+  # releases/latest, never the first row of `gh release list`: the platform
+  # releases (`v<x>-desktop`/`-android`/`-ios`, formerly `desktop-v<x>` …) are
+  # listed alongside and can sort first, but they are published with
+  # --latest=false and carry no cosign-signed CHECKSUMS.txt. The `v<x>` API
+  # release is the one this script verifies.
+  VERSION=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
   if [ -z "$VERSION" ]; then
     echo "ERROR: No releases found for $REPO"
     exit 1

@@ -663,7 +663,8 @@ above except `push.` are relative to `domain`, and `tauri.conf.json`'s updater e
 
 ## 6. Serving desktop updates from this box
 
-The GitHub Releases (`desktop-v<version>`, `android-v<version>`) always work and
+The GitHub Releases (`v<version>-desktop`, `v<version>-android`; `desktop-v<version>` /
+`android-v<version>` for 0.21.7 and earlier) always work and
 need nothing from this box. The self-hosted origin is an *additional* channel for
 the in-app updater.
 

@@ -10,7 +10,7 @@
 
   `destination` MUST stay `export`: it makes `xcodebuild -exportArchive` write a
   local .ipa into the export path, which mobile-release.yml attaches to the
-  `ios-v<version>` GitHub Release. `upload` would instead send the build straight
+  `v<version>-ios` GitHub Release. `upload` would instead send the build straight
   to App Store Connect and leave no .ipa behind — CI never submits to a store
   (#969); submission is done locally with fastlane. The operator has chosen
   TestFlight, for which `method = app-store-connect` is correct; `destination =

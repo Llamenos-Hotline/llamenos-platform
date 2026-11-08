@@ -41,10 +41,12 @@ push uses a self-hosted relay is in [`../../deploy/PUSH_NOTIFICATIONS.md`](../..
 
 For end users and testers; free, no toolchain needed.
 
-- **Android:** the signed APK attached to the `android-v<version>` GitHub Release
-  (with its SHA-256 checksum). Release procedure: [`../runbooks/android-release.md`](../runbooks/android-release.md).
+- **Android:** the signed APK attached to the `v<version>-android` GitHub Release,
+  titled `<version> Android` (with its SHA-256 checksum). Release procedure: [`../runbooks/android-release.md`](../runbooks/android-release.md).
 - **Desktop:** the AppImage, deb, rpm, exe and msi installers (and macOS builds)
-  attached to the `desktop-v<version>` GitHub Release. Update-channel details:
+  attached to the `v<version>-desktop` GitHub Release, titled `<version> Desktop`.
+  Releases up to and including 0.21.7 are tagged `android-v<version>` /
+  `desktop-v<version>` instead (tags are immutable). Update-channel details:
   [`../runbooks/desktop-update-release.md`](../runbooks/desktop-update-release.md).
 
 ### Build and install locally from a checkout
