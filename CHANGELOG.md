@@ -14,20 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.19.2] - 2026-02-27
 
-### Miscellaneous
+### Notes
 
-- add AGPL-3.0-or-later license
-- v0.19.2 [skip ci]
+- No product changes in this release.
 
 ## [0.19.1] - 2026-02-27
 
 ### Bug Fixes
 
 - fix WebSocket relay config for CI instead of disabling it
-
-### Miscellaneous
-
-- v0.19.1 [skip ci]
 
 ## [0.19.0] - 2026-02-27
 
@@ -40,10 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - include .github/ in CI change detection patterns
 - CI change detection + WebSocket relay dependency for Docker E2E
 - disable WebSocket relay in Docker E2E tests, replace --wait with targeted health check
-
-### CI/CD
-
-- increase e2e-cf timeout to 20 minutes
 
 ### Documentation
 
@@ -76,72 +67,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - client-side transcription with Whisper WASM via transformers.js
 - add DEMO_MODE env flag with CF Cron Trigger for scheduled reset
 
-### Miscellaneous
-
-- v0.19.0 [skip ci]
-
 ## [0.18.0] - 2026-02-25
 
 ### Bug Fixes
-
-- use dark theme for Mermaid diagrams
-- deploy site for docs-only changes
-- filter WebSocket errors in Docker test environment
-
-### CI/CD
-
-- skip versioning and deploy for docs-only changes
 
 ### Features
 
 - implement volunteer assignment and two-way conversation UI
 
-### Miscellaneous
-
-- trigger site deploy for Mermaid dark theme fix
-- v0.18.0 [skip ci]
-
-### Testing
-
-- add comprehensive tests for messaging epics 68-73
-
 ## [0.17.0] - 2026-02-24
 
-### CI/CD
+### Notes
 
-- skip E2E tests for docs-only changes
-
-### Features
-
-- enhance visual design with animations and polish
-
-### Miscellaneous
-
-- v0.17.0 [skip ci]
+- No product changes in this release.
 
 ## [0.16.1] - 2026-02-24
 
 ### Bug Fixes
 
-- restore waitForTimeout for reliable test timing
-
 ### Documentation
 
 - add screenshots and Mermaid diagrams to documentation
-
-### Miscellaneous
-
-- v0.16.1 [skip ci]
-
-### Refactoring
-
-- add test ID infrastructure for maintainable selectors
 
 ## [0.16.0] - 2026-02-24
 
 ### Bug Fixes
 
-- fix panic wipe overlay rendering and playwright port config
 - match bun versions
 
 ### Documentation
@@ -156,42 +107,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add call recording playback and dev tunnel script
 - add Ansible playbooks, OpenTofu modules, and ops docs (Epic 66)
 
-### Miscellaneous
-
-- update logo SVG and clean up footer
-- v0.16.0 [skip ci]
-
 ## [0.15.0] - 2026-02-24
 
 ### Bug Fixes
 
-- update reporter onboarding test for simplified backup flow
-- add missing PG_PASSWORD to docker E2E, increase CF timeout, exclude live tests
-- use data-testid selectors, enable parallel E2E, reduce timeouts
-- increase login timeouts and add serial mode for state-dependent tests
-- resolve parallel execution conflicts in E2E tests
-- increase e2e-docker timeout from 20 to 30 minutes
-- fix field slug, remove double logins, increase timeouts
-- scope custom field badge assertion to specific note card
-- restore bun.lockb compatible with CI bun v1.2
-- make custom field creation idempotent, scope edit assertions
-- prevent section toggle race in custom fields tests
 - audit round 6 — supply chain, crypto hygiene, permission guards
 - audit R6 high — remove V1 encrypt, gate resets, tree-shake demo, lockfile, ARI creds
 - audit R6 medium — SSRF guard, DO admin routes, HMAC-SHA256 hashing
 - audit R6 medium — dep scanning, image pinning, PG egress
-- improve test-reset error handling and robustness
 - request-bound auth tokens, adminPubkey migration, CI test fixes
 - complete keyPair→keyManager migration in remaining components
 - complete L-3 keyPair removal from auth context
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
-- skip live telephony in CI, fix strict mode and flaky navigation
 - handle deep link section expansion on search-only navigation
-
-### CI/CD
-
-- trigger fresh CI run for e2e-docker validation
 
 ### Features
 
@@ -202,30 +131,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - dynamic role assignment UI, notification/PWA banners, logo refresh, and setup wizard improvements
 - add live telephony E2E tests, UX improvements, and phone input upgrade
 
-### Miscellaneous
-
-- add next staging environment for pre-release testing
-- v0.15.0 [skip ci]
-
 ## [0.14.0] - 2026-02-22
 
 ### Bug Fixes
-
-- add [skip ci] to release commits to prevent re-triggering
 
 ### Features
 
 - add demo mode with sample data and one-click login
 
-### Miscellaneous
-
-- v0.14.0 [skip ci]
-
 ## [0.13.0] - 2026-02-21
 
 ### Bug Fixes
 
-- remove invalid workflows permission from version job
 - use correct CallSettings property names in status summary
 
 ### Documentation
@@ -236,67 +153,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - UI polish and admin UX improvements (epics 56-57)
 
-### Miscellaneous
-
-- v0.13.0
-
 ## [0.12.0] - 2026-02-19
 
 ### Bug Fixes
 
-- fix E2E job failures — Docker build + wrangler auth
 - copy index.html into frontend build stage
-- fix strict mode violation in ban management test
-- rebase version commit onto latest before push
-- add workflows permission to version job
-
-### Features
-
-- add E2E tests gating version bump and deployment
-
-### Miscellaneous
-
-- v0.12.0
 
 ## [0.11.1] - 2026-02-19
 
-### Bug Fixes
+### Notes
 
-- generate release notes directly in release job
-
-### Miscellaneous
-
-- v0.11.1
+- No product changes in this release.
 
 ## [0.11.0] - 2026-02-19
 
 ### Bug Fixes
-
-- install site dependencies before building
 
 ### Features
 
 - add multi-platform deployment (Docker Compose + Helm)
 - add CI/CD pipeline, security hardening, and self-hosting docs
 
-### Miscellaneous
-
-- update changelog for v0.9.1
-- v0.11.0
-
 ## [0.9.1] - 2026-02-18
 
 ### Documentation
 
 - update documentation for Epic 54 architecture changes
-
-### Features
-
-- reorganize docs sidebar into 4 audience-focused sections
-
-### Miscellaneous
-
-- bump version to 0.9.1
 
 ## [0.9.0] - 2026-02-18
 
@@ -324,8 +206,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - link color
 - security hardening from comprehensive audit
 - medium-severity security hardening
-- remove PII from GitHub URLs across all site pages
-- use correct GitHub URL for all repository links
 - redesign logo with recognizable phone handset silhouette
 
 ### Documentation
@@ -374,8 +254,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 33 — cloud provider adapters (SignalWire, Vonage, Plivo)
 - Epic 34 — WebRTC volunteer calling
 - Epics 35+36 — Asterisk ARI adapter, bridge service, and telephony docs
-- expand docs sidebar with all pages in two sections
-- translate all documentation to 11 additional languages
 - Epic 42 — messaging architecture foundation & threaded conversations
 - Epics 43 & 47 — admin setup wizard and reporter role with encrypted file uploads
 - Epics 44-46 — SMS, WhatsApp, and Signal channel adapters
@@ -386,39 +264,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
-### Miscellaneous
-
-- consolidate deploy scripts in root package.json
-- add versioning and changelog generation (v0.9.0)
-
-### Refactoring
-
-- split SessionManagerDO into 3 focused Durable Objects
-- epics 37-41 — split large components, deduplicate, add tests
-- simplify report titles to plaintext, add role selector to invite form, consolidate UserRole type, add E2E tests
-
-### Testing
-
-- E2E tests for epics 24-27 and backlog update
-- E2E tests for custom fields in notes, update CLAUDE.md
-- add E2E tests for device linking and fix /link-device public path
-
-
 ## 0.21.10 (2026-11-09)
 
-### Features
+### Notes
 
-- the Mac CI host gets its own supervisor fragment (#2600)
-
-### Fixes
-
-- mac disk guard reclaims plist-less DerivedData leftovers and never counts a failed delete as freed (#2530, #2566) (#2532)
+- No product changes in this release.
 
 ## 0.21.9 (2026-11-08)
 
-### Fixes
+### Notes
 
-- agents, CODEOWNERS and the fleet/review token describe the three-class write gate (#2559) (#2562)
+- No product changes in this release.
 
 ## 0.21.8 (2026-11-08)
 
@@ -426,11 +282,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ban + hang up follows the server's answer; the UI test names the step that failed (#2531) (#2536)
 - five admin deletes require a confirmation token only their dialog mints (#2540) (#2543)
-- the write gate classifies by what a file is — secret, trust anchor, or writable (#2556) (#2557)
-- queue-feed isolates a PR by whether it can fail the iOS gate, not whether it schedules it (#2548) (#2568)
 - the security upgrade re-runs when Debian publishes, not once per cache lifetime (#2564) (#2567)
-- queue-feed batches PRs that share a file when git merges them (#2570) (#2580)
-- the write gate holds project.yml when a trust setting moves, not whenever it changes (#2579) (#2587)
 - admin deletes need a dialog-minted confirmation; override changes and unbans are audited (#2575) (#2583)
 - the UI test target shares the app's Localizable variant group, which Xcode 27.2 requires (#2576) (#2577)
 - signal-notifier and sip-bridge stop trusting the compromised eMudhra hierarchy (#2582) (#2588)
@@ -439,18 +291,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- ssh iOS builds put DerivedData on CIScratch behind a loud mount preflight; CI's data stays internal and its disk guard proves it (#2518)
-- a merged orchestrator change takes effect without a human; dormancy visible in doctor (#2515, #2512) (#2534)
-- queue-feed scopes verdicts to the head and reads why a job failed before which shard it was (#2529) (#2535)
 - destroying the device identity requires a confirmation token (#2123) (#2537)
 - conform responses to their declared schema — null becomes absent; ledger 74 → 35 (#2521 tranche 1) (#2539)
-- the test reporter derives each step's result from that step's own output (#2494) (#2520)
 
 ## 0.21.6 (2026-11-06)
 
-### Features
+### Notes
 
-- re-queue a PR once per head after an infra-timeout ejection — never on a failure (#2458) (#2511)
+- No product changes in this release.
 
 ## 0.21.5 (2026-11-06)
 
@@ -460,16 +308,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.21.4 (2026-11-05)
 
-### Features
-
-- llamenos-fleet pr-why <pr> — named, deterministic verdicts for a PR that is not merging (#2472)
-
 ### Fixes
 
 - refuse calls to a number no hub owns; delete the hub-'' accommodation (#2460) (#2467)
-- fleet/review retries its queued-PR lookup, never the verdict (#2481) (#2482)
-- git-ancestry flake was a hook-timeout kill misread as a git error; library no longer turns a kill into a verdict (#2477) (#2487)
-- board reads the fleet/review outcome from its annotation, not the never-written title (#2473) (#2488)
 - notes, contact metadata, conversations and outbox events always have a hub (#2464) (#2485)
 
 ## 0.21.3 (2026-11-04)
@@ -477,23 +318,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Features
 
 - fail new/changed values that are verbatim English; report the backlog (#2335) (#2350)
-- queue-feed — a durable owner feeds the merge queue (#2434)
 - a failed erasure reaches erasure:admin and can be retried or abandoned; a hub-less subject opens a platform incident [PROTO] (#2347) (#2361)
-- milestone-scoped lane sources + explicit phase-then-age queue order (#2445)
 
 ### Fixes
 
 - hub-owned routers refuse requests outside /hubs/:hubId; a route-table ledger fails any new dual mount (#2395) (#2405)
 - SignalIdentityService refuses a non-Drizzle db; router uses services (#2447) (#2449)
 - UI_TESTING registration no longer blocks the main thread in AppState.init (#2426)
-- the watchdog checks outcomes, not just liveness (#1834) (#2444)
-- cancel orphaned merge_group runs — queue reshuffles leak both Mac runners (#2438)
-- board treats CONFLICTING as its own REBASE bucket, ages stale greens, resolves mergeable by polling (#2442)
-- doctor reports a self-healing quota halt as WARN, never FAIL (#2440)
-- migration-order answers its own ancestry question; a gate that could not run says so (#2456)
 - connection card reads Connected only once every member hub has acknowledged its subscription (#2428) (#2432)
-- enforce the no-enqueue rule with a merge-queue guard, not a prohibition line (#2436)
-- fleet/review prefers the runner's pinned Bun; setup-bun is a 3-minute fallback (#2437)
 
 ## 0.21.2 (2026-11-03)
 
@@ -518,7 +350,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - the erasure admin surface is scoped to the hub it is called in (#2363) (#2378)
 - enforce per-hub channel switches at the webhooks; readiness skips hubs without voice [PROTO] (#2393)
 - serve conversations only inside a hub; empty claimable set means no waiting queue (#2381) (#2397)
-- upgrade Playwright to 1.64.1, unpin ubuntu-24.04 jobs, invert the runner guard (#2324) (#2379)
 - deleteHub deletes provider-held recordings before the credentials go (#2364 part 1) (#2380)
 - generate the UniFFI Kotlin binding from one script and fail CI when the tracked copy drifts (#2325) (#2356)
 - provider call/recording/message ids never reach a log or audit row; a keyed ref stands in (#2333) (#2373)
@@ -543,24 +374,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- bot-authored skip requires every commit to be a bot's (#2284) (#2287)
 - STOP from a non-subscriber is remembered — suppression enforced at import and every send (#2288)
 - UI tests never raise the notifications permission alert (#2292)
-- release-pr rail models knope's one-span rewrite, not a file-wide replace (#2301)
 - delete caller recordings at the provider; probe provider-side recording (#2297) (#2304)
-- pin Playwright jobs to ubuntu-24.04 — 1.59.1 has no ubuntu26.04 build (#2315) (#2320)
 - a volunteer can redeem an invite — entry point, llamenos:// deep link, hub-addressed link (#1128) (#1542)
-- bind the storage-integrity JSONB round-trip scenarios (#1198) (#1454)
 - decrypt relay events with the frame's epoch, register the device key at enrolment, resubscribe on new hubs (#2127)
 - handle-less provider recordings tracked as residue; purge audit carries what remained (#2321) (#2322)
-- key fleet/review's verdict cache on the PR description as well as the tree (#2336) (#2337)
 - show Call Ended from the relay event, not a later calls/active fetch (#2283) (#2289)
-- knope's release PR matches the review waiver again (EOF newline in tauri.conf.json) (#2344) (#2349)
-- release-pr rail fixture states its own trailing newline (unblocks #2290 backend-unit) (#2360)
 - unique-index-existing passes a partial index whose predicate provably matches no row (unblocks #2361) (#2368)
 - deployment-wide settings are unreachable under /hubs/:hubId (#2367) (#2370)
-- Android coverage gate reports executed scenarios, not tagged ones (#1212) (#2387)
-- reprice the shard packer from measured durations; flag stale prices (#2339) (#2355)
 - Compose test rule dispatches app coroutines on the UI thread (#2406) (#2407)
 - timestamped, order-independent migrations + a PR-time claims guard (#2391) (#2398)
 
@@ -584,7 +406,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - webview cannot extract or misuse long-lived secrets over IPC (#2146, #2158) (#2227)
 - settings sections open by keyboard and screen reader (#2211, #1308) (#2248)
 - self-host DM Sans; no third-party request at launch (#2222) (#2249)
-- completeness guard false-fails on SIGPIPE under pipefail (#2252)
 - shift screens show what the server will ring, per member hub (#2204) (#2259)
 - backup restore and recovery work by keyboard, with labelled, translated fields (#2215) (#2260)
 - register the device's X25519/Ed25519 keys signed, after unlock, with retry (#2201) (#2253)
@@ -597,7 +418,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - no idle lock mid-call on any hub; in-call note draft survives the lock (#2210) (#2270)
 - pin curl/libcurl >= 8.23.0-r0 in the static stage (CVE-2026-92392) (#2274)
 - a logout that ends the last live session clocks the user out (#2205) (#2271)
-- verify-release-live names a non-JSON Play secret (main's release path: causes + #2241 ruling) (#2276)
 - ui (3) — per-runner bun HOME (Killed: 9 race) + wait for Add Ban field focus (#2279)
 - STOP matches every identifier shape a sender carries (#2280) (#2281)
 - Call Ended / Add Note prompt; Android can save a call note (#1341) (#2275)
@@ -611,7 +431,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- upgrade ctutils and tokio to clear RUSTSEC-2026-0385/0386 (unblocks cargo-deny + rust-audit) (#2089)
 - require the storage credentials the server cannot boot without (#1450)
 - bind hub-scoped resources to their hub at fetch time (#2011) (#2024)
 - file notes to the item's own hub, not the active hub (#1162)
@@ -628,7 +447,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RCS and Telegram webhooks fail closed without a secret (#2154) (#2226)
 - every hub always has at least one admin — lock before reading the role catalog (#2126, supersedes #2131) (#2132)
 - a call counts as answered only when a human is bridged (#2168, #2169) (#2200)
-- patched zod, happy-dom, undici, body-parser; TanStack router-plugin + react-router pinned together (supersedes #2124) (#2230)
 - hub authority never reaches past its hub (#2153, #1099) (#2228)
 
 ## 0.19.21 (2026-10-23)
@@ -645,49 +463,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 
-- changelog page rendered at build time, with release links and verification (#1979)
-- check every client call against the mounted routes (#1997) (#2001)
 - add role viewer, tags management, and tag picker (#1811)
 
 ### Fixes
 
-- compact locale diffs for review (#1860)
 - validate Helm chart in CI, fix image/version drift, forbid unsafe multi-replica (#1481)
 - point invite list/create at the routes the server mounts (#1047) (#1785)
-- grant deferred.json to every platform lane; name the sync remedy (#1947)
-- grant docs/security/ to the shared lane (#1955)
-- pin dev-bun.sh's compose project instead of inheriting COMPOSE_PROJECT_NAME (#1957)
-- clear rust-audit and cargo-deny on main (#1958)
 - narrow hpkeEncSchema to hex-only (#1961)
-- key the quota cooldown on provider and make doctor report it (#1963)
 - verify remote wipes and stop every relay event reaching the wipe path (#1965)
-- hand the reviewer the generated protocol types (#1964)
 - verify remote wipes and stop inferring one from hub events (#1978)
 - make the device-wipe signature encoding injective (#1981)
-- attach installers to v<version> before publishing, and fail if none are there (#1982)
-- resync Helm appVersion and check knope versioned_files on every PR (#1987)
-- a BLOCKED outcome no longer spends the item's attempt budget (#1962)
-- a disk-starved build waits for its co-tenant instead of draining the merge queue (#1980)
-- verify the app image is pullable; docker.yml fails by name on missing secrets (#1971)
-- match knope's anti-recursion guard on the commit subject only (#2005)
-- a skipped crypto-tests no longer reads as green (#1941, #1954) (#1970)
-- reclaim orphaned iOS DerivedData safely (#1838)
-- paginate open PRs in board (#1832) (#1837)
-- per-host shard pricing, app warm-up, and a Cases screen that cannot depend on load order (#1873, #1893) (#1976)
 - admin sidebar CAPTCHA/rate-limit/transcription toggles now PATCH (#1184)
-- key the review verdict cache on the judged tree, not the diff (#2014) (#2015)
 - replace unfalsifiable UI test assertions with real expectations (#1825)
 - let a claiming volunteer read pre-claim messages via client re-wrap (#1512) (#2031)
 - repoint update, rollback and security-update at the per-service compose layout (#1478)
-- CAPTCHA reload step stranded on PIN screen — wait for sidebar after unlock (#2047) (#2048)
 - first-run probe judges the server certificate like api_config_set (#1711) (#2025)
 - pin shift and shift-admin view-model state to the main actor (#2049) (#2050)
-- detect a required context that is ABSENT on the head, not red (#1673)
 - survive PBX reconnects, fail-closed recording guard, graceful shutdown (#1377)
-- bound the disk guard so a hung report/reclaim cannot burn 36 min at 50 GiB free (#2063)
-- clear the 3 new HIGH advisories failing audit in every merge group (#2065)
-- wait for the typed case title before tapping Create (#2052)
-- clear nanoid HIGH advisories; re-justify braces + http-cache-semantics (#2064) (#2066)
 - socket-free SipRegistrationTest, close ApiService responses, upload test reports (#1984)
 - zeroize the two device seeds left on the stack after bundle import (#2037)
 - contacts search + profile speak the server's contract (#2002) (#2069)
@@ -698,39 +490,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - read the member directory from the hub-scoped /identity/members (#1766, #1992) (#1992)
 - ship res_resolver_unbound so SIP targets known only from /etc/hosts resolve (#1690) (#2030)
 - main-actor isolate every @Observable that SwiftUI reads (45-type audit, #1920) (#2073)
-- apply the CodeQL config — security-extended + path exclusions (#2077) (#2078)
 - admin clients re-wrap pre-claim messages for the claimer; desktop relay events decode (#2046) (#2074)
-- the red nightly now reports; testAllTabsExist asserts reachability (#2057) (#2058)
 - wire the 12 #1997 client calls to mounted routes (baseline 19 → 8) (#2079)
 - wire #1701 iOS calls and #2068 webhook URLs to mounted routes (baseline 8 → 2) (#2081)
 - bind step definitions for ban list BDD coverage (#1182)
 - ephemeral ECDH for device provisioning, signed claim (#1865) (#1975)
 - keep esbuild, vite and the marketing-site toolchain out of the app image (#1990)
-- fleet/review fails closed when a claimed verdict has no report to publish (#2082) (#2083)
-- knope's release PR concludes a real green on fleet/review, keyed on structure (#2085)
 
 ## 0.19.19 (2026-10-18)
 
 ### Features
 
-- scope:<lane> grants make cross-lane PRs expressible (#1117)
-- one batched fleet/review, triggered by a review request (#1164)
-- one PostgreSQL database per worktree — created by setup, one DATABASE_URL export, swept when the worktree goes (#1267)
-- conclude fleet/review green on Dependabot PRs without a model call (#1275)
 - speak every prompt on self-hosted PBXs, and sign every IVR media URL (#1387)
-- record the review verdict as a GitHub App, or not at all (#1487)
-- kimi-primary review engine with claude fallback (#1551)
 - receive and answer inbound in-app calls (#1539)
 - enroll via invite code redemption (#1544)
-- file-based kimi review prompts (removes the argv brief cap) (#1563)
 - M1 probe as a ratcheting gate, plus the auth foundation (enrol, lock, PIN, hub) (#1390)
 - hub deletion by crypto-shred — shred-set executor, 48h window, co-approved force (#1532)
 - link the Linphone SDK via its upstream Swift package, pinned 5.5.23-novideo (#1188) (#1572)
 - per-volunteer SIP registrar against self-hosted Asterisk (#1556)
 - ring a volunteer's registered in-app endpoint (#1573)
-- run the end-to-end suite against a deployed instance (#723) (#1605)
 - accept desktop device registrations without push tokens (#1548 groundwork) (#1550)
-- triage agent assigns lane labels from cited file paths (#1829)
 - create sigchain genesis link and PUK at onboarding (#1050) (#1791)
 - shift admin surfaces — ring groups, overrides, requests, availability (#752) (#1809)
 - mount GET /api/identity/members, the admin member directory iOS reads (#1917)
@@ -740,31 +519,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixes
 
 - do not ring volunteers already on a live call in any hub (#1077)
-- backend owns the shared test helpers its own suite imports (#1116)
 - inbound webhooks 500 on Bun — use backgroundTask, not c.executionCtx (#1132) (#1157)
-- let a worker refuse a worse fix, and give migrations an owner (#1181)
-- fail generation on unbound scenarios instead of silently skipping them (#1153) (#1199)
-- point owner-scoped addresses at Llamenos-Hotline after the org move (#1215)
 - clock in to a real hub; shifts BDD tags are not the fix for #1212 (#1216)
 - point runtime-resolved addresses at Llamenos-Hotline after the org move (#1220)
 - initialise settings, roles and the platform admin at startup (#1160)
-- point every llamenos-releases consumer at Llamenos-Hotline (#1228)
-- lowercase the repository path in the build-cache image refs (#1217)
-- post fleet/review verdict comments as llamenos-auto (#1238)
-- give llamenos-auto-authored PRs a route to a fleet/review verdict (#1232) (#1239)
-- give fleet/verify its token; pin where an unreadable PR read fails closed (#1258)
 - make contact type filter assertion actually assert something (#1261)
-- stop the never-write guard calling a committed template a secret (#1256)
 - make the deploy path capable of completing a first deploy (#1253)
 - assertAnyTagDisplayed must be able to fail; fix the hub-comms defects it hid (#1222) (#1224)
-- let the shared lane write the crypto step definitions it owns both ends of (#1266)
-- prove TestDB queries the same database as the server (#1263)
 - make demo identities unreachable off a development server (#1265)
-- warm the bddgen transform cache in desktop-e2e (#1268)
 - honest iOS coverage (15→19/569, no fuzzy credit) and the iOS UI suite gates merges (#1225)
-- give image-smoke's log flush 60s, not 5s (#1274)
-- name every fleet/review outcome on its own check (#1230) (#1270)
-- republish fleet/review on a moved head, without re-reviewing (#1284)
 - scope hub user list, get and writes to hub members (#1281)
 - route a real call through self-hosted Asterisk end to end (#1321)
 - provision the Asterisk SIP trunk through the app, and keep it (#1327)
@@ -773,51 +536,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - never claim a browser audio SDK that isn't installed (#1171)
 - events list no longer claims "No events" while loading (android-e2e shard 3) (#1402)
 - gate readiness on load-bearing deps only, keep Signal wired (#1420)
-- make the live suite runnable against a deployed server (#1429)
 - stop %@ format specifiers being handed non-object arguments (#1414)
-- create the default hub through the real API, not a test route (#1431)
 - stop the PIN wipe test dying on slow runners, and stop a dead shard reporting green (#1425)
-- bootstrap desktop suites through real routes, not dev-only ones (#1433)
 - refuse to issue the hub's shared SIP trunk credential (#1435)
 - create test hubs through the real API on iOS and Android (#1436)
 - let every shipped call-answering template role clock in (and be importable at all) (#1406)
 - enforce first-pickup-wins (atomic answer, ring-set eligibility, cancel losing legs) (#1072)
-- diff pull requests from the merge base, not the base tip (#1397)
 - let the default Volunteer role clock in (#1441)
-- point the Vite proxy at TEST_HUB_URL, not always :3000 (#1443)
-- make the review-cache key deterministic, and ask the right reviewer (#1447)
 - backfill shifts:set-availability onto an existing Volunteer role (#1444)
-- report an exhausted turn budget as itself, not as unreadable (#1449)
 - exclude soft-deleted contacts from directory list and get (#1452)
 - in-app Hang up / Ban & hang up now disconnect the caller at the provider (#1071)
-- withhold the shell, so the reviewer stops walking the export one `cat` per turn (#1458)
 - never serve the admin's Ed25519 key as an HPKE recipient (#1466)
 - an invite carries its hub, and redeeming it grants membership (#1474)
-- make the re-request dead end loud, and resolve a dispatch's PR author (#1477)
-- add a root-anchored owned-path form, and grant infra the two operator-facing setup docs (#1467)
-- redeem an invite as a distinct client, so the suite stops 429ing itself (#1491)
 - presence reports who a call would ring, and a hub that rings nobody says so (#1490)
 - print real public keys; never serve the admin seed via /api/auth/me (#1472)
 - count rate-limited requests atomically, not read-modify-write (#1498)
 - stop offering device linking in the pilot build (#1405)
 - land inbound messages in their hub; stop sealing to Ed25519 identity keys (#1507)
-- run the reviewer under a gate-owned HOME, not the runner's (#1514)
 - ringing requires both a shift entry and a clock-in (#1469)
 - one nonce-optional canonical auth-token builder, with its own label (#1509)
-- name the failing tests in fleet/verify, not just count them (#1524)
-- land the fleet/review trigger fix — unblock the review/merge train (#1471) (#1534)
-- absolute path for the reviewer agent profile in the smoke step (#1557)
 - make each signed invite redemption single-use (#1392)
-- raise the kimi review-brief cap to 120k chars (#1558)
 - project call rows onto the protocol shape; stop sending the caller-number HMAC (#1372)
 - seal HPKE envelopes to X25519 keys, never Ed25519 auth keys (#1371)
-- resolve workspace packages into the export, so fleet/verify tests the PR's own packages (#1526)
 - hub membership isolation (permissions, invites, users, ringing, auth) (#1540)
 - let the mobile FFI bind the envelope AAD, and derive it once (#1528)
-- kimi brief cap to 131000 chars (MAX_ARG_STRLEN headroom) (#1559)
 - one PIN length everywhere, and lock actually clears authenticated state (#1536)
 - one stored-record reader for server-sealed messages and call metadata (#1393)
-- type errors in step files from today's merges (#1561)
 - select the initial active hub after login and on session restore (#1541)
 - switch the active hub without a hub key (#1408)
 - register for SIP on clock-in, for every member hub (#1200)
@@ -826,50 +570,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - align sigchain genesis with the crate verifier (seq 1, null prevHash) (#1537)
 - derive the envelope AAD once, and let the desktop register a key to be sealed to (#1517)
 - make the sigchain append path fork-proof (#1501)
-- fail fleet/review closed when nothing has reviewed the head (#1570)
-- unblock the merge queue — desktop e2e shards 2 and 4, backend-bdd, and the Android M1 probe gate (#1585)
 - wire the hub crypto-shred executor into the scheduler (#1567)
 - one ADMIN_DECRYPTION_PUBKEY assignment per template, not two (#1571)
-- make main audit-green — 63 advisories to a 10-entry justified allowlist (#1480) (#1581)
 - migrate the wdio crypto spec off six nonexistent IPC commands (#1503)
 - fail /setup/complete when default-hub creation fails (#1488)
 - make six read-modify-write races atomic (#1513)
 - wire retention/erasure/cleanup/signal-drain workers into the scheduler (#1516)
 - keep the detail pane open when the post-create queue refresh drops the report (#1590)
 - deploy sip-bridge with Asterisk, and place its config on disk (#1485)
-- stop a corrupt SDK download from skipping the Android suite (#1596)
-- give the reviewer more turns, and a usable result when they run out (#1599)
 - make SIP registration and media work over TLS (#1188) (#1575)
 - unbreak the three deterministic Deploy Demo failures (#1603)
-- take the real fixes for the sharp/librsvg and MCP SDK advisories (#1607)
 - bucket rate limits per real client behind Caddy (#1606) (#1609)
 - bind jsonb envelope predicates so erasure actually strips envelopes (#1600)
-- stop the scope gate calling every .pem a secret (#1612)
 - scope the triage queue's conversion filter to the active hub (#1614)
 - revoke hub access when a member is removed (#1616)
 - let a volunteer see the schedule, without seeing who else is on it (#1445)
-- make both merge gates fail closed instead of green (#1588, #1587) (#1627)
 - require current hub membership to contribute a recovery share (#1626)
 - make the smoke gate able to fire, a cert failure red, and stop printing a secret (#1615)
 - correct the transcribed ISRG Root X2 certificate pin (#1608)
-- make resource names unique across parallel BDD workers (#1638)
 - record a skipped probe as SKIPPED, not PASS (#1617) (#1635)
-- review-and-merge runs the whole review set, on kimi (#1637) (#1647)
-- isolate the eight in-route rate limiters for the harness, not exempt them (#1644)
 - gate the push recorder and Signal synthetic bridge on the dev-surface predicate (#1654)
 - give each ffi_v3 test its own MobileState (#1685)
 - delete cached responses on wipe instead of hiding them (#1692)
 - clear rust-audit on libcrux-kem RUSTSEC-2026-0330/0331 (#1714)
 - stop snake_casing every request body (#1642)
 - resolve the active hub from the user's memberships, and stop publishing the hub roster (#1719)
-- stop a cancelled ios-e2e job from leaking the backend that ejects the next PR (#1671)
 - pin Asterisk >= 22.10.0 so dtls_verify=fingerprint verifies fingerprints (#1706)
 - make in-app calling work end to end — decode, render and mount (#1660)
 - probe the SIP TLS listener, and decide which smoke failures are fatal (#1691)
 - obtain the sip-bridge image, and stop a variable gating the probe that would notice (#1721)
-- report an unresolvable opencode engine id as misconfiguration, not outage (#1740)
 - settle one canonical backup format so the onboarding download can succeed (#1718)
-- compute merge-group platform scope against the queue target, not the group base (#1694)
 - save five admin settings screens, and the shift roster, to the routes the server mounts (#1732)
 - prove the SIP edge starts and serves — socket-level edge test, real probe, cfg routing fix (#1688) (#1745)
 - save four admin settings screens to the routes the server mounts (#1731)
@@ -877,42 +607,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - saving a note works — protocol-shaped body, {note} decode, required call ID (#1757)
 - clock in/out hub-scoped and always visible; sign-up via join requests (#1759)
 - render case detail tabs deterministically, decode contacts rows as sent (#1246) (#1758)
-- resolve downloads from desktop-v*/android-v* releases, not the updater host (#1768)
 - decode System Health from the protocol type so the cards render (#1752)
-- drop the stale POST /api/shifts/{}/signup gap, unbreaking main (#1773) (#1777)
 - migrations 0030/0032/0036 no longer collide on platform_settings/erased_at (#791) (#1778)
-- request the review at PR open that fleet/review waits on (#1760) (#1771)
-- give fleet/review a fallback that is tested and cannot fail the PR (#1767) (#1784)
-- bootstrap project resolves TEST_HUB_URL, never inherits :8788 (#1792) (#1794)
-- stop stray test artifacts wedging dispatch lanes (#1755) (#1772)
-- zero ESLint errors in apps/worker, sip-bridge, signal-notifier (#1774)
-- show every reviewer what the PR claims to do (#1699)
-- make fleet-runtime drift impossible to miss (#1801) (#1805)
 - pin LABEL_REGISTRY indices append-only, and stop crypto-labels.json claiming an order it never had (#1661)
-- drop --delete-branch so auto-merge can arm at all (#1804) (#1808)
 - name device X25519 keys as envelope recipients, never identity keys (#1668)
 - bound the retry wait, and tell a rate-limited volunteer to wait (#1707)
 - make relay subscriptions honestly per-user, and isolate the harness (#1678)
-- webdriverio 9 → 10, clearing deepmerge-ts/extract-zip advisories (#1769) (#1786)
 - move device-link room polling off the auth-tier rate limit (#1789) (#1800)
 - speak the server relay protocol on /ws, attribute events by envelope hubId (#1799)
 - dashboard own-note detection compared signing pubkey to encryption key (#1024) (#1807)
-- keep a tick pass inside its systemd unit, repair at-open review requests, salvage past broken hooks (#1819)
-- stop re-running full analysis fleets on the knope release PR (#1823)
 - queue onboarding step taps instead of dropping them while a step is in flight (#1827)
 - distinguish retryable invite-validation failures from verdicts (#1712) (#1818)
 - replace AdminSidebarUITests with behavior tests of the shipped admin menu (#1780)
 - load member hubs at session start so clock-in works without visiting Settings (#1720) (#1821)
-- grant orchestrator/ to the infra lane so the fleet can repair itself (#1836) (#1839)
-- reject invalid fleet review engine selector (#1847)
 - guard encrypted_* fields against plaintext assignment, pin worker opacity contract (#1506) (#1828)
-- make partial re-runs of ios-e2e and fleet-review artifact-safe (#1370)
 - save call settings to the route the server actually mounts (#1723)
 - seal/open case record data under LABEL_CASE_SUMMARY/LABEL_CASE_FIELDS (#1025) (#1802)
 - carry both device seeds in the provisioning bundle (#1382)
-- bind sip-bridge HTTP surface, retire fictional command-protocol scenarios (#1479)
 - encrypt queued message data (#1846)
-- drop screenshots.spec.ts from the dev-surface secret rail (#1869) (#1870)
 - keep CAPTCHA digits out of URLs, logs and Asterisk's on-disk cache (#1395)
 - strip inner defaults when deriving a PATCH body schema (#1652)
 - register UnifiedPush endpoint as pushToken + voipToken so the phone can be rung (#1810)
@@ -920,7 +632,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - purge the device-link strings and references the removed flow left behind (#1028) (#1796)
 - render the New Case toolbar button unconditionally (#1877) (#1878)
 - refuse a note with no admin reader, and ask the server who may read a record (#1824)
-- create a simulator in the build step instead of aborting (#1875) (#1881)
 - bind shifts/ring-groups BDD Background steps, execute dead step coverage (#1519)
 - bind the §2.7 composite AAD to every hub-key wrap (#1648)
 - render the env vars the worker reads, and gate the category (#1656)
@@ -930,20 +641,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - make observability actually observe, and alerting actually alert (#1455)
 - pin case state to the main actor and make Cases readiness explicit (#1918) (#1920)
 - return 409 instead of 500 when a user's pubkey already exists (#1459)
-- pin TMPDIR to runner.temp for bun on the self-hosted Mac runners (#1919)
-- name a stale PR base base-stale, not engine-misconfigured (#1923)
 - pin Dashboard and Events state to the main actor; make Admin › Events reachable with an honest load state (#1924)
 - pin the LABEL_MESSAGE stored-record AAD with a server-written vector; add mobile_encrypt_message (#1928)
-- name the remedy in a scope failure — grant, grant-excluded, or unowned (#1931)
 - seal/open stored records via Rust's no-AAD readers; regenerate stale UniFFI binding and arm its integrity check (#1934)
 - crypto-tests red on main — Android label-id guard still required constants #1934 deleted (#1942)
-- give bun a per-runner BUN_TMPDIR on the self-hosted Mac (bun ignores TMPDIR) (#1936)
 - seal and open LABEL_MESSAGE with the shared no-AAD functions (#1933)
 - conversation detail loads its conversation + exposes inner ids; API reads fail fast (#1916)
 - delete the AAD-bearing message/call-record functions that disagree with the stored-record fixture (#1937)
 - pin the desktop stored-record readers to the server-written fixture (#1927) (#1938)
-- lanes may propose a dependency change; CODEOWNERS still gates it (#1380)
-- judge the diff — report out-of-scope findings, never reject on them (#1667)
 - redact international phone numbers and telephony field names (#1378)
 - stop the env-var gate passing on stale renders, restore unreachable (#1383)
 - HubScopedReloadTests flake — MockHubAPIService data race corrupts memory (#1943)
@@ -969,7 +674,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - keep the volunteer call token valid for the whole leg (#1073)
 - relay uses the server-advertised /ws endpoint and every member hub (#1084)
 - create the call record before ringing so unrouted calls and voicemails are not lost (#1069)
-- assign scripts/ to the infra lane (#1087)
 
 ## 0.19.17 (2026-09-26)
 
@@ -988,7 +692,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- derive board's required set from the live ruleset (#975)
 - reference provisioning profile by its internal Name (#978)
 - remove project name from operator-visible ISO labels (#983)
 - app image pull policy defaults to missing so a docker-loaded image is used (#986)
@@ -996,73 +699,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - keep latest Bun working on CPUID-masked hosts; gate release on a PostgreSQL smoke on a kvm64 guest (#988)
 - preflight RAM check uses MemAvailable, not MemFree (#980)
 - drop unused hpke-rs-libcrux [patch.crates-io] entry (#990)
-- release-PR job fails on real errors; llamenos-auto identity; push with lease (#992)
-- ntfy_domain guard follows the deployment domain (llamenos-hotline.org) (#993)
 - event link API accepts event-category records, hub-scoped (#998)
 - clear 6 RUSTSEC advisories (rustls 0.23.45, rkyv, quick-xml) (#1002)
-- triage convert step races detail load and swallows the miss (#1009)
 - add GET /directory/:id/cases so the contact Cases tab works (#994)
 
 ## 0.19.16 (2026-09-25)
 
 ### Features
 
-- add review-and-merge operator command (#864)
 - TLS certificate pinning for the network proxy (#859)
-- add `llamenos-fleet board` — the deterministic gate decision table (#871)
 - per-hub IVR language override, constrained to provider speakability (#829)
 - make biometric enrollment reachable via Settings (#834)
 - chain-of-custody access log backed by the hash-chained audit trail (#835)
-- impact tiers — scale review ceremony to a diff's blast radius (#870)
 - run and verify the ntfy push relay on staging/demo (Android testers can be rung) (#964)
 
 ### Fixes
 
 - keep apps/desktop/Cargo.lock in lockstep with knope releases (#919)
-- scope ci.yml jobs to the platforms a PR's changes actually touch (#862)
-- prevent partial tauri release from a failed metadata push (#884)
 - point the updater at the current signing keypair (#927)
 - updater pubkey must match the key CI signs with (#931)
-- let macOS release build succeed unsigned when no Apple cert is configured (#932)
-- remove redundant hono override that conflicts under npm (#933)
-- stop Playwright loading Bun test files and failing the whole run (#936)
 - classify lockfile-rail failures instead of blaming the lockfile (#929)
-- stop PIN entry being the suite's single biggest flake (#935)
-- digest and halt/resume report to GitHub, not only the journal (#841)
-- grant platform lanes owned access to packages/i18n/locales/ (#938)
-- stop the failure breaker counting REJECTED as a runaway failure (#942)
 - derive APNs topic from a single source, default to org.llamenos.hotline (#856)
-- narrow tests/steps/ ownership to tests/steps/backend/, extend baseline grant to backend (#943)
-- stop the tab-click step from racing panel mount (#678) (#917)
-- sweep isVisible probes in cms-cases-steps.ts (#785) (#853)
 - remove AUTO_RECEIVE_SCHEDULE from signal-cli (fatal with MODE=json-rpc) (#945)
-- close out the fixable-HIGH Trivy gate for issue #650 (#912)
-- replace remaining isVisible()/.first() control-flow probes (#681 sweep) (#776)
-- probe sweep — real waiting assertions in cms-events-steps (#784) (#854)
-- stop double-caching the Rust toolchain in desktop-e2e (#910)
-- sweep isVisible()/.first() control-flow probes in tests/steps (#916)
-- sweep remaining write-guarding probes in security/hub/calls/notes/reports/messaging steps (#897)
-- sweep isVisible probes in cases-area step files (#784 #785 #786) (#790)
 - gate api_config_clear behind a Rust-owned confirmation token (#822)
-- resolve fleet/verify lane-boundary scope for 4 blocked PRs (#947)
 - land three EP09 recovery-group errata items (#847)
 - show the specific passkey-required error on WEBAUTHN_CREDENTIAL_REQUIRED (#920)
-- mismatched content-key envelope broke seeded-contact decryption (#796) (#934)
 - stop tracking vendored bundler gem (#823)
-- clear the 9 baselined tsc errors at the tests/ root (#894)
-- clear all 71 baselined tsc errors under tests/steps/ (#887)
-- clear 8 baselined tsc errors in tests/steps/{admin,auth} (#950)
-- make API-seeded contacts decryptable; cms-assignment/contacts steps wait deterministically (#796) (#952)
-- take src/client and tests to zero (desktop third of #647) (#890)
 - encrypt evidence uploads client-side; derive hash/size from ciphertext (#951)
-- make mobile-release Android job complete and attach a verified installable APK (#958)
 - accept UnifiedPush endpoints only on configured ntfy origins (#960) (#963)
 
 ## 0.19.15 (2026-09-20)
 
 ### Fixes
 
-- move docker-stable's buildx cache off the shared Actions quota (#911)
 - stop tauri:build/tauri:dev from passing an unsupported positional path, pin @tauri-apps/cli (#915)
 
 ## 0.19.14 (2026-09-20)
@@ -1073,15 +742,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- unblock installable artifacts from an unconfigured Docker Hub (#885)
-- eslint packages to zero (#836)
 - upgrade openmls 0.8 → 0.9 to pull patched libcrux (#652) (#852)
 - pin the three tag-pinned container images by digest (#861)
-- fail loud on unconfigured fleet/review engine, never a dead default (#891)
 - reject deleting an admin's last credential under requireForAdmins (#889)
-- desktop release workflow never produced installable artifacts (#893)
-- run fleet/review as a claude session on a self-hosted runner (#866)
-- publish release container images to GHCR instead of Docker Hub (#905)
 - pin Tauri Rust crate and npm package to matching versions (#895)
 
 ## 0.19.13 (2026-09-20)
@@ -1092,22 +755,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port 9 languages to config and voice prompts (#430)
 - add locale files for 9 new languages (#434)
 - add multi-language content support (#433)
-- add documentation for 9 new languages (#435)
 - hub-configurable IVR language menus (#432)
 - production deployment profiles, update server, Android CI, runbooks (#448)
-- add 9 new locales (uk, fa, tr, ku, so, am, my, quc, mix) (#439)
 - add call history screen (Epic 356) (#473)
 - fix offline queue replay auth + NWPathMonitor AsyncStream (#474)
-- establish k6 baseline thresholds with pass/fail summary (#506)
-- orchestrator core — shadow-pass dispatch layer (#642)
-- live dispatch — verification, roles, review loop, digest (#658)
-- GitHub enforces the merge gate — required statuses, auto-merge, delete orchestrator-side merge logic (#665)
 - configurable backend address + Rust-enforced network allowlist (#772)
-- delete the orchestrator-side merge gate — GitHub enforces it now (#777)
 - staging=demo decision, env-var plumbing for push/crash/demo-mode/Signal, banner rework (#771)
-- add the review-gate CLI subcommand (bootstrap, inert until #848) (#851)
-- per-lane engine/model overrides from lanes.json (#840)
-- request standard auto-merge at PR open, with a named release-PR switch (#877)
 
 ### Fixes
 
@@ -1116,21 +769,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - upgrade container base images to resolve CVEs (#437)
 - upgrade vulnerable runtime dependencies (#436)
 - upgrade remaining vulnerable dependencies (#438)
-- fix Radix Collapsible expansion check in 5 test files (#440)
 - Epic D — mobile platform hardening (#449)
 - harden pagination bounds, audit timestamp, and CI supply chain
-- increase far-future timestamp margin to avoid race condition (#472)
-- replace fake ciphertext with real HPKE encryption in BDD tests (#468)
-- isolate invite validation rate limit buckets per scenario (#457)
-- reporter isolation — correct role ID and seedHex in BDD helpers (#452)
-- hub key lifecycle steps — replace deprecated nsec with seedHex (#453)
-- relay event decryption via API key instead of hardcoded secret (#458)
 - add CI guard for Tauri updater pubkey, fix stale docs (#455)
 - add missing requirePermission guards to settings endpoints (#456)
 - standardize error response format across backend routes (#450)
 - implement push endpoint registration with backend (#462)
 - add device-link and hub-invite deep link handlers (#464)
-- replace remaining member.nsec with member.seedHex in hub-key-lifecycle steps (#475)
 - prevent webhook signature bypass via Host header spoofing (#478)
 - complete permission granularity overhaul (Epic 362) (#460)
 - add maxLength constraints to encrypted payload schemas (Epic 263) (#469)
@@ -1155,7 +800,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add rate limiting to device provisioning endpoints (#483)
 - fix biometric unlock — eliminate double LAContext prompt, use kSecUseAuthenticationContext (#488)
 - store iOS wake key with device-only, non-syncable Keychain attributes (Epic 260 H8) (#489)
-- handle enum defaults and field ordering in Kotlin output (#496)
 - remove volunteer nsec from Android ViewModel state (#491)
 - add Android certificate pinning to release network security config (#485)
 - BIP-340 Schnorr sign_prehash / verify_prehash with official test vectors (Epic 259) (#492)
@@ -1164,7 +808,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add missing security headers to all Caddyfile.production origins (#507)
 - iOS accepts HTTP relay URLs — should reject non-HTTPS (Epic 260) (#494)
 - enforce SAS verification state machine in iOS device linking (#495)
-- resolve 2 flaky CI test scenarios (#497)
 - Android deep link relay URL injection (Epic 261) (#498)
 - Android PIN brute-force protection UI gaps (Epic 261) (#499)
 - replace alpha biometric-ktx with stable biometric 1.1.0 (#500)
@@ -1173,11 +816,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove IPC commands that leak private keys to webview (C3) (#502)
 - add signal notifier sidecar check to readiness probe (#508)
 - remove dead nsec/secp256k1/ECIES code and stale references (#509)
-- resolve systemic CI failures across E2E, iOS, crypto, Android, and backend (#523)
 - remove demo private key seeds from client bundle (Epic 257) (#512)
 - add missing keys to all locales and fix hardcoded mobile strings (#513)
 - prevent QR relay SSRF via IPv6 bypass and hub domain enforcement (Epic 260) (#514)
-- hard-fail tauri-release.yml when updater pubkey is empty (#515)
 - make IPC commands stateful — keys never cross JS bridge (#517)
 - signal-notifier sidecar hardening (#518)
 - harden WebSocket connection authentication (#519)
@@ -1185,11 +826,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove unused X25519PublicKey import in ffi.rs
 - rename error.invalidDeviceKey to error.invalidKey in English locale
 - suppress secret detection false positive on test fixture hex string
-- align android-e2e backend setup with backend-bdd (#531)
-- prevent admin role downgrade during parallel test-reset (#532)
-- add missing nsec field to createUserViaApi return value (#534)
-- prevent admin role race in parallel worker hub setup (#535)
-- serialize CI e2e workers + fix demo mode endpoint + WASM timeouts
 - implement loadAllHubKeys, sigchain verification, guard debug print (#552)
 - address remaining audit findings (A/E/G/I epics) (#573)
 - fall back to Debian archive CDN when point release is superseded (#572)
@@ -1212,62 +848,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add device ownership verification to MLS routes (#554)
 - address 5 HIGH backend findings from wave 2 audit (#565)
 - address HIGH security findings A3, A4, A5 (#566)
-- upgrade libcrux-chacha20poly1305 (HIGH) and time (MEDIUM) (#577)
-- fix ban management tests and unban bug after phone masking (HIGH-W3) (#576)
-- fix ansible-validate CI job — real bugs + pinned/scoped ansible-lint (#593)
 - resolve RUSTSEC-2026-0204 in crossbeam-epoch (#592)
 - address 3 uncovered MEDIUM audit findings (#579)
 - address 2 uncovered MEDIUM audit findings (#580)
 - repair admin bootstrap auth nonce + isolation allowlist (#589)
-- resolve 4 pre-existing test flakes (#582)
 - address 6 uncovered MEDIUM backend findings (#581)
-- resolve security audit failures (rust-audit + dependency-audit) (#602)
-- deflake e2e shard 1 — race on window.__TEST_PLATFORM dynamic import (#603)
-- replace invalid job-level runner.temp env with a step (#617)
-- declare clippy/rustfmt toolchain components (#618)
-- bump Astro to patch critical AVIF RCE (GHSA-26w7-cxv4-gfx2) (#632)
-- correct sip-bridge and signal-notifier paths in backend fragment (#633)
-- correct dead pre-push commands and rewrite crypto reviewer for HPKE (#643)
-- measure BDD coverage instead of asserting it (#645)
-- repair gates that pass without checking (#651)
 - isolate the Gradle build path per invocation (#656)
 - derive locale lists dynamically, cover all 22 locales (#644)
 - repair the production deploy path (compose, helm, caddy, nodejs image) (#654)
 - point generic module inventory at path ansible.cfg reads (#662)
-- make the verify/review/merge gates observable and label PRs truthfully (#663)
 - apply Debian security updates to app base image (perl CVEs) (#668)
 - build the IVR language menu only from languages the provider can speak (#673)
-- schema-browser steps silently skipped the entity type editor (#669) (#675)
 - block enabling admin passkey requirement without a passkey (#674)
 - serialize concurrent custom-field replacements (#690)
 - add GET/PATCH hub erasure config routes (#691)
-- release dispatch job fails loudly and actually dispatches (#711, #712) (#770)
-- a source-unreadable abort must carry the reason it aborted (#815)
 - DemoBanner now renders the demo-mode body text (#824)
 - repoint update.yml at role templates, delete stale ansible dupes (#825)
 - rewrite stale device-key-import UI tests to assert v3 behavior (#826)
-- never run opencode with the PR export as its project root (#821)
-- finish admin-area probe sweep (#778–#783) (#793)
 - typed-report location picker, disable file field honestly (#827)
 - gate MLS/OpenMLS behind a real default-off `mls` feature (#830)
-- dispatch workers on the fleet/<lane>/<item> branch grammar (#839)
-- CI gate fails closed — machine-readable test result, last-line exact verdict (#814)
 - SecurityEventService durably queues and uploads security events (#833)
-- make fleet/review's engine provider/model configurable (#842)
-- review once at merge time, not on every push (#844)
-- trigger on a review label, not workflow_dispatch (#848)
 - PR #212 review issues — add permission bypass tests (#614)
 - fix flaky wait for case detail load in E2E steps (#625)
-- stop the review-gate step crashing on a stale PR base (#855)
-- resolve the HIGH advisory blocking the audit gate (#858)
-- classify engine-quota exhaustion as QUOTA, not consecutive failures (#857)
-- stop recording SUCCESSFUL workers as FAILED (#863)
-- scope the release-commit guard to push, not pull_request/merge_group (#867)
-- make the review-engine smoke test report why it failed (#872)
-- update review engine's default opencode model, add misconfigured-id rail (#876)
 - restore missing Gemfile for fastlane release workflow (#613)
-- never re-dispatch an item whose branch already has an open PR (#882)
-- unbreak release-artifact signing under cosign v3's bundle defaults (#883)
 
 ## 0.19.12 (2026-09-20)
 
@@ -1277,21 +880,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port 9 languages to config and voice prompts (#430)
 - add locale files for 9 new languages (#434)
 - add multi-language content support (#433)
-- add documentation for 9 new languages (#435)
 - hub-configurable IVR language menus (#432)
 - production deployment profiles, update server, Android CI, runbooks (#448)
-- add 9 new locales (uk, fa, tr, ku, so, am, my, quc, mix) (#439)
 - add call history screen (Epic 356) (#473)
 - fix offline queue replay auth + NWPathMonitor AsyncStream (#474)
-- establish k6 baseline thresholds with pass/fail summary (#506)
-- orchestrator core — shadow-pass dispatch layer (#642)
-- live dispatch — verification, roles, review loop, digest (#658)
-- GitHub enforces the merge gate — required statuses, auto-merge, delete orchestrator-side merge logic (#665)
 - configurable backend address + Rust-enforced network allowlist (#772)
-- delete the orchestrator-side merge gate — GitHub enforces it now (#777)
 - staging=demo decision, env-var plumbing for push/crash/demo-mode/Signal, banner rework (#771)
-- add the review-gate CLI subcommand (bootstrap, inert until #848) (#851)
-- per-lane engine/model overrides from lanes.json (#840)
 
 ### Fixes
 
@@ -1300,21 +894,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - upgrade container base images to resolve CVEs (#437)
 - upgrade vulnerable runtime dependencies (#436)
 - upgrade remaining vulnerable dependencies (#438)
-- fix Radix Collapsible expansion check in 5 test files (#440)
 - Epic D — mobile platform hardening (#449)
 - harden pagination bounds, audit timestamp, and CI supply chain
-- increase far-future timestamp margin to avoid race condition (#472)
-- replace fake ciphertext with real HPKE encryption in BDD tests (#468)
-- isolate invite validation rate limit buckets per scenario (#457)
-- reporter isolation — correct role ID and seedHex in BDD helpers (#452)
-- hub key lifecycle steps — replace deprecated nsec with seedHex (#453)
-- relay event decryption via API key instead of hardcoded secret (#458)
 - add CI guard for Tauri updater pubkey, fix stale docs (#455)
 - add missing requirePermission guards to settings endpoints (#456)
 - standardize error response format across backend routes (#450)
 - implement push endpoint registration with backend (#462)
 - add device-link and hub-invite deep link handlers (#464)
-- replace remaining member.nsec with member.seedHex in hub-key-lifecycle steps (#475)
 - prevent webhook signature bypass via Host header spoofing (#478)
 - complete permission granularity overhaul (Epic 362) (#460)
 - add maxLength constraints to encrypted payload schemas (Epic 263) (#469)
@@ -1339,7 +925,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add rate limiting to device provisioning endpoints (#483)
 - fix biometric unlock — eliminate double LAContext prompt, use kSecUseAuthenticationContext (#488)
 - store iOS wake key with device-only, non-syncable Keychain attributes (Epic 260 H8) (#489)
-- handle enum defaults and field ordering in Kotlin output (#496)
 - remove volunteer nsec from Android ViewModel state (#491)
 - add Android certificate pinning to release network security config (#485)
 - BIP-340 Schnorr sign_prehash / verify_prehash with official test vectors (Epic 259) (#492)
@@ -1348,7 +933,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add missing security headers to all Caddyfile.production origins (#507)
 - iOS accepts HTTP relay URLs — should reject non-HTTPS (Epic 260) (#494)
 - enforce SAS verification state machine in iOS device linking (#495)
-- resolve 2 flaky CI test scenarios (#497)
 - Android deep link relay URL injection (Epic 261) (#498)
 - Android PIN brute-force protection UI gaps (Epic 261) (#499)
 - replace alpha biometric-ktx with stable biometric 1.1.0 (#500)
@@ -1357,11 +941,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove IPC commands that leak private keys to webview (C3) (#502)
 - add signal notifier sidecar check to readiness probe (#508)
 - remove dead nsec/secp256k1/ECIES code and stale references (#509)
-- resolve systemic CI failures across E2E, iOS, crypto, Android, and backend (#523)
 - remove demo private key seeds from client bundle (Epic 257) (#512)
 - add missing keys to all locales and fix hardcoded mobile strings (#513)
 - prevent QR relay SSRF via IPv6 bypass and hub domain enforcement (Epic 260) (#514)
-- hard-fail tauri-release.yml when updater pubkey is empty (#515)
 - make IPC commands stateful — keys never cross JS bridge (#517)
 - signal-notifier sidecar hardening (#518)
 - harden WebSocket connection authentication (#519)
@@ -1369,11 +951,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove unused X25519PublicKey import in ffi.rs
 - rename error.invalidDeviceKey to error.invalidKey in English locale
 - suppress secret detection false positive on test fixture hex string
-- align android-e2e backend setup with backend-bdd (#531)
-- prevent admin role downgrade during parallel test-reset (#532)
-- add missing nsec field to createUserViaApi return value (#534)
-- prevent admin role race in parallel worker hub setup (#535)
-- serialize CI e2e workers + fix demo mode endpoint + WASM timeouts
 - implement loadAllHubKeys, sigchain verification, guard debug print (#552)
 - address remaining audit findings (A/E/G/I epics) (#573)
 - fall back to Debian archive CDN when point release is superseded (#572)
@@ -1396,59 +973,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add device ownership verification to MLS routes (#554)
 - address 5 HIGH backend findings from wave 2 audit (#565)
 - address HIGH security findings A3, A4, A5 (#566)
-- upgrade libcrux-chacha20poly1305 (HIGH) and time (MEDIUM) (#577)
-- fix ban management tests and unban bug after phone masking (HIGH-W3) (#576)
-- fix ansible-validate CI job — real bugs + pinned/scoped ansible-lint (#593)
 - resolve RUSTSEC-2026-0204 in crossbeam-epoch (#592)
 - address 3 uncovered MEDIUM audit findings (#579)
 - address 2 uncovered MEDIUM audit findings (#580)
 - repair admin bootstrap auth nonce + isolation allowlist (#589)
-- resolve 4 pre-existing test flakes (#582)
 - address 6 uncovered MEDIUM backend findings (#581)
-- resolve security audit failures (rust-audit + dependency-audit) (#602)
-- deflake e2e shard 1 — race on window.__TEST_PLATFORM dynamic import (#603)
-- replace invalid job-level runner.temp env with a step (#617)
-- declare clippy/rustfmt toolchain components (#618)
-- bump Astro to patch critical AVIF RCE (GHSA-26w7-cxv4-gfx2) (#632)
-- correct sip-bridge and signal-notifier paths in backend fragment (#633)
-- correct dead pre-push commands and rewrite crypto reviewer for HPKE (#643)
-- measure BDD coverage instead of asserting it (#645)
-- repair gates that pass without checking (#651)
 - isolate the Gradle build path per invocation (#656)
 - derive locale lists dynamically, cover all 22 locales (#644)
 - repair the production deploy path (compose, helm, caddy, nodejs image) (#654)
 - point generic module inventory at path ansible.cfg reads (#662)
-- make the verify/review/merge gates observable and label PRs truthfully (#663)
 - apply Debian security updates to app base image (perl CVEs) (#668)
 - build the IVR language menu only from languages the provider can speak (#673)
-- schema-browser steps silently skipped the entity type editor (#669) (#675)
 - block enabling admin passkey requirement without a passkey (#674)
 - serialize concurrent custom-field replacements (#690)
 - add GET/PATCH hub erasure config routes (#691)
-- release dispatch job fails loudly and actually dispatches (#711, #712) (#770)
-- a source-unreadable abort must carry the reason it aborted (#815)
 - DemoBanner now renders the demo-mode body text (#824)
 - repoint update.yml at role templates, delete stale ansible dupes (#825)
 - rewrite stale device-key-import UI tests to assert v3 behavior (#826)
-- never run opencode with the PR export as its project root (#821)
-- finish admin-area probe sweep (#778–#783) (#793)
 - typed-report location picker, disable file field honestly (#827)
 - gate MLS/OpenMLS behind a real default-off `mls` feature (#830)
-- dispatch workers on the fleet/<lane>/<item> branch grammar (#839)
-- CI gate fails closed — machine-readable test result, last-line exact verdict (#814)
 - SecurityEventService durably queues and uploads security events (#833)
-- make fleet/review's engine provider/model configurable (#842)
-- review once at merge time, not on every push (#844)
-- trigger on a review label, not workflow_dispatch (#848)
 - PR #212 review issues — add permission bypass tests (#614)
 - fix flaky wait for case detail load in E2E steps (#625)
-- stop the review-gate step crashing on a stale PR base (#855)
-- resolve the HIGH advisory blocking the audit gate (#858)
-- classify engine-quota exhaustion as QUOTA, not consecutive failures (#857)
-- stop recording SUCCESSFUL workers as FAILED (#863)
-- scope the release-commit guard to push, not pull_request/merge_group (#867)
-- make the review-engine smoke test report why it failed (#872)
-- update review engine's default opencode model, add misconfigured-id rail (#876)
 
 ## 0.19.11 (2026-07-07)
 
@@ -1458,13 +1004,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port 9 languages to config and voice prompts (#430)
 - add locale files for 9 new languages (#434)
 - add multi-language content support (#433)
-- add documentation for 9 new languages (#435)
 - hub-configurable IVR language menus (#432)
 - production deployment profiles, update server, Android CI, runbooks (#448)
-- add 9 new locales (uk, fa, tr, ku, so, am, my, quc, mix) (#439)
 - add call history screen (Epic 356) (#473)
 - fix offline queue replay auth + NWPathMonitor AsyncStream (#474)
-- establish k6 baseline thresholds with pass/fail summary (#506)
 
 ### Fixes
 
@@ -1473,21 +1016,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - upgrade container base images to resolve CVEs (#437)
 - upgrade vulnerable runtime dependencies (#436)
 - upgrade remaining vulnerable dependencies (#438)
-- fix Radix Collapsible expansion check in 5 test files (#440)
 - Epic D — mobile platform hardening (#449)
 - harden pagination bounds, audit timestamp, and CI supply chain
-- increase far-future timestamp margin to avoid race condition (#472)
-- replace fake ciphertext with real HPKE encryption in BDD tests (#468)
-- isolate invite validation rate limit buckets per scenario (#457)
-- reporter isolation — correct role ID and seedHex in BDD helpers (#452)
-- hub key lifecycle steps — replace deprecated nsec with seedHex (#453)
-- relay event decryption via API key instead of hardcoded secret (#458)
 - add CI guard for Tauri updater pubkey, fix stale docs (#455)
 - add missing requirePermission guards to settings endpoints (#456)
 - standardize error response format across backend routes (#450)
 - implement push endpoint registration with backend (#462)
 - add device-link and hub-invite deep link handlers (#464)
-- replace remaining member.nsec with member.seedHex in hub-key-lifecycle steps (#475)
 - prevent webhook signature bypass via Host header spoofing (#478)
 - complete permission granularity overhaul (Epic 362) (#460)
 - add maxLength constraints to encrypted payload schemas (Epic 263) (#469)
@@ -1512,7 +1047,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add rate limiting to device provisioning endpoints (#483)
 - fix biometric unlock — eliminate double LAContext prompt, use kSecUseAuthenticationContext (#488)
 - store iOS wake key with device-only, non-syncable Keychain attributes (Epic 260 H8) (#489)
-- handle enum defaults and field ordering in Kotlin output (#496)
 - remove volunteer nsec from Android ViewModel state (#491)
 - add Android certificate pinning to release network security config (#485)
 - BIP-340 Schnorr sign_prehash / verify_prehash with official test vectors (Epic 259) (#492)
@@ -1521,7 +1055,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add missing security headers to all Caddyfile.production origins (#507)
 - iOS accepts HTTP relay URLs — should reject non-HTTPS (Epic 260) (#494)
 - enforce SAS verification state machine in iOS device linking (#495)
-- resolve 2 flaky CI test scenarios (#497)
 - Android deep link relay URL injection (Epic 261) (#498)
 - Android PIN brute-force protection UI gaps (Epic 261) (#499)
 - replace alpha biometric-ktx with stable biometric 1.1.0 (#500)
@@ -1530,11 +1063,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove IPC commands that leak private keys to webview (C3) (#502)
 - add signal notifier sidecar check to readiness probe (#508)
 - remove dead nsec/secp256k1/ECIES code and stale references (#509)
-- resolve systemic CI failures across E2E, iOS, crypto, Android, and backend (#523)
 - remove demo private key seeds from client bundle (Epic 257) (#512)
 - add missing keys to all locales and fix hardcoded mobile strings (#513)
 - prevent QR relay SSRF via IPv6 bypass and hub domain enforcement (Epic 260) (#514)
-- hard-fail tauri-release.yml when updater pubkey is empty (#515)
 - make IPC commands stateful — keys never cross JS bridge (#517)
 - signal-notifier sidecar hardening (#518)
 - harden WebSocket connection authentication (#519)
@@ -1542,11 +1073,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove unused X25519PublicKey import in ffi.rs
 - rename error.invalidDeviceKey to error.invalidKey in English locale
 - suppress secret detection false positive on test fixture hex string
-- align android-e2e backend setup with backend-bdd (#531)
-- prevent admin role downgrade during parallel test-reset (#532)
-- add missing nsec field to createUserViaApi return value (#534)
-- prevent admin role race in parallel worker hub setup (#535)
-- serialize CI e2e workers + fix demo mode endpoint + WASM timeouts
 - implement loadAllHubKeys, sigchain verification, guard debug print (#552)
 - address remaining audit findings (A/E/G/I epics) (#573)
 - fall back to Debian archive CDN when point release is superseded (#572)
@@ -1569,14 +1095,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add device ownership verification to MLS routes (#554)
 - address 5 HIGH backend findings from wave 2 audit (#565)
 - address HIGH security findings A3, A4, A5 (#566)
-- upgrade libcrux-chacha20poly1305 (HIGH) and time (MEDIUM) (#577)
-- fix ban management tests and unban bug after phone masking (HIGH-W3) (#576)
-- fix ansible-validate CI job — real bugs + pinned/scoped ansible-lint (#593)
 - resolve RUSTSEC-2026-0204 in crossbeam-epoch (#592)
 - address 3 uncovered MEDIUM audit findings (#579)
 - address 2 uncovered MEDIUM audit findings (#580)
 - repair admin bootstrap auth nonce + isolation allowlist (#589)
-- resolve 4 pre-existing test flakes (#582)
 
 ## 0.19.10 (2026-05-29)
 
@@ -1586,10 +1108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port 9 languages to config and voice prompts (#430)
 - add locale files for 9 new languages (#434)
 - add multi-language content support (#433)
-- add documentation for 9 new languages (#435)
 - hub-configurable IVR language menus (#432)
 - production deployment profiles, update server, Android CI, runbooks (#448)
-- add 9 new locales (uk, fa, tr, ku, so, am, my, quc, mix) (#439)
 
 ### Fixes
 
@@ -1598,7 +1118,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - upgrade container base images to resolve CVEs (#437)
 - upgrade vulnerable runtime dependencies (#436)
 - upgrade remaining vulnerable dependencies (#438)
-- fix Radix Collapsible expansion check in 5 test files (#440)
 - Epic D — mobile platform hardening (#449)
 
 ## 0.19.9 (2026-05-20)
@@ -1612,7 +1131,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- fix desktop release pipeline — manifest, notarization, threat model (#396)
 - replace 7 hardcoded contentDescription strings with i18n a11y keys (#407)
 - replace z.infer type aliases with direct protocol schema imports (#413)
 - align EntityTypeDefinition, EntityFieldDefinition, and CustomFieldDef with protocol-generated types (#416)
@@ -1625,14 +1143,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve @wip security test scenarios (#414)
 - align types with codegen, add sigchain/PUK wrappers, fix i18n strings (#404)
 - wire deep links, sigchain verify, PUK rotation, LruCache (#411)
-- deduplicate schemas, fix integer types, add quicktype options (#406)
 - bulk rename Protocol* types to match codegen output (#419)
 - bulk rename Channels to SharedChannelConfig (#420)
 - resolve orphaned Category type and dedup envelope references (#421)
 - bulk rename all remaining typealias references to codegen names (#422)
 - rename HubKeyEnvelopeResponseEnvelope to SharedAdminEnvelope in tests
-- replace Cucumber world with sasWorld fixture in SAS verification steps (#423)
-- resolve all shard-2 test failures (#426)
 
 ## 0.19.8 (2026-05-19)
 
@@ -1709,7 +1224,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - event linking + contact relationships UI (6 @wip scenarios) (#339)
 - cross-platform declarative E2E test seeding + Android E2E fixes (#346)
 - separate debug/release crypto .so builds (#355)
-- add check-label-count.sh to catch hardcoded domain separation counts
 - auth hardening + session security + test updates (Epic A)
 - apply rate limiting as default middleware on all routes (Epic A / H03)
 - Epic I Phases 2-5 — error disclosure, side channels, safeFetch, webhook replay
@@ -1737,9 +1251,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - address PR #293 review — hubId threading, plaintext removal, label versioning, i18n
 - hub-scope guard, /me permission documentation
 - remove orphaned items, fix gdpr permission, dedup canSeeGroup
-- use shared loginAsAdmin helper in recovery-group E2E tests
 - correct liveness proof BDD test — enroll admin as share holder
-- update shift API helpers and steps to use encryptedName
 - update ScreenshotTests Shift constructors to use encryptedName
 - CI test fixes (round 1)
 - CI test fixes (round 1)
@@ -1751,14 +1263,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - align BDD step assertions with API response shape
 - populate answeredBy in call_records and coerce count types
 - use unnest() instead of jsonb_array_elements_text() for text[] roles column
-- restore Playwright browser install in backend-bdd job
 - add teamId to users table, identity service, and User interface
 - prevent circuit breaker cascade on unconfigured messaging channels
 - sanitize hyphens in Android resource names + add missing i18n keys
 - treat signal bridge network errors as retryable, not failed
 - remove stale eslint-disable-line for unused-vars in updateTelephonyProvider
 - use BanResponse instead of non-existent Ban type
-- update shift test helpers for EP07 schema changes
 - resolve test failures from EP05a/EP08-P4 merge
 - correct permission in admin-nav-visibility test
 - resolve 5 BDD failures (ban hashing, invite perms, feature tags)
@@ -1768,14 +1278,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BDD fixes — ban call rejection + CMS contact write operations
 - BDD fixes — ban column rename, triage auto-assign hub scoping
 - CI green-up — codegen enforcement, iOS/Android builds, desktop e2e, shift tests
-- remove broken RustFS standalone binary download from iOS E2E
-- fix desktop E2E shard 2 — account erasure, login restore, admin nav, CMS events
-- add self-trigger path to ios-e2e workflow
-- fix channel-config tests — add auth, API mocks, client-side nav
 - regenerate UniFFI Kotlin bindings to match current Rust FFI
 - include regenerated llamenos_core.kt bindings
-- fix 17 failing Cucumber scenarios + shard filtering
-- fix 14 failing Cucumber scenarios across 5 clusters
 - un-wip 2 BDD scenarios with proper access control
 - fix admin toggles E2E regression — use count() not isVisible() for expansion check
 - re-add @wip to admin toggles test (pre-existing issue)
@@ -1788,13 +1292,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - @wip 4 shift detail scenarios (React Query cache race in E2E)
 - @wip relationships tab scenario (UI step not wired)
 - @wip navigate-to-shift-detail (same cache race)
-- analytics cross-hub test + reports e2e + rate-limit BDD isolation (#340)
 - shift detail @wip scenarios — cache invalidation (#336)
 - admin settings toggles @wip scenario (#338)
-- replace GNU timeout with cross-platform gtimeout for macOS runners (#341)
-- resolve desktop E2E failures (50/50 green) (#343)
-- add docker/setup-docker-action for macOS runners (#344)
-- resolve reports filter chip visibility flake (#357)
 - resolve rate limit BDD test flakes (#356)
 - add 7 missing labels + CI drift guard tests
 - Epic I Phase 1 — JSON parse safety and error disclosure (AST-01..03, W05-H01/M03/M05)
@@ -1807,40 +1306,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - reject control characters in blast content (H02)
 - fail closed on DNS resolution failure (H07)
 - use upsert for PUK envelope distribution (H09)
-- resolve 5 CI failures from security audit PRs
-- resolve android compile errors, backend-bdd and e2e test failures
-- revert a2p test to apiPost, remove unused import
-- fix Android unit tests and BDD dev route auth
-- align tests with security hardening behavior changes
-- Robolectric sdk=34, provision room path, import diagnostics
 - use plain Application in Robolectric to avoid JNI load
 - remove autoVerify from custom scheme intent filter
 - use stringResource() for biometric prompt strings
 - add test-ext-junit dep, fix FLAG_SECURE test types
-- mark RACE-03 and RACE-09 scenarios as @wip
-- increase panic-wipe redirect wait for async imports
-- exclude @wip/@fixme from backend-bdd tag filter
-- disable auto-lock and panic-wipe in Playwright test builds (#393)
-- resolve reply count badge failure — pass hubId to createNote (#394)
-- tag unimplemented push notification scenario as @wip (#395)
 
 ## 0.19.7 (2026-05-14)
 
 ### Features
 
 - integrate Nostr event decrypt via UniFFI CryptoService (#143)
-- add ios-e2e workflow with 4 parallel shards and hub separation (#163)
-- add wasm-pack toolchain and enable WASM crypto interop tests
-- add data deletion page required for Google Play data safety (#183)
-- add contributor infrastructure — templates, SECURITY.md, CODEOWNERS, labels, badges (#191)
-- mise integration and contributor onboarding overhaul (#189)
 - add missing response schemas for cross-platform codegen (#199)
 - add Play Store assets and submission checklist (#182)
 - add 6 domain supervisor agents with proper dispatch integration
 - generate supervisor agent instructions
-- add migration drift detection hook and CI check (#215)
-- port v1 realistic bootstrap and per-role fixtures (#220)
-- add full-featured blog with OG images, RSS, tags (#227)
 - Rust FFI server bridge + Ed25519 auth purge (#225)
 - add provider auto-config schemas, DB tables, PBAC permissions (Phase 1) (#257)
 - add provider capability registry + 8 provider implementations (Phase 2) (#258)
@@ -1854,38 +1333,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixes
 
-- update all GitHub URLs to llamenos-hotline (#148)
-- URGENT correct GitHub URLs to llamenos-platform (#150)
-- correct GitHub URLs to llamenos-platform (reverts #148 direction) (#151)
 - add missing iOS strings — error_credential_too_short, pin_placeholder
-- SBOM crash on .mcp.json + remove phantom v0.19.6 changelog (#149)
-- add STRFRY_ALLOWED_PUBKEY to all Docker Compose .env steps
-- resolve 5 independent CI failures
-- remove invalid openmls_rust_crypto js feature, fix sip-bridge Docker typecheck
-- resolve remaining 3 CI failures (#153)
-- ios-build-test runs unit tests only, not E2E (#161)
-- install Playwright chromium in backend-bdd job (#162)
-- iOS argon2 params + signal-notifier postgres auth (#160)
-- structured test reporters for machine-readable CI logs (#165)
 - regenerated UniFFI bindings + CryptoServiceTests PIN fixes (verified on M4) (#167)
-- skip UITests build in ios-build-test (#168)
-- regenerate UniFFI bindings and update Kotlin layer for Argon2id
 - update CryptoServiceTest for Argon2 params (iterations → kdfVersion/argon2MCost/argon2TCost/argon2PCost)
-- update PIN input selectors after PinInput refactor to single field
-- add STRFRY_ALLOWED_PUBKEY + deterministic secret to desktop-e2e.yml
-- await Nostr event publishing in simulation endpoints
-- exclude backend-bdd from desktop e2e jobs, bump timeout to 60min
-- update PIN selectors after PinInput refactor to single field
-- fix records-architecture reply count and strict mode violations
-- enable crypto interop tests by generating test vectors in CI
-- fix Hilt EntryPoint ClassCastException and native crypto loading
 - start server after migration to prevent restart loop (#186)
-- fix backend BDD test failures — hubs 201, bans, shifts
-- fix desktop BDD step definitions — button mapping, reports, CMS
-- resolve backend BDD test failures
-- fix auth/PIN BDD step definitions
-- resolve all backend BDD test failures (#203)
-- prevent main branch CI runs from being cancelled (#204)
 - clarify dispatch-one.sh timeout is in seconds, not minutes
 - document all available models in supervisor-common.md
 - restore bun run supervisors aliases, fix zsh local output noise
@@ -1895,34 +1346,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - security and logic bugs found in backend unit test audit (#212)
 - bugs found during unit test audit of PRs #206-209 (#210)
 - add 9 missing table migrations for fresh DB (#205)
-- stabilize circuit-breaker half_open timing test
 - add missing reported_by column to active_calls (#214)
-- restore migration-drift job definition dropped by #213 merge (#216)
 - add WASM build step to test-desktop.sh (#217)
-- hub isolation + CI reliability for desktop E2E (#218)
-- fix Android active-call E2E tests — hub URL routing, deserialization, refresh (#198)
-- rewrite admin BDD step definitions for behavioral correctness (#221)
-- remove networkidle waits from bootstrap spec
-- core BDD fixes — notes, messaging, reports (#219)
 - resolve active call card never rendering in E2E tests (#224)
-- add missing BDD step definitions for 27 skipped scenarios (#226)
-- CI logcat capture, hub-scoped CMS data, fail-fast hooks (#228)
 - guard c.env access with optional chaining in hub middleware (#230)
-- seed default roles + fix hub navigation (#229)
-- resolve desktop BDD step definition failures (#233)
-- clarify XCFramework cache key scope comment (#235)
-- recover BDD fixes for notes, messaging, reports (#236)
-- prevent ci-status hang + increase Playwright workers to 4 (#239)
-- resolve desktop auth cascade failures (#240)
-- resolve 14 remaining backend BDD failures (#241)
 - recover unmerged Android fixes — E2E, Argon2, schema, Play Store (#237)
 - cherry-pick safe unit tests and bug fixes from closed #238 (#242)
 - cherry-pick safe DX, site, and test fixes from closed #234 (#243)
-- restructure desktop-e2e workflow to eliminate build timeout (#244)
-- add TOKEN_MAX_AGE_MS and audit env parity (#247)
-- add graceful skip for sidecar-dependent health checks (#246)
-- get desktop BDD E2E tests running in CI (#248)
-- resolve CI E2E failures and eliminate test duplication (#254)
 - ansible templates
 - sync i18n locale keys + resolve migration drift (#265)
 - add missing provider-setup desktop string keys + codegen (#266)
@@ -1931,29 +1361,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Signal + A2P BDD test failures on main (#271)
 - complete deployment templates and fix deployment issues (#256)
 - address code review findings across Phases 1-5 (#262)
-- update telephony provider persistence test for credential masking
-- fix iOS E2E artifact digest mismatch (#273)
 - address code review findings — duplicate import, OAuth state, async nav, encapsulation
 - add missing i18n keys, fix build and crypto label issues
 - address code review findings — OAuth CSRF state, credential clearing, ephemeral session
 - add missing i18n keys and use crypto label constants
 - fix 9 failing E2E tests — hub management and triage queue
-- add fallback to download MinIO binary directly in iOS E2E shard job
 - make 0010 idempotent for fresh databases
 - worktree script, bun lockfile
 - worktree setup
-- move Docker Compose teardown from composite action to calling workflows
-- align ARI password and add missing sip-bridge config for sidecar integration
 - forward csrf_state in OAuth deep link callback
 - remove Nostr references from backend unit tests and system health
-- add bootstrap-backend action, fix ARI password and sip-bridge config
-- use Playwright .or() combinator for reports screen assertion
-- use Playwright .or() combinator for reports screen assertion
 - remove remaining Nostr/strfry/MinIO references across codebase
 - update remaining SERVER_NOSTR_SECRET refs in tests, docs, and site content
 - delete strfry write-policy test (source script already removed)
 - scope telephony provider config to active hub to prevent parallel test interference
-- restore ARI_PASSWORD=changeme to match asterisk config
 - restore EP01 full spec (rebase conflict resolution error)
 - close 13/14 security gaps from PR #286 audit
 - plan self-review fixes across all 4 phases
@@ -1964,7 +1385,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use hub-scoped endpoint in rate limit test to prevent cross-worker flake
 - resolve all E2E test failures (557 passing, 0 failing)
 - add get_public_key FFI export for WakeKeyService
-- pass hubId in test connection and fix recovery test flakiness
 - scope messaging conversations and CMS report types to workerHub
 
 ## 0.19.5 (2026-04-29)
@@ -1999,8 +1419,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 33 — cloud provider adapters (SignalWire, Vonage, Plivo)
 - Epic 34 — WebRTC volunteer calling
 - Epics 35+36 — Asterisk ARI adapter, bridge service, and telephony docs
-- expand docs sidebar with all pages in two sections
-- translate all documentation to 11 additional languages
 - Epic 42 — messaging architecture foundation & threaded conversations
 - Epics 43 & 47 — admin setup wizard and reporter role with encrypted file uploads
 - Epics 44-46 — SMS, WhatsApp, and Signal channel adapters
@@ -2010,10 +1428,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 4 — simplified invite & recovery flow
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
-- reorganize docs sidebar into 4 audience-focused sections
 - add multi-platform deployment (Docker Compose + Helm)
 - add CI/CD pipeline, security hardening, and self-hosting docs
-- add E2E tests gating version bump and deployment
 - UI polish and admin UX improvements (epics 56-57)
 - add demo mode with sample data and one-click login
 - add in-browser admin bootstrap
@@ -2027,7 +1443,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add message blasts with subscriber management (Epic 62)
 - add call recording playback and dev tunnel script
 - add Ansible playbooks, OpenTofu modules, and ops docs (Epic 66)
-- enhance visual design with animations and polish
 - implement volunteer assignment and two-way conversation UI
 - create authoritative crypto domain separation labels
 - add SAS verification to device provisioning protocol
@@ -2168,7 +1583,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 5 Claude Code skills for core architecture patterns
 - add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
-- desktop BDD behavioral recovery (Epics 247-251)
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
 - add shared call/event simulation service for E2E testing
@@ -2223,8 +1637,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add camelCase key casing validator to prevent snake_case in en.json
 - write OpenAPI snapshot on dev server startup
 - write OpenAPI snapshot on dev server startup
-- enable CI on all pull requests for regression detection
-- add Docker Compose backend for iOS UI tests
 - implement Epic 315 Entity Schema Engine — Phase 1
 - implement Epic 316 Blind Index Infrastructure — Rust + server utils
 - implement Epic 317 Template System — engine + 3 core templates
@@ -2239,26 +1651,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 10 remaining templates — full 13-template catalog
 - implement Epic 340 — Volunteer Profiles + fix batch storage bug
 - implement Epic 341 — Hub Context & Multi-Hub UX
-- Epic 336 — BDD serial isolation infrastructure
-- Epic 334 — enable parallel BDD execution (3x speedup)
 - Epic 335 — Events route, template label fix, 69/101 BDD pass
 - E2EE contact directory — client-side encrypt/decrypt pipeline
 - Epic 342 — Smart Case Assignment & Routing
 - Epic 338 — CMS translations for all 13 locales
-- Epic 342 — assignment BDD step definitions
 - add createdAt to EntityFieldDefinition schema
 - Epic 343 — Template-Defined Report Types (6/6 BDD pass)
 - add Stop the Sweeps template
 - Epic 342 Part 2 — Report Triage & Case Conversion
-- register CMS report type schemas in codegen registry
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 344 — CMS case management views
 - Epic 345 — CMS case management views
 - Epic 338 — fix snake_case keys + add 35 missing mobile i18n strings
-- add CMS entity type + record schemas to protocol codegen
-- add Kotlin post-processor for JSON Schema default values
-- add schema defaults + enhance Kotlin post-processor (Epic 354)
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
@@ -2289,7 +1694,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 363 — wire schema coverage for all endpoints
 - Epic 364 — downstream client type migration
 - Epic 365 — BDD behavioral depth tests (588 pass, 10 fail)
-- remove TypeScript output — consumers use z.infer<> directly
 - add createdAt, admin variant, and enum-typed callPreference to volunteer schema
 - add ephemeralPubkey to noteResponseSchema
 - add recordingSid/encryptedContent/adminEnvelopes to callRecordResponseSchema, add activeCallResponseSchema
@@ -2299,15 +1703,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ensure auditEntryResponseSchema details field matches AuditLogEntry interface
 - add export type declarations to all protocol schema files — types co-located with schemas
 - add customFieldDefinitionSchema, migrate CustomFieldDefinition from @shared/types to protocol schemas
-- add --check mode and codegen:check CI gate for drift detection
 - rename /volunteers route to /users route in app.ts
 - rename protocol schemas volunteers -> users, update field names across codebase
 - rename Volunteer→User type, /volunteers→/users routes, update all API calls
 - rename VolunteersView to UsersView, update API paths to /users
 - rename Volunteer entity types to User, update API paths to /users
-- add worker-scoped hub fixture for parallel test isolation
-- collapse playwright config from 7 to 3 projects, delete bdd-serial and @resets-state
-- complete hub isolation for backend BDD — hub-scoped API paths, remove server reset dependency
 - add createEntityRouter CRUD factory with permissionOverrides
 - merge overhaul-2026-03-19 — test infrastructure, API surface simplification, hub isolation
 - add hubId to WakePayload, FullPushPayload, and VoIP push payloads
@@ -2372,9 +1772,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - backend API for device sigchain, PUK envelopes, and MLS routing
 - production hardening configs + dev SIP bridge
 - K8s health probes + Prometheus metrics + logger hardening
-- add knope release PR flow + release orchestration
 - full integration compose — Kamailio, CoTURN, CI overlay, Ollama
-- activate sidecar profiles and add integration BDD scenarios
 - add deployment guardrails - preflight, smoke-check, kamailio
 - scaffold unified bridge project with BridgeClient interface
 - implement ARI, ESL, and Kamailio clients
@@ -2384,19 +1782,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port RCS (Google RBM) messaging adapter
 - sync iOS client with v3 crypto API (device keys + HPKE)
 - sync Android client with v3 crypto API (device keys + HPKE)
-- add markdown slide presentation engine
-- add conference talk + training + overview slide decks
-- refine slide decks — tone, security context, domain experience
-- add Playwright screenshot capture spec for all major app views
 - comprehensive screenshot capture for website and presentations
-- port v1 user guides with multi-platform updates
-- port v1 deploy docs for v2 infrastructure
-- add pagefind search and sitemap; integrate SearchBar
 - add Roborazzi screenshot tests + capture 17 app screens
 - add 24 app screenshots captured via ScreenshotAuditTests
-- searchable guide card grid with audience/task tag filtering
-- restructure docs navigation — deploy/providers/reference hierarchy
-- comprehensive features overhaul — grouped sections, v2 crypto, complete feature set
 
 ### Fixes
 
@@ -2420,48 +1808,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - link color
 - security hardening from comprehensive audit
 - medium-severity security hardening
-- remove PII from GitHub URLs across all site pages
-- use correct GitHub URL for all repository links
 - redesign logo with recognizable phone handset silhouette
-- install site dependencies before building
-- generate release notes directly in release job
-- fix E2E job failures — Docker build + wrangler auth
 - copy index.html into frontend build stage
-- fix strict mode violation in ban management test
-- rebase version commit onto latest before push
-- add workflows permission to version job
-- remove invalid workflows permission from version job
 - use correct CallSettings property names in status summary
-- add [skip ci] to release commits to prevent re-triggering
-- update reporter onboarding test for simplified backup flow
-- add missing PG_PASSWORD to docker E2E, increase CF timeout, exclude live tests
-- use data-testid selectors, enable parallel E2E, reduce timeouts
-- increase login timeouts and add serial mode for state-dependent tests
-- resolve parallel execution conflicts in E2E tests
-- increase e2e-docker timeout from 20 to 30 minutes
-- fix field slug, remove double logins, increase timeouts
-- scope custom field badge assertion to specific note card
-- restore bun.lockb compatible with CI bun v1.2
-- make custom field creation idempotent, scope edit assertions
-- prevent section toggle race in custom fields tests
 - audit round 6 — supply chain, crypto hygiene, permission guards
 - audit R6 high — remove V1 encrypt, gate resets, tree-shake demo, lockfile, ARI creds
 - audit R6 medium — SSRF guard, DO admin routes, HMAC-SHA256 hashing
 - audit R6 medium — dep scanning, image pinning, PG egress
-- improve test-reset error handling and robustness
 - request-bound auth tokens, adminPubkey migration, CI test fixes
 - complete keyPair→keyManager migration in remaining components
 - complete L-3 keyPair removal from auth context
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
-- skip live telephony in CI, fix strict mode and flaky navigation
 - handle deep link section expansion on search-only navigation
-- fix panic wipe overlay rendering and playwright port config
 - match bun versions
-- restore waitForTimeout for reliable test timing
-- use dark theme for Mermaid diagrams
-- deploy site for docs-only changes
-- filter WebSocket errors in Docker test environment
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
@@ -2555,7 +1915,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
-- press Enter after PIN entry to trigger unlock with 8-field PinInput
 - contacts pagination, silent error swallowing, relay tab reconnection
 - NewNoteForm manual call ID input, accessibility aria-labels
 - replace more silent .catch(() => {}) with user-visible error toasts
@@ -2591,28 +1950,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - localize hardcoded "Access denied" strings, downgrade webrtc console.log
 - localize hardcoded strings in CopyConfirmationBanner and CopyableField
 - downgrade circuit-breaker console.log to debug, add missing data-testid attrs
-- resolve actionlint validation errors across all workflows
-- correct action SHAs, add toolchain input, remove Cloudflare deploys
-- fix mobile-release secrets parsing, enable CI on desktop branch
-- fix build failures — dep compat, codegen prereqs, rust fmt
-- re-add desktop branch to CI trigger, gate version to main
-- resolve iOS/Android/E2E/integration failures
 - use docker run for RustFS instead of service container
 - add MockWebServer dep, fix RustFS + test selector
-- resolve Android, E2E bootstrap, and integration-node failures
-- resolve Android Lint, bootstrap test, postgres null, iOS Docker failures
-- use colima for Docker on macOS iOS CI runner
-- pass --env-file explicitly to all docker compose commands
-- put android e2e gradle command on single line
 - postgres null storage and bootstrap PIN submission
-- install colima via brew, use cliPluginsExtraDirs for compose
 - use native PostgreSQL + RustFS on macOS instead of Docker
 - update PIN minimum to 6 digits, fix crypto interop + bootstrap tests, ecryptfs build
-- update worker integration test fixtures for current API (Epic 313)
-- run desktop BDD serially, add epic 314 for step alignment
-- align desktop BDD step definitions with current UI (Epic 314)
-- additional BDD step alignment fixes (Epic 314)
-- fix ban phone validation, tag blast scenarios @wip (Epic 314)
 - fix entity-schema route mounting order and BDD step definitions
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
@@ -2622,20 +1964,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
-- Epic 335 — CMS admin settings BDD: 28/28 pass
-- fix interaction API validation and contact directory listing
-- revert directory API endpoints, fix interaction creation
-- case management step fixes — sheet overlay, timeline tab, schema scope
 - step definition improvements + contacts search error handling
 - mobile report type refinements from agent review
 - null-safe array access in template-engine.ts
 - resolve all 7 remaining BDD failures + add report type scenarios
 - Epic 335 — resolve remaining CMS BDD failures + serial test split
-- rename 10 Swift type collisions with built-in/framework types
 - remove duplicate Color.init(hex:) extension
-- rename CaseInteraction + EvidenceListResponse to avoid iOS app type collisions
 - make Color.init(hex:) internal instead of private
-- re-add CaseInteraction + EvidenceListResponse renames after linter revert
 - use generated Evidence + Interaction types from protocol codegen
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
@@ -2655,8 +1990,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add @protocol/* alias to esbuild Node.js build config
 - wire case field decryption + encrypted save on desktop (Epic 349)
 - wire iOS server event decryption + fix BDD case tab timing
-- paginate through all records when clearing empty state (Epic 335)
-- fix hub management test assertions + codegen
 - remove 14 duplicate string resources in strings.xml
 - remove duplicate Color.init(hex:) from BrandColors.swift
 - rename CaseEvent → AppCaseEvent to avoid codegen collision
@@ -2682,30 +2015,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve 25 of 29 failing BDD tests
 - resolve last 3 BDD failures — metadata merge double-serialization
 - Epics 366-370 — resolve all 10 BDD failures (590 pass, 0 fail)
-- resolve 3 client BDD test failures found during suite check
-- bump scrollToFind maxSwipes and fix anyElementExists ordering
 - remove locally-defined types now generated by protocol codegen
-- always start backend before UI tests and reset state
 - resolve loginAsAdmin failure — serde_wasm_bindgen Map serialization
 - resolve all BDD serial test flakiness (590 pass, 0 fail)
 - replace z.unknown() bare fields with typed schemas to eliminate JSONAny
 - clean up remaining volunteers entity references — permission strings, system health, telephony paths, internal var names
-- update auth-utils test to use /api/users path
-- make report-type badge test self-contained — seed own report data instead of relying on prior test
 - correct delete response default, add unit tests
 - rename volunteerPubkeys to userPubkeys — align schema with DB column
-- correct api-helpers import path and remove duplicate getState imports
 - resolve post-overhaul compilation and test errors across platforms
-- rename generated CustomFieldDefinition to ProtocolCustomFieldDefinition
 - rename ServiceStatus to ServiceHealthStatus to avoid generated type conflict
 - remove duplicate HubStatus definition, extend generated type instead
-- rename 6 generated Swift types that conflict with local iOS models
 - resolve UIViewRepresentable conformance and ActiveCallResponseStatus type errors
-- bootstrap admin in global-setup, fix e2ee-integrity state bug, increase BDD timeout
-- fix world/s scope bugs in backend BDD step definitions
-- resolve all backend BDD test failures — 598/606 passing
-- check backend connectivity not health status code
-- address all reviewer findings in mobile multi-hub and test infrastructure plans
 - remove hubId??'' silent fallback; thread hubId into tryAutoAssign
 - use pinned session in validateConnection and checkVersionCompatibility
 - extend HubAPIServiceProtocol to cover request methods; fix haptic generator retention
@@ -2724,29 +2044,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use hp() helper for all hub-scoped API calls
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
-- hub-scope backend routes + BDD test infrastructure fixes
-- fix cms-screen-pop and cms-templates test failures
-- fix state-transitions and cross-do-workflow test failures
 - mount entity-schema routes under hubScoped
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- hub-scope call history in cross-do step definitions
-- hub-scope call history in cross-do step definitions
 - resolve LinphoneService scope error + LlamenosApp binding
-- pin production Dockerfile base images to SHA-256 digest
-- scope contents:write to publish jobs only in release workflows
-- add --locked/--frozen-lockfile to all install commands
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
-- add pre-commit hook blocking .env commits + document policy
-- prevent shell injection via workflow_dispatch version input in tauri-release.yml
 - remove hardcoded admin key and unsafe print statements from iOS
 - CRIT-H1 add auth guard to GET /:hubId/key endpoint
 - HIGH-W3/W4/W5 + MED-W2 — audit log, dev endpoints, Twilio SID, ban permission
 - CRIT-W1/W2 — hub from call record, opaque call tokens for callbacks
 - desktop Tauri IPC hardening — eliminate nsec/secretKeyHex from IPC boundary
 - add missing coroutine imports to LocationService
-- correct 2 backend BDD test failures from security commit
 - remove setActiveHub from background push path (Gap 1 multi-hub routing)
 - harden push routing tests and empty-string callId guard
 - remove setActiveHub from wake-payload coroutine (Gap 1 multi-hub routing)
@@ -2757,10 +2064,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - replace placeholder base URL with workerWebhookUrl
 - replace as-any and as-unknown-as type assertion bypasses
 - rename event→action field throughout audit schema and consumers
-- phone numbers, DB idle timeout, hub-scoped user ops, nav/auth steps
 - disable idle timeout by default — prevents server crashes during tests
-- fix profile-setup race condition and access-denied navigation
-- resolve all desktop BDD and Playwright test failures
 - fix memory leaks, add lifecycle cleanup, separate bridge secret
 - domain separation violations + zeroization gaps
 - decrypt failures — label mismatch, version byte, window keys
@@ -2778,53 +2082,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - strip sig query param from URL before signature verification on /recordings/
 - wire NOTIFIER_API_KEY and NOTIFIER_TOKEN_SECRET into signal-notifier service
 - remove UniFFI exports from auth_legacy to resolve symbol collision
-- remove deprecated baseUrl and ignoreDeprecations for TS 5.9
 - resolve merge conflicts from firehose+blast integration
 - add telegram to messaging rate limits default
 - fix fetch mock typing in test files
 - address LOW security findings — Zeroizing, raw labels, WebSocket tag constant
 - add missing string keys to unblock build CI
 - resolve 6 CI failures after mass merge session
-- fix crypto-guardrails and audit job failures
 - resolve CI build/test failures after mobile crypto V3 sync
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
-- add per-platform coverage thresholds to test-specs validator
 - remove duplicate mobileIsUnlocked stub causing compilation failure
 - correct @noble/* import paths for Vite 8/Rolldown compatibility
-- resolve 5 CI failures — cargo fmt, android lint, stale tests, docker env, ios secret check
-- fix Docker Compose startup in e2e job — wrong paths, stale service name, ulimits
 - update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
-- fix e2e health check, iOS test isolation, Android E2E codegen
-- Docker healthcheck curl→bun, Android E2E feature paths, iOS health endpoint
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
 - auto-migrate DB at startup, fix sidecar configs for CI
 - whitelist docker-entrypoint.sh in .dockerignore
-- make migrations idempotent + fix signal-cli health in test overlay
-- --no-recreate on sidecar profiles to prevent app restart
-- add missing blast_deliveries migration, fix iOS test isolation, make android-e2e non-blocking
-- PBX_TYPE=asterisk not ari — sip-bridge expects provider name
-- update crypto mock + helpers for v3 Ed25519/HPKE onboarding
-- update bun lockfile for marked dependency in site
-- default testHubURL to Linux dev machine for screenshot capture
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
-- v3 HPKE envelope format — hex enc field for schema compat
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- smoke title assertion + report-types hub scope
-- add report-type-badge testid to ReportCard in list view
 - thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
 - update BDD step definitions — crypto v3, auth, dashboard, ban management
-- resolve backend BDD 'No tests found' — duplicate steps + missing bddgen
-- make backend BDD non-blocking until stabilized
-- restore deploy docs depth from v1 — k8s, co-op cloud, self-hosting
-- correct factually wrong security page claims across all 13 locales
-- correct repo URL from llamenos.git to llamenos-platform.git
-- header a11y, CSS safeguards, sitemap hreflang, i18n strings
-- release checksums — bun.lockb not bun.lock
-- slide parser — columns/fragment directives with nested ::: delimiters
 
 ## 0.19.4 (2026-04-29)
 
@@ -2858,8 +2137,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 33 — cloud provider adapters (SignalWire, Vonage, Plivo)
 - Epic 34 — WebRTC volunteer calling
 - Epics 35+36 — Asterisk ARI adapter, bridge service, and telephony docs
-- expand docs sidebar with all pages in two sections
-- translate all documentation to 11 additional languages
 - Epic 42 — messaging architecture foundation & threaded conversations
 - Epics 43 & 47 — admin setup wizard and reporter role with encrypted file uploads
 - Epics 44-46 — SMS, WhatsApp, and Signal channel adapters
@@ -2869,10 +2146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 4 — simplified invite & recovery flow
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
-- reorganize docs sidebar into 4 audience-focused sections
 - add multi-platform deployment (Docker Compose + Helm)
 - add CI/CD pipeline, security hardening, and self-hosting docs
-- add E2E tests gating version bump and deployment
 - UI polish and admin UX improvements (epics 56-57)
 - add demo mode with sample data and one-click login
 - add in-browser admin bootstrap
@@ -2886,7 +2161,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add message blasts with subscriber management (Epic 62)
 - add call recording playback and dev tunnel script
 - add Ansible playbooks, OpenTofu modules, and ops docs (Epic 66)
-- enhance visual design with animations and polish
 - implement volunteer assignment and two-way conversation UI
 - create authoritative crypto domain separation labels
 - add SAS verification to device provisioning protocol
@@ -3027,7 +2301,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 5 Claude Code skills for core architecture patterns
 - add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
-- desktop BDD behavioral recovery (Epics 247-251)
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
 - add shared call/event simulation service for E2E testing
@@ -3082,8 +2355,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add camelCase key casing validator to prevent snake_case in en.json
 - write OpenAPI snapshot on dev server startup
 - write OpenAPI snapshot on dev server startup
-- enable CI on all pull requests for regression detection
-- add Docker Compose backend for iOS UI tests
 - implement Epic 315 Entity Schema Engine — Phase 1
 - implement Epic 316 Blind Index Infrastructure — Rust + server utils
 - implement Epic 317 Template System — engine + 3 core templates
@@ -3098,26 +2369,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 10 remaining templates — full 13-template catalog
 - implement Epic 340 — Volunteer Profiles + fix batch storage bug
 - implement Epic 341 — Hub Context & Multi-Hub UX
-- Epic 336 — BDD serial isolation infrastructure
-- Epic 334 — enable parallel BDD execution (3x speedup)
 - Epic 335 — Events route, template label fix, 69/101 BDD pass
 - E2EE contact directory — client-side encrypt/decrypt pipeline
 - Epic 342 — Smart Case Assignment & Routing
 - Epic 338 — CMS translations for all 13 locales
-- Epic 342 — assignment BDD step definitions
 - add createdAt to EntityFieldDefinition schema
 - Epic 343 — Template-Defined Report Types (6/6 BDD pass)
 - add Stop the Sweeps template
 - Epic 342 Part 2 — Report Triage & Case Conversion
-- register CMS report type schemas in codegen registry
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 344 — CMS case management views
 - Epic 345 — CMS case management views
 - Epic 338 — fix snake_case keys + add 35 missing mobile i18n strings
-- add CMS entity type + record schemas to protocol codegen
-- add Kotlin post-processor for JSON Schema default values
-- add schema defaults + enhance Kotlin post-processor (Epic 354)
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
@@ -3148,7 +2412,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 363 — wire schema coverage for all endpoints
 - Epic 364 — downstream client type migration
 - Epic 365 — BDD behavioral depth tests (588 pass, 10 fail)
-- remove TypeScript output — consumers use z.infer<> directly
 - add createdAt, admin variant, and enum-typed callPreference to volunteer schema
 - add ephemeralPubkey to noteResponseSchema
 - add recordingSid/encryptedContent/adminEnvelopes to callRecordResponseSchema, add activeCallResponseSchema
@@ -3158,15 +2421,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ensure auditEntryResponseSchema details field matches AuditLogEntry interface
 - add export type declarations to all protocol schema files — types co-located with schemas
 - add customFieldDefinitionSchema, migrate CustomFieldDefinition from @shared/types to protocol schemas
-- add --check mode and codegen:check CI gate for drift detection
 - rename /volunteers route to /users route in app.ts
 - rename protocol schemas volunteers -> users, update field names across codebase
 - rename Volunteer→User type, /volunteers→/users routes, update all API calls
 - rename VolunteersView to UsersView, update API paths to /users
 - rename Volunteer entity types to User, update API paths to /users
-- add worker-scoped hub fixture for parallel test isolation
-- collapse playwright config from 7 to 3 projects, delete bdd-serial and @resets-state
-- complete hub isolation for backend BDD — hub-scoped API paths, remove server reset dependency
 - add createEntityRouter CRUD factory with permissionOverrides
 - merge overhaul-2026-03-19 — test infrastructure, API surface simplification, hub isolation
 - add hubId to WakePayload, FullPushPayload, and VoIP push payloads
@@ -3231,9 +2490,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - backend API for device sigchain, PUK envelopes, and MLS routing
 - production hardening configs + dev SIP bridge
 - K8s health probes + Prometheus metrics + logger hardening
-- add knope release PR flow + release orchestration
 - full integration compose — Kamailio, CoTURN, CI overlay, Ollama
-- activate sidecar profiles and add integration BDD scenarios
 - add deployment guardrails - preflight, smoke-check, kamailio
 - scaffold unified bridge project with BridgeClient interface
 - implement ARI, ESL, and Kamailio clients
@@ -3243,19 +2500,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port RCS (Google RBM) messaging adapter
 - sync iOS client with v3 crypto API (device keys + HPKE)
 - sync Android client with v3 crypto API (device keys + HPKE)
-- add markdown slide presentation engine
-- add conference talk + training + overview slide decks
-- refine slide decks — tone, security context, domain experience
-- add Playwright screenshot capture spec for all major app views
 - comprehensive screenshot capture for website and presentations
-- port v1 user guides with multi-platform updates
-- port v1 deploy docs for v2 infrastructure
-- add pagefind search and sitemap; integrate SearchBar
 - add Roborazzi screenshot tests + capture 17 app screens
 - add 24 app screenshots captured via ScreenshotAuditTests
-- searchable guide card grid with audience/task tag filtering
-- restructure docs navigation — deploy/providers/reference hierarchy
-- comprehensive features overhaul — grouped sections, v2 crypto, complete feature set
 
 ### Fixes
 
@@ -3279,48 +2526,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - link color
 - security hardening from comprehensive audit
 - medium-severity security hardening
-- remove PII from GitHub URLs across all site pages
-- use correct GitHub URL for all repository links
 - redesign logo with recognizable phone handset silhouette
-- install site dependencies before building
-- generate release notes directly in release job
-- fix E2E job failures — Docker build + wrangler auth
 - copy index.html into frontend build stage
-- fix strict mode violation in ban management test
-- rebase version commit onto latest before push
-- add workflows permission to version job
-- remove invalid workflows permission from version job
 - use correct CallSettings property names in status summary
-- add [skip ci] to release commits to prevent re-triggering
-- update reporter onboarding test for simplified backup flow
-- add missing PG_PASSWORD to docker E2E, increase CF timeout, exclude live tests
-- use data-testid selectors, enable parallel E2E, reduce timeouts
-- increase login timeouts and add serial mode for state-dependent tests
-- resolve parallel execution conflicts in E2E tests
-- increase e2e-docker timeout from 20 to 30 minutes
-- fix field slug, remove double logins, increase timeouts
-- scope custom field badge assertion to specific note card
-- restore bun.lockb compatible with CI bun v1.2
-- make custom field creation idempotent, scope edit assertions
-- prevent section toggle race in custom fields tests
 - audit round 6 — supply chain, crypto hygiene, permission guards
 - audit R6 high — remove V1 encrypt, gate resets, tree-shake demo, lockfile, ARI creds
 - audit R6 medium — SSRF guard, DO admin routes, HMAC-SHA256 hashing
 - audit R6 medium — dep scanning, image pinning, PG egress
-- improve test-reset error handling and robustness
 - request-bound auth tokens, adminPubkey migration, CI test fixes
 - complete keyPair→keyManager migration in remaining components
 - complete L-3 keyPair removal from auth context
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
-- skip live telephony in CI, fix strict mode and flaky navigation
 - handle deep link section expansion on search-only navigation
-- fix panic wipe overlay rendering and playwright port config
 - match bun versions
-- restore waitForTimeout for reliable test timing
-- use dark theme for Mermaid diagrams
-- deploy site for docs-only changes
-- filter WebSocket errors in Docker test environment
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
@@ -3414,7 +2633,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
-- press Enter after PIN entry to trigger unlock with 8-field PinInput
 - contacts pagination, silent error swallowing, relay tab reconnection
 - NewNoteForm manual call ID input, accessibility aria-labels
 - replace more silent .catch(() => {}) with user-visible error toasts
@@ -3450,28 +2668,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - localize hardcoded "Access denied" strings, downgrade webrtc console.log
 - localize hardcoded strings in CopyConfirmationBanner and CopyableField
 - downgrade circuit-breaker console.log to debug, add missing data-testid attrs
-- resolve actionlint validation errors across all workflows
-- correct action SHAs, add toolchain input, remove Cloudflare deploys
-- fix mobile-release secrets parsing, enable CI on desktop branch
-- fix build failures — dep compat, codegen prereqs, rust fmt
-- re-add desktop branch to CI trigger, gate version to main
-- resolve iOS/Android/E2E/integration failures
 - use docker run for RustFS instead of service container
 - add MockWebServer dep, fix RustFS + test selector
-- resolve Android, E2E bootstrap, and integration-node failures
-- resolve Android Lint, bootstrap test, postgres null, iOS Docker failures
-- use colima for Docker on macOS iOS CI runner
-- pass --env-file explicitly to all docker compose commands
-- put android e2e gradle command on single line
 - postgres null storage and bootstrap PIN submission
-- install colima via brew, use cliPluginsExtraDirs for compose
 - use native PostgreSQL + RustFS on macOS instead of Docker
 - update PIN minimum to 6 digits, fix crypto interop + bootstrap tests, ecryptfs build
-- update worker integration test fixtures for current API (Epic 313)
-- run desktop BDD serially, add epic 314 for step alignment
-- align desktop BDD step definitions with current UI (Epic 314)
-- additional BDD step alignment fixes (Epic 314)
-- fix ban phone validation, tag blast scenarios @wip (Epic 314)
 - fix entity-schema route mounting order and BDD step definitions
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
@@ -3481,20 +2682,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
-- Epic 335 — CMS admin settings BDD: 28/28 pass
-- fix interaction API validation and contact directory listing
-- revert directory API endpoints, fix interaction creation
-- case management step fixes — sheet overlay, timeline tab, schema scope
 - step definition improvements + contacts search error handling
 - mobile report type refinements from agent review
 - null-safe array access in template-engine.ts
 - resolve all 7 remaining BDD failures + add report type scenarios
 - Epic 335 — resolve remaining CMS BDD failures + serial test split
-- rename 10 Swift type collisions with built-in/framework types
 - remove duplicate Color.init(hex:) extension
-- rename CaseInteraction + EvidenceListResponse to avoid iOS app type collisions
 - make Color.init(hex:) internal instead of private
-- re-add CaseInteraction + EvidenceListResponse renames after linter revert
 - use generated Evidence + Interaction types from protocol codegen
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
@@ -3514,8 +2708,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add @protocol/* alias to esbuild Node.js build config
 - wire case field decryption + encrypted save on desktop (Epic 349)
 - wire iOS server event decryption + fix BDD case tab timing
-- paginate through all records when clearing empty state (Epic 335)
-- fix hub management test assertions + codegen
 - remove 14 duplicate string resources in strings.xml
 - remove duplicate Color.init(hex:) from BrandColors.swift
 - rename CaseEvent → AppCaseEvent to avoid codegen collision
@@ -3541,30 +2733,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve 25 of 29 failing BDD tests
 - resolve last 3 BDD failures — metadata merge double-serialization
 - Epics 366-370 — resolve all 10 BDD failures (590 pass, 0 fail)
-- resolve 3 client BDD test failures found during suite check
-- bump scrollToFind maxSwipes and fix anyElementExists ordering
 - remove locally-defined types now generated by protocol codegen
-- always start backend before UI tests and reset state
 - resolve loginAsAdmin failure — serde_wasm_bindgen Map serialization
 - resolve all BDD serial test flakiness (590 pass, 0 fail)
 - replace z.unknown() bare fields with typed schemas to eliminate JSONAny
 - clean up remaining volunteers entity references — permission strings, system health, telephony paths, internal var names
-- update auth-utils test to use /api/users path
-- make report-type badge test self-contained — seed own report data instead of relying on prior test
 - correct delete response default, add unit tests
 - rename volunteerPubkeys to userPubkeys — align schema with DB column
-- correct api-helpers import path and remove duplicate getState imports
 - resolve post-overhaul compilation and test errors across platforms
-- rename generated CustomFieldDefinition to ProtocolCustomFieldDefinition
 - rename ServiceStatus to ServiceHealthStatus to avoid generated type conflict
 - remove duplicate HubStatus definition, extend generated type instead
-- rename 6 generated Swift types that conflict with local iOS models
 - resolve UIViewRepresentable conformance and ActiveCallResponseStatus type errors
-- bootstrap admin in global-setup, fix e2ee-integrity state bug, increase BDD timeout
-- fix world/s scope bugs in backend BDD step definitions
-- resolve all backend BDD test failures — 598/606 passing
-- check backend connectivity not health status code
-- address all reviewer findings in mobile multi-hub and test infrastructure plans
 - remove hubId??'' silent fallback; thread hubId into tryAutoAssign
 - use pinned session in validateConnection and checkVersionCompatibility
 - extend HubAPIServiceProtocol to cover request methods; fix haptic generator retention
@@ -3583,29 +2762,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use hp() helper for all hub-scoped API calls
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
-- hub-scope backend routes + BDD test infrastructure fixes
-- fix cms-screen-pop and cms-templates test failures
-- fix state-transitions and cross-do-workflow test failures
 - mount entity-schema routes under hubScoped
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- hub-scope call history in cross-do step definitions
-- hub-scope call history in cross-do step definitions
 - resolve LinphoneService scope error + LlamenosApp binding
-- pin production Dockerfile base images to SHA-256 digest
-- scope contents:write to publish jobs only in release workflows
-- add --locked/--frozen-lockfile to all install commands
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
-- add pre-commit hook blocking .env commits + document policy
-- prevent shell injection via workflow_dispatch version input in tauri-release.yml
 - remove hardcoded admin key and unsafe print statements from iOS
 - CRIT-H1 add auth guard to GET /:hubId/key endpoint
 - HIGH-W3/W4/W5 + MED-W2 — audit log, dev endpoints, Twilio SID, ban permission
 - CRIT-W1/W2 — hub from call record, opaque call tokens for callbacks
 - desktop Tauri IPC hardening — eliminate nsec/secretKeyHex from IPC boundary
 - add missing coroutine imports to LocationService
-- correct 2 backend BDD test failures from security commit
 - remove setActiveHub from background push path (Gap 1 multi-hub routing)
 - harden push routing tests and empty-string callId guard
 - remove setActiveHub from wake-payload coroutine (Gap 1 multi-hub routing)
@@ -3616,10 +2782,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - replace placeholder base URL with workerWebhookUrl
 - replace as-any and as-unknown-as type assertion bypasses
 - rename event→action field throughout audit schema and consumers
-- phone numbers, DB idle timeout, hub-scoped user ops, nav/auth steps
 - disable idle timeout by default — prevents server crashes during tests
-- fix profile-setup race condition and access-denied navigation
-- resolve all desktop BDD and Playwright test failures
 - fix memory leaks, add lifecycle cleanup, separate bridge secret
 - domain separation violations + zeroization gaps
 - decrypt failures — label mismatch, version byte, window keys
@@ -3637,51 +2800,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - strip sig query param from URL before signature verification on /recordings/
 - wire NOTIFIER_API_KEY and NOTIFIER_TOKEN_SECRET into signal-notifier service
 - remove UniFFI exports from auth_legacy to resolve symbol collision
-- remove deprecated baseUrl and ignoreDeprecations for TS 5.9
 - resolve merge conflicts from firehose+blast integration
 - add telegram to messaging rate limits default
 - fix fetch mock typing in test files
 - address LOW security findings — Zeroizing, raw labels, WebSocket tag constant
 - add missing string keys to unblock build CI
 - resolve 6 CI failures after mass merge session
-- fix crypto-guardrails and audit job failures
 - resolve CI build/test failures after mobile crypto V3 sync
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
-- add per-platform coverage thresholds to test-specs validator
 - remove duplicate mobileIsUnlocked stub causing compilation failure
 - correct @noble/* import paths for Vite 8/Rolldown compatibility
-- resolve 5 CI failures — cargo fmt, android lint, stale tests, docker env, ios secret check
-- fix Docker Compose startup in e2e job — wrong paths, stale service name, ulimits
 - update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
-- fix e2e health check, iOS test isolation, Android E2E codegen
-- Docker healthcheck curl→bun, Android E2E feature paths, iOS health endpoint
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
 - auto-migrate DB at startup, fix sidecar configs for CI
 - whitelist docker-entrypoint.sh in .dockerignore
-- make migrations idempotent + fix signal-cli health in test overlay
-- --no-recreate on sidecar profiles to prevent app restart
-- add missing blast_deliveries migration, fix iOS test isolation, make android-e2e non-blocking
-- PBX_TYPE=asterisk not ari — sip-bridge expects provider name
-- update crypto mock + helpers for v3 Ed25519/HPKE onboarding
-- update bun lockfile for marked dependency in site
-- default testHubURL to Linux dev machine for screenshot capture
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
-- v3 HPKE envelope format — hex enc field for schema compat
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- smoke title assertion + report-types hub scope
-- add report-type-badge testid to ReportCard in list view
 - thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
 - update BDD step definitions — crypto v3, auth, dashboard, ban management
-- resolve backend BDD 'No tests found' — duplicate steps + missing bddgen
-- make backend BDD non-blocking until stabilized
-- restore deploy docs depth from v1 — k8s, co-op cloud, self-hosting
-- correct factually wrong security page claims across all 13 locales
-- correct repo URL from llamenos.git to llamenos-platform.git
-- header a11y, CSS safeguards, sitemap hreflang, i18n strings
 
 ## 0.19.3 (2026-04-29)
 
@@ -3715,8 +2855,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 33 — cloud provider adapters (SignalWire, Vonage, Plivo)
 - Epic 34 — WebRTC volunteer calling
 - Epics 35+36 — Asterisk ARI adapter, bridge service, and telephony docs
-- expand docs sidebar with all pages in two sections
-- translate all documentation to 11 additional languages
 - Epic 42 — messaging architecture foundation & threaded conversations
 - Epics 43 & 47 — admin setup wizard and reporter role with encrypted file uploads
 - Epics 44-46 — SMS, WhatsApp, and Signal channel adapters
@@ -3726,10 +2864,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 4 — simplified invite & recovery flow
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
-- reorganize docs sidebar into 4 audience-focused sections
 - add multi-platform deployment (Docker Compose + Helm)
 - add CI/CD pipeline, security hardening, and self-hosting docs
-- add E2E tests gating version bump and deployment
 - UI polish and admin UX improvements (epics 56-57)
 - add demo mode with sample data and one-click login
 - add in-browser admin bootstrap
@@ -3743,7 +2879,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add message blasts with subscriber management (Epic 62)
 - add call recording playback and dev tunnel script
 - add Ansible playbooks, OpenTofu modules, and ops docs (Epic 66)
-- enhance visual design with animations and polish
 - implement volunteer assignment and two-way conversation UI
 - create authoritative crypto domain separation labels
 - add SAS verification to device provisioning protocol
@@ -3884,7 +3019,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 5 Claude Code skills for core architecture patterns
 - add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
-- desktop BDD behavioral recovery (Epics 247-251)
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
 - add shared call/event simulation service for E2E testing
@@ -3939,8 +3073,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add camelCase key casing validator to prevent snake_case in en.json
 - write OpenAPI snapshot on dev server startup
 - write OpenAPI snapshot on dev server startup
-- enable CI on all pull requests for regression detection
-- add Docker Compose backend for iOS UI tests
 - implement Epic 315 Entity Schema Engine — Phase 1
 - implement Epic 316 Blind Index Infrastructure — Rust + server utils
 - implement Epic 317 Template System — engine + 3 core templates
@@ -3955,26 +3087,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add 10 remaining templates — full 13-template catalog
 - implement Epic 340 — Volunteer Profiles + fix batch storage bug
 - implement Epic 341 — Hub Context & Multi-Hub UX
-- Epic 336 — BDD serial isolation infrastructure
-- Epic 334 — enable parallel BDD execution (3x speedup)
 - Epic 335 — Events route, template label fix, 69/101 BDD pass
 - E2EE contact directory — client-side encrypt/decrypt pipeline
 - Epic 342 — Smart Case Assignment & Routing
 - Epic 338 — CMS translations for all 13 locales
-- Epic 342 — assignment BDD step definitions
 - add createdAt to EntityFieldDefinition schema
 - Epic 343 — Template-Defined Report Types (6/6 BDD pass)
 - add Stop the Sweeps template
 - Epic 342 Part 2 — Report Triage & Case Conversion
-- register CMS report type schemas in codegen registry
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 337 Phase 1 — template-driven report submission
 - Epic 344 — CMS case management views
 - Epic 345 — CMS case management views
 - Epic 338 — fix snake_case keys + add 35 missing mobile i18n strings
-- add CMS entity type + record schemas to protocol codegen
-- add Kotlin post-processor for JSON Schema default values
-- add schema defaults + enhance Kotlin post-processor (Epic 354)
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
@@ -4005,7 +3130,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 363 — wire schema coverage for all endpoints
 - Epic 364 — downstream client type migration
 - Epic 365 — BDD behavioral depth tests (588 pass, 10 fail)
-- remove TypeScript output — consumers use z.infer<> directly
 - add createdAt, admin variant, and enum-typed callPreference to volunteer schema
 - add ephemeralPubkey to noteResponseSchema
 - add recordingSid/encryptedContent/adminEnvelopes to callRecordResponseSchema, add activeCallResponseSchema
@@ -4015,15 +3139,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ensure auditEntryResponseSchema details field matches AuditLogEntry interface
 - add export type declarations to all protocol schema files — types co-located with schemas
 - add customFieldDefinitionSchema, migrate CustomFieldDefinition from @shared/types to protocol schemas
-- add --check mode and codegen:check CI gate for drift detection
 - rename /volunteers route to /users route in app.ts
 - rename protocol schemas volunteers -> users, update field names across codebase
 - rename Volunteer→User type, /volunteers→/users routes, update all API calls
 - rename VolunteersView to UsersView, update API paths to /users
 - rename Volunteer entity types to User, update API paths to /users
-- add worker-scoped hub fixture for parallel test isolation
-- collapse playwright config from 7 to 3 projects, delete bdd-serial and @resets-state
-- complete hub isolation for backend BDD — hub-scoped API paths, remove server reset dependency
 - add createEntityRouter CRUD factory with permissionOverrides
 - merge overhaul-2026-03-19 — test infrastructure, API surface simplification, hub isolation
 - add hubId to WakePayload, FullPushPayload, and VoIP push payloads
@@ -4088,9 +3208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - backend API for device sigchain, PUK envelopes, and MLS routing
 - production hardening configs + dev SIP bridge
 - K8s health probes + Prometheus metrics + logger hardening
-- add knope release PR flow + release orchestration
 - full integration compose — Kamailio, CoTURN, CI overlay, Ollama
-- activate sidecar profiles and add integration BDD scenarios
 - add deployment guardrails - preflight, smoke-check, kamailio
 - scaffold unified bridge project with BridgeClient interface
 - implement ARI, ESL, and Kamailio clients
@@ -4100,17 +3218,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - port RCS (Google RBM) messaging adapter
 - sync iOS client with v3 crypto API (device keys + HPKE)
 - sync Android client with v3 crypto API (device keys + HPKE)
-- add markdown slide presentation engine
-- add conference talk + training + overview slide decks
-- refine slide decks — tone, security context, domain experience
-- add Playwright screenshot capture spec for all major app views
 - comprehensive screenshot capture for website and presentations
-- port v1 user guides with multi-platform updates
-- port v1 deploy docs for v2 infrastructure
-- add pagefind search and sitemap; integrate SearchBar
 - add Roborazzi screenshot tests + capture 17 app screens
 - add 24 app screenshots captured via ScreenshotAuditTests
-- searchable guide card grid with audience/task tag filtering
 
 ### Fixes
 
@@ -4134,48 +3244,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - link color
 - security hardening from comprehensive audit
 - medium-severity security hardening
-- remove PII from GitHub URLs across all site pages
-- use correct GitHub URL for all repository links
 - redesign logo with recognizable phone handset silhouette
-- install site dependencies before building
-- generate release notes directly in release job
-- fix E2E job failures — Docker build + wrangler auth
 - copy index.html into frontend build stage
-- fix strict mode violation in ban management test
-- rebase version commit onto latest before push
-- add workflows permission to version job
-- remove invalid workflows permission from version job
 - use correct CallSettings property names in status summary
-- add [skip ci] to release commits to prevent re-triggering
-- update reporter onboarding test for simplified backup flow
-- add missing PG_PASSWORD to docker E2E, increase CF timeout, exclude live tests
-- use data-testid selectors, enable parallel E2E, reduce timeouts
-- increase login timeouts and add serial mode for state-dependent tests
-- resolve parallel execution conflicts in E2E tests
-- increase e2e-docker timeout from 20 to 30 minutes
-- fix field slug, remove double logins, increase timeouts
-- scope custom field badge assertion to specific note card
-- restore bun.lockb compatible with CI bun v1.2
-- make custom field creation idempotent, scope edit assertions
-- prevent section toggle race in custom fields tests
 - audit round 6 — supply chain, crypto hygiene, permission guards
 - audit R6 high — remove V1 encrypt, gate resets, tree-shake demo, lockfile, ARI creds
 - audit R6 medium — SSRF guard, DO admin routes, HMAC-SHA256 hashing
 - audit R6 medium — dep scanning, image pinning, PG egress
-- improve test-reset error handling and robustness
 - request-bound auth tokens, adminPubkey migration, CI test fixes
 - complete keyPair→keyManager migration in remaining components
 - complete L-3 keyPair removal from auth context
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
-- skip live telephony in CI, fix strict mode and flaky navigation
 - handle deep link section expansion on search-only navigation
-- fix panic wipe overlay rendering and playwright port config
 - match bun versions
-- restore waitForTimeout for reliable test timing
-- use dark theme for Mermaid diagrams
-- deploy site for docs-only changes
-- filter WebSocket errors in Docker test environment
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
@@ -4269,7 +3351,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
-- press Enter after PIN entry to trigger unlock with 8-field PinInput
 - contacts pagination, silent error swallowing, relay tab reconnection
 - NewNoteForm manual call ID input, accessibility aria-labels
 - replace more silent .catch(() => {}) with user-visible error toasts
@@ -4305,28 +3386,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - localize hardcoded "Access denied" strings, downgrade webrtc console.log
 - localize hardcoded strings in CopyConfirmationBanner and CopyableField
 - downgrade circuit-breaker console.log to debug, add missing data-testid attrs
-- resolve actionlint validation errors across all workflows
-- correct action SHAs, add toolchain input, remove Cloudflare deploys
-- fix mobile-release secrets parsing, enable CI on desktop branch
-- fix build failures — dep compat, codegen prereqs, rust fmt
-- re-add desktop branch to CI trigger, gate version to main
-- resolve iOS/Android/E2E/integration failures
 - use docker run for RustFS instead of service container
 - add MockWebServer dep, fix RustFS + test selector
-- resolve Android, E2E bootstrap, and integration-node failures
-- resolve Android Lint, bootstrap test, postgres null, iOS Docker failures
-- use colima for Docker on macOS iOS CI runner
-- pass --env-file explicitly to all docker compose commands
-- put android e2e gradle command on single line
 - postgres null storage and bootstrap PIN submission
-- install colima via brew, use cliPluginsExtraDirs for compose
 - use native PostgreSQL + RustFS on macOS instead of Docker
 - update PIN minimum to 6 digits, fix crypto interop + bootstrap tests, ecryptfs build
-- update worker integration test fixtures for current API (Epic 313)
-- run desktop BDD serially, add epic 314 for step alignment
-- align desktop BDD step definitions with current UI (Epic 314)
-- additional BDD step alignment fixes (Epic 314)
-- fix ban phone validation, tag blast scenarios @wip (Epic 314)
 - fix entity-schema route mounting order and BDD step definitions
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
@@ -4336,20 +3400,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
-- Epic 335 — CMS admin settings BDD: 28/28 pass
-- fix interaction API validation and contact directory listing
-- revert directory API endpoints, fix interaction creation
-- case management step fixes — sheet overlay, timeline tab, schema scope
 - step definition improvements + contacts search error handling
 - mobile report type refinements from agent review
 - null-safe array access in template-engine.ts
 - resolve all 7 remaining BDD failures + add report type scenarios
 - Epic 335 — resolve remaining CMS BDD failures + serial test split
-- rename 10 Swift type collisions with built-in/framework types
 - remove duplicate Color.init(hex:) extension
-- rename CaseInteraction + EvidenceListResponse to avoid iOS app type collisions
 - make Color.init(hex:) internal instead of private
-- re-add CaseInteraction + EvidenceListResponse renames after linter revert
 - use generated Evidence + Interaction types from protocol codegen
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
@@ -4369,8 +3426,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add @protocol/* alias to esbuild Node.js build config
 - wire case field decryption + encrypted save on desktop (Epic 349)
 - wire iOS server event decryption + fix BDD case tab timing
-- paginate through all records when clearing empty state (Epic 335)
-- fix hub management test assertions + codegen
 - remove 14 duplicate string resources in strings.xml
 - remove duplicate Color.init(hex:) from BrandColors.swift
 - rename CaseEvent → AppCaseEvent to avoid codegen collision
@@ -4396,30 +3451,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve 25 of 29 failing BDD tests
 - resolve last 3 BDD failures — metadata merge double-serialization
 - Epics 366-370 — resolve all 10 BDD failures (590 pass, 0 fail)
-- resolve 3 client BDD test failures found during suite check
-- bump scrollToFind maxSwipes and fix anyElementExists ordering
 - remove locally-defined types now generated by protocol codegen
-- always start backend before UI tests and reset state
 - resolve loginAsAdmin failure — serde_wasm_bindgen Map serialization
 - resolve all BDD serial test flakiness (590 pass, 0 fail)
 - replace z.unknown() bare fields with typed schemas to eliminate JSONAny
 - clean up remaining volunteers entity references — permission strings, system health, telephony paths, internal var names
-- update auth-utils test to use /api/users path
-- make report-type badge test self-contained — seed own report data instead of relying on prior test
 - correct delete response default, add unit tests
 - rename volunteerPubkeys to userPubkeys — align schema with DB column
-- correct api-helpers import path and remove duplicate getState imports
 - resolve post-overhaul compilation and test errors across platforms
-- rename generated CustomFieldDefinition to ProtocolCustomFieldDefinition
 - rename ServiceStatus to ServiceHealthStatus to avoid generated type conflict
 - remove duplicate HubStatus definition, extend generated type instead
-- rename 6 generated Swift types that conflict with local iOS models
 - resolve UIViewRepresentable conformance and ActiveCallResponseStatus type errors
-- bootstrap admin in global-setup, fix e2ee-integrity state bug, increase BDD timeout
-- fix world/s scope bugs in backend BDD step definitions
-- resolve all backend BDD test failures — 598/606 passing
-- check backend connectivity not health status code
-- address all reviewer findings in mobile multi-hub and test infrastructure plans
 - remove hubId??'' silent fallback; thread hubId into tryAutoAssign
 - use pinned session in validateConnection and checkVersionCompatibility
 - extend HubAPIServiceProtocol to cover request methods; fix haptic generator retention
@@ -4438,29 +3480,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - use hp() helper for all hub-scoped API calls
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
-- hub-scope backend routes + BDD test infrastructure fixes
-- fix cms-screen-pop and cms-templates test failures
-- fix state-transitions and cross-do-workflow test failures
 - mount entity-schema routes under hubScoped
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- pass hubId to simulateIncomingCall in call-lifecycle, relay, and cross-do steps
-- hub-scope call history in cross-do step definitions
-- hub-scope call history in cross-do step definitions
 - resolve LinphoneService scope error + LlamenosApp binding
-- pin production Dockerfile base images to SHA-256 digest
-- scope contents:write to publish jobs only in release workflows
-- add --locked/--frozen-lockfile to all install commands
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
-- add pre-commit hook blocking .env commits + document policy
-- prevent shell injection via workflow_dispatch version input in tauri-release.yml
 - remove hardcoded admin key and unsafe print statements from iOS
 - CRIT-H1 add auth guard to GET /:hubId/key endpoint
 - HIGH-W3/W4/W5 + MED-W2 — audit log, dev endpoints, Twilio SID, ban permission
 - CRIT-W1/W2 — hub from call record, opaque call tokens for callbacks
 - desktop Tauri IPC hardening — eliminate nsec/secretKeyHex from IPC boundary
 - add missing coroutine imports to LocationService
-- correct 2 backend BDD test failures from security commit
 - remove setActiveHub from background push path (Gap 1 multi-hub routing)
 - harden push routing tests and empty-string callId guard
 - remove setActiveHub from wake-payload coroutine (Gap 1 multi-hub routing)
@@ -4471,10 +3500,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - replace placeholder base URL with workerWebhookUrl
 - replace as-any and as-unknown-as type assertion bypasses
 - rename event→action field throughout audit schema and consumers
-- phone numbers, DB idle timeout, hub-scoped user ops, nav/auth steps
 - disable idle timeout by default — prevents server crashes during tests
-- fix profile-setup race condition and access-denied navigation
-- resolve all desktop BDD and Playwright test failures
 - fix memory leaks, add lifecycle cleanup, separate bridge secret
 - domain separation violations + zeroization gaps
 - decrypt failures — label mismatch, version byte, window keys
@@ -4492,44 +3518,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - strip sig query param from URL before signature verification on /recordings/
 - wire NOTIFIER_API_KEY and NOTIFIER_TOKEN_SECRET into signal-notifier service
 - remove UniFFI exports from auth_legacy to resolve symbol collision
-- remove deprecated baseUrl and ignoreDeprecations for TS 5.9
 - resolve merge conflicts from firehose+blast integration
 - add telegram to messaging rate limits default
 - fix fetch mock typing in test files
 - address LOW security findings — Zeroizing, raw labels, WebSocket tag constant
 - add missing string keys to unblock build CI
 - resolve 6 CI failures after mass merge session
-- fix crypto-guardrails and audit job failures
 - resolve CI build/test failures after mobile crypto V3 sync
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
-- add per-platform coverage thresholds to test-specs validator
 - remove duplicate mobileIsUnlocked stub causing compilation failure
 - correct @noble/* import paths for Vite 8/Rolldown compatibility
-- resolve 5 CI failures — cargo fmt, android lint, stale tests, docker env, ios secret check
-- fix Docker Compose startup in e2e job — wrong paths, stale service name, ulimits
 - update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
-- fix e2e health check, iOS test isolation, Android E2E codegen
-- Docker healthcheck curl→bun, Android E2E feature paths, iOS health endpoint
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
 - auto-migrate DB at startup, fix sidecar configs for CI
 - whitelist docker-entrypoint.sh in .dockerignore
-- make migrations idempotent + fix signal-cli health in test overlay
-- --no-recreate on sidecar profiles to prevent app restart
-- add missing blast_deliveries migration, fix iOS test isolation, make android-e2e non-blocking
-- PBX_TYPE=asterisk not ari — sip-bridge expects provider name
-- update crypto mock + helpers for v3 Ed25519/HPKE onboarding
-- update bun lockfile for marked dependency in site
-- default testHubURL to Linux dev machine for screenshot capture
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
-- v3 HPKE envelope format — hex enc field for schema compat
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- smoke title assertion + report-types hub scope
-- add report-type-badge testid to ReportCard in list view
 - thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
 - update BDD step definitions — crypto v3, auth, dashboard, ban management
-- resolve backend BDD 'No tests found' — duplicate steps + missing bddgen
-- make backend BDD non-blocking until stabilized
