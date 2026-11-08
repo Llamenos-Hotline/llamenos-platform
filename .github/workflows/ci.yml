@@ -1828,8 +1828,6 @@ jobs:
       # `timeout-minutes` is only a backstop for the script itself misbehaving.
       - name: Install Linux deps
         timeout-minutes: 10
-        env:
-          APT_DOWNLOAD_BUDGET_SEC: "1"  # DEMO ONLY (#2545): force the stall path; reverted before review
         run: |
           bash scripts/ci/apt-install-bounded.sh \
             libwebkit2gtk-4.1-dev \
