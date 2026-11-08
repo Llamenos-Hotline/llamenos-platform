@@ -8,7 +8,8 @@ import { matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
 import {
-  isShippedClientSource, secretFinding, secretRefusal, trustAnchorEntry, trustAnchorFinding, trustAnchorRefusal,
+  comparesBaseContent, isShippedClientSource, secretFinding, secretRefusal, trustAnchorEntry, trustAnchorFinding,
+  trustAnchorRefusal,
   type WriteFinding,
 } from './write-gate.js'
 import { scrubSecrets } from './github-app.js'
@@ -1106,19 +1107,24 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // base against the head (`trustAnchorFinding`), from blobs — never from
   // diff hunks, which a binary file does not have.
   // Files whose earlier bytes the trust check compares: every changed
-  // shipped-client file outside the registry, and registered files knope
-  // bumps (`releaseBump`), whose version-only change is not held.
+  // shipped-client file outside the registry, registered files knope bumps
+  // (`releaseBump`), whose version-only change is not held, and registered
+  // files judged by a content rule (`contentRule`).
   const shippedOthers = changedFiles.filter((f) => {
     const entry = trustAnchorEntry(f)
-    return entry === undefined ? isShippedClientSource(f) : entry.releaseBump !== undefined
+    return entry === undefined ? isShippedClientSource(f) : comparesBaseContent(entry)
   })
   const added = new Set(changedFilesFrom(addedRaw ?? ''))
   const mergeBase = shippedOthers.length === 0 ? undefined : (await runGit(worktree, ['merge-base', baseRef, branch]))?.trim()
   const baseBytes = mergeBase === undefined ? new Map<string, Buffer>() : await readHeadBlobs(worktree, mergeBase, shippedOthers)
   const trust: WriteFinding[] = []
   for (const f of changedFiles) {
-    const unregistered = trustAnchorEntry(f) === undefined
-    if (unregistered && shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
+    // A content-judged registered file (`contentRule`) is compared like an
+    // unregistered one, so it needs the same guard: an unreadable base must
+    // not read as "the file is new".
+    const entry = trustAnchorEntry(f)
+    const comparedByContent = entry === undefined || entry.contentRule !== undefined
+    if (comparedByContent && shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
       // The file existed before this diff but its earlier bytes cannot be
       // read, so a trust line it REMOVED would be invisible — hold it.
       trust.push({ file: f, why: 'its content at the merge base could not be read, so a removed trust line could not be ruled out' })

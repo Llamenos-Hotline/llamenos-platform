@@ -8,6 +8,8 @@ import {
 import { NEVER_WRITE_PATHS, TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
 import { ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem, throwawayPublicKeyPem } from './pem-fixtures.js'
 
+const escapeRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 /**
  * Unit tests for the pure halves of the write gate (#2556): private key
  * recognition (key-material.ts) and classification/rendering (write-gate.ts).
@@ -188,8 +190,18 @@ describe('secretFinding', () => {
 describe('trustAnchorFinding', () => {
   const NEW_CLIENT = 'apps/android/app/src/main/java/org/llamenos/hotline/api/NewClient.kt'
 
-  it('names what a registered file anchors, whatever changed', () => {
-    for (const a of TRUST_ANCHOR_FILES) expect(trustAnchorFinding(a.path, 'x', 'x')).toBe(`it is ${a.anchors}`)
+  it('names what a registered whole-file anchor anchors, whatever changed', () => {
+    for (const a of TRUST_ANCHOR_FILES.filter((e) => e.contentRule === undefined)) {
+      expect(trustAnchorFinding(a.path, 'x', 'x')).toBe(`it is ${a.anchors}`)
+    }
+  })
+
+  // #2579: a content-judged anchor is still held when it cannot be read —
+  // here a YAML document that is not a mapping, unchanged on both sides.
+  it('holds a content-judged anchor it cannot read, and still names what it anchors', () => {
+    for (const a of TRUST_ANCHOR_FILES.filter((e) => e.contentRule !== undefined)) {
+      expect(trustAnchorFinding(a.path, 'x', 'x')).toMatch(new RegExp(`cannot be read faithfully .*; it is ${escapeRe(a.anchors)}$`))
+    }
   })
 
   it('catches a trust line added to an unregistered shipped file, and quotes it', () => {

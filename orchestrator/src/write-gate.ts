@@ -3,6 +3,7 @@ import {
 } from './fragments.js'
 import { SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type TrustAnchorFile } from './config.js'
 import { findPrivateKeyMaterial, latin1, textViews } from './key-material.js'
+import { xcodegenTrustFinding } from './xcodegen-trust.js'
 
 /**
  * The write gate's classification of a changed file (#2556). Three answers,
@@ -201,8 +202,9 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
     name: 'a build-wiring setting that chooses what ships',
     re: new RegExp([
       // Gradle: source sets, the variants they belong to, and injected values.
-      // (XcodeGen's `project.yml` is a registered whole-file anchor instead:
-      // YAML is not line-shaped, so no line rule could read it faithfully.)
+      // (XcodeGen's `project.yml` is registered with a structural content rule
+      // instead, `xcodegenTrustFinding`: YAML is not line-shaped, so no line
+      // rule could read it faithfully.)
       'sourceSets', 'srcDirs?\\(', 'setSrcDirs', 'manifest\\.srcFile', 'manifestPlaceholders', 'resValue\\(',
       'buildTypes', 'productFlavors', 'flavorDimensions', 'initWith\\(',
     ].join('|')),
@@ -211,6 +213,13 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
 
 export function trustAnchorEntry(file: string): TrustAnchorFile | undefined {
   return TRUST_ANCHOR_FILES.find((e) => e.path === file)
+}
+
+/** True when a registered file's verdict depends on its bytes at BOTH sides
+ *  (a release-bump allowance or a content rule), so the caller must read its
+ *  merge-base bytes as well as the head's. */
+export function comparesBaseContent(entry: TrustAnchorFile): boolean {
+  return entry.releaseBump !== undefined || entry.contentRule !== undefined
 }
 
 /** True for a file under `SHIPPED_CLIENT_SOURCE_ROOTS`. */
@@ -296,7 +305,8 @@ const quote = (s: string): string => (s.length > MAX_QUOTED_LINE ? `${s.slice(0,
  * the head; `undefined` for a side where the file does not exist.
  *
  * A registered file is a trust anchor whatever changed — deleting or renaming
- * it included. Any other file under `SHIPPED_CLIENT_SOURCE_ROOTS` is one when
+ * it included — unless it names a `contentRule`, which then decides (and holds
+ * whatever it cannot read). Any other file under `SHIPPED_CLIENT_SOURCE_ROOTS` is one when
  * its `trustProjection` differs between the two sides: a trust line added,
  * removed, reordered, or its value changed. An edit that leaves every trust
  * line and its successor alone is not.
@@ -305,6 +315,10 @@ export function trustAnchorFinding(file: string, before?: FileContent, after?: F
   const entry = trustAnchorEntry(file)
   if (entry !== undefined) {
     if (isOnlyReleaseBump(entry, before, after)) return undefined
+    if (entry.contentRule === 'xcodegen-spec') {
+      const why = xcodegenTrustFinding(before, after)
+      return why === undefined ? undefined : `${why}; it is ${entry.anchors}`
+    }
     return `it is ${entry.anchors}`
   }
   if (!isShippedClientSource(file)) return undefined

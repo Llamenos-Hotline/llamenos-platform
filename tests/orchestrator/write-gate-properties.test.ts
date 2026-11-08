@@ -312,7 +312,12 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
     it('is refused without a human approval, naming what it anchors', async () => {
       const rep = await gate(judged({ [path]: `pins = [${PIN_A}]\n` }, { [path]: `pins = [${PIN_B}]\n` }))
       expect(rep.passed).toBe(false)
-      expect(trustLine(rep)).toContain(`${path} (it is ${anchor.anchors})`)
+      // A content-judged anchor (#2579) says why its rule held the change
+      // first, then what the file anchors.
+      expect(trustLine(rep)).toContain(anchor.contentRule === undefined
+        ? `${path} (it is ${anchor.anchors})`
+        : `it is ${anchor.anchors})`)
+      expect(trustLine(rep)).toContain(`${path} (`)
       expect(trustLine(rep)).toContain(`No trust-anchor approver (${OPERATOR}) has signed off on ${rep.verifiedCommit}`)
       expect(rep.trustAnchors).toEqual({ files: [path], approvedBy: [] })
     })
@@ -436,14 +441,15 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
     })
 
     it.each([
-      ['block style', '    info:\n      path: Sources/App/Other.plist\n'],
-      ['flow style a line rule could never read', '    sources: [Sources, Extra]\n'],
-      ['an include', 'include: [extra.yml]\n'],
-    ])('refuses any XcodeGen change — %s', async (_style, body) => {
+      ['block style', 'info:\n  path: Sources/App/Other.plist\n', 'info'],
+      ['flow style a line rule could never read', 'sources: [Sources, Extra]\n', 'sources'],
+      ['an include', 'include: [extra.yml]\n', 'include'],
+    ])('refuses a non-routine XcodeGen change — %s', async (_style, body, path) => {
       const f = 'apps/ios/project.yml'
       const rep = await gate(judged({ [f]: 'name: x\n' }, { [f]: `name: x\n${body}` }))
       expect(rep.passed).toBe(false)
-      expect(trustLine(rep)).toContain(`${f} (it is the XcodeGen spec`)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes \`${path}\``)
+      expect(trustLine(rep)).toContain('it is the XcodeGen spec')
     })
 
     // From the third automated security review of this PR.
@@ -611,5 +617,115 @@ describe('property 5 — every consumer agrees on the classification', () => {
     const body = section.slice(0, section.indexOf('\n## ', 3) > 0 ? section.indexOf('\n## ', 3) : undefined)
     const listed = [...body.matchAll(/`(apps\/[^`]+)`/g)].map((m) => m[1]).sort()
     expect(listed).toEqual(TRUST_ANCHOR_FILES.map((a) => a.path).sort())
+  })
+})
+
+// ---------------------------------------------------------------------------
+describe('#2579 — the XcodeGen spec is held when a trust setting moves, not whenever the file changes', () => {
+  const SPEC = 'apps/ios/project.yml'
+  // The REAL tracked spec, so an injection that stops matching it fails here
+  // instead of silently testing nothing.
+  const real = readFileSync(join(process.cwd(), SPEC), 'utf8')
+  const edit = (from: string, to: string): string => {
+    expect(real, `the tracked ${SPEC} no longer contains ${JSON.stringify(from)}`).toContain(from)
+    return real.replace(from, to)
+  }
+  const ATS = '        NSAppTransportSecurity:\n          NSAllowsArbitraryLoads: false\n'
+
+  // #2577's diff to the spec, verbatim in effect: one test target's
+  // `sources` entry, plus comments. It moved no trust setting, and the
+  // whole-file rule held the fix for a repo-wide iOS outage on it.
+  it('lands #2577\'s change — a UI-test target sources entry — with no sign-off', async () => {
+    const after = edit(
+      '      - path: Resources/Localizable/en.lproj/Localizable.strings\n',
+      '      #\n      # This must be the SAME source path the app target uses.\n      - path: Resources/Localizable\n',
+    )
+    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: after }))
+    expect(rep.reasons).toEqual([])
+    expect(rep.trustAnchors).toBeUndefined()
+  })
+
+  it.each<[string, () => string]>([
+    ['a scheme test-target list', () => edit('        - LlamenosUITests\n      gatherCoverageData', '      gatherCoverageData')],
+    ['a Swift package revision', () => real.replace(/revision: [0-9a-f]{40}/, `revision: ${'a'.repeat(40)}`)],
+    ['a package added to the app target', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - package: other\n')],
+    ['the Xcode version', () => edit('xcodeVersion: "26.0"', 'xcodeVersion: "27.2"')],
+    ['a unit-test target\'s settings', () => edit('PRODUCT_BUNDLE_IDENTIFIER: org.llamenos.hotline.tests', 'PRODUCT_BUNDLE_IDENTIFIER: org.llamenos.hotline.unit')],
+    ['comments only', () => edit('# ─── UI Tests', '# ─── UI test bundle')],
+  ])('lands a routine change — %s', async (_what, after) => {
+    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: after() }))
+    expect(rep.reasons).toEqual([])
+  })
+
+  // The audit the issue asks for: inject the thing the rule exists to catch,
+  // and watch it hold — with the same legible refusal the whole-file rule gave.
+  it('holds NSAllowsArbitraryLoads flipped open, naming the key, both values, the head and the remedy', async () => {
+    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: edit('NSAllowsArbitraryLoads: false', 'NSAllowsArbitraryLoads: true') }))
+    expect(rep.passed).toBe(false)
+    const line = trustLine(rep) ?? ''
+    expect(line).toContain(
+      `${SPEC} (its diff changes \`targets.Llamenos.info.properties.NSAppTransportSecurity.NSAllowsArbitraryLoads\` (false → true)`,
+    )
+    expect(line).toContain('it is the XcodeGen spec the iOS app is built from')
+    expect(line).toContain(`No trust-anchor approver (${OPERATOR}) has signed off on ${rep.verifiedCommit}`)
+    expect(line).toContain('re-requests review from llamenos-auto')
+    expect(rep.trustAnchors).toEqual({ files: [SPEC], approvedBy: [] })
+    // ...and the sign-off still clears it.
+    const signed = await gate(judged({ [SPEC]: real }, { [SPEC]: edit('NSAllowsArbitraryLoads: false', 'NSAllowsArbitraryLoads: true') }), approvedBy(OPERATOR))
+    expect(signed.passed).toBe(true)
+  })
+
+  it.each<[string, () => string, string]>([
+    ['an NSExceptionDomains entry', () => edit(ATS, `${ATS}          NSExceptionDomains:\n            evil.example:\n              NSExceptionAllowsInsecureHTTPLoads: true\n`),
+      'NSAppTransportSecurity.NSExceptionDomains'],
+    ['an ATS key nobody has heard of — no key has to be recognised to be held', () => edit(ATS, `${ATS}          NSFutureTrustKey: true\n`),
+      'NSAppTransportSecurity.NSFutureTrustKey'],
+    ['the YAML 1.1 spelling `yes`', () => edit('NSAllowsArbitraryLoads: false', 'NSAllowsArbitraryLoads: yes'), '(false → yes)'],
+    ['ATS rewritten in flow style', () => edit(ATS, '        NSAppTransportSecurity: {NSAllowsArbitraryLoads: true}\n'), '(false → true)'],
+    ['ATS deleted', () => edit(ATS, ''), 'NSAppTransportSecurity` ({NSAllowsArbitraryLoads: false} → (absent))'],
+    ['the Info.plist re-pointed', () => edit('INFOPLIST_FILE: Sources/App/Info.plist', 'INFOPLIST_FILE: Resources/Other.plist'), 'settings.base.INFOPLIST_FILE'],
+    ['a release compilation condition', () => edit('SWIFT_ACTIVE_COMPILATION_CONDITIONS: RELEASE_HARDENED', 'SWIFT_ACTIVE_COMPILATION_CONDITIONS: UI_TESTING'),
+      'configs.Release.SWIFT_ACTIVE_COMPILATION_CONDITIONS'],
+    ['a source path added to the shipped target', () => edit('      - path: Resources/Fonts\n', '      - path: Resources/Fonts\n      - path: ../../tmp/x\n'),
+      'targets.Llamenos.sources[5]'],
+    ['a test target embedded in the app', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - target: LlamenosUITests\n        embed: true\n'),
+      'targets.Llamenos.dependencies[2]'],
+    ['a test target retyped as an app', () => edit('type: bundle.ui-testing', 'type: application'), 'targets.LlamenosUITests.type'],
+    ['a build script on a test target that rewrites the plist', () => edit('        TEST_TARGET_NAME: Llamenos\n',
+      '        TEST_TARGET_NAME: Llamenos\n    postBuildScripts:\n      - script: PlistBuddy -c "Set :NSAppTransportSecurity:NSAllowsArbitraryLoads true"\n'),
+    'targets.LlamenosUITests.postBuildScripts'],
+    ['a new target', () => `${real}\n  Extension:\n    type: app-extension\n    platform: iOS\n`, 'targets.Extension'],
+  ])('holds %s', async (_what, after, named) => {
+    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: after() }))
+    expect(rep.passed).toBe(false)
+    expect(trustLine(rep)).toContain(`${SPEC} (its diff changes \``)
+    expect(trustLine(rep)).toContain(named)
+  })
+
+  // Fail closed: what the rule cannot read faithfully, it holds.
+  it.each<[string, () => string | Buffer, string]>([
+    ['an alias that lets a routine region define a trust value', () => edit(ATS, '        NSAppTransportSecurity: *ats\n')
+      .replace('      - path: Tests/Unit\n', '      - path: Tests/Unit\n        x: &ats {NSAllowsArbitraryLoads: true}\n'), 'YAML alias'],
+    ['a duplicate key, which XcodeGen and this parser could read differently', () => edit('        ITSAppUsesNonExemptEncryption: true\n',
+      '        ITSAppUsesNonExemptEncryption: true\n        ITSAppUsesNonExemptEncryption: false\n'), 'Map keys must be unique'],
+    ['an unknown tag', () => edit('NSAllowsArbitraryLoads: false', 'NSAllowsArbitraryLoads: !include ats.yml'), 'does not parse as YAML 1.1'],
+    ['broken YAML', () => `${real}\n<<<<<<< ours\n`, 'does not parse as YAML 1.1'],
+    ['a UTF-16 re-encoding', () => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(real, 'utf16le')]), 'not valid UTF-8'],
+  ])('holds %s', async (_what, after, named) => {
+    const rep = await gate(judged({ [SPEC]: real }, { [SPEC]: after() }))
+    expect(rep.passed).toBe(false)
+    expect(trustLine(rep)).toContain(`${SPEC} (its content at the head cannot be read faithfully (`)
+    expect(trustLine(rep)).toContain(named)
+  })
+
+  it('holds deleting the spec, and renaming it away', async () => {
+    expect((await gate(judged({ [SPEC]: real }, { [SPEC]: null }))).passed).toBe(false)
+    const renamed = await gate(judged({ [SPEC]: real }, {}, [[SPEC, 'apps/ios/project.yaml']]))
+    expect(trustLine(renamed)).toContain(`${SPEC} (its diff deletes the spec`)
+  })
+
+  it('the Info.plist and the Android manifest stay whole-file — neither has had a non-release edit since 2026-08', () => {
+    expect(trustAnchorEntry('apps/ios/Sources/App/Info.plist')?.contentRule).toBeUndefined()
+    expect(trustAnchorEntry('apps/android/app/src/main/AndroidManifest.xml')?.contentRule).toBeUndefined()
   })
 })
