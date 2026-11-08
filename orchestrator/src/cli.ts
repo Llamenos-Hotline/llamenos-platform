@@ -22,6 +22,7 @@ import {
   DEFAULT_OPENCODE_MODEL, type EffortLevel,
 } from './engines.js'
 import { verifyMechanical } from './verify.js'
+import { trustAnchorApprovers } from './write-gate.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
   exportReviewSnapshot,
@@ -1941,6 +1942,57 @@ async function readPrFacts(
   }
 }
 
+/** `per_page` for the reviews read. A PR with this many reviews is read as
+ *  "could not be read" rather than as a possibly-truncated list: a later
+ *  review on page two could be the one that withdrew an approval. */
+const REVIEWS_PAGE = 100
+
+/**
+ * The trust-anchor sign-off for the commit this CI gate judges (#2556): the
+ * `TRUST_ANCHOR_APPROVERS` whose latest review APPROVED it, or `undefined`
+ * when the PR or its reviews could not be read — which the gate reports as
+ * such and refuses on.
+ *
+ * WHICH commit: on `pull_request` (and `workflow_dispatch`) the commit under
+ * judgement IS the PR head, and an approval must name exactly it — if the
+ * head has moved since this event, the approval of the new head says nothing
+ * about the old one. On `merge_group` the judged commit is the queue's own,
+ * built from the PR head, so the approval must name that head.
+ *
+ * Two `pull-requests: read` GETs, made only when the diff touches a trust
+ * anchor (`verifyMechanical` calls this lazily).
+ */
+async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | undefined> {
+  if (!/^[0-9]+$/.test(ctx.pr)) return undefined
+  const consequence = 'no trust-anchor approval can be confirmed, so a trust-anchor change is refused'
+  const pull = await ghJson<{ head?: { sha?: string } | null; user?: { login?: string | null } | null }>(
+    ['api', `repos/${REPO}/pulls/${ctx.pr}`],
+    30_000,
+    (detail) => ciLog(`reading PR #${ctx.pr} failed — ${consequence}: ${detail}`),
+  )
+  const reviews = await ghJson<{ user?: { login?: string | null } | null; state?: string; commit_id?: string | null }[]>(
+    ['api', `repos/${REPO}/pulls/${ctx.pr}/reviews?per_page=${REVIEWS_PAGE}`],
+    30_000,
+    (detail) => ciLog(`reading the reviews of PR #${ctx.pr} failed — ${consequence}: ${detail}`),
+  )
+  const head = pull?.head?.sha ?? undefined
+  if (head === undefined || reviews === undefined) return undefined
+  if (reviews.length >= REVIEWS_PAGE) {
+    ciLog(`PR #${ctx.pr} has ${reviews.length} reviews, the most one read returns — ${consequence}`)
+    return undefined
+  }
+  const mergeGroup = process.env['GITHUB_EVENT_NAME'] === 'merge_group'
+  if (!mergeGroup && head !== ctx.headSha) {
+    ciLog(`PR #${ctx.pr}'s head is now ${head}, not the judged ${ctx.headSha} — an approval of one is not an approval of the other`)
+    return []
+  }
+  return trustAnchorApprovers({
+    reviews: reviews.map((r) => ({ login: r.user?.login ?? undefined, state: r.state ?? '', commitId: r.commit_id ?? undefined })),
+    author: pull?.user?.login ?? undefined,
+    approvedSha: mergeGroup ? head : ctx.headSha,
+  })
+}
+
 /**
  * `llamenos-fleet review-and-merge <pr>` — see review-and-merge.ts's own
  * module comment for the full design. This wrapper is deliberately thin:
@@ -2011,6 +2063,7 @@ const HANDLERS: Record<string, CommandHandler> = {
       ctx.pr,
       `its ${SCOPE_GRANT_PREFIX}<lane> grants are unknown, so none apply and it is judged on its own lane alone`,
     ))?.labels,
+    trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
   })),
   'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
@@ -2020,6 +2073,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     pathExists: existsSync,
     log: ciLog,
     prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
+    trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
     prDiff: () => ciDiff(ctx),
     // The cache KEY (#2014) — the same tree the gate step keyed its lookup
     // on; its claim half is `prClaim` below (#2336).

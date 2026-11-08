@@ -26,6 +26,16 @@ describe('buildGateTrace', () => {
     expect(buildGateTrace({ report: scopeFailed })).toContain('tests=none')
   })
 
+  // #2556: an unapproved trust-anchor change is a scope-stage refusal too —
+  // it must never read as "scope=pass" in the ledger.
+  it('reports an unapproved trust-anchor change as a scope failure', () => {
+    const held: VerifyReport = {
+      ...passingReport(), passed: false, testsRun: undefined, testsPassed: undefined,
+      reasons: ["touched trust-anchor files — a shipped client's TLS trust decision, which lands only with a human sign-off: x"],
+    }
+    expect(buildGateTrace({ report: held })).toContain('scope=fail(touched trust-anchor files — ')
+  })
+
   it('reports a test failure with scope passing', () => {
     const testsFailed: VerifyReport = {
       ...passingReport(), passed: false, testsPassed: false, reasons: ['diff-targeted tests failed'],

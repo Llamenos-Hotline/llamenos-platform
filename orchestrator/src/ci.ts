@@ -956,6 +956,19 @@ export interface CiDeps {
    * exactly equivalent to a PR carrying no grants.
    */
   prLabels?(): Promise<string[] | undefined>
+  /**
+   * The human sign-off a trust-anchor change needs (#2556): the
+   * `TRUST_ANCHOR_APPROVERS` logins whose latest review APPROVED the commit
+   * this gate judges, or `undefined` when the reviews could not be read.
+   * Handed to `verifyMechanical`, which calls it only when the diff touches
+   * a trust anchor — so an ordinary PR costs no extra API read.
+   *
+   * Optional, and its absence is the closed direction: no approval, so a
+   * trust-anchor diff is refused. Both gates take the SAME lookup, so
+   * `fleet/verify` and `fleet/review` cannot disagree about whether a human
+   * signed off.
+   */
+  trustAnchorApprovals?(): Promise<readonly string[] | undefined>
 }
 
 export type VerifyCiDeps = CiDeps
@@ -1238,6 +1251,13 @@ export function headDirRefusal(deps: Pick<CiDeps, 'ctx' | 'pathExists'>): CiVerd
   }
 }
 
+/** `CiDeps.trustAnchorApprovals` as `VerifyInput` takes it — bound, so a
+ *  deps object written with method syntax keeps its `this`. */
+function approvalsOf(deps: CiDeps): VerifyInput['trustAnchorApprovals'] {
+  const read = deps.trustAnchorApprovals
+  return read === undefined ? undefined : () => read.call(deps)
+}
+
 /** The diff range, taken entirely inside the trusted base checkout. */
 function rangeFor(ctx: CiContext): Pick<VerifyInput, 'worktree' | 'base' | 'branch'> {
   return { worktree: ctx.repoDir, base: ctx.baseSha, branch: ctx.headSha }
@@ -1257,7 +1277,10 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // the commit under judgement has executed, or can, at this point.
   const grantedLanes = await resolveGrantedLanes(deps, lane)
 
-  const gate = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), skipTests: true })
+  const trustAnchorApprovals = approvalsOf(deps)
+  const gate = await deps.verify({
+    ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), skipTests: true, trustAnchorApprovals,
+  })
   deps.log(`gate (no code from the commit under judgement executed): ${buildGateTrace({ report: gate })}`)
   if (!gate.passed) {
     return {
@@ -1271,7 +1294,9 @@ export async function runVerifyCi(deps: VerifyCiDeps): Promise<CiVerdict> {
   // was computed and printed, in a separate process, against the export — so
   // it can only AND into the result, never revise it. This job holds no
   // secrets for that code to reach.
-  const withTests = await deps.verify({ ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), testDir: deps.ctx.headDir })
+  const withTests = await deps.verify({
+    ...rangeFor(deps.ctx), lane, grantedLanes, allLanes: await deps.lanes(), testDir: deps.ctx.headDir, trustAnchorApprovals,
+  })
   return {
     ok: withTests.passed,
     summary: [
@@ -1492,6 +1517,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     grantedLanes: await resolveGrantedLanes(deps, lane),
     allLanes: await deps.lanes(),
     skipTests: true,
+    trustAnchorApprovals: approvalsOf(deps),
   })
   if (!report.passed) {
     return {

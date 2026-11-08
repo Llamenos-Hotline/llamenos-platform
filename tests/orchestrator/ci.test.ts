@@ -291,6 +291,26 @@ describe('fleet/verify in CI', () => {
     expect((await runVerifyCi(deps({ verify: vi.fn(async () => failed) }))).ok).toBe(false)
   })
 
+  // #2556: the trust-anchor sign-off is read by the CI wiring and decided by
+  // `verifyMechanical`. Both verify passes — the trusted gate and the one that
+  // runs the tests — must receive the SAME lookup, or one could pass a
+  // trust-anchor diff the other refuses.
+  it('hands the trust-anchor approval lookup to both verify passes, and calls nothing itself', async () => {
+    const approvals = vi.fn(async () => ['rhonda-rodododo'])
+    const d = deps({ trustAnchorApprovals: approvals })
+    await runVerifyCi(d)
+    const calls = (d.verify as Mock).mock.calls.map((c) => c[0] as VerifyInput)
+    expect(calls).toHaveLength(2)
+    expect(approvals).not.toHaveBeenCalled()
+    for (const input of calls) expect(await input.trustAnchorApprovals?.()).toEqual(['rhonda-rodododo'])
+  })
+
+  it('passes no lookup when the caller wired none — the closed direction', async () => {
+    const d = deps()
+    await runVerifyCi(d)
+    expect(((d.verify as Mock).mock.calls[0]?.[0] as VerifyInput).trustAnchorApprovals).toBeUndefined()
+  })
+
   // A branch that PARSES as a fleet branch but names no real lane is a
   // misconfiguration and must fail — never be quietly downgraded to the
   // unscoped check a human branch gets.
@@ -321,6 +341,27 @@ describe('fleet/review in CI', () => {
     publishReport: vi.fn(async () => {}),
     profileReview: vi.fn(async () => ({ verdict: 'PASS' as const, text: 'nothing in my scope\nVERDICT: PASS' })),
     ...over,
+  })
+
+  it('hands verify the same trust-anchor approval lookup fleet/verify gets (#2556)', async () => {
+    const approvals = vi.fn(async () => undefined)
+    const d = deps({ trustAnchorApprovals: approvals })
+    await runReviewCi(d)
+    const input = (d.verify as Mock).mock.calls[0]?.[0] as VerifyInput
+    expect(await input.trustAnchorApprovals?.()).toBeUndefined()
+    expect(approvals).toHaveBeenCalledTimes(1)
+  })
+
+  it('reviews nothing when verify refuses a trust anchor — no model clears one', async () => {
+    const refused: VerifyReport = {
+      ...passing, passed: false,
+      reasons: ['touched trust-anchor files — a shipped client\'s TLS trust decision, which lands only with a human sign-off: x'],
+    }
+    const d = deps({ verify: vi.fn(async () => refused) })
+    const v = await runReviewCi(d)
+    expect(v).toMatchObject({ ok: false, result: 'scope' })
+    expect(v.summary).toContain('touched trust-anchor files')
+    expect(d.secondOpinion).not.toHaveBeenCalled()
   })
 
   // Every PR gets the non-author review, fleet or not: the user's policy is

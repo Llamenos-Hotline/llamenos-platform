@@ -1,12 +1,16 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScope, checkScopeAcross } from './scope.js'
-import { CERTIFICATE_ONLY_PATTERNS, matchesPath } from './fragments.js'
+import { matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
-import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS } from './config.js'
+import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
+import {
+  changedLinesByFile, isShippedClientSource, secretFinding, secretRefusal, trustAnchorFinding, trustAnchorRefusal,
+  type WriteFinding,
+} from './write-gate.js'
 import { scrubSecrets } from './github-app.js'
 import type { Lane } from './config.js'
 
@@ -84,6 +88,20 @@ export interface VerifyInput {
    * tree. See `prepareTestRoot`.
    */
   testDir?: string
+  /**
+   * The human sign-off a TRUST-ANCHOR change needs (#2556): the logins whose
+   * latest review APPROVED the exact commit under judgement, or `undefined`
+   * when the PR's reviews could not be read. The caller resolves "the exact
+   * commit" (`trustAnchorApprovers`, write-gate.ts) — here only membership
+   * in `TRUST_ANCHOR_APPROVERS` is re-checked, so no caller can clear a
+   * trust anchor by handing in a fleet login.
+   *
+   * A FUNCTION, called only when the diff touches a trust anchor, so the
+   * common PR costs no API read. Absent is "no approval" — fail closed: the
+   * fleet's own loop never passes one, and so can never land a trust-anchor
+   * change by itself.
+   */
+  trustAnchorApprovals?: () => Promise<readonly string[] | undefined>
 }
 
 export interface VerifyReport {
@@ -108,6 +126,10 @@ export interface VerifyReport {
    * `git rev-parse` itself failed — which already implies `passed: false`.
    */
   verifiedCommit?: string
+  /** The trust-anchor files this diff touches and the approvers whose
+   *  sign-off let it pass — present only when it touched one. Description:
+   *  the decision is already in `passed`/`reasons`. */
+  trustAnchors?: { files: string[]; approvedBy: string[] }
 }
 
 /** Parses `git diff --name-only` output. Blank lines (a trailing newline, or
@@ -827,37 +849,76 @@ export function judgeTargetRun(
 }
 
 /**
- * The bytes behind the `*.pem` carve-out, read the only way this gate is
- * allowed to read them.
- *
- * `git show <head>:<path>` in `worktree`, which is the TRUSTED BASE
- * CHECKOUT: `fleet-verify.yml` fetches the head sha as an OBJECT into it
- * (`git fetch --no-tags origin "$HEAD_SHA"`) and never checks it out, and
- * `rangeFor` (ci.ts) passes that sha as `branch`. So the content is
- * available here without the commit under judgement being checked out,
- * installed, or executed — the same property that already lets this function
- * compute the diff. Nothing from the head reaches a module path, and the
- * bytes are only ever pattern-matched, never run.
- *
- * Reads ONLY files that a `CERTIFICATE_ONLY_PATTERNS` entry matches, so a
- * normal diff spawns no git process at all and a certificate-bearing one
- * spawns a handful. Everything else keeps the pre-#1610 path-only decision.
- *
- * Every failure is an absent entry, which `matchesSecretPath` reads as
- * `undefined` and treats as a secret: a file DELETED in the diff (git show
- * exits non-zero), an unreadable object, a submodule or symlink entry. "I
- * could not read it" is never "it is safe".
+ * Pins `git diff` against the runner's own git config, so the gate's input is
+ * a function of the two commits alone: no renames (a rename would hide the
+ * OLD path from every check — renaming `cert_pin.rs` away, or a `.env` to an
+ * innocent name), no external or textconv driver, no colour, and the default
+ * `a/`/`b/` prefixes `changedLinesByFile` parses.
  */
-async function readCertificateCandidates(
-  worktree: string,
-  rev: string,
-  changedFiles: string[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
-  for (const f of changedFiles) {
-    if (!CERTIFICATE_ONLY_PATTERNS.some((p) => matchesPath(f, p))) continue
-    const content = await runGit(worktree, ['show', `${rev}:${f}`])
-    if (content !== undefined) out.set(f, content)
+const GATE_DIFF_FLAGS: readonly string[] = [
+  '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/', '--dst-prefix=b/',
+]
+
+/** The most head-commit bytes the gate will read in one diff. Far above any
+ *  real PR (the largest tracked file is ~2 MiB); past it the read fails and
+ *  every changed file is refused as unreadable rather than half-inspected. */
+const MAX_HEAD_BYTES = 128 * 1024 * 1024
+
+/**
+ * The head commit's bytes for `files`, read the only way this gate is
+ * allowed to read them: `git cat-file --batch` in `worktree`, which is the
+ * TRUSTED BASE CHECKOUT. `fleet-verify.yml` fetches the head sha as an OBJECT
+ * into it and never checks it out, and `rangeFor` (ci.ts) passes that sha as
+ * `branch`, so the content is available without the commit under judgement
+ * being checked out, installed, or executed. The bytes are only ever
+ * pattern-matched, never run.
+ *
+ * Every changed file present at the head is read (#2556) — not only `*.pem`
+ * as before — because the secret class now includes a private key under ANY
+ * name, and that can only be seen in the bytes. One process for the whole
+ * diff, not one per file.
+ *
+ * A file that cannot be read is ABSENT from the map, and the caller refuses
+ * it: "I could not look" is never "it is safe".
+ */
+async function readHeadBlobs(worktree: string, rev: string, files: string[]): Promise<Map<string, Buffer>> {
+  const out = new Map<string, Buffer>()
+  // `cat-file --batch` reads one object name per line, so a path containing a
+  // newline cannot be asked for — it stays unread, and is refused.
+  const askable = files.filter((f) => !f.includes('\n'))
+  if (askable.length === 0) return out
+  const stdout = await new Promise<Buffer | undefined>((resolve) => {
+    const child = spawn('git', ['-C', worktree, 'cat-file', '--batch'], { stdio: ['pipe', 'pipe', 'ignore'] })
+    const chunks: Buffer[] = []
+    let size = 0
+    let overflow = false
+    child.stdout.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > MAX_HEAD_BYTES) {
+        overflow = true
+        child.kill()
+        return
+      }
+      chunks.push(c)
+    })
+    child.on('error', () => resolve(undefined))
+    child.on('close', (code) => resolve(code === 0 && !overflow ? Buffer.concat(chunks) : undefined))
+    child.stdin.on('error', () => { /* the close handler reports the failure */ })
+    child.stdin.end(askable.map((f) => `${rev}:${f}\n`).join(''))
+  })
+  if (stdout === undefined) return out
+  let offset = 0
+  for (const f of askable) {
+    const nl = stdout.indexOf(0x0a, offset)
+    if (nl < 0) break
+    const header = stdout.subarray(offset, nl).toString('utf8')
+    offset = nl + 1
+    // `<sha> <type> <size>` for a found object; `<name> missing` otherwise.
+    const m = /^[0-9a-f]{40,64} (\w+) (\d+)$/.exec(header)
+    if (m === null) continue
+    const length = Number(m[2])
+    if (m[1] === 'blob') out.set(f, stdout.subarray(offset, offset + length))
+    offset += length + 1
   }
   return out
 }
@@ -983,7 +1044,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   }
   const verifiedCommit = headShaRaw.trim()
 
-  const nameOnly = await runGit(worktree, ['diff', '--name-only', range])
+  const nameOnly = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', range])
   if (nameOnly === undefined) {
     return {
       passed: false,
@@ -996,26 +1057,72 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     }
   }
 
-  const fullDiff = await runGit(worktree, ['diff', range])
+  const fullDiff = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, range])
   const changedFiles = changedFilesFrom(nameOnly)
   const addedLines = addedLinesFrom(fullDiff ?? '')
+  // The files the head still HAS — everything changed except deletions.
+  // Their bytes are what the secret class reads; a deleted file has none.
+  const presentRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=d', range])
 
   const reasons: string[] = []
   // A granted lane with no owned paths grants nothing — see checkScopeAcross.
   // Dropped here too so the failure message never credits a grant that had no
   // effect.
   const granted = (input.grantedLanes ?? []).filter((g) => g.scope.owned.length > 0)
-  const certificateCandidates = await readCertificateCandidates(worktree, branch, changedFiles)
+  // If the present-file list itself could not be computed, every changed
+  // file is treated as present: each is then read, and any that cannot be is
+  // refused below. Never "no files present, nothing to inspect".
+  const present = presentRaw === undefined ? changedFiles : changedFilesFrom(presentRaw)
+  const headBytes = await readHeadBlobs(worktree, branch, present)
   const { forbidden, strayed } = checkScopeAcross(
     changedFiles,
     lane.scope,
     granted.map((g) => g.scope),
-    [...NEVER_WRITE_PATHS],
-    [...GRANT_EXCLUDED_PATHS],
-    (f) => certificateCandidates.get(f),
+    NEVER_WRITE_PATHS,
+    GRANT_EXCLUDED_PATHS,
+    (f) => headBytes.get(f),
   )
-  if (forbidden.length > 0) {
-    reasons.push(`touched never-write paths: ${forbidden.join(', ')}`)
+
+  // CLASS 1 — secrets. What `checkScopeAcross` forbade, each with the fact
+  // that decided it, plus every present file whose bytes could not be read
+  // and so could not be shown to hold no key.
+  const secrets: WriteFinding[] = forbidden.map((f) => ({
+    file: f,
+    why: secretFinding(f, NEVER_WRITE_PATHS, headBytes.get(f)) ?? 'it is refused by the never-write list',
+  }))
+  for (const f of present) {
+    if (headBytes.has(f) || forbidden.includes(f)) continue
+    secrets.push({ file: f, why: 'its content could not be read from the head commit, so it cannot be shown to hold no private key' })
+  }
+  if (secrets.length > 0) reasons.push(secretRefusal(secrets))
+
+  // CLASS 2 — trust anchors. Not a scope question (the owning lane still
+  // owns the file): a human approval of this exact commit is the remedy.
+  const changedLines = changedLinesByFile(fullDiff ?? '')
+  const trust: WriteFinding[] = []
+  for (const f of changedFiles) {
+    const why = trustAnchorFinding(f, changedLines.get(f))
+    if (why !== undefined) trust.push({ file: f, why })
+  }
+  // Without the diff text the signature half cannot look at the changed
+  // lines, so every changed shipped-client file is held — fail closed.
+  if (fullDiff === undefined) {
+    for (const f of changedFiles) {
+      if (trust.some((t) => t.file === f) || !isShippedClientSource(f)) continue
+      trust.push({ file: f, why: 'the diff text could not be read, so its trust-signature lines could not be checked' })
+    }
+  }
+  let trustAnchors: VerifyReport['trustAnchors']
+  if (trust.length > 0) {
+    let read: readonly string[] | undefined
+    try {
+      read = input.trustAnchorApprovals === undefined ? [] : await input.trustAnchorApprovals()
+    } catch {
+      read = undefined
+    }
+    const approvedBy = (read ?? []).filter((l) => TRUST_ANCHOR_APPROVERS.includes(l))
+    trustAnchors = { files: trust.map((t) => t.file), approvedBy }
+    if (approvedBy.length === 0) reasons.push(trustAnchorRefusal(trust, verifiedCommit, read))
   }
   if (strayed.length > 0) {
     // Name the grants already in force, so a half-labelled cross-lane PR does
@@ -1026,14 +1133,15 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     reasons.push(`touched files outside ${scopeDesc}: ${strayed.join(', ')}`)
     reasons.push(...scopeStrayAdvice(strayed, lane, input.allLanes))
   }
-  const scopeFailed = forbidden.length > 0 || strayed.length > 0
+  const scopeFailed = secrets.length > 0 || strayed.length > 0 ||
+    (trustAnchors !== undefined && trustAnchors.approvedBy.length === 0)
 
   const { impact, reasons: impactReasons } = classifyImpact(changedFiles, addedLines)
 
   // Scope failure is immediate and unconditional: do not spend time running
   // tests for a diff that already touched what it must not have.
   if (scopeFailed) {
-    return { passed: false, reasons, changedFiles, addedLines, impact, impactReasons, verifiedCommit }
+    return { passed: false, reasons, changedFiles, addedLines, impact, impactReasons, verifiedCommit, trustAnchors }
   }
 
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
@@ -1082,5 +1190,6 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     testsPassed,
     testResults,
     verifiedCommit,
+    trustAnchors,
   }
 }

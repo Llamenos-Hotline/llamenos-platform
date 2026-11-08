@@ -1320,7 +1320,12 @@ describe('verifyMechanical reads certificate content from the head object (#1610
   it('still refuses a genuine private key at the same path', async () => {
     const report = await verify(repoAddingPem(throwawayPrivateKeyPem()))
     expect(report.passed).toBe(false)
-    expect(report.reasons.join(' ')).toContain(`touched never-write paths: ${PEM}`)
+    expect(report.reasons.join(' ')).toMatch(/^touched never-write paths — secret material/)
+    // Named as a secret by its CONTENT, not merely by its `.pem` name.
+    expect(report.reasons.join(' ')).toContain(
+      `${PEM} (its path matches secret pattern "*.pem" and its content is not provably public certificate material: ` +
+      'line 1 opens a "PRIVATE KEY" block)',
+    )
   })
 
   it('still refuses a certificate with a private key appended', async () => {
@@ -1359,7 +1364,8 @@ describe('verifyMechanical reads certificate content from the head object (#1610
       worktree: r.dir, base: r.base, branch: head, lane: unrestricted, skipTests: true,
     })
     expect(report.passed).toBe(false)
-    expect(report.reasons.join(' ')).toContain('touched never-write paths: .env')
+    expect(report.reasons.join(' ')).toContain('touched never-write paths — ')
+    expect(report.reasons.join(' ')).toContain('.env (its path matches secret pattern ".env")')
     expect(report.reasons.join(' ')).not.toContain(PEM)
   })
 })

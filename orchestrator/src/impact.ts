@@ -1,5 +1,6 @@
 import { SECRET_PATH_PATTERNS } from './config.js'
 import { isSecretTemplatePath, matchesPath } from './fragments.js'
+import { trustAnchorEntry } from './write-gate.js'
 
 export const LARGE_DIFF_FILES = 40
 export const LARGE_DIFF_LINES = 1500
@@ -218,6 +219,15 @@ export function classifyImpact(
           ? `${f} matches secret pattern ${secretHit} as a committed template (writable, still high-impact)`
           : `${f} matches secret pattern ${secretHit} (never-write and high-impact)`,
       )
+    }
+    // The trust-anchor class (#2556) is DECIDED in verify.ts — a refusal
+    // until a human approves the exact head. Described here too, so the
+    // trace, the digest and the reviewer's budget all see the same file as
+    // the gate does: one registry, no second notion of "which files are
+    // client trust".
+    const anchor = trustAnchorEntry(f)
+    if (anchor !== undefined) {
+      reasons.push(`${f} is a trust anchor — ${anchor.anchors} (lands only with a human approval of its head)`)
     }
   }
   if (changedFiles.length > LARGE_DIFF_FILES) {
@@ -548,6 +558,11 @@ function agentInstructionHit(f: string): string | undefined {
  *    line, stated as code.
  */
 function tierForFile(f: string): { tier: ImpactTier; reason: string } {
+  // A shipped client's trust anchor is never demoted by any rule below (#2556).
+  const anchor = trustAnchorEntry(f)
+  if (anchor !== undefined) {
+    return { tier: 2, reason: `${f} is Tier 2 (always) — trust anchor: ${anchor.anchors}` }
+  }
   const instructionHit = agentInstructionHit(f)
   if (instructionHit !== undefined) {
     return { tier: 2, reason: `${f} is Tier 2 (always) — agent-instruction path ${instructionHit}` }

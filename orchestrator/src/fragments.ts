@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { derPrivateKeyKind } from './key-material.js'
 
 export interface LaneScope {
   owned: string[]
@@ -315,8 +316,35 @@ const PUBLIC_PEM_LABELS: ReadonlySet<string> = new Set(['CERTIFICATE', 'PUBLIC K
 const PEM_BEGIN = /^-----BEGIN ([A-Z0-9][A-Z0-9 ]*)-----$/
 const PEM_END = /^-----END ([A-Z0-9][A-Z0-9 ]*)-----$/
 
+/** Anything that LOOKS like a boundary — any case, any indentation. Outside a
+ *  block, a line matching this but not `PEM_BEGIN` is a boundary written so
+ *  that a strict parser would skip it, which is exactly how a key block could
+ *  ride inside annotation text unseen. Refused, never read as annotation. */
+const BOUNDARY_LIKE = /-----\s*(BEGIN|END)\b/i
+
 /** A base64 body line. Non-empty, no whitespace, padding only at the end. */
 const PEM_BODY = /^[A-Za-z0-9+/]+={0,2}$/
+
+/**
+ * The longest base64/hex run an annotation line may carry. `openssl
+ * s_client -showcerts` and `openssl x509 -text` write subjects, issuers,
+ * validity dates and colon-separated hex dumps, whose longest unbroken
+ * base64-alphabet run is a word or a DN fragment — well under this. A
+ * 16-byte secret is 32 hex characters; a 32-byte key is 44 base64 or 64 hex.
+ * So a run this long outside a block is data, not commentary, and the file
+ * is refused rather than vouched for. It also refuses a few things that are
+ * public — an SPKI pin hash in a comment, an s_client `Session-ID` — which is
+ * the safe direction: such a fixture stays human-gated, and says why.
+ */
+export const ANNOTATION_MAX_RUN = 32
+
+const KEY_SHAPED_RUN = /[A-Za-z0-9+/=]+/g
+
+function longestKeyShapedRun(line: string): number {
+  let longest = 0
+  for (const m of line.matchAll(KEY_SHAPED_RUN)) longest = Math.max(longest, m[0].length)
+  return longest
+}
 
 /** Printable US-ASCII plus tab/CR/LF. Anything else — a NUL, a DER blob, a
  *  UTF-8 replacement character from a binary file decoded as text — is not
@@ -331,51 +359,75 @@ function isPrintableAsciiText(s: string): boolean {
   return true
 }
 
+/** Why a file is, or is not, provably public certificate material. The
+ *  refusal reason is shown to the operator verbatim (#2556 property 4): a
+ *  `*.pem` the gate refuses must say WHICH line made it unprovable, so a
+ *  false positive reads as one. */
+export type CertificateVerdict = { public: true } | { public: false; reason: string }
+
+const notPublic = (reason: string): CertificateVerdict => ({ public: false, reason })
+
 /**
- * True ONLY for a file that is, in its entirety, public certificate material.
+ * Whether a file is, in its entirety, public certificate material — and if
+ * not, the first reason it cannot be shown to be.
  *
- * The content half of the `*.pem` carve-out. Every rule here is written to
- * fail CLOSED, because the cost of a false negative is "a vendored CA bundle
- * needs a one-line carve-out added" and the cost of a false positive is "a
- * private key becomes writable by a lane".
+ * The content half of the `*.pem` carve-out. Every rule here fails CLOSED,
+ * because the cost of a false negative is "a fixture stays human-gated, with
+ * a stated reason" and the cost of a false positive is "a private key
+ * becomes writable by a lane".
+ *
+ * PERMITTED, since #2556: human-readable annotation between blocks — the
+ * `openssl s_client -showcerts` chain dump (` 1 s:C = US, O = Let's Encrypt
+ * …`) and `openssl x509 -text` output. #1610 refused any non-blank line
+ * outside a block, on the argument that a key could hide there; that refused
+ * the two Let's Encrypt chains #2550 carries as test input, which is the
+ * false positive #2556 is about. The argument is answered rather than
+ * dropped: annotation is admitted ONLY when it cannot be carrying a key —
+ *
+ * - no line in it looks like a PEM boundary at all (`BOUNDARY_LIKE`: any
+ *   case, any indentation), so an armoured key cannot sit there;
+ * - no line in it carries a base64/hex run of `ANNOTATION_MAX_RUN` or more,
+ *   so an UNarmoured key cannot either;
+ * - and, separately, every changed file — this one included — is scanned for
+ *   private key material by `findPrivateKeyMaterial` (key-material.ts)
+ *   before any carve-out is considered (write-gate.ts).
  *
  * Refused, each case deliberately:
  *
  * - `undefined` — the file could not be read at all. "Could not look" is
  *   never "is safe"; the caller gets no exemption rather than a guess.
- * - empty, or whitespace only — zero blocks is not "one or more blocks".
+ * - empty, whitespace only, or annotation only — zero blocks is not "one or
+ *   more blocks".
  * - any byte outside printable ASCII — binary, DER, or a mis-decoded blob.
- * - any line outside a block that is not blank. This refuses the common
- *   `openssl x509 -text` output with its human-readable preamble, on
- *   purpose: text outside the boundaries is content this function did not
- *   analyse, and a private key can be hidden in exactly that position in a
- *   way a block-only scan would never see.
  * - a BEGIN whose label is not in `PUBLIC_PEM_LABELS`, and separately and
  *   redundantly any label containing `PRIVATE KEY`. The allowlist already
  *   subsumes the second check; it is stated anyway so that widening the
  *   allowlist by accident cannot also admit `RSA PRIVATE KEY`.
+ * - a block whose LABEL says public but whose decoded body is a private key
+ *   structure (`derPrivateKeyKind`): the label is a claim, the bytes are the
+ *   fact, and a mislabelled block is the one way a key could pass the label
+ *   allowlist.
  * - a BEGIN inside an open block, an END with no BEGIN, or an END whose
- *   label differs from the BEGIN it closes. Mismatched boundaries mean the
- *   file does not parse, and a mismatched pair is precisely how a block's
- *   real contents could be mislabelled.
- * - a file that ends with a block still open — the truncated-file case. A
- *   `BEGIN CERTIFICATE` followed by an unterminated second block is NOT one
- *   valid certificate plus some noise; it is a file that did not parse.
+ *   label differs from the BEGIN it closes.
+ * - a file that ends with a block still open — the truncated-file case.
  * - a non-base64 line inside a block, including a blank one. RFC 1421-style
  *   in-block headers are not accepted either: they are not needed by any
  *   certificate this repo tracks, and accepting them is surface for nothing.
  *
  * Permitted only when: at least one block was parsed, every block closed,
- * and every label was public.
+ * every label was public, every body decoded to something that is not a
+ * private key, and every line outside a block was key-free annotation.
  */
-export function isPublicCertificateFile(content: string | undefined): boolean {
-  if (content === undefined) return false
-  if (!isPrintableAsciiText(content)) return false
+export function publicCertificateVerdict(content: string | undefined): CertificateVerdict {
+  if (content === undefined) return notPublic('its content could not be read')
+  if (!isPrintableAsciiText(content)) return notPublic('it is not printable ASCII text (binary, DER, or mis-decoded)')
 
   let open: string | undefined
-  let body = 0
+  let body: string[] = []
   let blocks = 0
+  let lineNo = 0
   for (const raw of content.split('\n')) {
+    lineNo += 1
     // Only trailing whitespace is tolerated (a CRLF file's `\r`). Leading
     // whitespace is not: an indented boundary is not a boundary.
     const line = raw.replace(/[ \t\r]+$/, '')
@@ -383,29 +435,57 @@ export function isPublicCertificateFile(content: string | undefined): boolean {
     if (open === undefined) {
       if (line.length === 0) continue
       const begin = PEM_BEGIN.exec(line)
-      if (begin === null) return false
-      const label = begin[1]
-      if (label.includes('PRIVATE KEY')) return false
-      if (!PUBLIC_PEM_LABELS.has(label)) return false
+      if (begin === null) {
+        if (BOUNDARY_LIKE.test(line)) {
+          return notPublic(`line ${lineNo} is a malformed PEM boundary outside any block`)
+        }
+        const run = longestKeyShapedRun(line)
+        if (run >= ANNOTATION_MAX_RUN) {
+          return notPublic(
+            `line ${lineNo}, outside any PEM block, carries a ${run}-character base64/hex run ` +
+            `(${ANNOTATION_MAX_RUN} or more could be key material)`,
+          )
+        }
+        continue
+      }
+      const label = begin[1] as string
+      if (label.includes('PRIVATE KEY')) return notPublic(`line ${lineNo} opens a "${label}" block`)
+      if (!PUBLIC_PEM_LABELS.has(label)) {
+        return notPublic(`line ${lineNo} opens a "${label}" block, which is not a label known to be public`)
+      }
       open = label
-      body = 0
+      body = []
       continue
     }
 
     const end = PEM_END.exec(line)
     if (end !== null) {
+      if (end[1] !== open) return notPublic(`line ${lineNo} closes a "${open}" block with "END ${end[1]}"`)
       // An empty block — BEGIN immediately followed by END — carries no
       // certificate at all. It is not a parse this function will vouch for.
-      if (end[1] !== open || body === 0) return false
+      if (body.length === 0) return notPublic(`line ${lineNo} closes an empty "${open}" block`)
+      const kind = derPrivateKeyKind(Buffer.from(body.join(''), 'base64'))
+      if (kind !== undefined) {
+        return notPublic(`the "${open}" block ending at line ${lineNo} decodes to a ${kind}`)
+      }
       open = undefined
       blocks += 1
       continue
     }
-    if (!PEM_BODY.test(line)) return false
-    body += 1
+    if (PEM_BEGIN.test(line)) return notPublic(`line ${lineNo} opens a block inside the open "${open}" block`)
+    if (!PEM_BODY.test(line)) return notPublic(`line ${lineNo}, inside the "${open}" block, is not base64`)
+    body.push(line)
   }
 
-  return open === undefined && blocks > 0
+  if (open !== undefined) return notPublic(`the "${open}" block is never closed (a truncated file)`)
+  if (blocks === 0) return notPublic('it contains no PEM block')
+  return { public: true }
+}
+
+/** `publicCertificateVerdict` as a predicate — what `matchesSecretPath`
+ *  needs, where the reason is not shown. */
+export function isPublicCertificateFile(content: string | undefined): boolean {
+  return publicCertificateVerdict(content).public
 }
 
 /**

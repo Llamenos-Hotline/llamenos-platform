@@ -95,3 +95,21 @@ export function throwawayPrivateKeyPem(): string {
 export function throwawayPublicKeyPem(): string {
   return generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString()
 }
+
+/**
+ * The SHAPE of an `openssl s_client -showcerts` chain dump — the format of
+ * #2550's `le-chain-ye.pem` / `le-chain-yr.pem` (#2556 property 2): each
+ * certificate followed by its depth/subject, issuer, key and validity lines.
+ * Built from the two real roots above, so no new certificate bytes are
+ * introduced; the annotation text is verbatim s_client syntax. Public through
+ * and through — it must be agent-writable test input.
+ */
+export const SHOWCERTS_CHAIN = [
+  ISRG_ROOT_X1.trimEnd(),
+  ' 1 s:C = US, O = Internet Security Research Group, CN = ISRG Root X2',
+  '   i:C = US, O = Internet Security Research Group, CN = ISRG Root X1',
+  '   a:PKEY: id-ecPublicKey, 384 (bit); sigalg: RSA-SHA256',
+  '   v:NotBefore: Sep  4 00:00:00 2020 GMT; NotAfter: Sep 15 16:00:00 2025 GMT',
+  ISRG_ROOT_X2.trimEnd(),
+  '',
+].join('\n')
