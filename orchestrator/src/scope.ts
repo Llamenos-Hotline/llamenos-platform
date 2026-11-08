@@ -1,4 +1,5 @@
-import { matchesPath, matchesSecretPath, type LaneScope } from './fragments.js'
+import { matchesPath, type LaneScope } from './fragments.js'
+import { secretFinding, type FileContent } from './write-gate.js'
 
 function longestMatch(file: string, patterns: string[]): string | undefined {
   let best: string | undefined
@@ -37,10 +38,12 @@ function longestMatch(file: string, patterns: string[]): string | undefined {
  * `forbidden` (neverWrite) is checked first and is absolute: it beats both
  * owned and notOwned regardless of specificity, and it binds even a lane
  * whose `owned` list is empty — an unrestricted lane still cannot touch
- * secrets, deploy config, or CI. `strayed` is everything else that falls
- * outside the lane once neverWrite is out of the way.
+ * secrets. (CI and deploy config are NOT never-write — see
+ * `GRANT_EXCLUDED_PATHS` and `checkScopeAcross`.) `strayed` is everything
+ * else that falls outside the lane once neverWrite is out of the way.
  *
- * The neverWrite comparison is `matchesSecretPath`, not `matchesPath`: a
+ * The neverWrite comparison is `secretFinding` (write-gate.ts), whose path
+ * half is `matchesSecretPath`, not `matchesPath`: a
  * committed template (`deploy/docker/.env.example`) is not the secret it is
  * a template of, and the prefix match that makes `.env` catch
  * `.env.production` had been making all five of this repo's tracked
@@ -48,26 +51,33 @@ function longestMatch(file: string, patterns: string[]): string | undefined {
  * plain `matchesPath` — a template is owned by whichever lane owns its
  * directory, exactly as before. See `SECRET_TEMPLATE_SUFFIXES`.
  *
- * `contentOf` is the same arrangement for the second carve-out, which is
- * decided by CONTENT rather than by path: a public root CA certificate is
- * not a key, and `*.pem` had been making every tracked certificate in this
- * repo permanently unwritable (#1610). It is optional, and its ABSENCE is
- * the fail-closed default — without it every `*.pem` is a secret, exactly as
- * before. These functions stay pure: the caller does the reading and hands
- * in a lookup, so the gate's own trust boundary (git in the base checkout,
- * the head as data) is decided where it is already decided, in `verify.ts`.
- * See `CERTIFICATE_ONLY_PATTERNS` and `isPublicCertificateFile`.
+ * `contentOf` hands in the head commit's bytes, which the secret class
+ * needs in two ways (`secretFinding`, write-gate.ts): to admit a `*.pem` that
+ * is provably public certificate material (#1610, widened to annotated
+ * chains by #2556), and to refuse a private key in ANY file whatever its
+ * path (#2556). It is optional, and its ABSENCE is the fail-closed default
+ * for the first — every `*.pem` is a secret — but it also silences the
+ * second, so a caller that can read the bytes must pass them; `verify.ts`
+ * does, for every file present at the head. These functions stay pure: the
+ * caller does the reading and hands in a lookup, so the gate's own trust
+ * boundary (git in the base checkout, the head as data) is decided where it
+ * is already decided, in `verify.ts`.
+ *
+ * Trust anchors (`TRUST_ANCHOR_FILES`) are deliberately NOT decided here.
+ * They are not a scope question — android still owns `ApiService.kt` — and
+ * their remedy is a human approval, not leaving the PR; `verifyMechanical`
+ * classifies them separately and says so in its own refusal.
  */
 export function checkScope(
   changed: string[],
   scope: LaneScope,
-  neverWrite: string[],
-  contentOf?: (file: string) => string | undefined,
+  neverWrite: readonly string[],
+  contentOf?: (file: string) => FileContent | undefined,
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesSecretPath(f, p, contentOf))) {
+    if (secretFinding(f, neverWrite, contentOf?.(f)) !== undefined) {
       forbidden.push(f)
       continue
     }
@@ -124,9 +134,9 @@ export function checkScopeAcross(
   changed: string[],
   ownScope: LaneScope,
   grantedScopes: LaneScope[],
-  neverWrite: string[],
-  grantExcluded: string[] = [],
-  contentOf?: (file: string) => string | undefined,
+  neverWrite: readonly string[],
+  grantExcluded: readonly string[] = [],
+  contentOf?: (file: string) => FileContent | undefined,
 ): { forbidden: string[]; strayed: string[] } {
   const forbidden: string[] = []
   const strayed: string[] = []
@@ -135,7 +145,7 @@ export function checkScopeAcross(
   const unrestricted = ownScope.owned.length === 0
   const granted = grantedScopes.filter((s) => s.owned.length > 0)
   for (const f of changed) {
-    if (neverWrite.some((p) => matchesSecretPath(f, p, contentOf))) {
+    if (secretFinding(f, neverWrite, contentOf?.(f)) !== undefined) {
       forbidden.push(f)
       continue
     }

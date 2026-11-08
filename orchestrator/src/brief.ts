@@ -1,4 +1,5 @@
-import type { Lane } from './config.js'
+import { SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane } from './config.js'
+import { SECRET_TEMPLATE_SUFFIXES } from './fragments.js'
 import type { WorkItem } from './source.js'
 
 export interface BriefSection {
@@ -20,6 +21,32 @@ export interface Brief {
 
 export function renderBrief(brief: Brief): string {
   return brief.sections.map((s) => `## ${s.heading}\n\n${s.body}`).join('\n\n')
+}
+
+/**
+ * The write gate's two refusals, as the worker is told them (#2556) —
+ * rendered from the SAME constants `verifyMechanical` enforces
+ * (`SECRET_PATH_PATTERNS`, `TRUST_ANCHOR_FILES`, `TRUST_ANCHOR_APPROVERS`),
+ * so the brief and the gate cannot describe different classes. A worker
+ * that learns about a trust anchor only from a red `fleet/verify` has
+ * already spent its session on a PR it was never told needs a human.
+ */
+export function writeGateRules(): string {
+  const patterns = SECRET_PATH_PATTERNS.map((p) => `\`${p}\``).join(', ')
+  const templates = SECRET_TEMPLATE_SUFFIXES.map((t) => `\`${t}\``).join('/')
+  const anchors = TRUST_ANCHOR_FILES.map((a) => `  - \`${a.path}\` — ${a.anchors}`).join('\n')
+  return (
+    `- Never write secret material. A file whose path matches a secret pattern (${patterns}) is refused — ` +
+    `except a committed ${templates} template and a \`*.pem\` that is provably public certificate material — and ` +
+    `so is a private key in ANY file, whatever its name, tests and fixtures included. No approval clears this: ` +
+    `generate a test key at test time instead of committing one.\n` +
+    `- A change to a shipped client's trust anchors lands only after a human (${TRUST_ANCHOR_APPROVERS.join(', ')}) ` +
+    `signs off on the exact head commit. These files, and any diff that adds or removes a pin literal or TLS trust ` +
+    `hook in shipped client source:\n${anchors}\n` +
+    `  If your issue genuinely needs such a change, make it, say so in the PR description, and say so in your ` +
+    `status \`notes:\` — the gate will hold the PR until that sign-off. Never change one incidentally, and never ` +
+    `post a sign-off yourself: it is the human's statement that they checked the values, and nobody else's.`
+  )
 }
 
 /**
@@ -89,6 +116,7 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
         `- Your PR description MUST contain the line \`Closes #${item.id}\` on its own line. ` +
         `That is what closes issue #${item.id} when the PR merges; without it the issue stays ` +
         `open after the work has landed.\n` +
+        `${writeGateRules()}\n` +
         `- Never deploy anything, to any environment.\n` +
         `- Never send anything (no notifications, no messages, no emails) as a side effect of this work.\n` +
         `- Do not run the full test suite. Run only the tests your diff actually touches — ` +

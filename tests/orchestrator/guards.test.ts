@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { LANES, NEVER_WRITE_PATHS, loadLanes, readLaneModes, assertLiveLanesHaveScope } from '../../orchestrator/src/config.js'
+import {
+  LANES, NEVER_WRITE_PATHS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, loadLanes, readLaneModes, assertLiveLanesHaveScope,
+} from '../../orchestrator/src/config.js'
+import { throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
@@ -730,6 +733,36 @@ describe('rail: crypto and protocol always reach a human', () => {
   })
 })
 
+// #2556. Beside the crypto rail on purpose: a wrong pin disconnects every
+// installed client and only an app-store release undoes it, which is a larger
+// blast radius than most crypto edits. The decision itself is verify.ts's
+// (refused until a human signs off on the head — write-gate-properties.test.ts
+// proves it end to end); these pin the two things that must never drift.
+describe('rail: a shipped client\'s trust anchors always reach a human', () => {
+  it.each(TRUST_ANCHOR_FILES.map((a) => [a.path]))('%s is high impact', (f) => {
+    expect(classifyImpact([f], 1).impact).toBe('high')
+  })
+
+  it('only a human may sign one off — never the fleet\'s own reviewer identity', () => {
+    expect(TRUST_ANCHOR_APPROVERS.length).toBeGreaterThan(0)
+    expect(TRUST_ANCHOR_APPROVERS).not.toContain(REVIEW_REQUEST_LOGIN)
+  })
+
+  // The operator opens every PR here, so the human signal is a sign-off LINE
+  // in a comment, posted from the operator's account — the same account the
+  // fleet's gh calls use. What keeps that a human act is that no fleet code
+  // can produce one: the phrase lives only in the gate that parses it (whose
+  // own published refusal is pinned NOT to parse, write-gate.test.ts).
+  it('no orchestrator source but the parser contains the sign-off phrase — the fleet cannot write one', () => {
+    const sources = orchestratorSources()
+    expect(sources.length).toBeGreaterThan(10)
+    const parser = sources.filter((s) => s.file.endsWith('/write-gate.ts'))
+    expect(parser.map((s) => s.text.includes('trust-anchor sign-off:'))).toEqual([true])
+    const elsewhere = sources.filter((s) => !s.file.endsWith('/write-gate.ts') && /trust-anchor sign-off/i.test(s.text))
+    expect(elsewhere.map((s) => s.file)).toEqual([])
+  })
+})
+
 describe('rail: never-write binds even an unrestricted lane', () => {
   it('forbids secrets for a lane with no declared scope', () => {
     expect(checkScope(['.env'], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual(['.env'])
@@ -738,6 +771,14 @@ describe('rail: never-write binds even an unrestricted lane', () => {
   it('forbids a nested secrets file for a lane with no declared scope', () => {
     expect(checkScope(['apps/worker/config/.env'], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden)
       .toEqual(['apps/worker/config/.env'])
+  })
+
+  // #2556: the secret class reads bytes, not just names. A key under a
+  // harmless name binds an unrestricted lane exactly as a `.env` does.
+  it('forbids a private key under a harmless name for a lane with no declared scope', () => {
+    const key = throwawayPrivateKeyPem()
+    expect(checkScope(['tests/fixtures/k.ts'], { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS], () => key).forbidden)
+      .toEqual(['tests/fixtures/k.ts'])
   })
 
   it('forbids a signing keystore for a lane with no declared scope', () => {

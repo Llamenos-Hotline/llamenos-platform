@@ -288,6 +288,20 @@ export async function loadLanes(
  * path the write gate missed — because the merge gate would then wave it
  * through unreviewed. Add new secret patterns here ONLY; both gates pick
  * them up automatically.
+ *
+ * These patterns are the PATH half of the secret class only (#2556). A path
+ * is a guess about what a file holds, and it was wrong both ways: it refused
+ * public Let's Encrypt chains named `*.pem`, and it said nothing about a
+ * private key pasted into a `.ts` test or saved as `testdata/key.der`. The
+ * CONTENT half — `findPrivateKeyMaterial` (key-material.ts), applied to
+ * every changed file by `secretFinding` (write-gate.ts) — is what makes "a
+ * file holding a private key is never agent-writable" true wherever the file
+ * sits. Neither half replaces the other: a `.env` holds no PEM block and is
+ * still a secret, and a key in `fixture.ts` matches no pattern and is still
+ * a secret.
+ *
+ * A file that decides what a shipped client TRUSTS is a different class
+ * again, with a different remedy — see `TRUST_ANCHOR_FILES` below.
  */
 export const SECRET_PATH_PATTERNS: readonly string[] = [
   '.env',
@@ -306,9 +320,151 @@ export const SECRET_PATH_PATTERNS: readonly string[] = [
   '.npmrc',
   '.pgpass',
   'authorized_keys',
+  // The REAL Ansible deployment inputs (#2556). `deploy/ansible/.gitignore`
+  // names these as "never commit": the tracked `vars.yml` / `inventory.yml`
+  // are placeholder templates the infra lane edits routinely, and real values
+  // live in these files — the vault-encrypted vars, the inventory holding
+  // host addresses this public repo must never carry, the vault password, and
+  // the scratch inventory a killed job once left behind. `.gitignore` only
+  // stops an accidental `git add`; `git add -f` sails past it, and until now
+  // no pattern here covered any of them. Basename-prefix matches, so
+  // `vars-production.yml.orig` is caught too — while the tracked
+  // `vars-production.example.yml` template (a different prefix) is not.
+  'vars-production.yml',
+  'vars-staging.yml',
+  'inventory-production.yml',
+  'inventory-staging.yml',
+  '.roundtrip-inventory.yml',
+  '.vault-pass',
+  '*.vault-pass',
 ]
 
 export const NEVER_WRITE_PATHS: readonly string[] = SECRET_PATH_PATTERNS
+
+/** One file that decides which certificates a SHIPPED client accepts. */
+export interface TrustAnchorFile {
+  /** Exact repo-relative path — no globs, no prefixes. */
+  path: string
+  client: 'android' | 'ios' | 'desktop'
+  /** What a wrong edit here changes. Rendered verbatim in the gate's refusal,
+   *  in every fleet brief and in the worker rules, so it is written for the
+   *  operator who has to decide whether to approve. */
+  anchors: string
+  /**
+   * knope's own version-bump pattern for this file, when knope rewrites it on
+   * every release (`knope.toml`'s `versioned_files`). A diff whose ONLY
+   * difference is that version is not a trust change, so the release PR is
+   * not held for a human. Copied from `knope.toml` verbatim and pinned to it
+   * by `write-gate-properties.test.ts` — an allowance that drifted from what
+   * knope actually rewrites would either hold every release or wave through
+   * a change knope never makes.
+   */
+  releaseBump?: RegExp
+}
+
+/**
+ * The files that decide which certificate authorities and keys our shipped
+ * clients accept for TLS (#2556) — the trust-anchor class of the write gate.
+ *
+ * A wrong value here is not a test failure. It is every installed client
+ * refusing to connect to a crisis hotline, and the iOS and Android pin sets
+ * are compiled in, so there is no server-side remedy: recovery needs a client
+ * release through the app stores. That made these the highest-blast-radius
+ * files an agent could edit in this repo, and until #2556 the write gate said
+ * nothing about them while refusing the public certificates that test them.
+ *
+ * The class is not "never-write". A pin rotation is real, scheduled work
+ * (#2505 — the Let's Encrypt Gen-Y roots), so an agent may WRITE these. What
+ * it may not do is land them on its own: `verifyMechanical` refuses a diff
+ * touching any of them until a human in `TRUST_ANCHOR_APPROVERS` has signed
+ * off on the exact commit under judgement. That refusal is what both
+ * required gates (`fleet/verify`, `fleet/review`) and the fleet's own loop
+ * report, so no model verdict — however confident — clears it.
+ *
+ * WHOLE FILES, exact paths. A pin list is source code, not key material, so
+ * no content rule can recognise one; the registry is the only honest way to
+ * say "this file is a trust decision". The other half — a trust decision
+ * made in some file NOT listed here — is `TRUST_SIGNATURES` (write-gate.ts):
+ * a diff that adds or removes a pin literal or a TLS trust hook anywhere in
+ * shipped client source is held the same way. Two rails in
+ * `tests/orchestrator/write-gate-properties.test.ts` keep this list honest
+ * against the real tree: every entry is a tracked file, and every tracked
+ * shipped-client file carrying a trust signature is either listed here or
+ * named, with a reason, as a call site the signature check already covers.
+ */
+export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
+  {
+    path: 'apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt',
+    client: 'android',
+    anchors: 'the Android OkHttp CertificatePinner pin set (DEFAULT_PIN_HASHES) every API and relay connection is held to',
+  },
+  {
+    path: 'apps/android/app/src/main/res/xml/network_security_config.xml',
+    client: 'android',
+    anchors: "the Android OS-level <pin-set> and <trust-anchors> of the release build",
+  },
+  {
+    path: 'apps/ios/Sources/Services/CertificatePinning.swift',
+    client: 'ios',
+    anchors: 'the compiled-in iOS pin set (CertificatePins) and the validator every non-loopback connection is held to',
+  },
+  {
+    path: 'apps/desktop/src/cert_pin.rs',
+    client: 'desktop',
+    anchors: 'the desktop pin capture and the enforcing certificate verifier',
+  },
+  {
+    path: 'apps/desktop/src/api_config.rs',
+    client: 'desktop',
+    anchors: 'the desktop persisted pin set (apiCertPins) and its plausibility check',
+  },
+  {
+    path: 'apps/desktop/src/net.rs',
+    client: 'desktop',
+    anchors: 'the desktop pinned HTTP client and WebSocket connector every backend request is built on',
+  },
+  // The build files that decide WHICH of the above ships. Whole-file, because
+  // their formats are not line-shaped: a plist key and its value sit on
+  // different lines inside nested dicts, the Android manifest is merged with
+  // `tools:remove`/`tools:replace` semantics, and XcodeGen YAML has flow
+  // style, `include:` and templates. A line-signature check over any of these
+  // would be a parser differential.
+  {
+    path: 'apps/android/app/src/main/AndroidManifest.xml',
+    client: 'android',
+    anchors: 'the Android manifest, which points the release build at its network security config and sets cleartext policy',
+  },
+  {
+    path: 'apps/ios/Sources/App/Info.plist',
+    client: 'ios',
+    anchors: 'the iOS Info.plist, which carries App Transport Security (NSAppTransportSecurity)',
+    releaseBump: /<key>CFBundleShortVersionString<\/key>\n\t<string>(?<version>[0-9]+[.][0-9]+[.][0-9]+)<\/string>/,
+  },
+  {
+    path: 'apps/ios/project.yml',
+    client: 'ios',
+    anchors: 'the XcodeGen spec the iOS app is built from — its sources, its Info.plist and the App Transport Security keys it writes',
+  },
+]
+
+/**
+ * The humans whose sign-off on the exact commit under judgement lets a
+ * trust-anchor change land — a `TRUST_ANCHOR_SIGN_OFF` line (write-gate.ts)
+ * naming the full head SHA in a PR comment, or an APPROVED review of that
+ * commit when they did not open the PR (`trustAnchorApprovers`). The operator's own
+ * login — the same account `CODEOWNERS` names and
+ * `RELEASE_REVIEW_REQUEST_LOGIN` (ci.ts) means. That account opens every PR
+ * here, and GitHub never records an author's approval, which is why the
+ * comment form exists.
+ *
+ * Never a fleet identity: `llamenos-auto` reviews AS the fleet, and an
+ * approval it could give would be the fleet clearing its own trust change.
+ * `tests/orchestrator/write-gate-properties.test.ts` pins that, and the
+ * standing rail that the fleet never posts a review (guards.test.ts: no
+ * approving flag appears anywhere under `orchestrator/`) is what keeps this
+ * list meaningful.
+ */
+export const TRUST_ANCHOR_APPROVERS: readonly string[] = ['rhonda-rodododo']
 
 /**
  * Paths a `scope:<lane>` GRANT may never reach, even when the granted lane

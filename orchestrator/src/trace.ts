@@ -1,5 +1,6 @@
 import type { VerifyReport } from './verify.js'
 import type { SecondOpinionResult } from './review.js'
+import { SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX } from './write-gate.js'
 
 export type ReviewVerdict = SecondOpinionResult['verdict']
 
@@ -18,13 +19,14 @@ export interface GateTraceInput {
 /**
  * `verifyMechanical` (verify.ts) folds scope and test failures into one
  * `reasons` array with no separate boolean for "scope specifically failed" —
- * these are the exact, stable prefixes it uses for the two scope failure
- * messages (`checkScope`'s `forbidden`/`strayed` cases). Matched by text
+ * these are the exact, stable prefixes it uses for the three write-gate
+ * refusals: a secret, a trust anchor with no human sign-off (write-gate.ts
+ * owns both prefixes), and a file outside the lane. Matched by text
  * rather than adding a new field to `VerifyReport`, so this stays a read-only
  * view over the existing report shape; pinned by a direct unit test in
  * trace.test.ts so a wording change in verify.ts is caught here too.
  */
-const SCOPE_REASON_PREFIXES = ['touched never-write paths', 'touched files outside lane'] as const
+const SCOPE_REASON_PREFIXES = [SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, 'touched files outside lane'] as const
 
 function scopeSummary(report: VerifyReport): string {
   const scopeReasons = report.reasons.filter((r) => SCOPE_REASON_PREFIXES.some((p) => r.startsWith(p)))

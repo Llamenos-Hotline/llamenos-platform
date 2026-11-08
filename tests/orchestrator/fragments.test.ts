@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseOwnedPaths, matchesPath, matchesSecretPath, isSecretTemplatePath, SECRET_TEMPLATE_SUFFIXES,
-  TEMPLATED_SECRET_PATTERNS, CERTIFICATE_ONLY_PATTERNS, isPublicCertificateFile, loadLaneScopes,
+  TEMPLATED_SECRET_PATTERNS, CERTIFICATE_ONLY_PATTERNS, isPublicCertificateFile, publicCertificateVerdict,
+  loadLaneScopes,
 } from '../../orchestrator/src/fragments.js'
-import { ISRG_ROOT_X1, ISRG_ROOT_X2, throwawayPrivateKeyPem, throwawayPublicKeyPem } from './pem-fixtures.js'
+import {
+  ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem, throwawayPublicKeyPem,
+} from './pem-fixtures.js'
 
 // Verbatim excerpt of .claude/agents/fragments/ios-supervisor.md
 const IOS = `
@@ -410,12 +413,48 @@ describe('isPublicCertificateFile / the *.pem carve-out (#1610)', () => {
       expect(isPublicCertificateFile(c)).toBe(false)
     })
 
-    it('refuses `openssl x509 -text` output, where a key could hide in the preamble', () => {
-      expect(isPublicCertificateFile(`Certificate:\n    Issuer: CN=ISRG Root X1\n${ISRG_ROOT_X1}`)).toBe(false)
+    // #2556 replaced "refuse ANY text outside a block" — which refused the two
+    // public Let's Encrypt chains #2550 needed as test input — with "refuse
+    // any text outside a block that could be carrying a key". These are the
+    // shapes a key could take there; each must still be refused, with a
+    // reason that names the line.
+    it('refuses an unarmoured key-sized base64 run hidden in annotation text', () => {
+      const raw = throwawayPrivateKeyPem().split('\n').filter((l) => !l.startsWith('-----')).join('')
+      const v = publicCertificateVerdict(`${ISRG_ROOT_X1}\n ${raw}\n${ISRG_ROOT_X2}`)
+      expect(v).toMatchObject({ public: false })
+      expect(v.public === false && v.reason).toMatch(/line \d+, outside any PEM block, carries a \d+-character base64\/hex run/)
     })
 
-    it('refuses trailing text after an otherwise valid certificate', () => {
-      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\nand then something else\n`)).toBe(false)
+    it('refuses a 32-character hex secret in annotation text, and admits a 31-character run', () => {
+      expect(isPublicCertificateFile(`Session-ID: ${'a1'.repeat(16)}\n${ISRG_ROOT_X1}`)).toBe(false)
+      expect(isPublicCertificateFile(`Session-ID: ${'a'.repeat(31)}\n${ISRG_ROOT_X1}`)).toBe(true)
+    })
+
+    // Boundaries assembled at runtime: no literal here reads as a key block
+    // to a secret scanner.
+    const pk = ['PRIVATE', 'KEY'].join(' ')
+    it.each([
+      ['an indented private key block', `  -----BEGIN ${pk}-----\n  MC4CAQAw\n  -----END ${pk}-----\n`],
+      ['a lowercase boundary beside a real certificate', `-----begin ${pk.toLowerCase()}-----\nMC4CAQAw\n-----end ${pk.toLowerCase()}-----\n`],
+      ['a stray END outside any block', '-----END CERTIFICATE-----\n'],
+    ])('refuses %s in annotation position', (_name, hidden) => {
+      const v = publicCertificateVerdict(`${ISRG_ROOT_X1}\n${hidden}`)
+      expect(v.public).toBe(false)
+      expect(v.public === false && v.reason).toMatch(/malformed PEM boundary outside any block/)
+    })
+
+    it('refuses a block whose label says CERTIFICATE but whose body is a private key', () => {
+      // The label is a claim; the decoded bytes are the fact.
+      const mislabelled = throwawayPrivateKeyPem().replaceAll('PRIVATE KEY', 'CERTIFICATE')
+      const v = publicCertificateVerdict(mislabelled)
+      expect(v.public).toBe(false)
+      expect(v.public === false && v.reason).toMatch(/"CERTIFICATE" block ending at line \d+ decodes to a PKCS#8 private key/)
+    })
+
+    it('refuses annotation with no block at all', () => {
+      expect(publicCertificateVerdict('Certificate chain\n 0 s:CN = example\n')).toEqual({
+        public: false, reason: 'it contains no PEM block',
+      })
     })
 
     it.each(['RSA PRIVATE KEY', 'EC PRIVATE KEY', 'ENCRYPTED PRIVATE KEY', 'DSA PRIVATE KEY'])(
@@ -447,6 +486,20 @@ describe('isPublicCertificateFile / the *.pem carve-out (#1610)', () => {
 
     it('permits a bare PUBLIC KEY block', () => {
       expect(isPublicCertificateFile(throwawayPublicKeyPem())).toBe(true)
+    })
+
+    // #2556 property 2. The exact shape #2550's `le-chain-ye.pem` /
+    // `le-chain-yr.pem` have: `openssl s_client -showcerts` output, the
+    // certificates interleaved with their subject/issuer/key/validity lines.
+    it('permits an `openssl s_client -showcerts` chain — published data used as test input', () => {
+      expect(publicCertificateVerdict(SHOWCERTS_CHAIN)).toEqual({ public: true })
+      expect(matchesSecretPath('apps/android/app/src/test/resources/certs/le-chain.pem', '*.pem', content(SHOWCERTS_CHAIN)))
+        .toBe(false)
+    })
+
+    it('permits `openssl x509 -text` output and trailing commentary', () => {
+      expect(isPublicCertificateFile(`Certificate:\n    Issuer: CN=ISRG Root X1\n${ISRG_ROOT_X1}`)).toBe(true)
+      expect(isPublicCertificateFile(`${ISRG_ROOT_X1}\nand then something else\n`)).toBe(true)
     })
   })
 
