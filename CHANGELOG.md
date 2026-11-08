@@ -404,6 +404,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.8 (2026-11-08)
+
+### Fixes
+
+- ban + hang up follows the server's answer; the UI test names the step that failed (#2531) (#2536)
+- five admin deletes require a confirmation token only their dialog mints (#2540) (#2543)
+- the write gate classifies by what a file is — secret, trust anchor, or writable (#2556) (#2557)
+- queue-feed isolates a PR by whether it can fail the iOS gate, not whether it schedules it (#2548) (#2568)
+- the security upgrade re-runs when Debian publishes, not once per cache lifetime (#2564) (#2567)
+- queue-feed batches PRs that share a file when git merges them (#2570) (#2580)
+- the write gate holds project.yml when a trust setting moves, not whenever it changes (#2579) (#2587)
+- admin deletes need a dialog-minted confirmation; override changes and unbans are audited (#2575) (#2583)
+- the UI test target shares the app's Localizable variant group, which Xcode 27.2 requires (#2576) (#2577)
+- signal-notifier and sip-bridge stop trusting the compromised eMudhra hierarchy (#2582) (#2588)
+
 ## 0.21.7 (2026-11-07)
 
 ### Fixes
