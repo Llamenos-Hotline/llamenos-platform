@@ -169,11 +169,11 @@ final class SecurityHardeningTests: XCTestCase {
     // Pin computation and chain evaluation are covered by CertificatePinningTests.
 
     func testCertificatePinsNonEmpty() {
-        // Production pins Let's Encrypt's ISRG Root X1 + X2. The set is a constant —
+        // Production pins Let's Encrypt's ISRG Root X1, X2, YR and YE (#2505). The set is a constant —
         // there is no runtime update that could empty it and switch pinning off.
         XCTAssertEqual(
-            CertificatePins.pinned.count, 2,
-            "CertificatePins.pinned must hold both ISRG root pins"
+            CertificatePins.pinned.count, 4,
+            "CertificatePins.pinned must hold all four ISRG root pins"
         )
     }
 

@@ -18,9 +18,18 @@
 # issuer list falls back to ZeroSSL when Let's Encrypt fails or rate-limits,
 # and a ZeroSSL certificate chains to a root the Android client does NOT pin:
 # apps/android/app/src/main/res/xml/network_security_config.xml hard-fails on
-# anything not chained to ISRG Root X1/X2. A silent fallback would look like a
-# healthy deploy on the web and be a total outage on Android. Fail loudly at
-# issuance instead. TLS must terminate here, on this box — never on a CDN.
+# anything not chained to a pinned ISRG root (X1, X2, YR, YE). A silent fallback
+# would look like a healthy deploy on the web and be a total outage on Android.
+# Fail loudly at issuance instead. TLS must terminate here, on this box — never
+# on a CDN.
+#
+# Nothing here chooses WHICH Let's Encrypt root the chain ends at, and nothing
+# needs to: every chain Let's Encrypt offers ends at one of the four roots the
+# mobile and desktop clients pin (X1/X2, and the Generation-Y roots YR/YE that
+# Let's Encrypt has issued under by default since 2026-05-13, #2505). Do NOT
+# add `preferred_chains` or an ACME `profile` to steer it: a chain that ends at
+# a root no client pins is the outage, and the client pin set is immutable once
+# released (docs/security/CERTIFICATE_PINS.md).
 {
     email {{ acme_email }}
     acme_ca https://acme-v02.api.letsencrypt.org/directory

@@ -30,12 +30,22 @@ final class CertificatePinningTests: XCTestCase {
         XCTAssertEqual(SubjectPublicKeyInfo.pin(of: root), CertificatePins.isrgRootX2Hash)
     }
 
+    /// #2505: the Gen-Y pins are the SPKI hashes of the roots Let's Encrypt publishes, and the
+    /// cross-signed copies the server presents today carry the same keys — so one pin
+    /// matches the root in either form.
+    func testGenYRootPinsAreSPKIHashesOfBothFormsOfEachRoot() throws {
+        XCTAssertEqual(SubjectPublicKeyInfo.pin(of: try certificate(F.isrgRootYR)), CertificatePins.isrgRootYRHash)
+        XCTAssertEqual(SubjectPublicKeyInfo.pin(of: try certificate(F.isrgRootYE)), CertificatePins.isrgRootYEHash)
+        XCTAssertEqual(SubjectPublicKeyInfo.pin(of: try certificate(F.isrgRootYRByX1)), CertificatePins.isrgRootYRHash)
+        XCTAssertEqual(SubjectPublicKeyInfo.pin(of: try certificate(F.isrgRootYEByX2)), CertificatePins.isrgRootYEHash)
+    }
+
     /// The pre-fix computation, kept as a witness: hashing the external key
     /// representation of the very same roots does NOT produce the pins. If this ever
     /// started matching, the SPKI tests above would no longer be the thing proving
     /// correctness.
     func testRawKeyRepresentationHashNeverMatchesTheSPKIPins() throws {
-        for der in [F.isrgRootX1, F.isrgRootX2] {
+        for der in [F.isrgRootX1, F.isrgRootX2, F.isrgRootYR, F.isrgRootYE] {
             let key = try XCTUnwrap(SecCertificateCopyKey(try certificate(der)))
             let raw = try XCTUnwrap(SecKeyCopyExternalRepresentation(key, nil) as Data?)
             XCTAssertFalse(CertificatePins.pinned.contains(SubjectPublicKeyInfo.sha256Base64(raw)))
@@ -134,12 +144,88 @@ final class CertificatePinningTests: XCTestCase {
 
     // MARK: - Pin set
 
-    func testPinSetIsTheTwoISRGRootsAndMatchesAndroid() {
-        // Android pins the same two hashes (network_security_config.xml, ApiService.kt).
+    func testPinSetIsTheFourISRGRootsAndMatchesAndroidAndDesktop() {
+        // Android (network_security_config.xml, ApiService.DEFAULT_PIN_HASHES) and desktop
+        // (ISRG_ROOT_PINS) pin the same four hashes; each platform re-derives them from the
+        // published certificates in its own tests.
         XCTAssertEqual(
             CertificatePins.pinned,
-            ["C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=", "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI="]
+            [
+                "C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=", // ISRG Root X1
+                "diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=", // ISRG Root X2
+                "fk6IOKit1ild5647BH06ujSIq5XbCgqlbYl6ANhhi88=", // ISRG Root YR
+                "sCkq5UWXjg+7mKu9lMhhYF5bGLsy7VI/UNW3tccdR7w=", // ISRG Root YE
+            ]
         )
+    }
+
+    // MARK: - Rotation (#2505)
+    //
+    // The invariant, not the values: a chain whose evaluation reaches ANY pinned root is
+    // accepted, and a chain that is just as valid but reaches an unpinned one is refused.
+    // The system trust store cannot be edited from a test, so each case pins the anchor
+    // explicitly (`SecTrustSetAnchorCertificates`) — the evaluation, the SSL policy bound to
+    // the host and the date checks are all real; only the choice of anchor is the test's.
+    // That is exactly the situation a future OS release creates by adding Root YR / YE.
+
+    private struct RotationCase {
+        let name: String
+        let host: String
+        let presented: [String]
+        let anchor: String
+    }
+
+    private var pinnedRootCases: [RotationCase] {
+        [
+            RotationCase(name: "ISRG Root X1 via the YR cross-sign", host: F.letsEncryptHost,
+                         presented: F.letsEncryptChain, anchor: F.isrgRootX1),
+            RotationCase(name: "ISRG Root X2 via the YE cross-sign", host: F.letsEncryptHostYE,
+                         presented: F.letsEncryptChainYE, anchor: F.isrgRootX2),
+            RotationCase(name: "ISRG Root YR", host: F.letsEncryptHost,
+                         presented: Array(F.letsEncryptChain.prefix(2)), anchor: F.isrgRootYR),
+            RotationCase(name: "ISRG Root YE", host: F.letsEncryptHostYE,
+                         presented: Array(F.letsEncryptChainYE.prefix(2)), anchor: F.isrgRootYE),
+        ]
+    }
+
+    func testChainAnchoredByAnyPinnedRootIsAccepted() throws {
+        for c in pinnedRootCases {
+            let trust = try serverTrust(c.presented, anchors: [c.anchor])
+            XCTAssertEqual(CertificatePinValidator.evaluate(trust, host: c.host), .accept, c.name)
+        }
+    }
+
+    /// A valid chain to a root whose key is not pinned. If the evaluation had failed instead
+    /// (`rejectUntrustedChain`) this test would prove nothing about the pin, so it requires
+    /// the pin-mismatch outcome specifically.
+    func testChainAnchoredByAnUnpinnedRootIsRefusedAsAPinMismatch() throws {
+        let trust = try serverTrust([F.unpinnedLeaf], anchors: [F.unpinnedCA])
+        guard case .rejectPinMismatch(let observed) =
+            CertificatePinValidator.evaluate(trust, host: F.letsEncryptHost)
+        else {
+            return XCTFail("a valid chain to an unpinned root must be refused as a pin mismatch")
+        }
+        XCTAssertFalse(observed.isEmpty, "the chain was evaluated and its keys inspected")
+        XCTAssertTrue(CertificatePins.pinned.isDisjoint(with: observed))
+    }
+
+    /// The #2505 outage in miniature: with only X1 / X2 pinned, the chain a trust store
+    /// anchors at Root YR / YE carries no pinned key. This is the half that shows the new
+    /// pins are what accepts it.
+    func testGenYPinsAreWhatAcceptAYAnchoredChain() throws {
+        let legacy: Set<String> = [CertificatePins.isrgRootX1Hash, CertificatePins.isrgRootX2Hash]
+        for c in pinnedRootCases.suffix(2) {
+            let trust = try serverTrust(c.presented, anchors: [c.anchor])
+            guard case .rejectPinMismatch = CertificatePinValidator.evaluate(trust, host: c.host, pins: legacy)
+            else { return XCTFail("\(c.name): the X1/X2-only pin set must refuse a Y-anchored chain") }
+        }
+        for c in pinnedRootCases.prefix(2) {
+            let trust = try serverTrust(c.presented, anchors: [c.anchor])
+            XCTAssertEqual(
+                CertificatePinValidator.evaluate(trust, host: c.host, pins: legacy), .accept,
+                "\(c.name): the cross-signed chains served today still satisfy the X1/X2-only set"
+            )
+        }
     }
 
     // MARK: - Live handshake (opt-in)
@@ -178,8 +264,11 @@ final class CertificatePinningTests: XCTestCase {
 
     /// A server trust as URLSession would hand it over: the presented certificates and an
     /// SSL policy, evaluated at `date` with network fetches disabled.
+    ///
+    /// `anchors` replaces the system roots for this evaluation (see "Rotation" above).
     private func serverTrust(
         _ chain: [String],
+        anchors: [String]? = nil,
         at date: Date = CertificatePinningFixtures.letsEncryptChainVerifyDate
     ) throws -> SecTrust {
         let certificates = try chain.map(certificate)
@@ -189,6 +278,12 @@ final class CertificatePinningTests: XCTestCase {
         )
         XCTAssertEqual(status, errSecSuccess)
         let serverTrust = try XCTUnwrap(trust)
+        if let anchors {
+            XCTAssertEqual(
+                SecTrustSetAnchorCertificates(serverTrust, try anchors.map(certificate) as CFArray),
+                errSecSuccess
+            )
+        }
         XCTAssertEqual(SecTrustSetVerifyDate(serverTrust, date as CFDate), errSecSuccess)
         XCTAssertEqual(SecTrustSetNetworkFetchAllowed(serverTrust, false), errSecSuccess)
         return serverTrust
