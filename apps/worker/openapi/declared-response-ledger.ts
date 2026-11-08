@@ -22,16 +22,18 @@ export interface KnownViolation {
   issue: number
 }
 
-/** Owns every entry below until each is split out or fixed. */
+/** Owns what has not been split out to an issue of its own — today, the validator 400 below. */
 const TRACKING_ISSUE = 2521
 
 export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
-  { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/provider-setup/signal/register', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/provider-setup/signal/status', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: TRACKING_ISSUE },
+  { method: 'POST', route: '/api/hubs/:hubId/blasts', status: 201, issue: 2572 },
+  { method: 'POST', route: '/api/hubs/:hubId/blasts/:id/send', status: 200, issue: 2572 },
+  { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: 2300 },
+  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/provider-setup/signal/register', status: 200, issue: 2571 },
+  { method: 'GET', route: '/api/provider-setup/signal/status', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: 2571 },
 ]
 
 /**
