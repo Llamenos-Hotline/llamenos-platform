@@ -5,16 +5,21 @@ import { siteConfig } from '../config';
  * artifacts.
  *
  * Release layout (published by CI):
- *   `desktop-v<version>` — desktop installers, each with a base64-wrapped
+ *   `v<version>-desktop` — desktop installers, each with a base64-wrapped
  *                          minisign `.sig`, plus CHECKSUMS.txt, SBOM and
  *                          build-info.json (.github/workflows/tauri-release.yml)
- *   `android-v<version>` — app-release.apk + app-release.apk.sha256
+ *   `v<version>-android` — app-release.apk + app-release.apk.sha256
  *                          (.github/workflows/mobile-release.yml)
  *   `v<version>`         — integrity metadata ONLY (cosign-signed CHECKSUMS.txt,
  *                          SLSA provenance, SBOM). Never carries an installer,
  *                          so it must never be the source of a download link.
  *
- * CHECKSUMS.txt is taken from the SAME desktop-v* release that serves the
+ * Platform tags are version-first so GitHub's Releases page, which orders
+ * same-day releases by tag name, keeps one version's releases together.
+ * Releases cut before that change are tagged `desktop-v<version>` /
+ * `android-v<version>`; tags are immutable, so both forms are read.
+ *
+ * CHECKSUMS.txt is taken from the SAME desktop release that serves the
  * installers, so the integrity reference cannot drift from the binaries.
  *
  * Runs only at build time (Astro static output). Any failure — offline build,
@@ -84,10 +89,27 @@ async function listReleases(): Promise<GhRelease[] | null> {
   }
 }
 
-function latestTagged(releases: GhRelease[], prefix: string): GhRelease | null {
-  const matches = releases.filter(r => !r.draft && r.tag_name.startsWith(prefix));
+type Platform = 'desktop' | 'android';
+
+/** The version a platform release's tag names, or null if it is not one. */
+export function platformTagVersion(tag: string, platform: Platform): string | null {
+  const m = new RegExp(`^(?:v(\\d[^\\s]*)-${platform}|${platform}-v(\\d[^\\s]*))$`).exec(tag);
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+interface TaggedRelease {
+  release: GhRelease;
+  version: string;
+}
+
+function latestTagged(releases: GhRelease[], platform: Platform): TaggedRelease | null {
+  const matches: TaggedRelease[] = [];
+  for (const release of releases) {
+    const version = release.draft ? null : platformTagVersion(release.tag_name, platform);
+    if (version !== null) matches.push({ release, version });
+  }
   if (matches.length === 0) return null;
-  matches.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
+  matches.sort((a, b) => Date.parse(b.release.published_at) - Date.parse(a.release.published_at));
   return matches[0];
 }
 
@@ -99,10 +121,10 @@ function assetUrl(release: GhRelease, match: (name: string) => boolean): string 
 //   Hotline_0.19.18_x64-setup.exe, Hotline_0.19.18_x64_en-US.msi,
 //   Hotline_0.19.18_amd64.AppImage, Hotline_0.19.18_amd64.deb,
 //   Hotline-0.19.18-1.x86_64.rpm, CHECKSUMS.txt (+ .sig per installer)
-function toDesktopRelease(r: GhRelease): DesktopRelease {
+function toDesktopRelease({ release: r, version }: TaggedRelease): DesktopRelease {
   return {
     tag: r.tag_name,
-    version: r.tag_name.replace(/^desktop-v/, ''),
+    version,
     url: r.html_url,
     checksumsUrl: assetUrl(r, n => n === 'CHECKSUMS.txt'),
     windowsExe: assetUrl(r, n => n.endsWith('_x64-setup.exe')),
@@ -114,10 +136,10 @@ function toDesktopRelease(r: GhRelease): DesktopRelease {
 }
 
 // Asset names observed on android-v0.19.18: app-release.apk, app-release.apk.sha256
-function toAndroidRelease(r: GhRelease): AndroidRelease {
+function toAndroidRelease({ release: r, version }: TaggedRelease): AndroidRelease {
   return {
     tag: r.tag_name,
-    version: r.tag_name.replace(/^android-v/, ''),
+    version,
     url: r.html_url,
     apkUrl: assetUrl(r, n => n === 'app-release.apk'),
     apkSha256Url: assetUrl(r, n => n === 'app-release.apk.sha256'),
@@ -129,8 +151,8 @@ export async function fetchLatestReleases(): Promise<LatestReleases> {
   if (!releases) {
     return { desktop: null, android: null, fetchFailed: true };
   }
-  const desktop = latestTagged(releases, 'desktop-v');
-  const android = latestTagged(releases, 'android-v');
+  const desktop = latestTagged(releases, 'desktop');
+  const android = latestTagged(releases, 'android');
   return {
     desktop: desktop ? toDesktopRelease(desktop) : null,
     android: android ? toAndroidRelease(android) : null,

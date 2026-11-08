@@ -20,6 +20,43 @@ versioned_files = [
     { path = "deploy/helm/llamenos/Chart.yaml", regex = 'appVersion: "(?<version>[0-9]+[.][0-9]+[.][0-9]+)"' },
 ]
 changelog = "CHANGELOG.md"
+# Release notes are PRODUCT-ONLY: what changed for someone who runs, uses or
+# self-hosts Llamenos. This is an ALLOWLIST of conventional-commit scopes, so
+# a scope that is not listed here is excluded by default — from the changelog
+# AND from the version bump. Internal tooling (fleet, orchestrator, ci, tests,
+# e2e, bdd, release pipeline, scripts, lint, deps, site, agents, codegen, …)
+# is deliberately absent and must stay absent: a `feat(fleet)` once shipped
+# under "### Features" in a user-facing release.
+#
+# The rule, exactly as knope applies it (tested against knope 0.22.4):
+#   - `feat|fix(<scope>)` with <scope> in this list (case-insensitive) → in.
+#   - Any other scope → out, including a multi-scope `fix(desktop,worker)`:
+#     knope compares the whole scope string. Give a product change ONE scope.
+#   - No scope at all → in. knope always considers unscoped commits; an
+#     unscoped `feat:`/`fix:` therefore claims to be a whole-product change.
+# Every commit this rule leaves out is listed in the release PR body
+# (knope-release-pr.yml → scripts/release/notes-scope.ts), so a product scope
+# missing from this list is visible at release review, not silently dropped.
+#
+# Adding a product area: add its scope here in the same PR that introduces it.
+scopes = [
+    # Clients
+    "desktop", "ios", "android", "mobile", "clients", "client", "ui", "a11y", "i18n",
+    # Server, sidecars and the shared layer
+    "worker", "backend", "server", "api", "crypto", "protocol", "schemas", "db",
+    "sip-bridge", "asterisk", "signal", "signal-notifier", "firehose", "cms",
+    # Product domains
+    "telephony", "messaging", "calls", "calling", "ringing", "ivr", "turn", "relay", "push",
+    "auth", "webauthn", "identity", "roles", "permissions", "provisioning", "devices",
+    "recovery", "recovery-group", "pin", "puk", "account", "hubs", "settings", "setup",
+    "bootstrap-admin", "shifts", "invites", "incidents", "notes", "readers", "records",
+    "contacts", "conversations", "channels", "events", "evidence", "files", "triage",
+    "bans", "blasts", "blast", "audit", "analytics", "erasure", "shred", "geocoding",
+    "templates", "teams", "entity", "contract", "scope", "config", "env", "cors",
+    "middleware", "logging", "observability", "health", "security", "ssrf",
+    # The self-hostable stack operators deploy from a release
+    "deploy", "ansible", "docker", "helm", "iso", "opentofu",
+]
 extra_changelog_sections = [
     { name = "Security", types = ["security"] },
     { name = "Performance", types = ["perf"] },

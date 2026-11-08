@@ -28,7 +28,7 @@
 # Consequence worth knowing: a failed desktop or Android build now fails the
 # release and leaves `v<version>` an unpublished draft — loudly, instead of a
 # published release with nothing in it. Re-run the failed jobs; if the
-# `desktop-v<version>` / `android-v<version>` release of the failed leg was
+# `v<version>-desktop` / `v<version>-android` release of the failed leg was
 # already published (immutable, so it refuses a rebuild), bump the version.
 #
 # `…/releases/latest/download/<alias>` then resolves for every alias in the
@@ -216,7 +216,7 @@ jobs:
             echo "- Android: [APK](${BASE}/llamenos-android.apk)"
             echo "- macOS: attached as \`llamenos-macos-universal.dmg\` only when the build is Apple-signed and notarized (#741); otherwise it is withheld."
             echo ""
-            echo "Every file here is byte-identical to the one on the versioned \`desktop-v${NEW_VERSION}\` / \`android-v${NEW_VERSION}\` releases, which keep the original file names."
+            echo "Every file here is byte-identical to the one on the versioned \`v${NEW_VERSION}-desktop\` / \`v${NEW_VERSION}-android\` releases, which keep the original file names."
             echo ""
             echo "### Verify"
             echo ""
@@ -226,7 +226,7 @@ jobs:
             echo "sha256sum -c CHECKSUMS.txt --ignore-missing   # run next to the files you downloaded"
             echo "${FENCE}"
             echo ""
-            echo "Desktop installers also carry a minisign \`.sig\`; see the \`desktop-v${NEW_VERSION}\` release notes for the command."
+            echo "Desktop installers also carry a minisign \`.sig\`; see the \`v${NEW_VERSION}-desktop\` release notes for the command."
             echo ""
             echo "Desktop update metadata is published to the [llamenos-releases](https://github.com/Llamenos-Hotline/llamenos-releases) repository."
           } >> release-notes.md
@@ -246,7 +246,7 @@ jobs:
           fi
           gh release create "v${NEW_VERSION}" \
             --draft \
-            --title "v${NEW_VERSION}" \
+            --title "v${NEW_VERSION} API" \
             --notes-file release-notes.md \
             BUILD-MANIFEST.txt
 
