@@ -360,6 +360,15 @@ export interface TrustAnchorFile {
    * a change knope never makes.
    */
   releaseBump?: RegExp
+  /**
+   * Set when a change to the file is judged by its CONTENT instead of being
+   * held whatever changed: the name of the rule that decides which changes are
+   * trust decisions. The rule must fail closed, holding anything it cannot read
+   * faithfully and anything outside an explicit list of routine changes. Only
+   * `'xcodegen-spec'` exists (`xcodegenTrustFinding`, xcodegen-trust.ts,
+   * #2579).
+   */
+  contentRule?: 'xcodegen-spec'
 }
 
 /**
@@ -423,12 +432,18 @@ export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
     client: 'desktop',
     anchors: 'the desktop pinned HTTP client and WebSocket connector every backend request is built on',
   },
-  // The build files that decide WHICH of the above ships. Whole-file, because
-  // their formats are not line-shaped: a plist key and its value sit on
-  // different lines inside nested dicts, the Android manifest is merged with
-  // `tools:remove`/`tools:replace` semantics, and XcodeGen YAML has flow
-  // style, `include:` and templates. A line-signature check over any of these
-  // would be a parser differential.
+  // The build files that decide WHICH of the above ships. No LINE rule can
+  // read them: a plist key and its value sit on different lines inside nested
+  // dicts, the Android manifest is merged with `tools:remove`/`tools:replace`
+  // semantics, and XcodeGen YAML has flow style, `include:` and templates. A
+  // line-signature check over any of these would be a parser differential.
+  //
+  // The manifest and the Info.plist are held whole. Since 2026-08-01 neither
+  // has had a single edit that was not knope's release bump, so whole-file
+  // costs nothing (#2579). `project.yml` is parsed and compared structurally
+  // instead (`contentRule`). It is edited for test targets, schemes and
+  // packages, and holding all of that whole stopped #2577, the fix for a
+  // repo-wide iOS outage that moved no trust setting.
   {
     path: 'apps/android/app/src/main/AndroidManifest.xml',
     client: 'android',
@@ -444,6 +459,7 @@ export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
     path: 'apps/ios/project.yml',
     client: 'ios',
     anchors: 'the XcodeGen spec the iOS app is built from — its sources, its Info.plist and the App Transport Security keys it writes',
+    contentRule: 'xcodegen-spec',
   },
 ]
 

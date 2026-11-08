@@ -227,7 +227,10 @@ export function classifyImpact(
     // client trust".
     const anchor = trustAnchorEntry(f)
     if (anchor !== undefined) {
-      reasons.push(`${f} is a trust anchor — ${anchor.anchors} (lands only with a human sign-off on its head)`)
+      const held = anchor.contentRule === undefined
+        ? 'lands only with a human sign-off on its head'
+        : 'a change outside its routine paths lands only with a human sign-off on its head'
+      reasons.push(`${f} is a trust anchor — ${anchor.anchors} (${held})`)
     }
   }
   if (changedFiles.length > LARGE_DIFF_FILES) {

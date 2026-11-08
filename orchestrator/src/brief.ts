@@ -1,4 +1,7 @@
-import { SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane } from './config.js'
+import {
+  SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane, type TrustAnchorFile,
+} from './config.js'
+import { ROUTINE_XCODEGEN_PATHS } from './xcodegen-trust.js'
 import { SECRET_TEMPLATE_SUFFIXES } from './fragments.js'
 import type { WorkItem } from './source.js'
 
@@ -31,10 +34,17 @@ export function renderBrief(brief: Brief): string {
  * that learns about a trust anchor only from a red `fleet/verify` has
  * already spent its session on a PR it was never told needs a human.
  */
+/** What a content-judged trust anchor's rule holds, as a worker is told it. */
+const CONTENT_RULE_SUMMARY: Record<NonNullable<TrustAnchorFile['contentRule']>, string> = {
+  'xcodegen-spec': `held only when it changes something outside ${ROUTINE_XCODEGEN_PATHS.map((r) => `\`${r.path}\``).join(', ')}`,
+}
+
 export function writeGateRules(): string {
   const patterns = SECRET_PATH_PATTERNS.map((p) => `\`${p}\``).join(', ')
   const templates = SECRET_TEMPLATE_SUFFIXES.map((t) => `\`${t}\``).join('/')
-  const anchors = TRUST_ANCHOR_FILES.map((a) => `  - \`${a.path}\` — ${a.anchors}`).join('\n')
+  const anchors = TRUST_ANCHOR_FILES.map((a) =>
+    `  - \`${a.path}\` — ${a.anchors}${a.contentRule === undefined ? '' : ` (${CONTENT_RULE_SUMMARY[a.contentRule]})`}`,
+  ).join('\n')
   return (
     `- Never write secret material. A file whose path matches a secret pattern (${patterns}) is refused — ` +
     `except a committed ${templates} template and a \`*.pem\` that is provably public certificate material — and ` +

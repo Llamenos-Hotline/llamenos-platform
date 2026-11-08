@@ -53,7 +53,9 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   - `apps/desktop/src/net.rs`
   - `apps/android/app/src/main/AndroidManifest.xml`
   - `apps/ios/Sources/App/Info.plist` (knope's release version bump alone is not held)
-  - `apps/ios/project.yml`
+  - `apps/ios/project.yml` (parsed, not held whole (#2579): test-target sources/settings, scheme test lists,
+    remote Swift packages and the Xcode-version option are routine. Any other change is held, and so is
+    a file the rule cannot parse)
 - **Everything else is writable** — including public certificates and annotated chains used
   as test input.
 
