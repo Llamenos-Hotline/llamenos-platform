@@ -67,8 +67,9 @@ const TEST_TARGET = '<test target>'
 export interface RoutinePath {
   path: string
   why: string
-  /** A further condition on the values at `path` on both sides. */
-  when?: (before: Canon | undefined, after: Canon | undefined) => boolean
+  /** A further condition on the values at `path` on both sides, given both
+   *  whole specs as well. */
+  when?: (before: Canon | undefined, after: Canon | undefined, specs: { before: Canon; after: Canon }) => boolean
 }
 
 export const ROUTINE_XCODEGEN_PATHS: readonly RoutinePath[] = [
@@ -81,13 +82,21 @@ export const ROUTINE_XCODEGEN_PATHS: readonly RoutinePath[] = [
   // Package and dependency choices are supply-chain decisions with their own
   // review (Package.swift/Package.resolved, CODEOWNERS). This is the same
   // line `TRUST_SIGNATURES` draws for Gradle and Cargo dependencies.
-  { path: 'packages', why: 'a Swift package pin: supply chain, gated separately' },
+  {
+    // Remote packages only. A local package (`path:`) compiles code from this
+    // repo into the app, code that neither Package.resolved nor the line rule
+    // reads, so adding, changing or re-pointing one is held.
+    path: 'packages',
+    why: 'a remote Swift package pin: supply chain, gated separately',
+    when: (before, after) => sameCanon(nonRemotePackages(before), nonRemotePackages(after)),
+  },
   {
     // Only `package:` entries. A `target:` or `framework:` entry can embed
     // code from outside the roots the line rule reads, so changing one holds.
     path: 'targets.*.dependencies',
     why: 'which Swift packages a target links: supply chain, gated separately',
-    when: (before, after) => sameCanon(nonPackageItems(before), nonPackageItems(after)),
+    when: (before, after, specs) =>
+      sameCanon(nonPackageItems(before, specs.before), nonPackageItems(after, specs.after)),
   },
   { path: 'options.xcodeVersion', why: 'the Xcode version the project file declares' },
   { path: 'options.minimumXcodeGenVersion', why: 'the XcodeGen version the spec requires' },
@@ -169,14 +178,37 @@ const PACKAGE_DEPENDENCY_KEYS: ReadonlySet<string> = new Set([
   'package', 'product', 'products', 'link', 'embed', 'codeSign', 'weak', 'platformFilter', 'platformFilters',
 ])
 
-const isPackageDependency = (d: Canon): boolean =>
-  d.kind === 'map' && d.entries.has('package') && [...d.entries.keys()].every((k) => PACKAGE_DEPENDENCY_KEYS.has(k))
+/** The keys a REMOTE package declaration may carry: where it lives and
+ *  which version. Anything else (`path:` above all) is not remote. */
+const REMOTE_PACKAGE_KEYS: ReadonlySet<string> = new Set([
+  'url', 'github', 'version', 'from', 'exactVersion', 'revision', 'branch', 'minorVersion', 'majorVersion',
+  'minVersion', 'maxVersion',
+])
 
-/** A dependency list without its unambiguous `package:` entries. Anything
- *  that is not a list is returned whole, so it still compares. */
-function nonPackageItems(deps: Canon | undefined): Canon | undefined {
+const isRemotePackage = (p: Canon | undefined): boolean =>
+  p?.kind === 'map' && (p.entries.has('url') || p.entries.has('github')) &&
+  [...p.entries.keys()].every((k) => REMOTE_PACKAGE_KEYS.has(k))
+
+/** The `packages` map without its remote declarations. Anything that is not
+ *  a map is returned whole, so it still compares. */
+function nonRemotePackages(packages: Canon | undefined): Canon | undefined {
+  if (packages?.kind !== 'map') return packages
+  return { kind: 'map', entries: new Map([...packages.entries].filter(([, p]) => !isRemotePackage(p))) }
+}
+
+/** True for an unambiguous `package:` dependency on a package `spec`
+ *  declares as remote. */
+function isRemotePackageDependency(d: Canon, spec: Canon): boolean {
+  if (d.kind !== 'map' || ![...d.entries.keys()].every((k) => PACKAGE_DEPENDENCY_KEYS.has(k))) return false
+  const name = d.entries.get('package')
+  return name?.kind === 'scalar' && isRemotePackage(child(child(spec, 'packages'), name.text))
+}
+
+/** A dependency list without its unambiguous dependencies on remote packages.
+ *  Anything that is not a list is returned whole, so it still compares. */
+function nonPackageItems(deps: Canon | undefined, spec: Canon): Canon | undefined {
   if (deps?.kind !== 'seq') return deps
-  return { kind: 'seq', items: deps.items.filter((d) => !isPackageDependency(d)) }
+  return { kind: 'seq', items: deps.items.filter((d) => !isRemotePackageDependency(d, spec)) }
 }
 
 /** True when `targets.<name>` is a test bundle with no template, in `spec`. */
@@ -199,7 +231,7 @@ function routineFor(path: readonly string[], before: Canon, after: Canon): strin
     })
     if (!hit) continue
     const at = (spec: Canon) => pattern.reduce<Canon | undefined>((c, _seg, i) => child(c, path[i] as string), spec)
-    if (r.when === undefined || r.when(at(before), at(after))) return r.path
+    if (r.when === undefined || r.when(at(before), at(after), { before, after })) return r.path
   }
   return undefined
 }
@@ -289,5 +321,5 @@ export function xcodegenTrustFinding(
   const more = changes.length > 1 ? ` and ${changes.length - 1} other non-routine path(s)` : ''
   return `its diff changes \`${dotted(first.path)}\` (${show(first.before)} → ${show(first.after)})${more}, ` +
     'which is not one of the routine XcodeGen paths (test-target sources/settings/dependencies, scheme test lists, ' +
-    'Swift packages, the xcodeVersion option)'
+    'remote Swift packages, the xcodeVersion option)'
 }

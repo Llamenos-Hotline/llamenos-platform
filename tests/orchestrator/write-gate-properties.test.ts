@@ -648,7 +648,8 @@ describe('#2579 — the XcodeGen spec is held when a trust setting moves, not wh
   it.each<[string, () => string]>([
     ['a scheme test-target list', () => edit('        - LlamenosUITests\n      gatherCoverageData', '      gatherCoverageData')],
     ['a Swift package revision', () => real.replace(/revision: [0-9a-f]{40}/, `revision: ${'a'.repeat(40)}`)],
-    ['a package added to the app target', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - package: other\n')],
+    ['a remote package added and linked by the app target', () => edit('packages:\n', 'packages:\n  Other:\n    url: https://example.com/other\n    exactVersion: 1.2.3\n')
+      .replace('      - package: linphonesw\n', '      - package: linphonesw\n      - package: Other\n')],
     ['the Xcode version', () => edit('xcodeVersion: "26.0"', 'xcodeVersion: "27.2"')],
     ['a unit-test target\'s settings', () => edit('PRODUCT_BUNDLE_IDENTIFIER: org.llamenos.hotline.tests', 'PRODUCT_BUNDLE_IDENTIFIER: org.llamenos.hotline.unit')],
     ['comments only', () => edit('# ─── UI Tests', '# ─── UI test bundle')],
@@ -691,6 +692,11 @@ describe('#2579 — the XcodeGen spec is held when a trust setting moves, not wh
     ['a test target embedded in the app', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - target: LlamenosUITests\n        embed: true\n'),
       'targets.Llamenos.dependencies[2]'],
     ['a target smuggled into a package entry', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - package: x\n        target: LlamenosUITests\n'),
+      'targets.Llamenos.dependencies[2]'],
+    ['a local Swift package declared', () => edit('packages:\n', 'packages:\n  Local:\n    path: ../../tools/local-pkg\n'), 'packages.Local'],
+    ['a remote package re-pointed to a local path', () => real.replace(/    url: https:\/\/github\.com\/BelledonneCommunications\/linphone-sdk-swift-ios\n/, '    path: ../../vendor/linphone\n'),
+      'packages.linphonesw'],
+    ['a package dependency on a package the spec does not declare', () => edit('      - package: linphonesw\n', '      - package: linphonesw\n      - package: Undeclared\n'),
       'targets.Llamenos.dependencies[2]'],
     ['the deployment target lowered', () => edit('    iOS: "17.0"', '    iOS: "8.0"'), 'options.deploymentTarget.iOS'],
     ['a test target retyped as an app', () => edit('type: bundle.ui-testing', 'type: application'), 'targets.LlamenosUITests.type'],
