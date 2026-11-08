@@ -72,8 +72,9 @@ extension BaseUITest {
     /// find the event the app emits for that thing and wait on it.
     static let eventBackstop: TimeInterval = 60
 
-    /// The app's own copy for `key`, from the generated English strings bundled into this test
-    /// target (`project.yml`). The app is launched pinned to English (`BaseUITest.setUp`), so this
+    /// The app's own copy for `key`, from the generated strings bundled into this test target
+    /// (`project.yml` shares the app's `Resources/Localizable` variant group, so every locale is
+    /// in the bundle; this reads `en.lproj` explicitly). The app is launched pinned to English (`BaseUITest.setUp`), so this
     /// is exactly what it renders. Fails the test on a key the strings do not define, rather than
     /// returning the key and letting a wait time out on a label nothing will ever show.
     func appString(_ key: String, file: StaticString = #filePath, line: UInt = #line) -> String {
