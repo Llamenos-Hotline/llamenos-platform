@@ -122,6 +122,7 @@ describe('checkScope', () => {
         'packages/test-specs/',
         'packages/i18n/languages.ts',
         'packages/i18n/tools/',
+        'tests/runner-boundary.spec.ts',
       ])
     })
 
