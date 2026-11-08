@@ -95,11 +95,11 @@ describe('assembled agent definitions stay in sync with all of their sources', (
       run.status,
       `an assembled .claude/agents/<lane>-supervisor.md is stale — run \`bun run agents:build\` and commit the result:\n${run.stderr}`,
     ).toBe(0)
-    // A check that built nothing compared nothing; pin that all six lanes were assembled.
-    expect(run.stdout).toContain('Check passed: 6 agent definitions match their sources.')
+    // A check that built nothing compared nothing; pin that every lane was assembled.
+    expect(run.stdout).toContain('Check passed: 7 agent definitions match their sources.')
   })
 
-  it.each(['desktop', 'ios', 'android', 'backend', 'shared', 'infra'] as const)(
+  it.each(['desktop', 'ios', 'android', 'backend', 'shared', 'infra', 'mac'] as const)(
     '%s-supervisor.md carries the shared worker rules, not only its lane fragment',
     async (lane) => {
       const fragment = await readFile(join(FRAGMENTS_DIR, `${lane}-supervisor.md`), 'utf8')

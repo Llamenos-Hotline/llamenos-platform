@@ -46,6 +46,7 @@ SUPERVISORS=(
   backend-supervisor
   shared-supervisor
   infra-supervisor
+  mac-supervisor
 )
 
 # Verify every shared source exists — no fallback to a machine-local copy

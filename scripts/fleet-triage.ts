@@ -52,6 +52,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../orchestrator/src/fragments.js'
+import { LANE_IDS } from '../orchestrator/src/config.js'
 import { gh, describeGhFailure } from '../orchestrator/src/gh.js'
 
 /** The only labels this agent may ever apply. `agent-dispatchable` is absent
@@ -163,11 +164,19 @@ export function attributePaths(paths: string[], scopes: Record<string, LaneScope
  *     and a mis-routed dispatch burns three attempts before giving up (#1764).
  *
  * Lane iteration is sorted so a tie-break is deterministic across runs.
+ *
+ * Only fleet lanes count. A supervisor fragment that is not in `LANE_IDS`
+ * (mac-supervisor, #2599) still takes part in `attributePaths`, so its paths
+ * resolve to it by longest match instead of falling through to a lane that
+ * disclaims them. But the router cannot dispatch to it, so its paths implicate
+ * nobody here: the issue stays unlabelled for a human.
  */
 export function decideLane(attributed: Map<string, string[]>): TriageDecision {
+  const fleetLanes: ReadonlySet<string> = new Set(LANE_IDS)
+  const routable = [...attributed].filter(([lane]) => fleetLanes.has(lane))
   const lanes: Record<string, number> = {}
-  for (const [lane, paths] of attributed) lanes[lane] = paths.length
-  const paths = [...attributed.values()].flat()
+  for (const [lane, paths] of routable) lanes[lane] = paths.length
+  const paths = routable.flatMap(([, p]) => p)
   const ranked = Object.entries(lanes).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
   if (ranked.length === 0) {
     return { label: null, reason: 'no cited path matched any lane scope', lanes, paths }

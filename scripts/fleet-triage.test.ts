@@ -170,6 +170,18 @@ describe('against the real lane scope table (the same one select.ts uses)', () =
     }
   })
 
+  test('a path only a non-fleet fragment owns is left for a human, never labelled for it (#2599)', () => {
+    expect(scopes.mac?.owned).toContain('.github/workflows/ios-e2e.yml')
+    const d = triageBody('.github/workflows/ios-e2e.yml has a stale timeout', scopes)
+    expect(d.label).toBeNull()
+  })
+
+  test('a non-fleet fragment does not count towards the implicated lanes (#2599)', () => {
+    const d = triageBody('apps/ios/Sources/App.swift calls scripts/mac-run.sh', scopes)
+    expect(d.label).toBe('lane:ios')
+    expect(d.lanes).toEqual({ ios: 1 })
+  })
+
   test('#1690-shaped body (deploy/... asterisk image) -> lane:infra', () => {
     const d = triageBody('The asterisk image in deploy/docker/Dockerfile.asterisk is stale', scopes)
     expect(d.label).toBe('lane:infra')
