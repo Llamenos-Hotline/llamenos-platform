@@ -73,6 +73,35 @@ Each learned from a live fleet failure. Full list + failures:
   HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
   by path or by your PR description. Say so in the description if the paths do not show it.
 
+## The write gate (#2556) — secrets, trust anchors, everything else
+
+`fleet/verify` and `fleet/review` sort every changed file into one of three classes. The
+enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
+`orchestrator/src/config.ts`; the refusal names the class and the fact that decided it.
+
+- **Secret — never write it; no approval clears it.** A path matching a secret pattern
+  (`.env*`, `*.pem`, `*.key`, `*.p12`, keystores, SSH keys, the real Ansible inputs such as
+  `vars-production.yml`), except a committed `.example`/`.sample`/`.template` and a `*.pem`
+  that is provably public certificate material. AND any private key in ANY file, read from
+  its bytes — a `.ts` test, a `testdata/` file, a `.der`. Generate test keys at test time.
+- **Trust anchor — lands only after a human signs off on the exact head.** The files that decide
+  which certificates a shipped client accepts, and any diff adding or removing a pin literal
+  or TLS trust hook in shipped client source. A wrong value disconnects every installed client
+  and only an app-store release undoes it. If the issue needs one, change it, say so in the
+  PR and in your status `notes:`, and expect the gate to hold the PR. Never post the sign-off
+  yourself — it is the operator's statement that they checked the values. Never incidentally:
+  - `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
+  - `apps/android/app/src/main/res/xml/network_security_config.xml`
+  - `apps/ios/Sources/Services/CertificatePinning.swift`
+  - `apps/desktop/src/cert_pin.rs`
+  - `apps/desktop/src/api_config.rs`
+  - `apps/desktop/src/net.rs`
+  - `apps/android/app/src/main/AndroidManifest.xml`
+  - `apps/ios/Sources/App/Info.plist` (knope's release version bump alone is not held)
+  - `apps/ios/project.yml`
+- **Everything else is writable** — including public certificates and annotated chains used
+  as test input.
+
 ## Migrations (#2391 — read before adding one)
 
 - **Generate, never number by hand.** Change `apps/worker/db/schema/`, then
