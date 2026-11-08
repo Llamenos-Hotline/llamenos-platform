@@ -550,6 +550,8 @@ function harness(attemptJobs: RunJob[], opts: HarnessOpts = {}): Harness {
     verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
     resolveReviewer: async (name) => ({ ok: true, profile: { name } as never }),
     platformFlags: async () => opts.flags ?? BACKEND,
+    readMergeBase: async () => undefined,
+    readFileAt: async () => undefined,
     readKnopeToml: async () => undefined,
     listMergeGroupRuns: async () => [{ ...groupRun, createdAt: opts.runCreatedAt ?? groupRun.createdAt }],
     readRunJobs,
