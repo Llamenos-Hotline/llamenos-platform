@@ -109,7 +109,12 @@ fi
 # ── 1. Known distrust events ───────────────────────────────────────────────────
 event_count=0
 for event in "$fixtures"/*/; do
-  [ -d "$event/chains" ] || continue
+  # An event documented without its chains would otherwise be skipped once any other
+  # event exists, and its distrust would silently stop being checked.
+  if [ ! -d "$event/chains" ]; then
+    fail "distrust event $(basename "$event") has no chains/ directory"
+    continue
+  fi
   event_count=$((event_count + 1))
   cat "$event"/control-roots/*.pem > "$work/control.pem"
   echo "   distrust event: $(basename "$event")"
