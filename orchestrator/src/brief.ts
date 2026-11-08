@@ -41,10 +41,11 @@ export function writeGateRules(): string {
     `so is a private key in ANY file, whatever its name, tests and fixtures included. No approval clears this: ` +
     `generate a test key at test time instead of committing one.\n` +
     `- A change to a shipped client's trust anchors lands only after a human (${TRUST_ANCHOR_APPROVERS.join(', ')}) ` +
-    `approves the exact head commit. These files, and any diff that adds or removes a pin literal or TLS trust ` +
+    `signs off on the exact head commit. These files, and any diff that adds or removes a pin literal or TLS trust ` +
     `hook in shipped client source:\n${anchors}\n` +
     `  If your issue genuinely needs such a change, make it, say so in the PR description, and say so in your ` +
-    `status \`notes:\` — the gate will hold the PR until that sign-off. Never change one incidentally.`
+    `status \`notes:\` — the gate will hold the PR until that sign-off. Never change one incidentally, and never ` +
+    `post a sign-off yourself: it is the human's statement that they checked the values, and nobody else's.`
   )
 }
 

@@ -1942,52 +1942,67 @@ async function readPrFacts(
   }
 }
 
-/** `per_page` for the reviews read. A PR with this many reviews is read as
- *  "could not be read" rather than as a possibly-truncated list: a later
- *  review on page two could be the one that withdrew an approval. */
-const REVIEWS_PAGE = 100
+/** Page size and page cap for the sign-off reads. A PR with more than
+ *  `SIGN_OFF_PAGE * SIGN_OFF_MAX_PAGES` reviews or comments is read as "could
+ *  not be read" — never as a list that might be missing its newest entries. */
+const SIGN_OFF_PAGE = 100
+const SIGN_OFF_MAX_PAGES = 10
+
+/** Every page of a GitHub list endpoint, or `undefined` if any page failed
+ *  or the list outran the cap. */
+async function readAllPages<T>(path: string, onFail: (detail: string) => void): Promise<T[] | undefined> {
+  const out: T[] = []
+  for (let page = 1; page <= SIGN_OFF_MAX_PAGES; page += 1) {
+    const sep = path.includes('?') ? '&' : '?'
+    const batch = await ghJson<T[]>(['api', `${path}${sep}per_page=${SIGN_OFF_PAGE}&page=${page}`], 30_000, onFail)
+    if (batch === undefined) return undefined
+    out.push(...batch)
+    if (batch.length < SIGN_OFF_PAGE) return out
+  }
+  onFail(`more than ${SIGN_OFF_PAGE * SIGN_OFF_MAX_PAGES} entries at ${path}`)
+  return undefined
+}
 
 /**
- * The trust-anchor sign-off for the commit this CI gate judges (#2556): the
- * `TRUST_ANCHOR_APPROVERS` whose latest review APPROVED it, or `undefined`
- * when the PR or its reviews could not be read — which the gate reports as
- * such and refuses on.
+ * The human sign-off on trust anchors for the commit this CI gate judges (#2556): the
+ * `TRUST_ANCHOR_APPROVERS` who signed off on it (`trustAnchorApprovers`), or
+ * `undefined` when the PR, its reviews or its comments could not be read —
+ * which the gate reports as such and refuses on.
  *
  * WHICH commit: on `pull_request` (and `workflow_dispatch`) the commit under
- * judgement IS the PR head, and an approval must name exactly it — if the
- * head has moved since this event, the approval of the new head says nothing
- * about the old one. On `merge_group` the judged commit is the queue's own,
- * built from the PR head, so the approval must name that head.
+ * judgement IS the PR head, and a sign-off must name exactly it — if the head
+ * has moved since this event, a sign-off on the new head says nothing about
+ * the old one. On `merge_group` the judged commit is the queue's own, built
+ * from the PR head, so the sign-off must name that head.
  *
- * Two `pull-requests: read` GETs, made only when the diff touches a trust
+ * `pull-requests: read` GETs only, made only when the diff touches a trust
  * anchor (`verifyMechanical` calls this lazily).
  */
 async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | undefined> {
   if (!/^[0-9]+$/.test(ctx.pr)) return undefined
-  const consequence = 'no trust-anchor approval can be confirmed, so a trust-anchor change is refused'
+  const consequence = 'no human sign-off on a trust anchor can be confirmed, so a trust-anchor change is refused'
+  const fail = (what: string) => (detail: string) => ciLog(`reading ${what} of PR #${ctx.pr} failed — ${consequence}: ${detail}`)
   const pull = await ghJson<{ head?: { sha?: string } | null; user?: { login?: string | null } | null }>(
-    ['api', `repos/${REPO}/pulls/${ctx.pr}`],
-    30_000,
-    (detail) => ciLog(`reading PR #${ctx.pr} failed — ${consequence}: ${detail}`),
+    ['api', `repos/${REPO}/pulls/${ctx.pr}`], 30_000, fail('the head'),
   )
-  const reviews = await ghJson<{ user?: { login?: string | null } | null; state?: string; commit_id?: string | null }[]>(
-    ['api', `repos/${REPO}/pulls/${ctx.pr}/reviews?per_page=${REVIEWS_PAGE}`],
-    30_000,
-    (detail) => ciLog(`reading the reviews of PR #${ctx.pr} failed — ${consequence}: ${detail}`),
-  )
+  type RawReview = { user?: { login?: string | null } | null; state?: string; commit_id?: string | null; body?: string | null }
+  type RawComment = { user?: { login?: string | null } | null; body?: string | null; performed_via_github_app?: unknown }
+  const reviews = await readAllPages<RawReview>(`repos/${REPO}/pulls/${ctx.pr}/reviews`, fail('the reviews'))
+  const comments = await readAllPages<RawComment>(`repos/${REPO}/issues/${ctx.pr}/comments`, fail('the comments'))
   const head = pull?.head?.sha ?? undefined
-  if (head === undefined || reviews === undefined) return undefined
-  if (reviews.length >= REVIEWS_PAGE) {
-    ciLog(`PR #${ctx.pr} has ${reviews.length} reviews, the most one read returns — ${consequence}`)
-    return undefined
-  }
+  if (head === undefined || reviews === undefined || comments === undefined) return undefined
   const mergeGroup = process.env['GITHUB_EVENT_NAME'] === 'merge_group'
   if (!mergeGroup && head !== ctx.headSha) {
-    ciLog(`PR #${ctx.pr}'s head is now ${head}, not the judged ${ctx.headSha} — an approval of one is not an approval of the other`)
+    ciLog(`PR #${ctx.pr}'s head is now ${head}, not the judged ${ctx.headSha} — a sign-off on one is not a sign-off on the other`)
     return []
   }
   return trustAnchorApprovers({
-    reviews: reviews.map((r) => ({ login: r.user?.login ?? undefined, state: r.state ?? '', commitId: r.commit_id ?? undefined })),
+    reviews: reviews.map((r) => ({
+      login: r.user?.login ?? undefined, state: r.state ?? '', commitId: r.commit_id ?? undefined, body: r.body ?? '',
+    })),
+    comments: comments.map((c) => ({
+      login: c.user?.login ?? undefined, body: c.body ?? '', viaApp: c.performed_via_github_app != null,
+    })),
     author: pull?.user?.login ?? undefined,
     approvedSha: mergeGroup ? head : ctx.headSha,
   })

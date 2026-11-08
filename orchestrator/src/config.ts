@@ -376,8 +376,8 @@ export interface TrustAnchorFile {
  * The class is not "never-write". A pin rotation is real, scheduled work
  * (#2505 — the Let's Encrypt Gen-Y roots), so an agent may WRITE these. What
  * it may not do is land them on its own: `verifyMechanical` refuses a diff
- * touching any of them until a human in `TRUST_ANCHOR_APPROVERS` has
- * APPROVED the exact commit under judgement. That refusal is what both
+ * touching any of them until a human in `TRUST_ANCHOR_APPROVERS` has signed
+ * off on the exact commit under judgement. That refusal is what both
  * required gates (`fleet/verify`, `fleet/review`) and the fleet's own loop
  * report, so no model verdict — however confident — clears it.
  *
@@ -448,9 +448,14 @@ export const TRUST_ANCHOR_FILES: readonly TrustAnchorFile[] = [
 ]
 
 /**
- * The humans whose APPROVED review on the exact commit under judgement lets a
- * trust-anchor change land. The operator's own login — the same account
- * `CODEOWNERS` names and `RELEASE_REVIEW_REQUEST_LOGIN` (ci.ts) means.
+ * The humans whose sign-off on the exact commit under judgement lets a
+ * trust-anchor change land — a `TRUST_ANCHOR_SIGN_OFF` line (write-gate.ts)
+ * naming the full head SHA in a PR comment, or an APPROVED review of that
+ * commit when they did not open the PR (`trustAnchorApprovers`). The operator's own
+ * login — the same account `CODEOWNERS` names and
+ * `RELEASE_REVIEW_REQUEST_LOGIN` (ci.ts) means. That account opens every PR
+ * here, and GitHub never records an author's approval, which is why the
+ * comment form exists.
  *
  * Never a fleet identity: `llamenos-auto` reviews AS the fleet, and an
  * approval it could give would be the fleet clearing its own trust change.

@@ -313,7 +313,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       const rep = await gate(judged({ [path]: `pins = [${PIN_A}]\n` }, { [path]: `pins = [${PIN_B}]\n` }))
       expect(rep.passed).toBe(false)
       expect(trustLine(rep)).toContain(`${path} (it is ${anchor.anchors})`)
-      expect(trustLine(rep)).toContain(`No APPROVED review from a trust-anchor approver (${OPERATOR}) is on ${rep.verifiedCommit}`)
+      expect(trustLine(rep)).toContain(`No trust-anchor approver (${OPERATOR}) has signed off on ${rep.verifiedCommit}`)
       expect(rep.trustAnchors).toEqual({ files: [path], approvedBy: [] })
     })
 
@@ -343,7 +343,7 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
 
   it('says it could not ask, rather than that nobody approved, when the reviews were unreadable', async () => {
     const rep = await gate(judged({ [CERT_PIN]: 'a\n' }, { [CERT_PIN]: 'b\n' }), async () => undefined)
-    expect(trustLine(rep)).toContain('reviews could not be read')
+    expect(trustLine(rep)).toContain('reviews and comments could not be read')
   })
 
   it('refuses deleting a trust anchor', async () => {

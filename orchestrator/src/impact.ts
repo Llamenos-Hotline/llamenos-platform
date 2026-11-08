@@ -221,13 +221,13 @@ export function classifyImpact(
       )
     }
     // The trust-anchor class (#2556) is DECIDED in verify.ts — a refusal
-    // until a human approves the exact head. Described here too, so the
+    // until a human signs off on the exact head. Described here too, so the
     // trace, the digest and the reviewer's budget all see the same file as
     // the gate does: one registry, no second notion of "which files are
     // client trust".
     const anchor = trustAnchorEntry(f)
     if (anchor !== undefined) {
-      reasons.push(`${f} is a trust anchor — ${anchor.anchors} (lands only with a human approval of its head)`)
+      reasons.push(`${f} is a trust anchor — ${anchor.anchors} (lands only with a human sign-off on its head)`)
     }
   }
   if (changedFiles.length > LARGE_DIFF_FILES) {

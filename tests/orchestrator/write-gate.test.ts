@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS, textViews } from '../../orchestrator/src/key-material.js'
 import {
-  secretFinding, secretRefusal, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal, trustProjection,
-  SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
+  secretFinding, secretRefusal, signedOffShas, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal,
+  trustProjection, SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
 } from '../../orchestrator/src/write-gate.js'
 import { NEVER_WRITE_PATHS, TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
 import { ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem, throwawayPublicKeyPem } from './pem-fixtures.js'
@@ -297,6 +297,48 @@ describe('trustAnchorApprovers', () => {
   })
 })
 
+describe('the trust-anchor sign-off comment', () => {
+  const SHA = 'c'.repeat(40)
+  const OTHER = 'd'.repeat(40)
+  const comment = (login: string, body: string, viaApp = false) => ({ login, body, viaApp })
+
+  // This repo's operator opens every PR, so GitHub will never record their
+  // approval of one. The sign-off line is how they clear a trust anchor.
+  it('lets the PR\'s own author sign off, naming the exact head', () => {
+    expect(trustAnchorApprovers({
+      reviews: [], comments: [comment('rhonda-rodododo', `Checked all four pins.\ntrust-anchor sign-off: ${SHA}\n`)],
+      author: 'rhonda-rodododo', approvedSha: SHA,
+    })).toEqual(['rhonda-rodododo'])
+  })
+
+  it('accepts the same line in the body of a COMMENTED review', () => {
+    expect(trustAnchorApprovers({
+      reviews: [{ login: 'rhonda-rodododo', state: 'COMMENTED', commitId: OTHER, body: `trust-anchor sign-off: ${SHA}` }],
+      author: 'rhonda-rodododo', approvedSha: SHA,
+    })).toEqual(['rhonda-rodododo'])
+  })
+
+  it.each<[string, ReturnType<typeof comment>]>([
+    ['a sign-off on an earlier head', comment('rhonda-rodododo', `trust-anchor sign-off: ${OTHER}`)],
+    ['a short SHA', comment('rhonda-rodododo', `trust-anchor sign-off: ${SHA.slice(0, 12)}`)],
+    ['the line inside other prose', comment('rhonda-rodododo', `ok, trust-anchor sign-off: ${SHA} later`)],
+    ['the fleet\'s reviewer identity', comment('llamenos-auto', `trust-anchor sign-off: ${SHA}`)],
+    ['a GitHub App posting as an approver', comment('rhonda-rodododo', `trust-anchor sign-off: ${SHA}`, true)],
+    ['a different capitalisation', comment('rhonda-rodododo', `Trust-Anchor Sign-Off: ${SHA}`)],
+  ])('does not count %s', (_name, c) => {
+    expect(trustAnchorApprovers({ reviews: [], comments: [c], author: 'rhonda-rodododo', approvedSha: SHA })).toEqual([])
+  })
+
+  // The gate PUBLISHES its refusal — in check output and in review report
+  // comments. If that text parsed as a sign-off, the gate would clear itself.
+  it('the gate\'s own refusal text never parses as a sign-off', () => {
+    const text = trustAnchorRefusal([{ file: 'apps/desktop/src/cert_pin.rs', why: 'it is x' }], SHA, [])
+    expect(text).toContain('trust-anchor sign-off:')
+    expect(signedOffShas(text)).toEqual([])
+    expect(signedOffShas(text.replaceAll('. ', '.\n'))).toEqual([])
+  })
+})
+
 describe('the refusal text names its class', () => {
   it('a secret refusal starts with its prefix and only mentions key generation when a key was found', () => {
     const path = secretRefusal([{ file: '.env', why: 'its path matches secret pattern ".env"' }])
@@ -309,7 +351,7 @@ describe('the refusal text names its class', () => {
     const f = [{ file: 'apps/desktop/src/cert_pin.rs', why: 'it is the desktop pin capture' }]
     const none = trustAnchorRefusal(f, 'abc123', [])
     expect(none.startsWith(`${TRUST_ANCHOR_REASON_PREFIX} — a shipped client's TLS trust decision`)).toBe(true)
-    expect(none).toContain('No APPROVED review from a trust-anchor approver (rhonda-rodododo) is on abc123')
-    expect(trustAnchorRefusal(f, 'abc123', undefined)).toContain('reviews could not be read')
+    expect(none).toContain('No trust-anchor approver (rhonda-rodododo) has signed off on abc123')
+    expect(trustAnchorRefusal(f, 'abc123', undefined)).toContain('reviews and comments could not be read')
   })
 })

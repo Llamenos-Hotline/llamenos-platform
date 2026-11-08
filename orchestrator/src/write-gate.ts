@@ -15,10 +15,10 @@ import { findPrivateKeyMaterial, latin1, textViews } from './key-material.js'
  *    `testdata/` and a `.ts` source file included. A path is a guess; the
  *    bytes are the fact, so both are checked.
  * 2. **trust anchor** — a file that decides which certificates a shipped
- *    client accepts (`TRUST_ANCHOR_FILES`), or a diff that changes a trust
- *    signature line in shipped client source (`TRUST_SIGNATURES`). Writable,
- *    but it lands only once a human in `TRUST_ANCHOR_APPROVERS` has approved
- *    the exact commit under judgement. A pin list is source code, not a key,
+ *    client accepts (`TRUST_ANCHOR_FILES`), or a change to a trust line in
+ *    any other shipped client file (`TRUST_SIGNATURES`, `trustProjection`).
+ *    Writable, but it lands only once a human in `TRUST_ANCHOR_APPROVERS` has
+ *    signed off on the exact commit under judgement (`trustAnchorApprovers`). A pin list is source code, not a key,
  *    so no content rule could put it here — the registry does.
  * 3. **writable** — everything else, including a public certificate chain
  *    used as test input, which is published data and carries no secret.
@@ -329,34 +329,88 @@ export interface PrReview {
   login: string | undefined
   state: string
   commitId: string | undefined
+  /** The review's own text — a COMMENTED review can carry a sign-off. */
+  body?: string
+}
+
+/** One conversation comment on a pull request (`GET /repos/{r}/issues/{n}/comments`). */
+export interface PrComment {
+  login: string | undefined
+  body: string
+  /** Set when a GitHub App posted it — never a human's sign-off. */
+  viaApp?: boolean
 }
 
 /**
- * The trust-anchor approvers who have signed off on `approvedSha`.
+ * The line a human writes to sign off on a trust-anchor change: exactly
+ * `trust-anchor sign-off: <full 40-hex head SHA>`, alone on its line.
  *
- * A login counts only when its LATEST decisive review (APPROVED,
- * CHANGES_REQUESTED or DISMISSED — a later plain COMMENT does not withdraw an
- * approval, exactly as GitHub reads it) is APPROVED, on exactly
- * `approvedSha`, by someone in `TRUST_ANCHOR_APPROVERS` who is not the PR's
- * author. An approval of an earlier head does not carry forward: a push after
- * sign-off is a change nobody signed off on.
+ * Why a comment and not only an approval: in this repo `rhonda-rodododo`
+ * opens every PR, fleet workers included, and GitHub forbids an author's
+ * approval of their own PR — so an approval-only rule would make every
+ * trust-anchor PR, #2550 first, permanently unlandable. The sign-off line
+ * is a deliberate human statement that works whoever opened the PR.
+ *
+ * Why the FULL SHA: it binds the sign-off to one commit. A push moves the
+ * head, the line no longer names it, and the change is held again. A short
+ * SHA or the word "head" is refused.
+ *
+ * Anchored to a whole line, so prose that merely MENTIONS the format — the
+ * gate's own refusal text, a brief, this comment — can never read as one.
+ */
+export const TRUST_ANCHOR_SIGN_OFF = /^[ \t]*trust-anchor sign-off:[ \t]*([0-9a-f]{40})[ \t]*$/gm
+
+/** The commits `body` signs off on. */
+export function signedOffShas(body: string): string[] {
+  return [...body.matchAll(TRUST_ANCHOR_SIGN_OFF)].map((m) => m[1] as string)
+}
+
+/**
+ * The trust-anchor approvers who have signed off on `approvedSha`, by either
+ * of two human acts:
+ *
+ * 1. a sign-off line (`TRUST_ANCHOR_SIGN_OFF`) naming `approvedSha`, in a PR
+ *    comment or in the body of any review, written by an approver — the PR's
+ *    author included, since that is who the operator is here. Never a
+ *    comment a GitHub App posted.
+ * 2. an APPROVED review of exactly `approvedSha` by an approver who is not
+ *    the author (GitHub would not record the author's). A login counts only
+ *    when its LATEST decisive review (APPROVED, CHANGES_REQUESTED or
+ *    DISMISSED — a later plain COMMENT does not withdraw an approval, exactly
+ *    as GitHub reads it) is that approval.
+ *
+ * Either way the sign-off names one commit, and a push after it is a change
+ * nobody signed off on.
  */
 export function trustAnchorApprovers(input: {
   reviews: readonly PrReview[]
+  comments?: readonly PrComment[]
   author: string | undefined
   approvedSha: string
 }): string[] {
+  const approvers = new Set<string>()
+  const isApprover = (l: string | undefined): l is string => l !== undefined && TRUST_ANCHOR_APPROVERS.includes(l)
+
+  const signed = [
+    ...(input.comments ?? []).filter((c) => c.viaApp !== true),
+    ...input.reviews.map((r) => ({ login: r.login, body: r.body ?? '' })),
+  ]
+  for (const c of signed) {
+    if (isApprover(c.login) && signedOffShas(c.body).includes(input.approvedSha)) approvers.add(c.login)
+  }
+
   const latest = new Map<string, PrReview>()
   for (const r of input.reviews) {
     if (r.login === undefined || r.login.length === 0) continue
     if (r.state !== 'APPROVED' && r.state !== 'CHANGES_REQUESTED' && r.state !== 'DISMISSED') continue
     latest.set(r.login, r)
   }
-  return [...latest.values()]
-    .filter((r) => r.state === 'APPROVED' && r.commitId === input.approvedSha)
-    .map((r) => r.login as string)
-    .filter((l) => l !== input.author && TRUST_ANCHOR_APPROVERS.includes(l))
-    .sort()
+  for (const r of latest.values()) {
+    if (r.state === 'APPROVED' && r.commitId === input.approvedSha && r.login !== input.author && isApprover(r.login)) {
+      approvers.add(r.login)
+    }
+  }
+  return [...approvers].sort()
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +452,14 @@ export function trustAnchorRefusal(
 ): string {
   const who = TRUST_ANCHOR_APPROVERS.join(', ')
   const state = approvers === undefined
-    ? `This PR's reviews could not be read, so no approval of ${commit} could be confirmed (fails closed)`
-    : `No APPROVED review from a trust-anchor approver (${who}) is on ${commit}`
+    ? `This PR's reviews and comments could not be read, so no sign-off on ${commit} could be confirmed (fails closed)`
+    : `No trust-anchor approver (${who}) has signed off on ${commit}`
+  // The sign-off format is DESCRIBED, never written as a line on its own:
+  // this text is published in check output and review reports, and must not
+  // itself parse as a sign-off (`TRUST_ANCHOR_SIGN_OFF` is line-anchored).
   return `${TRUST_ANCHOR_REASON_PREFIX} — a shipped client's TLS trust decision, which lands only with a human ` +
     `sign-off: ${listFindings(findings)}. ${state}. A wrong value here disconnects every installed client and ` +
-    'only a client release can undo it, so no automated review clears it: a human checks the change, approves ' +
-    'this exact head, and re-requests review from llamenos-auto'
+    'only a client release can undo it, so no automated review clears it: a human checks the change, then posts ' +
+    'a PR comment whose only content on one line is "trust-anchor sign-off:" followed by this full head SHA (or, ' +
+    'when they did not open the PR, approves this exact head), and re-requests review from llamenos-auto'
 }

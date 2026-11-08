@@ -90,14 +90,14 @@ export interface VerifyInput {
   testDir?: string
   /**
    * The human sign-off a TRUST-ANCHOR change needs (#2556): the logins whose
-   * latest review APPROVED the exact commit under judgement, or `undefined`
-   * when the PR's reviews could not be read. The caller resolves "the exact
+   * sign-off names the exact commit under judgement, or `undefined`
+   * when the PR's reviews or comments could not be read. The caller resolves "the exact
    * commit" (`trustAnchorApprovers`, write-gate.ts) — here only membership
    * in `TRUST_ANCHOR_APPROVERS` is re-checked, so no caller can clear a
    * trust anchor by handing in a fleet login.
    *
    * A FUNCTION, called only when the diff touches a trust anchor, so the
-   * common PR costs no API read. Absent is "no approval" — fail closed: the
+   * common PR costs no API read. Absent is "no sign-off" — fail closed: the
    * fleet's own loop never passes one, and so can never land a trust-anchor
    * change by itself.
    */
@@ -1100,7 +1100,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   if (secrets.length > 0) reasons.push(secretRefusal(secrets))
 
   // CLASS 2 — trust anchors. Not a scope question (the owning lane still
-  // owns the file): a human approval of this exact commit is the remedy.
+  // owns the file): a human sign-off on this exact commit is the remedy.
   // Registered files need no bytes; every other changed file under a
   // shipped-client root is judged by comparing its trust lines at the merge
   // base against the head (`trustAnchorFinding`), from blobs — never from

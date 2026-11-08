@@ -963,7 +963,7 @@ export interface CiDeps {
    * Handed to `verifyMechanical`, which calls it only when the diff touches
    * a trust anchor — so an ordinary PR costs no extra API read.
    *
-   * Optional, and its absence is the closed direction: no approval, so a
+   * Optional, and its absence is the closed direction: no sign-off, so a
    * trust-anchor diff is refused. Both gates take the SAME lookup, so
    * `fleet/verify` and `fleet/review` cannot disagree about whether a human
    * signed off.
