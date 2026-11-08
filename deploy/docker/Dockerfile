@@ -246,7 +246,7 @@ RUN bun run build
 # Digest bump (issue #650, 2026-09-20): refreshes the Alpine package layer
 # (curl/c-ares/libcrypto3/libssl3 CVEs) under the same 2.11.4 tag — same Caddy
 # version, no behavior change. See the `static` stage below for the matching bump.
-FROM caddy:2.11.7-builder-alpine@sha256:ef9b65adf9a224770c6d5f6d1ae1bf99bc3caaa78d8c4bae3ea949ee6984f301 AS caddy-builder
+FROM caddy:2.11.8-builder-alpine@sha256:e42a64b3bc70aa3a1387bde85b930e507a378fecae5852d5bfde9dcd37d0b999 AS caddy-builder
 RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 
 # Stage 7 (`static`): Caddy image serving the built SPA. Matches the
@@ -277,7 +277,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # Caddy container calls curl (its healthcheck is `caddy version`), so this is
 # patched rather than removed only to keep the base image's contents unchanged.
 # Drop the curl/libcurl pins once a caddy base image ships curl >= 8.23.0-r0.
-FROM caddy:2.11.7-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f AS static
+FROM caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9 AS static
 RUN apk add --no-cache 'brotli-libs>=1.2.1-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0'
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app
