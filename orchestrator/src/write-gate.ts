@@ -116,17 +116,33 @@ export const SHIPPED_CLIENT_SOURCE_ROOTS: readonly string[] = [
   // BuildConfig values ship, so a pin injected or a config swapped there ships.
   'apps/android/app/build.gradle.kts',
   'apps/ios/Sources/',
+  // XcodeGen adds every file under a target's source paths to the build, so
+  // the app target's `Resources/` paths ship exactly as `Sources/` does — a
+  // `.swift` file dropped in `Resources/Fonts` is compiled into the app.
+  'apps/ios/Resources/',
   // XcodeGen's spec writes Info.plist keys — App Transport Security included —
-  // and says which Info.plist the app is built with.
+  // and says which sources and which Info.plist the app is built from.
   'apps/ios/project.yml',
   'apps/desktop/src/',
 ]
 
-/** Android source sets that never reach an installed release build: unit
- *  and instrumentation tests, and debug variants (`src/debug/` carries its own
- *  pin-free `network_security_config.xml` by design). Any other set —
- *  `release`, a product flavour, a flavour+release combination — ships. */
-const ANDROID_NON_SHIPPING_SOURCE_SET = /^apps\/android\/app\/src\/(test|androidTest|debug|testFixtures)(?:[A-Z][A-Za-z0-9]*)?\//
+/**
+ * The Android source sets that never reach an installed release build, by
+ * EXACT name: unit and instrumentation tests (each, and per declared build
+ * type), test fixtures, and the `debug` build type (`src/debug/` carries its
+ * own pin-free `network_security_config.xml` by design). An allowlist of
+ * exclusions, never a prefix: a product flavour called `debugger` or
+ * `testing` ships, so it is shipped source. Every other set — `release`, a
+ * flavour, a flavour+release combination — ships. The build types are the
+ * two `apps/android/app/build.gradle.kts` declares; a new one ships until it
+ * is deliberately added here.
+ */
+const ANDROID_NON_SHIPPING_SOURCE_SETS: ReadonlySet<string> = new Set([
+  'test', 'androidTest', 'testFixtures', 'debug',
+  'testDebug', 'testRelease', 'androidTestDebug', 'androidTestRelease',
+])
+
+const ANDROID_SRC = 'apps/android/app/src/'
 
 /** A line shape that carries a TLS trust decision in client source. */
 export interface TrustSignature {
@@ -183,7 +199,13 @@ export const TRUST_SIGNATURES: readonly TrustSignature[] = [
     // shipped build is made from. Re-pointing one swaps every setting above
     // without changing a line that names them.
     name: 'a build-wiring setting that chooses what ships',
-    re: /sourceSets|srcDirs?\(|setSrcDirs|manifest\.srcFile|manifestPlaceholders|resValue\(|INFOPLIST_FILE|^info:$/,
+    re: new RegExp([
+      // Gradle: source sets, the variants they belong to, and injected values.
+      'sourceSets', 'srcDirs?\\(', 'setSrcDirs', 'manifest\\.srcFile', 'manifestPlaceholders', 'resValue\\(',
+      'buildTypes', 'productFlavors', 'flavorDimensions', 'initWith\\(',
+      // XcodeGen: which Info.plist, and which sources, the target is built from.
+      'INFOPLIST_FILE', '^info:$', '^sources:$', '^- path:', '^excludes:', '^includes:', '^buildPhase:', '^configFiles:',
+    ].join('|')),
   },
 ]
 
@@ -193,7 +215,10 @@ export function trustAnchorEntry(file: string): TrustAnchorFile | undefined {
 
 /** True for a file under `SHIPPED_CLIENT_SOURCE_ROOTS`. */
 export function isShippedClientSource(file: string): boolean {
-  if (ANDROID_NON_SHIPPING_SOURCE_SET.test(file)) return false
+  if (file.startsWith(ANDROID_SRC)) {
+    const set = file.slice(ANDROID_SRC.length).split('/')[0] ?? ''
+    if (ANDROID_NON_SHIPPING_SOURCE_SETS.has(set)) return false
+  }
   return SHIPPED_CLIENT_SOURCE_ROOTS.some((r) => matchesPath(file, r))
 }
 

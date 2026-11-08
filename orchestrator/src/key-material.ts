@@ -82,57 +82,56 @@ export function latin1(bytes: Uint8Array): string {
 
 /**
  * Every text reading of `bytes` a scanner must look at: the byte-faithful
- * latin1 view always, plus a decoded view when the bytes are UTF-16 or UTF-32
- * text. A key or a pin written in UTF-16 is the same key or pin, but in a
- * latin1 view every ASCII character is NUL-interleaved and no pattern
- * matches — so without this an encoding change alone would hide it.
+ * latin1 view always, plus every UTF-16 and UTF-32 decoding of the WHOLE
+ * buffer at every alignment, whenever the bytes could hold such text at all.
+ * A key or a pin written in UTF-16 is the same key or pin, but in a latin1
+ * view each ASCII character is NUL-interleaved and no pattern matches — so
+ * without this an encoding change alone would hide it.
  *
- * Recognised by BOM, or — BOM-less UTF-16 — by NUL in at least 90% of the
- * odd (little-endian) or even (big-endian) positions of the first 1 KiB,
- * which ASCII-range text has and ordinary binary formats do not.
+ * Deliberately NOT a sniff of the encoding. Deciding from a BOM or from a
+ * sample of the first bytes is a parser differential: a file whose first
+ * kilobyte is ASCII and whose remainder is UTF-16 at an odd offset would be
+ * read one way here and another way by whatever consumes it. Every alignment
+ * is decoded instead, gated only on what such text must contain — ASCII in
+ * UTF-16 always carries a NUL byte, in UTF-32 a run of three — so a plain
+ * text file costs nothing extra. A BOM decodes to U+FEFF, which is harmless.
+ *
+ * Decoding arbitrary binary this way yields noise; the patterns read from
+ * these views are long, specific ASCII words, which random 16- and 32-bit
+ * code units do not spell.
  */
 export function textViews(bytes: Uint8Array): string[] {
   const views = [latin1(bytes)]
-  const decoded = wideTextView(bytes)
-  if (decoded !== undefined) views.push(decoded)
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (buf.includes(0)) {
+    for (const offset of [0, 1]) {
+      views.push(decodeUtf16(buf.subarray(offset), false), decodeUtf16(buf.subarray(offset), true))
+    }
+  }
+  if (buf.includes(TRIPLE_NUL)) {
+    for (const offset of [0, 1, 2, 3]) {
+      views.push(decodeUtf32(buf.subarray(offset), false), decodeUtf32(buf.subarray(offset), true))
+    }
+  }
   return views
 }
 
-function decodeUtf16(b: Uint8Array, bigEndian: boolean): string {
-  const even = b.length - (b.length % 2)
-  const copy = Buffer.from(b.subarray(0, even))
+const TRIPLE_NUL = Buffer.from([0, 0, 0])
+
+function decodeUtf16(b: Buffer, bigEndian: boolean): string {
+  const copy = Buffer.from(b.subarray(0, b.length - (b.length % 2)))
   if (bigEndian) copy.swap16()
   return copy.toString('utf16le')
 }
 
-function decodeUtf32(b: Uint8Array, bigEndian: boolean): string {
+function decodeUtf32(b: Buffer, bigEndian: boolean): string {
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength)
-  let out = ''
+  const units: string[] = []
   for (let i = 0; i + 4 <= b.length; i += 4) {
     const cp = view.getUint32(i, !bigEndian)
-    out += cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd'
+    units.push(cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : '\ufffd')
   }
-  return out
-}
-
-function wideTextView(b: Uint8Array): string | undefined {
-  const at = (i: number) => b[i] ?? -1
-  if (at(0) === 0xff && at(1) === 0xfe && at(2) === 0 && at(3) === 0) return decodeUtf32(b.subarray(4), false)
-  if (at(0) === 0 && at(1) === 0 && at(2) === 0xfe && at(3) === 0xff) return decodeUtf32(b.subarray(4), true)
-  if (at(0) === 0xff && at(1) === 0xfe) return decodeUtf16(b.subarray(2), false)
-  if (at(0) === 0xfe && at(1) === 0xff) return decodeUtf16(b.subarray(2), true)
-  const n = Math.min(b.length, 1024) & ~1
-  if (n < 8) return undefined
-  let oddNul = 0
-  let evenNul = 0
-  for (let i = 0; i < n; i += 2) {
-    if (b[i] === 0) evenNul += 1
-    if (b[i + 1] === 0) oddNul += 1
-  }
-  const pairs = n / 2
-  if (oddNul >= pairs * 0.9 && evenNul < pairs * 0.1) return decodeUtf16(b, false)
-  if (evenNul >= pairs * 0.9 && oddNul < pairs * 0.1) return decodeUtf16(b, true)
-  return undefined
+  return units.join('')
 }
 
 function lineOf(text: string, index: number): number {

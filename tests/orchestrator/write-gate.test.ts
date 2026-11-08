@@ -131,13 +131,22 @@ describe('textViews', () => {
       Buffer.from([...text].flatMap((c) => [c.charCodeAt(0), 0, 0, 0]))])],
   ])('decodes %s alongside the latin1 view', (_name, b) => {
     const views = textViews(b)
-    expect(views).toHaveLength(2)
-    expect(views[1]).toContain('serverTrust')
+    expect(views[0]).not.toContain('serverTrust')
+    expect(views.slice(1).some((v) => v.includes('serverTrust'))).toBe(true)
   })
 
-  it('adds no decoded view for ASCII or for ordinary binary', () => {
+  it('decodes the WHOLE buffer at every alignment — never a sniff of its first bytes', () => {
+    const b = Buffer.concat([Buffer.from(`${'x'.repeat(1025)}\n`), Buffer.from(text, 'utf16le')])
+    expect(textViews(b).some((v) => v.includes('serverTrust'))).toBe(true)
+  })
+
+  it('adds no decoded view for text with no NUL byte', () => {
     expect(textViews(Buffer.from(text))).toHaveLength(1)
-    expect(textViews(randomBytes(2048))).toHaveLength(1)
+  })
+
+  it('finds a key in UTF-16 that starts after a kilobyte of ASCII', () => {
+    const b = Buffer.concat([Buffer.from(`${'#'.repeat(1025)}\n`), Buffer.from(throwawayPrivateKeyPem(), 'utf16le')])
+    expect(findPrivateKeyMaterial(b)?.kind).toBe('a PEM "PRIVATE KEY" block')
   })
 })
 
@@ -226,6 +235,7 @@ describe('trustAnchorFinding', () => {
       'apps/android/app/src/debug/res/xml/network_security_config.xml',
       'apps/android/app/src/androidTest/java/org/llamenos/hotline/telephony/LiveSipRegistrationTest.kt',
       'apps/android/app/src/testDebug/java/X.kt',
+      'apps/android/app/src/androidTestRelease/java/X.kt',
       'apps/ios/Tests/Unit/CertificatePinningTests.swift',
       'scripts/inject-cert-pins.ts',
     ]) expect(trustAnchorFinding(f, undefined, 'CertificatePinner.Builder()\n<pin-set>\n')).toBeUndefined()

@@ -14,7 +14,7 @@ import { buildBrief, renderBrief, writeGateRules } from '../../orchestrator/src/
 import { buildGateTrace } from '../../orchestrator/src/trace.js'
 import { REVIEW_REQUEST_LOGIN } from '../../orchestrator/src/ci.js'
 import {
-  SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES, isShippedClientSource, trustAnchorEntry,
+  SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, isShippedClientSource, trustAnchorEntry, trustProjection,
 } from '../../orchestrator/src/write-gate.js'
 import { ISRG_ROOT_X1, ISRG_ROOT_X2, SHOWCERTS_CHAIN, throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { trackedFiles } from './codeowners.js'
@@ -390,6 +390,37 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       expect(trustLine(rep)).toContain(`${f} (its diff changes a build-wiring setting that chooses what ships`)
     })
 
+    // From the third automated security review of this PR.
+    it('treats a product flavour named like a test set as shipped — exclusions are exact names, not prefixes', async () => {
+      const f = 'apps/android/app/src/debugger/res/xml/network_security_config.xml'
+      const rep = await gate(judged({}, { [f]: '<network-security-config/>\n' }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(f)
+      const unitTests = 'apps/android/app/src/testRelease/res/xml/network_security_config.xml'
+      expect((await gate(judged({}, { [unitTests]: '<network-security-config/>\n' }))).reasons).toEqual([])
+    })
+
+    it.each<[string, string, string]>([
+      ['a new Gradle product flavour', 'apps/android/app/build.gradle.kts', '    productFlavors {\n        create("open") {}\n    }\n'],
+      ['a new XcodeGen source path', 'apps/ios/project.yml', '    sources:\n      - path: Extra\n'],
+      ['a Swift file dropped into an iOS resource path XcodeGen compiles', 'apps/ios/Resources/Fonts/Trust.swift',
+        'final class T: NSObject, URLSessionDelegate { func f(_ c: URLAuthenticationChallenge) { _ = c.protectionSpace.serverTrust } }\n'],
+    ])('refuses %s', async (_what, f, body) => {
+      const rep = await gate(judged({ [f]: 'name: x\n' }, { [f]: `name: x\n${body}` }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(f)
+    })
+
+    it('refuses UTF-16 trust text that starts after a kilobyte of ASCII, at an odd offset', async () => {
+      const f = 'apps/android/app/src/main/res/raw/notes.txt'
+      const blob = (pin: string) => Buffer.concat([
+        Buffer.from(`${'x'.repeat(1025)}\n`), Buffer.from(`"sha256/${pin.repeat(43)}="\n`, 'utf16le'),
+      ])
+      const rep = await gate(judged({ [f]: blob('A') }, { [f]: blob('B') }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes an SPKI pin literal`)
+    })
+
     it('refuses removing a pinner from a call site re-encoded as UTF-16', async () => {
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
       const utf16 = (t: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(t, 'utf16le')])
@@ -453,10 +484,9 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
     // The gate's own predicate, so the rail scans exactly what the gate holds.
     const shipped = trackedFiles().filter(isShippedClientSource)
     expect(shipped.length, 'no shipped client source found — the scan would pass vacuously').toBeGreaterThan(100)
-    const carriers = shipped.filter((f) => {
-      const lines = readFileSync(join(process.cwd(), f), 'latin1').split('\n')
-      return lines.some((l) => TRUST_SIGNATURES.some((s) => s.re.test(l)))
-    })
+    // The gate's own projection over the raw bytes — every text view, binary
+    // files included — so the rail sees exactly what the gate compares.
+    const carriers = shipped.filter((f) => trustProjection(readFileSync(join(process.cwd(), f))).length > 0)
     const unclassified = carriers.filter((f) => trustAnchorEntry(f) === undefined && !(f in CALL_SITES))
     expect(unclassified, 'shipped files making a trust decision that is neither registered nor a known call site').toEqual([])
     for (const a of TRUST_ANCHOR_FILES) expect(carriers, `${a.path} carries no trust signature`).toContain(a.path)
