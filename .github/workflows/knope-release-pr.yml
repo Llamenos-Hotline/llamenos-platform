@@ -3,8 +3,8 @@
 # with the next version bump and a CHANGELOG.md entry. Merging that PR
 # triggers release.yml to cut the actual release.
 #
-# Uses RELEASE_BOT_TOKEN (a fine-grained PAT with Contents:write and
-# Pull requests:write), NOT GITHUB_TOKEN.
+# Uses RELEASE_BOT_TOKEN (a classic PAT — see below for why it cannot be
+# fine-grained), NOT GITHUB_TOKEN.
 #
 # Why: the repo's fork-PR approval policy is `all_external_contributors`,
 # which is load-bearing — this is a public repo and nearly every other
@@ -81,7 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::RELEASE_BOT_TOKEN is not set. Create a fine-grained PAT on this repo with Contents:write and Pull requests:write, then: gh secret set RELEASE_BOT_TOKEN"
+            echo "::error::RELEASE_BOT_TOKEN is not set. Create a classic PAT with the public_repo scope, owned by llamenos-auto (a fine-grained PAT cannot write to this repo — see the header), then: gh secret set RELEASE_BOT_TOKEN"
             exit 1
           fi
           if ! gh api user -q .login; then
@@ -120,8 +120,12 @@ jobs:
           version: 0.22.4
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Runs scripts/release/notes-scope.ts below. No `bun install`: the
-      # script imports only node: built-ins and Bun's own TOML parser.
+      # Runs scripts/release/notes-scope.ts: knope.toml's prepare-release
+      # workflow calls it before PrepareRelease (security/perf commits →
+      # changesets, #2584) and after it (fails unless every one of them is in
+      # the notes exactly once), and the annotation step below calls it too.
+      # No `bun install`: the script imports only node: built-ins and Bun's
+      # own TOML parser.
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
@@ -163,8 +167,9 @@ jobs:
       # every other scope out of the changelog and the version bump. That
       # exclusion must be visible, not silent — a product change filed under
       # a scope the allowlist lacks would otherwise vanish from the notes. So
-      # every left-out feat/fix commit is listed in the release PR body, where
-      # the release is reviewed. knope's CreatePullRequest rewrites the body on
+      # every left-out feat/fix/breaking/security/perf commit is listed in the
+      # release PR body, where the release is reviewed, with left-out security
+      # commits called out first. knope's CreatePullRequest rewrites the body on
       # every run, so appending here is idempotent per run.
       - name: List what the notes leave out in the release PR body
         env:
