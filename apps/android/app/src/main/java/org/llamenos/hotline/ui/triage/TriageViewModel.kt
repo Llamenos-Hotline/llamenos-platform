@@ -14,8 +14,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.HubMembershipPendingException
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.launchOnBrowsingChange
 import org.llamenos.hotline.model.CmsReportTypesResponse
 import org.llamenos.hotline.model.ConvertFromReportResponse
 import org.llamenos.hotline.model.EntityTypeDefinition
@@ -67,10 +69,7 @@ class TriageViewModel @Inject constructor(
     val uiState: StateFlow<TriageUiState> = _uiState.asStateFlow()
 
     init {
-        activeHubState.activeHubId
-            .filterNotNull()
-            .onEach { loadTriageQueue() }
-            .launchIn(viewModelScope)
+        activeHubState.launchOnBrowsingChange(viewModelScope) { loadTriageQueue() }
     }
 
     fun loadTriageQueue() {
@@ -109,9 +108,15 @@ class TriageViewModel @Inject constructor(
                 )
             }
         } catch (_: NoActiveHubException) {
-            // No hub to browse: nothing to load, which is not a failure (#2405).
+            // The user belongs to no hub: nothing to load, which is not a failure (#2405).
+            // A hub list that could not be read is NOT this, and falls through to an error (#2565).
             _uiState.update {
                 it.copy(reports = emptyList(), total = 0, isLoading = false, isRefreshing = false)
+            }
+        } catch (_: HubMembershipPendingException) {
+            // The hub list is still loading: not "no hub" (#2565). This reloads when it settles.
+            _uiState.update {
+                it.copy(reports = emptyList(), total = 0, isLoading = true, isRefreshing = false)
             }
         } catch (e: Exception) {
             _uiState.update {

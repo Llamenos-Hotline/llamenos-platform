@@ -39,6 +39,7 @@ import org.llamenos.hotline.ui.conversations.ConversationsScreen
 import org.llamenos.hotline.ui.conversations.ConversationsViewModel
 import org.llamenos.hotline.ui.dashboard.DashboardScreen
 import org.llamenos.hotline.ui.dashboard.DashboardViewModel
+import org.llamenos.hotline.ui.hubs.HubMembershipBanner
 import org.llamenos.hotline.ui.hubs.HubSelectionViewModel
 import org.llamenos.hotline.ui.notes.NotesScreen
 import org.llamenos.hotline.ui.notes.NotesViewModel
@@ -131,6 +132,7 @@ fun MainScreen(
     val biometricSettingsUiState by biometricSettingsViewModel.uiState.collectAsState()
     // Picks the hub to browse when none is chosen yet (#1340); refreshed by pull-to-refresh.
     val hubSelectionViewModel: HubSelectionViewModel = hiltViewModel()
+    val membershipUnavailable by hubSelectionViewModel.membershipUnavailable.collectAsState()
     // Open incidents from every member hub (rule V): a banner above every tab.
     val incidentsViewModel: IncidentsViewModel = hiltViewModel()
     val incidentRows by incidentsViewModel.rows.collectAsState()
@@ -161,6 +163,7 @@ fun MainScreen(
     ) { paddingValues ->
         Column(modifier = Modifier.padding(paddingValues)) {
             OfflineBanner(networkMonitor, offlineQueue)
+            HubMembershipBanner(visible = membershipUnavailable, onRetry = hubSelectionViewModel::refresh)
             IncidentBanner(rows = incidentRows, onOpen = onNavigateToIncidents)
 
             when (MainTab.entries[selectedTab]) {

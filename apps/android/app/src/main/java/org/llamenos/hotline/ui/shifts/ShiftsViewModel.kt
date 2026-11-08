@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -16,8 +15,11 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.HubMembershipPendingException
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.launchOnBrowsingChange
 import org.llamenos.hotline.model.ShiftResponse
 import org.llamenos.hotline.model.ShiftsListResponse
 import org.llamenos.hotline.telephony.SipRegistrar
@@ -63,10 +65,7 @@ class ShiftsViewModel @Inject constructor(
     val uiState: StateFlow<ShiftsUiState> = _uiState.asStateFlow()
 
     init {
-        activeHubState.activeHubId
-            .filterNotNull()
-            .onEach { refresh() }
-            .launchIn(viewModelScope)
+        activeHubState.launchOnBrowsingChange(viewModelScope) { refresh() }
 
         combine(shiftClockRepository.clockedIn, activeHubState.activeHubId) { clockedIn, hubId ->
             hubId?.let { clockedIn[it] }
@@ -89,7 +88,8 @@ class ShiftsViewModel @Inject constructor(
             }
 
             try {
-                val response = apiService.request<ShiftsListResponse>("GET", apiService.hp("/api/shifts"))
+                // Shifts belong to a hub (#2461): never the bare path, which names no hub.
+                val response = apiService.request<ShiftsListResponse>("GET", apiService.activeHubPath("/api/shifts"))
                 _uiState.update {
                     it.copy(
                         shifts = response.shifts,
@@ -97,7 +97,20 @@ class ShiftsViewModel @Inject constructor(
                         isRefreshing = false,
                     )
                 }
+            } catch (_: NoActiveHubException) {
+                // The user belongs to no hub: there is no schedule, which is not a failure.
+                _uiState.update {
+                    it.copy(shifts = emptyList(), isLoading = false, isRefreshing = false)
+                }
+            } catch (_: HubMembershipPendingException) {
+                // The hub list is still loading. An empty schedule here would say "you are
+                // not on shift" before anyone knows; this reloads when the list settles.
+                _uiState.update {
+                    it.copy(shifts = emptyList(), isLoading = true, isRefreshing = false)
+                }
             } catch (e: Exception) {
+                // Includes a hub list that could not be read (#2565): the volunteer is told,
+                // never shown an empty schedule for a hub nobody reached.
                 _uiState.update {
                     it.copy(
                         isLoading = false,

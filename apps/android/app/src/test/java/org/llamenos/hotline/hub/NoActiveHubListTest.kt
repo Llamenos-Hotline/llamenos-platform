@@ -38,7 +38,7 @@ import org.llamenos.hotline.ui.triage.TriageViewModel
  *
  * Notes, reports, contacts and the audit log have no unscoped route (#2395), so
  * [ApiService.activeHubPath] throws [org.llamenos.hotline.api.NoActiveHubException]
- * when no hub is active. There is then nothing to browse: the screen must settle on
+ * when no hub is active and the hub list says the user belongs to none. There is then nothing to browse: the screen must settle on
  * its empty state, not on an error, and must not ask the server for the bare path.
  *
  * The hub URL IS configured here, so the reason is the missing active hub. The
@@ -88,9 +88,15 @@ class NoActiveHubListTest {
         assertEquals("A hub-owned list has no unscoped route to ask", emptyList<String>(), unscoped)
     }
 
+    /**
+     * The hub list has been read: with [hubId] null the user belongs to no hub. A list that
+     * could not be read is a different state with a different answer — see
+     * [HubMembershipFailureTest].
+     */
     private fun activeHubState(hubId: String?): ActiveHubState {
         val state = mockk<ActiveHubState>(relaxed = true)
         every { state.activeHubId } returns MutableStateFlow(hubId)
+        every { state.membership } returns MutableStateFlow(HubMembership.Loaded)
         return state
     }
 

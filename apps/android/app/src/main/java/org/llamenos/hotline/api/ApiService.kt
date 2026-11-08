@@ -14,6 +14,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.HubMembership
 import org.llamenos.hotline.model.AuthMeEventKeysResponse
 import org.llamenos.hotline.model.ClearPushTokenRequest
 import org.llamenos.hotline.model.HubsListResponse
@@ -43,8 +44,26 @@ import javax.inject.Singleton
 
 class ApiException(val code: Int, override val message: String) : Exception("HTTP $code: $message")
 
-/** A hub-owned resource was requested with no hub active; see [ApiService.activeHubPath]. */
+/**
+ * A hub-owned resource was requested with no hub active, and the server has said which
+ * hubs the user belongs to: there is nothing to browse. See [ApiService.activeHubPath].
+ */
 class NoActiveHubException : IllegalStateException("No active hub")
+
+/**
+ * A hub-owned resource was requested with no hub active because the hub list has not been
+ * read yet this session. Not "no hub": the screen is waiting, and reloads when the list
+ * settles ([org.llamenos.hotline.hub.launchOnBrowsingChange]).
+ */
+class HubMembershipPendingException : IllegalStateException("Hub membership not loaded yet")
+
+/**
+ * A hub-owned resource was requested with no hub active because the hub list could not be
+ * read (#2565). Not "no hub" and never an empty list: nobody knows what the user belongs
+ * to, and a screen must report that. Carries the load's own failure.
+ */
+class HubMembershipUnavailableException(cause: Exception) :
+    IllegalStateException(cause.message ?: "Hub membership unavailable", cause)
 
 /**
  * Request tag for public endpoints that prove identity in their body or not at all
@@ -375,10 +394,23 @@ class ApiService @Inject constructor(
      * the server refuses that path, and a request with no hub in it would be a
      * request for every hub's rows.
      *
-     * @throws NoActiveHubException when no hub is active.
+     * With no hub active, WHY decides what is thrown, and the three are deliberately not
+     * related: a caller that settles on an empty list for [NoActiveHubException] cannot
+     * catch the others by accident (#2565).
+     *
+     * @throws NoActiveHubException when the user belongs to no hub — nothing to browse.
+     * @throws HubMembershipPendingException when the hub list has not been read yet.
+     * @throws HubMembershipUnavailableException when the hub list could not be read.
      */
-    fun activeHubPath(path: String): String =
-        hubPath(activeHubState.activeHubId.value ?: throw NoActiveHubException(), path)
+    fun activeHubPath(path: String): String {
+        val hubId = activeHubState.activeHubId.value
+            ?: throw when (val membership = activeHubState.membership.value) {
+                HubMembership.Loaded -> NoActiveHubException()
+                HubMembership.Unknown -> HubMembershipPendingException()
+                is HubMembership.Failed -> HubMembershipUnavailableException(membership.cause)
+            }
+        return hubPath(hubId, path)
+    }
 
     /**
      * Returns the path prefixed with /hubs/{hubId} — for acting on a call or
