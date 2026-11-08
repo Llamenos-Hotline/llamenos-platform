@@ -404,6 +404,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.9 (2026-11-08)
+
+### Fixes
+
+- agents, CODEOWNERS and the fleet/review token describe the three-class write gate (#2559) (#2562)
+
 ## 0.21.8 (2026-11-08)
 
 ### Fixes
