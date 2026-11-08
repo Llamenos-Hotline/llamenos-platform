@@ -228,6 +228,11 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   ['(6d) a partial review that found nothing wrong in the part it read',
     reviewed('partial-pass', 'failure'), 'NO-VERDICT:partial-pass'],
   ['(7) scope — touched files outside the lane\'s scope (#1235)', reviewed('scope', 'failure'), 'NO-VERDICT:scope'],
+  // #2559: a trust-anchor change with no human sign-off on the head is held
+  // like `scope` — red, nobody reviewed — but named apart, because its
+  // remedy is a person signing off, never a code change.
+  ['(7b) a trust-anchor change awaiting a human sign-off on this head (#2559)',
+    reviewed('sign-off-pending', 'failure'), 'NO-VERDICT:sign-off-pending'],
   ['review-set-unresolved, decided by the gate',
     { JOB_STATUS: 'failure', GATE_CONCLUSION: 'failure', OUTCOME: 'review-set-unresolved' }, 'NO-VERDICT:review-set-unresolved'],
   ['review-set-unresolved, decided again by review-ci', reviewed('review-set-unresolved', 'failure'), 'NO-VERDICT:review-set-unresolved'],
@@ -681,6 +686,13 @@ describe('rail: runReviewCi names the result of every return path', () => {
     ['a cached PASS', { cacheFor: cacheOf({ verdict: 'PASS', text: 'cached pass' }) }, 'cache-pass', true],
     ['a cached FAIL', { cacheFor: cacheOf({ verdict: 'FAIL', text: 'cached fail' }) }, 'cache-fail', false],
     ['the scope pre-check refused the diff', { verify: vi.fn(async () => ({ ...passing, passed: false, reasons: ['touched files outside lane "ios"\'s scope: x'] })) }, 'scope', false],
+    ['the pre-check held a trust anchor nobody signed off on, and refused nothing else',
+      { verify: vi.fn(async () => ({
+        ...passing, passed: false,
+        reasons: ['touched trust-anchor files — a shipped client\'s TLS trust decision, which lands only with a human sign-off: x'],
+        trustAnchors: { files: ['apps/desktop/src/net.rs'], approvedBy: [] },
+      })) },
+      'sign-off-pending', false],
     ['the review set could not be resolved', { reviewSet: async () => ({ ok: false as const, reason: 'labels unreadable' }) }, 'review-set-unresolved', false],
     ['a profile in the set did not resolve', { ...withProfile, resolveProfile: async () => ({ ok: false as const, reason: 'no such agent' }) }, 'review-set-unresolved', false],
     ['the branch names no real lane', { ctx: ctx({ branch: 'fleet/nosuchlane/1' }) }, 'unknown-lane', false],

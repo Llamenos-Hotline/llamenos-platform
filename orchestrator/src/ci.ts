@@ -10,6 +10,7 @@ import {
 } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
+import { TRUST_ANCHOR_REASON_PREFIX } from './write-gate.js'
 import { tierFor, type ImpactTier } from './impact.js'
 import { isReviewerLabel, type ReviewerProfile, type ReviewerResolution } from './specialist.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
@@ -650,15 +651,25 @@ export interface CiVerdict { ok: boolean; summary: string }
  *    (#2014, #2336), restated. A verdict that faulted the description clears
  *    by correcting the description and re-requesting — never by perturbing
  *    the tree to bust a hash (#2332, #1895).
- *  - `scope`: the mechanical pre-check (lane scope, never-write paths)
- *    refused the diff, so no reviewer was asked.
+ *  - `scope`: the mechanical pre-check refused the diff for a reason no
+ *    sign-off clears — a file outside the lane's scope, secret material, or
+ *    a check that could not run — so no reviewer was asked.
+ *  - `sign-off-pending`: the mechanical pre-check's ONLY refusal is that the
+ *    diff touches a shipped client's trust anchors and no trust-anchor
+ *    approver has signed off on this head (#2556, #2559). Nothing is wrong
+ *    with the diff's scope; the remedy is a human's sign-off, then a review
+ *    request. Held exactly as `scope` is — red, no reviewer asked — and named
+ *    apart only so the token says which of the two remedies applies. A diff
+ *    that is ALSO out of scope or carries a secret is `scope`: a sign-off
+ *    would not clear it, so naming sign-off would send a human to approve
+ *    something that still cannot land.
  *  - `review-set-unresolved`, `unknown-lane`, `review-disabled`,
  *    `export-unsafe`: refused before any reviewer ran, for the reason named.
  */
 export const REVIEW_CI_RESULTS = [
   'pass', 'fail', 'unreadable', 'budget-exhausted', 'partial-fail', 'partial-pass',
   'cache-pass', 'cache-fail',
-  'scope', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
+  'scope', 'sign-off-pending', 'review-set-unresolved', 'unknown-lane', 'review-disabled', 'export-unsafe',
 ] as const
 export type ReviewCiResult = (typeof REVIEW_CI_RESULTS)[number]
 
@@ -727,6 +738,7 @@ export const REVIEW_OUTCOME_TOKENS = [
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed', 'NO-VERDICT:tree-changed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
+  'NO-VERDICT:sign-off-pending',
   'NO-VERDICT:unreadable', 'NO-VERDICT:budget-exhausted', 'NO-VERDICT:partial-pass',
   'NO-VERDICT:did-not-run', 'NO-VERDICT:report-missing',
   'NO-VERDICT:engine-quota', 'NO-VERDICT:engine-auth', 'NO-VERDICT:engine-misconfigured',
@@ -1497,6 +1509,24 @@ export async function runReviewCi(deps: ReviewCiDeps): Promise<ReviewCiVerdict> 
   return verdict
 }
 
+/**
+ * True when a refused mechanical report's ONLY obstacle is a trust-anchor
+ * change nobody has signed off on — the `sign-off-pending` result. Read from
+ * the report's own structured `trustAnchors` and the refusal-class prefixes
+ * write-gate.ts publishes (the same stable prefixes trace.ts matches), never
+ * re-derived: the classification is verify.ts's, and this only names it.
+ *
+ * Fails toward `scope`: a report with no reasons, with an approved trust
+ * anchor (so something else refused it), or with any reason outside the
+ * trust-anchor class is not "awaiting sign-off", because a sign-off would not
+ * make it land.
+ */
+export function awaitsOnlyTrustAnchorSignOff(report: Pick<VerifyReport, 'passed' | 'reasons' | 'trustAnchors'>): boolean {
+  return !report.passed &&
+    report.trustAnchors !== undefined && report.trustAnchors.approvedBy.length === 0 &&
+    report.reasons.length > 0 && report.reasons.every((r) => r.startsWith(TRUST_ANCHOR_REASON_PREFIX))
+}
+
 async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
   const refusal = headDirRefusal(deps)
   if (refusal !== undefined) return { ...refusal, result: 'export-unsafe' }
@@ -1523,7 +1553,7 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
     return {
       ok: false,
       summary: `no review requested: ${report.reasons.join('; ') || 'mechanical verification failed'}`,
-      result: 'scope',
+      result: awaitsOnlyTrustAnchorSignOff(report) ? 'sign-off-pending' : 'scope',
     }
   }
 

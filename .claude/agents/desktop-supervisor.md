@@ -95,7 +95,8 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   which certificates a shipped client accepts, and any diff adding or removing a pin literal
   or TLS trust hook in shipped client source. A wrong value disconnects every installed client
   and only an app-store release undoes it. If the issue needs one, change it, say so in the
-  PR and in your status `notes:`, and expect the gate to hold the PR. Never post the sign-off
+  PR and in your status `notes:`, and expect the gate to hold the PR — `fleet/review` reports
+  `NO-VERDICT:sign-off-pending`, which is the hold, not a defect to fix. Never post the sign-off
   yourself — it is the operator's statement that they checked the values. Never incidentally:
   - `apps/android/app/src/main/java/org/llamenos/hotline/api/ApiService.kt`
   - `apps/android/app/src/main/res/xml/network_security_config.xml`
@@ -105,7 +106,9 @@ enforced lists are `SECRET_PATH_PATTERNS` and `TRUST_ANCHOR_FILES` in
   - `apps/desktop/src/net.rs`
   - `apps/android/app/src/main/AndroidManifest.xml`
   - `apps/ios/Sources/App/Info.plist` (knope's release version bump alone is not held)
-  - `apps/ios/project.yml`
+  - `apps/ios/project.yml` (parsed, not held whole (#2579): test-target sources/settings, scheme test lists,
+    remote Swift packages and the Xcode-version option are routine. Any other change is held, and so is
+    a file the rule cannot parse)
 - **Everything else is writable** — including public certificates and annotated chains used
   as test input.
 

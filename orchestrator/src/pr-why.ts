@@ -230,7 +230,8 @@ export interface PrWhyFacts {
 export const VERDICT_NAMES = [
   'unknown', 'head-moved', 'merged', 'closed', 'conflicted', 'draft',
   'queued-unmergeable', 'queued-ok',
-  'required-check-failing', 'review-verdict-stale-by-tree', 'review-never-requested', 'required-context-absent',
+  'required-check-failing', 'review-verdict-stale-by-tree', 'review-never-requested', 'review-awaits-trust-approval',
+  'required-context-absent',
   'changes-requested', 'codeowner-approval-missing', 'approvals-missing', 'behind',
   'automerge-stale', 'not-queued', 'fleet-queue-guard-unsatisfied', 'required-check-pending', 'blocked-unexplained', 'check-carrier-ambiguous',
 ] as const
@@ -613,6 +614,20 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
       severity: 'blocker',
       evidence: [...evidence, 'the last PASS judged another tree; only a requested review earns a verdict for this one'],
       remedy: `cycle the review REQUEST (remove and re-request llamenos-auto on #${s.number}); gh run rerun only re-executes the cache lookup and stamps the red carrier as the newest`,
+    })
+    return
+  }
+  // #2559: held, not refused. Nothing is wrong with the diff's scope and no
+  // code change or re-run clears it — a trust-anchor approver signing off on
+  // this exact head does, then a review request. Still a blocker: the token
+  // names the remedy, it does not soften the hold.
+  if (token === 'NO-VERDICT:sign-off-pending') {
+    v.push({
+      name: 'review-awaits-trust-approval',
+      severity: 'blocker',
+      evidence: [...evidence, `the diff changes a shipped client's TLS trust anchors and no trust-anchor approver has signed off on head ${s.headRefOid}`],
+      remedy: `the operator checks the trust-anchor values on #${s.number} and signs off on head ${s.headRefOid} as the run's ` +
+        'summary describes, then re-requests review from llamenos-auto; a push voids the sign-off',
     })
     return
   }

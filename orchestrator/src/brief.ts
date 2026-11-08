@@ -1,6 +1,7 @@
 import {
   SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, type Lane, type TrustAnchorFile,
 } from './config.js'
+import type { ReviewOutcomeToken } from './ci.js'
 import { ROUTINE_XCODEGEN_PATHS } from './xcodegen-trust.js'
 import { SECRET_TEMPLATE_SUFFIXES } from './fragments.js'
 import type { WorkItem } from './source.js'
@@ -26,6 +27,14 @@ export function renderBrief(brief: Brief): string {
   return brief.sections.map((s) => `## ${s.heading}\n\n${s.body}`).join('\n\n')
 }
 
+/** What a content-judged trust anchor's rule holds, as a worker is told it. */
+const CONTENT_RULE_SUMMARY: Record<NonNullable<TrustAnchorFile['contentRule']>, string> = {
+  'xcodegen-spec': `held only when it changes something outside ${ROUTINE_XCODEGEN_PATHS.map((r) => `\`${r.path}\``).join(', ')}`,
+}
+
+/** The token a held trust-anchor PR shows (#2559) — named so a worker reads it as the hold it was told about. */
+const SIGN_OFF_PENDING: ReviewOutcomeToken = 'NO-VERDICT:sign-off-pending'
+
 /**
  * The write gate's two refusals, as the worker is told them (#2556) —
  * rendered from the SAME constants `verifyMechanical` enforces
@@ -34,11 +43,6 @@ export function renderBrief(brief: Brief): string {
  * that learns about a trust anchor only from a red `fleet/verify` has
  * already spent its session on a PR it was never told needs a human.
  */
-/** What a content-judged trust anchor's rule holds, as a worker is told it. */
-const CONTENT_RULE_SUMMARY: Record<NonNullable<TrustAnchorFile['contentRule']>, string> = {
-  'xcodegen-spec': `held only when it changes something outside ${ROUTINE_XCODEGEN_PATHS.map((r) => `\`${r.path}\``).join(', ')}`,
-}
-
 export function writeGateRules(): string {
   const patterns = SECRET_PATH_PATTERNS.map((p) => `\`${p}\``).join(', ')
   const templates = SECRET_TEMPLATE_SUFFIXES.map((t) => `\`${t}\``).join('/')
@@ -54,7 +58,8 @@ export function writeGateRules(): string {
     `signs off on the exact head commit. These files, and any diff that adds or removes a pin literal or TLS trust ` +
     `hook in shipped client source:\n${anchors}\n` +
     `  If your issue genuinely needs such a change, make it, say so in the PR description, and say so in your ` +
-    `status \`notes:\` — the gate will hold the PR until that sign-off. Never change one incidentally, and never ` +
+    `status \`notes:\` — the gate will hold the PR until that sign-off, and \`fleet/review\` reports ` +
+    `\`${SIGN_OFF_PENDING}\` meanwhile: that is the expected hold, not a defect to fix or re-run. Never change one incidentally, and never ` +
     `post a sign-off yourself: it is the human's statement that they checked the values, and nobody else's.`
   )
 }

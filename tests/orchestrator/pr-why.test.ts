@@ -321,6 +321,17 @@ describe('fleet/review verdicts — read from the outcome annotation, not output
     expect(names(f)).toEqual(['required-check-failing'])
     produced.add('required-check-failing')
   })
+  // #2559: a held trust-anchor change names the sign-off remedy, never
+  // "act on the cause" — and is still a blocker.
+  it('review-awaits-trust-approval: NO-VERDICT:sign-off-pending', () => {
+    const r = expectVerdict(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:sign-off-pending — the diff changes a shipped client\'s TLS trust anchors') }), 'review-awaits-trust-approval')
+    expect(r.verdicts[0]?.severity).toBe('blocker')
+    expect(r.verdicts[0]?.remedy).toContain('signs off on head')
+    expect(r.verdicts[0]?.remedy).not.toContain('a NO-VERDICT is not a rejection')
+  })
+  it('flips: NO-VERDICT:scope stays required-check-failing, not review-awaits-trust-approval', () => {
+    expect(names(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:scope — outside the lane') }))).toEqual(['required-check-failing'])
+  })
   it('review-never-requested: NO-VERDICT:unreviewed with nobody requested', () => {
     expectVerdict(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:unreviewed — no review has ever been earned') }), 'review-never-requested')
   })
