@@ -102,7 +102,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing`, `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
-| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, files disjoint from the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
+| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
 ### `queue-feed`: the queue had no owner (#2036)
 
@@ -128,8 +128,17 @@ tops the queue up to the live ruleset's `min_entries_to_merge`, never past
    (knope release PR, all-bot-authored, Tier 0/1) are re-derived with the
    gate's own rules, and a profile in the review set disables the last two
    exactly as in the gate.
-3. Its files are **disjoint** from every queued PR and from the pass's other
-   selections — under ALLGREEN one conflict fails the whole group.
+3. Its changes **merge** into the group it would join — under ALLGREEN one
+   conflict fails the whole group. Every file it shares with a queued PR or
+   an earlier selection of the pass is rebuilt as the group would hold it
+   (base tip, then each earlier member's change, in queue order) and the
+   candidate's change is three-way-merged on top by git itself
+   (`git merge-tree --merge-base`, in a scratch object store —
+   `src/merge-sim.ts`, #2570). Whole-file disjointness refused every pair
+   touching `package.json`, a locale or `PROTOCOL.md`, ~95% of which merge
+   cleanly; ordinary source overlaps mostly do conflict and are still
+   refused. A file that cannot be replayed (unreadable, added/deleted/renamed
+   on a side, binary, more than 25 shared files) counts as a conflict.
 4. An **iOS-gate-risk** PR is queued only **alone**: into an empty queue, as
    the pass's only selection. That is two questions (#2548,
    `src/ios-isolation.ts`): the diff *schedules* the iOS gate (the shared

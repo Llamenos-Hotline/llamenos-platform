@@ -15,6 +15,7 @@ import {
 import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-cache.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
+import { gitThreeWayMerge } from '../../orchestrator/src/merge-sim.js'
 
 const TREE = 'a'.repeat(40)
 const OTHER_TREE = 'c'.repeat(40)
@@ -63,6 +64,9 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     platformFlags: async () => ({ ...NO_FLAGS, backend: true }),
     readMergeBase: async () => undefined,
     readFileAt: async () => undefined,
+    readBranchHead: async () => undefined,
+    readBlobAt: async () => undefined,
+    mergeContents: gitThreeWayMerge,
     readKnopeToml: async () => undefined,
     listMergeGroupRuns: async () => [],
     readRunJobs: async () => [],
@@ -557,33 +561,162 @@ describe('runQueueFeedWith — the pass', () => {
     expect(enableAutoMerge).not.toHaveBeenCalled()
   })
 
-  it('requirement 3: a candidate touching a QUEUED PR\'s file is skipped (ALLGREEN conflict)', async () => {
+  // Requirement 3 (#2570): a shared file is a conflict only when git's own
+  // three-way merge says so. The fixture is the live 2026-11-07 shape: four
+  // open PRs whose ONLY shared file was package.json — a release version
+  // bump (#2555), a script added further down (#2562), and two PRs appending
+  // to the same `test:repo` line (#2532, #2563). Whole-file disjointness let
+  // one of the four into a group; git merges three of them.
+  const PKG_BASE = [
+    '{',
+    '  "name": "llamenos",',
+    '  "version": "0.21.7",',
+    '  "private": true,',
+    '  "scripts": {',
+    '    "test:fleet": "bunx vitest run --config vitest.orchestrator.config.ts",',
+    '    "test:repo": "bun test packages/shared/__tests__/ scripts/lib/test-reporter.test.ts",',
+    '    "test:sip-bridge": "cd sip-bridge && bunx vitest run",',
+    '    "i18n:validate:all": "bun run packages/i18n/tools/validate-strings.ts all",',
+    '    "codegen": "bun run packages/protocol/tools/codegen.ts",',
+    '    "codegen:check": "bun run packages/protocol/tools/codegen.ts --check",',
+    '    "migration:check": "bun scripts/check-migration-drift.ts"',
+    '  }',
+    '}',
+    '',
+  ].join('\n')
+  const PKG_EDITS: Record<number, (s: string) => string> = {
+    2532: (s) => s.replace('test-reporter.test.ts"', 'test-reporter.test.ts scripts/ci/mac-runner-disk-guard.test.ts"'),
+    2555: (s) => s.replace('"version": "0.21.7"', '"version": "0.21.8"'),
+    2562: (s) => s.replace('--check",\n', '--check",\n    "agents:build": "bash .claude/agents/build-agents.sh",\n'),
+    2563: (s) => s.replace('test-reporter.test.ts"', 'test-reporter.test.ts scripts/ci/apt-install-bounded.test.ts"'),
+  }
+  const MB = '0'.repeat(40)
+  const TIP = '1'.repeat(40)
+  const headOf = (n: number): string => String(n).padStart(40, 'a')
+
+  /** A repo where every PR forks from MB, main's tip is TIP, and each PR's
+   *  head holds `edits[n]` applied to `base` for `path`. */
+  function mergeRepo(path: string, base: string, edits: Record<number, (s: string) => string>, tip = base): Partial<QueueFeedDeps> {
+    const heads = new Map(Object.keys(edits).map((n) => [headOf(Number(n)), Number(n)]))
+    return {
+      readPr: async (n) => mkPr({ number: n, headRefOid: headOf(n), headRefName: `fleet/x/${n}` }),
+      readPrFiles: async () => [path],
+      readBranchHead: async () => TIP,
+      readMergeBase: async () => MB,
+      readBlobAt: async (p, sha) => {
+        if (p !== path) return undefined
+        if (sha === MB) return base
+        if (sha === TIP) return tip
+        const n = heads.get(sha)
+        return n === undefined ? undefined : edits[n]?.(base)
+      },
+      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+    }
+  }
+
+  it('requirement 3 (#2570): the live package.json clique — git merges three of the four into one group', async () => {
+    const armed: string[] = []
+    const deps = mkDeps({
+      ...mergeRepo('package.json', PKG_BASE, PKG_EDITS),
+      listOpenPrNumbers: async () => [2532, 2555, 2562, 2563].map((number) => ({ number, baseRefName: 'main' })),
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['2532', '2555', '2562'])
+    expect(result.branches[0]?.notes.some((n) => n.startsWith('pr 2562: shares package.json') && n.endsWith('— batchable'))).toBe(true)
+    expect(result.branches[0]?.skipped).toEqual([{
+      pr: 2563,
+      reason: 'its change to package.json does not merge onto main + #2532 + #2555 + #2562 (git\'s own three-way merge, the group replayed in queue order) — under ALLGREEN one conflict fails the whole group',
+    }])
+  })
+
+  it('requirement 3 (#2570): a candidate whose change conflicts with a QUEUED PR\'s is skipped', async () => {
     const enableAutoMerge = vi.fn(async () => {})
     const deps = mkDeps({
+      ...mergeRepo('package.json', PKG_BASE, { 200: PKG_EDITS[2532] as (s: string) => string, 100: PKG_EDITS[2563] as (s: string) => string }),
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 200, baseRefName: 'main' }],
       listQueueEntries: async () => ({ queue: true, prs: [200] }),
-      readPr: async (n) => mkPr({ number: n, headRefName: `fleet/backend/${n}` }),
-      readPrFiles: async () => ['apps/worker/routes/shared.ts'],
-      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
       enableAutoMerge,
     })
     const result = await runQueueFeedWith(deps)
     expect(enableAutoMerge).not.toHaveBeenCalled()
-    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/already in the queue/)
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/^its change to package\.json does not merge onto main \+ #200 /)
   })
 
-  it('requirement 3: two same-pass candidates touching one file — only the first queues', async () => {
+  it('requirement 3 (#2570): a candidate whose change merges with a QUEUED PR\'s joins its group', async () => {
     const armed: string[] = []
     const deps = mkDeps({
+      ...mergeRepo('package.json', PKG_BASE, { 200: PKG_EDITS[2555] as (s: string) => string, 100: PKG_EDITS[2563] as (s: string) => string }),
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 200, baseRefName: 'main' }],
+      listQueueEntries: async () => ({ queue: true, prs: [200] }),
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100'])
+  })
+
+  it('requirement 3 (#2570): the group is replayed onto the base TIP, not the PRs\' fork point', async () => {
+    // main moved on after both PRs forked: the tip already carries a line
+    // that 101's change would collide with. Against the fork point the two
+    // PRs merge; against the tip — what GitHub actually builds — they do not.
+    const armed: string[] = []
+    const tip = PKG_BASE.replace('"private": true,', '"private": true,\n  "description": "x",')
+    const deps = mkDeps({
+      ...mergeRepo('package.json', PKG_BASE, {
+        100: PKG_EDITS[2562] as (s: string) => string,
+        101: (s) => s.replace('"private": true,', '"private": true,\n  "license": "AGPL-3.0-or-later",'),
+      }, tip),
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 101, baseRefName: 'main' }],
-      readPr: async (n) => mkPr({ number: n, headRefName: `fleet/backend/${n}` }),
-      readPrFiles: async () => ['apps/worker/routes/shared.ts'],
-      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
       enableAutoMerge: async (p) => { armed.push(p) },
     })
     const result = await runQueueFeedWith(deps)
     expect(armed).toEqual(['100'])
-    expect(result.branches[0]?.skipped[0]?.pr).toBe(101)
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/^its change to package\.json does not merge onto main \+ #100 /)
+  })
+
+  it('requirement 3 (#2570): a shared file that cannot be simulated is a conflict — nothing is predicted', async () => {
+    const armed: string[] = []
+    // Readable everywhere except main's tip (failed read, or a file main
+    // deleted): the group's content is unknown, so 101 is refused.
+    const deps = mkDeps({
+      ...mergeRepo('package.json', PKG_BASE, { 100: PKG_EDITS[2555] as (s: string) => string, 101: PKG_EDITS[2562] as (s: string) => string }),
+      readBranchHead: async () => undefined,
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 101, baseRefName: 'main' }],
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100'])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/the merge cannot be simulated: the main tip could not be read — an unprovable merge is treated as a conflict$/)
+  })
+
+  it('requirement 3 (#2570): a file one side adds (absent at its merge base) is never simulated as a modify/modify merge', async () => {
+    const armed: string[] = []
+    const repo = mergeRepo('package.json', PKG_BASE, { 100: PKG_EDITS[2555] as (s: string) => string, 101: PKG_EDITS[2562] as (s: string) => string })
+    const deps = mkDeps({
+      ...repo,
+      readBlobAt: async (p, sha) => (sha === MB ? undefined : await repo.readBlobAt?.(p, sha)),
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 101, baseRefName: 'main' }],
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100'])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/package\.json could not be read at #100's merge base \(or is added, deleted or renamed there\)/)
+  })
+
+  it('requirement 3 (#2570): an ordinary source file both PRs rewrite still conflicts', async () => {
+    const armed: string[] = []
+    const src = 'export function f() {\n  return 1\n}\n'
+    const deps = mkDeps({
+      ...mergeRepo('apps/worker/routes/shared.ts', src, {
+        100: (s) => s.replace('return 1', 'return 2'),
+        101: (s) => s.replace('return 1', 'return 3'),
+      }),
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }, { number: 101, baseRefName: 'main' }],
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+    const result = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100'])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/^its change to apps\/worker\/routes\/shared\.ts does not merge onto main \+ #100 /)
   })
 
   it('unprovable disjointness against a queued PR decides NOTHING for the branch', async () => {

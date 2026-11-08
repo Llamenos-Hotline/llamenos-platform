@@ -2189,9 +2189,9 @@ const HANDLERS: Record<string, CommandHandler> = {
   // #2036: the merge queue has no durable owner — an ejected or never-armed
   // PR sits CLEAN forever because nothing re-arms it. This pass re-arms
   // auto-merge on PRs that pass the feed's four conditions (fresh CLEAN,
-  // a PASS verdict for the head tree, disjoint files, iOS-only-when-alone),
-  // using the same enableAutoMerge the tick uses. Exit 2 when a prerequisite
-  // read was undecidable.
+  // a PASS verdict for the head tree, changes git merges onto the group,
+  // iOS-only-when-alone), using the same enableAutoMerge the tick uses. Exit
+  // 2 when a prerequisite read was undecidable.
   'queue-feed': async () => {
     const result = await runQueueFeedWith(defaultQueueFeedDeps(REPO_ROOT, enableAutoMerge, log))
     process.stdout.write(`${renderQueueFeed(result)}\n`)

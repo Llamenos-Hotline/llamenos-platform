@@ -15,6 +15,10 @@ import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } fro
 import { checkHalt } from './killswitch.js'
 import { iosIsolationFor, isContentCheckedPath, type IosIsolation, type IosIsolationReads } from './ios-isolation.js'
 import {
+  sharedFilesMerge, newMergeSimCache, gitThreeWayMerge,
+  type GroupMember, type MergeSimReads,
+} from './merge-sim.js'
+import {
   classifyAttempt, newAttemptReadCache, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
   type AttemptReadDeps, type AttemptReadCache, type PlatformFlags, type RunJob, type InfraEvidence,
 } from './queue-attempt.js'
@@ -67,9 +71,15 @@ import {
  *        signed, list ends at the judged head), and a Tier 0/1 diff
  *        (`tierFor`, impact.ts — no reviewable content). A profile in the
  *        review set disables the last two, exactly as in the gate.
- *     c. Its file list is DISJOINT from every PR already queued and from
- *        every PR selected earlier in the same pass — under ALLGREEN one
- *        conflict fails the whole group.
+ *     c. It MERGES into the group it would join — under ALLGREEN one
+ *        conflict fails the whole group. Every file it shares with a PR
+ *        already queued or selected earlier in the same pass is rebuilt as
+ *        the group would hold it (base tip, then each earlier member's
+ *        change in queue order) and the candidate's change is three-way-
+ *        merged on top by git's own merge (merge-sim.ts, #2570). Whole-file
+ *        disjointness refused every pair that touched `package.json` or a
+ *        locale, and measured ~95% of those as false conflicts. Anything
+ *        the simulation cannot replay is a conflict.
  *     d. An iOS-gate-risk PR is queued only ALONE: into an empty queue, as
  *        the one selection of its pass. The queue-only iOS jobs are the
  *        likeliest to fail a group, and under ALLGREEN an iOS entry batched
@@ -233,8 +243,9 @@ export interface QueueFeedDeps {
   readHeadTree(headSha: string): Promise<string | undefined>
   /** The PR's commits — read only for a bot-authored candidate. */
   readPrCommits(pr: number): Promise<PrCommitIdentity[] | undefined>
-  /** The merge queue's current entries. `null` when the branch HAS no merge
-   *  queue; `undefined` when the read failed (cannot decide). */
+  /** The merge queue's current entries, in queue order. `null` when the
+   *  branch HAS no merge queue; `undefined` when the read failed (cannot
+   *  decide). */
   listQueueEntries(branch: string): Promise<{ queue: true; prs: number[] } | { queue: false } | undefined>
   /** The base branch's LIVE ruleset. THROWS on failure — a failed read is
    *  never an empty rule list (missing-checks.ts's contract). */
@@ -251,6 +262,13 @@ export interface QueueFeedDeps {
   /** A content-checked file at a commit (ios-isolation.ts's four shapes
    *  only). `undefined` on failure or absence. */
   readFileAt: IosIsolationReads['readFileAt']
+  /** The base branch's tip commit — the merge simulation's starting point. */
+  readBranchHead: MergeSimReads['readBranchHead']
+  /** Any repo file at a commit, for the merge simulation. `undefined` on
+   *  failure or absence. */
+  readBlobAt: MergeSimReads['readBlobAt']
+  /** git's three-way merge of one file's content (`gitThreeWayMerge`). */
+  mergeContents: MergeSimReads['mergeContents']
   /** The base checkout's knope.toml — read only for a release-branch PR. */
   readKnopeToml(): Promise<string | undefined>
   /** Recent COMPLETED merge_group runs for a base branch. */
@@ -566,18 +584,19 @@ async function feedBranch(
   }
   result.outcome = 'swept'
 
-  // Files of every PR already in the queue — requirement 3's first half.
-  const usedFiles = new Set<string>()
-  for (const n of queued) {
+  // Every PR already in the queue, in queue order — the group a candidate
+  // would join, and requirement 3's first half.
+  const group: GroupMember[] = []
+  for (const n of entries.prs) {
     const files = await deps.readPrFiles(n)
     if (files === undefined) {
-      // Cannot prove disjointness against a queued PR whose files cannot be
+      // Cannot simulate the merge against a queued PR whose files cannot be
       // read: every addition this pass could be the ALLGREEN conflict that
       // fails the group. Decide nothing rather than gamble the queue.
-      deps.log(`queue-feed: files of queued PR #${n} could not be read — disjointness is unprovable, deciding nothing for ${branch}`)
+      deps.log(`queue-feed: files of queued PR #${n} could not be read — the group's merge is unprovable, deciding nothing for ${branch}`)
       return emptyBranch(branch, 'unreadable', queued.size)
     }
-    for (const f of files) usedFiles.add(f)
+    group.push({ pr: n, files: new Set(files) })
   }
 
   // One read per branch, before the candidate loop — the not-a-retry guard.
@@ -589,7 +608,14 @@ async function feedBranch(
   }
   const attemptCache: AttemptReadCache = newAttemptReadCache()
 
-  const selectedFiles = new Set<string>()
+  const mergeCache = newMergeSimCache()
+  const mergeReads: MergeSimReads = {
+    readBranchHead: deps.readBranchHead,
+    readHead: async (n) => (await deps.readPr(n))?.headRefOid,
+    readMergeBase: deps.readMergeBase,
+    readBlobAt: deps.readBlobAt,
+    mergeContents: deps.mergeContents,
+  }
   for (const ref of [...candidates].sort((a, b) => a.number - b.number)) {
     if (result.armed.length >= capacity) break
 
@@ -604,7 +630,7 @@ async function feedBranch(
 
     const files = await deps.readPrFiles(pr.number)
     if (files === undefined) {
-      result.skipped.push({ pr: pr.number, reason: 'the changed-file list could not be read — disjointness and platform flags are unprovable' })
+      result.skipped.push({ pr: pr.number, reason: 'the changed-file list could not be read — the group merge and platform flags are unprovable' })
       continue
     }
 
@@ -697,13 +723,23 @@ async function feedBranch(
       continue
     }
 
-    const conflicts = files.filter((f) => usedFiles.has(f) || selectedFiles.has(f))
-    if (conflicts.length > 0) {
+    const merged = await sharedFilesMerge(branch, { pr: pr.number, head: pr.headRefOid, files }, group, mergeReads, mergeCache)
+    if (merged.kind === 'conflict') {
       result.skipped.push({
         pr: pr.number,
-        reason: `touches file(s) already in the queue or this pass's batch (${conflicts.slice(0, 5).join(', ')}${conflicts.length > 5 ? `, +${conflicts.length - 5} more` : ''}) — under ALLGREEN one conflict fails the whole group`,
+        reason: `its change to ${merged.file} does not merge onto ${[branch, ...merged.with.map((n) => `#${n}`)].join(' + ')} (git's own three-way merge, the group replayed in queue order) — under ALLGREEN one conflict fails the whole group`,
       })
       continue
+    }
+    if (merged.kind === 'unprovable') {
+      result.skipped.push({
+        pr: pr.number,
+        reason: `shares file(s) with the queue or this pass's batch and the merge cannot be simulated: ${merged.reason} — an unprovable merge is treated as a conflict`,
+      })
+      continue
+    }
+    if (merged.files.length > 0) {
+      result.notes.push(`pr ${pr.number}: shares ${merged.files.slice(0, 5).join(', ')}${merged.files.length > 5 ? `, +${merged.files.length - 5} more` : ''} with the queue or this pass's batch, and git merges each cleanly on top of the group — batchable`)
     }
 
     // An infrastructure re-queue is recorded on the PR BEFORE arming: the
@@ -726,7 +762,8 @@ async function feedBranch(
       await deps.enableAutoMerge(String(pr.number))
       result.armed.push(pr.number)
       if (infra !== undefined) result.infraRequeued.push(infra)
-      for (const f of files) selectedFiles.add(f)
+      group.push({ pr: pr.number, files: new Set(files) })
+      mergeCache.heads.set(pr.number, Promise.resolve(pr.headRefOid))
       deps.log(`queue-feed: armed pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
       if (isolation?.isolate === true) break // an iOS-gate-risk PR is the whole group — stop the pass here
     } catch (e) {
@@ -771,6 +808,12 @@ export function renderQueueFeed(result: QueueFeedResult): string {
  *  type resolves to `{}` here and reads as unreadable, never as empty. */
 const JOB_ANNOTATIONS_QUERY = `query($id: ID!) { node(id: $id) { ... on CheckRun { annotations(first: 100) { nodes { annotationLevel message } } } } }`
 
+/** A repo-relative file path safe to place in an API path: no `..`
+ *  segment, no empty segment, no leading slash, a conservative charset. */
+export function isPlainRepoPath(path: string): boolean {
+  return /^[A-Za-z0-9._@+-]+(\/[A-Za-z0-9._@+-]+)*$/.test(path) && !path.split('/').some((seg) => seg === '..' || seg === '.')
+}
+
 /** A workflow file path as the runs API reports it. */
 const WORKFLOW_PATH_RE = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
 
@@ -780,14 +823,14 @@ const MERGE_QUEUE_QUERY = `
 query($owner: String!, $repo: String!, $branch: String!) {
   repository(owner: $owner, name: $repo) {
     mergeQueue(branch: $branch) {
-      entries(first: 50) { nodes { pullRequest { number } } }
+      entries(first: 50) { nodes { position pullRequest { number } } }
     }
   }
 }
 `.trim()
 
 interface MergeQueueResponse {
-  data?: { repository?: { mergeQueue?: { entries?: { nodes?: { pullRequest?: { number?: number } | null }[] | null } } | null } | null } | null
+  data?: { repository?: { mergeQueue?: { entries?: { nodes?: { position?: number; pullRequest?: { number?: number } | null }[] | null } } | null } | null } | null
   errors?: unknown
 }
 
@@ -898,8 +941,13 @@ export function defaultQueueFeedDeps(
       const queue = raw.data?.repository?.mergeQueue
       if (queue === undefined) return undefined
       if (queue === null) return { queue: false }
-      const prs = (queue.entries?.nodes ?? []).flatMap((n) => (typeof n?.pullRequest?.number === 'number' ? [n.pullRequest.number] : []))
-      return { queue: true, prs }
+      // Queue order is the merge order the simulation replays (merge-sim.ts);
+      // an entry without a position cannot be placed, so the read fails.
+      const nodes = queue.entries?.nodes ?? []
+      const placed = nodes.flatMap((n) => (typeof n?.pullRequest?.number === 'number' && typeof n.position === 'number'
+        ? [{ pr: n.pullRequest.number, position: n.position }] : []))
+      if (placed.length !== nodes.length) return undefined
+      return { queue: true, prs: placed.sort((a, b) => a.position - b.position).map((e) => e.pr) }
     },
     fetchBranchRules: async (branch) => {
       const pages = JSON.parse(await gh([
@@ -949,6 +997,34 @@ export function defaultQueueFeedDeps(
         return undefined
       }
     },
+    readBranchHead: async (branch) => {
+      if (!/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes('..')) return undefined
+      const data = await ghJson<{ sha?: string }>(
+        ['api', `repos/${REPO}/commits/${encodeURIComponent(branch)}`, '--jq', '{sha: .sha}'], 30_000,
+        (d) => log(`queue-feed: reading the ${branch} tip failed: ${d}`),
+      )
+      return typeof data?.sha === 'string' && /^[0-9a-f]{40}$/.test(data.sha) ? data.sha : undefined
+    },
+    readBlobAt: async (path, ref) => {
+      // Both segments are API-path data, and a PR names the path: only a
+      // plain relative path is served (no `..`, no leading slash, a
+      // conservative charset), each segment encoded; a ref is a 40-hex commit.
+      if (!isPlainRepoPath(path)) return undefined
+      let sha: string
+      try {
+        sha = commitSha(ref)
+      } catch {
+        return undefined
+      }
+      const encoded = path.split('/').map(encodeURIComponent).join('/')
+      try {
+        return await gh(['api', '-H', 'Accept: application/vnd.github.raw', `repos/${REPO}/contents/${encoded}?ref=${sha}`], 30_000)
+      } catch (e) {
+        log(`queue-feed: reading ${path} at ${sha.slice(0, 8)} failed: ${describeGhFailure(e)}`)
+        return undefined
+      }
+    },
+    mergeContents: gitThreeWayMerge,
     readKnopeToml: async () => {
       try {
         return await readFile(join(repoRoot, 'knope.toml'), 'utf8')
