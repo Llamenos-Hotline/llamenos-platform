@@ -75,7 +75,19 @@ function run(stub: Record<string, string>, args: string[] = PACKAGES) {
   }
 }
 
-const errorLine = (out: string) => out.split('\n').find((l) => l.startsWith('::error')) ?? ''
+// Parse an annotation exactly as the runner does: the title property ends at
+// the first RAW comma or `::`, then %-escapes are decoded. A title with an
+// unescaped comma is therefore truncated here just as it was on GitHub.
+function annotation(out: string, level: 'error' | 'warning') {
+  const line = out.split('\n').find((l) => l.startsWith(`::${level} `)) ?? ''
+  const m = /^::\w+ title=([^,:]*)(?:[^:]*)::(.*)$/.exec(line)
+  const decode = (v: string) => v.replace(/%2C/g, ',').replace(/%3A/g, ':').replace(/%0D/g, '\r').replace(/%0A/g, '\n').replace(/%25/g, '%')
+  return { found: line !== '', title: m ? decode(m[1]) : '', message: m ? decode(m[2]) : '' }
+}
+const errorLine = (out: string) => {
+  const a = annotation(out, 'error')
+  return a.found ? `${a.title} :: ${a.message}` : ''
+}
 
 describe('apt-install-bounded.sh', () => {
   test('healthy mirror: one attempt, installs offline, exit 0', () => {
@@ -92,8 +104,9 @@ describe('apt-install-bounded.sh', () => {
   test("a stalled runner mirror falls over to the canonical archive and says so", () => {
     const r = run({ STUB_UPDATE_RUNNER: 'hang' })
     expect(r.code).toBe(0)
-    expect(r.out).toContain('::warning title=Install Linux deps — the runner\'s apt mirror failed; installed from the canonical archive instead::')
-    expect(r.out).toContain('STALLED — budget of 2s expired')
+    const warn = annotation(r.out, 'warning')
+    expect(warn.title).toBe("Install Linux deps — the runner's apt mirror failed; installed from the canonical archive instead")
+    expect(warn.message).toContain('STALLED — budget of 2s expired')
     // The install phase reads the lists the successful attempt fetched.
     const install = r.calls.split('\n').find((l) => l.includes('--no-download')) ?? ''
     expect(install).toContain('Dir::Etc::SourceParts=')
@@ -106,7 +119,9 @@ describe('apt-install-bounded.sh', () => {
     // Two 2 s budgets; nowhere near the old 30-minute job ceiling.
     expect(r.seconds).toBeLessThan(15)
     const err = errorLine(r.out)
-    expect(err).toContain('::error title=Install Linux deps — apt mirror stall (infrastructure, not a test or build result)::')
+    // The whole title survives GitHub's parser — the first CI run of this
+    // script lost everything after "(infrastructure" to an unescaped comma.
+    expect(annotation(r.out, 'error').title).toBe('Install Linux deps — apt mirror stall (infrastructure, not a test or build result)')
     expect(err).toContain('attempt 1, runner sources')
     expect(err).toContain('attempt 2, canonical archive')
     expect(err).toContain('stalled in apt-get update')
@@ -127,7 +142,7 @@ describe('apt-install-bounded.sh', () => {
     const r = run({ STUB_DOWNLOAD_RUNNER: 'missing' })
     expect(r.code).toBe(1)
     const err = errorLine(r.out)
-    expect(err).toContain('the package set does not resolve (a real defect in this step, not a mirror problem)')
+    expect(annotation(r.out, 'error').title).toBe('Install Linux deps — the package set does not resolve (a real defect in this step, not a mirror problem)')
     expect(err).toContain('E: Unable to locate package libwebkit2gtk-9.9-dev')
     expect(err).not.toContain('infrastructure, not a test')
     expect(r.calls).not.toContain('SourceParts')
@@ -137,7 +152,7 @@ describe('apt-install-bounded.sh', () => {
     const r = run({ STUB_INSTALL_RUNNER: 'hang' })
     expect(r.code).toBe(1)
     expect(r.seconds).toBeLessThan(10)
-    expect(errorLine(r.out)).toContain('dpkg install exceeded its 2s budget')
+    expect(annotation(r.out, 'error').title).toBe('Install Linux deps — dpkg install exceeded its 2s budget (infrastructure, not a test or build result)')
   })
 
   test('no packages is a usage error, not a silent success', () => {

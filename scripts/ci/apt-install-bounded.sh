@@ -63,8 +63,28 @@ KILL_GRACE=15
 KEYRING="${APT_FALLBACK_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
 STEP="${APT_STEP_NAME:-Install Linux deps}"
 
+# GitHub workflow commands: a property value (title=) ENDS at the first comma
+# or colon unless they are %-escaped, and data needs %, CR and LF escaped. The
+# first CI run of this script showed it — "apt mirror stall (infrastructure,
+# not a test ...)" was cut to "apt mirror stall (infrastructure".
+gh_escape_data() {
+  local s="$1"
+  s="${s//'%'/%25}"; s="${s//$'\r'/%0D}"; s="${s//$'\n'/%0A}"
+  printf '%s' "$s"
+}
+gh_escape_prop() {
+  local s
+  s="$(gh_escape_data "$1")"
+  s="${s//:/%3A}"; s="${s//,/%2C}"
+  printf '%s' "$s"
+}
+# annotate <error|warning> <title> <message>
+annotate() {
+  printf '::%s title=%s::%s\n' "$1" "$(gh_escape_prop "$2")" "$(gh_escape_data "$3")"
+}
+
 if [ "$#" -eq 0 ]; then
-  echo "::error title=${STEP} — no packages given::usage: apt-install-bounded.sh <package>..." >&2
+  annotate error "${STEP} — no packages given" "usage: apt-install-bounded.sh <package>..." >&2
   exit 2
 fi
 PACKAGES=("$@")
@@ -212,7 +232,8 @@ download_attempt() {
 
   if is_package_set_error "$log"; then
     why="$(grep -m1 -E '^E: ' "$log" || echo 'apt could not resolve the package set')"
-    echo "::error title=${STEP} — the package set does not resolve (a real defect in this step, not a mirror problem)::${why} — attempt ${n}, ${SOURCE_LABEL}. A different mirror cannot fix this; the package list or the runner image changed."
+    annotate error "${STEP} — the package set does not resolve (a real defect in this step, not a mirror problem)" \
+      "${why} — attempt ${n}, ${SOURCE_LABEL}. A different mirror cannot fix this; the package list or the runner image changed."
     exit 1
   fi
 
@@ -240,13 +261,14 @@ if download_attempt 1; then
   ok=1
 elif use_archive_sources && download_attempt 2; then
   ok=1
-  echo "::warning title=${STEP} — the runner's apt mirror failed; installed from the canonical archive instead::${ATTEMPT_REPORTS[0]}"
+  annotate warning "${STEP} — the runner's apt mirror failed; installed from the canonical archive instead" "${ATTEMPT_REPORTS[0]}"
 fi
 
 if [ -z "$ok" ]; then
   summary="$(printf '%s | ' "${ATTEMPT_REPORTS[@]}")"
   summary="${summary% | }"
-  echo "::error title=${STEP} — apt mirror stall (infrastructure, not a test or build result)::${summary}. No test ran. Re-run the job unchanged; this PR did not cause it (#2545)."
+  annotate error "${STEP} — apt mirror stall (infrastructure, not a test or build result)" \
+    "${summary}. No test ran. Re-run the job unchanged; this PR did not cause it (#2545)."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
       echo "### ${STEP}: apt mirror stall — infrastructure, not a test or build result"
@@ -268,10 +290,12 @@ bounded "$INSTALL_BUDGET" "$log" apt-get "${COMMON_OPTS[@]}" "${SOURCE_OPTS[@]}"
   install -y --no-download "${PACKAGES[@]}" || rc=$?
 elapsed=$(( $(date +%s) - started ))
 if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-  echo "::error title=${STEP} — dpkg install exceeded its ${INSTALL_BUDGET}s budget (infrastructure, not a test or build result)::Every package was already downloaded; the local install did not finish in ${elapsed}s. Last line: $(tail -n 1 "$log" | cut -c1-200). Re-run the job unchanged (#2545)."
+  annotate error "${STEP} — dpkg install exceeded its ${INSTALL_BUDGET}s budget (infrastructure, not a test or build result)" \
+    "Every package was already downloaded; the local install did not finish in ${elapsed}s. Last line: $(tail -n 1 "$log" | cut -c1-200). Re-run the job unchanged (#2545)."
   exit 1
 elif [ "$rc" -ne 0 ]; then
-  echo "::error title=${STEP} — apt-get install failed (exit ${rc})::$(grep -m1 -E '^(E|dpkg):' "$log" | cut -c1-300 || tail -n 1 "$log")"
+  annotate error "${STEP} — apt-get install failed (exit ${rc})" \
+    "$(grep -m1 -E '^(E|dpkg):' "$log" | cut -c1-300 || tail -n 1 "$log")"
   exit "$rc"
 fi
 echo "${STEP}: installed ${#PACKAGES[@]} requested package(s) in ${elapsed}s (${SOURCE_LABEL})."
