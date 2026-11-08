@@ -138,11 +138,14 @@ jobs:
           workspaces: |
             apps/desktop
 
+      # Bounded install with mirror fallback and a named failure — see
+      # scripts/ci/apt-install-bounded.sh and #2545 (the same unbounded step
+      # hung desktop-rust for 30 minutes at a time).
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-22.04'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          bash scripts/ci/apt-install-bounded.sh \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
