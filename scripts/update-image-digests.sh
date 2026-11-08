@@ -13,7 +13,7 @@
 #   - deploy/docker/docker-compose.dev.yml
 #   - deploy/docker/docker-compose.yml
 #   - deploy/docker/docker-compose.production.yml
-#   - signal-notifier/Dockerfile
+#   - signal-notifier/Dockerfile (oven/bun:1.4.4-slim), sip-bridge/Dockerfile (oven/bun:1.4.4)
 #   - deploy/docker/Dockerfile.nodejs (node:26-slim + bun zip)
 set -euo pipefail
 
@@ -31,7 +31,8 @@ images=(
   "ollama/ollama:latest"
   "containrrr/watchtower:1.7.1"
   "tecnativa/docker-socket-proxy:latest"
-  "oven/bun:1.3.5-slim"
+  "oven/bun:1.4.4-slim"
+  "oven/bun:1.4.4"
   "node:26-slim"
 )
 

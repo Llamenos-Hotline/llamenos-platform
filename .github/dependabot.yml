@@ -17,7 +17,15 @@ updates:
       codeql-action:
         patterns: ["github/codeql-action/*", "github/codeql-action"]
   - package-ecosystem: "docker"
-    directory: "/deploy/docker"
+    # Every directory holding a Dockerfile we ship. A Dockerfile outside this
+    # list never gets a base-image bump: signal-notifier and sip-bridge sat on
+    # Bun 1.3.5 — whose compiled-in root store still trusted the compromised
+    # eMudhra hierarchy (#2582) — while deploy/docker moved to 1.4.4. For a Bun
+    # service the base image's Bun release IS its outbound TLS trust store.
+    directories:
+      - "/deploy/docker"
+      - "/signal-notifier"
+      - "/sip-bridge"
     schedule:
       interval: "weekly"
     commit-message:
