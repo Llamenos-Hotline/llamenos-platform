@@ -25,6 +25,13 @@ export const inviteResponseSchema = z.object({
 
 export type InviteCode = z.infer<typeof inviteResponseSchema>
 
+/** `POST /invites` answers with the invite it minted, wrapped — every client reads `invite`. */
+export const createInviteResponseSchema = z.object({
+  invite: inviteResponseSchema,
+})
+
+export type CreateInviteResponse = z.infer<typeof createInviteResponseSchema>
+
 export const inviteValidationResponseSchema = z.object({
   valid: z.boolean(),
   error: z.enum(['not_found', 'already_used', 'expired']).optional(),

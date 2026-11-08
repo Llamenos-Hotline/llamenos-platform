@@ -4,7 +4,7 @@ import type { AppEnv } from '../types'
 import { isValidE164 } from '../lib/helpers'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
-import { createBanBodySchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema } from '@protocol/schemas/bans'
+import { createBanBodySchema, createBanResponseSchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema } from '@protocol/schemas/bans'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { createEntityRouter } from '../lib/entity-router'
@@ -42,7 +42,7 @@ bans.post('/',
         description: 'Number banned',
         content: {
           'application/json': {
-            schema: resolver(okResponseSchema),
+            schema: resolver(createBanResponseSchema),
           },
         },
       },

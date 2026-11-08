@@ -39,7 +39,8 @@ export interface CreateNoteInput {
   encryptedContent: string
   encryptedFields?: string
   fieldEnvelopes?: unknown
-  authorEnvelope: unknown
+  /** Absent when the author sealed no envelope for themselves — stored NULL, never `{}`. */
+  authorEnvelope?: unknown
   adminEnvelopes?: unknown[]
   /** Explicit creation time — only for seeding the historical sample dataset. */
   createdAt?: Date
@@ -109,7 +110,7 @@ export class RecordsService {
         encryptedContent: input.encryptedContent,
         encryptedFields: input.encryptedFields ?? null,
         fieldEnvelopes: input.fieldEnvelopes ?? null,
-        authorEnvelope: input.authorEnvelope,
+        authorEnvelope: input.authorEnvelope ?? null,
         adminEnvelopes: input.adminEnvelopes ?? [],
         replyCount: 0,
         ...(input.createdAt ? { createdAt: input.createdAt, updatedAt: input.createdAt } : {}),

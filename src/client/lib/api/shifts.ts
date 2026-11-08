@@ -1,6 +1,6 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath } from './client'
-import type { CreateShiftBody } from '@protocol/schemas/shifts'
+import type { CreateShiftBody, FallbackGroup } from '@protocol/schemas/shifts'
 import type { Shift, ShiftStatus } from '@protocol/schemas'
 
 export type { Shift, ShiftStatus }
@@ -38,11 +38,11 @@ export async function deleteShift(id: string, confirmed: DeletionConfirmed) {
 }
 
 export async function getFallbackGroup() {
-  return request<{ userPubkeys: string[] }>(activeHubPath('/shifts/fallback'))
+  return request<FallbackGroup>(activeHubPath('/shifts/fallback'))
 }
 
 export async function setFallbackGroup(volunteers: string[]) {
-  return request<{ ok: true }>(activeHubPath('/shifts/fallback'), {
+  return request<FallbackGroup>(activeHubPath('/shifts/fallback'), {
     method: 'PUT',
     body: JSON.stringify({ userPubkeys: volunteers }),
   })

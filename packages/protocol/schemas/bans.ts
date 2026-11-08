@@ -20,6 +20,11 @@ export const banListResponseSchema = z.object({
   bans: z.array(banResponseSchema),
 })
 
+/** `POST /bans` answers with the ban it created — the desktop reads it back from `ban`. */
+export const createBanResponseSchema = z.object({
+  ban: banResponseSchema,
+})
+
 export const bulkBanResponseSchema = z.object({
   count: z.number(),
 })

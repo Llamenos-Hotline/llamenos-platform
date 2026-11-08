@@ -81,6 +81,16 @@ export const blastResponseSchema = z.object({
 
 export type Blast = z.infer<typeof blastResponseSchema>
 
+/**
+ * What every blast MUTATION answers with (create, update, send, schedule,
+ * cancel): the blast, wrapped. `GET /blasts/:id` answers with it bare.
+ */
+export const blastEnvelopeResponseSchema = z.object({
+  blast: blastResponseSchema,
+})
+
+export type BlastEnvelopeResponse = z.infer<typeof blastEnvelopeResponseSchema>
+
 export const subscriberResponseSchema = z.object({
   id: z.string(),
   identifierHash: z.string(),

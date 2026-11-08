@@ -60,8 +60,8 @@ function createTestApp(opts: {
       createRole: vi.fn().mockResolvedValue({ id: 'role-1', name: 'Admin' }),
       updateRole: vi.fn().mockResolvedValue({ id: 'role-1', name: 'Admin' }),
       deleteRole: vi.fn().mockResolvedValue({ ok: true }),
-      getTTLOverrides: vi.fn().mockResolvedValue({}),
-      updateTTLOverrides: vi.fn().mockResolvedValue({}),
+      getTTLOverrides: vi.fn().mockResolvedValue({ overrides: {} }),
+      updateTTLOverrides: vi.fn().mockResolvedValue({ overrides: {} }),
       getCleanupMetrics: vi.fn().mockResolvedValue({}),
       getGeocodingConfig: vi.fn().mockResolvedValue({ provider: 'google', countries: ['US'], enabled: true }),
       updateGeocodingConfig: vi.fn().mockResolvedValue({ provider: 'google', countries: ['US'], enabled: true }),
@@ -915,7 +915,7 @@ describe('settings route', () => {
     })
 
     it('PATCH /ttl updates with permission', async () => {
-      const updateSpy = vi.fn().mockResolvedValue({ conversationTTL: 86400 })
+      const updateSpy = vi.fn().mockResolvedValue({ overrides: { conversationTTL: 86400 } })
       const app = createTestApp({
         permissions: ['settings:manage-ttl'],
         services: { settings: { updateTTLOverrides: updateSpy } },
@@ -927,6 +927,8 @@ describe('settings route', () => {
       })
       expect(res.status).toBe(200)
       expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ conversationTTL: 86400 }))
+      // The declared shape: the overrides record itself, not `{ overrides }`.
+      expect(await res.json()).toEqual({ conversationTTL: 86400 })
     })
   })
 

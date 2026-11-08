@@ -1415,8 +1415,8 @@ export async function generateCaseNumberViaApi(
   prefix: string,
   hubId: string,
   seedHex = ADMIN_SEED,
-): Promise<{ number: string; sequence: number }> {
-  const { status, data } = await apiPost<{ number: string; sequence: number }>(
+): Promise<{ number: string; prefix: string }> {
+  const { status, data } = await apiPost<{ number: string; prefix: string }>(
     request,
     '/settings/cms/case-number',
     { prefix, hubId },
@@ -2474,8 +2474,8 @@ export async function addGroupMemberViaApi(
   role: string | undefined,
   seedHex = ADMIN_SEED,
   hubId: string,
-): Promise<{ added: boolean; memberCount: number }> {
-  const { status, data } = await apiPost<{ added: boolean; memberCount: number }>(
+): Promise<GroupMemberResult> {
+  const { status, data } = await apiPost<GroupMemberResult>(
     request,
     hubOwnedPath(`/directory/groups/${groupId}/members`, hubId),
     { contactId, role, isPrimary: false },

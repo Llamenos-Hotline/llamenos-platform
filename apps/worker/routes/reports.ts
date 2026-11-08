@@ -609,14 +609,14 @@ reports.post('/:id/records',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    const result = await services.cases.linkReportCase(body.caseId, reportId, pubkey)
+    await services.cases.linkReportCase(body.caseId, reportId, pubkey)
 
     await audit(services.audit, 'caseLinkedToReport', pubkey, {
       reportId,
       caseId: body.caseId,
     }, undefined, pathHubId(c))
 
-    return c.json(result, 201)
+    return c.json({ ok: true }, 201)
   },
 )
 

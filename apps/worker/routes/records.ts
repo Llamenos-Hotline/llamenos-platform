@@ -31,6 +31,7 @@ import { notifyContactsResponseSchema } from '@protocol/schemas/notifications'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { toRecordContact } from '../services/cases'
 import { mergeRecordsBodySchema, mergeRecordsResponseSchema } from '@protocol/schemas/entity-merge'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED, KIND_RECORD_ASSIGNED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
@@ -763,7 +764,7 @@ records.post('/:id/contacts',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    const result = await services.cases.linkContact(id, body.contactId, body.role, pubkey)
+    const link = await services.cases.linkContact(id, body.contactId, body.role, pubkey)
 
     await audit(services.audit, 'recordContactLinked', pubkey, {
       recordId: id,
@@ -771,7 +772,7 @@ records.post('/:id/contacts',
       role: body.role,
     }, undefined, pathHubId(c))
 
-    return c.json(result, 201)
+    return c.json(toRecordContact(link), 201)
   },
 )
 
@@ -843,7 +844,7 @@ records.get('/:id/contacts',
 
     const services = c.get('services')
     const contacts = await services.cases.listContacts(id)
-    return c.json({ contacts })
+    return c.json({ contacts: contacts.map(toRecordContact) })
   },
 )
 
@@ -940,7 +941,7 @@ records.post('/:id/assign',
     const body = c.req.valid('json')
 
     const record = await services.cases.get(id)
-    const result = await services.cases.assign(id, body.pubkeys)
+    await services.cases.assign(id, body.pubkeys)
 
     // Publish assignment event with enriched context (EP06-A3)
     publishEvent(c.env, KIND_RECORD_ASSIGNED, {
@@ -956,7 +957,8 @@ records.post('/:id/assign',
       assignedPubkeys: body.pubkeys,
     }, undefined, pathHubId(c))
 
-    return c.json(result)
+    // The record as it now stands — the declared answer, not just its assignee list.
+    return c.json(await services.cases.get(id))
   },
 )
 
@@ -987,7 +989,7 @@ records.post('/:id/unassign',
     const body = c.req.valid('json')
 
     const unassignRecord = await services.cases.get(id)
-    const result = await services.cases.unassign(id, body.pubkey)
+    await services.cases.unassign(id, body.pubkey)
 
     // Publish assignment change event with enriched context (EP06-A3)
     publishEvent(c.env, KIND_RECORD_ASSIGNED, {
@@ -1003,7 +1005,7 @@ records.post('/:id/unassign',
       unassignedPubkey: body.pubkey,
     }, undefined, pathHubId(c))
 
-    return c.json(result)
+    return c.json(await services.cases.get(id))
   },
 )
 

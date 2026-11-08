@@ -138,7 +138,7 @@ notes.post('/',
       callId: body.callId,
       conversationId: body.conversationId,
       contactHash: body.contactHash,
-      authorEnvelope: body.authorEnvelope ?? {},
+      authorEnvelope: body.authorEnvelope,
       adminEnvelopes: body.adminEnvelopes,
     })
 

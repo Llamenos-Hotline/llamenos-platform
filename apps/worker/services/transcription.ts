@@ -60,7 +60,6 @@ export async function maybeTranscribe(params: {
     callId,
     authorPubkey: 'system:transcription',
     encryptedContent,
-    authorEnvelope: {},
     adminEnvelopes: readerEnvelopes,
   })
 

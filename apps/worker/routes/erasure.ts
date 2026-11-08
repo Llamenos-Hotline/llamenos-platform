@@ -6,6 +6,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { permissionGranted, resolveHubPermissions, resolvePermissions } from '@shared/permissions'
 import {
   erasureRequestResponseSchema,
+  myErasureRequestResponseSchema,
   erasureRequestListResponseSchema,
   createSelfErasureBodySchema,
   createEmergencySelfErasureBodySchema,
@@ -139,7 +140,7 @@ erasure.get(
         description: 'Erasure request status',
         content: {
           'application/json': {
-            schema: resolver(erasureRequestResponseSchema),
+            schema: resolver(myErasureRequestResponseSchema),
           },
         },
       },
