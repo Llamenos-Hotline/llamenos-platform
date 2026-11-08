@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { derPrivateKeyKind, findPrivateKeyMaterial, MIN_KEY_BODY_CHARS } from '../../orchestrator/src/key-material.js'
 import {
-  changedLinesByFile, secretFinding, secretRefusal, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal,
+  secretFinding, secretRefusal, trustAnchorApprovers, trustAnchorFinding, trustAnchorRefusal, trustProjection,
   SECRET_REASON_PREFIX, TRUST_ANCHOR_REASON_PREFIX, TRUST_SIGNATURES,
 } from '../../orchestrator/src/write-gate.js'
 import { NEVER_WRITE_PATHS, TRUST_ANCHOR_FILES } from '../../orchestrator/src/config.js'
@@ -157,33 +157,64 @@ describe('secretFinding', () => {
 })
 
 describe('trustAnchorFinding', () => {
-  it('names what a registered file anchors, whatever its diff', () => {
-    for (const a of TRUST_ANCHOR_FILES) expect(trustAnchorFinding(a.path)).toBe(`it is ${a.anchors}`)
+  const NEW_CLIENT = 'apps/android/app/src/main/java/org/llamenos/hotline/api/NewClient.kt'
+
+  it('names what a registered file anchors, whatever changed', () => {
+    for (const a of TRUST_ANCHOR_FILES) expect(trustAnchorFinding(a.path, 'x', 'x')).toBe(`it is ${a.anchors}`)
   })
 
-  it('catches a signature line changed in an unregistered shipped file, and quotes it', () => {
-    const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/NewClient.kt'
-    expect(trustAnchorFinding(f, ['    .certificatePinner(pinner)'])).toBe(
+  it('catches a trust line added to an unregistered shipped file, and quotes it', () => {
+    expect(trustAnchorFinding(NEW_CLIENT, undefined, 'val c = b\n    .certificatePinner(pinner)\n')).toBe(
       'its diff changes an OkHttp/JSSE trust hook in shipped client source: `.certificatePinner(pinner)`',
     )
-    expect(trustAnchorFinding(f, ['val x = 1'])).toBeUndefined()
   })
 
-  it('ignores the same line outside shipped client source', () => {
+  it('catches a trust line removed', () => {
+    expect(trustAnchorFinding(NEW_CLIENT, 'b\n.certificatePinner(p)\n.build()\n', 'b\n.build()\n')).toMatch(/OkHttp\/JSSE trust hook/)
+  })
+
+  it('leaves an edit that does not touch a trust line or its successor alone', () => {
+    const pinned = '.certificatePinner(p)\n.build()\n'
+    expect(trustAnchorFinding(NEW_CLIENT, `val a = 1\n${pinned}`, `val a = 2\n${pinned}`)).toBeUndefined()
+    expect(trustAnchorFinding(NEW_CLIENT, 'val a = 1\n', 'val a = 2\n')).toBeUndefined()
+  })
+
+  // The value of a plist key lives on the NEXT line, which carries no
+  // signature of its own — the case a line-by-line diff scan cannot see.
+  it('catches App Transport Security flipped open in Info.plist, and shows the old and new value', () => {
+    const plist = (v: string) => `<key>NSAppTransportSecurity</key>\n<dict>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<${v}/>\n</dict>\n`
+    expect(trustAnchorFinding('apps/ios/Sources/App/Info.plist', plist('false'), plist('true'))).toBe(
+      'its diff changes an Apple Security trust API or App Transport Security key in shipped client source: ' +
+      '`<key>NSAllowsArbitraryLoads</key> <false/> → <true/>`',
+    )
+  })
+
+  it('leaves a release version bump in Info.plist alone — knope makes one every release', () => {
+    const plist = (v: string) =>
+      `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n<key>NSAllowsArbitraryLoads</key>\n<false/>\n`
+    expect(trustAnchorFinding('apps/ios/Sources/App/Info.plist', plist('0.21.7'), plist('0.21.8'))).toBeUndefined()
+  })
+
+  it('reads a binary file\'s bytes — no diff hunks are needed to see a trust line', () => {
+    const blob = (pin: string) => Buffer.concat([Buffer.from([0, 1, 2, 0x0a]), Buffer.from(`"sha256/${pin.repeat(43)}="\n`)])
+    expect(trustAnchorFinding('apps/android/app/src/main/res/raw/pins.bin', blob('A'), blob('B'))).toMatch(/SPKI pin literal/)
+  })
+
+  it('ignores the same lines outside shipped client source', () => {
     for (const f of [
       'apps/android/app/src/test/java/org/llamenos/hotline/api/CertificatePinnerTest.kt',
       'apps/android/app/src/debug/res/xml/network_security_config.xml',
       'apps/ios/Tests/Unit/CertificatePinningTests.swift',
       'scripts/inject-cert-pins.ts',
-    ]) expect(trustAnchorFinding(f, ['CertificatePinner.Builder()', '<pin-set>'])).toBeUndefined()
+    ]) expect(trustAnchorFinding(f, undefined, 'CertificatePinner.Builder()\n<pin-set>\n')).toBeUndefined()
   })
 
   it.each(TRUST_SIGNATURES.map((s) => [s.name, s] as const))('signature %s matches a line of its own kind', (_n, s) => {
     const sample: Record<string, string> = {
       'an SPKI pin literal (sha256/…)': `"sha256/${'C'.repeat(43)}="`,
-      'an Android network-security trust element': '<pin-set expiration="2027-01-01">',
-      'an OkHttp/JSSE trust hook': 'object : X509TrustManager {',
-      'an Apple Security trust API': 'SecTrustEvaluateWithError(trust, nil)',
+      'an Android network-security setting': 'android:networkSecurityConfig="@xml/network_security_config"',
+      'an OkHttp/JSSE trust hook': 'object : X509ExtendedTrustManager() {',
+      'an Apple Security trust API or App Transport Security key': '<key>NSAllowsArbitraryLoads</key>',
       'a rustls/reqwest trust hook': 'impl ServerCertVerifier for Pinned {',
       'a SIP TLS trust anchor': 'applyTlsTrustAnchor(core, sip)',
     }
@@ -192,20 +223,12 @@ describe('trustAnchorFinding', () => {
   })
 })
 
-describe('changedLinesByFile', () => {
-  it('attributes added and removed lines, and never reads hunk content as a header', () => {
-    const diff = [
-      'diff --git a/a.kt b/a.kt', 'index 1..2 100644', '--- a/a.kt', '+++ b/a.kt', '@@ -1,2 +1,2 @@',
-      ' keep', '-old pin', '+new pin', '--- looks like a header but is a removed line', '+++ and an added one',
-      'diff --git a/gone.rs b/gone.rs', 'deleted file mode 100644', '--- a/gone.rs', '+++ /dev/null', '@@ -1 +0,0 @@',
-      '-cert_pin::verify()',
-      'diff --git "a/caf\\303\\251.swift" "b/caf\\303\\251.swift"', '--- "a/caf\\303\\251.swift"', '+++ "b/caf\\303\\251.swift"',
-      '@@ -0,0 +1 @@', '+serverTrust',
-    ].join('\n')
-    const m = changedLinesByFile(diff)
-    expect(m.get('a.kt')).toEqual(['old pin', 'new pin', '-- looks like a header but is a removed line', '++ and an added one'])
-    expect(m.get('gone.rs')).toEqual(['cert_pin::verify()'])
-    expect(m.get('café.swift')).toEqual(['serverTrust'])
+describe('trustProjection', () => {
+  it('pairs each trust line with the line after it, trimmed', () => {
+    expect(trustProjection('a\n  <key>NSAllowsArbitraryLoads</key>\n  <false/>\nb\n')).toEqual([
+      { name: 'an Apple Security trust API or App Transport Security key', line: '<key>NSAllowsArbitraryLoads</key>', next: '<false/>' },
+    ])
+    expect(trustProjection(undefined)).toEqual([])
   })
 })
 

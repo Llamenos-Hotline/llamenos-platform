@@ -8,7 +8,7 @@ import { matchesPath } from './fragments.js'
 import { classifyImpact } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
 import {
-  changedLinesByFile, isShippedClientSource, secretFinding, secretRefusal, trustAnchorFinding, trustAnchorRefusal,
+  isShippedClientSource, secretFinding, secretRefusal, trustAnchorEntry, trustAnchorFinding, trustAnchorRefusal,
   type WriteFinding,
 } from './write-gate.js'
 import { scrubSecrets } from './github-app.js'
@@ -853,7 +853,7 @@ export function judgeTargetRun(
  * a function of the two commits alone: no renames (a rename would hide the
  * OLD path from every check — renaming `cert_pin.rs` away, or a `.env` to an
  * innocent name), no external or textconv driver, no colour, and the default
- * `a/`/`b/` prefixes `changedLinesByFile` parses.
+ * `a/`/`b/` prefixes `addedLinesFrom` counts against.
  */
 const GATE_DIFF_FLAGS: readonly string[] = [
   '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/', '--dst-prefix=b/',
@@ -1020,7 +1020,8 @@ export function scopeStrayAdvice(strayed: string[], own: Lane, allLanes: Lane[] 
 
 export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport> {
   const { worktree, branch, lane } = input
-  const range = `${input.base ?? 'origin/main'}...${branch}`
+  const baseRef = input.base ?? 'origin/main'
+  const range = `${baseRef}...${branch}`
   const testRoot = input.testDir ?? worktree
 
   // Captured FIRST and once: the commit under judgement — the RIGHT-HAND
@@ -1063,6 +1064,8 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   // The files the head still HAS — everything changed except deletions.
   // Their bytes are what the secret class reads; a deleted file has none.
   const presentRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=d', range])
+  // ...and the ones this diff CREATES, which have no earlier bytes to compare.
+  const addedRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=A', range])
 
   const reasons: string[] = []
   // A granted lane with no owned paths grants nothing — see checkScopeAcross.
@@ -1098,19 +1101,24 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
 
   // CLASS 2 — trust anchors. Not a scope question (the owning lane still
   // owns the file): a human approval of this exact commit is the remedy.
-  const changedLines = changedLinesByFile(fullDiff ?? '')
+  // Registered files need no bytes; every other changed file under a
+  // shipped-client root is judged by comparing its trust lines at the merge
+  // base against the head (`trustAnchorFinding`), from blobs — never from
+  // diff hunks, which a binary file does not have.
+  const shippedOthers = changedFiles.filter((f) => isShippedClientSource(f) && trustAnchorEntry(f) === undefined)
+  const added = new Set(changedFilesFrom(addedRaw ?? ''))
+  const mergeBase = shippedOthers.length === 0 ? undefined : (await runGit(worktree, ['merge-base', baseRef, branch]))?.trim()
+  const baseBytes = mergeBase === undefined ? new Map<string, Buffer>() : await readHeadBlobs(worktree, mergeBase, shippedOthers)
   const trust: WriteFinding[] = []
   for (const f of changedFiles) {
-    const why = trustAnchorFinding(f, changedLines.get(f))
-    if (why !== undefined) trust.push({ file: f, why })
-  }
-  // Without the diff text the signature half cannot look at the changed
-  // lines, so every changed shipped-client file is held — fail closed.
-  if (fullDiff === undefined) {
-    for (const f of changedFiles) {
-      if (trust.some((t) => t.file === f) || !isShippedClientSource(f)) continue
-      trust.push({ file: f, why: 'the diff text could not be read, so its trust-signature lines could not be checked' })
+    if (shippedOthers.includes(f) && (addedRaw === undefined || (!added.has(f) && !baseBytes.has(f)))) {
+      // The file existed before this diff but its earlier bytes cannot be
+      // read, so a trust line it REMOVED would be invisible — hold it.
+      trust.push({ file: f, why: 'its content at the merge base could not be read, so a removed trust line could not be ruled out' })
+      continue
     }
+    const why = trustAnchorFinding(f, baseBytes.get(f), headBytes.get(f))
+    if (why !== undefined) trust.push({ file: f, why })
   }
   let trustAnchors: VerifyReport['trustAnchors']
   if (trust.length > 0) {

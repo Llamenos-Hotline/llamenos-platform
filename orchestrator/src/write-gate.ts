@@ -107,7 +107,12 @@ export function secretFinding(
  */
 export const SHIPPED_CLIENT_SOURCE_ROOTS: readonly string[] = [
   'apps/android/app/src/main/',
+  // The Android build script decides which resources and BuildConfig values
+  // ship, so a pin injected or a network config swapped there ships too.
+  'apps/android/app/build.gradle.kts',
   'apps/ios/Sources/',
+  // XcodeGen's spec writes Info.plist keys — App Transport Security included.
+  'apps/ios/project.yml',
   'apps/desktop/src/',
 ]
 
@@ -130,20 +135,33 @@ export interface TrustSignature {
  *
  * Specific on purpose. Each was checked against the tracked shipped sources
  * (the discovery rail in `write-gate-properties.test.ts`): only the
- * registered files and four known call sites contain any of them, so an
- * ordinary client change does not trip this.
+ * registered files and a handful of named call sites contain any of them,
+ * so an ordinary client change does not trip this.
+ *
+ * Deliberately NOT here: TLS library versions and features in `Cargo.toml`
+ * or Gradle dependency blocks. A `rustls` bump is a supply-chain change with
+ * its own gate (lockfiles, CODEOWNERS on manifests), not a change to which
+ * certificates the client accepts.
  */
 export const TRUST_SIGNATURES: readonly TrustSignature[] = [
   { name: 'an SPKI pin literal (sha256/…)', re: /sha256\/[A-Za-z0-9+/]{43}=/ },
-  { name: 'an Android network-security trust element', re: /<(pin-set|pin\b|trust-anchors|certificates\b)/ },
+  {
+    // The manifest's `networkSecurityConfig` pointer is as load-bearing as the
+    // file it points at: deleting it silently drops every pin.
+    name: 'an Android network-security setting',
+    re: /<(pin-set|pin\b|trust-anchors|certificates\b)|networkSecurityConfig|usesCleartextTraffic|cleartextTrafficPermitted/,
+  },
   {
     name: 'an OkHttp/JSSE trust hook',
-    re: /CertificatePinner|certificatePinner\(|X509TrustManager|HostnameVerifier|hostnameVerifier\(|sslSocketFactory\(/,
+    re: /CertificatePinner|certificatePinner\(|X509\w*TrustManager|TrustManagerFactory|SSLContext|SSLSocketFactory|sslSocketFactory\(|HostnameVerifier|hostnameVerifier\(/,
   },
-  { name: 'an Apple Security trust API', re: /\bSecTrust[A-Za-z]*|serverTrust|CertificatePinValidator|CertificatePins/ },
+  {
+    name: 'an Apple Security trust API or App Transport Security key',
+    re: /\bSecTrust[A-Za-z]*|serverTrust|CertificatePinValidator|CertificatePins|NSAppTransportSecurity|NSAllowsArbitraryLoads|NSExceptionDomains|NSPinnedDomains/,
+  },
   {
     name: 'a rustls/reqwest trust hook',
-    re: /ServerCertVerifier|RootCertStore|danger_accept_invalid|add_root_certificate|tls_built_in_root_certs|\.dangerous\(\)|cert_pin::/,
+    re: /ServerCertVerifier|RootCertStore|danger_accept_invalid|add_root_certificate|tls_built_in_root_certs|\.dangerous\(\)|with_custom_certificate_verifier|ClientConfig::builder|\bwebpki|rustls::|cert_pin::/,
   },
   { name: 'a SIP TLS trust anchor', re: /[Tt]lsTrustAnchor/ },
 ]
@@ -159,86 +177,71 @@ export function isShippedClientSource(file: string): boolean {
 
 const MAX_QUOTED_LINE = 100
 
+/** One trust signature line and the line after it, as `trustProjection`
+ *  extracts them. */
+interface TrustGroup {
+  name: string
+  line: string
+  next: string
+}
+
 /**
- * Why changing `file` is a trust-anchor change, or `undefined`.
+ * The trust-relevant lines of a file: every line carrying a
+ * `TRUST_SIGNATURES` match, each paired with the line that follows it.
  *
- * `changedLines` are the lines the diff adds or removes in that file (see
- * `changedLinesByFile`), signs stripped. A registered file is a trust anchor
- * whatever its diff says — deleting or renaming it included.
+ * The following line is what makes this a projection of the trust DECISION
+ * rather than of the keyword. A plist writes a key and its value on separate
+ * lines — flipping `<key>NSAllowsArbitraryLoads</key>` from `<false/>` to
+ * `<true/>` changes only the value line, which carries no signature at all —
+ * and an XML attribute or a builder call can continue onto the next line the
+ * same way. Pairing each signature with its successor puts that value inside
+ * the projection, so it is compared.
+ *
+ * Read from BYTES (a latin1 view), not from diff hunks: a file git calls
+ * binary has no hunks, and a trust decision must not become invisible just
+ * because its file contains a NUL.
  */
-export function trustAnchorFinding(file: string, changedLines: readonly string[] = []): string | undefined {
+export function trustProjection(content: FileContent | undefined): TrustGroup[] {
+  if (content === undefined) return []
+  const lines = asText(content).split('\n').map((l) => l.trim())
+  const out: TrustGroup[] = []
+  lines.forEach((line, i) => {
+    const sig = TRUST_SIGNATURES.find((s) => s.re.test(line))
+    if (sig !== undefined) out.push({ name: sig.name, line, next: lines[i + 1] ?? '' })
+  })
+  return out
+}
+
+const quote = (s: string): string => (s.length > MAX_QUOTED_LINE ? `${s.slice(0, MAX_QUOTED_LINE)}…` : s)
+
+/**
+ * Why changing `file` from `before` to `after` is a trust-anchor change, or
+ * `undefined`. `before`/`after` are the file's bytes at the merge base and at
+ * the head; `undefined` for a side where the file does not exist.
+ *
+ * A registered file is a trust anchor whatever changed — deleting or renaming
+ * it included. Any other file under `SHIPPED_CLIENT_SOURCE_ROOTS` is one when
+ * its `trustProjection` differs between the two sides: a trust line added,
+ * removed, reordered, or its value changed. An edit that leaves every trust
+ * line and its successor alone is not.
+ */
+export function trustAnchorFinding(file: string, before?: FileContent, after?: FileContent): string | undefined {
   const entry = trustAnchorEntry(file)
   if (entry !== undefined) return `it is ${entry.anchors}`
   if (!isShippedClientSource(file)) return undefined
-  for (const line of changedLines) {
-    const sig = TRUST_SIGNATURES.find((s) => s.re.test(line))
-    if (sig === undefined) continue
-    const quoted = line.trim().length > MAX_QUOTED_LINE ? `${line.trim().slice(0, MAX_QUOTED_LINE)}…` : line.trim()
-    return `its diff changes ${sig.name} in shipped client source: \`${quoted}\``
+  const a = trustProjection(before)
+  const b = trustProjection(after)
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const x = a[i]
+    const y = b[i]
+    if (x !== undefined && y !== undefined && x.line === y.line && x.next === y.next) continue
+    const g = (y ?? x) as TrustGroup
+    const shown = x !== undefined && y !== undefined && x.line === y.line
+      ? `${g.line} ${x.next} → ${y.next}`
+      : g.line
+    return `its diff changes ${g.name} in shipped client source: \`${quote(shown)}\``
   }
   return undefined
-}
-
-/** Undo git's C-style path quoting (`"a/caf\303\251.txt"`). */
-function unquoteGitPath(p: string): string {
-  if (!(p.startsWith('"') && p.endsWith('"'))) return p
-  const inner = p.slice(1, -1)
-  const bytes: number[] = []
-  for (let i = 0; i < inner.length; i += 1) {
-    const ch = inner[i] as string
-    if (ch !== '\\') { bytes.push(...Buffer.from(ch, 'utf8')); continue }
-    const next = inner[i + 1] ?? ''
-    const oct = /^[0-7]{3}/.exec(inner.slice(i + 1))
-    if (oct !== null) { bytes.push(parseInt(oct[0], 8)); i += 3; continue }
-    const esc: Record<string, number> = { n: 10, t: 9, r: 13, '"': 34, '\\': 92, a: 7, b: 8, f: 12, v: 11 }
-    bytes.push(esc[next] ?? next.charCodeAt(0))
-    i += 1
-  }
-  return Buffer.from(bytes).toString('utf8')
-}
-
-/**
- * The lines a unified diff adds or removes, per file, without their `+`/`-`.
- *
- * A file's header block runs from `diff --git` to its first `@@`; only there
- * are `--- a/…` and `+++ b/…` path lines. Inside a hunk every line starts
- * with ` `, `+`, `-` or `\`, so content that itself begins `---`/`+++` is
- * never mistaken for a header. A deleted file (`+++ /dev/null`) is keyed by
- * its old path, so its removed lines are still attributed to it.
- */
-export function changedLinesByFile(diff: string): Map<string, string[]> {
-  const out = new Map<string, string[]>()
-  let oldPath: string | undefined
-  let current: string | undefined
-  let inHunk = false
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      oldPath = undefined
-      current = undefined
-      inHunk = false
-      continue
-    }
-    if (!inHunk) {
-      if (line.startsWith('--- ')) {
-        const p = line.slice(4)
-        oldPath = p === '/dev/null' ? undefined : unquoteGitPath(p).replace(/^a\//, '')
-      } else if (line.startsWith('+++ ')) {
-        const p = line.slice(4)
-        current = p === '/dev/null' ? oldPath : unquoteGitPath(p).replace(/^b\//, '')
-      } else if (line.startsWith('@@')) {
-        inHunk = true
-      }
-      continue
-    }
-    if (line.startsWith('@@')) continue
-    if (current === undefined) continue
-    if (line.startsWith('+') || line.startsWith('-')) {
-      const list = out.get(current) ?? []
-      list.push(line.slice(1))
-      out.set(current, list)
-    }
-  }
-  return out
 }
 
 /** One review on a pull request, as `GET /repos/{r}/pulls/{n}/reviews`

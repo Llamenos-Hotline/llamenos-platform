@@ -317,6 +317,43 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       expect(trustLine(rep)).toContain('a rustls/reqwest trust hook')
     })
 
+    // From the automated security review of this PR: the manifest pointer is
+    // as load-bearing as the file it points at.
+    it('refuses deleting the manifest\'s networkSecurityConfig pointer — which drops every pin', async () => {
+      const f = 'apps/android/app/src/main/AndroidManifest.xml'
+      const app = (attr: string) => `<application\n        android:label="x"\n${attr}        android:icon="y">\n`
+      const rep = await gate(judged(
+        { [f]: app('        android:networkSecurityConfig="@xml/network_security_config"\n') },
+        { [f]: app('') },
+      ))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes an Android network-security setting`)
+    })
+
+    it('refuses flipping App Transport Security open — a value on the line AFTER its key', async () => {
+      const f = 'apps/ios/Sources/App/Info.plist'
+      const plist = (v: string) => `<key>NSAppTransportSecurity</key>\n<dict>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<${v}/>\n</dict>\n`
+      const rep = await gate(judged({ [f]: plist('false') }, { [f]: plist('true') }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain('`<key>NSAllowsArbitraryLoads</key> <false/> → <true/>`')
+    })
+
+    it('does NOT hold the release version bump knope makes in the same Info.plist', async () => {
+      const f = 'apps/ios/Sources/App/Info.plist'
+      const plist = (v: string) =>
+        `<key>CFBundleShortVersionString</key>\n\t<string>${v}</string>\n\t<key>NSAllowsArbitraryLoads</key>\n\t<false/>\n`
+      const rep = await gate(judged({ [f]: plist('0.21.7') }, { [f]: plist('0.21.8') }))
+      expect(rep.reasons).toEqual([])
+    })
+
+    it('refuses a pin changed inside a file git treats as binary — bytes, not hunks', async () => {
+      const f = 'apps/android/app/src/main/res/raw/pins.bin'
+      const blob = (c: string) => Buffer.concat([Buffer.from([0, 0, 0, 0x0a]), Buffer.from(`"sha256/${c.repeat(43)}="\n`)])
+      const rep = await gate(judged({ [f]: blob('A') }, { [f]: blob('B') }))
+      expect(rep.passed).toBe(false)
+      expect(trustLine(rep)).toContain(`${f} (its diff changes an SPKI pin literal`)
+    })
+
     it('does NOT hold an ordinary edit to a call-site file that leaves its trust lines alone', async () => {
       const f = 'apps/android/app/src/main/java/org/llamenos/hotline/api/WebSocketService.kt'
       const pinned = '    .certificatePinner(ApiService.buildPinner(host))\n'
@@ -353,6 +390,16 @@ describe('property 3 — a change to a shipped client\'s trust anchors requires 
       'the URLSession challenge handler, delegating to CertificatePinValidator (registered CertificatePinning.swift)',
     'apps/ios/Sources/Services/LinphoneService.swift':
       'applies the SIP TLS trust anchor the hub publishes at runtime — nothing compiled in',
+    // Mixed files knope bumps on every release, so they cannot be registered
+    // whole-file; their trust lines (and each line's value) are compared.
+    'apps/android/app/src/main/AndroidManifest.xml':
+      'points the app at the registered network_security_config.xml (android:networkSecurityConfig)',
+    'apps/android/app/build.gradle.kts':
+      'release versioning plus a test task that reads the release <pin-set>; a pin injected here ships',
+    'apps/ios/Sources/App/Info.plist':
+      'App Transport Security (NSAllowsArbitraryLoads) beside the release version keys',
+    'apps/ios/project.yml':
+      'XcodeGen source of the same App Transport Security keys',
   }
 
   it('every tracked shipped-client file carrying a trust signature is registered or a named call site', () => {
