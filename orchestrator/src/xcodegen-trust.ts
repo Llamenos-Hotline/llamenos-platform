@@ -90,7 +90,6 @@ export const ROUTINE_XCODEGEN_PATHS: readonly RoutinePath[] = [
     when: (before, after) => sameCanon(nonPackageItems(before), nonPackageItems(after)),
   },
   { path: 'options.xcodeVersion', why: 'the Xcode version the project file declares' },
-  { path: 'options.deploymentTarget', why: 'the minimum OS version' },
   { path: 'options.minimumXcodeGenVersion', why: 'the XcodeGen version the spec requires' },
   { path: 'options.groupSortPosition', why: 'navigator ordering' },
   { path: 'options.generateEmptyDirectories', why: 'navigator layout' },
@@ -162,11 +161,22 @@ function plain(c: Canon | undefined): unknown {
 const child = (c: Canon | undefined, key: string): Canon | undefined =>
   c?.kind === 'map' ? c.entries.get(key) : undefined
 
-/** A dependency list without its `package:` entries. Anything that is not a
- *  list is returned whole, so it still compares. */
+/** The keys a Swift-package dependency entry may carry. An entry with any
+ *  other key, such as `target:`, `framework:`, `carthage:`, `sdk:` or
+ *  `bundle:` next to `package:`, is ambiguous about what it links, so it is
+ *  not treated as a package entry. */
+const PACKAGE_DEPENDENCY_KEYS: ReadonlySet<string> = new Set([
+  'package', 'product', 'products', 'link', 'embed', 'codeSign', 'weak', 'platformFilter', 'platformFilters',
+])
+
+const isPackageDependency = (d: Canon): boolean =>
+  d.kind === 'map' && d.entries.has('package') && [...d.entries.keys()].every((k) => PACKAGE_DEPENDENCY_KEYS.has(k))
+
+/** A dependency list without its unambiguous `package:` entries. Anything
+ *  that is not a list is returned whole, so it still compares. */
 function nonPackageItems(deps: Canon | undefined): Canon | undefined {
   if (deps?.kind !== 'seq') return deps
-  return { kind: 'seq', items: deps.items.filter((d) => child(d, 'package') === undefined) }
+  return { kind: 'seq', items: deps.items.filter((d) => !isPackageDependency(d)) }
 }
 
 /** True when `targets.<name>` is a test bundle with no template, in `spec`. */
@@ -279,5 +289,5 @@ export function xcodegenTrustFinding(
   const more = changes.length > 1 ? ` and ${changes.length - 1} other non-routine path(s)` : ''
   return `its diff changes \`${dotted(first.path)}\` (${show(first.before)} → ${show(first.after)})${more}, ` +
     'which is not one of the routine XcodeGen paths (test-target sources/settings/dependencies, scheme test lists, ' +
-    'Swift packages, xcodeVersion/deploymentTarget options)'
+    'Swift packages, the xcodeVersion option)'
 }
