@@ -93,13 +93,14 @@ that environment was **not verified**.
 
 `mobile-release.yml` publishes a signed APK to the dedicated `v<version>-android`
 release, titled `<version> Android` (assets `app-release.apk`,
-`app-release.apk.sha256`, `android-build-meta.json`). Releases up to and including
-0.21.7 predate the version-first tags and are tagged `android-v<version>` instead —
-for example `android-v0.21.7` (verified with `gh release view android-v0.21.7`).
+`app-release.apk.sha256`, `android-build-meta.json`). Releases cut before the
+version-first tags are tagged `android-v<version>` instead; tags are immutable, so both
+forms exist. Try the version-first tag and fall back to the old one:
 
 ```bash
-# v<version>-android for releases after 0.21.7; android-v<version> for 0.21.7 and earlier
 gh release download v<version>-android --repo Llamenos-Hotline/llamenos-platform \
+  --pattern 'app-release.apk*' \
+  || gh release download android-v<version> --repo Llamenos-Hotline/llamenos-platform \
   --pattern 'app-release.apk*'
 sha256sum -c app-release.apk.sha256       # the .sha256 records the bare file name
 adb install app-release.apk               # or open the file on the phone
@@ -344,7 +345,7 @@ PR's owned paths, and the iOS README point is cosmetic):
 
 | I want to… | Do this |
 |---|---|
-| Try Android with no build | `gh release download v<ver>-android --pattern 'app-release.apk*'` (`android-v<ver>` for 0.21.7 and earlier), verify sha256, `adb install` |
+| Try Android with no build | `gh release download v<ver>-android --pattern 'app-release.apk*'` (`android-v<ver>` if that tag does not exist — a release cut before the version-first scheme), verify sha256, `adb install` |
 | Build Android for an ARM phone | jniLibs (both variants) → `./gradlew assembleRelease` with a keystore |
 | Build Android for the emulator | jniLibs (debug) → `./gradlew assembleDebug` → `adb install` (never for testers) |
 | Run the iOS simulator build | `bun run ios:xcframework && bun run ios:build` |

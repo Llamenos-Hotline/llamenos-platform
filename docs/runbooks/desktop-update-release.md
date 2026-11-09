@@ -8,8 +8,8 @@ How desktop updates are published to the update server, and how to manually re-u
 
 The **GitHub Release** `v<version>-desktop` (titled `<version> Desktop`) is the working,
 always-on channel and needs nothing from the server. Releases cut before the
-version-first tag scheme are tagged `desktop-v<version>` instead (up to and including
-0.21.7); tags are immutable, so both forms exist. The self-hosted updater origin
+version-first tag scheme are tagged `desktop-v<version>` instead; tags are immutable, so
+both forms exist (try `v<version>-desktop` first, fall back to `desktop-v<version>`). The self-hosted updater origin
 (`updates.<domain>` / `releases.<domain>`) is an *additional* channel and is **not
 yet functional end to end**: `scripts/generate-update-manifest.sh` produces
 `"platforms": {}` for the real release artifacts (it searches for
@@ -47,8 +47,9 @@ installer's `.sig` and `url` = `https://releases.<domain>/desktop/v<version>/<in
 
 ```bash
 # 1. get the signed artifacts (GitHub Release is the source of truth).
-#    Tag is v<version>-desktop; for 0.21.7 and earlier it is desktop-v<version>.
-gh release download v<version>-desktop --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts
+#    Tag is v<version>-desktop; a release cut before the version-first scheme is desktop-v<version>.
+gh release download v<version>-desktop --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts \
+  || gh release download desktop-v<version> --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts
 
 # 2. manifest (URLs must point at the self-hosted origin)
 VERSION=<version> RUSTFS_PUBLIC_URL=https://releases.<domain> \
