@@ -12,6 +12,25 @@
 # Tags: docker, service-discovery, internal-tls, postgres, rustfs, ntfy,
 #       app, caddy, whisper, asterisk, signal, deploy
 
+# The disk-tier guard (a host marked llamenos_disk_encrypted: false may run only
+# the push relay) used to live in preflight.yml alone. setup.yml runs preflight
+# first, but every `just deploy-*` recipe and the documented
+# `ansible-playbook playbooks/deploy.yml` skip it -- so this playbook, run on its
+# own, would place the app, database, object store or Signal sidecar on an
+# unencrypted host without anything stopping it. Imported (not included) with
+# `tags: always` so it also holds under `--tags`; scripts/check-disk-tier-guards.py
+# proves it.
+- name: Refuse to place secrets on a host without disk encryption
+  hosts: llamenos_servers
+  gather_facts: false
+  # A refused layout is a misconfigured inventory, not one bad host: stop the whole
+  # run before anything is deployed anywhere, rather than deploy around it.
+  any_errors_fatal: true
+  tasks:
+    - name: Include shared disk-tier guard (no secrets at rest on unencrypted hosts)
+      ansible.builtin.import_tasks: tasks/guard-disk-tier.yml
+      tags: always
+
 - name: Gather facts and run service discovery
   hosts: llamenos_servers
   become: true
