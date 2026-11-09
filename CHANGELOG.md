@@ -404,6 +404,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add E2E tests for device linking and fix /link-device public path
 
 
+## 0.21.10 (2026-11-09)
+
+### Features
+
+- the Mac CI host gets its own supervisor fragment (#2600)
+
+### Fixes
+
+- mac disk guard reclaims plist-less DerivedData leftovers and never counts a failed delete as freed (#2530, #2566) (#2532)
+
 ## 0.21.9 (2026-11-08)
 
 ### Fixes
