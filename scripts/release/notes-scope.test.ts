@@ -1,7 +1,7 @@
 /**
  * Rails for scripts/release/notes-scope.ts and the knope.toml lists it reads:
  * user-facing release notes contain only end-user-relevant changes, by commit
- * type, then scope, then (for the types we bridge) the paths a commit touched.
+ * type, then scope, then the paths a commit touched.
  *
  *   bun test scripts/release/notes-scope.test.ts
  *
@@ -10,16 +10,19 @@
  * (#2472, #2481, #2482, #2477, #2487, #2473, #2488).
  */
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  changesetFileName,
   type Commit,
   excludedCommits,
+  highestReleaseTag,
   loadNoteSections,
   loadProductScopes,
   MAX_LISTED_OTHER_TYPES,
   noteEntries,
+  parseMessage,
   parseSubject,
   placeCommit,
   renderChangeset,
@@ -33,10 +36,16 @@ const scopes = loadProductScopes()
 const sections = loadNoteSections()
 
 const SHIPPING = ['apps/worker/services/settings.ts']
-const commit = (subject: string, paths: readonly string[] = SHIPPING, sha = 'a'.repeat(40)): Commit => ({ sha, subject, paths })
-const kindOf = (subject: string, paths?: readonly string[]): string => {
-  const p = placeCommit(commit(subject, paths), scopes, sections)
+const commit = (message: string, paths: readonly string[] = SHIPPING, sha = 'a'.repeat(40)): Commit => ({ sha, message, paths })
+const kindOf = (message: string, paths?: readonly string[]): string => {
+  const p = placeCommit(commit(message, paths), scopes, sections)
   return p.kind === 'excluded' ? `excluded:${p.reason}` : p.kind
+}
+/** The `[type, section, description]` of each bullet a listed commit produces. */
+const listedAs = (message: string, paths?: readonly string[]): string[][] => {
+  const p = placeCommit(commit(message, paths), scopes, sections)
+  if (p.kind !== 'listed') throw new Error(`${message} was excluded: ${p.reason}`)
+  return p.entries.map((e) => [e.type, e.section, e.description])
 }
 
 describe('knope.toml scopes allowlist', () => {
@@ -68,6 +77,53 @@ describe('parseSubject', () => {
     expect(parseSubject('fix mechanical five (#1969)')).toBeNull()
     expect(parseSubject('a11y(worker): x')?.type).toBe('a11y')
   })
+
+  // Each of these is what knope 0.22.4 did with the same subject.
+  test('a space after the colon is optional, the type is case-insensitive, a space before it is not allowed', () => {
+    expect(parseSubject('fix:no space')).toMatchObject({ type: 'fix', description: 'no space' })
+    expect(parseSubject('FIX: upper')?.type).toBe('fix')
+    expect(parseSubject('Feat(x): title')?.type).toBe('feat')
+    expect(parseSubject('fix : spaced')).toBeNull()
+  })
+})
+
+// Footer cases taken one-for-one from running knope 0.22.4 on these messages.
+describe('parseMessage — BREAKING CHANGE footers', () => {
+  const footers = (message: string): readonly string[] | undefined => parseMessage(message)?.breakingFooters
+
+  test('a footer after a blank line, in either spelling, and with the hash separator', () => {
+    expect(footers('fix: x\n\nsome body\n\nBREAKING CHANGE: the text')).toEqual(['the text'])
+    expect(footers('fix: x\n\nBREAKING-CHANGE: hyphen')).toEqual(['hyphen'])
+    expect(footers('fix: x\n\nprose\n\nBREAKING CHANGE #55')).toEqual(['55'])
+  })
+
+  test('among other footers, which end its value', () => {
+    expect(footers('fix: x\n\nprose\n\nRefs: #1\nBREAKING CHANGE: after-refs')).toEqual(['after-refs'])
+    expect(footers('fix: x\n\nBREAKING CHANGE: before\nCo-Authored-By: a <a@b>')).toEqual(['before'])
+    expect(footers('fix: x\n\nBREAKING CHANGE: one\nBREAKING CHANGE: two')).toEqual(['one', 'two'])
+    expect(footers('fix: x\n\nCloses #9\n\nprose\n\nBREAKING CHANGE: later')).toEqual(['later'])
+    expect(footers('fix: x\n\nNote that this is: fine\n\nBREAKING CHANGE: later')).toEqual(['later'])
+  })
+
+  test('a multi-line footer becomes one line, because it is one bullet', () => {
+    expect(footers('fix: x\n\nBREAKING CHANGE: first\nsecond')).toEqual(['first second'])
+    expect(footers('fix: x\n\nBREAKING CHANGE: first\n\nsecond para')).toEqual(['first second para'])
+  })
+
+  test('not a footer: mid-paragraph, wrong case, indented', () => {
+    expect(footers('fix: x\n\nprose\nBREAKING CHANGE: inline\nmore')).toEqual([])
+    expect(footers('fix: x\n\nbreaking change: lower')).toEqual([])
+    expect(footers('fix: x\n\nBreaking Change: mixed')).toEqual([])
+    expect(footers('fix: x\n\n  BREAKING CHANGE: indented')).toEqual([])
+  })
+
+  test('a subject not followed by a blank line is not a conventional commit', () => {
+    expect(parseMessage('fix: x\nBREAKING CHANGE: y')).toBeNull()
+  })
+
+  test('CRLF line endings are read like LF', () => {
+    expect(footers('fix: x\r\n\r\nBREAKING CHANGE: y\r\n')).toEqual(['y'])
+  })
 })
 
 describe('the rule knope applies', () => {
@@ -81,12 +137,12 @@ describe('the rule knope applies', () => {
 })
 
 describe('placeCommit — the type allowlist', () => {
-  test('knope lists feat, fix and any breaking change under a product scope, or none', () => {
-    expect(kindOf('feat(ios): x')).toBe('knope')
-    expect(kindOf('fix(ios): x')).toBe('knope')
-    expect(kindOf('fix: x')).toBe('knope')
-    expect(kindOf('refactor(ios)!: x')).toBe('knope')
-    expect(kindOf('security(crypto)!: drop v1 envelopes')).toBe('knope')
+  test('feat, fix and any breaking change under a product scope, or none, are listed', () => {
+    expect(kindOf('feat(ios): x')).toBe('listed')
+    expect(kindOf('fix(ios): x')).toBe('listed')
+    expect(kindOf('fix: x')).toBe('listed')
+    expect(kindOf('refactor(ios)!: x')).toBe('listed')
+    expect(kindOf('security(crypto)!: drop v1 envelopes')).toBe('listed')
   })
 
   test.each(['test', 'ci', 'chore', 'build', 'docs', 'refactor', 'style', 'revert', 'wip', 'bugfix'])(
@@ -105,7 +161,7 @@ describe('placeCommit — the type allowlist', () => {
     expect(kindOf('ci: tier the iOS gate (#1272)', ['.github/workflows/ci.yml'])).toBe('excluded:type')
     expect(kindOf('chore(worker): bump', ['apps/worker/package.json'])).toBe('excluded:type')
     expect(kindOf('docs(release): runbooks', ['docs/runbooks/x.md'])).toBe('excluded:type')
-    expect(kindOf('security: harden the relay', ['apps/worker/lib/relay.ts'])).toBe('bridged')
+    expect(kindOf('security: harden the relay', ['apps/worker/lib/relay.ts'])).toBe('listed')
   })
 
   test('a non-conventional subject is excluded, not an error', () => {
@@ -132,15 +188,61 @@ describe('the extra types are configuration', () => {
   const customSections = loadNoteSections(toml)
   const place = (subject: string) => placeCommit(commit(subject), customScopes, customSections)
 
-  test('a type added to knope.toml is bridged to the section it names, with no code change', () => {
+  test('a type added to knope.toml is listed under the section it names, with no code change', () => {
     expect(place('a11y(worker): larger hit targets')).toEqual({
-      kind: 'bridged', type: 'a11y', section: 'Accessibility', description: 'larger hit targets',
+      kind: 'listed',
+      entries: [{ type: 'a11y', section: 'Accessibility', description: 'larger hit targets' }],
     })
   })
 
   test('a type removed from knope.toml is excluded like any other', () => {
     expect(place('perf(worker): faster')).toEqual({ kind: 'excluded', reason: 'type', type: 'perf', scope: 'worker' })
     expect(place('security(worker): patched')).toMatchObject({ kind: 'excluded', reason: 'type' })
+  })
+})
+
+// What each commit produces is what knope produced from it (0.22.4). The
+// changeset types carry the version bump, so a wrong one here is a wrong release.
+describe('placeCommit — the changesets a commit produces', () => {
+  test('feat is minor, fix is patch, under the headings knope gives them', () => {
+    expect(listedAs('feat(ios): a')).toEqual([['minor', 'Features', 'a']])
+    expect(listedAs('fix(ios): a')).toEqual([['patch', 'Fixes', 'a']])
+  })
+
+  test('opted-in types keep their own type, which is a patch bump', () => {
+    expect(listedAs('security(worker): a')).toEqual([['security', 'Security', 'a']])
+    expect(listedAs('perf: a')).toEqual([['perf', 'Performance', 'a']])
+  })
+
+  test('a bang is one major entry and nothing else, whatever the type', () => {
+    expect(listedAs('feat(ios)!: a')).toEqual([['major', 'Breaking Changes', 'a']])
+    expect(listedAs('fix!: a')).toEqual([['major', 'Breaking Changes', 'a']])
+    expect(listedAs('refactor(ios)!: a')).toEqual([['major', 'Breaking Changes', 'a']])
+    expect(listedAs('security(crypto)!: a')).toEqual([['major', 'Breaking Changes', 'a']])
+  })
+
+  test('a footer adds a major entry with its own text, beside the usual entry', () => {
+    expect(listedAs('fix(worker): a\n\nBREAKING CHANGE: b')).toEqual([
+      ['major', 'Breaking Changes', 'b'],
+      ['patch', 'Fixes', 'a'],
+    ])
+    expect(listedAs('feat(worker)!: a\n\nBREAKING CHANGE: b')).toEqual([
+      ['major', 'Breaking Changes', 'b'],
+      ['minor', 'Features', 'a'],
+    ])
+  })
+
+  test('a footer admits a type that is otherwise out, with only the footer listed', () => {
+    expect(listedAs('chore(worker): a\n\nBREAKING CHANGE: b')).toEqual([['major', 'Breaking Changes', 'b']])
+  })
+
+  test('two footers are two entries', () => {
+    expect(listedAs('chore(worker): a\n\nBREAKING CHANGE: b\nBREAKING CHANGE: c').map((e) => e[2])).toEqual(['b', 'c'])
+  })
+
+  test('a footer does not get past the scope or path checks', () => {
+    expect(kindOf('fix(fleet): a\n\nBREAKING CHANGE: b')).toBe('excluded:scope')
+    expect(kindOf('ci: a\n\nBREAKING CHANGE: b', ['.github/workflows/ci.yml'])).toBe('excluded:non-shipping-paths')
   })
 })
 
@@ -163,7 +265,7 @@ describe('placeCommit — test work under a product scope', () => {
   })
 
   test('perf(worker) touching apps/worker/services is included', () => {
-    expect(kindOf('perf(worker): cache getRoles()', ['apps/worker/services/settings.ts'])).toBe('bridged')
+    expect(kindOf('perf(worker): cache getRoles()', ['apps/worker/services/settings.ts'])).toBe('listed')
   })
 
   test('one shipping path is enough, alongside any number of tests', () => {
@@ -173,21 +275,30 @@ describe('placeCommit — test work under a product scope', () => {
         'tests/steps/limits-steps.ts',
         'apps/worker/middleware/limits.ts',
       ]),
-    ).toBe('bridged')
+    ).toBe('listed')
   })
 
   test('an unscoped security commit is subject to the same path check', () => {
     expect(kindOf('security: harden the test harness', ['tests/helpers.ts'])).toBe('excluded:non-shipping-paths')
-    expect(kindOf('security: pad payloads', ['packages/crypto/src/hpke.rs'])).toBe('bridged')
+    expect(kindOf('security: pad payloads', ['packages/crypto/src/hpke.rs'])).toBe('listed')
   })
 
   test('a commit with no changed paths is not called test-only', () => {
     expect(touchesOnlyNonShippingPaths([])).toBe(false)
-    expect(kindOf('security(worker): x', [])).toBe('bridged')
+    expect(kindOf('security(worker): x', [])).toBe('listed')
   })
 
-  test('knope decides feat/fix itself, so the path check cannot apply to them', () => {
-    expect(kindOf('fix(ios): flaky XCUITest', ['apps/ios/Tests/UI/FooTests.swift'])).toBe('knope')
+  // The hole the 2026-11-08 ruling closed: 85 of 1,266 historical feat/fix
+  // commits were test, CI or test-tooling work under a product scope.
+  test('feat, fix and breaking commits are subject to the path check too', () => {
+    expect(kindOf('fix(ios): flaky XCUITest', ['apps/ios/Tests/UI/FooTests.swift'])).toBe('excluded:non-shipping-paths')
+    expect(kindOf('feat(android): test helper', ['apps/android/app/src/androidTest/java/X.kt'])).toBe('excluded:non-shipping-paths')
+    expect(kindOf('test(ios)!: new harness', ['apps/ios/Tests/UI/FooTests.swift'])).toBe('excluded:non-shipping-paths')
+  })
+
+  test('feat and fix touching something that ships are listed', () => {
+    expect(kindOf('fix(worker): x', ['apps/worker/services/settings.ts'])).toBe('listed')
+    expect(kindOf('fix(ios): x', ['apps/ios/Tests/UI/FooTests.swift', 'apps/ios/Sources/App/Foo.swift'])).toBe('listed')
   })
 
   test.each([
@@ -263,6 +374,7 @@ describe('excludedCommits — what the release PR body lists', () => {
     commit('security(worker): upgrade hono (#922)', ['apps/worker/package.json'], '3'.repeat(40)),
     commit('perf(ios): parallelize XCUITests (#141)', ['apps/ios/Tests/UI/x.swift'], '4'.repeat(40)),
     commit('fix mechanical five (#1969)', ['apps/worker/x.ts'], '5'.repeat(40)),
+    commit('fix(ios): flaky XCUITest (#6)', ['apps/ios/Tests/UI/x.swift'], '6'.repeat(40)),
   ]
   const excluded = excludedCommits(commits, scopes, sections)
 
@@ -276,7 +388,19 @@ describe('excludedCommits — what the release PR body lists', () => {
       ['2', 'scope'],
       ['4', 'non-shipping-paths'],
       ['5', 'type'],
+      ['6', 'non-shipping-paths'],
     ])
+  })
+
+  test('a left-out feat/fix is listed visibly too, with its reason', () => {
+    expect(md).toContain('- tests/CI/tooling only — fix(ios): flaky XCUITest (#6)')
+    expect(md.indexOf('fix(ios): flaky XCUITest')).toBeGreaterThan(md.indexOf('Other commits left out'))
+    expect(md.indexOf('fix(ios): flaky XCUITest')).toBeLessThan(md.indexOf('<details>'))
+  })
+
+  test('the subject is listed, not the whole message', () => {
+    const [e] = excludedCommits([commit('chore: a\n\nlong body text')], scopes, sections)
+    expect(e.subject).toBe('chore: a')
   })
 
   const md = renderExcluded(excluded, 'v0.21.7..HEAD', sections)
@@ -317,12 +441,18 @@ describe('excludedCommits — what the release PR body lists', () => {
 })
 
 /**
- * #2584: knope 0.22.4 matches extra_changelog_sections `types` against
- * changeset types only, so a security(...)/perf(...) commit never reached the
- * notes. The bridge turns each product-scoped one into a changeset, and
- * `verify` fails the release unless each lands exactly once.
+ * Every admitted commit becomes a changeset (knope reads no commits itself:
+ * `[changes] ignore_conventional_commits`), and `verify` fails the release
+ * unless each entry lands as many times as it should.
  */
-describe('security/perf bridge', () => {
+describe('changesets and verify', () => {
+  test('knope.toml turns knope\'s own commit reading off', () => {
+    const toml = Bun.TOML.parse(readFileSync(join(import.meta.dir, '..', '..', 'knope.toml'), 'utf8')) as {
+      changes?: { ignore_conventional_commits?: unknown }
+    }
+    expect(toml.changes?.ignore_conventional_commits).toBe(true)
+  })
+
   test('knope.toml names the Security and Performance sections', () => {
     expect(sections.get('security')).toBe('Security')
     expect(sections.get('perf')).toBe('Performance')
@@ -335,17 +465,26 @@ describe('security/perf bridge', () => {
     commit('security(fleet): internal token scope (#1)', ['orchestrator/src/x.ts'], '4'.repeat(40)),
     commit('perf(ci): tier the iOS E2E gate (#1272)', ['.github/workflows/ci.yml'], '5'.repeat(40)),
     commit('security(crypto)!: drop v1 envelopes (#3)', ['packages/crypto/src/hpke.rs'], '6'.repeat(40)),
-    commit('fix(worker): knope reads this one itself', ['apps/worker/x.ts'], '7'.repeat(40)),
+    commit('fix(worker): a plain product fix', ['apps/worker/x.ts'], '7'.repeat(40)),
     commit('perf(ios): parallelize XCUITests (#141)', ['apps/ios/Tests/UI/x.swift'], '8'.repeat(40)),
   ]
   const entries = noteEntries(commits, scopes, sections)
 
-  test('bridges product-scoped and unscoped security/perf commits that ship; breaking ones are left to knope', () => {
+  test('every admitted commit, of every type, gets a changeset; what is excluded gets none', () => {
     expect(entries.map((e) => [e.type, e.section, e.description])).toEqual([
       ['security', 'Security', 'upgrade hono past GHSA-88fw-hqm2-52qc (#922)'],
       ['security', 'Security', 'payload padding for traffic analysis resistance (#137)'],
       ['perf', 'Performance', 'add 30s TTL cache for getRoles()'],
+      ['major', 'Breaking Changes', 'drop v1 envelopes (#3)'],
+      ['patch', 'Fixes', 'a plain product fix'],
     ])
+  })
+
+  test('file names keep commit order, and stay distinct for one commit with two entries', () => {
+    const [a, b] = noteEntries([commit('fix(worker): a\n\nBREAKING CHANGE: b')], scopes, sections)
+    expect(changesetFileName(a, 0)).toBe('commit-00000-major-aaaaaaaaaaaa.md')
+    expect(changesetFileName(b, 1)).toBe('commit-00001-patch-aaaaaaaaaaaa.md')
+    expect(changesetFileName(a, 9) < changesetFileName(a, 10)).toBe(true)
   })
 
   test('writes the changeset shape knope 0.22.4 reads', () => {
@@ -357,9 +496,11 @@ describe('security/perf bridge', () => {
   const changelog = (security: string[], perf: string[]): string =>
     [
       '# Changelog', '', '## [Unreleased]', '', '### Added', '- old', '', '## [0.19.2] - 2026-02-27', '',
-      '## 0.21.8 (2026-11-08)', '', '### Fixes', '', '- a fix', '',
+      '## 0.21.8 (2026-11-08)', '',
+      '### Breaking Changes', '', '- drop v1 envelopes (#3)', '',
       '### Security', '', ...security.map((s) => `- ${s}`), '',
       '### Performance', '', ...perf.map((s) => `- ${s}`), '',
+      '### Fixes', '', '- a plain product fix', '',
       '## 0.21.7 (2026-11-07)', '', '### Security', '', '- upgrade hono past GHSA-88fw-hqm2-52qc (#922)', '',
     ].join('\n')
   const security = ['upgrade hono past GHSA-88fw-hqm2-52qc (#922)', 'payload padding for traffic analysis resistance (#137)']
@@ -375,6 +516,18 @@ describe('security/perf bridge', () => {
     expect(problems[0]).toContain('appears 0× under "### Security" in 0.21.8')
   })
 
+  test('two commits with the same description are two bullets, and that is correct', () => {
+    const same = noteEntries(
+      [commit('fix(ios): update strings', SHIPPING, '1'.repeat(40)), commit('fix(android): update strings', SHIPPING, '2'.repeat(40))],
+      scopes,
+      sections,
+    )
+    const notes = (n: number): string => ['## 0.21.8', '', '### Fixes', '', ...Array<string>(n).fill('- update strings'), ''].join('\n')
+    expect(verifyEntries(notes(2), '0.21.8', same)).toEqual([])
+    expect(verifyEntries(notes(1), '0.21.8', same)[0]).toContain('appears 1×')
+    expect(verifyEntries(notes(3), '0.21.8', same)[0]).toContain('appears 3×')
+  })
+
   test('fails on a duplicate — knope starting to read commit types itself', () => {
     const problems = verifyEntries(changelog([...security, security[0]], perf), '0.21.8', entries)
     expect(problems).toHaveLength(1)
@@ -388,6 +541,12 @@ describe('security/perf bridge', () => {
 
   test('an entry in an OLDER release section does not satisfy the new one', () => {
     expect(verifyEntries(changelog(security.slice(1), perf), '0.21.8', entries)).toHaveLength(1)
+  })
+
+  test('the release is built on the highest bare-semver tag; platform tags do not count', () => {
+    expect(highestReleaseTag(['v0.21.7', 'v0.21.10', 'v0.21.9', 'v0.21.10-desktop', 'v0.21.10-ios', 'desktop-v0.30.0', ''])).toBe('v0.21.10')
+    expect(highestReleaseTag(['v0.9.0', 'v0.10.0'])).toBe('v0.10.0')
+    expect(highestReleaseTag(['desktop-v1.0.0'])).toBeNull()
   })
 
   test('nothing to verify passes, whatever the changelog holds', () => {
