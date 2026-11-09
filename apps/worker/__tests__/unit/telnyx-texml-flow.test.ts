@@ -205,9 +205,13 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
 
     it('a wrong CAPTCHA answer is challenged again on the next round, not queued', async () => {
       vi.mocked(services.settings.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
-      const res = await telnyxPost('/api/telephony/captcha?callSid=v3%3Acaller-leg&lang=en&round=0&hub=hub-1', callFields({ Digits: '0000' }))
+      const menu = await (await telnyxPost('/api/telephony/incoming', callFields())).text()
+      const challenge = await (await telnyxPost(pathOf(attr(menu, 'Gather', 'action')), callFields({ Digits: '1' }))).text()
+      const firstRound = pathOf(attr(challenge, 'Gather', 'action'))
+      expect(new URL(firstRound, ORIGIN).searchParams.get('round')).toBe('0')
+      const res = await telnyxPost(firstRound, callFields({ Digits: '0000' }))
       const body = await res.text()
-      expect(attr(body, 'Gather', 'action')).toContain('round=1')
+      expect(new URL(attr(body, 'Gather', 'action')).searchParams.get('round')).toBe('1')
       expect(body).not.toContain('<Enqueue')
       expect(startParallelRinging).not.toHaveBeenCalled()
     })
@@ -254,6 +258,138 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       })
       expect(await res.text()).toBe('<Response><Hangup/></Response>')
       expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the callback URL a TeXML document names is authenticated, not just the body', () => {
+    // Telnyx signs `timestamp|body` and nothing else, so `hub`, `callSid`,
+    // `round`, `lang` and `callToken` — all in the URL — are outside what the
+    // signature covers. A correctly signed callback captured on its way to us can
+    // be re-sent inside the 60 s tolerance with the URL altered. These tests send
+    // exactly that: a REAL signature over the body, and a mutated URL. (The replay
+    // store is stubbed to "first sighting" — the case where the original never
+    // arrived, which is the only case a replay guard cannot help with.)
+    const OTHER_HUB = 'hub-2'
+
+    async function menuPath() {
+      const menu = await (await telnyxPost('/api/telephony/incoming', callFields())).text()
+      return pathOf(attr(menu, 'Gather', 'action'))
+    }
+    const mutate = (path: string, change: (q: URLSearchParams) => void) => {
+      const u = new URL(path, ORIGIN)
+      change(u.searchParams)
+      return `${u.pathname}${u.search}`
+    }
+
+    it('a callback minted for one hub, re-sent naming another, is refused and acts on neither', async () => {
+      const genuine = await menuPath()
+      expect(new URL(genuine, ORIGIN).searchParams.get('hub')).toBe('hub-1')
+
+      const redirected = mutate(genuine, q => q.set('hub', OTHER_HUB))
+      const res = await telnyxPost(redirected, callFields({ Digits: '1' }))
+
+      expect(res.status).toBe(403)
+      expect(services.settings.getIvrLanguages).toHaveBeenCalledTimes(1) // the menu's own, nothing since
+      expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+      expect(startParallelRinging).not.toHaveBeenCalled()
+    })
+
+    it('the same callback, untouched, is served', async () => {
+      const res = await telnyxPost(await menuPath(), callFields({ Digits: '1' }))
+      expect(res.status).toBe(200)
+      expect(await res.text()).toContain('<Gather')
+    })
+
+    it('a callback with its hub removed is refused rather than served as though it had one', async () => {
+      const res = await telnyxPost(mutate(await menuPath(), q => q.delete('hub')), callFields({ Digits: '1' }))
+      expect(res.status).toBe(403)
+      expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+    })
+
+    it('a callback with no authentication tag at all is refused', async () => {
+      const res = await telnyxPost(mutate(await menuPath(), q => q.delete('sig')), callFields({ Digits: '1' }))
+      expect(res.status).toBe(403)
+    })
+
+    it('an invented tag is refused', async () => {
+      const res = await telnyxPost(mutate(await menuPath(), q => q.set('sig', 'A'.repeat(43))), callFields({ Digits: '1' }))
+      expect(res.status).toBe(403)
+    })
+
+    it('a tag minted for one step does not vouch for another', async () => {
+      const toLanguage = await menuPath() // /language-selected?hub=…&sig=…
+      const asQueueExit = toLanguage.replace('/language-selected', '/queue-exit')
+      const res = await telnyxPost(asQueueExit, callFields({ QueueResult: 'hangup' }))
+      expect(res.status).toBe(403)
+      expect(services.calls.endCall).not.toHaveBeenCalled()
+    })
+
+    async function captchaPath() {
+      vi.mocked(services.settings.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+      const afterMenu = await (await telnyxPost(await menuPath(), callFields({ Digits: '1' }))).text()
+      return pathOf(attr(afterMenu, 'Gather', 'action'))
+    }
+
+    it.each([
+      ['callSid', 'v3:another-callers-leg'],
+      ['lang', 'es'],
+      ['round', '9'],
+      ['hub', OTHER_HUB],
+    ])('a CAPTCHA answer re-sent with its %s altered is refused, and no challenge is touched', async (param, value) => {
+      const genuine = await captchaPath()
+      vi.mocked(services.settings.submitCaptcha).mockClear()
+      const res = await telnyxPost(mutate(genuine, q => q.set(param, value)), callFields({ Digits: '0000' }))
+      expect(res.status).toBe(403)
+      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
+    })
+
+    it('a CAPTCHA answer with an extra parameter appended is refused', async () => {
+      const res = await telnyxPost(mutate(await captchaPath(), q => q.append('callSid', 'v3:another-callers-leg')), callFields({ Digits: '0000' }))
+      expect(res.status).toBe(403)
+    })
+
+    describe('a volunteer leg', () => {
+      async function ring() {
+        await adapter.ringVolunteers({
+          callSid: CALL_SID, callerNumber: CALLER, callbackUrl: ORIGIN, hubId: 'hub-1',
+          volunteers: [{ phone: '+15550000001', callToken: 'leg-token-1' }],
+        })
+        return ringBodies[0]!
+      }
+      const legFields = (extra: Record<string, string> = {}) => ({ AccountSid: 'acct-1', CallSid: 'v3:volunteer-leg-1', From: HOTLINE_NUMBER, To: '+15550000001', ConnectionId: CONNECTION_ID, ParentCallSid: CALL_SID, ...extra })
+
+      it('answer URL re-sent with another leg\'s call token claims nothing', async () => {
+        const { Url } = await ring()
+        const res = await telnyxPost(mutate(pathOf(Url!), q => q.set('callToken', 'leg-token-2')), legFields({ CallStatus: 'in-progress' }))
+        expect(res.status).toBe(403)
+        expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
+      })
+
+      it('status URL re-sent with the token swapped for a call id ends no call', async () => {
+        const { StatusCallback } = await ring()
+        const res = await telnyxPost(
+          mutate(pathOf(StatusCallback!), q => { q.delete('callToken'); q.set('parentCallSid', 'v3:someone-elses-call') }),
+          legFields({ CallStatus: 'completed' }),
+        )
+        expect(res.status).toBe(403)
+        expect(services.calls.endCall).not.toHaveBeenCalled()
+      })
+
+      it('status URL re-sent naming another hub is refused', async () => {
+        const { StatusCallback } = await ring()
+        const res = await telnyxPost(mutate(pathOf(StatusCallback!), q => q.set('hub', OTHER_HUB)), legFields({ CallStatus: 'completed' }))
+        expect(res.status).toBe(403)
+        expect(services.calls.endCall).not.toHaveBeenCalled()
+      })
+    })
+
+    it('a voicemail recording callback re-sent with another call\'s id is refused', async () => {
+      // Mint the recording callback the way the queue-exit step does, then alter it.
+      const voicemail = await adapter.handleVoicemail({ callSid: CALL_SID, callerLanguage: 'en', callbackUrl: ORIGIN, hubId: 'hub-1', audioUrls: {} } as Parameters<typeof adapter.handleVoicemail>[0])
+      const callback = attr(voicemail.body, 'Record', 'recordingStatusCallback')
+      const res = await telnyxPost(mutate(pathOf(callback), q => q.set('callSid', 'v3:another-callers-leg')), callFields({ RecordingStatus: 'completed', RecordingSid: 'rec-1' }))
+      expect(res.status).toBe(403)
+      expect(services.calls.markVoicemail).not.toHaveBeenCalled()
     })
   })
 

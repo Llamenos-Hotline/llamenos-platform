@@ -21,6 +21,17 @@ function attr(xml: string, element: string, name: string): string {
   return value.replace(/&amp;/g, '&')
 }
 
+/**
+ * A callback URL without its authentication tag, so the rest can be read at a
+ * glance. Every callback this adapter writes carries one, as its last parameter:
+ * a URL without it throws here.
+ */
+function untagged(url: string): string {
+  const m = /^(.*)[?&]sig=[A-Za-z0-9_-]{43}$/.exec(url)
+  if (!m) throw new Error(`callback URL carries no authentication tag: ${url}`)
+  return m[1]!
+}
+
 const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString()
 const formRequest = (fields: Record<string, string>) => new Request('https://hotline.example.org/api/telephony/x', {
   method: 'POST',
@@ -48,25 +59,25 @@ describe('TelnyxAdapter (TeXML)', () => {
       const res = await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: 'hub-1' })
       expect(res.contentType).toBe('text/xml')
       expect(res.body).toContain('<Gather numDigits="1"')
-      expect(attr(res.body, 'Gather', 'action')).toBe(`${BASE}/api/telephony/language-selected?hub=hub-1`)
+      expect(untagged(attr(res.body, 'Gather', 'action'))).toBe(`${BASE}/api/telephony/language-selected?hub=hub-1`)
       expect(res.body.match(/<Say /g)).toHaveLength(2)
       expect(res.body).toContain(`voice="${TELNYX_VOICES.voiceFor('en')!.voice}"`)
       expect(res.body).toContain(`voice="${TELNYX_VOICES.voiceFor('es')!.voice}"`)
       // No input at all falls through to an automatic choice on the same route.
-      expect(res.body).toContain(`<Redirect method="POST">${BASE}/api/telephony/language-selected?auto=1&amp;hub=hub-1</Redirect>`)
+      expect(res.body).toContain(`<Redirect method="POST">${BASE}/api/telephony/language-selected?auto=1&amp;hub=hub-1&amp;sig=`)
       expect(fetchSpy).not.toHaveBeenCalled()
     })
 
     it('skips the menu for a single language and redirects with that language forced', async () => {
       const res = await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['es'], hubId: 'hub-1' })
       expect(res.body).not.toContain('<Gather')
-      expect(res.body).toContain(`${BASE}/api/telephony/language-selected?auto=1&amp;forceLang=es&amp;hub=hub-1`)
+      expect(res.body).toContain(`${BASE}/api/telephony/language-selected?auto=1&amp;forceLang=es&amp;hub=hub-1&amp;sig=`)
     })
 
     it('uses root-relative callbacks when no public base URL is configured', async () => {
       const bare = new TelnyxAdapter(API_KEY, CONNECTION_ID, PHONE_NUMBER)
       const res = await bare.handleLanguageMenu({ callSid: 'c', callerNumber: '+1', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: 'hub-1' })
-      expect(attr(res.body, 'Gather', 'action')).toBe('/api/telephony/language-selected?hub=hub-1')
+      expect(untagged(attr(res.body, 'Gather', 'action'))).toBe('/api/telephony/language-selected?hub=hub-1')
     })
   })
 
@@ -76,8 +87,8 @@ describe('TelnyxAdapter (TeXML)', () => {
       expect(res.body).toContain('<Say voice="AWS.Polly.Joanna-Neural"')
       expect(res.body).toContain('<Enqueue ')
       expect(res.body).toContain('>v3:call-1</Enqueue>')
-      expect(attr(res.body, 'Enqueue', 'waitUrl')).toBe(`${BASE}/api/telephony/wait-music?lang=en&hub=hub-1`)
-      expect(attr(res.body, 'Enqueue', 'action')).toBe(`${BASE}/api/telephony/queue-exit?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
+      expect(untagged(attr(res.body, 'Enqueue', 'waitUrl'))).toBe(`${BASE}/api/telephony/wait-music?lang=en&hub=hub-1`)
+      expect(untagged(attr(res.body, 'Enqueue', 'action'))).toBe(`${BASE}/api/telephony/queue-exit?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
       expect(fetchSpy).not.toHaveBeenCalled()
     })
 
@@ -90,7 +101,7 @@ describe('TelnyxAdapter (TeXML)', () => {
     it('gathers the CAPTCHA answer on /captcha, carrying the call, language, round and hub', async () => {
       const res = await adapter.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: true, rateLimited: false, captchaDigits: '4821', hubId: 'hub-1' })
       const action = attr(res.body, 'Gather', 'action')
-      expect(action).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=0&hub=hub-1`)
+      expect(untagged(action)).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=0&hub=hub-1`)
       expect(res.body).toContain('4, 8, 2, 1.')
       expect(res.body).not.toContain('<Enqueue')
       // A caller who says nothing is sent to the same route as a timeout.
@@ -118,7 +129,7 @@ describe('TelnyxAdapter (TeXML)', () => {
 
     it('challenges again on a retry, on the next round', async () => {
       const res = await adapter.handleCaptchaResponse({ outcome: 'retry', callSid: 'v3:call-1', callerLanguage: 'en', hubId: 'hub-1', digitsToSpeak: '4821', round: 1 })
-      expect(attr(res.body, 'Gather', 'action')).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=1&hub=hub-1`)
+      expect(untagged(attr(res.body, 'Gather', 'action'))).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=1&hub=hub-1`)
       expect(res.body).not.toContain('<Enqueue')
     })
   })
@@ -137,7 +148,7 @@ describe('TelnyxAdapter (TeXML)', () => {
     it('asks Telnyx to record, calling back on /call-recording, when this hub opted in', async () => {
       const res = await adapter.handleCallAnswered({ ...answered, recordCall: true })
       expect(attr(res.body, 'Dial', 'record')).toBe('record-from-answer')
-      expect(attr(res.body, 'Dial', 'recordingStatusCallback')).toBe(`${HOLD_ORIGIN}/api/telephony/call-recording?parentCallSid=v3%3Aparent-1`)
+      expect(untagged(attr(res.body, 'Dial', 'recordingStatusCallback'))).toBe(`${HOLD_ORIGIN}/api/telephony/call-recording?parentCallSid=v3%3Aparent-1`)
     })
   })
 
@@ -145,8 +156,8 @@ describe('TelnyxAdapter (TeXML)', () => {
     it('prompts, records with a completion route and a recording callback, and hangs up', async () => {
       const res = await adapter.handleVoicemail({ callSid: 'v3:call-1', callerLanguage: 'en', callbackUrl: HOLD_ORIGIN, hubId: 'hub-1', maxRecordingSeconds: 45 })
       expect(attr(res.body, 'Record', 'maxLength')).toBe('45')
-      expect(attr(res.body, 'Record', 'action')).toBe(`${BASE}/api/telephony/voicemail-complete?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
-      expect(attr(res.body, 'Record', 'recordingStatusCallback')).toBe(`${HOLD_ORIGIN}/api/telephony/voicemail-recording?callSid=v3%3Acall-1&hub=hub-1`)
+      expect(untagged(attr(res.body, 'Record', 'action'))).toBe(`${BASE}/api/telephony/voicemail-complete?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
+      expect(untagged(attr(res.body, 'Record', 'recordingStatusCallback'))).toBe(`${HOLD_ORIGIN}/api/telephony/voicemail-recording?callSid=v3%3Acall-1&hub=hub-1`)
       expect(res.body).toContain('<Hangup/>')
     })
 
@@ -237,8 +248,8 @@ describe('TelnyxAdapter (TeXML)', () => {
       expect(first.url).toBe(`https://api.telnyx.com/v2/texml/calls/${CONNECTION_ID}`)
       expect(first.body).toMatchObject({ To: '+15550000001', From: PHONE_NUMBER, Timeout: 30, MachineDetection: 'Enable', Method: 'POST' })
       // The answer URL is fetched on answer only; progress events go elsewhere.
-      expect(first.body.Url).toBe('https://cb.example.org/api/telephony/user-answer?callToken=tok%20one&hub=hub-1')
-      expect(first.body.StatusCallback).toBe('https://cb.example.org/api/telephony/call-status?callToken=tok%20one&hub=hub-1')
+      expect(untagged(first.body.Url)).toBe('https://cb.example.org/api/telephony/user-answer?callToken=tok+one&hub=hub-1')
+      expect(untagged(first.body.StatusCallback)).toBe('https://cb.example.org/api/telephony/call-status?callToken=tok+one&hub=hub-1')
       expect(first.body.StatusCallback).not.toBe(first.body.Url)
       expect(first.body.StatusCallbackEvent).toBe('initiated ringing answered completed')
     })
@@ -475,6 +486,52 @@ describe('TelnyxAdapter (TeXML)', () => {
       const b = new Request('https://hotline.example.org/api/telephony/captcha?round=1', { method: 'POST', headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' }, body })
       expect(await adapter.webhookReplayKey(a)).toBe(await adapter.webhookReplayKey(b))
       expect(await adapter.webhookReplayKey(a)).toBe(`${headers['telnyx-timestamp']}\n${body}`)
+    })
+  })
+
+  describe('callback URL authentication', () => {
+    const body = form({ CallSid: 'v3:call-1', From: '+15559876543', To: PHONE_NUMBER, ConnectionId: CONNECTION_ID, Digits: '1' })
+    let signer: TelnyxSigner
+
+    beforeEach(async () => {
+      signer = await makeTelnyxSigner()
+      fetchSpy.mockImplementation(async () => publicKeyResponse(signer))
+    })
+
+    const signed = async (url: string, signWith: TelnyxSigner = signer) => new Request(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...(await signWith.sign(body)) },
+      body,
+    })
+    const wrote = async (hub = 'hub-1') =>
+      attr((await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: hub })).body, 'Gather', 'action')
+
+    it('accepts a callback on exactly the URL this adapter wrote, with a genuine signature', async () => {
+      expect(await adapter.validateWebhook(await signed(await wrote()))).toBe(true)
+    })
+
+    it('refuses a genuinely signed callback whose hub was changed', async () => {
+      const url = new URL(await wrote())
+      url.searchParams.set('hub', 'hub-2')
+      expect(await adapter.validateWebhook(await signed(url.toString()))).toBe(false)
+    })
+
+    it('refuses one whose route was changed, whose tag was removed, or that carries two tags', async () => {
+      const genuine = await wrote()
+      expect(await adapter.validateWebhook(await signed(genuine.replace('/language-selected', '/queue-exit')))).toBe(false)
+      expect(await adapter.validateWebhook(await signed(genuine.replace(/[?&]sig=[^&]*/, '')))).toBe(false)
+      expect(await adapter.validateWebhook(await signed(`${genuine}&sig=${new URL(genuine).searchParams.get('sig')}`))).toBe(false)
+    })
+
+    it('does not accept a URL another account\'s adapter wrote — the tag is under the account\'s own key', async () => {
+      const other = new TelnyxAdapter('another-api-key', CONNECTION_ID, PHONE_NUMBER, BASE)
+      const foreign = attr((await other.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: 'hub-1' })).body, 'Gather', 'action')
+      expect(await adapter.validateWebhook(await signed(foreign))).toBe(false)
+    })
+
+    it('/incoming, which Telnyx is configured with by hand, carries no tag — and no parameters to be altered', async () => {
+      expect(await adapter.validateWebhook(await signed(`${BASE}/api/telephony/incoming`))).toBe(true)
+      expect(await adapter.validateWebhook(await signed(`${BASE}/api/telephony/incoming?hub=hub-2`))).toBe(false)
     })
   })
 

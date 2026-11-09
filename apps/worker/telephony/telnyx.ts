@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { safeFetch } from '../lib/safe-fetch'
 import { createLogger } from '../lib/logger'
 import type {
@@ -89,9 +90,29 @@ function sayOrPlay(promptKey: string, lang: string, audioUrls?: AudioUrlMap, tex
   return say(lang, text ?? getPrompt(promptKey, lang))
 }
 
-/** Hub query param suffix for a callback URL */
-function hubQP(hubId?: string): string {
-  return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
+/** The query parameter that carries a callback URL's authentication tag. */
+const CALLBACK_TAG_PARAM = 'sig'
+
+/** Domain separation for the callback-URL MAC key: nothing else is ever MACed under it. */
+const CALLBACK_KEY_CONTEXT = 'llamenos/telnyx-texml-callback-url/v1'
+
+/** A callback's route: the last segment of `/api/telephony/<route>`. */
+function routeOf(pathname: string): string {
+  return pathname.replace(/\/+$/, '').split('/').pop() ?? ''
+}
+
+/**
+ * The exact bytes a callback URL's tag covers: the route and EVERY query
+ * parameter but the tag itself, as decoded pairs in a fixed order, each side
+ * percent-encoded so no value can masquerade as a separator. A repeated
+ * parameter is covered too — appending one changes the string.
+ */
+function callbackTagInput(route: string, params: URLSearchParams): string {
+  const pairs = [...params.entries()]
+    .filter(([key]) => key !== CALLBACK_TAG_PARAM)
+    .sort(([ka, va], [kb, vb]) => (ka < kb ? -1 : ka > kb ? 1 : va < vb ? -1 : va > vb ? 1 : 0))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+  return `${route}\n${pairs.join('&')}`
 }
 
 /**
@@ -257,6 +278,8 @@ export class TelnyxAdapter implements TelephonyAdapter {
   private connectionId: string
   private phoneNumber: string
   private webhookBaseUrl: string
+  /** MAC key for the callback URLs this adapter writes — derived from the API key, so it is the account's and never leaves this server. */
+  private callbackKey: Buffer
 
   /**
    * `connectionId` is the TeXML application's id. `webhookBaseUrl` is the
@@ -265,41 +288,63 @@ export class TelnyxAdapter implements TelephonyAdapter {
    */
   constructor(apiKey: string, connectionId: string, phoneNumber: string, webhookBaseUrl = '') {
     this.client = new TelnyxApiClient(apiKey)
+    this.callbackKey = createHmac('sha256', apiKey).update(CALLBACK_KEY_CONTEXT).digest()
     this.connectionId = connectionId
     this.phoneNumber = phoneNumber
     this.webhookBaseUrl = webhookBaseUrl.replace(/\/+$/, '')
   }
 
-  /** An absolute (or, with no base configured, root-relative) URL of one of this server's telephony webhooks, XML-escaped. */
-  private hook(pathAndQuery: string): string {
-    return escapeXml(`${this.webhookBaseUrl}/api/telephony/${pathAndQuery}`)
+  private callbackTag(route: string, params: URLSearchParams): string {
+    return createHmac('sha256', this.callbackKey).update(callbackTagInput(route, params)).digest('base64url')
+  }
+
+  /**
+   * The URL of one of this server's telephony webhooks, at `base` (or, with
+   * none configured, root-relative), carrying `params` and a tag over them.
+   *
+   * Telnyx signs the request BODY and nothing else, so everything in this URL —
+   * the hub a callback is for, the call it is about, the leg token — arrives
+   * outside the signature, and a captured genuine callback could be re-sent with
+   * any of it changed. The tag closes that: `validateWebhook` refuses a callback
+   * whose route or parameters are not exactly what was written here. Parameters
+   * left `undefined` are omitted (and so cannot be added later).
+   */
+  private callbackUrl(base: string, route: string, params: Record<string, string | number | undefined> = {}): string {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) query.set(key, String(value))
+    }
+    query.set(CALLBACK_TAG_PARAM, this.callbackTag(route, query))
+    return `${base}/api/telephony/${route}?${query.toString()}`
+  }
+
+  /** `callbackUrl` at the configured public origin, XML-escaped for a TeXML attribute or text node. */
+  private hook(route: string, params: Record<string, string | number | undefined> = {}): string {
+    return escapeXml(this.callbackUrl(this.webhookBaseUrl, route, params))
   }
 
   // --- IVR Methods ---
 
   async handleLanguageMenu(params: LanguageMenuParams): Promise<TelephonyResponse> {
     const menu = buildIvrLanguageMenu(params.enabledLanguages, TELNYX_VOICES)
-    const hp = hubQP(params.hubId)
-
     if (menu.kind === 'single') {
       return this.texml(`
         <Response>
-          <Redirect method="POST">${this.hook(`language-selected?auto=1&forceLang=${menu.language}${hp}`)}</Redirect>
+          <Redirect method="POST">${this.hook('language-selected', { auto: 1, forceLang: menu.language, hub: params.hubId })}</Redirect>
         </Response>
       `)
     }
 
-    const hubParam = params.hubId ? `?hub=${encodeURIComponent(params.hubId)}` : ''
     const sayElements = menu.options
       .map(o => `<Say voice="${o.voice.voice}" language="${o.voice.language}">${escapeXml(o.prompt)}</Say>`)
       .join('\n          ')
 
     return this.texml(`
       <Response>
-        <Gather numDigits="1" action="${this.hook(`language-selected${hubParam}`)}" timeout="8">
+        <Gather numDigits="1" action="${this.hook('language-selected', { hub: params.hubId })}" timeout="8">
           ${sayElements}
         </Gather>
-        <Redirect method="POST">${this.hook(`language-selected?auto=1${hp}`)}</Redirect>
+        <Redirect method="POST">${this.hook('language-selected', { auto: 1, hub: params.hubId })}</Redirect>
       </Response>
     `)
   }
@@ -373,8 +418,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
    * document finishes); `/queue-exit` runs when the caller leaves the queue.
    */
   private enqueue(callSid: string, lang: string, hubId: string | undefined): string {
-    const hp = hubQP(hubId)
-    return `<Enqueue waitUrl="${this.hook(`wait-music?lang=${lang}${hp}`)}" waitUrlMethod="POST" action="${this.hook(`queue-exit?callSid=${encodeURIComponent(callSid)}&lang=${lang}${hp}`)}" method="POST">${escapeXml(callSid)}</Enqueue>`
+    return `<Enqueue waitUrl="${this.hook('wait-music', { lang, hub: hubId })}" waitUrlMethod="POST" action="${this.hook('queue-exit', { callSid, lang, hub: hubId })}" method="POST">${escapeXml(callSid)}</Enqueue>`
   }
 
   /**
@@ -384,7 +428,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
    * no digits and counts it.
    */
   private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: string, round: number): string {
-    const action = this.hook(`captcha?callSid=${encodeURIComponent(callSid)}&lang=${lang}&round=${round}${hubQP(hubId)}`)
+    const action = this.hook('captcha', { callSid, lang, round, hub: hubId })
     return `
           <Gather numDigits="4" validDigits="0123456789*" action="${action}" timeout="10">
             ${lead}
@@ -404,7 +448,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       logger.warn('Call recording requested on a <Dial><Queue> bridge, which Telnyx does not list as recordable — the recording may not be made')
     }
     const recordAttrs = params.recordCall
-      ? ` record="record-from-answer" recordingStatusCallback="${escapeXml(`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${encodeURIComponent(params.parentCallSid)}`)}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed"`
+      ? ` record="record-from-answer" recordingStatusCallback="${escapeXml(this.callbackUrl(params.callbackUrl, 'call-recording', { parentCallSid: params.parentCallSid }))}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed"`
       : ''
     return this.texml(`
       <Response>
@@ -417,10 +461,9 @@ export class TelnyxAdapter implements TelephonyAdapter {
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const hp = hubQP(params.hubId)
     const voicemailTexml = sayOrPlay('voicemailPrompt', lang, params.audioUrls)
-    const complete = this.hook(`voicemail-complete?callSid=${encodeURIComponent(params.callSid)}&lang=${lang}${hp}`)
-    const recordingCallback = escapeXml(`${params.callbackUrl}/api/telephony/voicemail-recording?callSid=${encodeURIComponent(params.callSid)}${hp}`)
+    const complete = this.hook('voicemail-complete', { callSid: params.callSid, lang, hub: params.hubId })
+    const recordingCallback = escapeXml(this.callbackUrl(params.callbackUrl, 'voicemail-recording', { callSid: params.callSid, hub: params.hubId }))
     return this.texml(`
       <Response>
         ${voicemailTexml}
@@ -483,8 +526,6 @@ export class TelnyxAdapter implements TelephonyAdapter {
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
-    const hubParam = hubQP(params.hubId)
-
     const calls = await Promise.allSettled(
       params.volunteers.map((vol) => {
         // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs.
@@ -492,12 +533,11 @@ export class TelnyxAdapter implements TelephonyAdapter {
         // progress event (initiated, ringing, answered, completed) goes to
         // `StatusCallback`. A single URL for both is what made call.initiated
         // claim the answer before anyone picked up (#1135).
-        const token = encodeURIComponent(vol.callToken)
         return this.client.createTexmlCall(this.connectionId, {
           To: vol.phone,
           From: this.phoneNumber,
-          Url: `${params.callbackUrl}/api/telephony/user-answer?callToken=${token}${hubParam}`,
-          StatusCallback: `${params.callbackUrl}/api/telephony/call-status?callToken=${token}${hubParam}`,
+          Url: this.callbackUrl(params.callbackUrl, 'user-answer', { callToken: vol.callToken, hub: params.hubId }),
+          StatusCallback: this.callbackUrl(params.callbackUrl, 'call-status', { callToken: vol.callToken, hub: params.hubId }),
           Timeout: 30,
           MachineDetection: 'Enable',
         })
@@ -716,12 +756,18 @@ export class TelnyxAdapter implements TelephonyAdapter {
    * stale timestamp, a key that cannot be fetched, a malformed signature and an
    * empty body all refuse. (An empty body is a GET: the signature would then
    * cover nothing, and every parameter would arrive in the unsigned query.)
+   *
+   * That signature does not cover the URL, so the URL is authenticated
+   * separately (`callbackUrlIsAuthentic`): a genuine callback re-sent with its
+   * `hub`, `callSid`, `round`, `lang` or `callToken` altered is refused here,
+   * before any route reads them.
    */
   async validateWebhook(request: Request): Promise<boolean> {
     const signature = request.headers.get('telnyx-signature-ed25519')
     const timestamp = request.headers.get('telnyx-timestamp')
 
     if (!signature || !timestamp) return false
+    if (!this.callbackUrlIsAuthentic(request.url)) return false
 
     const ts = Number.parseInt(timestamp, 10)
     if (Number.isNaN(ts)) return false
@@ -732,6 +778,28 @@ export class TelnyxAdapter implements TelephonyAdapter {
       const rawBody = await request.clone().text()
       if (rawBody === '') return false
       return await this.client.verifyWebhookSignature(signature, timestamp, rawBody)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Whether the URL a callback arrived on is exactly one this adapter wrote.
+   * Telnyx's signature does not cover it, so this is the only thing that does:
+   * a tag over the route and every parameter, under a key only this server
+   * holds. `/incoming` is the one route Telnyx is configured with by hand, so it
+   * carries no tag — and no parameters, so nothing in it can be read.
+   */
+  private callbackUrlIsAuthentic(requestUrl: string): boolean {
+    try {
+      const url = new URL(requestUrl)
+      const route = routeOf(url.pathname)
+      if (route === 'incoming') return url.search === ''
+      const tags = url.searchParams.getAll(CALLBACK_TAG_PARAM)
+      if (tags.length !== 1) return false
+      const given = Buffer.from(tags[0]!, 'base64url')
+      const expected = Buffer.from(this.callbackTag(route, url.searchParams), 'base64url')
+      return given.length === expected.length && timingSafeEqual(given, expected)
     } catch {
       return false
     }
