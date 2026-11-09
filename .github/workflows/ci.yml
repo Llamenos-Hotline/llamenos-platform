@@ -1714,6 +1714,10 @@ jobs:
   #                                         sweep must satisfy before dropping
   #   scripts/api-schema-binding/bind-report.test.ts
   #                                         the CodeQL sanitization finding's rail
+  #   scripts/ci/apt-install-bounded.test.ts
+  #                                         desktop-rust's bounded apt install
+  #                                         (#2545); desktop-rust itself only
+  #                                         exercises the happy path
   #
   # Its sibling contract-guard.test.ts is NOT listed: api-contract.yml already
   # runs it, path-scoped to the files it guards.
@@ -1813,10 +1817,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Bounded, not bare `apt-get` (#2545). An unbounded install here sat on a
+      # mirror trickling ~40 KB/s until the JOB's 30-minute ceiling killed it —
+      # five times in two days, each reported as `cancelled` with nothing in the
+      # log naming a cause, each holding a merge group. The script gives the
+      # network phase a wall-clock budget, falls over from the runner's Azure
+      # mirror to the canonical archive, and ends any failure with an
+      # `::error::` that names the phase, mirror and rate. Same packages, same
+      # install semantics as before. Worst case 525 s; healthy ~25 s. The step
+      # `timeout-minutes` is only a backstop for the script itself misbehaving.
       - name: Install Linux deps
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          bash scripts/ci/apt-install-bounded.sh \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
