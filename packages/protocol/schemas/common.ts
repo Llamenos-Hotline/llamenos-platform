@@ -15,6 +15,33 @@ export const eciesPubkeySchema = hpkeEncSchema
 /** UUID v4 */
 export const uuidSchema = z.uuid()
 
+/**
+ * IANA time zone identifier (`America/New_York`, `Europe/Berlin`, `UTC`).
+ *
+ * Validated against the runtime's own tz database via `Intl.DateTimeFormat`,
+ * the same facility that later evaluates it — so a value this accepts is a value
+ * the shift roster can compute a wall-clock time in. A fixed UTC offset is NOT a
+ * time zone: it is wrong for half the year wherever DST applies.
+ */
+export const ianaTimezoneSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .refine(
+    (tz) => {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz })
+        return true
+      } catch {
+        return false
+      }
+    },
+    'Must be an IANA time zone identifier (e.g. America/New_York)',
+  )
+
+/** The zone a hub gets when none is given — and what every pre-existing hub was implicitly evaluated in. */
+export const DEFAULT_HUB_TIMEZONE = 'UTC'
+
 /** E.164 phone number */
 export const e164PhoneSchema = z.string().regex(/^\+\d{7,15}$/, 'Must be E.164 format (+XXXXXXXXXXX)')
 

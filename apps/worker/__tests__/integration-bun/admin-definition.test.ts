@@ -98,7 +98,7 @@ async function makeHub(label: string, founder: Person): Promise<string> {
   const id = nextId(`hub-${label}`)
   await settings.createHub(
     {
-      id, name: label, slug: id, status: 'active', createdBy: founder.pubkey,
+      id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder.pubkey,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     },
     { pubkey: founder.pubkey, roleIds: ['role-hub-admin'] },

@@ -98,6 +98,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
   async (c) => {
     const pubkey = c.get('pubkey')
     const services = c.get('services')
+    const { timezone } = c.req.valid('json')
 
     // Create default hub if none exists. Deliberately NOT caught here: if hub
     // creation or admin-role assignment fails, the request must fail too —
@@ -123,6 +124,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
         status: 'active' as const,
         phoneNumber: (platformProvider ? platformProvider.phoneNumber : c.env.TWILIO_PHONE_NUMBER) || '',
         description: '',
+        timezone,
         createdBy: pubkey,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),

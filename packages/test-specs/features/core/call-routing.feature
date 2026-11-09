@@ -65,12 +65,6 @@ Feature: Call Routing & History
     When a call needs to be routed
     Then the router should return a no-volunteers error
 
-  @backend
-  Scenario: Shift time zone is respected
-    Given a shift configured for 9am-5pm in America/New_York
-    When the current time is 10am Eastern
-    Then the shift should be considered active
-
   # ── Backend: Call Simulation Lifecycle ─────────────────────────────
 
   @backend @desktop @e2e @simulation

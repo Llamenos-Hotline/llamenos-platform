@@ -35,6 +35,7 @@ function makeHub(overrides: Record<string, unknown> = {}) {
     description: 'A test hub',
     status: 'active',
     phoneNumber: null,
+    timezone: 'UTC',
     createdBy: 'admin-pubkey',
     createdAt: now,
     updatedAt: now,
@@ -387,6 +388,7 @@ describe('SettingsService.createHub', () => {
     slug: 'new-hub',
     description: 'A new hub',
     status: 'active' as const,
+    timezone: 'America/New_York',
     createdBy: 'admin-pk',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -486,5 +488,25 @@ describe('SettingsService.updateHub', () => {
     await service.updateHub('hub-1', { name: 'Updated Hub' })
 
     expect(db.update).toHaveBeenCalled()
+  })
+
+  it('writes no timezone when the update does not name one, and writes it when it does (#1054)', async () => {
+    const { db, service } = setup()
+    const hub = makeHub({ timezone: 'America/New_York' })
+    db.$setSelectResults([[hub], [hub], [hub], [hub]])
+    const setArgs = () => db.update.mock.results.map((r) => (r.value as { set: { mock: { calls: unknown[][] } } }).set.mock.calls[0][0])
+
+    await service.updateHub('hub-1', { name: 'Renamed' })
+    expect(setArgs()[0]).not.toHaveProperty('timezone')
+
+    await service.updateHub('hub-1', { timezone: 'Europe/Berlin' })
+    expect(setArgs()[1]).toMatchObject({ timezone: 'Europe/Berlin' })
+  })
+
+  it('reports the stored zone on every read of a hub', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[makeHub({ timezone: 'Asia/Kolkata' })], [makeHub({ timezone: 'Asia/Kolkata' })]])
+    expect((await service.getHub('hub-1')).hub.timezone).toBe('Asia/Kolkata')
+    expect((await service.getHubs()).hubs[0].timezone).toBe('Asia/Kolkata')
   })
 })

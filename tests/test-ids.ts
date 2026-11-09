@@ -70,6 +70,7 @@ export const TestIds = {
   SHIFT_EDIT_BTN: 'shift-edit-btn',
   SHIFT_DELETE_BTN: 'shift-delete-btn',
   SHIFT_FORM: 'shift-form',
+  SHIFT_TIMEZONE_NOTE: 'shift-timezone-note',
   SHIFT_NAME_INPUT: 'shift-name-input',
   SHIFT_START_TIME: 'shift-start-time',
   SHIFT_END_TIME: 'shift-end-time',

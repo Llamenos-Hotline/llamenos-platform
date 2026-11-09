@@ -11,10 +11,20 @@ import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { ShiftPage, Navigation } from '../../pages/index'
 import { expectShiftScheduleSettled } from './shift-schedule-state'
+import { apiGet } from '../../api-helpers'
 // API helpers imported as needed by other step files
 
 Then('I should see shifts or the {string} message', async ({ page, backendRequest, workerHub }, emptyMsg: string) => {
   await expectShiftScheduleSettled(page, backendRequest, workerHub, emptyMsg)
+})
+
+Then("the shift form should state the hub's time zone", async ({ page, backendRequest, workerHub }) => {
+  // The expected zone comes from the server, not from a literal: the form must show
+  // whatever zone the hub is actually stored in.
+  const { status, data } = await apiGet<{ hub: { timezone: string } }>(backendRequest, `/hubs/${workerHub}`)
+  expect(status, 'read the hub').toBe(200)
+  expect(data.hub.timezone).toBeTruthy()
+  await expect(page.getByTestId(TestIds.SHIFT_TIMEZONE_NOTE)).toContainText(data.hub.timezone, { timeout: Timeouts.ELEMENT })
 })
 
 When('I fill in the shift name with a unique name', async ({ page }) => {

@@ -188,6 +188,8 @@ function ScheduleTab({ isAdmin, toast, t }: { isAdmin: boolean; toast: ReturnTyp
   const [editingShift, setEditingShift] = useState<Shift | null>(null)
   const [confirmingShift, setConfirmingShift] = useState<Shift | null>(null)
 
+  const { hubs, currentHubId } = useConfig()
+  const hubTimezone = hubs.find(h => h.id === currentHubId)?.timezone
   const { data: shifts = [], isLoading } = useShifts()
   const { data: fallback = [] } = useFallbackGroup()
   const createShiftMutation = useCreateShift()
@@ -238,6 +240,7 @@ function ScheduleTab({ isAdmin, toast, t }: { isAdmin: boolean; toast: ReturnTyp
         <ShiftForm
           shift={editingShift}
           users={users}
+          timezone={hubTimezone}
           onSave={async (data) => {
             try {
               if (editingShift) {
@@ -936,9 +939,11 @@ function ShiftTimer({ startedAt }: { startedAt: Date }) {
 // Shift Form (used in ScheduleTab)
 // ============================================================================
 
-function ShiftForm({ shift, users, onSave, onCancel, t }: {
+function ShiftForm({ shift, users, timezone, onSave, onCancel, t }: {
   shift: Shift | null
   users: User[]
+  /** The hub's IANA zone: the zone `startTime`, `endTime` and the weekdays are written in. */
+  timezone: string | undefined
   onSave: (data: Partial<Shift>) => Promise<void>
   onCancel: () => void
   t: ReturnType<typeof useTranslation>['t']
@@ -990,6 +995,11 @@ function ShiftForm({ shift, users, onSave, onCancel, t }: {
               <Input id="end-time" data-testid="shift-end-time" type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
             </div>
           </div>
+          {timezone && (
+            <p data-testid="shift-timezone-note" className="text-xs text-muted-foreground">
+              {t('shifts.timezoneNote', { timezone })}
+            </p>
+          )}
           <div className="space-y-2">
             <Label>{t('shifts.recurring')}</Label>
             <div className="flex flex-wrap gap-2">

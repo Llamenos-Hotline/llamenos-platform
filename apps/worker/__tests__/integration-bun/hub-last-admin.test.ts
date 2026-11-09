@@ -66,7 +66,7 @@ async function makeHub(label: string, founder: string, roleIds = ['role-hub-admi
   const id = nextId(`hub-${label}`)
   await settings.createHub(
     {
-      id, name: label, slug: id, status: 'active', createdBy: founder,
+      id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     },
     { pubkey: founder, roleIds },
@@ -116,7 +116,7 @@ describe('hub creation always yields an admin', () => {
   it('leaves no hub behind when the founder cannot be made an admin', async () => {
     const id = nextId('hub-orphan')
     const hub = {
-      id, name: 'orphan', slug: id, status: 'active' as const, createdBy: 'ghost',
+      id, name: 'orphan', slug: id, status: 'active' as const, timezone: 'UTC', createdBy: 'ghost',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
     await expect(settings.createHub(hub, { pubkey: nextId('pk-ghost'), roleIds: ['role-hub-admin'] }))
@@ -130,7 +130,7 @@ describe('hub creation always yields an admin', () => {
     await expect(
       settings.createHub(
         {
-          id, name: 'x', slug: id, status: 'active', createdBy: founder,
+          id, name: 'x', slug: id, status: 'active', timezone: 'UTC', createdBy: founder,
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         },
         { pubkey: founder, roleIds: ['role-volunteer'] },

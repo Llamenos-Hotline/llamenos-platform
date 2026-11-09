@@ -312,6 +312,22 @@ async function lockReplaceAll(tx: Pick<Database, 'execute'>, table: string): Pro
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${table}:replace`}))`)
 }
 
+/** The one place a `hubs` row becomes the wire `Hub` — every read of a hub goes through it. */
+function hubFromRow(row: typeof hubsTable.$inferSelect): Hub {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description ?? '',
+    status: row.status as Hub['status'],
+    phoneNumber: row.phoneNumber ?? undefined,
+    timezone: row.timezone,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  }
+}
+
 export class SettingsService {
   /**
    * Modes already initialised by this process (cleared by `reset`). Tracked per
@@ -2096,18 +2112,7 @@ export class SettingsService {
 
   async getHubs(): Promise<{ hubs: Hub[] }> {
     const rows = await this.db.select().from(hubsTable)
-    const hubList: Hub[] = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      slug: r.slug,
-      description: r.description ?? '',
-      status: r.status as Hub['status'],
-      phoneNumber: r.phoneNumber ?? undefined,
-      createdBy: r.createdBy,
-      createdAt: r.createdAt.toISOString(),
-      updatedAt: r.updatedAt.toISOString(),
-    }))
-    return { hubs: hubList }
+    return { hubs: rows.map(hubFromRow) }
   }
 
   /**
@@ -2166,6 +2171,7 @@ export class SettingsService {
         description: hub.description,
         status: hub.status ?? 'active',
         phoneNumber: hub.phoneNumber,
+        timezone: hub.timezone,
         createdBy: hub.createdBy,
         createdAt: now,
         updatedAt: now,
@@ -2197,19 +2203,7 @@ export class SettingsService {
     if (!row) {
       throw new ServiceError(404, 'Not found')
     }
-    return {
-      hub: {
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        description: row.description ?? '',
-        status: row.status as Hub['status'],
-        phoneNumber: row.phoneNumber ?? undefined,
-        createdBy: row.createdBy,
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-      },
-    }
+    return { hub: hubFromRow(row) }
   }
 
   async updateHub(
@@ -2231,6 +2225,7 @@ export class SettingsService {
     if (data.description !== undefined) updates.description = data.description
     if (data.status !== undefined) updates.status = data.status
     if (data.phoneNumber !== undefined) updates.phoneNumber = data.phoneNumber
+    if (data.timezone !== undefined) updates.timezone = data.timezone
 
     await this.db
       .update(hubsTable)
@@ -2242,19 +2237,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
 
-    return {
-      hub: {
-        id: updated.id,
-        name: updated.name,
-        slug: updated.slug,
-        description: updated.description ?? '',
-        status: updated.status as Hub['status'],
-        phoneNumber: updated.phoneNumber ?? undefined,
-        createdBy: updated.createdBy,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      },
-    }
+    return { hub: hubFromRow(updated) }
   }
 
   async archiveHub(id: string): Promise<{ ok: true }> {
@@ -2873,19 +2856,7 @@ export class SettingsService {
     if (!row) {
       throw new ServiceError(404, 'No hub for this number')
     }
-    return {
-      hub: {
-        id: row.id,
-        name: row.name,
-        slug: row.slug,
-        description: row.description ?? '',
-        status: row.status as Hub['status'],
-        phoneNumber: row.phoneNumber ?? undefined,
-        createdBy: row.createdBy,
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-      },
-    }
+    return { hub: hubFromRow(row) }
   }
 
   // =========================================================================

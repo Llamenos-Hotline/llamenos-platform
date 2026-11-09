@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { pubkeySchema, recipientEnvelopeSchema } from './common'
+import { DEFAULT_HUB_TIMEZONE, ianaTimezoneSchema, pubkeySchema, recipientEnvelopeSchema } from './common'
 
 // --- Response schemas ---
 
@@ -9,6 +9,12 @@ export const hubResponseSchema = z.object({
   slug: z.string(),
   description: z.string().optional(),
   phoneNumber: z.string().optional(),
+  /**
+   * IANA zone the hub's shift schedules are written in. A shift's `startTime`,
+   * `endTime` and `days` are wall-clock values in THIS zone, and the roster is
+   * evaluated in it (DST included). Every hub has one; a hub that never chose is `UTC`.
+   */
+  timezone: ianaTimezoneSchema,
   status: z.enum(['active', 'suspended', 'archived']),
   createdBy: z.string(),
   createdAt: z.string(),
@@ -45,13 +51,23 @@ export const createHubBodySchema = z.object({
   slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).optional(),
   description: z.string().max(500).optional(),
   phoneNumber: z.string().max(20).optional(),
+  /** Defaults from the creating admin's device on the client; `UTC` when a client sends none. */
+  timezone: ianaTimezoneSchema.optional().default(DEFAULT_HUB_TIMEZONE),
 })
 
+/**
+ * PATCH body. Declared field by field and deliberately carrying NO `.default()`:
+ * a default here would materialise on every request that omits the key, and a
+ * PATCH omitting `timezone` would silently reset the hub to UTC — moving its
+ * whole shift roster by hours (#1643's failure class). Never derive this from
+ * `createHubBodySchema.partial()`; `.partial()` keeps the inner default.
+ */
 export const updateHubBodySchema = z.object({
   name: z.string().min(1).max(200).optional(),
   slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).optional(),
   description: z.string().max(500).optional(),
   phoneNumber: z.string().max(20).optional(),
+  timezone: ianaTimezoneSchema.optional(),
   status: z.enum(['active', 'archived']).optional(),
 })
 

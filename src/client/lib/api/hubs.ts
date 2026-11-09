@@ -10,7 +10,7 @@ export async function listHubs() {
   return request<{ hubs: Hub[] }>('/hubs')
 }
 
-export async function createHub(data: { name: string; slug?: string; description?: string; phoneNumber?: string }) {
+export async function createHub(data: { name: string; slug?: string; description?: string; phoneNumber?: string; timezone?: string }) {
   return request<{ hub: Hub }>('/hubs', {
     method: 'POST',
     body: JSON.stringify(data),
