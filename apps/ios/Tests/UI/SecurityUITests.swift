@@ -289,9 +289,14 @@ final class SecurityUITests: BaseUITest {
     }
 
     /// Attempts made while locked out are refused, not counted: the policy escalates on
-    /// attempts the app actually evaluated, so hammering the pad during a lockout neither
+    /// attempts the app actually evaluated, so hammering the field during a lockout neither
     /// unlocks nor advances toward the key wipe. (The ten-attempt wipe itself needs fifteen
     /// minutes of real lockouts; `PINLockout` is covered by `SecurityHardeningTests`.)
+    ///
+    /// Two refused attempts prove the policy. More would be actively wrong with a typed
+    /// credential: typing + submitting costs ~6s per attempt, so five attempts outlast
+    /// the 30s lockout, expire it mid-loop, and leak through as REAL attempts — marching
+    /// the counter toward the wipe this test must stay clear of (observed on #2303).
     func testPINWipeAfterTenFailedAttempts() {
         given("the app is locked and a five-attempt lockout is in force") {
             launchAuthenticated()
@@ -300,7 +305,7 @@ final class SecurityUITests: BaseUITest {
             XCTAssertTrue(find("pin-error").label.contains("Try again in 30 seconds"))
         }
         when("I keep entering wrong PINs during the lockout") {
-            for _ in 1...5 { enterPIN(wrongPIN) }
+            for _ in 1...2 { enterPIN(wrongPIN) }
         }
         then("they are refused, and the app is neither unlocked nor wiped") {
             XCTAssertTrue(
