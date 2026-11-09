@@ -43,7 +43,7 @@ struct RingGroupsView: View {
         .refreshable {
             await viewModel.loadRingGroups()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadRingGroups()
             await viewModel.loadUsers()
         }

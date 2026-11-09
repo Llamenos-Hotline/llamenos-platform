@@ -56,7 +56,7 @@ struct ShiftRequestsView: View {
         .refreshable {
             await viewModel.loadRequests()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadRequests()
             await viewModel.loadShifts()
         }

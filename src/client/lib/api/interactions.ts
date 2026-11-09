@@ -1,4 +1,4 @@
-import { request, hp } from './client'
+import { request, activeHubPath } from './client'
 import type { CaseInteraction } from '@protocol/schemas/interactions'
 import type { RecipientEnvelope } from '@shared/types'
 
@@ -27,7 +27,7 @@ export async function listInteractions(recordId: string, params?: {
     page: number
     limit: number
     hasMore: boolean
-  }>(hp(`/records/${recordId}/interactions?${qs}`))
+  }>(activeHubPath(`/records/${recordId}/interactions?${qs}`))
 }
 
 export async function createInteraction(recordId: string, body: {
@@ -39,7 +39,7 @@ export async function createInteraction(recordId: string, body: {
   previousStatusHash?: string
   newStatusHash?: string
 }) {
-  return request<CaseInteraction>(hp(`/records/${recordId}/interactions`), {
+  return request<CaseInteraction>(activeHubPath(`/records/${recordId}/interactions`), {
     method: 'POST',
     body: JSON.stringify(body),
   })

@@ -34,7 +34,7 @@ struct ConversationsView: View {
             .refreshable {
                 await vm.refresh()
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 await vm.loadConversations()
                 vm.startEventListener()
             }

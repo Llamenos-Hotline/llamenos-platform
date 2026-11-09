@@ -51,7 +51,7 @@ struct ErasureQueueView: View {
             viewModel.isLoadingErasure = false
             await viewModel.loadErasureRequests()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadErasureRequests()
         }
     }

@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { getCallHistory, listUsers, type CallRecord, type User } from '@/lib/api'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import { useToast } from '@/lib/toast'
 import { decryptCallRecord } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
@@ -46,15 +48,14 @@ export const Route = createFileRoute('/calls')({
   component: CallHistoryPage,
 })
 
+const EMPTY_HISTORY: { calls: CallRecord[]; total: number } = { calls: [], total: 0 }
+
 function CallHistoryPage() {
   const { t } = useTranslation()
   const { isAdmin, hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate({ from: '/calls' })
   const { page, q, dateFrom, dateTo, status } = Route.useSearch()
-  const [calls, setCalls] = useState<CallRecord[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState<User[]>([])
   // Local input state (synced to URL on submit)
   const [searchInput, setSearchInput] = useState(q)
@@ -62,24 +63,19 @@ function CallHistoryPage() {
   const [dateToInput, setDateToInput] = useState(dateTo)
   const limit = 50
 
-  const fetchCalls = useCallback(() => {
-    setLoading(true)
-    getCallHistory({
-      page,
-      limit,
-      search: q || undefined,
-      dateFrom: dateFrom || undefined,
-      dateTo: dateTo || undefined,
-      status: status || undefined,
-    })
-      .then(r => { setCalls(r.calls); setTotal(r.total) })
-      .catch(() => toast(t('common.error'), 'error'))
-      .finally(() => setLoading(false))
-  }, [page, q, dateFrom, dateTo, status])
-
-  useEffect(() => {
-    fetchCalls()
-  }, [fetchCalls])
+  const fetchCalls = useCallback(() => getCallHistory({
+    page,
+    limit,
+    search: q || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    status: status || undefined,
+  }), [page, q, dateFrom, dateTo, status])
+  const { data: history, setData: setHistory, noHub, loading } = useHubOwned(fetchCalls, {
+    empty: EMPTY_HISTORY,
+    onError: () => toast(t('common.error'), 'error'),
+  })
+  const { calls, total } = history
 
   // Decrypt encrypted call records client-side (Epic 77)
   // Uses functional state update to avoid stale closure over calls
@@ -99,7 +95,7 @@ function CallHistoryPage() {
         if (meta) return { ...call, answeredBy: meta.answeredBy, callerNumber: meta.callerNumber }
         return call
       }))
-      if (!cancelled) setCalls(decrypted)
+      if (!cancelled) setHistory(prev => ({ ...prev, calls: decrypted }))
     })()
     return () => { cancelled = true }
   }, [calls, hasDeviceKey, publicKey])
@@ -229,7 +225,9 @@ function CallHistoryPage() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
+          {noHub ? (
+            <NoActiveHubNotice />
+          ) : loading ? (
             <div className="divide-y divide-border">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-4 px-6 py-3">

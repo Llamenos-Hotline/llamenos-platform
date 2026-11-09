@@ -26,7 +26,7 @@ Before({ tags: '@backend' }, async () => {
 // ── Generic admin request with DataTable body ───────────────────────
 
 When('an admin sends {string} to {string} with body:', async (
-  { request, world },
+  { request, world, workerHub },
   method: string,
   path: string,
   dataTable: { raw: () => string[][] },
@@ -41,7 +41,9 @@ When('an admin sends {string} to {string} with body:', async (
     }
   }
 
-  const apiPath = path.startsWith('/api') ? path.slice(4) : path
+  // `:hubId` stands for the scenario's own hub, the way a client addresses it.
+  const resolved = resolvePathParams(world, path, workerHub).replaceAll(':hubId', workerHub)
+  const apiPath = resolved.startsWith('/api') ? resolved.slice(4) : resolved
 
   switch (method) {
     case 'GET':
@@ -98,8 +100,8 @@ When('an admin sends {string} to {string} with missing title', async ({ request,
   }, ADMIN_NSEC))
 })
 
-When('an admin sends {string} to {string} with invalid day body', async ({ request, world }, _method: string, _path: string) => {
-  setLastResponse(world, await apiPost(request, '/shifts', {
+When('an admin sends {string} to {string} with invalid day body', async ({ request, world, workerHub }, _method: string, _path: string) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts`, {
     name: 'Bad Shift',
     startTime: '09:00',
     endTime: '17:00',
@@ -108,8 +110,8 @@ When('an admin sends {string} to {string} with invalid day body', async ({ reque
   }, ADMIN_NSEC))
 })
 
-When('an admin sends {string} to {string} with negative day body', async ({ request, world }, _method: string, _path: string) => {
-  setLastResponse(world, await apiPost(request, '/shifts', {
+When('an admin sends {string} to {string} with negative day body', async ({ request, world, workerHub }, _method: string, _path: string) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts`, {
     name: 'Bad Shift',
     startTime: '09:00',
     endTime: '17:00',
@@ -139,8 +141,8 @@ When('an admin creates a volunteer with valid data', async ({ request, world }) 
   }, ADMIN_NSEC))
 })
 
-When('an admin creates a shift with valid data', async ({ request, world }) => {
-  setLastResponse(world, await apiPost(request, '/shifts', {
+When('an admin creates a shift with valid data', async ({ request, world, workerHub }) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts`, {
     id: crypto.randomUUID(),
     encryptedName: uniqueName('Contract Shift'),
     startTime: '09:00',

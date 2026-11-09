@@ -106,7 +106,7 @@ struct MainTabView: View {
             IncidentsView()
         }
         .accessibilityIdentifier("main-tab-view")
-        .task(id: appState.hubContext.activeHubId) {
+        .task(id: appState.hubContext.browsing) {
             await fetchUnreadCount()
         }
     }

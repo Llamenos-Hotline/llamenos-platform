@@ -87,7 +87,7 @@ struct CaseListView: View {
                     }
                 }
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 await vm.loadInitial()
             }
             .refreshable {
@@ -717,7 +717,7 @@ private struct CreateCaseSheet: View {
             let jsonData = try JSONSerialization.data(withJSONObject: body)
             let response: SharedRecordListResponseRecord = try await appState.apiService.request(
                 method: "POST",
-                path: appState.apiService.hp("/api/records"),
+                path: try appState.apiService.activeHubPath("/api/records"),
                 rawBody: jsonData
             )
 

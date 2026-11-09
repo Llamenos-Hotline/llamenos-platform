@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.crypto.AdminEnvelopeData
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
@@ -82,7 +83,7 @@ class CallHistoryViewModel @Inject constructor(
             }
             try {
                 val query = buildString {
-                    append(apiService.hp("/api/calls/history"))
+                    append(apiService.activeHubPath("/api/calls/history"))
                     append("?page=$page&limit=50")
                     val search = _uiState.value.searchQuery
                     if (search.isNotBlank()) {
@@ -130,6 +131,9 @@ class CallHistoryViewModel @Inject constructor(
                         isRefreshing = false,
                     )
                 }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
+                _uiState.update { it.copy(calls = emptyList(), total = 0, isLoading = false, isRefreshing = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -183,7 +187,7 @@ class CallHistoryViewModel @Inject constructor(
      * apps/worker/routes/calls.ts). Hub-scoped like the list it was picked from.
      */
     suspend fun loadRecording(callId: String): ByteArray =
-        apiService.requestBytes("GET", apiService.hp("/api/calls/$callId/recording"))
+        apiService.requestBytes("GET", apiService.activeHubPath("/api/calls/$callId/recording"))
 
     fun dismissError() {
         _uiState.update { it.copy(error = null) }

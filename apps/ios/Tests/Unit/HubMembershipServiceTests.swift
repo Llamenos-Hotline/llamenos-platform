@@ -266,6 +266,69 @@ final class HubMembershipServiceTests: XCTestCase {
         XCTAssertTrue(service.memberHubs.isEmpty)
     }
 
+    /// A failed hub-list fetch is recorded on the HubContext, so a session with no active
+    /// hub can tell "the hub could not be asked" from "a member of no hub" (#2478).
+    func testMembershipLoadFailureIsRecordedForHubOwnedReads() async {
+        let ctx = HubContext()
+        let service = HubMembershipService(
+            apiService: FailingHubListAPI(), cryptoService: RecordingHubCrypto(), hubContext: ctx
+        )
+
+        await service.loadMembership()
+
+        XCTAssertEqual(
+            (ctx.membershipFailure as? URLError)?.code, .cannotConnectToHost,
+            "The fetch's own failure is what a hub-owned screen must report"
+        )
+    }
+
+    /// The next successful load clears it: membership is known again.
+    func testMembershipLoadSuccessClearsARecordedFailure() async throws {
+        let api = try makeStubbedAPI()
+        MembershipStubURLProtocol.reset([
+            "/api/hubs": hubListJSON([]),
+        ])
+        let ctx = HubContext()
+        ctx.recordMembershipLoad(failure: URLError(.cannotConnectToHost))
+        let service = HubMembershipService(
+            apiService: api, cryptoService: RecordingHubCrypto(), hubContext: ctx
+        )
+
+        let loaded = await service.loadMembership()
+
+        XCTAssertTrue(loaded)
+        XCTAssertNil(ctx.membershipFailure, "A fetched list of no hubs is membership of none, not a failure")
+        XCTAssertNil(ctx.activeHubId)
+    }
+
+    /// No hub URL is no hub to ask — "no hub", not a failure to report.
+    func testMembershipLoadWithNoHubURLRecordsNoFailure() async {
+        let ctx = HubContext()
+        let api = APIService(cryptoService: CryptoService(), hubContext: ctx)
+        XCTAssertNil(api.baseURL, "precondition: no hub URL configured")
+        let service = HubMembershipService(
+            apiService: api, cryptoService: RecordingHubCrypto(), hubContext: ctx
+        )
+
+        let loaded = await service.loadMembership()
+
+        XCTAssertFalse(loaded)
+        XCTAssertNil(ctx.membershipFailure)
+    }
+
+    /// Logout ends the session the failure belonged to.
+    func testResetClearsARecordedMembershipFailure() {
+        let ctx = HubContext()
+        ctx.recordMembershipLoad(failure: URLError(.cannotConnectToHost))
+        let service = HubMembershipService(
+            apiService: FailingHubListAPI(), cryptoService: RecordingHubCrypto(), hubContext: ctx
+        )
+
+        service.reset()
+
+        XCTAssertNil(ctx.membershipFailure)
+    }
+
     /// Logout resets the snapshot so a stale list cannot leak into the next session.
     func testResetClearsMembershipSnapshot() async throws {
         let api = try makeStubbedAPI()

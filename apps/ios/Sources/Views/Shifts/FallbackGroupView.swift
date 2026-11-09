@@ -92,7 +92,7 @@ struct FallbackGroupView: View {
             await viewModel.loadFallback()
             await viewModel.loadUsers()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadFallback()
             await viewModel.loadUsers()
         }

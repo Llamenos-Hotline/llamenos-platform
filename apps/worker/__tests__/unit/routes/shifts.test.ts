@@ -9,13 +9,14 @@ import shiftRoutes from '@worker/routes/shifts'
 
 function createTestApp(opts: {
   permissions?: string[]
-  hubId?: string
+  /** The path hub; `null` is a request that did not arrive under /hubs/:hubId. */
+  hubId?: string | null
   pubkey?: string
   serviceMock?: Record<string, unknown>
 } = {}) {
   const {
     permissions = ['*'],
-    hubId,
+    hubId = 'hub-1',
     pubkey = 'a'.repeat(64),
     serviceMock = {},
   } = opts
@@ -52,7 +53,7 @@ function createTestApp(opts: {
       onBreak: false,
       callPreference: 'phone',
     })
-    if (hubId !== undefined) {
+    if (hubId !== null) {
       c.set('hubId', hubId)
     }
     await next()
@@ -128,23 +129,22 @@ describe('shifts routes', () => {
       expect(getActiveSpy).toHaveBeenCalledWith('a'.repeat(64), 'hub-1')
     })
 
-    it('uses empty string hubId when not set', async () => {
-      const getMyStatusSpy = vi.fn().mockResolvedValue({
-        onShift: false,
-        currentShift: null,
-        nextShift: null,
-      })
+    it('has no hubless form: with no path hub it is a 404 and reads nothing (#2461)', async () => {
+      const getMyStatusSpy = vi.fn()
+      const getActiveSpy = vi.fn()
       const { app } = createTestApp({
-        permissions: ['shifts:read-own'],
+        permissions: ['*'],
+        hubId: null,
         serviceMock: {
           shifts: { getMyStatus: getMyStatusSpy },
-          activeShifts: { getActive: vi.fn().mockResolvedValue(null) },
+          activeShifts: { getActive: getActiveSpy },
         },
       })
 
       const res = await app.request('/shifts/my-status')
-      expect(res.status).toBe(200)
-      expect(getMyStatusSpy).toHaveBeenCalledWith('', 'a'.repeat(64))
+      expect(res.status).toBe(404)
+      expect(getMyStatusSpy).not.toHaveBeenCalled()
+      expect(getActiveSpy).not.toHaveBeenCalled()
     })
   })
 
@@ -216,16 +216,17 @@ describe('shifts routes', () => {
   })
 
   // -------------------------------------------------------------------------
-  // The unscoped mount has no fallback group (#2460)
+  // There is no unscoped fallback group (#2460, #2461)
   // -------------------------------------------------------------------------
 
   describe('/shifts/fallback with no hub', () => {
     // The instance-wide group rang only calls that belonged to no hub; such
-    // calls are refused now, so there is nothing for this mount to read or write.
+    // calls are refused now (#2460), and the router is hub-only (#2461).
     it('GET is 404 and reads nothing', async () => {
       const getFallbackGroupSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
+        hubId: null,
         serviceMock: { settings: { getFallbackGroup: getFallbackGroupSpy } },
       })
       const res = await app.request('/shifts/fallback')
@@ -237,6 +238,7 @@ describe('shifts routes', () => {
       const setFallbackGroupSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
+        hubId: null,
         serviceMock: { settings: { setFallbackGroup: setFallbackGroupSpy } },
       })
       const res = await app.request('/shifts/fallback', {

@@ -38,7 +38,7 @@ struct InviteView: View {
             viewModel.isLoadingInvites = false
             await viewModel.loadInvites()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadInvites()
         }
     }

@@ -16,6 +16,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Plus, Loader2 } from 'lucide-react'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 
 interface EntityTypeFilteredRecordListProps {
   /** Filter records to entity types with this category */
@@ -35,6 +37,9 @@ interface EntityTypeFilteredRecordListProps {
  * Used by both /cases and /events routes — the events route is now just this component
  * filtered to category='event'.
  */
+type RecordsPage = { records: CaseRecord[]; total: number }
+const EMPTY_RECORDS_PAGE: RecordsPage = { records: [], total: 0 }
+
 export function EntityTypeFilteredRecordList({
   entityCategory,
   headerIcon,
@@ -44,9 +49,6 @@ export function EntityTypeFilteredRecordList({
   const { t } = useTranslation()
   const { toast } = useToast()
 
-  const [records, setRecords] = useState<CaseRecord[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
   const [cmsEnabled, setCmsEnabled] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -62,10 +64,6 @@ export function EntityTypeFilteredRecordList({
     [entityTypes],
   )
 
-  const selectedRecord = records.find(r => r.id === selectedId)
-  const selectedEntityType = selectedRecord
-    ? entityTypeMap.get(selectedRecord.entityTypeId)
-    : undefined
 
   useEffect(() => {
     getCaseManagementEnabled()
@@ -77,25 +75,25 @@ export function EntityTypeFilteredRecordList({
       .catch(() => {})
   }, [])
 
-  const fetchRecords = useCallback(() => {
-    if (filteredEntityTypes.length === 0) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    const firstType = filteredEntityTypes[0]
-    listRecords({ entityTypeId: firstType.id, limit: 50 })
-      .then(({ records: recs, total: t }) => {
-        setRecords(recs)
-        setTotal(t)
-      })
-      .catch(() =>
-        toast(t(`${i18nPrefix}.loadError`, { defaultValue: 'Failed to load records' }), 'error'),
-      )
-      .finally(() => setLoading(false))
-  }, [filteredEntityTypes, toast, t, i18nPrefix])
+  const loadRecords = useCallback((): Promise<RecordsPage> => {
+    if (filteredEntityTypes.length === 0) return Promise.resolve(EMPTY_RECORDS_PAGE)
+    return listRecords({ entityTypeId: filteredEntityTypes[0].id, limit: 50 })
+      .then(({ records: recs, total: tot }) => ({ records: recs, total: tot }))
+  }, [filteredEntityTypes])
+  const { data: recordsPage, setData: setRecordsPage, noHub, loading, reload: fetchRecords } = useHubOwned(loadRecords, {
+    empty: EMPTY_RECORDS_PAGE,
+    onError: () => toast(t(`${i18nPrefix}.loadError`, { defaultValue: 'Failed to load records' }), 'error'),
+  })
+  const { records, total } = recordsPage
+  const setRecords = useCallback(
+    (update: (prev: CaseRecord[]) => CaseRecord[]) => setRecordsPage(prev => ({ ...prev, records: update(prev.records) })),
+    [setRecordsPage],
+  )
 
-  useEffect(() => { fetchRecords() }, [fetchRecords])
+  const selectedRecord = records.find(r => r.id === selectedId)
+  const selectedEntityType = selectedRecord
+    ? entityTypeMap.get(selectedRecord.entityTypeId)
+    : undefined
 
   const handleRecordCreated = useCallback((recordId: string) => {
     fetchRecords()
@@ -148,7 +146,7 @@ export function EntityTypeFilteredRecordList({
   }
 
   const defaultEntityTypeId = filteredEntityTypes.length > 0 ? filteredEntityTypes[0].id : undefined
-  const showEmptyState = !loading && records.length === 0
+  const showEmptyState = !noHub && !loading && records.length === 0
 
   return (
     <div className="space-y-4">
@@ -164,7 +162,13 @@ export function EntityTypeFilteredRecordList({
         </Button>
       </div>
 
-      {showEmptyState ? (
+      {noHub ? (
+        <Card>
+          <CardContent>
+            <NoActiveHubNotice />
+          </CardContent>
+        </Card>
+      ) : showEmptyState ? (
         <Card data-testid="empty-state">
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             {headerIcon}

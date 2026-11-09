@@ -71,7 +71,9 @@ final class HubMembershipService {
     ///
     /// Non-fatal on failure: a network error at unlock leaves the persisted
     /// active hub and the previous membership snapshot untouched, and the next
-    /// unlock (or a visit to Settings → Hubs) retries.
+    /// unlock (or a visit to Settings → Hubs) retries. The failure is recorded on
+    /// `HubContext`, so with no active hub a hub-owned screen reports it rather than
+    /// settling on an empty list as if the user belonged to no hub (#2478).
     ///
     /// - Returns: true when the hub list was fetched and applied.
     @discardableResult
@@ -84,6 +86,11 @@ final class HubMembershipService {
             hubs = response.hubs
         } catch {
             logger.warning("Hub membership load failed: \(error.localizedDescription, privacy: .public)")
+            // A load the session cancelled (logout, or a newer load) failed nothing. With
+            // no hub URL there is no hub to ask, which is "no hub", not a failure.
+            if !Task.isCancelled && !APIError.isNoHub(error) {
+                hubContext.recordMembershipLoad(failure: error)
+            }
             return false
         }
 
@@ -93,6 +100,7 @@ final class HubMembershipService {
 
         memberHubs = hubs
         hasLoaded = true
+        hubContext.recordMembershipLoad(failure: nil)
         reconcileActiveHub(hubs: hubs)
         await eagerLoadHubKeys(for: hubs)
         return true
@@ -103,6 +111,7 @@ final class HubMembershipService {
     func reset() {
         memberHubs = []
         hasLoaded = false
+        hubContext.recordMembershipLoad(failure: nil)
     }
 
     // MARK: - Active Hub Reconciliation

@@ -334,6 +334,20 @@ export class TestDB {
   }
 
   /**
+   * How many rows of `table` hold `value` in `column`. For asserting that a refused
+   * write stored nothing — a response status alone cannot show that (#2461).
+   */
+  static async countRows(table: string, column: string, value: string): Promise<number> {
+    validateIdentifier(table)
+    validateIdentifier(column)
+    const rows = await (await sql()).unsafe(
+      `SELECT count(*)::int AS n FROM ${table} WHERE ${column} = $1`,
+      [value],
+    )
+    return Number((rows[0] as Record<string, unknown>).n)
+  }
+
+  /**
    * Update a single column on a row identified by id.
    */
   static async updateColumn(table: string, id: string, column: string, value: postgres.Serializable): Promise<void> {

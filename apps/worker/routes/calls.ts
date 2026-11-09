@@ -2,11 +2,10 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
-import type { Services } from '../services'
 import { hangUpCallerLeg } from '../services/call-hangup'
 
 import { audit } from '../services/audit'
-import { banHash, openCallerNumber, PLATFORM_BAN_SCOPE } from '../lib/crypto'
+import { banHash, openCallerNumber } from '../lib/crypto'
 import { ServiceError } from '../services/settings'
 import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
@@ -18,8 +17,17 @@ import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema
 import { okResponseSchema } from '@protocol/schemas/common'
 import type { activeCalls, callRecords } from '../db/schema'
 import { authErrors, notFoundError } from '../openapi/helpers'
+import { hubOnly, pathHubId } from '../lib/hub-scope'
 
 const calls = new Hono<AppEnv>()
+
+// A call belongs to the hub whose number was dialled, so this router is served
+// only under /hubs/:hubId (#2461). Registered first: a stray unscoped mount
+// answers 404 before any handler runs. Every lookup below is therefore bounded
+// to the path hub — a call of another hub reads as missing, exactly like an
+// unknown id (#2011) — and never degrades to a lookup by id alone. Past a
+// lookup, `pathHubId(c)` IS the call's hub: the subject handlers audit with.
+calls.use('*', hubOnly)
 
 // Every call a route returns is projected onto `callRecordResponseSchema`, never
 // passed through as a row. An active_calls row carries the caller's number sealed
@@ -62,22 +70,6 @@ function toCallRecordResponse(row: CallRecordRow): CallRecord {
   })
 }
 
-/**
- * The live call `callId` as seen from this request: inside /hubs/:hubId only a
- * call of that hub exists (a call of another hub reads as missing — #2011);
- * on the unscoped mount (`hubId === ''`) there is no hub to bound to, so the
- * lookup is by id alone.
- */
-function findActiveCall(
-  services: Services,
-  hubId: string,
-  callId: string,
-): Promise<ActiveCallRow | null> {
-  return hubId
-    ? services.calls.getActiveCallById(hubId, callId)
-    : services.calls.getActiveCallByCallId(callId)
-}
-
 calls.get('/active',
   describeRoute({
     tags: ['Calls'],
@@ -97,7 +89,7 @@ calls.get('/active',
   requirePermission('calls:read-active'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const rows = await services.calls.getActiveCalls(hubId)
     return c.json({ calls: rows.map(toActiveCallResponse) })
   },
@@ -122,7 +114,7 @@ calls.get('/today-count',
   requirePermission('calls:read-active'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const count = await services.calls.getTodayCount(hubId)
     return c.json({ count })
   },
@@ -147,7 +139,7 @@ calls.get('/presence',
   requirePermission('calls:read-presence'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const result = await getHubPresence(services, hubId)
     return c.json(result)
   },
@@ -204,7 +196,7 @@ calls.get('/routing',
   requirePermission('calls:read-active'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const decision = await currentRingDecision(services, hubId)
 
     const body: z.infer<typeof ringDecisionResponseSchema> = {
@@ -241,7 +233,7 @@ calls.get('/history',
   validator('query', callHistoryQuerySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const query = c.req.valid('query')
     const result = await services.calls.listCallHistory(hubId, {
       search: query.search,
@@ -281,7 +273,7 @@ calls.get('/identify/:identifierHash',
   async (c) => {
     const identifierHash = c.req.param('identifierHash')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // Look up contact in ContactsService
     const contact = await services.contacts.lookupByIdentifierHash(hubId, identifierHash)
@@ -338,7 +330,7 @@ calls.get('/debug',
   requirePermission('calls:debug'),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const result = await services.calls.debug(hubId)
     return c.json(result)
   },
@@ -367,10 +359,10 @@ calls.get('/:callId',
   async (c) => {
     const callId = c.req.param('callId')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // Try active calls first (hub-scoped if available, then global), fall back to history
-    const activeCall = await findActiveCall(services, hubId, callId)
+    const activeCall = await services.calls.getActiveCallById(hubId, callId)
     if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
     const historyRecord = await services.calls.getCallRecord(hubId, callId)
@@ -405,7 +397,7 @@ calls.post('/:callId/answer',
     const callId = c.req.param('callId')
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     const existing = await services.calls.getActiveCallById(hubId, callId)
     if (!existing) return c.json({ error: 'Call not found' }, 404)
@@ -442,7 +434,7 @@ calls.post('/:callId/answer',
       return c.json({ error: 'Failed to answer call' }, 500)
     }
 
-    await audit(services.audit, 'callAnswered', pubkey, {}, undefined, result.hubId || hubId || null)
+    await audit(services.audit, 'callAnswered', pubkey, {}, undefined, hubId)
 
     publishEvent(c.env, KIND_CALL_UPDATE, {
       type: 'call:update',
@@ -484,7 +476,7 @@ calls.post('/:callId/hangup',
     const callId = c.req.param('callId')
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // Verify the volunteer answered this call
     const call = await services.calls.getActiveCallById(hubId, callId)
@@ -538,7 +530,7 @@ calls.post('/:callId/spam',
     const callId = c.req.param('callId')
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // Verify the volunteer answered this call
     const call = await services.calls.getActiveCallById(hubId, callId)
@@ -578,9 +570,9 @@ calls.post('/:callId/ban',
     const callId = c.req.param('callId')
     const pubkey = c.get('pubkey')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
-    const call = await findActiveCall(services, hubId, callId)
+    const call = await services.calls.getActiveCallById(hubId, callId)
     if (!call) return c.json({ error: 'Call not found' }, 404)
 
     if (call.answeredBy !== pubkey) {
@@ -595,13 +587,12 @@ calls.post('/:callId/ban',
     let banned = false
     try {
       if (!call.callerNumberSealed) throw new Error('call holds no caller number')
-      const banHubId = call.hubId ?? hubId ?? undefined
       const number = openCallerNumber(call.callerNumberSealed, callId, c.env.SERVER_KEK)
       await services.records.addBan({
-        phoneHash: banHash(number, banHubId || PLATFORM_BAN_SCOPE, c.env.BAN_HASH_KEY),
+        phoneHash: banHash(number, hubId, c.env.BAN_HASH_KEY),
         reason: body.reason || 'Banned during active call',
         bannedBy: pubkey,
-        hubId: banHubId,
+        hubId,
       })
       banned = true
     } catch {
@@ -614,14 +605,14 @@ calls.post('/:callId/ban',
     const outcome = await hangUpCallerLeg(c.env, services, call)
     if (outcome !== 'failed') {
       try {
-        await services.calls.endCall(call.hubId ?? '', callId)
+        await services.calls.endCall(hubId, callId)
       } catch {
         // Record already ended (e.g. the provider's status callback got there first)
       }
     }
 
     if (banned) {
-      await audit(services.audit, 'numberBanned', pubkey, { callId }, undefined, call.hubId || hubId || null)
+      await audit(services.audit, 'numberBanned', pubkey, { callId }, undefined, hubId)
     }
 
     return c.json({ banned, hungUp: outcome !== 'failed' })
@@ -647,7 +638,7 @@ calls.get('/:callId/recording',
     const pubkey = c.get('pubkey')
 
     // Check call record for recording info (try active calls first, then history)
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const activeCall = await services.calls.getActiveCallById(hubId, callId)
     const historyRecord = activeCall ? null : await services.calls.getCallRecord(hubId, callId)
     const hasRecording = activeCall?.hasRecording ?? historyRecord?.hasRecording
