@@ -2004,6 +2004,33 @@ jobs:
       - name: Check Jinja select/reject test names resolve
         run: python3 deploy/ansible/scripts/check-jinja-tests.py
 
+      # A minimal Debian image has no `cron` package, so the first
+      # ansible.builtin.cron task on a host built from one died with
+      # `Failed to find required executable "crontab"` and nothing installed it.
+      # Every file that declares a cron job now includes roles/cron first.
+      - name: Check every cron job's file installs cron first
+        run: python3 deploy/ansible/scripts/check-cron-installed.py
+
+      # The app image migrates its database on every start; the migration gate
+      # judges the migrations BEFORE that. A "pull" task that was really
+      # `compose up` started the app first, so on a fresh host the gate read a
+      # half-applied ledger and failed the first deploy, every time.
+      - name: Check nothing starts the app before the migration gate
+        run: python3 deploy/ansible/scripts/check-app-gate-ordering.py
+
+      # group_vars/ is found next to the inventory or next to the playbook. With
+      # the inventory kept anywhere else (the normal case for a private
+      # inventory) every playbook under playbooks/ lost it and died on
+      # "'llamenos_compose_glob' is undefined". Plays against an inventory in a
+      # different directory.
+      - name: Check group_vars resolve with the inventory outside deploy/ansible
+        run: |
+          set -euo pipefail
+          inv_dir="$(mktemp -d)"
+          printf 'all:\n  hosts:\n    localhost:\n      ansible_connection: local\n' > "$inv_dir/inventory.yml"
+          cd deploy/ansible
+          ansible-playbook -i "$inv_dir/inventory.yml" playbooks/check-group-vars-resolve.yml -e ansible_become=false
+
       # Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED
       # task never ran, so it never failed, so it is `succeeded`. 27 checks
       # across the smoke, preflight, security-update and kamailio paths

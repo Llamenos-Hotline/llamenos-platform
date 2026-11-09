@@ -1,0 +1,38 @@
+---
+# cron: the scheduler every `ansible.builtin.cron` task in this repo writes to.
+#
+# ansible.builtin.cron shells out to `crontab`, and a minimal Debian image
+# (a cloud image, a bare VPS) does not ship the `cron` package: the first cron
+# task died with `Failed to find required executable "crontab"`, and nothing
+# anywhere installed it. A regular Debian install includes it (priority
+# "important"), which is why a host built from the FDE ISO usually has it and a
+# host built any other way does not.
+#
+# Included by every role/playbook that declares a cron job, immediately before
+# the first one (scripts/check-cron-installed.py keeps it that way), rather than
+# once from `common`: backup.yml, observability.yml and deploy.yml are run on
+# their own, and not every host has been through harden.yml.
+#
+# Checked before reaching for apt so it is a no-op on a host that already has
+# cron, and so it needs no privileges there.
+
+- name: Check whether crontab is already installed
+  ansible.builtin.command: sh -c 'command -v crontab'
+  register: cron_crontab_present
+  changed_when: false
+  failed_when: false
+
+- name: Install cron
+  ansible.builtin.apt:
+    name: cron
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: cron_crontab_present.rc != 0
+
+- name: Ensure the cron daemon is enabled and running
+  ansible.builtin.service:
+    name: cron
+    state: started
+    enabled: true
+  when: cron_crontab_present.rc != 0

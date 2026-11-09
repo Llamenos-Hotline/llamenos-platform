@@ -48,18 +48,27 @@
 
 # Pull policy: `missing` (default) pulls only when the image is absent locally, so
 # an image put on the host with `docker save | ssh ... docker load` (the documented
-# install path — docs/deployment/first-deploy.md) is used as-is instead of being
+# install path -- docs/deployment/first-deploy.md) is used as-is instead of being
 # re-pulled from a registry that does not have it. A registry-published image is
 # still pulled when absent. Set llamenos_app_image_pull_policy: always to force a
-# registry refresh on every run (e.g. a mutable tag you publish yourself).
+# registry refresh on every run (e.g. a mutable tag you publish yourself), or
+# `never` to skip the pull entirely and use only what is already loaded.
 # No ignore_errors: if the image is neither loaded nor pullable this must fail here,
-# with the daemon's message, rather than surface later from the start task.
+# with the daemon's message, rather than surface later from the gate or the start.
+#
+# This must only PULL. It used to be `docker_compose_v2 state: present,
+# recreate: never`, which is `compose up`: it started the container. On a fresh
+# host the entrypoint then began migrating the empty database, and the gate below
+# -- about a second later -- read a half-applied ledger, judged the remainder a
+# risky upgrade, and failed the first deploy every time (and, when it did not,
+# the app had migrated with no gate and no backup). Nothing may start the app
+# container before the gate has judged its migrations; scripts/check-app-gate-
+# ordering.py enforces that.
 - name: Pull app image if not present locally
-  community.docker.docker_compose_v2:
+  community.docker.docker_compose_v2_pull:
     project_src: "{{ app_dir }}/services/app"
-    pull: "{{ llamenos_app_image_pull_policy | default('missing') }}"
-    state: present
-    recreate: never
+    policy: "{{ 'always' if (llamenos_app_image_pull_policy | default('missing')) == 'always' else 'missing' }}"
+  when: (llamenos_app_image_pull_policy | default('missing')) != 'never'
 
 # Before the container (re)starts and migrates: deploy.yml reaches here with a
 # new image whenever llamenos_app_image changes, not only update.yml.

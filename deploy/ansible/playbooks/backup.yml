@@ -163,6 +163,11 @@
           "${SCRIPTS_DIR}/backup-monitor.sh" || true
       tags: always
 
+    - name: Ensure cron is installed (the cron jobs below need crontab)
+      ansible.builtin.include_role:
+        name: cron
+      tags: always
+
     - name: Configure daily backup cron job
       ansible.builtin.cron:
         name: "Llamenos daily full backup"
