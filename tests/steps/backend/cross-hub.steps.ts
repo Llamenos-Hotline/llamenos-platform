@@ -6,7 +6,7 @@
  * steps from entity-schema.steps.ts and common.steps.ts respectively.
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then, Before, getState, setState } from './fixtures'
+import { Given, When, Then, Before, After, getState, setState } from './fixtures'
 import {
   enableCrossHubSharingViaApi,
   getCrossHubSharingViaApi,
@@ -34,10 +34,21 @@ Before({ tags: '@cross-hub' }, async ({ request, world }) => {
   setState(world, CROSS_HUB_KEY, { crossHubEnabled: false } as CrossHubState)
 })
 
+// The switch is deployment-wide. Scenarios tagged @global-setting run alone in the
+// serial project and must leave it off, as they found it.
+After({ tags: '@global-setting and @cross-hub' }, async ({ request }) => {
+  await enableCrossHubSharingViaApi(request, false)
+})
+
 // ── Given ──────────────────────────────────────────────────────────
 
 Given('cross-hub sharing is enabled', async ({ request, world }) => {
   const result = await enableCrossHubSharingViaApi(request, true)
+  getCrossHubState(world).crossHubEnabled = result.enabled
+})
+
+Given('cross-hub sharing is disabled', async ({ request, world }) => {
+  const result = await enableCrossHubSharingViaApi(request, false)
   getCrossHubState(world).crossHubEnabled = result.enabled
 })
 
