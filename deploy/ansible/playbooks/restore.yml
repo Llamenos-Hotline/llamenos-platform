@@ -37,6 +37,7 @@
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_dry_run=true
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass --tags postgres
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_source_host=old-server
+#   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_discard_previous=true   # after inspecting a kept llamenos_pre_restore
 
 - name: Restore from backup
   hosts: all
@@ -402,9 +403,20 @@
               echo "ERROR: there is no 'llamenos' database to replace" >&2
               exit 1
             fi
-            # A leftover from an earlier, completed restore; the live database
-            # exists (checked above), so this is not the only copy of anything.
-            psql_admin -c "DROP DATABASE IF EXISTS llamenos_pre_restore;" || exit 1
+            # llamenos_pre_restore is the previous live database, kept until a
+            # restore has validated its replacement. One still here means an
+            # earlier restore did not get that far, so it may be the only good
+            # copy: refuse rather than delete it, as the RustFS swap does with
+            # its marker. -e restore_discard_previous=true is the operator saying
+            # they have looked.
+            if exists llamenos_pre_restore; then
+              {% if restore_discard_previous | default(false) | bool %}
+              psql_admin -c "DROP DATABASE llamenos_pre_restore;" || exit 1
+              {% else %}
+              echo "ERROR: 'llamenos_pre_restore' exists: an earlier restore replaced the database but did not validate its replacement, so it may hold your only good copy. Inspect it, then drop it by hand or re-run with -e restore_discard_previous=true. The live database was not touched." >&2
+              exit 1
+              {% endif %}
+            fi
             psql_admin -c "ALTER DATABASE llamenos ALLOW_CONNECTIONS false;" || exit 1
             psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'llamenos' AND pid <> pg_backend_pid();" >/dev/null || true
             if ! psql_admin -c "ALTER DATABASE llamenos RENAME TO llamenos_pre_restore;"; then
@@ -612,24 +624,31 @@
             live_entries="$(count_entries /data)"
             touch "${MARK}"
             mkdir "${PREV}"
-            if ! move_entries /data "${PREV}"; then
+            # The marker is removed only when a rollback fully succeeded (nothing
+            # left in PREV). Otherwise it stays, so the next run refuses (exit 4)
+            # instead of deleting the live objects that are still in PREV.
+            rollback() {
+              move_entries /data "${STAGE}" || true
               move_entries "${PREV}" /data || true
-              rm -f "${MARK}"
-              echo "ERROR: could not move the live objects aside; they were put back where they could be (any left are in ${PREV})" >&2
+              if [ "$(count_entries "${PREV}")" -eq 0 ]; then
+                rm -rf "${PREV}"; rm -f "${MARK}"
+                echo "$1; the live objects were put back" >&2
+              else
+                echo "$1, and the rollback was incomplete: some live objects are still in ${PREV}. Move them back by hand; the marker ${MARK} stays so a second restore cannot delete them." >&2
+              fi
+            }
+            if ! move_entries /data "${PREV}"; then
+              rollback "ERROR: could not move the live objects aside"
               exit 5
             fi
             if ! move_entries "${STAGE}" /data || [ "$(count_entries /data)" -ne "${staged_entries}" ]; then
-              move_entries /data "${STAGE}" || true
-              move_entries "${PREV}" /data || true
-              rm -f "${MARK}"
-              echo "ERROR: could not move the restored objects into place; the live objects were put back" >&2
+              rollback "ERROR: could not move the restored objects into place"
               exit 5
             fi
             # The replacement is in place and complete. Only now is the old data
             # deleted, and only if what was moved aside is still what was found.
             if [ "$(count_entries "${PREV}")" -ne "${live_entries}" ]; then
-              echo "WARNING: ${PREV} holds a different number of entries than the live data had; keeping it, delete it by hand once you have checked" >&2
-              rm -f "${MARK}"
+              echo "WARNING: ${PREV} holds a different number of entries than the live data had; keeping it and the marker ${MARK}. Check it, then delete both by hand." >&2
             else
               rm -f "${MARK}"
               rm -rf "${PREV}"
