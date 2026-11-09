@@ -435,11 +435,11 @@ describe('the service enforces the binding without the router', () => {
   it('CasesService.list refuses a cross-hub listing while sharing is off, whoever asks', async () => {
     await settings.setCrossHubSharingEnabled({ enabled: false })
     await expect(
-      svc.cases.list({ hubId: HUB_A, crossHub: true, requestingPubkey: SUPER.pubkey }),
+      svc.cases.list({ hubId: HUB_A, crossHub: { hubIds: null, requestingPubkey: SUPER.pubkey } }),
     ).rejects.toMatchObject({ status: 403 })
     await settings.setCrossHubSharingEnabled({ enabled: true })
     await expect(
-      svc.cases.list({ hubId: HUB_A, crossHub: true, requestingPubkey: SUPER.pubkey }),
+      svc.cases.list({ hubId: HUB_A, crossHub: { hubIds: null, requestingPubkey: SUPER.pubkey } }),
     ).resolves.toBeDefined()
   })
 })
