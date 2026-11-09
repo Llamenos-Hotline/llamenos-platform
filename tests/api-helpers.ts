@@ -239,8 +239,13 @@ export async function apiDelete<T = unknown>(
 export async function createHubViaApi(
   request: APIRequestContext,
   name: string,
+  /** IANA zone the hub's shift schedules are written in; the server's default (UTC) when omitted. */
+  timezone?: string,
 ): Promise<string> {
-  const { status, data } = await apiPost<{ hub?: { id: string } }>(request, '/hubs', { name })
+  const { status, data } = await apiPost<{ hub?: { id: string } }>(request, '/hubs', {
+    name,
+    ...(timezone ? { timezone } : {}),
+  })
   if (status !== 201 && status !== 200) {
     throw new Error(`Failed to create hub "${name}": POST /api/hubs returned ${status}`)
   }

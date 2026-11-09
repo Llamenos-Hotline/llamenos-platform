@@ -159,6 +159,15 @@ final class HubManagementViewModel {
 
     // MARK: - Hub Creation
 
+    /// The IANA zone this device is set to — what a new hub's shift schedule is
+    /// written in until an admin changes it (the zone editor is #2625). Falls back
+    /// to the server's own default when the device reports a zone the server's
+    /// IANA validation would refuse (e.g. a fixed-offset "GMT+5:30").
+    static func deviceTimezone() -> String {
+        let identifier = TimeZone.current.identifier
+        return TimeZone.knownTimeZoneIdentifiers.contains(identifier) ? identifier : "UTC"
+    }
+
     /// Create a new hub.
     func createHub(name: String, slug: String?, description: String?, phoneNumber: String?) async -> Bool {
         isSaving = true
@@ -169,7 +178,8 @@ final class HubManagementViewModel {
             description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             phoneNumber: phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
-            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines)
+            slug: slug?.trimmingCharacters(in: .whitespacesAndNewlines),
+            timezone: Self.deviceTimezone()
         )
 
         do {

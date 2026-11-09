@@ -11,8 +11,10 @@ import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
 import {
+  apiGet,
   apiPatch,
   apiPut,
+  createHubViaApi,
   createVolunteerViaApi,
   createShiftViaApi,
   clockInViaApi,
@@ -22,6 +24,7 @@ import {
 } from '../../api-helpers'
 import {
   simulateIncomingCall,
+  simulateIncomingCallResponse,
   simulateAnswerCall,
   simulateIncomingMessage,
   uniqueCallerNumber,
@@ -222,24 +225,75 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
   await clockInViaApi(request, hubId, vol2.deviceKey)
 })
 
-Given('a shift configured for 9am-5pm in America\\/New_York', async ({ request, world }) => {
+/**
+ * A `startTime`/`endTime` window an hour either side of now on `timeZone`'s own clock.
+ *
+ * This computes the INPUT (a schedule), not the expected outcome: the server decides
+ * whether the shift is live, and the scenario asserts only whether the call rang.
+ * It never wraps midnight (overnight shifts are #1053): near the end of the day the
+ * window is clamped to 23:59, which leaves one minute a day (23:59 local) outside it.
+ */
+function windowAroundNow(timeZone: string): { startTime: string; endTime: string } {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(new Date()),
+  )
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return {
+    startTime: `${pad(Math.max(0, hour - 1))}:00`,
+    endTime: hour + 2 > 23 ? '23:59' : `${pad(hour + 2)}:00`,
+  }
+}
+
+Given('a hub in the {string} time zone', async ({ request, world }, timeZone: string) => {
+  // A hub of its own: the zone is hub state, and the worker's shared hub (which other
+  // scenarios build UTC-clock shifts in) must keep its zone. A fresh hub also has no
+  // leftover shifts or fallback group to make a call ring for the wrong reason.
+  const hubId = await createHubViaApi(request, uniqueName('tz-hub'), timeZone)
+  const { status, data } = await apiGet<{ hub: { timezone: string } }>(request, `/hubs/${hubId}`)
+  expect(status, 'read the new hub back').toBe(200)
+  expect(data.hub.timezone).toBe(timeZone)
+  getScenarioState(world).hubId = hubId
+})
+
+Given('a volunteer is clocked in on a shift covering the current time in {string}', async ({ request, world }, timeZone: string) => {
   const hubId = getScenarioState(world).hubId
   const vol = await createVolunteerViaApi(request, { name: uniqueName('TZ Vol'), hubId })
   getCallSimState(world).shiftVolunteers = [{ pubkey: vol.pubkey, deviceKey: vol.deviceKey }]
   getScenarioState(world).volunteers.push({ ...vol, onShift: true })
-  // NOTE: createShiftViaApi (tests/api-helpers.ts, outside this lane's ownership) has no
-  // timezone option — shifts have no server-side timezone concept today. The scenario's
-  // "current time is 10am Eastern" step is a documented no-op precondition, so dropping
-  // this unsupported field does not change what the scenario actually verifies.
-  await createShiftViaApi(request, {
+  const shift = await createShiftViaApi(request, {
     name: uniqueName('TZ Shift'),
-    startTime: '09:00',
-    endTime: '17:00',
+    ...windowAroundNow(timeZone),
     days: [0, 1, 2, 3, 4, 5, 6],
     userPubkeys: [vol.pubkey],
     hubId,
   })
+  getScenarioState(world).shiftIds.push(shift.id)
+  // Ringing needs the volunteer's own consent as well as the roster — see clockInViaApi.
   await clockInViaApi(request, hubId, vol.deviceKey)
+})
+
+When('a call is routed to that hub', async ({ request, world }) => {
+  const state = getScenarioState(world)
+  const response = await simulateIncomingCallResponse(request, {
+    callerNumber: uniqueCallerNumber(),
+    hubId: state.hubId,
+    checkVolunteers: true,
+  })
+  state.callHttpStatus = response.status
+  state.callResponseBody = response.data
+})
+
+Then('the call should ring', async ({ world }) => {
+  const { callHttpStatus, callResponseBody } = getScenarioState(world)
+  expect(callHttpStatus, `incoming-call: ${JSON.stringify(callResponseBody)}`).toBe(200)
+  expect(callResponseBody?.status).toBe('ringing')
+})
+
+Then('the call should be refused because nobody is on shift', async ({ world }) => {
+  // The 422 `no-volunteers` answer specifically — any other failure is not a routing decision.
+  const { callHttpStatus, callResponseBody } = getScenarioState(world)
+  expect(callHttpStatus, `incoming-call: ${JSON.stringify(callResponseBody)}`).toBe(422)
+  expect(callResponseBody?.status).toBe('no-volunteers')
 })
 
 When('a call needs to be routed', async ({ request, world }) => {
@@ -277,16 +331,6 @@ Then('volunteers from both shifts should be in the ring group', async ({ world }
 
 Then('the router should return a no-volunteers error', async ({ world }) => {
   expect(getCallSimState(world).callStatus).toBe('no-volunteers')
-})
-
-Then('the shift should be considered active', async ({ world }) => {
-  // If we can route a call, the shift is active
-  expect(getCallSimState(world).shiftVolunteers.length).toBeGreaterThan(0)
-})
-
-When('the current time is 10am Eastern', async ({ world: _world }) => {
-  // Time is controlled by the server; this is a precondition
-  // The shift spans the current time in test mode
 })
 
 // ════════════════════════════════════════════════════════════════════

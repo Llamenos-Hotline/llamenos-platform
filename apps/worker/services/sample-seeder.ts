@@ -39,6 +39,7 @@ import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 import type { Hub } from '@shared/types'
 import type { MessagingChannelType } from '@protocol/schemas/settings'
+import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
 
 const HOUR_MS = 3_600_000
 
@@ -124,6 +125,7 @@ export async function seedSampleDataset(
     slug: SAMPLE_HUB.slug,
     description: SAMPLE_HUB.description,
     status: 'active',
+    timezone: DEFAULT_HUB_TIMEZONE,
     createdBy: cast.admin.pubkey,
     createdAt: ago(24 * 14).toISOString(),
     updatedAt: now.toISOString(),

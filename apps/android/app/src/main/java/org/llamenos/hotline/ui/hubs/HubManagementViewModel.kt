@@ -107,6 +107,7 @@ class HubManagementViewModel @Inject constructor(
                     name = name,
                     description = description?.takeIf { it.isNotBlank() },
                     phoneNumber = phoneNumber?.takeIf { it.isNotBlank() },
+                    timezone = deviceTimezone(),
                 )
                 apiService.request<CreateHubResponse>("POST", "/api/hubs", request)
                 _uiState.update { it.copy(isCreating = false, createSuccess = true) }
@@ -158,5 +159,18 @@ class HubManagementViewModel @Inject constructor(
 
     fun clearCreateSuccess() {
         _uiState.update { it.copy(createSuccess = false) }
+    }
+
+    private companion object {
+        /**
+         * The IANA zone this device is set to — what a new hub's shift schedule is
+         * written in until an admin changes it (the zone editor is #2625). Falls back
+         * to the server's own default when the device reports a zone the server's
+         * IANA validation would refuse.
+         */
+        fun deviceTimezone(): String {
+            val id = java.util.TimeZone.getDefault().id
+            return if (id in java.time.ZoneId.getAvailableZoneIds()) id else "UTC"
+        }
     }
 }

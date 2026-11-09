@@ -10,6 +10,7 @@ import {
   type Hub,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
+import { useConfig } from '@/lib/config'
 import { Building2, Plus, Pencil, Phone, Trash2 } from 'lucide-react'
 import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,8 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { PhoneInput } from '@/components/phone-input'
+import { TimezoneInput } from '@/components/timezone-input'
+import { deviceTimezone } from '@/lib/timezone'
 import {
   Dialog,
   DialogContent,
@@ -35,6 +38,7 @@ export const Route = createFileRoute('/admin/hubs')({
 export function HubsPage() {
   const { t } = useTranslation()
   const { hasPermission } = useAuth()
+  const { refreshMemberHubs } = useConfig()
   const { toast } = useToast()
   const [hubs, setHubs] = useState<Hub[]>([])
   const [loading, setLoading] = useState(true)
@@ -127,6 +131,8 @@ export function HubsPage() {
           onUpdated={(updated) => {
             setHubs(prev => prev.map(h => h.id === updated.id ? updated : h))
             setEditingHub(null)
+            // The shift editor reads the hub's zone from the member-hub list.
+            void refreshMemberHubs()
           }}
         />
       )}
@@ -212,12 +218,14 @@ function CreateHubDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
+  const [timezone, setTimezone] = useState(deviceTimezone)
   const [saving, setSaving] = useState(false)
 
   function resetForm() {
     setName('')
     setDescription('')
     setPhoneNumber('')
+    setTimezone(deviceTimezone())
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -229,6 +237,7 @@ function CreateHubDialog({
         name: name.trim(),
         ...(description.trim() && { description: description.trim() }),
         ...(phoneNumber.trim() && { phoneNumber: phoneNumber.trim() }),
+        timezone: timezone.trim(),
       })
       onCreated(res.hub)
       resetForm()
@@ -276,6 +285,11 @@ function CreateHubDialog({
               onChange={setPhoneNumber}
             />
             <p className="text-xs text-muted-foreground">{t('hubs.hubPhoneNumberHelp')}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="hub-timezone">{t('hubs.hubTimezone')}</Label>
+            <TimezoneInput id="hub-timezone" testId="hub-timezone-input" value={timezone} onChange={setTimezone} />
+            <p className="text-xs text-muted-foreground">{t('hubs.hubTimezoneHelp')}</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => { onOpenChange(false); resetForm() }} disabled={saving}>
@@ -388,6 +402,7 @@ function EditHubDialog({
   const [name, setName] = useState(hub.name)
   const [description, setDescription] = useState(hub.description || '')
   const [phoneNumber, setPhoneNumber] = useState(hub.phoneNumber || '')
+  const [timezone, setTimezone] = useState(hub.timezone)
   const [saving, setSaving] = useState(false)
 
   // Reset form state when hub changes
@@ -395,6 +410,7 @@ function EditHubDialog({
     setName(hub.name)
     setDescription(hub.description || '')
     setPhoneNumber(hub.phoneNumber || '')
+    setTimezone(hub.timezone)
   }, [hub])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -406,6 +422,7 @@ function EditHubDialog({
         name: name.trim(),
         description: description.trim() || undefined,
         phoneNumber: phoneNumber.trim() || undefined,
+        timezone: timezone.trim(),
       })
       onUpdated(res.hub)
       toast(t('hubs.hubUpdated'), 'success')
@@ -450,6 +467,11 @@ function EditHubDialog({
               onChange={setPhoneNumber}
             />
             <p className="text-xs text-muted-foreground">{t('hubs.hubPhoneNumberHelp')}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="edit-hub-timezone">{t('hubs.hubTimezone')}</Label>
+            <TimezoneInput id="edit-hub-timezone" testId="edit-hub-timezone-input" value={timezone} onChange={setTimezone} />
+            <p className="text-xs text-muted-foreground">{t('hubs.hubTimezoneHelp')}</p>
           </div>
 
           {/* Status display (read-only) */}

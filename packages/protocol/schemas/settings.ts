@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_HUB_TIMEZONE, ianaTimezoneSchema } from './common'
 
 // --- Inferred types ---
 
@@ -125,7 +126,10 @@ export const updateReportTypeBodySchema = z.object({
 
 export const ttlOverridesBodySchema = z.record(z.string(), z.number().int().min(0))
 
-export const setupCompleteBodySchema = z.object({})
+export const setupCompleteBodySchema = z.object({
+  /** Zone for the default hub created on completion; the setup admin's device zone. */
+  timezone: ianaTimezoneSchema.optional().default(DEFAULT_HUB_TIMEZONE),
+})
 
 /**
  * What a caller over the hub's per-number call limit gets — one setting, one

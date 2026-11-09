@@ -278,7 +278,7 @@ class HubMembershipFailureTest {
 
     private companion object {
         const val HUB_LIST =
-            """{"hubs":[{"id":"hub-1","name":"Hub 1","slug":"hub-1","status":"active",""" +
+            """{"hubs":[{"id":"hub-1","name":"Hub 1","slug":"hub-1","status":"active","timezone":"UTC",""" +
                 """"createdBy":"admin-pubkey","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}]}"""
 
         const val SHIFT_LIST =

@@ -258,6 +258,29 @@ describe('hubs routes', () => {
       expect(createHubSpy).toHaveBeenCalledOnce()
     })
 
+    it('gives a hub that names no zone UTC, and keeps the zone one names', async () => {
+      const createHubSpy = vi.fn().mockResolvedValue(undefined)
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { createHub: createHubSpy } },
+      })
+      const post = (body: unknown) => app.request('/hubs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const plain = await post({ name: 'Plain Hub' })
+      expect(plain.status).toBe(201)
+      expect((await plain.json()).hub.timezone).toBe('UTC')
+      expect(createHubSpy.mock.calls[0][0].timezone).toBe('UTC')
+
+      const berlin = await post({ name: 'Berlin Hub', timezone: 'Europe/Berlin' })
+      expect(berlin.status).toBe(201)
+      expect((await berlin.json()).hub.timezone).toBe('Europe/Berlin')
+      expect(createHubSpy.mock.calls[1][0].timezone).toBe('Europe/Berlin')
+    })
+
     it('generates slug from name when not provided', async () => {
       const createHubSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
@@ -456,6 +479,27 @@ describe('hubs routes', () => {
 
       expect(res.status).toBe(200)
       expect(updateHubSpy).toHaveBeenCalledWith('hub-1', { name: 'Updated' })
+    })
+
+    // A default materialised for an omitted key would reset the hub's zone and
+    // move its whole shift roster (#1643 / #1054).
+    it('does not hand the service a timezone the client did not send', async () => {
+      const updateHubSpy = vi.fn().mockResolvedValue({ hub: { id: 'hub-1', name: 'Updated' } })
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { updateHub: updateHubSpy } },
+      })
+      const patch = (body: unknown) => app.request('/hubs/hub-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      await patch({ name: 'Updated' })
+      expect(updateHubSpy.mock.calls[0][1]).not.toHaveProperty('timezone')
+
+      await patch({ timezone: 'Asia/Kolkata' })
+      expect(updateHubSpy.mock.calls[1][1]).toEqual({ timezone: 'Asia/Kolkata' })
     })
 
     it('returns 403 without system:manage-hubs permission', async () => {

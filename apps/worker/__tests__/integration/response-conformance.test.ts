@@ -76,7 +76,7 @@ import { loginResponseSchema, meResponseSchema } from '@protocol/schemas/auth'
 import { configResponseSchema } from '@protocol/schemas/config'
 import { activeCallsResponseSchema, todayCountResponseSchema, callPresenceResponseSchema } from '@protocol/schemas/calls'
 import type { activeCalls, noteReplies } from '../../db/schema'
-import { hubListResponseSchema, hubDetailResponseSchema } from '@protocol/schemas/hubs'
+import { hubListResponseSchema, hubDetailResponseSchema, type Hub } from '@protocol/schemas/hubs'
 import { noteListResponseSchema, noteStoredResponseSchema, noteReplyStoredResponseSchema } from '@protocol/schemas/notes'
 import { banListResponseSchema } from '@protocol/schemas/bans'
 import { inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
@@ -446,11 +446,14 @@ describe('Calls Routes — response conformance', () => {
 // ---------------------------------------------------------------------------
 
 describe('Hub Routes — response conformance', () => {
-  const mockHub = {
+  // Typed as the wire `Hub` so a field added to the contract fails to compile here
+  // rather than surfacing as a response-shape failure in an unrelated test.
+  const mockHub: Hub = {
     id: 'hub-1',
     name: 'Test Hub',
     slug: 'test-hub',
-    status: 'active' as const,
+    timezone: 'UTC',
+    status: 'active',
     createdBy: MOCK_PUBKEY,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

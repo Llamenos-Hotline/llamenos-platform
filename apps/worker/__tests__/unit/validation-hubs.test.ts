@@ -113,6 +113,23 @@ describe('hubs route validation', () => {
       expect(res.status).not.toBe(400)
     })
 
+    it('rejects a timezone that is not an IANA zone', async () => {
+      const app = createApp()
+      // A fixed offset is not a zone: it is wrong for half the year wherever DST applies.
+      for (const timezone of ['UTC+5', 'GMT-4', 'Mars/Olympus_Mons', '', 5]) {
+        const res = await sendJSON(app, '/hubs', { ...VALID_HUB, timezone })
+        expect(res.status, JSON.stringify(timezone)).toBe(400)
+      }
+    })
+
+    it('accepts IANA zones, with and without DST', async () => {
+      const app = createApp()
+      for (const timezone of ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Kolkata', 'Pacific/Auckland']) {
+        const res = await sendJSON(app, '/hubs', { ...VALID_HUB, timezone })
+        expect(res.status, timezone).not.toBe(400)
+      }
+    })
+
     it('accepts valid slug formats', async () => {
       const app = createApp()
       for (const slug of ['a', 'test-hub', 'hub123', 'a1b2c3']) {
@@ -140,6 +157,18 @@ describe('hubs route validation', () => {
         const res = await sendJSON(app, '/hubs/hub-1', { status }, 'PATCH')
         expect(res.status).not.toBe(400)
       }
+    })
+
+    it('rejects a timezone that is not an IANA zone', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, '/hubs/hub-1', { timezone: 'UTC+5' }, 'PATCH')
+      expect(res.status).toBe(400)
+    })
+
+    it('accepts an IANA timezone', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, '/hubs/hub-1', { timezone: 'Europe/Berlin' }, 'PATCH')
+      expect(res.status).not.toBe(400)
     })
 
     it('accepts empty body', async () => {

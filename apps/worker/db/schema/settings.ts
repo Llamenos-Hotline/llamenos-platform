@@ -67,6 +67,13 @@ export const hubs = pgTable('hubs', {
   description: text('description'),
   status: text('status').notNull().default('active'),
   phoneNumber: text('phone_number'),
+  /**
+   * IANA zone the hub's shift schedules are written in (shifts.start_time,
+   * end_time and days are wall-clock values in it). 'UTC' is the default and what
+   * every hub that existed before this column was implicitly evaluated in, so
+   * adding it moves no existing schedule.
+   */
+  timezone: text('timezone').notNull().default('UTC'),
   createdBy: text('created_by').notNull(),
   /**
    * Generation of the hub key that `hub_keys` currently wraps. 0 = no key yet.

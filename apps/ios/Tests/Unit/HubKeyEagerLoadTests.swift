@@ -70,6 +70,7 @@ private func makeHub(id: String, slug: String = "hub") -> SharedHub {
         phoneNumber: nil,
         slug: slug,
         status: .active,
+        timezone: "UTC",
         updatedAt: "2026-01-01T00:00:00Z"
     )
 }

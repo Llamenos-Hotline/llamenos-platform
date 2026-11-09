@@ -53,7 +53,7 @@ async function makeFounder(): Promise<string> {
 async function foundHub(founder: string): Promise<{ id: string }> {
   const id = `hub-founder-role-${suite}-${counter++}`
   const now = new Date().toISOString()
-  await settings.createHub({ id, name: id, slug: id, status: 'active', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
+  await settings.createHub({ id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
   createdHubs.push(id)
   return { id }
 }
@@ -122,7 +122,7 @@ describe('POST /hubs founder role is resolved by permission', () => {
       const id = `hub-founder-role-${suite}-none`
       const now = new Date().toISOString()
       const err = await settings
-        .createHub({ id, name: id, slug: id, status: 'active', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
+        .createHub({ id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
         .then(() => null, (e: unknown) => e)
       expect(err).toBeInstanceOf(ServiceError)
       expect((err as ServiceError).status).toBe(400)

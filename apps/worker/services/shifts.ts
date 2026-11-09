@@ -7,7 +7,7 @@
  */
 import { eq, and, sql } from 'drizzle-orm'
 import type { Database } from '../db'
-import { shifts, pushRemindersSent } from '../db/schema'
+import { shifts, pushRemindersSent, hubs } from '../db/schema'
 import { ServiceError } from './settings'
 import { permissionGranted } from '@shared/permissions'
 
@@ -45,9 +45,52 @@ export function isShiftActive(
   )
 }
 
-/** Format current UTC time as HH:MM */
-function utcTimeNow(now: Date = new Date()): string {
-  return `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
+
+const wallClockFormatters = new Map<string, Intl.DateTimeFormat>()
+
+function wallClockFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = wallClockFormatters.get(timeZone)
+  if (!formatter) {
+    // `en-US` + `h23` pins the part names and the 00-23 hour range regardless of
+    // the server's locale; only the zone varies.
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    })
+    wallClockFormatters.set(timeZone, formatter)
+  }
+  return formatter
+}
+
+/**
+ * The wall-clock weekday (0 = Sunday) and `HH:MM` that `now` reads in `timeZone`.
+ *
+ * Shift schedules are wall-clock values in the hub's IANA zone, so the roster is
+ * evaluated against the zone's own clock — never the server's `TZ` and never UTC.
+ * Going through `Intl` rather than a stored offset is what makes DST automatic:
+ * the zone's rules, not a constant, decide what hour it is. On the spring-forward
+ * night the skipped hour never occurs (a 02:30 shift start is first reached at
+ * 03:00); on the fall-back night the repeated hour occurs twice (a shift
+ * spanning it is on for both).
+ */
+export function shiftWallClock(now: Date, timeZone: string): { day: number; time: string; minutes: number } {
+  let weekday = ''
+  let hour = ''
+  let minute = ''
+  for (const part of wallClockFormatter(timeZone).formatToParts(now)) {
+    if (part.type === 'weekday') weekday = part.value
+    else if (part.type === 'hour') hour = part.value
+    else if (part.type === 'minute') minute = part.value
+  }
+  const day = WEEKDAY_INDEX[weekday]
+  if (day === undefined || !hour || !minute) {
+    throw new Error(`Cannot read the wall clock in time zone "${timeZone}"`)
+  }
+  return { day, time: `${hour}:${minute}`, minutes: Number(hour) * 60 + Number(minute) }
 }
 
 type ShiftRow = typeof shifts.$inferSelect
@@ -56,6 +99,21 @@ type CallerContext = { callerPubkey: string; permissions: string[] }
 
 export class ShiftsService {
   constructor(protected db: Database) {}
+
+  /**
+   * The IANA zone the hub's schedules are written in. A hub that cannot be found
+   * is an error, not "UTC": evaluating a schedule in a zone nobody chose is how
+   * the roster ends up hours off with no sign anything is wrong.
+   */
+  private async hubTimezone(hubId: string): Promise<string> {
+    const [row] = await this.db
+      .select({ timezone: hubs.timezone })
+      .from(hubs)
+      .where(eq(hubs.id, hubId))
+      .limit(1)
+    if (!row) throw new ServiceError(404, 'Hub not found')
+    return row.timezone
+  }
 
   // =========================================================================
   // CRUD
@@ -177,12 +235,11 @@ export class ShiftsService {
     nextShift: { id: string; encryptedName: string; startTime: string; endTime: string; day: number } | null
   }> {
     const { shifts: allShifts } = await this.list(hubId)
-    const now = new Date()
-    const currentDay = now.getUTCDay()
-    const currentTime = utcTimeNow(now)
-
-    // Filter to shifts that include this volunteer
     const myShifts = allShifts.filter(s => s.userPubkeys.includes(pubkey))
+    // Nothing scheduled for this volunteer: the zone cannot change the answer.
+    if (myShifts.length === 0) return { onShift: false, currentShift: null, nextShift: null }
+    const { day: currentDay, time: currentTime, minutes: currentMinutes } =
+      shiftWallClock(new Date(), await this.hubTimezone(hubId))
 
     // Find current active shift
     let currentShift: { id: string; encryptedName: string; startTime: string; endTime: string } | null = null
@@ -197,7 +254,6 @@ export class ShiftsService {
     let nextShift: { id: string; encryptedName: string; startTime: string; endTime: string; day: number } | null = null
     if (myShifts.length > 0) {
       let bestMinutesAway = Infinity
-      const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes()
 
       for (const shift of myShifts) {
         for (const day of shift.days) {
@@ -232,9 +288,9 @@ export class ShiftsService {
    */
   async getCurrentVolunteers(hubId: string): Promise<string[]> {
     const { shifts: allShifts } = await this.list(hubId)
-    const now = new Date()
-    const currentDay = now.getUTCDay()
-    const currentTime = utcTimeNow(now)
+    // No shifts: the zone cannot change the answer, so don't ask for it.
+    if (allShifts.length === 0) return []
+    const { day: currentDay, time: currentTime } = shiftWallClock(new Date(), await this.hubTimezone(hubId))
 
     const activeVolunteers = new Set<string>()
 

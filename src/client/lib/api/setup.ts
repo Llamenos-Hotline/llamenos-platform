@@ -1,3 +1,4 @@
+import { deviceTimezone } from '../timezone'
 import { request } from './client'
 import type { SetupState } from '@shared/types'
 
@@ -19,7 +20,8 @@ export async function updateSetupState(data: Partial<SetupState>) {
 export async function completeSetup() {
   return request<SetupState>('/setup/complete', {
     method: 'POST',
-    body: JSON.stringify({}),
+    // The default hub is created in the setup admin's own zone.
+    body: JSON.stringify({ timezone: deviceTimezone() }),
   })
 }
 

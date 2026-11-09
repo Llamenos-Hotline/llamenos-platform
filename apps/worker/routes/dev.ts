@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType } from '@shared/types'
+import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
 import { banHashes, sealCallerNumber } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
@@ -1558,6 +1559,8 @@ dev.post('/test-create-hub', async (c) => {
     name,
     slug,
     status: 'active',
+    // UTC: the seeding helpers below build shifts from the UTC clock.
+    timezone: DEFAULT_HUB_TIMEZONE,
     createdBy: 'test',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
