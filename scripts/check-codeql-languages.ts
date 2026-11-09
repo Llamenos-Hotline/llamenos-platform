@@ -485,6 +485,19 @@ function main(): void {
         violations.push(`\`${ROLLUP_JOB}\` needs staged job \`${job}\` — a staged language would become able to block a merge`)
       }
     }
+    // The rollup NAMES a missing leg from its own copy of the matrix. A stale
+    // copy would name the wrong leg (or none) when GitHub fails to create one.
+    const legs = analyze ? matrixLanguages(analyze) : undefined
+    const declared = (Array.isArray(rollup.steps) ? rollup.steps : [])
+      .map((step) => (isRecord(step) && isRecord(step.env) ? step.env.EXPECTED_LEGS : undefined))
+      .find((value): value is string => typeof value === 'string')
+    if (legs !== undefined) {
+      const have = String(declared ?? '').split(/\s+/).filter(Boolean).sort().join(' ')
+      const want = [...legs].sort().join(' ')
+      if (have !== want) {
+        violations.push(`\`${ROLLUP_JOB}\` EXPECTED_LEGS (${have || 'unset'}) must equal the \`${REQUIRED_JOB}\` matrix (${want}) — the rollup uses it to name a leg GitHub never created`)
+      }
+    }
     if (typeof rollup.if !== 'string' || normalizeExpression(rollup.if) !== 'always()') {
       violations.push(`\`${ROLLUP_JOB}\` must be \`if: always()\` — otherwise a failed leg skips it, and skipped counts as passing`)
     }

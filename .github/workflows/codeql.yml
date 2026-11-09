@@ -56,6 +56,16 @@
 # created and reported normally. So do not try to harden this against it from
 # the YAML — there is no condition that survives a job that is never created.
 #
+# The matrix-leg variant (2026-11-09, during an open Actions incident): a LEG
+# is never created, e.g. `ruby` absent from a run whose other four legs passed.
+# The rollup was created and correctly failed — `needs.analyze.result` was
+# `abandoned` — and GHAS's gate went `neutral` ("1 configuration not found"),
+# which `gh pr checks` shows as a second `CodeQL` row reading `skipping`. Not a
+# path filter (the matrix has none; main's own push run was red the same way)
+# and not a failed upload. The rollup's step now lists each expected leg and
+# says NEVER CREATED vs failed vs skipped, so the remedy is readable from the
+# log; `gh run rerun --failed` recreated the leg and turned both carriers green.
+#
 # Recovery is `gh run rerun --failed <run>`, which recreates the rollup
 # (verified: 7 jobs before, 8 after, rollup passing). Detection is
 # `llamenos-fleet missing-checks`, which diffs the live ruleset against the
@@ -426,7 +436,11 @@ jobs:
     needs: [analyze]
     if: always()
     runs-on: ubuntu-latest
-    permissions: {}
+    # `actions: read` only to list this run's own jobs when a leg is not green,
+    # so the failure can say WHICH leg and WHY (see the step). It changes no
+    # verdict: every path that was a failure still exits 1.
+    permissions:
+      actions: read
     timeout-minutes: 2
 
     steps:
@@ -435,18 +449,51 @@ jobs:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          # MUST equal the `analyze` matrix; scripts/check-codeql-languages.ts
+          # fails CI if they differ. Used only to NAME a missing leg.
+          EXPECTED_LEGS: actions javascript-typescript python ruby rust
         run: |
-          if [[ "$ANALYZE_RESULT" != "success" ]]; then
-            # The ONE legitimate skip (#1817): the knope release PR's diff is
-            # a version bump with no code, so `analyze` is gated off for that
-            # head branch and reports `skipped` here. Full analysis still
-            # runs on the push to main the merge produces. Any OTHER skipped
-            # leg stays a failure — a missing leg is missing coverage.
-            if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REF" == "release" && "$ANALYZE_RESULT" == "skipped" ]]; then
-              echo "Required CodeQL legs skipped by design on the knope release PR (#1817): version-bump-only diff; analysis runs on the push to main when it merges."
-              exit 0
-            fi
-            echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage — see the Analyze advanced (<language>) jobs."
+          if [[ "$ANALYZE_RESULT" == "success" ]]; then
+            echo "All required CodeQL legs analysed and uploaded."
+            exit 0
+          fi
+          # The ONE legitimate skip (#1817): the knope release PR's diff is
+          # a version bump with no code, so `analyze` is gated off for that
+          # head branch and reports `skipped` here. Full analysis still
+          # runs on the push to main the merge produces. Any OTHER skipped
+          # leg stays a failure — a missing leg is missing coverage.
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REF" == "release" && "$ANALYZE_RESULT" == "skipped" ]]; then
+            echo "Required CodeQL legs skipped by design on the knope release PR (#1817): version-bump-only diff; analysis runs on the push to main when it merges."
+            exit 0
+          fi
+
+          # Everything below only EXPLAINS the failure; it never decides it.
+          # `needs.analyze.result` collapses three different states into "not
+          # success", and they have different remedies:
+          #   failed/cancelled  a leg ran and did not analyse or upload — real.
+          #   skipped           a leg was gated off — a coverage hole.
+          #   abandoned         GitHub NEVER CREATED a matrix leg (observed
+          #                     2026-11-09 during an Actions incident: `ruby`
+          #                     absent from the run, rollup saw `abandoned`).
+          #                     Nothing in this repo caused it; `gh run rerun
+          #                     --failed <run>` recreates the leg.
+          echo "::error::Required CodeQL legs did not all succeed (analyze: $ANALYZE_RESULT). A missing leg is missing coverage."
+          if ! jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+                --jq '.jobs[] | select(.name | startswith("Analyze advanced (")) | [.name, (.conclusion // .status)] | @tsv'); then
+            echo "::error::Could not list this run's jobs, so the missing leg cannot be named. Open the run and read the Analyze advanced (<language>) jobs."
             exit 1
           fi
-          echo "All required CodeQL legs analysed and uploaded."
+          for lang in $EXPECTED_LEGS; do
+            state=$(printf '%s\n' "$jobs" | awk -F'\t' -v n="Analyze advanced ($lang)" '$1 == n { print $2 }')
+            case "$state" in
+              success) echo "  $lang: success" ;;
+              "")      echo "::error::  $lang: NEVER CREATED — GitHub did not start this matrix leg (check githubstatus.com). Not a code or SARIF-upload failure; recover with: gh run rerun --failed $RUN_ID" ;;
+              skipped) echo "::error::  $lang: skipped — gated off by an \`if:\`; only the knope release PR may skip (#1817), so this is a coverage hole." ;;
+              *)       echo "::error::  $lang: $state — the leg ran and did not succeed; read its log." ;;
+            esac
+          done
+          exit 1
