@@ -20,6 +20,11 @@ echo "apt-get $*" >> "$STUB_CALLS"
 src=RUNNER; case "$*" in *Dir::Etc::SourceParts=*) src=ARCHIVE ;; esac
 phase=UPDATE
 case "$*" in *--download-only*) phase=DOWNLOAD ;; *--no-download*) phase=INSTALL ;; esac
+# Real apt accepts --error-on only on \`update\`; \`install\` rejects it with exactly
+# this error and exit 100 (measured on apt 2.4.14, 2.8.3 and 3.2.0).
+if [ "$phase" != UPDATE ]; then case "$*" in *--error-on*)
+  echo "E: Command line option --error-on=any is not understood in combination with the other options"; exit 100 ;;
+esac; fi
 var="STUB_\${phase}_\${src}"; mode="\${!var:-ok}"
 case "$phase:$mode" in
   UPDATE:ok) echo "Get:1 http://mirror.test/ubuntu resolute InRelease [137 kB]"; echo "Reading package lists..." ;;

@@ -48,6 +48,16 @@
 # phase, which mirror, how much of the download had arrived and at what rate,
 # and whether it is infrastructure (re-run) or a real defect in the step.
 #
+# APT VERSIONS
+# ------------
+# Used by ubuntu-latest (ci.yml desktop-rust) and ubuntu-22.04 (tauri-release.yml).
+# `apt-get update --error-on=any` is accepted by every apt either can land on —
+# measured in ubuntu:22.04 / 24.04 / 26.04 containers, exit 0 on apt 2.4.14,
+# 2.8.3 and 3.2.0 — and this script runs this file end to end on each of them,
+# including the failover to the deb822 archive sources. The flag is passed ONLY
+# to `update`: `install` rejects it (exit 100, "Command line option --error-on=any
+# is not understood"), which the test's stub apt-get reproduces.
+#
 # SCOPE
 # -----
 # Only for packages that come from the Ubuntu archive itself: attempt 2
