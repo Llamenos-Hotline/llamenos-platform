@@ -219,16 +219,21 @@
             success_msg: "Found {{ rustfs_backup_files.matched }} RustFS backup(s)"
           when: test_rustfs | bool
 
+        # Under pipefail the decrypt and tar stages' exit codes are kept: an
+        # unreadable archive fails this task rather than counting as "0 files".
         - name: Read the newest RustFS archive end to end
           ansible.builtin.shell: |
             set -euo pipefail
+            listing="$(mktemp)"
+            trap 'rm -f "${listing}"' EXIT
             {% set newest = (rustfs_backup_files.files | sort(attribute='mtime') | last).path %}
             {% if newest is search('.age$') %}
             age -d -i {{ backup_age_private_key_path }} {{ newest }} \
             {% else %}
             cat {{ newest }} \
             {% endif %}
-              | tar -tzf - | grep -vc '/$' || true
+              | tar -tzf - > "${listing}"
+            grep -vc '/$' "${listing}" || true
           args:
             executable: /bin/bash
           register: rustfs_archive_files

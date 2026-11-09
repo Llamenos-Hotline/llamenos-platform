@@ -330,7 +330,27 @@
             - not restore_dry_run
           tags: [postgres]
 
-        - name: Drop a side database that holds no schema
+        # pg_restore exits non-zero on warnings it can carry on past, so its
+        # exit code cannot decide whether the restore is good. What can: the
+        # dump's table of contents says how many tables it holds, and the side
+        # database must hold exactly that many. A restore that silently dropped
+        # a table (an error mid-restore) is refused before the swap.
+        - name: Count the tables the dump says it holds, and the tables the side database holds
+          ansible.builtin.shell: |
+            set -euo pipefail
+            expected="$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres               pg_restore --list < {{ restore_tmpdir.path }}/pg.dump | grep -c '^[0-9]*; [0-9]* [0-9]* TABLE public ' || true)"
+            actual="$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres               psql -U llamenos -d llamenos_restore -tAc               "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p')")"
+            echo "${expected} ${actual}"
+          args:
+            executable: /bin/bash
+          register: pg_toc_vs_side
+          changed_when: false
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
+
+        - name: Drop a side database that is empty or incomplete
           ansible.builtin.command:
             cmd: >
               docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
@@ -340,24 +360,30 @@
             - pg_backup_file is defined
             - not restore_dry_run
             - (pg_side_count.stdout | default('0') | trim | int) == 0
+              or (pg_toc_vs_side.stdout | default('0 0') | trim).split()[0] != (pg_toc_vs_side.stdout | default('0 0') | trim).split()[1]
           tags: [postgres]
 
-        - name: Refuse to swap in a side database that holds no schema
+        - name: Refuse to swap in a side database that is empty or incomplete
           ansible.builtin.fail:
             msg: >-
-              Restoring {{ pg_backup_file }} produced an empty schema, so the
+              Restoring {{ pg_backup_file }} did not produce the database the
+              dump describes (tables in the dump / tables restored:
+              {{ pg_toc_vs_side.stdout | default('unknown') | trim }}), so the
               live database was NOT replaced. pg_restore said:
               {{ pg_restore_result.stdout | default('no output') }}
           when:
             - pg_backup_file is defined
             - not restore_dry_run
             - (pg_side_count.stdout | default('0') | trim | int) == 0
+              or (pg_toc_vs_side.stdout | default('0 0') | trim).split()[0] != (pg_toc_vs_side.stdout | default('0 0') | trim).split()[1]
           tags: [postgres]
 
         # Only now is the live database replaced. The app and every other
         # client are stopped; ALLOW_CONNECTIONS false plus a terminate keeps
         # a straggler (a metrics exporter) from holding the old database open
         # across the rename. If the second rename fails the first is undone.
+        # The replaced database is KEPT as llamenos_pre_restore until the
+        # restored one has been validated below; only then is it dropped.
         - name: Swap the restored database in
           ansible.builtin.shell: |
             set -u
@@ -365,6 +391,19 @@
               docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
                 psql -U llamenos -d postgres -v ON_ERROR_STOP=1 "$@"
             }
+            exists() {
+              [ "$(psql_admin -tAc "SELECT count(*) FROM pg_database WHERE datname = '$1'")" = "1" ]
+            }
+            if ! exists llamenos; then
+              if exists llamenos_pre_restore; then
+                echo "ERROR: there is no 'llamenos' database but there is a 'llamenos_pre_restore': an earlier restore stopped mid-swap and that is your data. Rename it back by hand before restoring again." >&2
+                exit 1
+              fi
+              echo "ERROR: there is no 'llamenos' database to replace" >&2
+              exit 1
+            fi
+            # A leftover from an earlier, completed restore; the live database
+            # exists (checked above), so this is not the only copy of anything.
             psql_admin -c "DROP DATABASE IF EXISTS llamenos_pre_restore;" || exit 1
             psql_admin -c "ALTER DATABASE llamenos ALLOW_CONNECTIONS false;" || exit 1
             psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'llamenos' AND pid <> pg_backend_pid();" >/dev/null || true
@@ -379,8 +418,6 @@
               echo "ERROR: could not move the restored database into place; the original was put back" >&2
               exit 1
             fi
-            psql_admin -c "DROP DATABASE IF EXISTS llamenos_pre_restore;" || \
-              echo "WARNING: the replaced database 'llamenos_pre_restore' could not be dropped; drop it by hand" >&2
             echo "swapped"
           args:
             executable: /bin/bash
@@ -438,6 +475,20 @@
             - pg_backup_file is defined
             - not restore_dry_run
             - (pg_restored_tables | default(0) | int) == 0
+          tags: [postgres]
+
+        # The replaced database has been kept until now. The restored one holds
+        # the schema the dump described and passed the check above, so this is
+        # the first moment the old data is no longer the only complete copy.
+        - name: Drop the replaced database now that the restored one is validated
+          ansible.builtin.command:
+            cmd: >
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+              psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos_pre_restore;"
+          changed_when: true
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
           tags: [postgres]
 
         - name: "[DRY RUN] Would restore PostgreSQL from {{ pg_backup_file | default('N/A') }}"
@@ -519,6 +570,27 @@
             STAGE=/data/.restore-staging
             PREV=/data/.restore-previous
             MARK=/data/.restore-swap
+            # `find -exec mv` would report success whatever mv did (the exit
+            # status is about find itself), so entries are moved by an explicit loop that
+            # stops at the first failure. The glob trio covers ordinary, dot- and
+            # double-dot-prefixed names; an unmatched glob stays literal and is
+            # skipped by the existence test.
+            move_entries() {
+              for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+                case "${e##*/}" in .restore-*) continue ;; esac
+                mv "$e" "$2"/ || return 1
+              done
+            }
+            count_entries() {
+              n=0
+              for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+                case "${e##*/}" in .restore-*) continue ;; esac
+                n=$((n + 1))
+              done
+              echo "$n"
+            }
             if [ -e "${MARK}" ]; then
               echo "ERROR: an earlier restore stopped part-way through swapping. The live objects are in ${PREV} on this volume. Move them back by hand before restoring again; nothing was changed." >&2
               exit 4
@@ -536,23 +608,33 @@
               echo "ERROR: the archive holds no files; the live objects were not touched" >&2
               exit 3
             fi
+            staged_entries="$(count_entries "${STAGE}")"
+            live_entries="$(count_entries /data)"
             touch "${MARK}"
             mkdir "${PREV}"
-            if ! find /data -mindepth 1 -maxdepth 1 ! -name '.restore-*' -exec mv {} "${PREV}/" \; ; then
-              find "${PREV}" -mindepth 1 -maxdepth 1 -exec mv {} /data/ \; || true
-              rm -rf "${PREV}"; rm -f "${MARK}"
-              echo "ERROR: could not move the live objects aside; they were put back" >&2
+            if ! move_entries /data "${PREV}"; then
+              move_entries "${PREV}" /data || true
+              rm -f "${MARK}"
+              echo "ERROR: could not move the live objects aside; they were put back where they could be (any left are in ${PREV})" >&2
               exit 5
             fi
-            if ! find "${STAGE}" -mindepth 1 -maxdepth 1 -exec mv {} /data/ \; ; then
-              find /data -mindepth 1 -maxdepth 1 ! -name '.restore-*' -exec mv {} "${STAGE}/" \; || true
-              find "${PREV}" -mindepth 1 -maxdepth 1 -exec mv {} /data/ \; || true
-              rm -rf "${PREV}" "${STAGE}"; rm -f "${MARK}"
+            if ! move_entries "${STAGE}" /data || [ "$(count_entries /data)" -ne "${staged_entries}" ]; then
+              move_entries /data "${STAGE}" || true
+              move_entries "${PREV}" /data || true
+              rm -f "${MARK}"
               echo "ERROR: could not move the restored objects into place; the live objects were put back" >&2
               exit 5
             fi
-            rm -f "${MARK}"
-            rm -rf "${PREV}" "${STAGE}"
+            # The replacement is in place and complete. Only now is the old data
+            # deleted, and only if what was moved aside is still what was found.
+            if [ "$(count_entries "${PREV}")" -ne "${live_entries}" ]; then
+              echo "WARNING: ${PREV} holds a different number of entries than the live data had; keeping it, delete it by hand once you have checked" >&2
+              rm -f "${MARK}"
+            else
+              rm -f "${MARK}"
+              rm -rf "${PREV}"
+            fi
+            rm -rf "${STAGE}"
             echo "Restored ${count} files"
             EOS
             {% if backup_age_public_key | default('') | length > 0 %}
