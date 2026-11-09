@@ -5,6 +5,11 @@
 # pre-built dashboards for the Llamenos stack. Accessible via /grafana path
 # on the main domain through Caddy reverse proxy.
 
+# First, before any file is written or any container started: see the file for
+# why an empty admin password is an error and not a default.
+- name: Refuse to deploy Grafana without a real admin password
+  ansible.builtin.import_tasks: ../../../playbooks/tasks/assert-grafana-admin-password.yml
+
 - name: Create Grafana directories
   ansible.builtin.file:
     path: "{{ app_dir }}/observability/grafana/{{ item }}"
@@ -97,3 +102,92 @@
   community.docker.docker_compose_v2:
     project_src: "{{ app_dir }}/observability/grafana"
     state: present
+
+# GF_SECURITY_ADMIN_PASSWORD is honoured only when Grafana first creates its
+# database. A host whose grafana-data volume already exists -- one deployed before
+# this key was required, with the default login -- keeps whatever password it
+# had, so setting the variable later would change nothing and the default would
+# stay live. Converge the live password to the configured one, then prove the
+# default login is dead. The password travels in the environment and on stdin,
+# never in a command line (`docker exec` argv is world-readable on the host).
+#
+# Grafana counts failed logins per account (5 in 5 minutes locks the account for
+# 5 minutes, and a locked account refuses even the right password). So the probes
+# are spent carefully: a converged host is checked with ONE login that succeeds
+# and no failed attempt at all (admin has a single password; if the configured
+# one works, "admin" does not -- it is 16+ characters and never "admin"), and only
+# a host that had to be changed also tries the default login, once, to see it
+# refused.
+- name: Wait for Grafana to be healthy
+  ansible.builtin.command:
+    cmd: >-
+      docker compose -f {{ app_dir }}/observability/grafana/docker-compose.yml
+      exec -T grafana curl -sf http://localhost:3000/api/health
+  register: grafana_health
+  # A first start runs Grafana's ~150 database migrations; on a small VPS that
+  # takes well over a minute. This is the only wait between starting the
+  # container and being able to ask it anything, so it is generous.
+  retries: 90
+  delay: 2
+  until: grafana_health.rc == 0
+  changed_when: false
+
+- name: Check whether the configured admin password is already the live one
+  ansible.builtin.shell: |
+    docker compose -f {{ app_dir }}/observability/grafana/docker-compose.yml exec -T -e GF_ADMIN_PW grafana \
+      sh -c 'printf "user = \"admin:%s\"\n" "$GF_ADMIN_PW" | curl -s -K - -o /dev/null -w "%{http_code}" http://localhost:3000/api/user'
+  environment:
+    GF_ADMIN_PW: "{{ grafana_admin_password }}"
+  register: grafana_configured_login
+  changed_when: false
+  no_log: true
+
+- name: Set the live Grafana admin password to the configured one
+  ansible.builtin.shell: |
+    printf '%s' "$GF_ADMIN_PW" | docker compose -f {{ app_dir }}/observability/grafana/docker-compose.yml \
+      exec -T grafana grafana cli admin reset-admin-password --password-from-stdin
+  environment:
+    GF_ADMIN_PW: "{{ grafana_admin_password }}"
+  register: grafana_pw_reset
+  changed_when: true
+  no_log: true
+  when: grafana_configured_login.stdout | trim != '200'
+
+- name: Check the configured admin password again after changing it
+  ansible.builtin.shell: |
+    docker compose -f {{ app_dir }}/observability/grafana/docker-compose.yml exec -T -e GF_ADMIN_PW grafana \
+      sh -c 'printf "user = \"admin:%s\"\n" "$GF_ADMIN_PW" | curl -s -K - -o /dev/null -w "%{http_code}" http://localhost:3000/api/user'
+  environment:
+    GF_ADMIN_PW: "{{ grafana_admin_password }}"
+  register: grafana_configured_login_after
+  changed_when: false
+  no_log: true
+  when: grafana_pw_reset is changed
+
+# The check that matters: not "the task ran" but "the default login no longer
+# works". Anything but 401 (200 = still open; 000 = could not ask) fails the
+# deploy.
+- name: Probe the default admin/admin login
+  ansible.builtin.shell: |
+    docker compose -f {{ app_dir }}/observability/grafana/docker-compose.yml exec -T grafana \
+      sh -c 'printf "user = \"admin:admin\"\n" | curl -s -K - -o /dev/null -w "%{http_code}" http://localhost:3000/api/user'
+  register: grafana_default_login
+  changed_when: false
+  when: grafana_pw_reset is changed
+
+- name: Assert Grafana accepts the configured login and rejects the default one
+  ansible.builtin.assert:
+    that:
+      - (grafana_configured_login_after.stdout | default(grafana_configured_login.stdout) | trim) == '200'
+      - grafana_pw_reset is not changed or (grafana_default_login.stdout | trim) == '401'
+    fail_msg: >-
+      Grafana is not locked down: the configured admin password answered
+      HTTP {{ grafana_configured_login_after.stdout | default(grafana_configured_login.stdout) | trim }}
+      (must be 200)
+      {% if grafana_pw_reset is changed %}and the default admin/admin login answered
+      HTTP {{ grafana_default_login.stdout | trim }} (must be 401){% endif %}.
+      If this repeats, wait five minutes: Grafana locks an account after five
+      failed logins, and a locked account refuses the right password too.
+    success_msg: >-
+      Grafana: configured admin password accepted (200){% if grafana_pw_reset is changed %};
+      default admin/admin login rejected (401), after changing the live password{% endif %}.

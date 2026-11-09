@@ -1,5 +1,8 @@
 ---
 grafana_image: grafana/grafana-oss:11.5.2
-grafana_admin_password: ""
+# grafana_admin_password has NO default, on purpose. An empty value is not "no
+# admin account": Grafana treats GF_SECURITY_ADMIN_PASSWORD="" as unset and keeps
+# its built-in admin/admin login. The role refuses to deploy without a real one
+# (playbooks/tasks/assert-grafana-admin-password.yml).
 grafana_domain: ""
 grafana_allow_signup: false

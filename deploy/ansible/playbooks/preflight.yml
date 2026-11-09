@@ -723,6 +723,18 @@
         - llamenos_postgres_enabled | default(true) | bool
         - not (healthcheck_only | default(false) | bool)
 
+    # Left empty, GF_SECURITY_ADMIN_PASSWORD makes Grafana keep its built-in
+    # admin/admin login -- a default credential on the observability host, from a
+    # key the production template never mentioned. Same conditions as the
+    # grafana role in playbooks/observability.yml.
+    - name: Assert grafana_admin_password is set when Grafana is enabled
+      ansible.builtin.import_tasks: tasks/assert-grafana-admin-password.yml
+      when:
+        - observability_enabled | default(false) | bool
+        - grafana_enabled | default(true) | bool
+        - prometheus_enabled | default(true) | bool
+        - not (healthcheck_only | default(false) | bool)
+
     - name: Warn if ntfy is not enabled
       ansible.builtin.debug:
         msg: "Note: ntfy push relay not enabled (Android push notifications via UnifiedPush disabled)"

@@ -563,6 +563,9 @@ postgres_exporter_password: "" # openssl rand -hex 24 (>= 16 chars)
 
 # Grafana settings
 grafana_image: grafana/grafana-oss:11.5.2
+# REQUIRED when Grafana is deployed (observability_enabled + grafana_enabled): there
+# is no default, because an empty value leaves Grafana on its built-in admin/admin
+# login. Preflight and the grafana role both refuse empty or under 16 characters.
 grafana_admin_password: "" # Generate with: openssl rand -base64 24
 grafana_domain: "" # Leave empty to use {{ domain }} with /grafana path
 grafana_allow_signup: false
