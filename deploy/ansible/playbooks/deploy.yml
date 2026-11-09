@@ -26,6 +26,12 @@
   # A refused layout is a misconfigured inventory, not one bad host: stop the whole
   # run before anything is deployed anywhere, rather than deploy around it.
   any_errors_fatal: true
+  # The guard reads the same switches the roles do (llamenos_signal_enabled,
+  # llamenos_postgres_enabled, ...), which an operator sets in vars.yml. Without
+  # this the guard would judge the defaults while the roles act on the file, and a
+  # service enabled there could land on an unencrypted host unchallenged.
+  vars_files:
+    - ../vars.yml
   tasks:
     - name: Include shared disk-tier guard (no secrets at rest on unencrypted hosts)
       ansible.builtin.import_tasks: tasks/guard-disk-tier.yml
