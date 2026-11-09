@@ -70,7 +70,7 @@ const field = (id: string, order: number): CustomFieldDefinition => ({
 /** Each destructive call, driven with a given confirmation for row `target`. */
 const DELETES: Record<AdminDeletion, { target: string; call: (c: DeletionConfirmed) => Promise<unknown>; wire: RecordedCall }> = {
   ban: { target: 'a'.repeat(64), call: c => removeBan('a'.repeat(64), c), wire: { method: 'DELETE', url: `/api/hubs/hub-1/bans/${'a'.repeat(64)}` } },
-  platformBan: { target: 'pb-1', call: c => deletePlatformBan('pb-1', c), wire: { method: 'DELETE', url: '/api/bans/platform/pb-1' } },
+  platformBan: { target: 'pb-1', call: c => deletePlatformBan('pb-1', c), wire: { method: 'DELETE', url: '/api/admin/bans/pb-1' } },
   shift: { target: 'shift-1', call: c => deleteShift('shift-1', c), wire: { method: 'DELETE', url: '/api/hubs/hub-1/shifts/shift-1' } },
   shiftOverride: { target: 'ov-1', call: c => deleteShiftOverride('ov-1', c), wire: { method: 'DELETE', url: '/api/hubs/hub-1/shifts/overrides/ov-1' } },
   ringGroup: { target: 'rg-1', call: c => deleteRingGroup('rg-1', c), wire: { method: 'DELETE', url: '/api/hubs/hub-1/ring-groups/rg-1' } },
