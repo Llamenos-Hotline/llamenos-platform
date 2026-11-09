@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -234,6 +235,7 @@ class HubRepositoryTest {
             HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertEquals("hub-aaa", state.activeHubId.value)
+            assertEquals(HubMembership.Loaded, state.membership.value)
         }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -262,6 +264,7 @@ class HubRepositoryTest {
             HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertNull(state.activeHubId.value)
+            assertEquals("No hub, and known to be none", HubMembership.Loaded, state.membership.value)
         }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -275,5 +278,25 @@ class HubRepositoryTest {
             HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).ensureInitialHub()
 
             assertNull(state.activeHubId.value)
+            val membership = state.membership.value
+            assertTrue("No hub, and NOT known to be none (#2565)", membership is HubMembership.Failed)
+            assertEquals("offline", (membership as HubMembership.Failed).cause.message)
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a hub list load the session cancelled failed nothing`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val state = makeRealActiveHubState()
+            val api = mockk<ApiService>()
+            coEvery { api.getHubs() } throws kotlinx.coroutines.CancellationException("session ended")
+
+            try {
+                HubRepository(api, mockk(relaxed = true), state, mockk(relaxed = true)).selectInitialHub()
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                // Rethrown to the cancelled caller, as it must be.
+            }
+
+            assertEquals(HubMembership.Unknown, state.membership.value)
         }
 }

@@ -19,11 +19,13 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.HubMembershipPendingException
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
+import org.llamenos.hotline.hub.launchOnBrowsingChange
 import org.llamenos.hotline.model.CustomFieldDef
 import org.llamenos.hotline.model.CustomFieldsResponse
 import org.llamenos.hotline.model.CustomFieldDefinitionType
@@ -122,13 +124,10 @@ class NotesViewModel @Inject constructor(
     val uiState: StateFlow<NotesUiState> = _uiState.asStateFlow()
 
     init {
-        activeHubState.activeHubId
-            .filterNotNull()
-            .onEach {
-                loadNotes()
-                loadCustomFields()
-            }
-            .launchIn(viewModelScope)
+        activeHubState.launchOnBrowsingChange(viewModelScope) {
+            loadNotes()
+            loadCustomFields()
+        }
     }
 
     private suspend fun ensureAdminPubkeyLoaded() =
@@ -169,7 +168,8 @@ class NotesViewModel @Inject constructor(
                     )
                 }
             } catch (_: NoActiveHubException) {
-                // No hub to browse: nothing to load, which is not a failure (#2405).
+                // The user belongs to no hub: nothing to load, which is not a failure (#2405).
+                // A hub list that could not be read is NOT this, and falls through to an error (#2565).
                 _uiState.update {
                     it.copy(
                         notes = emptyList(),
@@ -178,6 +178,11 @@ class NotesViewModel @Inject constructor(
                         totalNotes = 0,
                         hasMorePages = false,
                     )
+                }
+            } catch (_: HubMembershipPendingException) {
+                // The hub list is still loading: not "no hub" (#2565). This reloads when it settles.
+                _uiState.update {
+                    it.copy(notes = emptyList(), isLoading = true, isRefreshing = false)
                 }
             } catch (e: ApiException) {
                 // Hub-scoped 404/403 means the hub has no notes or user lacks

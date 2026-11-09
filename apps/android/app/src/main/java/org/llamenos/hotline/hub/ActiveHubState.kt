@@ -6,16 +6,44 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.di.ApplicationScope
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * What this session knows about which hubs the user belongs to (#2565).
+ *
+ * With no active hub, this is the difference between "the user belongs to no hub" —
+ * nothing to browse — and "nobody knows", which a hub-owned screen must never present as
+ * an empty list. An empty schedule for a hub that could not be reached tells a rostered
+ * volunteer they are off shift.
+ *
+ * Browsing context only: incoming calls and notifications are handled for every member
+ * hub whatever this says (multi-hub routing axiom).
+ */
+sealed interface HubMembership {
+    /** Not asked yet this session, or the answer is still in flight. */
+    data object Unknown : HubMembership
+
+    /** The server answered, and the active hub was reconciled against its answer. */
+    data object Loaded : HubMembership
+
+    /** The server could not be asked, or did not answer. */
+    data class Failed(val cause: Exception) : HubMembership
+}
 
 /**
  * Single source of truth for the currently active hub ID.
@@ -64,6 +92,30 @@ class ActiveHubState @Inject constructor(
      */
     suspend fun awaitHydrated() = hydrated.await()
 
+    private val _membership = MutableStateFlow<HubMembership>(HubMembership.Unknown)
+
+    /**
+     * What the session's latest hub-list load established; see [HubMembership]. Only
+     * meaningful while [activeHubId] is null — a chosen hub is browsed whether or not the
+     * list could be re-read since.
+     */
+    val membership: StateFlow<HubMembership> = _membership
+
+    /** A hub-list load has started: until it settles, membership is not known. */
+    fun beginMembershipLoad() {
+        _membership.value = HubMembership.Unknown
+    }
+
+    /** The hub list was read and the active hub reconciled against it. */
+    fun recordMembershipLoaded() {
+        _membership.value = HubMembership.Loaded
+    }
+
+    /** The hub list could not be read. */
+    fun recordMembershipFailed(cause: Exception) {
+        _membership.value = HubMembership.Failed(cause)
+    }
+
     private val _refreshTrigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /**
@@ -96,3 +148,21 @@ class ActiveHubState @Inject constructor(
         dataStore.edit { prefs -> prefs.remove(ACTIVE_HUB_KEY) }
     }
 }
+
+/**
+ * Runs [load] each time what a hub-owned screen can show may have changed: a hub becomes
+ * active, or — with none active — what is known about membership changes.
+ *
+ * Keying a screen on [ActiveHubState.activeHubId] alone is the defect in #2565: a screen
+ * opened while the hub list is loading settles on "no hub", and when the load then FAILS
+ * the active hub stays null, so the screen never loads again and shows an empty list for
+ * a hub nobody could reach. Membership changes are ignored while a hub is active: that
+ * hub is what is browsed, and its own change already reloads.
+ */
+fun ActiveHubState.launchOnBrowsingChange(scope: CoroutineScope, load: () -> Unit): Job =
+    merge(
+        activeHubId.filterNotNull(),
+        membership.filter { activeHubId.value == null },
+    )
+        .onEach { load() }
+        .launchIn(scope)

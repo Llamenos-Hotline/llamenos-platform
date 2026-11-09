@@ -1,6 +1,7 @@
 package org.llamenos.hotline.hub
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -14,7 +15,6 @@ import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
-import org.llamenos.hotline.model.HubsListResponse
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
 import javax.inject.Inject
@@ -153,37 +153,49 @@ class HubRepository @Inject constructor(
      * replaces a hub the user chose and still belongs to, and it runs in the foreground,
      * never from a background event.
      *
-     * An unregistered identity, or no network, has no hub list to choose from; that is
-     * logged and the current choice is left alone.
+     * The outcome is recorded on [ActiveHubState.membership]: a list that could not be
+     * read leaves the current choice alone, and is a failure hub-owned screens report —
+     * never "the user belongs to no hub" (#2565).
      */
     suspend fun selectInitialHub() {
-        val hubs = try {
-            apiService.request<HubsListResponse>("GET", "/api/hubs").hubs
-        } catch (e: ApiException) {
-            Log.w(TAG, "hub list unavailable (HTTP ${e.code}); active hub unchanged")
-            return
-        } catch (e: IOException) {
-            Log.w(TAG, "hub list unavailable (${e.message}); active hub unchanged")
-            return
-        }
-        loadInitialHub(hubs)
+        activeHubState.beginMembershipLoad()
+        loadMembership()
     }
 
     /**
      * Keep the persisted hub if the user is still a member of it; otherwise select their
-     * first hub, or none if they belong to none.
+     * first hub, or none if they belong to none. Membership is then known.
      */
     suspend fun loadInitialHub(hubs: List<Hub>) {
         // Relay events must arrive from every member hub, not only the one being browsed.
         webSocketService.syncMemberHubs(hubs.map { it.id })
         activeHubState.awaitHydrated()
         val current = activeHubState.activeHubId.value
-        if (current != null && hubs.any { it.id == current }) return
-        val first = hubs.firstOrNull()
-        when {
-            first != null -> switchHub(first.id)
-            current != null -> activeHubState.clearActiveHub()
+        if (current == null || hubs.none { it.id == current }) {
+            val first = hubs.firstOrNull()
+            when {
+                first != null -> switchHub(first.id)
+                current != null -> activeHubState.clearActiveHub()
+            }
         }
+        activeHubState.recordMembershipLoaded()
+    }
+
+    /** Read the hub list and reconcile the active hub against it, or record why not. */
+    private suspend fun loadMembership() {
+        val hubs = try {
+            apiService.getHubs().hubs
+        } catch (e: CancellationException) {
+            // The session cancelled the load (it ended, or a newer one started): nothing failed.
+            throw e
+        } catch (e: Exception) {
+            // Unreachable, refused, unregistered, or an unreadable answer: either way the
+            // server has not said which hubs the user belongs to.
+            Log.w(TAG, "hub list unavailable (${e.message}); active hub unchanged")
+            activeHubState.recordMembershipFailed(e)
+            return
+        }
+        loadInitialHub(hubs)
     }
 
     private companion object {
@@ -199,12 +211,11 @@ class HubRepository @Inject constructor(
      * No-op when a hub is already selected (restored from DataStore, or chosen by the
      * user in Hub Management).
      *
-     * Hub-list fetch failures are non-fatal: the dashboard stays hub-less until the
-     * user picks a hub or a later attempt succeeds.
+     * A hub-list failure leaves the dashboard hub-less until the user picks a hub or a
+     * later attempt succeeds, and is recorded so hub-owned screens report it (#2565).
      */
     suspend fun ensureInitialHub() {
         if (activeHubState.activeHubId.value != null) return
-        val hubs = runCatching { apiService.getHubs() }.getOrNull()?.hubs ?: return
-        loadInitialHub(hubs)
+        loadMembership()
     }
 }
