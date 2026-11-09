@@ -30,10 +30,11 @@ import {
   evidence,
   custodyEntries,
   entityTypeDefinitions,
+  contacts,
 } from '../db/schema'
 import { conversations } from '../db/schema/conversations'
 import type { ConvertFromReportResponse } from '@protocol/schemas/records'
-import { ServiceError } from './settings'
+import { ServiceError, isCrossHubSharingEnabled } from './settings'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import type { CreateRecordBody } from '@protocol/schemas/records'
 import type { MergeRecordsResponse } from '@protocol/schemas/entity-merge'
@@ -110,6 +111,53 @@ export class CasesService {
   constructor(protected db: Database) {}
 
   // =========================================================================
+  // Hub binding of body-supplied ids (#2605)
+  // =========================================================================
+  //
+  // Nothing in the schema ties these ids to a hub (no FK), so a record's
+  // references are bound HERE, by the hub of the record being written — which
+  // the caller takes from the authenticated path, never from the body. An id
+  // that names another hub's row and an id that names nothing are the same
+  // answer: 404, with the same text.
+
+  private async assertEntityTypeInHub(hubId: string, entityTypeId: string): Promise<void> {
+    const rows = await this.db
+      .select({ id: entityTypeDefinitions.id })
+      .from(entityTypeDefinitions)
+      .where(and(eq(entityTypeDefinitions.id, entityTypeId), eq(entityTypeDefinitions.hubId, hubId)))
+      .limit(1)
+    if (rows.length === 0) throw new ServiceError(404, 'Entity type not found')
+  }
+
+  private async assertParentRecordInHub(hubId: string, parentRecordId: string): Promise<void> {
+    const rows = await this.db
+      .select({ id: caseRecords.id })
+      .from(caseRecords)
+      .where(and(eq(caseRecords.id, parentRecordId), eq(caseRecords.hubId, hubId)))
+      .limit(1)
+    if (rows.length === 0) throw new ServiceError(404, 'Parent record not found')
+  }
+
+  private async assertContactsInHub(hubId: string, contactIds: string[]): Promise<void> {
+    const wanted = [...new Set(contactIds)]
+    if (wanted.length === 0) return
+    const rows = await this.db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(and(inArray(contacts.id, wanted), eq(contacts.hubId, hubId)))
+    if (rows.length !== wanted.length) throw new ServiceError(404, 'Contact not found')
+  }
+
+  private async assertReportInHub(hubId: string, reportId: string): Promise<void> {
+    const rows = await this.db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, reportId), eq(conversations.hubId, hubId)))
+      .limit(1)
+    if (rows.length === 0) throw new ServiceError(404, 'Report not found')
+  }
+
+  // =========================================================================
   // Case Record CRUD
   // =========================================================================
 
@@ -120,6 +168,14 @@ export class CasesService {
       caseNumber?: string
     },
   ): Promise<CaseRecordRow> {
+    // Every reference is checked against the record's hub BEFORE anything is
+    // written, so a refused request leaves no half-built record behind.
+    await this.assertEntityTypeInHub(input.hubId, input.entityTypeId)
+    if (input.parentRecordId) {
+      await this.assertParentRecordInHub(input.hubId, input.parentRecordId)
+    }
+    await this.assertContactsInHub(input.hubId, (input.contactLinks ?? []).map((l) => l.contactId))
+
     const [record] = await this.db
       .insert(caseRecords)
       .values({
@@ -395,6 +451,13 @@ export class CasesService {
     const limit = Math.min(input.limit ?? 20, 100)
     const offset = (page - 1) * limit
 
+    // Cross-hub listing is the deployment's opt-in. It is decided here, in the
+    // service, so no caller can widen a listing past its hub while sharing is
+    // off (#2605).
+    if (input.crossHub && !(await isCrossHubSharingEnabled(this.db))) {
+      throw new ServiceError(403, 'Cross-hub sharing is disabled')
+    }
+
     const conditions: SQL[] = []
     if (input.crossHub) {
       const { hubIds, requestingPubkey } = input.crossHub
@@ -648,12 +711,13 @@ export class CasesService {
     addedBy: string,
   ): Promise<CaseContactRow> {
     const record = await this.db
-      .select({ id: caseRecords.id })
+      .select({ id: caseRecords.id, hubId: caseRecords.hubId })
       .from(caseRecords)
       .where(eq(caseRecords.id, caseId))
     if (record.length === 0) {
       throw new ServiceError(404, 'Record not found')
     }
+    await this.assertContactsInHub(record[0].hubId ?? '', [contactId])
 
     const [link] = await this.db
       .insert(caseContacts)
@@ -1265,12 +1329,13 @@ export class CasesService {
     notesEnvelopes?: unknown,
   ): Promise<ReportCaseRow> {
     const record = await this.db
-      .select({ id: caseRecords.id })
+      .select({ id: caseRecords.id, hubId: caseRecords.hubId })
       .from(caseRecords)
       .where(eq(caseRecords.id, caseId))
     if (record.length === 0) {
       throw new ServiceError(404, 'Record not found')
     }
+    await this.assertReportInHub(record[0].hubId ?? '', reportId)
 
     // Check for duplicate link
     const existing = await this.db
@@ -1812,6 +1877,8 @@ export class CasesService {
     defaultStatusHash?: string
   }): Promise<ConvertFromReportResponse> {
     const { reportId, entityTypeId, hubId, createdBy, caseNumber, defaultStatusHash } = params
+
+    await this.assertEntityTypeInHub(hubId, entityTypeId)
 
     return await this.db.transaction(async (tx) => {
       // 1. Fetch report — validates existence, in this hub. A report of another

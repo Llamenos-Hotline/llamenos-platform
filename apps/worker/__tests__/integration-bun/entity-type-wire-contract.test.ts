@@ -94,11 +94,11 @@ describe('entity-types wire contract', () => {
       baseBody(hubId, 'notify_on', { notifyContactsOnStatusChange: true }),
     )
     expect(on.notifyContactsOnStatusChange).toBe(true)
-    expect((await settings.getEntityTypeById(on.id)).notifyContactsOnStatusChange).toBe(true)
+    expect((await settings.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(true)
 
     const flipped = await settings.updateEntityType(on.id, { notifyContactsOnStatusChange: false })
     expect(flipped.notifyContactsOnStatusChange).toBe(false)
-    expect((await settings.getEntityTypeById(on.id)).notifyContactsOnStatusChange).toBe(false)
+    expect((await settings.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(false)
 
     // A PATCH that does not mention the flag must not reset it.
     const set = await settings.updateEntityType(on.id, { notifyContactsOnStatusChange: true })

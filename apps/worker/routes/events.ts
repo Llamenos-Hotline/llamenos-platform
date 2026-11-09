@@ -153,7 +153,7 @@ events.post('/',
     // Generate case number if entity type has numbering enabled
     let caseNumber: string | undefined
     try {
-      const entityType = await services.settings.getEntityTypeById(body.entityTypeId)
+      const entityType = await services.settings.getEntityTypeById(body.entityTypeId, pathHubId(c))
       if (entityType.numberingEnabled && entityType.numberPrefix) {
         const result = await services.settings.generateCaseNumber({
           prefix: entityType.numberPrefix,

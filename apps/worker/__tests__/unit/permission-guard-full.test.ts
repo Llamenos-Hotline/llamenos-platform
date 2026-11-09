@@ -308,6 +308,6 @@ describe('requireEntityTypeAccess', () => {
 
     const res = await app.request('/test?entityTypeId=et-456')
     expect(res.status).toBe(200)
-    expect(mockGetEntityType).toHaveBeenCalledWith('et-456')
+    expect(mockGetEntityType).toHaveBeenCalledWith('et-456', '')
   })
 })
