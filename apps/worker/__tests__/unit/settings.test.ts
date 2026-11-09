@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { SettingsService, ServiceError } from '@worker/services/settings'
 import { createMockDb } from './mock-db'
+import { hubDetailResponseSchema, hubListResponseSchema } from '@protocol/schemas/hubs'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -508,5 +509,15 @@ describe('SettingsService.updateHub', () => {
     db.$setSelectResults([[makeHub({ timezone: 'Asia/Kolkata' })], [makeHub({ timezone: 'Asia/Kolkata' })]])
     expect((await service.getHub('hub-1')).hub.timezone).toBe('Asia/Kolkata')
     expect((await service.getHubs()).hubs[0].timezone).toBe('Asia/Kolkata')
+  })
+
+  it('every read of a hub satisfies the declared response contract, timezone included', async () => {
+    const { db, service } = setup()
+    db.$setSelectResults([[makeHub()], [makeHub()], [makeHub()], [makeHub()]])
+    // The route tests mock the service, so this is the check that the REAL row
+    // mapping fills every required `Hub` field.
+    expect(hubDetailResponseSchema.parse(await service.getHub('hub-1')).hub.timezone).toBe('UTC')
+    expect(hubListResponseSchema.parse(await service.getHubs()).hubs[0].timezone).toBe('UTC')
+    expect(hubDetailResponseSchema.parse(await service.updateHub('hub-1', { name: 'x' })).hub.timezone).toBe('UTC')
   })
 })

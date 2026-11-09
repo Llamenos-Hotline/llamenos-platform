@@ -93,6 +93,7 @@ private func makeMemberHub(id: String) -> SharedHub {
         phoneNumber: nil,
         slug: "hub-\(id)",
         status: .active,
+        timezone: "UTC",
         updatedAt: "2026-01-01T00:00:00Z"
     )
 }
@@ -100,7 +101,7 @@ private func makeMemberHub(id: String) -> SharedHub {
 /// Hub-list JSON the real APIService decodes into HubsListResponse.
 private func hubListJSON(_ ids: [String]) -> String {
     let hubs = ids.map { id in
-        #"{"createdAt":"2026-01-01T00:00:00Z","createdBy":"pub001","description":null,"id":"\#(id)","name":"Hub \#(id)","phoneNumber":null,"slug":"hub-\#(id)","status":"active","updatedAt":"2026-01-01T00:00:00Z"}"#
+        #"{"createdAt":"2026-01-01T00:00:00Z","createdBy":"pub001","description":null,"id":"\#(id)","name":"Hub \#(id)","phoneNumber":null,"slug":"hub-\#(id)","status":"active","timezone":"UTC","updatedAt":"2026-01-01T00:00:00Z"}"#
     }.joined(separator: ",")
     return #"{"hubs":[\#(hubs)]}"#
 }

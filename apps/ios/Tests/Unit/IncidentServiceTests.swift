@@ -215,6 +215,7 @@ private func makeIncidentHub(id: String, name: String) -> SharedHub {
         phoneNumber: nil,
         slug: id,
         status: .active,
+        timezone: "UTC",
         updatedAt: "2026-01-01T00:00:00Z"
     )
 }

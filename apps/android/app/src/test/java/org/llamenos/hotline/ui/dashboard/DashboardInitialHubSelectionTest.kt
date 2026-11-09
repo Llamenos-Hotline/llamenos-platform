@@ -128,6 +128,7 @@ class DashboardInitialHubSelectionTest {
         name = "Hub $id",
         slug = id,
         status = SharedHubDetailResponseStatus.Active,
+        timezone = "UTC",
         updatedAt = "2026-01-01T00:00:00Z",
     )
 

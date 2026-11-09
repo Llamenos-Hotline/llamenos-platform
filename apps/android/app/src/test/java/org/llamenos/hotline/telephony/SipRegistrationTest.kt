@@ -916,9 +916,9 @@ class SipRegistrationTest {
 
         val HUBS_JSON = """
             {"hubs":[
-              {"id":"$HUB_A","name":"Hub A","slug":"hub-a","status":"active","createdBy":"admin",
+              {"id":"$HUB_A","name":"Hub A","slug":"hub-a","status":"active","timezone":"UTC","createdBy":"admin",
                "createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"},
-              {"id":"$HUB_B","name":"Hub B","slug":"hub-b","status":"active","createdBy":"admin",
+              {"id":"$HUB_B","name":"Hub B","slug":"hub-b","status":"active","timezone":"UTC","createdBy":"admin",
                "createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:00Z"}
             ]}
         """.trimIndent()
