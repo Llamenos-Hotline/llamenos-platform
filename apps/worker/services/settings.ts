@@ -4117,12 +4117,17 @@ export class SettingsService {
     // in the platform-settings document (see `getPlatformSettings`).
     const { crossHubSharingEnabled, ...storedFlags } = (merged.featureFlags ?? {}) as Record<string, unknown>
     const incomingFlags = updates.featureFlags as Record<string, unknown> | undefined
-    if (incomingFlags && incomingFlags.crossHubSharingEnabled !== undefined) {
-      await this.setCrossHubSharingEnabled({ enabled: incomingFlags.crossHubSharingEnabled === true })
+    // ONE statement writes the column and the document, so a failure cannot leave the
+    // switch flipped while the rest of the update is lost (or the reverse).
+    const crossHubUpdate = incomingFlags?.crossHubSharingEnabled !== undefined
+      ? { crossHubSharingEnabled: incomingFlags.crossHubSharingEnabled === true }
+      : {}
+    if (crossHubUpdate.crossHubSharingEnabled !== undefined) {
+      await getSettings(this.db) // ensure the singleton row exists before UPDATE
     }
     await this.db
       .update(systemSettings)
-      .set({ platformSettings: { ...merged, featureFlags: storedFlags } })
+      .set({ platformSettings: { ...merged, featureFlags: storedFlags }, ...crossHubUpdate })
       .where(eq(systemSettings.id, SINGLETON_ID))
 
     return { ...merged, featureFlags: { ...storedFlags, crossHubSharingEnabled } }

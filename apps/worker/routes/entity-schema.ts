@@ -215,6 +215,38 @@ entitySchema.get('/entity-types',
   },
 )
 
+// GET /entity-types/:id stays hand-written, like the list above. `getEntityTypeById(id, hubId)`
+// takes the hub as its SECOND argument, while the factory dispatches by method *name* with a
+// fixed argument order (`hubScoped` puts the hub FIRST). Routing it through the factory erased
+// the signature: tsc could not see that a required `hubId` was never passed, so every lookup
+// became `WHERE hub_id = NULL` and returned 404 for every entity type (#2620 review). Calling
+// it directly keeps the call under the type checker.
+entitySchema.get('/entity-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Get an entity type definition',
+    responses: {
+      200: {
+        description: 'Entity type definition',
+        content: { 'application/json': { schema: resolver(entityTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('settings:read'),
+  async (c) => {
+    const services = c.get('services')
+    // Same scoping as the list: the path hub wins; on the unscoped mount another hub is
+    // honoured only for a caller who can read settings there. The platform's own entity
+    // types are stored under hub ''.
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const result = await services.settings.getEntityTypeById(c.req.param('id'), target.hubId ?? '')
+    return c.json(result)
+  },
+)
+
 // POST, PATCH /:id, DELETE /:id via entity-router factory
 const entityTypeRouter = createEntityRouter({
   tag: 'Case Management',
@@ -225,14 +257,13 @@ const entityTypeRouter = createEntityRouter({
   createBodySchema: createEntityTypeBodySchema,
   updateBodySchema: updateEntityTypeBodySchema,
   permissionOverrides: {
-    get: 'settings:read',
     create: 'cases:manage-types',
     update: 'cases:manage-types',
     delete: 'cases:manage-types',
   },
   disableList: true,
+  disableGet: true,
   methods: {
-    get: 'getEntityTypeById',
     create: 'createEntityType',
     update: 'updateEntityType',
     delete: 'deleteEntityType',
