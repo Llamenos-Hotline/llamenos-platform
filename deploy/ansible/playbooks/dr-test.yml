@@ -469,12 +469,14 @@
       # before the teardown destroys them. The failure is then re-raised: this
       # does not turn a failed drill into a passed one.
       rescue:
+        # `|| true` inside the shell, not failed_when/ignore_errors: collecting
+        # diagnostics must never replace the real failure with its own.
         - name: Collect the scratch app's logs
-          ansible.builtin.command:
-            cmd: docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml logs --no-color --tail 60 app rustfs
+          ansible.builtin.shell: >-
+            docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml
+            logs --no-color --tail 60 app rustfs 2>&1 || true
           register: dr_failure_logs
           changed_when: false
-          failed_when: false
 
         - name: Show why the drill failed
           ansible.builtin.debug:
