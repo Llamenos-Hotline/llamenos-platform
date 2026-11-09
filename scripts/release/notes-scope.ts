@@ -1,22 +1,34 @@
 /**
- * Which commits reach the user-facing release notes — the same rule knope
- * applies through `[package] scopes` in knope.toml, made inspectable — and the
- * bridge that gets `security(...)`/`perf(...)` commits into those notes at all.
+ * Which commits reach the user-facing release notes, and the bridge that gets
+ * the extra types knope.toml opts in (`security`, `perf`) into those notes at
+ * all. Operator ruling (2026-11-08): the notes contain only changes an end user
+ * or self-hoster would care about.
  *
- * knope.toml is the single source of truth for both lists this module uses:
- * `[package] scopes` (the allowlist of product scopes) and
- * `[package] extra_changelog_sections` (the Security/Performance sections and
- * the types that feed them). Nothing here keeps a second copy of either.
+ * `placeCommit` is THE rule; the changesets, the verification and the "left
+ * out" list are all views of it. A commit reaches the notes only if it passes,
+ * in order:
+ *
+ *   1. Type. knope's own (`feat`, `fix`, any breaking change), or a type opted
+ *      in through `[package] extra_changelog_sections`. Everything else — test,
+ *      ci, chore, build, docs, refactor, style, revert, any unknown type, any
+ *      non-conventional subject — is out, whatever its scope.
+ *   2. Scope. `[package] scopes` is the allowlist, or the commit has no scope.
+ *   3. Paths, for the opted-in types only. A commit whose every changed path is
+ *      test code, CI or test tooling is out even under a product scope:
+ *      `perf(ios): parallelize XCUITests` shipped nothing to anyone. knope
+ *      reads feat/fix itself and cannot apply this; see `placeCommit`.
+ *
+ * knope.toml is the single source of truth for both configured lists; nothing
+ * here keeps a second copy. Opting a new type in is one edit there.
  *
  *   bun scripts/release/notes-scope.ts excluded   <from-ref> [<to-ref>]
  *   bun scripts/release/notes-scope.ts changesets [<from-ref> [<to-ref>]]
  *   bun scripts/release/notes-scope.ts verify     [<from-ref> [<to-ref>]]
  *
- * `excluded` prints, as Markdown, every note-worthy commit in
- * <from-ref>..<to-ref> (default HEAD) that the rule keeps OUT of the notes.
- * knope-release-pr.yml appends it to the release PR body, so a product change
- * filed under a scope missing from the allowlist is seen at release review
- * instead of vanishing.
+ * `excluded` prints, as Markdown, every commit in <from-ref>..<to-ref> (default
+ * HEAD) that the rule keeps OUT of the notes. knope-release-pr.yml appends it
+ * to the release PR body, so a product change the rule misjudged is seen at
+ * release review instead of vanishing.
  *
  * `changesets` and `verify` are knope.toml `prepare-release` steps, before and
  * after PrepareRelease. <from-ref> defaults to `v<version>` read from
@@ -30,11 +42,11 @@
  * `.changeset/*.md` with `default: security` produced one under "### Security"
  * (and a patch bump on its own). So 18 security/perf commits in history never
  * reached a release note, and a self-hoster could not see that a release
- * patched something. `changesets` writes one changeset per product-scoped
- * security/perf commit; `verify` then fails the release unless each of them
- * appears exactly once in its section — so a knope upgrade that stops reading
- * the changesets (missing entry) or starts matching commit types itself
- * (duplicate entry) is a red release job, not a quiet gap.
+ * patched something. `changesets` writes one changeset per commit the rule
+ * bridges; `verify` then fails the release unless each of them appears exactly
+ * once in its section — so a knope upgrade that stops reading the changesets
+ * (missing entry) or starts matching commit types itself (duplicate entry) is a
+ * red release job, not a quiet gap.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -42,7 +54,10 @@ import { join } from 'node:path'
 const ROOT = join(import.meta.dir, '..', '..')
 const KNOPE_TOML = join(ROOT, 'knope.toml')
 
-/** Conventional-commit types knope itself turns into changelog entries. */
+/**
+ * Conventional-commit types knope itself turns into changelog entries. This
+ * describes knope's built-in behaviour; types WE add live in knope.toml.
+ */
 const KNOPE_COMMIT_TYPES = new Set(['feat', 'fix'])
 
 export interface ConventionalSubject {
@@ -53,7 +68,9 @@ export interface ConventionalSubject {
   description: string
 }
 
-const SUBJECT = /^(?<type>[A-Za-z]+)(?:\((?<scope>[^()]*)\))?(?<bang>!)?: (?<description>.+)$/
+// `[\w-]+`, not letters only: a type opted in through knope.toml can be any
+// changeset type, and one with a digit must not silently fail to parse.
+const SUBJECT = /^(?<type>[\w-]+)(?:\((?<scope>[^()]*)\))?(?<bang>!)?: (?<description>.+)$/
 
 export function parseSubject(subject: string): ConventionalSubject | null {
   const m = SUBJECT.exec(subject.trim())
@@ -86,9 +103,9 @@ export function loadProductScopes(path: string = KNOPE_TOML): ReadonlySet<string
 }
 
 /**
- * knope.toml's `extra_changelog_sections`, as type → section heading. These
- * types are also the conventional-commit types the bridge carries, so the
- * section a `security(...)` commit lands in is the one knope.toml names.
+ * knope.toml's `extra_changelog_sections`, as type → section heading. This is
+ * the whole opt-in: a type listed there is a release-note type and the bridge
+ * carries it to the section knope.toml names. A type not listed there is not.
  */
 export function loadNoteSections(path: string = KNOPE_TOML): ReadonlyMap<string, string> {
   const sections = loadPackage(path).extra_changelog_sections
@@ -116,22 +133,103 @@ export function scopeIsProduct(scope: string | null, productScopes: ReadonlySet<
 }
 
 /**
- * A commit that would produce a release-note entry if its scope were
- * admitted: one knope reads itself (feat, fix, any breaking change), or one of
- * the extra-section types the bridge carries (security, perf).
+ * Paths that never reach a user: test code wherever it lives, CI, and test or CI
+ * tooling. Everything else counts as shipping, so a new product directory needs
+ * no entry here and a path nobody thought of errs towards being in the notes.
+ *
+ * `scripts/ios-build.sh` and `apps/ios/project.yml` earn their place from the
+ * commit this rule exists for: 9bcdf2d32 `perf(ios): parallelize XCUITests`
+ * changed a test helper, the CI workflow, that script and the test-scheme stanza
+ * of the XcodeGen spec. Do NOT widen this to all of `scripts/` or
+ * `packages/*\/scripts/`: the Dockerfiles copy `scripts/run-migrations.ts` and
+ * its siblings into the app image, `deploy/docker/first-run.sh` sources
+ * `scripts/lib/server-hash-keys.sh`, `scripts/iso-builder/` builds the ISO, and
+ * `packages/crypto/scripts/build-server.sh` builds the server's crypto library.
+ * A security fix in any of those belongs in the notes.
  */
-export function isChangelogEligible(c: ConventionalSubject, noteSections: ReadonlyMap<string, string>): boolean {
-  return KNOPE_COMMIT_TYPES.has(c.type) || c.breaking || noteSections.has(c.type)
+const NON_SHIPPING_PATHS: readonly RegExp[] = [
+  // Test code: test directories on every platform, then test-named files that
+  // sit beside the source they cover.
+  /(^|\/)(tests?|Tests|__tests__|__mocks__|androidTest|e2e|test-specs)\//,
+  /\.(test|spec)\.[cm]?[jt]sx?$/,
+  /Tests?\.(swift|kt)$/,
+  /_test\.(rs|go)$/,
+  // Test-runner configuration.
+  /^(playwright|vitest)[^/]*$/,
+  /^tsconfig\.tests\.json$/,
+  // CI.
+  /^\.github\//,
+  // Test and CI tooling, named individually (see above).
+  /^scripts\/ci\//,
+  /^scripts\/test-[^/]*$/,
+  /^scripts\/ios-build\.sh$/,
+  /^apps\/ios\/scripts\//,
+  /^apps\/ios\/project\.yml$/,
+  /^orchestrator\//,
+  /^\.claude\//,
+]
+
+/** True only when there is at least one path and none of them ships. */
+export function touchesOnlyNonShippingPaths(paths: readonly string[]): boolean {
+  return paths.length > 0 && paths.every((p) => NON_SHIPPING_PATHS.some((re) => re.test(p)))
 }
 
 export interface Commit {
   sha: string
   subject: string
+  /** Every path the commit changed. A rename contributes both of its sides. */
+  paths: readonly string[]
 }
 
-export interface Excluded extends Commit {
-  type: string
-  scope: string
+export type ExclusionReason =
+  /** Not a release-note type, or not a conventional subject at all. */
+  | 'type'
+  /** A release-note type under a scope outside the allowlist. */
+  | 'scope'
+  /** A bridged type under a product scope that changed nothing that ships. */
+  | 'non-shipping-paths'
+
+export type Placement =
+  /** knope lists it itself; nothing for us to do. */
+  | { kind: 'knope' }
+  /** knope cannot see it; the bridge writes a changeset for it. */
+  | { kind: 'bridged'; type: string; section: string; description: string }
+  | { kind: 'excluded'; reason: ExclusionReason; type: string | null; scope: string | null }
+
+/**
+ * THE rule (see the module header). A breaking commit of any type is knope's:
+ * it files every one under "### Breaking Changes", so bridging one too would
+ * list it twice.
+ *
+ * The path check is reachable only for bridged types, on purpose. knope reads
+ * feat/fix commits straight out of git and offers no per-commit filter beyond
+ * `scopes`, so `fix(ios): flaky XCUITest` is listed whatever this function says.
+ * The type is the guard there: test work is `test(ios)`.
+ */
+export function placeCommit(
+  commit: Commit,
+  productScopes: ReadonlySet<string>,
+  noteSections: ReadonlyMap<string, string>,
+): Placement {
+  const c = parseSubject(commit.subject)
+  if (!c) return { kind: 'excluded', reason: 'type', type: null, scope: null }
+  const excluded = (reason: ExclusionReason): Placement => ({ kind: 'excluded', reason, type: c.type, scope: c.scope })
+
+  const knopeReadsIt = c.breaking || KNOPE_COMMIT_TYPES.has(c.type)
+  const section = knopeReadsIt ? undefined : noteSections.get(c.type)
+  if (!knopeReadsIt && section === undefined) return excluded('type')
+  if (!scopeIsProduct(c.scope, productScopes)) return excluded('scope')
+  if (section === undefined) return { kind: 'knope' }
+  if (touchesOnlyNonShippingPaths(commit.paths)) return excluded('non-shipping-paths')
+  return { kind: 'bridged', type: c.type, section, description: c.description }
+}
+
+export interface Excluded {
+  sha: string
+  subject: string
+  reason: ExclusionReason
+  type: string | null
+  scope: string | null
 }
 
 export function excludedCommits(
@@ -140,28 +238,40 @@ export function excludedCommits(
   noteSections: ReadonlyMap<string, string>,
 ): Excluded[] {
   const out: Excluded[] = []
-  for (const { sha, subject } of commits) {
-    const c = parseSubject(subject)
-    if (!c || !isChangelogEligible(c, noteSections) || scopeIsProduct(c.scope, productScopes)) continue
-    // scopeIsProduct(null) is true, so a commit reaching here has a scope.
-    out.push({ sha, subject, type: c.type, scope: c.scope as string })
+  for (const commit of commits) {
+    const placement = placeCommit(commit, productScopes, noteSections)
+    if (placement.kind !== 'excluded') continue
+    const { reason, type, scope } = placement
+    out.push({ sha: commit.sha, subject: commit.subject, reason, type, scope })
   }
   return out
 }
+
+/**
+ * The lowest-value tier (`chore:`, `test:`, …) is bounded so a release after a
+ * long gap cannot push the PR body past GitHub's 65,536-character limit, which
+ * would fail the workflow step. The cut is stated in the output, never silent.
+ */
+export const MAX_LISTED_OTHER_TYPES = 200
 
 export function renderExcluded(
   excluded: readonly Excluded[],
   range: string,
   noteSections: ReadonlyMap<string, string>,
 ): string {
-  const line = (e: Excluded): string => `- \`${e.scope}\` — ${e.subject} (${e.sha.slice(0, 9)})`
-  const flagged = excluded.filter((e) => noteSections.has(e.type))
-  const rest = excluded.filter((e) => !noteSections.has(e.type))
+  const line = (e: Excluded): string => {
+    const why = e.reason === 'scope' ? `\`${e.scope}\` — ` : e.reason === 'non-shipping-paths' ? 'tests/CI/tooling only — ' : ''
+    return `- ${why}${e.subject} (${e.sha.slice(0, 9)})`
+  }
+  const sectionOf = (e: Excluded): string | undefined => (e.type === null ? undefined : noteSections.get(e.type))
+  const flagged = excluded.filter((e) => sectionOf(e) !== undefined)
+  const otherScopes = excluded.filter((e) => e.reason === 'scope' && sectionOf(e) === undefined)
+  const otherTypes = excluded.filter((e) => e.reason === 'type')
   const lines = [
-    '### Left out of these notes (not a product scope)',
+    '### Left out of these notes',
     '',
-    `Commits in \`${range}\` that knope.toml's \`scopes\` allowlist keeps out of the changelog and the version bump. ` +
-      'If one of these changed the product, its scope belongs in that allowlist (multi-scope commits are always left out).',
+    `Commits in \`${range}\` that the release-notes rule (knope.toml, \`scripts/release/notes-scope.ts\`) keeps out of the changelog. ` +
+      'If one of these changed the product, fix its scope or type: a scope belongs in the `scopes` allowlist (multi-scope commits are always left out), a type in `extra_changelog_sections`.',
     '',
   ]
   if (excluded.length === 0) {
@@ -172,15 +282,24 @@ export function renderExcluded(
     // A left-out security fix is the one omission a self-hoster cannot afford
     // to miss, so it is called out on its own, above everything else.
     lines.push(
-      `**${[...new Set(flagged.map((e) => noteSections.get(e.type)))].join(' / ')} commits left out — confirm each is internal-only:**`,
+      `**${[...new Set(flagged.map(sectionOf))].join(' / ')} commits left out — confirm each is internal-only:**`,
       '',
       ...flagged.map(line),
       '',
     )
-    if (rest.length > 0) lines.push('Other commits left out:', '')
   }
-  lines.push(...rest.map(line))
-  return lines.join('\n')
+  if (otherScopes.length > 0) {
+    if (flagged.length > 0) lines.push('Other commits left out:', '')
+    lines.push(...otherScopes.map(line), '')
+  }
+  if (otherTypes.length > 0) {
+    const listed = otherTypes.slice(0, MAX_LISTED_OTHER_TYPES)
+    const unlisted = otherTypes.length - listed.length
+    lines.push(`<details><summary>Not a release-note type (${otherTypes.length})</summary>`, '', ...listed.map(line))
+    if (unlisted > 0) lines.push(`- …and ${unlisted} more: \`git log --no-merges ${range}\``)
+    lines.push('', '</details>')
+  }
+  return lines.join('\n').trimEnd()
 }
 
 /** A commit the bridge turns into a changeset — and that `verify` then expects. */
@@ -193,24 +312,17 @@ export interface NoteEntry {
   description: string
 }
 
-/**
- * Product-scoped (or unscoped) commits of an extra-section type. A breaking
- * one (`security(worker)!: …`) is left to knope, which already files every
- * breaking commit under "### Breaking Changes" — bridging it too would list
- * it twice.
- */
 export function noteEntries(
   commits: readonly Commit[],
   productScopes: ReadonlySet<string>,
   noteSections: ReadonlyMap<string, string>,
 ): NoteEntry[] {
   const out: NoteEntry[] = []
-  for (const { sha, subject } of commits) {
-    const c = parseSubject(subject)
-    if (!c || c.breaking || !scopeIsProduct(c.scope, productScopes)) continue
-    const section = noteSections.get(c.type)
-    if (section === undefined) continue
-    out.push({ sha, type: c.type, section, description: c.description })
+  for (const commit of commits) {
+    const placement = placeCommit(commit, productScopes, noteSections)
+    if (placement.kind !== 'bridged') continue
+    const { type, section, description } = placement
+    out.push({ sha: commit.sha, type, section, description })
   }
   return out
 }
@@ -233,7 +345,7 @@ export function verifyEntries(changelog: string, version: string, entries: reado
   const isHeading = (l: string): boolean => l === `## ${version}` || l.startsWith(`## ${version} `)
   const start = lines.findIndex(isHeading)
   if (start === -1) {
-    return [`CHANGELOG.md has no "## ${version}" section, but ${entries.length} security/performance entr${entries.length === 1 ? 'y was' : 'ies were'} expected in it`]
+    return [`CHANGELOG.md has no "## ${version}" section, but ${entries.length} bridged entr${entries.length === 1 ? 'y was' : 'ies were'} expected in it`]
   }
   const end = lines.findIndex((l, i) => i > start && l.startsWith('## '))
   const release = lines.slice(start + 1, end === -1 ? undefined : end)
@@ -262,15 +374,20 @@ export function verifyEntries(changelog: string, version: string, entries: reado
 }
 
 function gitLog(range: string): Commit[] {
-  const r = Bun.spawnSync(['git', 'log', '--no-merges', '--format=%H%x00%s', range], { cwd: ROOT, stderr: 'pipe' })
+  // --no-renames: a file moved out of the product into tests/ is a product change.
+  const r = Bun.spawnSync(['git', 'log', '--no-merges', '--no-renames', '--name-only', '--format=%x01%H%x00%s', range], {
+    cwd: ROOT,
+    stderr: 'pipe',
+  })
   if (r.exitCode !== 0) throw new Error(`git log ${range} failed: ${r.stderr.toString().trim()}`)
   return r.stdout
     .toString()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const [sha, subject] = line.split('\0')
-      return { sha, subject }
+    .split('\x01')
+    .slice(1)
+    .map((record) => {
+      const [header, ...paths] = record.split('\n').filter(Boolean)
+      const [sha, subject] = header.split('\0')
+      return { sha, subject, paths }
     })
 }
 
@@ -322,19 +439,19 @@ if (import.meta.main) {
         writeFileSync(file, renderChangeset(e))
         console.log(`${e.section}: ${e.description} (${e.sha.slice(0, 9)}) → ${file}`)
       }
-      console.log(`${entries.length} security/performance changeset(s) written for ${range}.`)
+      console.log(`${entries.length} bridged changeset(s) written for ${range}.`)
     } else {
       const problems = verifyEntries(readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8'), preparedVersion(), entries)
       if (problems.length > 0) {
         for (const p of problems) console.error(`::error::release notes: ${p}`)
         console.error(
-          `${problems.length} security/performance entr${problems.length === 1 ? 'y is' : 'ies are'} missing or duplicated in CHANGELOG.md. ` +
+          `${problems.length} bridged entr${problems.length === 1 ? 'y is' : 'ies are'} missing or duplicated in CHANGELOG.md. ` +
             'A self-hoster decides whether to upgrade from these notes — the release must not go out without them. ' +
             'See scripts/release/notes-scope.ts for why knope needs the changeset bridge.',
         )
         process.exit(1)
       }
-      console.log(`All ${entries.length} security/performance entr${entries.length === 1 ? 'y is' : 'ies are'} in CHANGELOG.md exactly once (${range}).`)
+      console.log(`All ${entries.length} bridged entr${entries.length === 1 ? 'y is' : 'ies are'} in CHANGELOG.md exactly once (${range}).`)
     }
   } else {
     usage()

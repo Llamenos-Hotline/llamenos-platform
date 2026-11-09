@@ -121,7 +121,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Runs scripts/release/notes-scope.ts: knope.toml's prepare-release
-      # workflow calls it before PrepareRelease (security/perf commits →
+      # workflow calls it before PrepareRelease (opted-in commit types →
       # changesets, #2584) and after it (fails unless every one of them is in
       # the notes exactly once), and the annotation step below calls it too.
       # No `bun install`: the script imports only node: built-ins and Bun's
@@ -163,14 +163,16 @@ jobs:
           echo "::error::knope prepare-release failed (exit ${status}) for a reason other than 'nothing to release'. See the log above."
           exit "${status}"
 
-      # Release notes are product-only: knope.toml's `scopes` allowlist keeps
-      # every other scope out of the changelog and the version bump. That
-      # exclusion must be visible, not silent — a product change filed under
-      # a scope the allowlist lacks would otherwise vanish from the notes. So
-      # every left-out feat/fix/breaking/security/perf commit is listed in the
-      # release PR body, where the release is reviewed, with left-out security
-      # commits called out first. knope's CreatePullRequest rewrites the body on
-      # every run, so appending here is idempotent per run.
+      # Release notes contain only end-user-relevant changes: knope.toml and
+      # scripts/release/notes-scope.ts keep everything else out by commit type,
+      # scope and (for bridged types) the paths a commit touched. That
+      # exclusion must be visible, not silent — a product change the rule
+      # misjudged would otherwise vanish from the notes. So every commit it
+      # drops is listed in the release PR body, where the release is reviewed:
+      # left-out security/perf-style commits first, then other release-note
+      # types under a non-product scope, then every other type in a collapsed
+      # block. knope's CreatePullRequest rewrites the body on every run, so
+      # appending here is idempotent per run.
       - name: List what the notes leave out in the release PR body
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}

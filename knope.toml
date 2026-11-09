@@ -20,23 +20,37 @@ versioned_files = [
     { path = "deploy/helm/llamenos/Chart.yaml", regex = 'appVersion: "(?<version>[0-9]+[.][0-9]+[.][0-9]+)"' },
 ]
 changelog = "CHANGELOG.md"
-# Release notes are PRODUCT-ONLY: what changed for someone who runs, uses or
-# self-hosts Llamenos. This is an ALLOWLIST of conventional-commit scopes, so
-# a scope that is not listed here is excluded by default — from the changelog
-# AND from the version bump. Internal tooling (fleet, orchestrator, ci, tests,
-# e2e, bdd, release pipeline, scripts, lint, deps, site, agents, codegen, …)
-# is deliberately absent and must stay absent: a `feat(fleet)` once shipped
-# under "### Features" in a user-facing release.
+# Release notes contain only what an end user or self-hoster would care about
+# (operator ruling, 2026-11-08). A commit reaches them only if it passes, in
+# order — the full rule, in code, is placeCommit in scripts/release/notes-scope.ts:
 #
-# The rule, exactly as knope applies it (tested against knope 0.22.4):
+#   1. TYPE. knope's own (feat, fix, any breaking change), or a type opted in
+#      through extra_changelog_sections below, which is the ONE place to add
+#      one. Everything else — test, ci, chore, build, docs, refactor, style,
+#      revert, any unknown type — is out, whatever its scope.
+#   2. SCOPE. The allowlist below (knope applies it to the changelog AND the
+#      version bump). A scope not listed is out by default.
+#   3. PATHS, for opted-in types only. A commit whose every path is test code,
+#      CI or test tooling is out even under a product scope:
+#      `perf(ios): parallelize XCUITests` shipped nothing. knope reads feat/fix
+#      itself and offers no per-commit filter beyond `scopes`, so feat/fix are
+#      kept honest by their type alone: test work is `test(ios)`, never
+#      `fix(ios)`. (A breaking `test(ios)!:` is likewise knope's to list.)
+#
+# Internal tooling (fleet, orchestrator, ci, tests, e2e, bdd, release pipeline,
+# scripts, lint, deps, site, agents, codegen, …) is deliberately absent from the
+# scopes and must stay absent: a `feat(fleet)` once shipped under "### Features"
+# in a user-facing release.
+#
+# The scope check, exactly as knope applies it (tested against knope 0.22.4):
 #   - `feat|fix(<scope>)` with <scope> in this list (case-insensitive) → in.
 #   - Any other scope → out, including a multi-scope `fix(desktop,worker)`:
 #     knope compares the whole scope string. Give a product change ONE scope.
 #   - No scope at all → in. knope always considers unscoped commits; an
 #     unscoped `feat:`/`fix:` therefore claims to be a whole-product change.
-# Every commit this rule leaves out is listed in the release PR body
-# (knope-release-pr.yml → scripts/release/notes-scope.ts), so a product scope
-# missing from this list is visible at release review, not silently dropped.
+# Every commit the rule leaves out is listed in the release PR body
+# (knope-release-pr.yml → scripts/release/notes-scope.ts), so a misjudged commit
+# is visible at release review, not silently dropped.
 #
 # Adding a product area: add its scope here in the same PR that introduces it.
 scopes = [
@@ -57,15 +71,17 @@ scopes = [
     # The self-hostable stack operators deploy from a release
     "deploy", "ansible", "docker", "helm", "iso", "opentofu",
 ]
-# Security and Performance sections. knope 0.22.4 matches these `types`
-# against CHANGESET types only — never against commit types — so on its own a
+# THE type opt-in. A type listed here is a release-note type: nothing else
+# has to change for one to be added (notes-scope.ts reads this table, and has
+# no list of its own). knope 0.22.4 matches these `types` against CHANGESET
+# types only — never against commit types — so on its own a
 # `security(worker): …` commit produces NO entry (verified on this repo, #2584;
 # 18 security/perf commits in history never reached a release note). The
 # prepare-release workflow below therefore bridges them: before PrepareRelease
-# it writes one changeset per product-scoped commit of these types, and after
-# it, fails unless each appears exactly once under its heading. Both read the
-# types and headings from here. A breaking `security(...)!:` is not bridged:
-# knope already lists it under Breaking Changes.
+# it writes one changeset per commit of these types that passes the rule above,
+# and after it, fails unless each appears exactly once under its heading. Both
+# read the types and headings from here. A breaking `security(...)!:` is not
+# bridged: knope already lists it under Breaking Changes.
 extra_changelog_sections = [
     { name = "Security", types = ["security"] },
     { name = "Performance", types = ["perf"] },
@@ -81,7 +97,7 @@ name = "prepare-release"
 type = "Command"
 command = "git switch -c release"
 
-# security(...)/perf(...) commits → .changeset/ files knope can read (see
+# Commits of the opted-in types → .changeset/ files knope can read (see
 # extra_changelog_sections above). Untracked; PrepareRelease consumes them.
 [[workflows.steps]]
 type = "Command"
@@ -90,7 +106,7 @@ command = "bun scripts/release/notes-scope.ts changesets"
 [[workflows.steps]]
 type = "PrepareRelease"
 
-# Loud by design: a security fix missing from (or doubled in) the notes fails
+# Loud by design: a bridged commit missing from (or doubled in) the notes fails
 # the release here, before anything is committed or pushed.
 [[workflows.steps]]
 type = "Command"
