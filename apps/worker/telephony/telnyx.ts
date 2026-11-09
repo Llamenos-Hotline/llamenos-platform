@@ -33,26 +33,32 @@ import type {
   ProviderSettingEnforcement,
   ProviderSettingReading,
 } from '@protocol/schemas/settings'
-import { DEFAULT_LANGUAGE } from '@shared/languages'
-import { getPrompt } from '@shared/voice-prompts'
+import { getPrompt, getVoicemailThanks } from '@shared/voice-prompts'
 import { IvrVoiceCatalog, buildIvrLanguageMenu } from './ivr-menu'
 import { holdMusicUrl } from './hold-music'
+import { isMachineAnsweredBy } from './twilio'
 
 const TELNYX_API_BASE = 'https://api.telnyx.com/v2'
 
-/** A recording resource from GET /v2/recordings. */
+/** A recording resource from GET /v2/recordings/{id}. */
 interface TelnyxRecording {
   id: string
-  call_leg_id?: string
   created_at?: string
   download_urls?: { mp3?: string; wav?: string }
+}
+
+/** A Telnyx TeXML `<Say>` voice: the Polly voice id, plus the locale it speaks. */
+interface TelnyxVoice {
+  voice: string
+  language: string
 }
 
 /**
  * Telnyx TTS voices (AWS Polly via Telnyx) — the explicit, ordered list of
  * locales Telnyx has a voice for. Absent locales are never offered in the IVR menu.
+ * `voice` is the `<Say voice>` value in Telnyx's direct Polly notation.
  */
-export const TELNYX_VOICES = new IvrVoiceCatalog<{ voice: string; language: string }>('telnyx', [
+export const TELNYX_VOICES = new IvrVoiceCatalog<TelnyxVoice>('telnyx', [
   ['en', { voice: 'AWS.Polly.Joanna-Neural', language: 'en-US' }],
   ['es', { voice: 'AWS.Polly.Lupe-Neural', language: 'es-US' }],
   ['zh', { voice: 'AWS.Polly.Zhiyu-Neural', language: 'cmn-CN' }],
@@ -65,26 +71,34 @@ export const TELNYX_VOICES = new IvrVoiceCatalog<{ voice: string; language: stri
   ['de', { voice: 'AWS.Polly.Vicki-Neural', language: 'de-DE' }],
 ])
 
-function getTelnyxVoice(lang: string): { voice: string; language: string } {
-  return TELNYX_VOICES.voiceForPrompt(lang)
+/** Escape XML special characters for safe TeXML embedding */
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 }
 
-function encodeClientState(state: Record<string, unknown>): string {
-  return btoa(JSON.stringify(state))
+/** `<Say>` in the locale's Telnyx voice */
+function say(lang: string, text: string): string {
+  const { voice, language } = TELNYX_VOICES.voiceForPrompt(lang)
+  return `<Say voice="${voice}" language="${language}">${escapeXml(text)}</Say>`
 }
 
-function decodeClientState(state: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(atob(state)) as Record<string, unknown>
-  } catch {
-    return null
-  }
+/** Generate TeXML: `<Play>` if custom audio exists, `<Say>` fallback. Uploaded audio always wins (#1350). */
+function sayOrPlay(promptKey: string, lang: string, audioUrls?: AudioUrlMap, text?: string): string {
+  const audioUrl = audioUrls?.[`${promptKey}:${lang}`]
+  if (audioUrl) return `<Play>${escapeXml(audioUrl)}</Play>`
+  return say(lang, text ?? getPrompt(promptKey, lang))
+}
+
+/** Hub query param suffix for a callback URL */
+function hubQP(hubId?: string): string {
+  return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
 }
 
 /**
- * Thin wrapper around the Telnyx REST API for issuing call control commands.
+ * Thin wrapper around the Telnyx v2 REST API: the TeXML call-creation endpoint,
+ * call hangup, recordings, and the account's webhook-signing public key.
  */
-class TelnyxCallControlClient {
+class TelnyxApiClient {
   private apiKey: string
   private cachedPublicKey: string | null = null
 
@@ -92,65 +106,60 @@ class TelnyxCallControlClient {
     this.apiKey = apiKey
   }
 
-  async command(callControlId: string, action: string, body?: Record<string, unknown>): Promise<void> {
-    const url = `${TELNYX_API_BASE}/calls/${encodeURIComponent(callControlId)}/actions/${action}`
+  /** End a call leg. A TeXML `CallSid` is the leg's call control id, which this endpoint takes. */
+  async hangup(callSid: string): Promise<void> {
+    const url = `${TELNYX_API_BASE}/calls/${encodeURIComponent(callSid)}/actions/hangup`
     const res = await safeFetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: body ? JSON.stringify(body) : '{}',
+      body: '{}',
     })
 
     if (!res.ok) {
       const errorText = await res.text().catch(() => 'unknown error')
-      throw new Error(`Telnyx API error (${action}): ${res.status} ${errorText}`)
+      throw new Error(`Telnyx API error (hangup): ${res.status} ${errorText}`)
     }
   }
 
-  async createCall(params: {
-    to: string
-    from: string
-    connection_id: string
-    webhook_url?: string
-    webhook_url_method?: string
-    client_state?: string
-    timeout_secs?: number
-  }): Promise<{ call_control_id: string; call_leg_id: string; call_session_id: string }> {
-    const url = `${TELNYX_API_BASE}/calls`
-    const body: Record<string, unknown> = {
-      to: params.to,
-      from: params.from,
-      connection_id: params.connection_id,
-    }
-    if (params.webhook_url) body.webhook_url = params.webhook_url
-    if (params.webhook_url_method) body.webhook_url_method = params.webhook_url_method
-    if (params.client_state) body.client_state = params.client_state
-    if (params.timeout_secs) body.timeout_secs = params.timeout_secs
-
-    const res = await safeFetch(url, {
+  /**
+   * Place an outbound call through the TeXML application (connection-scoped
+   * endpoint, so no account id is needed). Telnyx fetches the call's
+   * instructions from `Url` once the callee answers — NOT on every call event —
+   * and reports progress to `StatusCallback`.
+   */
+  async createTexmlCall(connectionId: string, params: {
+    To: string
+    From: string
+    Url: string
+    StatusCallback: string
+    Timeout: number
+    MachineDetection: 'Enable'
+  }): Promise<string> {
+    const res = await safeFetch(`${TELNYX_API_BASE}/texml/calls/${encodeURIComponent(connectionId)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...params,
+        Method: 'POST',
+        StatusCallbackMethod: 'POST',
+        StatusCallbackEvent: 'initiated ringing answered completed',
+      }),
     })
 
     if (!res.ok) {
       const errorText = await res.text().catch(() => 'unknown error')
-      throw new Error(`Telnyx API error (createCall): ${res.status} ${errorText}`)
+      throw new Error(`Telnyx API error (createTexmlCall): ${res.status} ${errorText}`)
     }
 
-    const data = await res.json() as {
-      data: {
-        call_control_id: string
-        call_leg_id: string
-        call_session_id: string
-      }
-    }
-    return data.data
+    const data = await res.json() as { call_sid?: string }
+    if (!data.call_sid) throw new Error('Telnyx API error (createTexmlCall): the response carried no call_sid')
+    return data.call_sid
   }
 
   async getRecording(url: string): Promise<ArrayBuffer> {
@@ -209,338 +218,289 @@ class TelnyxCallControlClient {
   }
 }
 
-/**
- * Map Telnyx hangup_cause to normalized call status.
- */
-function mapHangupCauseToStatus(cause: string): WebhookCallStatus['status'] {
-  const STATUS_MAP: Record<string, WebhookCallStatus['status']> = {
-    normal_clearing: 'completed',
-    originator_cancel: 'failed',
-    timeout: 'no-answer',
-    busy: 'busy',
-    user_busy: 'busy',
-    call_rejected: 'failed',
-    no_user_response: 'no-answer',
-    no_answer: 'no-answer',
-    subscriber_absent: 'no-answer',
-    normal_unspecified: 'completed',
-    unallocated_number: 'failed',
-    network_out_of_order: 'failed',
-    recovery_on_timer_expire: 'no-answer',
-    interworking: 'failed',
-  }
-  return STATUS_MAP[cause] ?? 'failed'
+/** Telnyx's `CallStatus` / `DialCallStatus` values, normalised. */
+const CALL_STATUS_MAP: Record<string, WebhookCallStatus['status']> = {
+  initiated: 'initiated',
+  queued: 'initiated',
+  ringing: 'ringing',
+  'in-progress': 'answered',
+  completed: 'completed',
+  busy: 'busy',
+  'no-answer': 'no-answer',
+  failed: 'failed',
+  canceled: 'failed',
 }
 
-function hubQP(hubId?: string): string {
-  return hubId ? `&hub=${encodeURIComponent(hubId)}` : ''
+/** `QueueResult` of an `<Enqueue action>` request, normalised. */
+const QUEUE_RESULT_MAP: Record<string, WebhookQueueResult['result']> = {
+  leave: 'leave',
+  'queue-full': 'queue-full',
+  error: 'error',
+  bridged: 'bridged',
+  hangup: 'hangup',
 }
 
 const logger = createLogger('telephony.telnyx')
 
 /**
- * TelnyxAdapter — Telnyx Call Control API implementation.
+ * TelnyxAdapter — Telnyx TeXML application implementation.
  *
- * All IVR methods issue API commands internally and return empty responses.
- * Call state is passed via base64 client_state between webhook events.
+ * TeXML is Telnyx's TwiML-compatible model: every IVR step is a TeXML document
+ * returned from a webhook, and each step names the URL of the next one
+ * (`<Gather action>`, `<Redirect>`, `<Enqueue action>`, `<Record action>`). The
+ * route a callback reaches therefore says which step it belongs to, which is
+ * what the Call Control event model could not do (#2305). REST is used only to
+ * place a volunteer's ring leg, to end a leg, and for recordings.
  */
 export class TelnyxAdapter implements TelephonyAdapter {
-  private apiKey: string
-  private client: TelnyxCallControlClient
+  private client: TelnyxApiClient
   private connectionId: string
   private phoneNumber: string
+  private webhookBaseUrl: string
 
-  constructor(apiKey: string, connectionId: string, phoneNumber: string) {
-    this.apiKey = apiKey
-    this.client = new TelnyxCallControlClient(apiKey)
+  /**
+   * `connectionId` is the TeXML application's id. `webhookBaseUrl` is the
+   * public origin Telnyx reaches this server on; callback URLs inside TeXML
+   * documents are absolute when it is set.
+   */
+  constructor(apiKey: string, connectionId: string, phoneNumber: string, webhookBaseUrl = '') {
+    this.client = new TelnyxApiClient(apiKey)
     this.connectionId = connectionId
     this.phoneNumber = phoneNumber
+    this.webhookBaseUrl = webhookBaseUrl.replace(/\/+$/, '')
+  }
+
+  /** An absolute (or, with no base configured, root-relative) URL of one of this server's telephony webhooks, XML-escaped. */
+  private hook(pathAndQuery: string): string {
+    return escapeXml(`${this.webhookBaseUrl}/api/telephony/${pathAndQuery}`)
   }
 
   // --- IVR Methods ---
 
   async handleLanguageMenu(params: LanguageMenuParams): Promise<TelephonyResponse> {
     const menu = buildIvrLanguageMenu(params.enabledLanguages, TELNYX_VOICES)
-
-    const clientState = encodeClientState({
-      hubId: params.hubId,
-      lang: DEFAULT_LANGUAGE,
-      callSid: params.callSid,
-      phase: 'language',
-    })
-
-    await this.client.command(params.callSid, 'answer', { client_state: clientState })
+    const hp = hubQP(params.hubId)
 
     if (menu.kind === 'single') {
-      const lang = menu.language
-      const skipState = encodeClientState({
-        hubId: params.hubId,
-        lang,
-        callSid: params.callSid,
-      })
-      const { voice, language } = getTelnyxVoice(lang)
-      await this.client.command(params.callSid, 'speak', {
-        payload: ' ',
-        voice,
-        language,
-        client_state: skipState,
-      })
-      return this.emptyResponse()
+      return this.texml(`
+        <Response>
+          <Redirect method="POST">${this.hook(`language-selected?auto=1&forceLang=${menu.language}${hp}`)}</Redirect>
+        </Response>
+      `)
     }
 
-    const menuText = menu.options.map(o => o.prompt).join(' ')
-    const { voice, language } = getTelnyxVoice(DEFAULT_LANGUAGE)
+    const hubParam = params.hubId ? `?hub=${encodeURIComponent(params.hubId)}` : ''
+    const sayElements = menu.options
+      .map(o => `<Say voice="${o.voice.voice}" language="${o.voice.language}">${escapeXml(o.prompt)}</Say>`)
+      .join('\n          ')
 
-    await this.client.command(params.callSid, 'gather_using_speak', {
-      payload: menuText,
-      voice,
-      language,
-      minimum_digits: 1,
-      maximum_digits: 1,
-      timeout_millis: 8000,
-      client_state: clientState,
-    })
-
-    return this.emptyResponse()
-  }
-
-  /** Loop the worker's own hold track on the caller's leg (#2298) */
-  private async startHoldMusic(callSid: string, audioUrls: AudioUrlMap | undefined, clientState: string): Promise<void> {
-    const holdMusic = holdMusicUrl(audioUrls)
-    if (!holdMusic) return
-    await this.client.command(callSid, 'playback_start', {
-      audio_url: holdMusic,
-      loop: 'infinity',
-      client_state: clientState,
-    })
+    return this.texml(`
+      <Response>
+        <Gather numDigits="1" action="${this.hook(`language-selected${hubParam}`)}" timeout="8">
+          ${sayElements}
+        </Gather>
+        <Redirect method="POST">${this.hook(`language-selected?auto=1${hp}`)}</Redirect>
+      </Response>
+    `)
   }
 
   async handleIncomingCall(params: IncomingCallParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const { voice, language } = getTelnyxVoice(lang)
     const greetingText = getPrompt('greeting', lang).replace('{name}', params.hotlineName)
+    const greetingTexml = sayOrPlay('greeting', lang, params.audioUrls, greetingText)
     // #1505: disclose provider-side recording before the caller can be connected.
     // Not spoken on the rate-limited path below — that call is hung up, never recorded.
-    const noticeText = params.callRecordingEnabled ? getPrompt('recordingNotice', lang) : ''
+    const noticeTexml = params.callRecordingEnabled
+      ? sayOrPlay('recordingNotice', lang, params.audioUrls)
+      : ''
 
     if (params.rateLimited) {
-      const rateLimitText = getPrompt('rateLimited', lang)
-      await this.client.command(params.callSid, 'speak', {
-        payload: `${greetingText} ${rateLimitText}`,
-        voice,
-        language,
-      })
-      await this.client.command(params.callSid, 'hangup', {})
-      return this.emptyResponse()
+      const rateLimitTexml = sayOrPlay('rateLimited', lang, params.audioUrls)
+      return this.texml(`
+        <Response>
+          ${greetingTexml}
+          ${rateLimitTexml}
+          <Hangup/>
+        </Response>
+      `)
     }
 
     if (params.voiceCaptchaEnabled && params.captchaDigits) {
-      const captchaText = getPrompt('captchaPrompt', lang)
-      const digitsSpoken = params.captchaDigits.split('').join(', ')
-      const captchaState = encodeClientState({
-        hubId: params.hubId,
-        lang,
-        callSid: params.callSid,
-        phase: 'captcha',
-      })
-
-      await this.client.command(params.callSid, 'speak', {
-        payload: [greetingText, noticeText].filter(Boolean).join(' '),
-        voice,
-        language,
-      })
-
-      await this.client.command(params.callSid, 'gather_using_speak', {
-        payload: `${captchaText} ${digitsSpoken}. ${getPrompt('captchaRepeatHint', lang)}`,
-        voice,
-        language,
-        minimum_digits: 1,
-        maximum_digits: 4,
-        timeout_millis: 10000,
-        client_state: captchaState,
-      })
-
-      return this.emptyResponse()
+      const captchaTexml = sayOrPlay('captchaPrompt', lang, params.audioUrls)
+      return this.texml(`
+        <Response>
+          ${this.captchaChallenge(params.callSid, lang, params.hubId, params.captchaDigits, greetingTexml + noticeTexml + captchaTexml, 0)}
+        </Response>
+      `)
     }
 
-    const holdText = getPrompt('pleaseHold', lang)
-    const queueState = encodeClientState({
-      hubId: params.hubId,
-      lang,
-      callSid: params.callSid,
-      phase: 'queue',
-    })
-
-    await this.client.command(params.callSid, 'speak', {
-      payload: [greetingText, noticeText, holdText].filter(Boolean).join(' '),
-      voice,
-      language,
-      client_state: queueState,
-    })
-
-    await this.startHoldMusic(params.callSid, params.audioUrls, queueState)
-
-    return this.emptyResponse()
+    const holdTexml = sayOrPlay('pleaseHold', lang, params.audioUrls)
+    return this.texml(`
+      <Response>
+        ${greetingTexml}
+        ${noticeTexml}
+        ${holdTexml}
+        ${this.enqueue(params.callSid, lang, params.hubId)}
+      </Response>
+    `)
   }
 
   async handleCaptchaResponse(params: CaptchaResponseParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const { voice, language } = getTelnyxVoice(lang)
 
-    // Telnyx posts every Call Control event to /incoming and never reaches
-    // /captcha (#2305, fixed by the TeXML move): this is the contract only.
     if (params.outcome === 'pass') {
-      const successText = getPrompt('captchaSuccess', lang)
-      const queueState = encodeClientState({
-        hubId: params.hubId,
-        lang,
-        callSid: params.callSid,
-        phase: 'queue',
-      })
-
-      await this.client.command(params.callSid, 'speak', {
-        payload: successText,
-        voice,
-        language,
-        client_state: queueState,
-      })
-
-      await this.startHoldMusic(params.callSid, params.audioUrls, queueState)
-
-      return this.emptyResponse()
+      return this.texml(`
+        <Response>
+          ${say(lang, getPrompt('captchaSuccess', lang))}
+          ${this.enqueue(params.callSid, lang, params.hubId)}
+        </Response>
+      `)
     }
 
-    const lead = getPrompt(params.outcome === 'retry' ? 'captchaRetry' : 'captchaPrompt', lang)
-    await this.client.command(params.callSid, 'gather_using_speak', {
-      payload: `${lead} ${params.digitsToSpeak.split('').join(', ')}. ${getPrompt('captchaRepeatHint', lang)}`,
-      voice,
-      language,
-      minimum_digits: 1,
-      maximum_digits: 4,
-      timeout_millis: 10000,
-      client_state: encodeClientState({ hubId: params.hubId, lang, callSid: params.callSid, phase: 'captcha' }),
-    })
+    const lead = params.outcome === 'retry'
+      ? sayOrPlay('captchaRetry', lang)
+      : sayOrPlay('captchaPrompt', lang, params.audioUrls)
+    return this.texml(`
+      <Response>
+        ${this.captchaChallenge(params.callSid, lang, params.hubId, params.digitsToSpeak, lead, params.round)}
+      </Response>
+    `)
+  }
 
-    return this.emptyResponse()
+  /**
+   * Put the caller in the queue named for their call. Hold music and the wait
+   * message come from `/wait-music` (re-requested by Telnyx each time the wait
+   * document finishes); `/queue-exit` runs when the caller leaves the queue.
+   */
+  private enqueue(callSid: string, lang: string, hubId: string | undefined): string {
+    const hp = hubQP(hubId)
+    return `<Enqueue waitUrl="${this.hook(`wait-music?lang=${lang}${hp}`)}" waitUrlMethod="POST" action="${this.hook(`queue-exit?callSid=${encodeURIComponent(callSid)}&lang=${lang}${hp}`)}" method="POST">${escapeXml(callSid)}</Enqueue>`
+  }
+
+  /**
+   * One CAPTCHA challenge: `lead`, the digits, the star hint, then a gather for
+   * the answer. A gather that hears nothing falls through to the `<Redirect>`
+   * to the same route, so the server learns of the timeout as a submission with
+   * no digits and counts it.
+   */
+  private captchaChallenge(callSid: string, lang: string, hubId: string | undefined, digits: string, lead: string, round: number): string {
+    const action = this.hook(`captcha?callSid=${encodeURIComponent(callSid)}&lang=${lang}&round=${round}${hubQP(hubId)}`)
+    return `
+          <Gather numDigits="4" validDigits="0123456789*" action="${action}" timeout="10">
+            ${lead}
+            ${say(lang, `${digits.split('').join(', ')}.`)}
+            ${sayOrPlay('captchaRepeatHint', lang)}
+          </Gather>
+          <Redirect method="POST">${action}</Redirect>`
   }
 
   async handleCallAnswered(params: CallAnsweredParams): Promise<TelephonyResponse> {
-    await this.client.command(params.parentCallSid, 'bridge', {
-      call_control_id: params.parentCallSid,
-    })
-
-    // #1505: only ask Telnyx to record when this hub opted in. Without this
-    // command Telnyx never writes the call audio to disk.
+    // CRIT-W1: Hub and pubkey are resolved from DB in /call-recording — no URL params needed
+    // #1505: no recording attributes at all unless this hub opted in. An absent
+    // `record` attribute means Telnyx never writes the audio to disk.
+    // Telnyx documents `<Dial record>` for the Number and Sip nouns only; a
+    // queue bridge is not on that list, so say so each time it is asked for.
     if (params.recordCall) {
-      await this.client.command(params.parentCallSid, 'record_start', {
-        format: 'mp3',
-        channels: 'single',
-        client_state: encodeClientState({
-          lang: 'en',
-          callSid: params.parentCallSid,
-          hubId: params.hubId,
-        }),
-      })
+      logger.warn('Call recording requested on a <Dial><Queue> bridge, which Telnyx does not list as recordable — the recording may not be made')
     }
-
-    return this.emptyResponse()
+    const recordAttrs = params.recordCall
+      ? ` record="record-from-answer" recordingStatusCallback="${escapeXml(`${params.callbackUrl}/api/telephony/call-recording?parentCallSid=${encodeURIComponent(params.parentCallSid)}`)}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed"`
+      : ''
+    return this.texml(`
+      <Response>
+        <Dial${recordAttrs}>
+          <Queue>${escapeXml(params.parentCallSid)}</Queue>
+        </Dial>
+      </Response>
+    `)
   }
 
   async handleVoicemail(params: VoicemailParams): Promise<TelephonyResponse> {
     const lang = params.callerLanguage
-    const { voice, language } = getTelnyxVoice(lang)
-    const voicemailText = getPrompt('voicemailPrompt', lang)
-
-    const vmState = encodeClientState({
-      hubId: params.hubId,
-      lang,
-      callSid: params.callSid,
-    })
-
-    await this.client.command(params.callSid, 'speak', {
-      payload: voicemailText,
-      voice,
-      language,
-      client_state: vmState,
-    })
-
-    await this.client.command(params.callSid, 'record_start', {
-      format: 'mp3',
-      play_beep: true,
-      max_length_secs: params.maxRecordingSeconds ?? 120,
-      client_state: vmState,
-    })
-
-    return this.emptyResponse()
+    const hp = hubQP(params.hubId)
+    const voicemailTexml = sayOrPlay('voicemailPrompt', lang, params.audioUrls)
+    const complete = this.hook(`voicemail-complete?callSid=${encodeURIComponent(params.callSid)}&lang=${lang}${hp}`)
+    const recordingCallback = escapeXml(`${params.callbackUrl}/api/telephony/voicemail-recording?callSid=${encodeURIComponent(params.callSid)}${hp}`)
+    return this.texml(`
+      <Response>
+        ${voicemailTexml}
+        <Record maxLength="${params.maxRecordingSeconds ?? 120}" playBeep="true" action="${complete}" method="POST" recordingStatusCallback="${recordingCallback}" recordingStatusCallbackMethod="POST" recordingStatusCallbackEvent="completed"/>
+        <Hangup/>
+      </Response>
+    `)
   }
 
   async handleWaitMusic(
-    _lang: string,
-    _audioUrls?: AudioUrlMap,
+    lang: string,
+    audioUrls?: AudioUrlMap,
     queueTime?: number,
     queueTimeout?: number,
   ): Promise<TelephonyResponse> {
+    // After timeout in queue with no answer, leave queue → triggers voicemail
     if (queueTime !== undefined && queueTime >= (queueTimeout ?? 90)) {
-      return {
-        contentType: 'application/json',
-        body: JSON.stringify({ leave: true }),
-      }
+      return this.texml('<Response><Leave/></Response>')
     }
 
-    return this.emptyResponse()
+    const waitTexml = sayOrPlay('waitMessage', lang, audioUrls)
+    const holdMusic = holdMusicUrl(audioUrls)
+    return this.texml(`
+      <Response>
+        ${waitTexml}
+        ${holdMusic ? `<Play>${escapeXml(holdMusic)}</Play>` : ''}
+      </Response>
+    `)
   }
 
-  handleVoicemailComplete(_lang: string): TelephonyResponse {
-    return this.emptyResponse()
+  handleVoicemailComplete(lang: string): TelephonyResponse {
+    return this.texml(`
+      <Response>
+        ${say(lang, getVoicemailThanks(lang))}
+        <Hangup/>
+      </Response>
+    `)
   }
 
   rejectCall(): TelephonyResponse {
-    return this.emptyResponse()
+    return this.texml('<Response><Reject reason="rejected"/></Response>')
   }
 
-  /**
-   * Telnyx is call-control: legs are ended by API command, not by the webhook
-   * response. The losing leg is ended by cancelRinging / hangupCall.
-   */
   hangupResponse(): TelephonyResponse {
-    return this.emptyResponse()
+    return this.texml('<Response><Hangup/></Response>')
   }
 
   emptyResponse(): TelephonyResponse {
-    return {
-      contentType: 'application/json',
-      body: '{}',
-    }
+    return this.texml('<Response/>')
+  }
+
+  private texml(xml: string): TelephonyResponse {
+    return { contentType: 'text/xml', body: xml.trim() }
   }
 
   // --- Call Control Methods ---
 
   async hangupCall(callSid: string): Promise<void> {
-    await this.client.command(callSid, 'hangup', {})
+    await this.client.hangup(callSid)
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
     const hubParam = hubQP(params.hubId)
 
     const calls = await Promise.allSettled(
-      params.volunteers.map(async (vol) => {
-        const clientState = encodeClientState({
-          lang: 'en',
-          callSid: params.callSid,
-          hubId: params.hubId,
+      params.volunteers.map((vol) => {
+        // CRIT-W2: Use opaque callToken instead of raw pubkey in callback URLs.
+        // `Url` is fetched when the volunteer ANSWERS and nothing else; every
+        // progress event (initiated, ringing, answered, completed) goes to
+        // `StatusCallback`. A single URL for both is what made call.initiated
+        // claim the answer before anyone picked up (#1135).
+        const token = encodeURIComponent(vol.callToken)
+        return this.client.createTexmlCall(this.connectionId, {
+          To: vol.phone,
+          From: this.phoneNumber,
+          Url: `${params.callbackUrl}/api/telephony/user-answer?callToken=${token}${hubParam}`,
+          StatusCallback: `${params.callbackUrl}/api/telephony/call-status?callToken=${token}${hubParam}`,
+          Timeout: 30,
+          MachineDetection: 'Enable',
         })
-
-        const result = await this.client.createCall({
-          to: vol.phone,
-          from: this.phoneNumber,
-          connection_id: this.connectionId,
-          webhook_url: `${params.callbackUrl}/api/telephony/user-answer?callToken=${encodeURIComponent(vol.callToken)}${hubParam}`,
-          webhook_url_method: 'POST',
-          client_state: clientState,
-          timeout_secs: 30,
-        })
-
-        return result.call_control_id
       }),
     )
 
@@ -553,7 +513,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
     await Promise.allSettled(
       callSids
         .filter((sid) => sid !== exceptSid)
-        .map((sid) => this.client.command(sid, 'hangup', {})),
+        .map((sid) => this.client.hangup(sid)),
     )
   }
 
@@ -564,16 +524,16 @@ export class TelnyxAdapter implements TelephonyAdapter {
   }
 
   /**
-   * The recording handle is the recorded call LEG's id. `call.recording.saved`
-   * carries no recording id (Telnyx call-control OpenAPI: call_leg_id,
-   * call_session_id, connection_id, client_state, recording_urls, …) and its
-   * URLs expire after ten minutes, so the leg is the only durable key; the
-   * recordings API filters on it.
+   * The recording handle is the `RecordingSid` of the recording-status
+   * callback — the id of the recording resource, which `/v2/recordings/{id}`
+   * returns with its download URLs and deletes.
    */
   async getRecordingAudio(recordingSid: string): Promise<ArrayBuffer | null> {
     try {
-      const recordings = await this.listLegRecordings(recordingSid)
-      const url = recordings[0]?.download_urls?.mp3 ?? recordings[0]?.download_urls?.wav
+      const res = await this.client.api('GET', `/recordings/${encodeURIComponent(recordingSid)}`)
+      if (!res.ok) return null
+      const body = await res.json() as { data?: TelnyxRecording }
+      const url = body.data?.download_urls?.mp3 ?? body.data?.download_urls?.wav
       if (!url) return null
       return await this.client.getRecording(url)
     } catch {
@@ -582,49 +542,33 @@ export class TelnyxAdapter implements TelephonyAdapter {
   }
 
   /**
-   * Delete every recording of the call leg. An empty listing means there is
-   * nothing left to delete — the same answer a 404 gives — because this only
-   * runs after `call.recording.saved`, by which time the recording is listed.
-   */
-  /**
-   * The Call Control application (connection) id: not a secret, and a
-   * connection belongs to exactly one Telnyx account. Never the API key.
+   * The TeXML application (connection) id: not a secret, and a connection
+   * belongs to exactly one Telnyx account. Never the API key.
    */
   providerAccountId(): string {
     return `telnyx:${this.connectionId}`
   }
 
-  /** Telnyx fills `data.payload.connection_id` in every Call Control event. */
+  /** Telnyx fills the form-encoded `ConnectionId` in TeXML requests. Exactly one must be present: a body repeating the field is not one Telnyx wrote. */
   async webhookNamesOwnAccount(request: Request): Promise<boolean> {
+    if (!request.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded')) return false
     try {
-      const body = await request.clone().json() as { data?: { payload?: { connection_id?: unknown } } }
-      return body.data?.payload?.connection_id === this.connectionId
+      const ids = new URLSearchParams(await request.clone().text()).getAll('ConnectionId')
+      return ids.length === 1 && ids[0] === this.connectionId
     } catch {
       return false
     }
   }
 
   async deleteRecording(recordingSid: string): Promise<void> {
-    let recordings: TelnyxRecording[]
+    let res: Response
     try {
-      recordings = await this.listLegRecordings(recordingSid)
+      res = await this.client.api('DELETE', `/recordings/${encodeURIComponent(recordingSid)}`)
     } catch (err) {
       if (err instanceof ProviderRecordingDeleteError) throw err
       throw new ProviderRecordingDeleteError('Telnyx', null, err instanceof Error ? err.message : String(err))
     }
-    for (const recording of recordings) {
-      const res = await this.client.api('DELETE', `/recordings/${encodeURIComponent(recording.id)}`)
-      await assertRecordingDeleted(res, 'Telnyx')
-    }
-  }
-
-  private async listLegRecordings(callLegId: string): Promise<TelnyxRecording[]> {
-    const res = await this.client.api('GET', `/recordings?filter[call_leg_id]=${encodeURIComponent(callLegId)}&page[size]=50`)
-    if (!res.ok) {
-      throw new ProviderRecordingDeleteError('Telnyx', res.status, await res.text().catch(() => ''))
-    }
-    const body = await res.json() as { data?: TelnyxRecording[] }
-    return body.data ?? []
+    await assertRecordingDeleted(res, 'Telnyx')
   }
 
   async probeRecordingPosture(context: RecordingPostureContext): Promise<ProviderRecordingPosture> {
@@ -675,7 +619,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
         setting: 'transcription',
         target: 'account',
         outcome: 'not-settable',
-        reason: 'Telnyx documents no account- or number-level transcription switch: a recording transcription exists only when a call-control or TeXML command asks for one, which this server never does',
+        reason: 'Telnyx documents no account- or number-level transcription switch: a recording transcription exists only when a TeXML verb or command asks for one, which this server never does',
       },
     ]
   }
@@ -705,7 +649,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
       removed: [
         {
           what: 'Voicemail and call recordings',
-          how: 'DELETE /v2/recordings/{id} for every recording of the leg once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
+          how: 'DELETE /v2/recordings/{id} once fetched — a call recording after the server holds its own sealed copy. A refusal stays in heldAtProvider and is retried.',
         },
       ],
       retained: [
@@ -739,7 +683,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
         provider: 'Telnyx',
         what: 'recordings',
         source: 'the newest Telnyx recordings',
-        listed: (body.data ?? []).map(r => ({ handle: r.call_leg_id ?? r.id, createdAt: r.created_at ? new Date(r.created_at) : null })),
+        listed: (body.data ?? []).map(r => ({ handle: r.id, createdAt: r.created_at ? new Date(r.created_at) : null })),
         context,
       })
     } catch (err) {
@@ -762,8 +706,17 @@ export class TelnyxAdapter implements TelephonyAdapter {
     }
   }
 
+
   // --- Webhook Validation ---
 
+  /**
+   * Telnyx signs the `telnyx-timestamp` header and the raw request body with
+   * Ed25519; the verifying key is the account's public key. EVERY inbound
+   * request is refused unless that signature verifies — a missing header, a
+   * stale timestamp, a key that cannot be fetched, a malformed signature and an
+   * empty body all refuse. (An empty body is a GET: the signature would then
+   * cover nothing, and every parameter would arrive in the unsigned query.)
+   */
   async validateWebhook(request: Request): Promise<boolean> {
     const signature = request.headers.get('telnyx-signature-ed25519')
     const timestamp = request.headers.get('telnyx-timestamp')
@@ -777,6 +730,7 @@ export class TelnyxAdapter implements TelephonyAdapter {
 
     try {
       const rawBody = await request.clone().text()
+      if (rawBody === '') return false
       return await this.client.verifyWebhookSignature(signature, timestamp, rawBody)
     } catch {
       return false
@@ -790,100 +744,60 @@ export class TelnyxAdapter implements TelephonyAdapter {
 
   // --- Webhook Parsing ---
 
-  async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const payload = data?.payload as Record<string, string> | undefined
+  /** TeXML requests are form-encoded: `CallSid`, `From`, `To`, `Digits`, `CallStatus`, … */
+  private async form(request: Request): Promise<URLSearchParams> {
+    return new URLSearchParams(await request.clone().text())
+  }
 
+  async parseIncomingWebhook(request: Request): Promise<WebhookCallInfo> {
+    const form = await this.form(request)
     return {
-      callSid: payload?.call_control_id ?? '',
-      callerNumber: payload?.from ?? '',
-      calledNumber: payload?.to ?? undefined,
+      callSid: form.get('CallSid') ?? '',
+      callerNumber: form.get('From') ?? '',
+      calledNumber: form.get('To') || undefined,
+      answeredByMachine: isMachineAnsweredBy(form.get('AnsweredBy')),
     }
   }
 
   async parseLanguageWebhook(request: Request): Promise<WebhookCallInfo & WebhookDigits> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const payload = data?.payload as Record<string, string> | undefined
-    const clientState = payload?.client_state ? decodeClientState(payload.client_state) : null
-
+    const form = await this.form(request)
     return {
-      callSid: payload?.call_control_id ?? (clientState?.callSid as string) ?? '',
-      callerNumber: payload?.from ?? '',
-      digits: payload?.digits ?? '',
+      callSid: form.get('CallSid') ?? '',
+      callerNumber: form.get('From') ?? '',
+      digits: form.get('Digits') ?? '',
     }
   }
 
   async parseCaptchaWebhook(request: Request): Promise<WebhookDigits & { callerNumber: string }> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const payload = data?.payload as Record<string, string> | undefined
-
+    const form = await this.form(request)
     return {
-      digits: payload?.digits ?? '',
-      callerNumber: payload?.from ?? '',
+      digits: form.get('Digits') ?? '',
+      callerNumber: form.get('From') ?? '',
     }
   }
 
   async parseCallStatusWebhook(request: Request): Promise<WebhookCallStatus> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const payload = data?.payload as Record<string, string> | undefined
-    const eventType = data?.event_type as string
-
-    if (eventType === 'call.initiated') {
-      return { status: 'initiated' }
-    }
-    if (eventType === 'call.answered') {
-      return { status: 'answered' }
-    }
-    if (eventType === 'call.hangup') {
-      return { status: mapHangupCauseToStatus(payload?.hangup_cause ?? 'normal_clearing') }
-    }
-
-    return { status: 'failed' }
+    const form = await this.form(request)
+    const raw = form.get('CallStatus') ?? form.get('DialCallStatus') ?? ''
+    return { status: CALL_STATUS_MAP[raw] ?? 'failed' }
   }
 
-  async parseQueueWaitWebhook(_request: Request): Promise<WebhookQueueWait> {
-    return { queueTime: 0 }
+  async parseQueueWaitWebhook(request: Request): Promise<WebhookQueueWait> {
+    const form = await this.form(request)
+    return { queueTime: Number.parseInt(form.get('QueueTime') ?? '0', 10) || 0 }
   }
 
   async parseQueueExitWebhook(request: Request): Promise<WebhookQueueResult> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const eventType = data?.event_type as string
-    const payload = data?.payload as Record<string, string> | undefined
-
-    if (eventType === 'call.bridged') {
-      return { result: 'bridged' }
-    }
-    if (eventType === 'call.hangup') {
-      const cause = payload?.hangup_cause ?? ''
-      if (cause === 'normal_clearing') return { result: 'hangup' }
-      if (cause === 'originator_cancel') return { result: 'hangup' }
-      return { result: 'error' }
-    }
-
-    return { result: 'error' }
+    const form = await this.form(request)
+    return { result: QUEUE_RESULT_MAP[form.get('QueueResult') ?? ''] ?? 'error' }
   }
 
   async parseRecordingWebhook(request: Request): Promise<WebhookRecordingStatus> {
-    const body = await request.clone().json() as Record<string, unknown>
-    const data = body.data as Record<string, unknown> | undefined
-    const payload = data?.payload as Record<string, unknown> | undefined
-    const recordingUrls = payload?.recording_urls as Record<string, string> | undefined
-
-    if (recordingUrls?.mp3) {
-      return {
-        status: 'completed',
-        // The leg id, not the URL: the URL expires in ten minutes and cannot
-        // address a deletion (see getRecordingAudio).
-        recordingSid: (payload?.call_leg_id as string) || undefined,
-        callSid: (payload?.call_control_id as string) ?? undefined,
-      }
+    const form = await this.form(request)
+    return {
+      status: form.get('RecordingStatus') === 'completed' ? 'completed' : 'failed',
+      recordingSid: form.get('RecordingSid') || undefined,
+      callSid: form.get('CallSid') || undefined,
     }
-
-    return { status: 'failed' }
   }
 }

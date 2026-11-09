@@ -91,6 +91,7 @@ describe('every adapter holds on the worker\'s own origin, with the old host unr
     ['plivo', () => new PlivoAdapter('id', 'tok', '+15551234567')],
     ['bandwidth', () => new BandwidthAdapter('acct', 'tok', 'secret', 'app', '+15551234567')],
     ['vonage', () => new VonageAdapter('key', 'secret', 'app-id', '+15551234567')],
+    ['telnyx', () => new TelnyxAdapter('key', 'conn', '+15551234567')],
   ]
 
   for (const [name, make] of xmlAdapters) {
@@ -106,24 +107,6 @@ describe('every adapter holds on the worker\'s own origin, with the old host unr
       expect(fetchSpy).not.toHaveBeenCalled()
     })
   }
-
-  it('telnyx: both queue paths loop the worker\'s own track and call only the Telnyx API', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
-    const adapter = new TelnyxAdapter('key', 'conn', '+15551234567')
-    await adapter.handleIncomingCall({
-      callSid: 'c1', callerNumber: '+15559876543', voiceCaptchaEnabled: false, rateLimited: false,
-      callerLanguage: 'en', hotlineName: 'Hotline', callRecordingEnabled: false, audioUrls,
-    })
-    await adapter.handleCaptchaResponse({
-      outcome: 'pass', callSid: 'c2', callerLanguage: 'en', audioUrls,
-    })
-    const played = fetchSpy.mock.calls
-      .filter(([url]) => String(url).endsWith('/actions/playback_start'))
-      .map(([, init]) => JSON.parse(String((init as RequestInit).body)))
-    expect(played).toHaveLength(2)
-    for (const body of played) expect(body).toMatchObject({ audio_url: HOLD_URL, loop: 'infinity' })
-    for (const [url] of fetchSpy.mock.calls) expect(String(url)).toMatch(/^https:\/\/api\.telnyx\.com\//)
-  })
 })
 
 // --- Guard: an externally hosted audio URL must not come back (it did, five times) ---

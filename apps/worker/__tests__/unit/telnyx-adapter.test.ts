@@ -1,433 +1,297 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { TelnyxAdapter } from '@worker/telephony/telnyx'
+import { TelnyxAdapter, TELNYX_VOICES } from '@worker/telephony/telnyx'
+import { AllDialsFailedError } from '@worker/telephony/adapter'
 import { holdMusicEntry } from '@worker/telephony/hold-music'
+import { makeTelnyxSigner, publicKeyResponse, type TelnyxSigner } from '../helpers/telnyx-signing'
 
 const HOLD_ORIGIN = 'https://hotline.example.org'
 const HOLD = holdMusicEntry(HOLD_ORIGIN)
 const HOLD_URL = `${HOLD_ORIGIN}/api/ivr-audio/hold-music.wav`
 
-describe('TelnyxAdapter', () => {
+const API_KEY = 'test-api-key'
+const CONNECTION_ID = 'conn-123'
+const PHONE_NUMBER = '+15551234567'
+const BASE = 'https://hotline.example.org'
+
+/** The attribute's value from the first element carrying it, XML-unescaped */
+function attr(xml: string, element: string, name: string): string {
+  const tag = new RegExp(`<${element}\\b[^>]*>`).exec(xml)?.[0]
+  const value = tag && new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1]
+  if (value === undefined) throw new Error(`no ${element}@${name} in ${xml}`)
+  return value.replace(/&amp;/g, '&')
+}
+
+const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString()
+const formRequest = (fields: Record<string, string>) => new Request('https://hotline.example.org/api/telephony/x', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: form(fields),
+})
+
+describe('TelnyxAdapter (TeXML)', () => {
   let adapter: TelnyxAdapter
   let fetchSpy: ReturnType<typeof vi.spyOn>
-  let subtleVerifySpy: ReturnType<typeof vi.spyOn>
-
-  const API_KEY = 'test-api-key'
-  const CONNECTION_ID = 'conn-123'
-  const PHONE_NUMBER = '+15551234567'
 
   beforeEach(() => {
-    adapter = new TelnyxAdapter(API_KEY, CONNECTION_ID, PHONE_NUMBER)
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('{}', { status: 200 }),
-    )
-    subtleVerifySpy = vi.spyOn(crypto.subtle, 'verify').mockResolvedValue(true)
-    vi.spyOn(crypto.subtle, 'importKey').mockResolvedValue({} as CryptoKey)
+    adapter = new TelnyxAdapter(API_KEY, CONNECTION_ID, PHONE_NUMBER, BASE)
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  function assertCommandFetch(
-    callControlId: string,
-    action: string,
-    body?: Record<string, unknown>,
-  ) {
-    const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/${action}`
-    const matchingCall = fetchSpy.mock.calls.find((call: unknown[]) => call[0] === url)
-    expect(matchingCall, `expected fetch to be called for ${action} on ${callControlId}`).toBeTruthy()
-
-    const init = matchingCall![1] as RequestInit
-    expect(init.method).toBe('POST')
-    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${API_KEY}`)
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-
-    if (body) {
-      if (typeof body === 'object' && Object.keys(body).length === 0) {
-        expect(init.body).toBe('{}')
-      } else if (body && typeof body === 'object' && Object.keys(body).length > 0) {
-        const actualBody = JSON.parse(init.body as string)
-        for (const [key, value] of Object.entries(body)) {
-          if (value && typeof value === 'object' && 'asymmetricMatch' in value) {
-            expect(actualBody).toHaveProperty(key)
-          } else {
-            expect(actualBody[key]).toEqual(value)
-          }
-        }
-      }
-    } else {
-      expect(init.body).toBe('{}')
-    }
-  }
-
-  function assertCommandFetchAnyBody(callControlId: string, action: string) {
-    const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/${action}`
-    const matchingCall = fetchSpy.mock.calls.find((call: unknown[]) => call[0] === url)
-    expect(matchingCall, `expected fetch to be called for ${action} on ${callControlId}`).toBeTruthy()
-
-    const init = matchingCall![1] as RequestInit
-    expect(init.method).toBe('POST')
-    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${API_KEY}`)
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
-    expect(init.body).toBeTruthy()
-    const parsed = JSON.parse(init.body as string)
-    expect(typeof parsed).toBe('object')
-  }
+  const incoming = { callSid: 'v3:call-1', callerNumber: '+15559876543', callerLanguage: 'en', hotlineName: 'Hotline', callRecordingEnabled: false }
 
   describe('handleLanguageMenu', () => {
-    it('answers call and issues gather_using_speak for multiple languages', async () => {
-      const result = await adapter.handleLanguageMenu({
-        callSid: 'call-001',
-        callerNumber: '+15559876543',
-        hotlineName: 'Test Hotline',
-        enabledLanguages: ['en', 'es'],
-        hubId: 'hub-1',
-      })
-
-      expect(result.contentType).toBe('application/json')
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-001', 'answer')
-      assertCommandFetchAnyBody('call-001', 'gather_using_speak')
+    it('gathers one digit across every offerable language, in the hub\'s order, and names the next step', async () => {
+      const res = await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: 'hub-1' })
+      expect(res.contentType).toBe('text/xml')
+      expect(res.body).toContain('<Gather numDigits="1"')
+      expect(attr(res.body, 'Gather', 'action')).toBe(`${BASE}/api/telephony/language-selected?hub=hub-1`)
+      expect(res.body.match(/<Say /g)).toHaveLength(2)
+      expect(res.body).toContain(`voice="${TELNYX_VOICES.voiceFor('en')!.voice}"`)
+      expect(res.body).toContain(`voice="${TELNYX_VOICES.voiceFor('es')!.voice}"`)
+      // No input at all falls through to an automatic choice on the same route.
+      expect(res.body).toContain(`<Redirect method="POST">${BASE}/api/telephony/language-selected?auto=1&amp;hub=hub-1</Redirect>`)
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
-    it('skips menu for single language and issues speak', async () => {
-      const result = await adapter.handleLanguageMenu({
-        callSid: 'call-002',
-        callerNumber: '+15559876543',
-        hotlineName: 'Test Hotline',
-        enabledLanguages: ['en'],
-        hubId: 'hub-1',
-      })
+    it('skips the menu for a single language and redirects with that language forced', async () => {
+      const res = await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: ['es'], hubId: 'hub-1' })
+      expect(res.body).not.toContain('<Gather')
+      expect(res.body).toContain(`${BASE}/api/telephony/language-selected?auto=1&amp;forceLang=es&amp;hub=hub-1`)
+    })
 
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-002', 'answer')
-      assertCommandFetchAnyBody('call-002', 'speak')
-      expect(fetchSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('/actions/gather_using_speak'),
-        expect.anything(),
-      )
+    it('uses root-relative callbacks when no public base URL is configured', async () => {
+      const bare = new TelnyxAdapter(API_KEY, CONNECTION_ID, PHONE_NUMBER)
+      const res = await bare.handleLanguageMenu({ callSid: 'c', callerNumber: '+1', hotlineName: 'H', enabledLanguages: ['en', 'es'], hubId: 'hub-1' })
+      expect(attr(res.body, 'Gather', 'action')).toBe('/api/telephony/language-selected?hub=hub-1')
     })
   })
 
   describe('handleIncomingCall', () => {
-    it('plays greeting + hold music for normal call', async () => {
-      const result = await adapter.handleIncomingCall({
-        callRecordingEnabled: false,
-        callSid: 'call-003',
-        callerNumber: '+15559876543',
-        voiceCaptchaEnabled: false,
-        rateLimited: false,
-        callerLanguage: 'en',
-        hotlineName: 'Test Hotline',
-        hubId: 'hub-1',
-        audioUrls: HOLD,
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-003', 'speak')
-      assertCommandFetch('call-003', 'playback_start', { audio_url: HOLD_URL, loop: 'infinity' })
+    it('greets, tells the caller to hold, and enqueues with wait and exit callbacks', async () => {
+      const res = await adapter.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: false, rateLimited: false, hubId: 'hub-1', audioUrls: HOLD })
+      expect(res.body).toContain('<Say voice="AWS.Polly.Joanna-Neural"')
+      expect(res.body).toContain('<Enqueue ')
+      expect(res.body).toContain('>v3:call-1</Enqueue>')
+      expect(attr(res.body, 'Enqueue', 'waitUrl')).toBe(`${BASE}/api/telephony/wait-music?lang=en&hub=hub-1`)
+      expect(attr(res.body, 'Enqueue', 'action')).toBe(`${BASE}/api/telephony/queue-exit?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
-    it('hangs up for rate-limited calls', async () => {
-      const result = await adapter.handleIncomingCall({
-        callRecordingEnabled: false,
-        callSid: 'call-004',
-        callerNumber: '+15559876543',
-        voiceCaptchaEnabled: false,
-        rateLimited: true,
-        callerLanguage: 'en',
-        hotlineName: 'Test Hotline',
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-004', 'speak')
-      assertCommandFetch('call-004', 'hangup', {})
+    it('hangs up on a rate-limited caller', async () => {
+      const res = await adapter.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: false, rateLimited: true })
+      expect(res.body).toContain('<Hangup/>')
+      expect(res.body).not.toContain('<Enqueue')
     })
 
-    it('plays captcha prompt when captcha enabled', async () => {
-      const result = await adapter.handleIncomingCall({
-        callRecordingEnabled: false,
-        callSid: 'call-005',
-        callerNumber: '+15559876543',
-        voiceCaptchaEnabled: true,
-        rateLimited: false,
-        callerLanguage: 'en',
-        hotlineName: 'Test Hotline',
-        captchaDigits: '1234',
-      })
+    it('gathers the CAPTCHA answer on /captcha, carrying the call, language, round and hub', async () => {
+      const res = await adapter.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: true, rateLimited: false, captchaDigits: '4821', hubId: 'hub-1' })
+      const action = attr(res.body, 'Gather', 'action')
+      expect(action).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=0&hub=hub-1`)
+      expect(res.body).toContain('4, 8, 2, 1.')
+      expect(res.body).not.toContain('<Enqueue')
+      // A caller who says nothing is sent to the same route as a timeout.
+      expect(res.body).toContain(`<Redirect method="POST">${action.replace(/&/g, '&amp;')}</Redirect>`)
+    })
 
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-005', 'speak')
-      assertCommandFetchAnyBody('call-005', 'gather_using_speak')
+    it('discloses recording before the caller can be connected', async () => {
+      const without = await adapter.handleIncomingCall({ ...incoming, voiceCaptchaEnabled: false, rateLimited: false })
+      const withNotice = await adapter.handleIncomingCall({ ...incoming, callRecordingEnabled: true, voiceCaptchaEnabled: false, rateLimited: false })
+      expect(withNotice.body.match(/<Say /g)!.length).toBe(without.body.match(/<Say /g)!.length + 1)
+    })
+
+    it('escapes a hotline name into valid XML', async () => {
+      const res = await adapter.handleIncomingCall({ ...incoming, hotlineName: 'A & B <hotline>', voiceCaptchaEnabled: false, rateLimited: false })
+      expect(res.body).toContain('A &amp; B &lt;hotline&gt;')
     })
   })
 
   describe('handleCaptchaResponse', () => {
-    it('queues caller on pass', async () => {
-      const result = await adapter.handleCaptchaResponse({
-        outcome: 'pass', callSid: 'call-006', callerLanguage: 'en', hubId: 'hub-1', audioUrls: HOLD,
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-006', 'speak')
-      assertCommandFetch('call-006', 'playback_start', { audio_url: HOLD_URL, loop: 'infinity' })
+    it('queues the caller on a pass', async () => {
+      const res = await adapter.handleCaptchaResponse({ outcome: 'pass', callSid: 'v3:call-1', callerLanguage: 'en', hubId: 'hub-1', audioUrls: HOLD })
+      expect(res.body).toContain('<Enqueue ')
+      expect(attr(res.body, 'Enqueue', 'action')).toContain('/api/telephony/queue-exit?')
     })
 
-    it('gathers again on retry', async () => {
-      const result = await adapter.handleCaptchaResponse({
-        outcome: 'retry', digitsToSpeak: '1234', round: 1, callSid: 'call-007', callerLanguage: 'en',
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-007', 'gather_using_speak')
+    it('challenges again on a retry, on the next round', async () => {
+      const res = await adapter.handleCaptchaResponse({ outcome: 'retry', callSid: 'v3:call-1', callerLanguage: 'en', hubId: 'hub-1', digitsToSpeak: '4821', round: 1 })
+      expect(attr(res.body, 'Gather', 'action')).toBe(`${BASE}/api/telephony/captcha?callSid=v3%3Acall-1&lang=en&round=1&hub=hub-1`)
+      expect(res.body).not.toContain('<Enqueue')
     })
   })
 
-  // #1505 — provider-side recording is opt-in per hub and OFF by default.
   describe('handleCallAnswered', () => {
-    /** Did the adapter ask Telnyx to start recording this call at all? */
-    function recordStartRequested(callControlId: string): boolean {
-      const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/record_start`
-      return fetchSpy.mock.calls.some((call: unknown[]) => call[0] === url)
-    }
+    const answered = { parentCallSid: 'v3:parent-1', callbackUrl: HOLD_ORIGIN, userPubkey: 'pk', hubId: 'hub-1' }
 
-    it('bridges the call but never issues record_start when recording is off', async () => {
-      const result = await adapter.handleCallAnswered({
-        recordCall: false,
-        parentCallSid: 'call-008',
-        callbackUrl: 'https://example.com',
-        userPubkey: 'pubkey-1',
-        hubId: 'hub-1',
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetch('call-008', 'bridge', {
-        call_control_id: 'call-008',
-      })
-      // No record_start command means Telnyx never writes the audio to disk.
-      expect(recordStartRequested('call-008')).toBe(false)
+    it('bridges the volunteer into the caller\'s queue without any recording attribute when recording is off', async () => {
+      const res = await adapter.handleCallAnswered({ ...answered, recordCall: false })
+      expect(res.body).toContain('<Dial>')
+      expect(res.body).toContain('<Queue>v3:parent-1</Queue>')
+      expect(res.body).not.toContain('record')
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
-    it('bridges the call and starts recording when recording is on', async () => {
-      const result = await adapter.handleCallAnswered({
-        recordCall: true,
-        parentCallSid: 'call-008',
-        callbackUrl: 'https://example.com',
-        userPubkey: 'pubkey-1',
-        hubId: 'hub-1',
-      })
-
-      expect(result.body).toBe('{}')
-      assertCommandFetch('call-008', 'bridge', {
-        call_control_id: 'call-008',
-      })
-      assertCommandFetchAnyBody('call-008', 'record_start')
+    it('asks Telnyx to record, calling back on /call-recording, when this hub opted in', async () => {
+      const res = await adapter.handleCallAnswered({ ...answered, recordCall: true })
+      expect(attr(res.body, 'Dial', 'record')).toBe('record-from-answer')
+      expect(attr(res.body, 'Dial', 'recordingStatusCallback')).toBe(`${HOLD_ORIGIN}/api/telephony/call-recording?parentCallSid=v3%3Aparent-1`)
     })
   })
 
   describe('handleVoicemail', () => {
-    it('speaks prompt and starts recording', async () => {
-      const result = await adapter.handleVoicemail({
-        callSid: 'call-009',
-        callerLanguage: 'en',
-        callbackUrl: 'https://example.com',
-        hubId: 'hub-1',
-        maxRecordingSeconds: 60,
-      })
+    it('prompts, records with a completion route and a recording callback, and hangs up', async () => {
+      const res = await adapter.handleVoicemail({ callSid: 'v3:call-1', callerLanguage: 'en', callbackUrl: HOLD_ORIGIN, hubId: 'hub-1', maxRecordingSeconds: 45 })
+      expect(attr(res.body, 'Record', 'maxLength')).toBe('45')
+      expect(attr(res.body, 'Record', 'action')).toBe(`${BASE}/api/telephony/voicemail-complete?callSid=v3%3Acall-1&lang=en&hub=hub-1`)
+      expect(attr(res.body, 'Record', 'recordingStatusCallback')).toBe(`${HOLD_ORIGIN}/api/telephony/voicemail-recording?callSid=v3%3Acall-1&hub=hub-1`)
+      expect(res.body).toContain('<Hangup/>')
+    })
 
-      expect(result.body).toBe('{}')
-      assertCommandFetchAnyBody('call-009', 'speak')
-      assertCommandFetch('call-009', 'record_start', {
-        format: 'mp3',
-        play_beep: true,
-        max_length_secs: 60,
-      })
+    it('plays the operator\'s uploaded voicemail greeting instead of speaking one (#1350)', async () => {
+      const upload = `${HOLD_ORIGIN}/api/ivr-audio/voicemailPrompt/en`
+      const res = await adapter.handleVoicemail({ callSid: 'v3:call-1', callerLanguage: 'en', callbackUrl: HOLD_ORIGIN, audioUrls: { 'voicemailPrompt:en': upload } })
+      expect(res.body).toContain(`<Play>${upload}</Play>`)
+      expect(res.body).not.toContain('<Say')
+    })
+
+    it('speaks the greeting when nothing was uploaded', async () => {
+      const res = await adapter.handleVoicemail({ callSid: 'v3:call-1', callerLanguage: 'en', callbackUrl: HOLD_ORIGIN, audioUrls: {} })
+      expect(res.body).toContain('<Say')
+      expect(res.body).not.toContain('<Play')
     })
   })
 
   describe('handleWaitMusic', () => {
-    it('returns empty response when under timeout', async () => {
-      const result = await adapter.handleWaitMusic('en', undefined, 30, 90)
-      expect(result.body).toBe('{}')
+    it('plays the wait message and the worker\'s own hold track while under the timeout', async () => {
+      const res = await adapter.handleWaitMusic('en', HOLD, 10, 90)
+      expect(res.body).toContain(`<Play>${HOLD_URL}</Play>`)
+      expect(res.body).not.toContain('<Leave')
     })
 
-    it('returns leave true when queueTime exceeds timeout', async () => {
-      const result = await adapter.handleWaitMusic('en', undefined, 95, 90)
-      expect(result.body).toBe(JSON.stringify({ leave: true }))
+    it('leaves the queue — which sends the caller to voicemail — once the timeout is reached', async () => {
+      expect((await adapter.handleWaitMusic('en', HOLD, 90, 90)).body).toBe('<Response><Leave/></Response>')
+      expect((await adapter.handleWaitMusic('en', HOLD, 120, 90)).body).toContain('<Leave/>')
     })
 
-    it('uses default timeout of 90', async () => {
-      const result = await adapter.handleWaitMusic('en', undefined, 100)
-      expect(result.body).toBe(JSON.stringify({ leave: true }))
-    })
-  })
-
-  describe('hangupCall', () => {
-    it('issues hangup command', async () => {
-      await adapter.hangupCall('call-010')
-      assertCommandFetch('call-010', 'hangup', {})
+    it('uses a default timeout of 90', async () => {
+      expect((await adapter.handleWaitMusic('en', HOLD, 89)).body).not.toContain('<Leave')
+      expect((await adapter.handleWaitMusic('en', HOLD, 90)).body).toContain('<Leave/>')
     })
   })
 
-  describe('ringVolunteers', () => {
-    it('creates outbound calls with correct parameters', async () => {
-      fetchSpy.mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            data: {
-              call_control_id: 'cc-vol-1',
-              call_leg_id: 'leg-1',
-              call_session_id: 'sess-1',
-            },
-          }),
-          { status: 200 },
-        ),
-      )
+  describe('handleVoicemailComplete / rejectCall / hangupResponse / emptyResponse', () => {
+    it('answers each with its TeXML verb', () => {
+      expect(adapter.handleVoicemailComplete('en').body).toContain('<Hangup/>')
+      expect(adapter.rejectCall().body).toBe('<Response><Reject reason="rejected"/></Response>')
+      expect(adapter.hangupResponse().body).toBe('<Response><Hangup/></Response>')
+      expect(adapter.emptyResponse().body).toBe('<Response/>')
+      for (const res of [adapter.rejectCall(), adapter.hangupResponse(), adapter.emptyResponse()]) expect(res.contentType).toBe('text/xml')
+    })
+  })
 
-      const result = await adapter.ringVolunteers({
-        callSid: 'call-parent',
-        callerNumber: '+15559876543',
-        volunteers: [
-          { phone: '+15551111111', callToken: 'token-a' },
-          { phone: '+15552222222', callToken: 'token-b' },
-        ],
-        callbackUrl: 'https://example.com/cb',
-        hubId: 'hub-1',
-      })
+  describe('hangupCall / cancelRinging', () => {
+    const hangupUrl = (sid: string) => `https://api.telnyx.com/v2/calls/${encodeURIComponent(sid)}/actions/hangup`
+    const hungUp = () => (fetchSpy.mock.calls as Array<[unknown, RequestInit?]>).map(c => String(c[0]))
 
-      expect(result).toEqual(['cc-vol-1'])
-      expect(fetchSpy).toHaveBeenCalledTimes(2)
-
-      const calls = fetchSpy.mock.calls.filter((call: unknown[]) =>
-        (call[0] as string).includes('/v2/calls'),
-      )
-      expect(calls).toHaveLength(2)
-
-      for (const [, init] of calls) {
-        const body = JSON.parse((init as RequestInit).body as string)
-        expect(body.from).toBe(PHONE_NUMBER)
-        expect(body.connection_id).toBe(CONNECTION_ID)
-        expect(body.webhook_url_method).toBe('POST')
-        expect(body.timeout_secs).toBe(30)
-        expect(body.client_state).toBeTruthy()
-      }
+    it('ends the leg by its CallSid, authenticated', async () => {
+      await adapter.hangupCall('v3:call-1')
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(hangupUrl('v3:call-1'))
+      expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${API_KEY}`)
     })
 
-    it('returns only successful call_control_ids', async () => {
+    it('rejects when Telnyx refuses the hangup', async () => {
+      fetchSpy.mockResolvedValue(new Response('no', { status: 500 }))
+      await expect(adapter.hangupCall('v3:call-1')).rejects.toThrow(/Telnyx API error \(hangup\): 500/)
+    })
+
+    it('hangs up every ringing leg except the one that answered', async () => {
+      await adapter.cancelRinging(['v3:a', 'v3:b', 'v3:c'], 'v3:b')
+      expect(hungUp().sort()).toEqual([hangupUrl('v3:a'), hangupUrl('v3:c')])
+    })
+
+    it('hangs up all legs when none answered', async () => {
+      await adapter.cancelRinging(['v3:a', 'v3:b'])
+      expect(hungUp()).toHaveLength(2)
+    })
+  })
+
+  describe('ringVolunteers (#1135)', () => {
+    const volunteers = [
+      { pubkey: 'pk1', phone: '+15550000001', callToken: 'tok one' },
+      { pubkey: 'pk2', phone: '+15550000002', callToken: 'tok-two' },
+    ]
+    const params = { callSid: 'v3:call-1', callerNumber: '+15559876543', volunteers, callbackUrl: 'https://cb.example.org', hubId: 'hub-1' }
+    const created = () => (fetchSpy.mock.calls as Array<[string, RequestInit]>).map(([url, init]) => ({ url, body: JSON.parse(String(init.body)) }))
+
+    it('places each leg through the TeXML application with distinct answer and status URLs', async () => {
+      let n = 0
+      fetchSpy.mockImplementation(async () => Response.json({ call_sid: `v3:leg-${++n}`, status: 'queued' }))
+      const sids = await adapter.ringVolunteers(params)
+
+      expect(sids).toEqual(['v3:leg-1', 'v3:leg-2'])
+      const [first] = created()
+      expect(first.url).toBe(`https://api.telnyx.com/v2/texml/calls/${CONNECTION_ID}`)
+      expect(first.body).toMatchObject({ To: '+15550000001', From: PHONE_NUMBER, Timeout: 30, MachineDetection: 'Enable', Method: 'POST' })
+      // The answer URL is fetched on answer only; progress events go elsewhere.
+      expect(first.body.Url).toBe('https://cb.example.org/api/telephony/user-answer?callToken=tok%20one&hub=hub-1')
+      expect(first.body.StatusCallback).toBe('https://cb.example.org/api/telephony/call-status?callToken=tok%20one&hub=hub-1')
+      expect(first.body.StatusCallback).not.toBe(first.body.Url)
+      expect(first.body.StatusCallbackEvent).toBe('initiated ringing answered completed')
+    })
+
+    it('returns only the legs that were placed', async () => {
       fetchSpy
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              data: {
-                call_control_id: 'cc-ok',
-                call_leg_id: 'leg-1',
-                call_session_id: 'sess-1',
-              },
-            }),
-            { status: 200 },
-          ),
-        )
-        .mockResolvedValueOnce(
-          new Response('Bad Request', { status: 400 }),
-        )
+        .mockResolvedValueOnce(Response.json({ call_sid: 'v3:ok' }))
+        .mockResolvedValueOnce(new Response('Invalid number', { status: 422 }))
+      expect(await adapter.ringVolunteers(params)).toEqual(['v3:ok'])
+    })
 
-      const result = await adapter.ringVolunteers({
-        callSid: 'call-parent',
-        callerNumber: '+15559876543',
-        volunteers: [
-          { phone: '+15551111111', callToken: 'token-a' },
-          { phone: '+15552222222', callToken: 'token-b' },
-        ],
-        callbackUrl: 'https://example.com/cb',
-      })
+    it('throws when every leg failed', async () => {
+      fetchSpy.mockImplementation(async () => new Response('down', { status: 500 }))
+      await expect(adapter.ringVolunteers(params)).rejects.toBeInstanceOf(AllDialsFailedError)
+    })
 
-      expect(result).toEqual(['cc-ok'])
+    it('does not mistake an answer with no call_sid for a placed leg', async () => {
+      fetchSpy.mockImplementation(async () => Response.json({ status: 'queued' }))
+      await expect(adapter.ringVolunteers(params)).rejects.toBeInstanceOf(AllDialsFailedError)
     })
   })
 
-  describe('cancelRinging', () => {
-    it('hangs up all calls except the answered one', async () => {
-      await adapter.cancelRinging(['call-a', 'call-b', 'call-c'], 'call-b')
-
-      assertCommandFetch('call-a', 'hangup', {})
-      assertCommandFetch('call-c', 'hangup', {})
-
-      expect(fetchSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('/actions/hangup'),
-        expect.objectContaining({
-          body: expect.stringContaining('call-b'),
-        }),
-      )
+  describe('recordings', () => {
+    it('getCallRecording is not supported', async () => {
+      expect(await adapter.getCallRecording('x')).toBeNull()
     })
 
-    it('hangs up all calls when no exceptSid', async () => {
-      await adapter.cancelRinging(['call-a', 'call-b'])
-      assertCommandFetch('call-a', 'hangup', {})
-      assertCommandFetch('call-b', 'hangup', {})
-    })
-  })
-
-  describe('getCallRecording', () => {
-    it('returns null (stub)', async () => {
-      const result = await adapter.getCallRecording('call-011')
-      expect(result).toBeNull()
-    })
-  })
-
-  // The handle is the recorded call LEG: call.recording.saved carries no
-  // recording id, and its URLs expire in ten minutes (#2297).
-  describe('getRecordingAudio', () => {
-    it('lists the leg\'s recordings, then fetches the first one\'s audio', async () => {
-      const buffer = new ArrayBuffer(8)
+    it('fetches a recording by its RecordingSid: the resource, then its download URL', async () => {
+      const audio = new ArrayBuffer(8)
       fetchSpy
-        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1', call_leg_id: 'leg-1', download_urls: { mp3: 'https://recording.url/audio.mp3' } }] }))
-        .mockResolvedValueOnce(new Response(buffer, { status: 200 }))
-
-      const result = await adapter.getRecordingAudio('leg-1')
-      expect(result).toStrictEqual(buffer)
-      expect(String(fetchSpy.mock.calls[0]![0])).toBe('https://api.telnyx.com/v2/recordings?filter[call_leg_id]=leg-1&page[size]=50')
-      expect(fetchSpy).toHaveBeenLastCalledWith(
-        'https://recording.url/audio.mp3',
-        expect.objectContaining({
-          headers: { Authorization: `Bearer ${API_KEY}` },
-        }),
-      )
+        .mockResolvedValueOnce(Response.json({ data: { id: 'rec-1', download_urls: { mp3: 'https://recording.url/audio.mp3' } } }))
+        .mockResolvedValueOnce(new Response(audio, { status: 200 }))
+      expect(await adapter.getRecordingAudio('rec-1')).toStrictEqual(audio)
+      expect(String(fetchSpy.mock.calls[0]![0])).toBe('https://api.telnyx.com/v2/recordings/rec-1')
     })
 
-    it('returns null on error', async () => {
+    it('returns null when the recording cannot be fetched', async () => {
       fetchSpy.mockResolvedValue(new Response('Not Found', { status: 404 }))
-      const result = await adapter.getRecordingAudio('leg-1')
-      expect(result).toBeNull()
-    })
-  })
-
-  // #2297: provider-side deletion — fail loudly, never a silent no-op.
-  describe('deleteRecording', () => {
-    it('deletes every recording of the leg', async () => {
-      fetchSpy
-        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1' }, { id: 'rec-2' }] }))
-        .mockResolvedValueOnce(Response.json({ data: {} }))
-        .mockResolvedValueOnce(Response.json({ data: {} }))
-      await expect(adapter.deleteRecording('leg-1')).resolves.toBeUndefined()
-      const deletes = (fetchSpy.mock.calls as Array<[unknown, RequestInit | undefined]>).filter(c => c[1]?.method === 'DELETE').map(c => String(c[0]))
-      expect(deletes).toEqual(['https://api.telnyx.com/v2/recordings/rec-1', 'https://api.telnyx.com/v2/recordings/rec-2'])
+      expect(await adapter.getRecordingAudio('rec-1')).toBeNull()
     })
 
-    it('resolves when the leg has no recording left', async () => {
-      fetchSpy.mockResolvedValueOnce(Response.json({ data: [] }))
-      await expect(adapter.deleteRecording('leg-1')).resolves.toBeUndefined()
+    it('deletes a recording by its RecordingSid; an already-gone one is deleted', async () => {
+      await expect(adapter.deleteRecording('rec-1')).resolves.toBeUndefined()
+      expect(fetchSpy.mock.calls[0]).toEqual(['https://api.telnyx.com/v2/recordings/rec-1', expect.objectContaining({ method: 'DELETE' })])
+      fetchSpy.mockResolvedValue(new Response('', { status: 404 }))
+      await expect(adapter.deleteRecording('rec-1')).resolves.toBeUndefined()
     })
 
-    it('rejects when the recordings cannot be listed', async () => {
-      fetchSpy.mockResolvedValueOnce(new Response('unauthorized', { status: 401 }))
-      await expect(adapter.deleteRecording('leg-1')).rejects.toThrow(/Telnyx recording deletion failed: 401/)
-    })
-
-    it('rejects when Telnyx refuses a deletion', async () => {
-      fetchSpy
-        .mockResolvedValueOnce(Response.json({ data: [{ id: 'rec-1' }] }))
-        .mockResolvedValueOnce(new Response('boom', { status: 500 }))
-      await expect(adapter.deleteRecording('leg-1')).rejects.toThrow(/Telnyx recording deletion failed: 500/)
+    it('rejects when Telnyx refuses a deletion, or cannot be reached', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('boom', { status: 500 }))
+      await expect(adapter.deleteRecording('rec-1')).rejects.toThrow(/Telnyx recording deletion failed: 500/)
+      fetchSpy.mockRejectedValueOnce(new Error('network down'))
+      await expect(adapter.deleteRecording('rec-1')).rejects.toThrow(/network down/)
     })
   })
 
@@ -506,7 +370,7 @@ describe('TelnyxAdapter', () => {
       route({
         'https://api.telnyx.com/v2/phone_numbers?': Response.json({ data: [{ id: 'pn-1' }] }),
         'https://api.telnyx.com/v2/phone_numbers/pn-1/voice': Response.json({ data: { call_recording: { inbound_call_recording_enabled: false } } }),
-        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [{ id: 'r', call_leg_id: 'leg-1', created_at: old }] }),
+        'https://api.telnyx.com/v2/recordings?': Response.json({ data: [{ id: 'leg-1', created_at: old }] }),
         'https://api.telnyx.com/v2/recording_transcriptions': Response.json({ data: [] }),
       })
       const posture = await adapter.probeRecordingPosture(context(['leg-1']))
@@ -536,444 +400,158 @@ describe('TelnyxAdapter', () => {
     })
   })
 
+  // Real Ed25519 over `timestamp|body`: nothing about verification is stubbed.
   describe('validateWebhook', () => {
-    it('returns true for valid signature and timestamp', async () => {
-      const now = Math.floor(Date.now() / 1000)
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('valid-sig'),
-          'telnyx-timestamp': String(now),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
+    let signer: TelnyxSigner
+    const body = form({ CallSid: 'v3:call-1', From: '+15559876543', To: PHONE_NUMBER, ConnectionId: CONNECTION_ID })
 
-      fetchSpy.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ data: { public_key: btoa('pubkey-bytes') } }),
-          { status: 200 },
-        ),
-      )
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(true)
+    beforeEach(async () => {
+      signer = await makeTelnyxSigner()
+      fetchSpy.mockImplementation(async () => publicKeyResponse(signer))
     })
 
-    it('returns false when crypto.subtle.verify returns false', async () => {
-      const now = Math.floor(Date.now() / 1000)
-      const request = new Request('https://example.com/webhook', {
+    const request = (headers: Record<string, string>, requestBody = body) =>
+      new Request('https://hotline.example.org/api/telephony/incoming', {
         method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('bad-sig'),
-          'telnyx-timestamp': String(now),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+        body: requestBody,
       })
 
-      fetchSpy.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ data: { public_key: btoa('pubkey-bytes') } }),
-          { status: 200 },
-        ),
-      )
-      subtleVerifySpy.mockResolvedValueOnce(false)
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
+    it('accepts a request signed by the account\'s key', async () => {
+      expect(await adapter.validateWebhook(request(await signer.sign(body)))).toBe(true)
     })
 
-    it('rejects expired timestamps (> 300 seconds)', async () => {
-      const oldTs = Math.floor(Date.now() / 1000) - 400
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('valid-sig'),
-          'telnyx-timestamp': String(oldTs),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
-      expect(fetchSpy).not.toHaveBeenCalled()
-      expect(subtleVerifySpy).not.toHaveBeenCalled()
+    it('refuses a body altered after signing', async () => {
+      const headers = await signer.sign(body)
+      expect(await adapter.validateWebhook(request(headers, body.replace('CallSid=v3', 'CallSid=v4')))).toBe(false)
     })
 
-    it('rejects missing signature header', async () => {
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-timestamp': String(Math.floor(Date.now() / 1000)),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
-      expect(fetchSpy).not.toHaveBeenCalled()
+    it('refuses a signature made by another key', async () => {
+      const other = await makeTelnyxSigner()
+      expect(await adapter.validateWebhook(request(await other.sign(body)))).toBe(false)
     })
 
-    it('rejects missing timestamp header', async () => {
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('valid-sig'),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
-      expect(fetchSpy).not.toHaveBeenCalled()
+    it('refuses a timestamp the signature does not cover', async () => {
+      const headers = await signer.sign(body)
+      expect(await adapter.validateWebhook(request({ ...headers, 'telnyx-timestamp': String(Number(headers['telnyx-timestamp']) + 1) }))).toBe(false)
     })
 
-    it('rejects invalid timestamp (NaN)', async () => {
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('valid-sig'),
-          'telnyx-timestamp': 'not-a-number',
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
+    it('refuses a stale signed request (replay window)', async () => {
+      const stale = Math.floor(Date.now() / 1000) - 120
+      expect(await adapter.validateWebhook(request(await signer.sign(body, stale)))).toBe(false)
     })
 
-    it('rejects invalid signature after verification', async () => {
-      const now = Math.floor(Date.now() / 1000)
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('invalid-sig'),
-          'telnyx-timestamp': String(now),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-
-      fetchSpy.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ data: { public_key: btoa('pubkey-bytes') } }),
-          { status: 200 },
-        ),
-      )
-      subtleVerifySpy.mockResolvedValueOnce(false)
-
-      const result = await adapter.validateWebhook(request)
-      expect(result).toBe(false)
+    it('refuses a request with no signature, no timestamp, or neither', async () => {
+      const headers = await signer.sign(body)
+      expect(await adapter.validateWebhook(request({ 'telnyx-timestamp': headers['telnyx-timestamp'] }))).toBe(false)
+      expect(await adapter.validateWebhook(request({ 'telnyx-signature-ed25519': headers['telnyx-signature-ed25519'] }))).toBe(false)
+      expect(await adapter.validateWebhook(request({}))).toBe(false)
     })
 
-    it('caches public key and reuses it', async () => {
-      const now = Math.floor(Date.now() / 1000)
-      const request = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('sig-1'),
-          'telnyx-timestamp': String(now),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
+    it('refuses a non-numeric timestamp and a malformed signature', async () => {
+      const headers = await signer.sign(body)
+      expect(await adapter.validateWebhook(request({ ...headers, 'telnyx-timestamp': 'now' }))).toBe(false)
+      expect(await adapter.validateWebhook(request({ ...headers, 'telnyx-signature-ed25519': '***not base64***' }))).toBe(false)
+    })
 
-      fetchSpy.mockResolvedValue(
-        new Response(
-          JSON.stringify({ data: { public_key: btoa('pubkey-bytes') } }),
-          { status: 200 },
-        ),
-      )
+    it('refuses an empty body, which a signature would cover only trivially', async () => {
+      expect(await adapter.validateWebhook(request(await signer.sign(''), ''))).toBe(false)
+    })
 
-      // First validation
-      await adapter.validateWebhook(request)
-      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    it('refuses when the account\'s public key cannot be fetched — it never fails open', async () => {
+      fetchSpy.mockResolvedValue(new Response('unauthorized', { status: 401 }))
+      expect(await adapter.validateWebhook(request(await signer.sign(body)))).toBe(false)
+    })
 
-      const request2 = new Request('https://example.com/webhook', {
-        method: 'POST',
-        headers: {
-          'telnyx-signature-ed25519': btoa('sig-2'),
-          'telnyx-timestamp': String(now),
-          'Content-Type': 'application/json',
-        },
-        body: '{}',
-      })
-      await adapter.validateWebhook(request2)
+    it('fetches the public key once per adapter, not once per request', async () => {
+      await adapter.validateWebhook(request(await signer.sign(body)))
+      await adapter.validateWebhook(request(await signer.sign(body)))
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
-  })
 
-  function makeWebhookRequest(payload: unknown): Request {
-    return new Request('https://example.com/webhook', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  }
-
-  describe('parseIncomingWebhook', () => {
-    it('parses call.initiated webhook', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          event_type: 'call.initiated',
-          payload: {
-            call_control_id: 'call-012',
-            from: '+15559876543',
-            to: '+15551234567',
-          },
-        },
-      })
-
-      const result = await adapter.parseIncomingWebhook(request)
-      expect(result.callSid).toBe('call-012')
-      expect(result.callerNumber).toBe('+15559876543')
-      expect(result.calledNumber).toBe('+15551234567')
-    })
-
-    it('handles missing fields gracefully', async () => {
-      const request = makeWebhookRequest({ data: {} })
-      const result = await adapter.parseIncomingWebhook(request)
-      expect(result.callSid).toBe('')
-      expect(result.callerNumber).toBe('')
-      expect(result.calledNumber).toBeUndefined()
+    it('keys replay protection on the signed timestamp and body, not the unsigned query', async () => {
+      const headers = await signer.sign(body)
+      const a = new Request('https://hotline.example.org/api/telephony/captcha?round=0', { method: 'POST', headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' }, body })
+      const b = new Request('https://hotline.example.org/api/telephony/captcha?round=1', { method: 'POST', headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded' }, body })
+      expect(await adapter.webhookReplayKey(a)).toBe(await adapter.webhookReplayKey(b))
+      expect(await adapter.webhookReplayKey(a)).toBe(`${headers['telnyx-timestamp']}\n${body}`)
     })
   })
 
-  describe('parseLanguageWebhook', () => {
-    it('parses language selection with digits', async () => {
-      const clientState = btoa(JSON.stringify({ callSid: 'call-013', hubId: 'hub-1' }))
-      const request = makeWebhookRequest({
-        data: {
-          event_type: 'call.gather.ended',
-          payload: {
-            call_control_id: 'call-013',
-            from: '+15559876543',
-            digits: '1',
-            client_state: clientState,
-          },
-        },
+  describe('webhookNamesOwnAccount', () => {
+    it('reads the provider-populated ConnectionId; a body that is not ours, or repeats the field, is refused', async () => {
+      expect(await adapter.webhookNamesOwnAccount(formRequest({ ConnectionId: CONNECTION_ID }))).toBe(true)
+      expect(await adapter.webhookNamesOwnAccount(formRequest({ ConnectionId: 'conn-999' }))).toBe(false)
+      expect(await adapter.webhookNamesOwnAccount(formRequest({ CallSid: 'x' }))).toBe(false)
+      const twice = new Request('https://hotline.example.org/x', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `ConnectionId=${CONNECTION_ID}&ConnectionId=conn-999`,
       })
-
-      const result = await adapter.parseLanguageWebhook(request)
-      expect(result.callSid).toBe('call-013')
-      expect(result.callerNumber).toBe('+15559876543')
-      expect(result.digits).toBe('1')
-    })
-
-    it('falls back to client_state callSid when payload missing', async () => {
-      const clientState = btoa(JSON.stringify({ callSid: 'call-014' }))
-      const request = makeWebhookRequest({
-        data: {
-          payload: {
-            from: '+15559876543',
-            digits: '2',
-            client_state: clientState,
-          },
-        },
-      })
-
-      const result = await adapter.parseLanguageWebhook(request)
-      expect(result.callSid).toBe('call-014')
-      expect(result.digits).toBe('2')
+      expect(await adapter.webhookNamesOwnAccount(twice)).toBe(false)
+      const json = new Request('https://hotline.example.org/x', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ConnectionId: CONNECTION_ID }) })
+      expect(await adapter.webhookNamesOwnAccount(json)).toBe(false)
     })
   })
 
-  describe('parseCaptchaWebhook', () => {
-    it('parses captcha digits', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          payload: {
-            digits: '1234',
-            from: '+15559876543',
-          },
-        },
+  describe('webhook parsing', () => {
+    it('parseIncomingWebhook reads the call, the caller, the dialled number and whether a machine answered', async () => {
+      expect(await adapter.parseIncomingWebhook(formRequest({ CallSid: 'v3:call-1', From: '+15559876543', To: PHONE_NUMBER }))).toEqual({
+        callSid: 'v3:call-1',
+        callerNumber: '+15559876543',
+        calledNumber: PHONE_NUMBER,
+        answeredByMachine: false,
       })
-
-      const result = await adapter.parseCaptchaWebhook(request)
-      expect(result.digits).toBe('1234')
-      expect(result.callerNumber).toBe('+15559876543')
-    })
-  })
-
-  describe('parseCallStatusWebhook', () => {
-    it('returns initiated for call.initiated', async () => {
-      const request = makeWebhookRequest({
-        data: { event_type: 'call.initiated', payload: {} },
-      })
-      const result = await adapter.parseCallStatusWebhook(request)
-      expect(result.status).toBe('initiated')
-    })
-
-    it('returns answered for call.answered', async () => {
-      const request = makeWebhookRequest({
-        data: { event_type: 'call.answered', payload: {} },
-      })
-      const result = await adapter.parseCallStatusWebhook(request)
-      expect(result.status).toBe('answered')
-    })
-
-    it('maps hangup causes correctly', async () => {
-      const causes: Array<{ cause: string; expected: string }> = [
-        { cause: 'normal_clearing', expected: 'completed' },
-        { cause: 'originator_cancel', expected: 'failed' },
-        { cause: 'timeout', expected: 'no-answer' },
-        { cause: 'busy', expected: 'busy' },
-        { cause: 'user_busy', expected: 'busy' },
-        { cause: 'call_rejected', expected: 'failed' },
-        { cause: 'no_user_response', expected: 'no-answer' },
-        { cause: 'no_answer', expected: 'no-answer' },
-        { cause: 'subscriber_absent', expected: 'no-answer' },
-        { cause: 'normal_unspecified', expected: 'completed' },
-        { cause: 'unallocated_number', expected: 'failed' },
-        { cause: 'network_out_of_order', expected: 'failed' },
-        { cause: 'recovery_on_timer_expire', expected: 'no-answer' },
-        { cause: 'interworking', expected: 'failed' },
-        { cause: 'unknown_cause', expected: 'failed' },
-      ]
-
-      for (const { cause, expected } of causes) {
-        const request = makeWebhookRequest({
-          data: {
-            event_type: 'call.hangup',
-            payload: { hangup_cause: cause },
-          },
-        })
-        const result = await adapter.parseCallStatusWebhook(request)
-        expect(result.status).toBe(expected)
+      for (const machine of ['machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other', 'fax']) {
+        expect((await adapter.parseIncomingWebhook(formRequest({ CallSid: 'c', AnsweredBy: machine }))).answeredByMachine, machine).toBe(true)
+      }
+      for (const person of ['human', 'unknown']) {
+        expect((await adapter.parseIncomingWebhook(formRequest({ CallSid: 'c', AnsweredBy: person }))).answeredByMachine, person).toBe(false)
       }
     })
 
-    it('returns failed for unknown event types', async () => {
-      const request = makeWebhookRequest({
-        data: { event_type: 'call.unknown', payload: {} },
+    it('parseIncomingWebhook tolerates missing fields', async () => {
+      expect(await adapter.parseIncomingWebhook(formRequest({}))).toMatchObject({ callSid: '', callerNumber: '', calledNumber: undefined })
+    })
+
+    it('parseLanguageWebhook and parseCaptchaWebhook read the gathered digits', async () => {
+      expect(await adapter.parseLanguageWebhook(formRequest({ CallSid: 'v3:c', From: '+1555', Digits: '2' }))).toEqual({ callSid: 'v3:c', callerNumber: '+1555', digits: '2' })
+      expect(await adapter.parseLanguageWebhook(formRequest({ CallSid: 'v3:c' }))).toMatchObject({ digits: '' })
+      expect(await adapter.parseCaptchaWebhook(formRequest({ Digits: '4821', From: '+1555' }))).toEqual({ digits: '4821', callerNumber: '+1555' })
+      expect(await adapter.parseCaptchaWebhook(formRequest({ From: '+1555' }))).toMatchObject({ digits: '' })
+    })
+
+    it('parseCallStatusWebhook maps every Telnyx call status, and an unknown one to failed', async () => {
+      const expected: Record<string, string> = {
+        initiated: 'initiated', ringing: 'ringing', 'in-progress': 'answered', completed: 'completed',
+        busy: 'busy', 'no-answer': 'no-answer', failed: 'failed', canceled: 'failed', bogus: 'failed',
+      }
+      for (const [raw, status] of Object.entries(expected)) {
+        expect(await adapter.parseCallStatusWebhook(formRequest({ CallStatus: raw })), raw).toEqual({ status })
+      }
+      expect(await adapter.parseCallStatusWebhook(formRequest({ DialCallStatus: 'completed' }))).toEqual({ status: 'completed' })
+      expect(await adapter.parseCallStatusWebhook(formRequest({}))).toEqual({ status: 'failed' })
+    })
+
+    it('parseQueueWaitWebhook reads QueueTime', async () => {
+      expect(await adapter.parseQueueWaitWebhook(formRequest({ QueueTime: '30' }))).toEqual({ queueTime: 30 })
+      expect(await adapter.parseQueueWaitWebhook(formRequest({}))).toEqual({ queueTime: 0 })
+    })
+
+    it('parseQueueExitWebhook maps QueueResult, and anything else to error', async () => {
+      for (const result of ['leave', 'queue-full', 'error', 'bridged', 'hangup']) {
+        expect(await adapter.parseQueueExitWebhook(formRequest({ QueueResult: result })), result).toEqual({ result })
+      }
+      expect(await adapter.parseQueueExitWebhook(formRequest({ QueueResult: 'surprise' }))).toEqual({ result: 'error' })
+      expect(await adapter.parseQueueExitWebhook(formRequest({}))).toEqual({ result: 'error' })
+    })
+
+    it('parseRecordingWebhook names the recording by its RecordingSid', async () => {
+      expect(await adapter.parseRecordingWebhook(formRequest({ RecordingStatus: 'completed', RecordingSid: 'rec-1', CallSid: 'v3:c' }))).toEqual({
+        status: 'completed', recordingSid: 'rec-1', callSid: 'v3:c',
       })
-      const result = await adapter.parseCallStatusWebhook(request)
-      expect(result.status).toBe('failed')
+      expect(await adapter.parseRecordingWebhook(formRequest({ RecordingStatus: 'absent' }))).toMatchObject({ status: 'failed' })
+      expect(await adapter.parseRecordingWebhook(formRequest({}))).toMatchObject({ status: 'failed', recordingSid: undefined })
     })
-  })
-
-  describe('parseQueueWaitWebhook', () => {
-    it('returns queueTime 0', async () => {
-      const request = makeWebhookRequest({})
-      const result = await adapter.parseQueueWaitWebhook(request)
-      expect(result.queueTime).toBe(0)
-    })
-  })
-
-  describe('parseQueueExitWebhook', () => {
-    it('returns bridged for call.bridged', async () => {
-      const request = makeWebhookRequest({
-        data: { event_type: 'call.bridged', payload: {} },
-      })
-      const result = await adapter.parseQueueExitWebhook(request)
-      expect(result.result).toBe('bridged')
-    })
-
-    it('returns hangup for normal clearing', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          event_type: 'call.hangup',
-          payload: { hangup_cause: 'normal_clearing' },
-        },
-      })
-      const result = await adapter.parseQueueExitWebhook(request)
-      expect(result.result).toBe('hangup')
-    })
-
-    it('returns hangup for originator cancel', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          event_type: 'call.hangup',
-          payload: { hangup_cause: 'originator_cancel' },
-        },
-      })
-      const result = await adapter.parseQueueExitWebhook(request)
-      expect(result.result).toBe('hangup')
-    })
-
-    it('returns error for other hangup causes', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          event_type: 'call.hangup',
-          payload: { hangup_cause: 'timeout' },
-        },
-      })
-      const result = await adapter.parseQueueExitWebhook(request)
-      expect(result.result).toBe('error')
-    })
-
-    it('returns error for unknown event types', async () => {
-      const request = makeWebhookRequest({
-        data: { event_type: 'call.random', payload: {} },
-      })
-      const result = await adapter.parseQueueExitWebhook(request)
-      expect(result.result).toBe('error')
-    })
-  })
-
-  describe('parseRecordingWebhook', () => {
-    it('returns completed with mp3 URL', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          payload: {
-            call_control_id: 'call-015',
-            call_leg_id: 'leg-015',
-            recording_urls: { mp3: 'https://rec.url/file.mp3' },
-          },
-        },
-      })
-
-      const result = await adapter.parseRecordingWebhook(request)
-      expect(result.status).toBe('completed')
-      // The leg, not the URL: the URL expires in ten minutes and cannot address a deletion.
-      expect(result.recordingSid).toBe('leg-015')
-      expect(result.callSid).toBe('call-015')
-    })
-
-    it('returns failed when no mp3 URL', async () => {
-      const request = makeWebhookRequest({
-        data: {
-          payload: {
-            call_control_id: 'call-016',
-            recording_urls: {},
-          },
-        },
-      })
-
-      const result = await adapter.parseRecordingWebhook(request)
-      expect(result.status).toBe('failed')
-      expect(result.recordingSid).toBeUndefined()
-    })
-
-    it('returns failed when recording_urls missing', async () => {
-      const request = makeWebhookRequest({
-        data: { payload: { call_control_id: 'call-017' } },
-      })
-
-      const result = await adapter.parseRecordingWebhook(request)
-      expect(result.status).toBe('failed')
-    })
-  })
-})
-
-describe('TelnyxAdapter.webhookNamesOwnAccount (#2330)', () => {
-  const adapter = new TelnyxAdapter('test-api-key', 'conn-123', '+15551234567')
-  const json = (body: string) => new Request('http://localhost/api/telephony/incoming', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  })
-
-  it('reads the provider-populated connection_id; a malformed body is not ours', async () => {
-    const event = (connection_id: string) => JSON.stringify({ data: { event_type: 'call.initiated', payload: { connection_id } } })
-    expect(await adapter.webhookNamesOwnAccount(json(event('conn-123')))).toBe(true)
-    expect(await adapter.webhookNamesOwnAccount(json(event('conn-999')))).toBe(false)
-    expect(await adapter.webhookNamesOwnAccount(json('[]'))).toBe(false)
-    expect(await adapter.webhookNamesOwnAccount(json('{not json'))).toBe(false)
   })
 })

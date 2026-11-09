@@ -45,7 +45,7 @@ export interface TelephonyProviderConfig {
   bridgeSecret?: string      // Separate HMAC secret for bridge<->worker auth (never reuse ariPassword)
 
   // Telnyx
-  connectionId?: string     // Telnyx Call Control App ID
+  connectionId?: string     // Telnyx TeXML application id
   // apiKey shared with Vonage field
 
   // Bandwidth

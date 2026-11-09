@@ -222,6 +222,9 @@ export const telephonyProviderSchema = z.object({
   apiKey: z.string().optional(),
   apiSecret: z.string().optional(),
   authId: z.string().optional(),
+  // Telnyx: the TeXML application id. PROVIDER_REQUIRED_FIELDS names it for
+  // Telnyx, and a z.object() drops keys it does not declare.
+  connectionId: z.string().optional(),
 })
 
 export const createRoleSchema = z.object({
