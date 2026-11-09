@@ -624,25 +624,30 @@
             live_entries="$(count_entries /data)"
             touch "${MARK}"
             mkdir "${PREV}"
-            # The marker is removed only when a rollback fully succeeded (nothing
-            # left in PREV). Otherwise it stays, so the next run refuses (exit 4)
-            # instead of deleting the live objects that are still in PREV.
-            rollback() {
-              move_entries /data "${STAGE}" || true
-              move_entries "${PREV}" /data || true
-              if [ "$(count_entries "${PREV}")" -eq 0 ]; then
-                rm -rf "${PREV}"; rm -f "${MARK}"
+            # The marker is removed only when a rollback is VERIFIED: nothing left
+            # in PREV and /data holding as many entries as the live data had.
+            # Otherwise it stays, so the next run refuses (exit 4) instead of
+            # deleting live objects that are still in PREV or STAGE.
+            finish_rollback() {
+              if [ "$(count_entries "${PREV}")" -eq 0 ] && [ "$(count_entries /data)" -eq "${live_entries}" ]; then
+                rm -rf "${PREV}" "${STAGE}"; rm -f "${MARK}"
                 echo "$1; the live objects were put back" >&2
               else
-                echo "$1, and the rollback was incomplete: some live objects are still in ${PREV}. Move them back by hand; the marker ${MARK} stays so a second restore cannot delete them." >&2
+                echo "$1, and the rollback could not be verified: live objects may be in ${PREV} or ${STAGE}. Move them back by hand; the marker ${MARK} stays so a second restore cannot delete them." >&2
               fi
             }
             if ! move_entries /data "${PREV}"; then
-              rollback "ERROR: could not move the live objects aside"
+              # Part of the live data was moved: bring only that back. Entries still
+              # in /data ARE the live data and must not be touched.
+              move_entries "${PREV}" /data || true
+              finish_rollback "ERROR: could not move the live objects aside"
               exit 5
             fi
             if ! move_entries "${STAGE}" /data || [ "$(count_entries /data)" -ne "${staged_entries}" ]; then
-              rollback "ERROR: could not move the restored objects into place"
+              # Everything live is in PREV, so what is in /data now came from STAGE.
+              move_entries /data "${STAGE}" || true
+              move_entries "${PREV}" /data || true
+              finish_rollback "ERROR: could not move the restored objects into place"
               exit 5
             fi
             # The replacement is in place and complete. Only now is the old data
