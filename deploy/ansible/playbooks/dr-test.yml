@@ -1,390 +1,505 @@
 ---
-# Disaster Recovery Test Playbook
+# Disaster Recovery Drill
 #
-# Provisions a fresh Docker environment, restores from the latest backup,
-# validates all services, measures time-to-recovery, and tears down.
+# Proves, on the host that holds the backups, that the newest backups can be
+# turned back into a working service, and measures how long that takes:
 #
-# Usage:
+#   1. restore the newest PostgreSQL dump and RustFS archive into an ISOLATED
+#      scratch Compose project (its own network with no route out, no published
+#      ports, throwaway credentials, its own volumes);
+#   2. require the restored database to hold exactly the tables the dump lists
+#      and the restored object store exactly the files the archive lists;
+#   3. boot the DEPLOYED app image against them and require /api/health/ready to
+#      report ready -- which runs the image's migrations over the restored
+#      ledger, so it also proves the newest image can start on the newest data;
+#   4. record the time each stage took against the RTO target and FAIL if it is
+#      missed;
+#   5. always tear the scratch project, its volumes and its directory down.
+#
+# Every check fails the play when it fails. There is no ignore_errors, no
+# "PASS" printed because a result merely exists, and nothing here can pass when
+# the backup cannot be restored.
+#
+# What it deliberately does NOT prove: that the restored data can be DECRYPTED.
+# The scratch app gets throwaway secrets, never the deployment's. That is
+# intentional -- an app holding the real keys, booted on restored production data,
+# could act on it (deliver queued messages, call provider APIs with decrypted
+# credentials). Decryptability is the key-escrow question, not a drill's. And the
+# time measured is the data-restore and app-boot part of recovery; provisioning a
+# replacement host is on top of it.
+#
+# The decrypted data is streamed (pipes), never written to a host directory and
+# never bind-mounted into a container: Docker userns-remap (harden.yml) maps a
+# container's root to an unprivileged sub-UID that cannot read a 0700 host
+# directory. The scratch volumes hold restored data until teardown, so a host
+# whose disk is not encrypted is skipped, as for restore.yml.
+#
+# Usage (from deploy/ansible/, on a host that holds the backups -- the age private
+# key must be readable there, as for test-restore.yml):
 #   just dr-test
 #   ansible-playbook playbooks/dr-test.yml --ask-vault-pass
-#   ansible-playbook playbooks/dr-test.yml --ask-vault-pass -e dr_mode=validate
+#   ansible-playbook playbooks/dr-test.yml --ask-vault-pass -e dr_rto_target=7200
 #
-# Tags: provision, restore, validate, always
-# Non-destructive: uses port 3333, project name llamenos-dr-test
+# Non-destructive: touches nothing but the scratch project `llamenos-dr-test`.
 
-- name: Disaster Recovery Test
-  hosts: localhost
-  connection: local
+- name: Disaster recovery drill
+  hosts: all
+  become: true
+  become_user: "{{ deploy_user }}"
   gather_facts: true
+  vars_files:
+    - ../vars.yml
 
   vars:
-    dr_mode: full # full | restore | validate
-    dr_start_time: "{{ ansible_date_time.epoch }}"
-    dr_compose_dir: "{{ ansible_env.HOME }}/.llamenos-dr-test"
-    dr_results_file: "{{ app_dir | default('/opt/llamenos') }}/dr-results/dr-{{ ansible_date_time.iso8601_basic_short }}.json"
     dr_project_name: llamenos-dr-test
-    dr_port: 3333
-    dr_rto_target: 14400 # 4 hours in seconds
-    backup_dir: "{{ app_dir | default('/opt/llamenos') }}/backups"
-    age_identity: "{{ age_identity_file | default('/root/backup-key.txt') }}"
-
-  pre_tasks:
-    - name: Record start time
-      ansible.builtin.set_fact:
-        dr_timer_start: "{{ ansible_date_time.epoch | int }}"
-      tags: always
-
-    - name: Ensure results directory exists
-      ansible.builtin.file:
-        path: "{{ dr_results_file | dirname }}"
-        state: directory
-        mode: "0755"
-      tags: always
+    dr_rto_target: 14400 # seconds (4 hours)
+    dr_ready_retries: 40
+    dr_ready_delay: 5
+    dr_results_dir: "{{ app_dir }}/dr-results"
+    dr_postgres_image: "{{ llamenos_postgres_image | default('postgres:17-alpine') }}"
+    dr_rustfs_image: "{{ llamenos_rustfs_image | default('rustfs/rustfs:latest') }}"
+    dr_helper_image: "{{ backup_rustfs_helper_image | default('alpine:3.22') }}"
+    dr_encrypted: "{{ backup_age_public_key | default('') | length > 0 }}"
+    # Same placement rule as roles/backup-postgres and roles/backup-rustfs: a host
+    # that does not hold the database (or object store) has no backup of it.
+    dr_holds_postgres: >-
+      {{ not (groups.get('llamenos_db', []) | length > 0
+              and inventory_hostname not in groups.get('llamenos_db', [])) }}
+    dr_holds_rustfs: >-
+      {{ (llamenos_rustfs_enabled | default(true))
+         and not (groups.get('llamenos_storage', []) | length > 0
+                  and inventory_hostname not in groups.get('llamenos_storage', [])) }}
 
   tasks:
-    # =========================================================================
-    # PROVISION — Create isolated Docker environment
-    # =========================================================================
-    - name: Create temporary DR compose directory
-      ansible.builtin.file:
-        path: "{{ dr_compose_dir }}"
-        state: directory
-        mode: "0700"
-      tags: provision
-
-    - name: Find latest backup file
-      ansible.builtin.shell: |
-        ls -t {{ backup_dir }}/*.sql.gz.age {{ backup_dir }}/*.sql.gz 2>/dev/null | head -1
-      register: latest_backup
-      changed_when: false
-      failed_when: latest_backup.stdout == ""
-      tags: provision
-
-    - name: Record backup file
-      ansible.builtin.set_fact:
-        dr_backup_file: "{{ latest_backup.stdout }}"
-      tags: provision
-
-    - name: Determine if backup is encrypted
-      ansible.builtin.set_fact:
-        dr_backup_encrypted: "{{ dr_backup_file.endswith('.age') }}"
-      tags: provision
-
-    # The app refuses to boot without the ban-hash-key and messaging-hash-key secret
-    # files (BAN_HASH_KEY and MESSAGING_HASH_KEY are file-only). Throwaway values:
-    # this environment holds no real data key.
-    - name: Write the DR hash key secret files
-      ansible.builtin.copy:
-        dest: "{{ dr_compose_dir }}/{{ item }}"
-        mode: "0444"
-        content: "{{ ('dr-test-' ~ item ~ '-for-validation-only') | hash('sha256') }}\n"
-      loop:
-        - ban-hash-key
-        - messaging-hash-key
-      tags: provision
-
-    - name: Generate DR Docker Compose file
-      ansible.builtin.copy:
-        dest: "{{ dr_compose_dir }}/docker-compose.yml"
-        mode: "0600"
-        content: |
-          services:
-            postgres:
-              image: postgres:16-alpine
-              environment:
-                POSTGRES_USER: llamenos
-                POSTGRES_PASSWORD: dr-test-password
-                POSTGRES_DB: llamenos
-              ports:
-                - "{{ dr_port | int + 1 }}:5432"
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U llamenos"]
-                interval: 5s
-                timeout: 3s
-                retries: 10
-              volumes:
-                - dr-pgdata:/var/lib/postgresql/data
-
-            rustfs:
-              image: rustfs/rustfs:latest
-              command: server /data
-              environment:
-                RUSTFS_ACCESS_KEY: dr-test-access
-                RUSTFS_SECRET_KEY: dr-test-secret-key
-              ports:
-                - "{{ dr_port | int + 2 }}:9000"
-              healthcheck:
-                test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
-                interval: 5s
-                timeout: 3s
-                retries: 10
-              volumes:
-                - dr-rustfs:/data
-
-            app:
-              image: docker.io/llamenos/llamenos:latest
-              depends_on:
-                postgres:
-                  condition: service_healthy
-                rustfs:
-                  condition: service_healthy
-              environment:
-                NODE_ENV: production
-                PG_HOST: postgres
-                PG_PORT: "5432"
-                PG_USER: llamenos
-                PG_PASSWORD: dr-test-password
-                PG_DATABASE: llamenos
-                STORAGE_ENDPOINT: rustfs
-                STORAGE_PORT: "9000"
-                STORAGE_ACCESS_KEY: dr-test-access
-                STORAGE_SECRET_KEY: dr-test-secret-key
-                HMAC_SECRET: "{{ 'dr-test-hmac-secret-for-validation-only' | hash('sha256') }}"
-                ADMIN_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000000"
-                # Distinct from ADMIN_PUBKEY: the app refuses to boot when the two
-                # are equal or this is missing (#1283).
-
-                ADMIN_DECRYPTION_PUBKEY: "0000000000000000000000000000000000000000000000000000000000000001"
-                SERVER_SECRET: "{{ 'dr-test-server-secret-for-validation-only' | hash('sha256') }}"
-                SERVER_KEK: "{{ 'dr-test-server-kek-for-validation-only' | hash('sha256') }}"
-                PORT: "3000"
-              secrets:
-                - ban-hash-key
-                - messaging-hash-key
-              ports:
-                - "{{ dr_port }}:3000"
-              healthcheck:
-                test: ["CMD", "curl", "-sf", "http://localhost:3000/api/health"]
-                interval: 10s
-                timeout: 5s
-                retries: 12
-                start_period: 30s
-
-          secrets:
-            ban-hash-key:
-              file: ./ban-hash-key
-            messaging-hash-key:
-              file: ./messaging-hash-key
-
-          volumes:
-            dr-pgdata:
-            dr-rustfs:
-      tags: provision
-
-    - name: Record provision start time
-      ansible.builtin.set_fact:
-        dr_timer_provision_start: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: provision
-
-    - name: Start DR Docker environment
-      ansible.builtin.command:
-        cmd: docker compose -p {{ dr_project_name }} up -d --wait
-        chdir: "{{ dr_compose_dir }}"
-      register: dr_compose_up
-      tags: provision
-
-    - name: Wait for PostgreSQL to be ready
-      ansible.builtin.command:
-        cmd: >
-          docker compose -p {{ dr_project_name }} exec -T postgres
-          pg_isready -U llamenos
-        chdir: "{{ dr_compose_dir }}"
-      register: pg_ready
-      retries: 30
-      delay: 2
-      until: pg_ready.rc == 0
-      tags: provision
-
-    - name: Record provision end time
-      ansible.builtin.set_fact:
-        dr_timer_provision_end: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: provision
-
-    # =========================================================================
-    # RESTORE — Decrypt and restore from backup
-    # =========================================================================
-    - name: Record restore start time
-      ansible.builtin.set_fact:
-        dr_timer_restore_start: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: restore
-
-    - name: Decrypt and restore backup (encrypted)
-      ansible.builtin.shell: |
-        age -d -i {{ age_identity }} {{ dr_backup_file }} \
-          | gunzip \
-          | docker compose -p {{ dr_project_name }} exec -T postgres \
-              psql -U llamenos -d llamenos
-      args:
-        chdir: "{{ dr_compose_dir }}"
-      when: dr_backup_encrypted | bool
-      register: dr_restore_encrypted
-      tags: restore
-
-    - name: Restore backup (unencrypted)
-      ansible.builtin.shell: |
-        gunzip -c {{ dr_backup_file }} \
-          | docker compose -p {{ dr_project_name }} exec -T postgres \
-              psql -U llamenos -d llamenos
-      args:
-        chdir: "{{ dr_compose_dir }}"
-      when: not (dr_backup_encrypted | bool)
-      register: dr_restore_unencrypted
-      tags: restore
-
-    - name: Record restore end time
-      ansible.builtin.set_fact:
-        dr_timer_restore_end: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: restore
-
-    # =========================================================================
-    # VALIDATE — Check health, database tables, and API endpoints
-    # =========================================================================
-    - name: Record validate start time
-      ansible.builtin.set_fact:
-        dr_timer_validate_start: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: validate
-
-    - name: Wait for app health endpoint
-      ansible.builtin.uri:
-        url: "http://localhost:{{ dr_port }}/api/health"
-        method: GET
-        status_code: 200
-      register: health_check
-      retries: 30
-      delay: 5
-      until: health_check.status == 200
-      ignore_errors: true
-      tags: validate
-
-    - name: Validate database tables exist
-      ansible.builtin.command:
-        cmd: >
-          docker compose -p {{ dr_project_name }} exec -T postgres
-          psql -U llamenos -d llamenos -t -c
-          "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';"
-        chdir: "{{ dr_compose_dir }}"
-      register: db_table_count
-      tags: validate
-
-    - name: Validate storage table has data
-      ansible.builtin.command:
-        cmd: >
-          docker compose -p {{ dr_project_name }} exec -T postgres
-          psql -U llamenos -d llamenos -t -c
-          "SELECT count(*) FROM storage;"
-        chdir: "{{ dr_compose_dir }}"
-      register: db_storage_count
-      ignore_errors: true
-      tags: validate
-
-    - name: Validate API auth endpoint responds
-      ansible.builtin.uri:
-        url: "http://localhost:{{ dr_port }}/api/auth/challenge"
-        method: GET
-        status_code: [200, 401, 404]
-      register: api_auth_check
-      ignore_errors: true
-      tags: validate
-
-    - name: Validate API settings endpoint responds
-      ansible.builtin.uri:
-        url: "http://localhost:{{ dr_port }}/api/settings/public"
-        method: GET
-        status_code: [200, 401, 404]
-      register: api_settings_check
-      ignore_errors: true
-      tags: validate
-
-    - name: Record validate end time
-      ansible.builtin.set_fact:
-        dr_timer_validate_end: "{{ now(utc=true).strftime('%s') | int }}"
-      tags: validate
-
-    # =========================================================================
-    # RESULTS — Calculate timing and save report
-    # =========================================================================
-    - name: Calculate recovery times
-      ansible.builtin.set_fact:
-        dr_time_provision: "{{ (dr_timer_provision_end | int) - (dr_timer_provision_start | int) }}"
-        dr_time_restore: "{{ (dr_timer_restore_end | int) - (dr_timer_restore_start | int) }}"
-        dr_time_validate: "{{ (dr_timer_validate_end | int) - (dr_timer_validate_start | int) }}"
-        dr_time_total: "{{ (dr_timer_validate_end | int) - (dr_timer_start | int) }}"
+    - name: Skip hosts without disk encryption (this play keeps restored data on disk)
+      ansible.builtin.import_tasks: tasks/skip-unencrypted-host.yml
       tags: always
 
-    - name: Display DR test results
+    - name: Skip hosts that hold no database backup
+      ansible.builtin.meta: end_host
+      when: not (dr_holds_postgres | bool)
+      tags: always
+
+    - name: Assert what the drill needs is configured
+      ansible.builtin.assert:
+        that:
+          - llamenos_app_image | default('') | length > 0
+          - (not (dr_encrypted | bool)) or (backup_age_private_key_path | default('') | length > 0)
+        fail_msg: >-
+          The drill boots the deployed app image against the restored data, so
+          llamenos_app_image must be set; and with encrypted backups
+          (backup_age_public_key set) it needs backup_age_private_key_path -- a
+          path on THIS host to the age private key, as test-restore.yml does.
+        quiet: true
+      tags: always
+
+    - name: Check the age private key is readable on this host
+      ansible.builtin.stat:
+        path: "{{ backup_age_private_key_path }}"
+      register: dr_age_key
+      when: dr_encrypted | bool
+      tags: always
+
+    - name: Fail if the age private key is not there
+      ansible.builtin.fail:
+        msg: >-
+          {{ backup_age_private_key_path }} does not exist on {{ inventory_hostname }}.
+          The newest backups are age-encrypted and cannot be restored without it.
+          Put it there for the drill and remove it afterwards.
+      when: dr_encrypted | bool and not dr_age_key.stat.exists
+      tags: always
+
+    - name: Find the newest PostgreSQL backup
+      ansible.builtin.find:
+        paths: "{{ app_dir }}/backups/postgres/daily"
+        patterns: "llamenos-postgres-*.dump*"
+        file_type: file
+      register: dr_pg_files
+      tags: always
+
+    - name: Find the newest RustFS backup
+      ansible.builtin.find:
+        paths: "{{ app_dir }}/backups/rustfs/daily"
+        patterns: "llamenos-rustfs-*"
+        file_type: file
+      register: dr_rustfs_files
+      when: dr_holds_rustfs | bool
+      tags: always
+
+    - name: Assert there is something to restore
+      ansible.builtin.assert:
+        that:
+          - dr_pg_files.matched > 0
+          - (not (dr_holds_rustfs | bool)) or dr_rustfs_files.matched > 0
+        fail_msg: >-
+          No backup to drill against under {{ app_dir }}/backups
+          (PostgreSQL: {{ dr_pg_files.matched }}
+          {%- if dr_holds_rustfs | bool %}, RustFS: {{ dr_rustfs_files.matched | default(0) }}{% endif %}).
+          A drill that finds nothing to restore has proved nothing, so it fails.
+        quiet: true
+      tags: always
+
+    - name: Record what will be restored
+      ansible.builtin.set_fact:
+        dr_pg_file: "{{ (dr_pg_files.files | sort(attribute='mtime') | last).path }}"
+        dr_rustfs_file: "{{ ((dr_rustfs_files.files | default([])) | sort(attribute='mtime') | last).path | default('') if (dr_holds_rustfs | bool) else '' }}"
+      tags: always
+
+    # `age -d` (or `cat` for an unencrypted backup) writing the plaintext to a pipe.
+    - name: Build the commands that stream a backup out
+      ansible.builtin.set_fact:
+        dr_read_pg: >-
+          {{ ('age -d -i ' ~ (backup_age_private_key_path | quote) ~ ' ' ~ (dr_pg_file | quote))
+             if (dr_encrypted | bool) else ('cat ' ~ (dr_pg_file | quote)) }}
+        dr_read_rustfs: >-
+          {{ '' if not (dr_holds_rustfs | bool) else
+             (('age -d -i ' ~ (backup_age_private_key_path | quote) ~ ' ' ~ (dr_rustfs_file | quote))
+              if (dr_encrypted | bool) else ('cat ' ~ (dr_rustfs_file | quote))) }}
+      tags: always
+
+    - name: Display the drill plan
       ansible.builtin.debug:
         msg: |
-          ========================================
-          DISASTER RECOVERY TEST RESULTS
-          ========================================
-          Date:            {{ ansible_date_time.iso8601 }}
-          Backup file:     {{ dr_backup_file }}
-          Encrypted:       {{ dr_backup_encrypted }}
-
-          TIMING
-          ----------------------------------------
-          Provision:       {{ dr_time_provision }}s
-          Restore:         {{ dr_time_restore }}s
-          Validate:        {{ dr_time_validate }}s
-          Total:           {{ dr_time_total }}s
-          RTO Target:      {{ dr_rto_target }}s ({{ (dr_rto_target | int / 3600) | round(1) }}h)
-          RTO Met:         {{ 'YES' if (dr_time_total | int) < (dr_rto_target | int) else 'NO' }}
-
-          VALIDATION
-          ----------------------------------------
-          Health endpoint: {{ 'PASS' if health_check.status == 200 else 'FAIL' }}
-          DB tables:       {{ db_table_count.stdout | trim }} tables
-          Storage rows:    {{ db_storage_count.stdout | default('0') | trim }}
-          Auth API:        {{ 'PASS' if api_auth_check.status is defined else 'FAIL' }}
-          Settings API:    {{ 'PASS' if api_settings_check.status is defined else 'FAIL' }}
-          ========================================
+          Disaster recovery drill on {{ inventory_hostname }}
+            PostgreSQL backup: {{ dr_pg_file | basename }}
+            RustFS backup:     {{ (dr_rustfs_file | basename) if (dr_holds_rustfs | bool) else '(this host holds no object store)' }}
+            App image:         {{ llamenos_app_image }}
+            RTO target:        {{ dr_rto_target }}s
       tags: always
 
-    - name: Save results as JSON
-      ansible.builtin.copy:
-        dest: "{{ dr_results_file }}"
-        mode: "0644"
-        content: |
-          {
-            "date": "{{ ansible_date_time.iso8601 }}",
-            "mode": "{{ dr_mode }}",
-            "backup_file": "{{ dr_backup_file }}",
-            "backup_encrypted": {{ dr_backup_encrypted | lower }},
-            "timing": {
-              "provision_seconds": {{ dr_time_provision }},
-              "restore_seconds": {{ dr_time_restore }},
-              "validate_seconds": {{ dr_time_validate }},
-              "total_seconds": {{ dr_time_total }}
-            },
-            "rto": {
-              "target_seconds": {{ dr_rto_target }},
-              "met": {{ 'true' if (dr_time_total | int) < (dr_rto_target | int) else 'false' }}
-            },
-            "validation": {
-              "health_endpoint": {{ 'true' if health_check.status == 200 else 'false' }},
-              "db_table_count": {{ db_table_count.stdout | trim | default('0') }},
-              "storage_row_count": {{ db_storage_count.stdout | default('0') | trim }},
-              "auth_api_responsive": {{ 'true' if api_auth_check.status is defined else 'false' }},
-              "settings_api_responsive": {{ 'true' if api_settings_check.status is defined else 'false' }}
-            },
-            "host": "{{ ansible_hostname }}"
-          }
+    - name: Create the scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: llamenos-dr-
+      register: dr_dir
       tags: always
 
-  # ===========================================================================
-  # CLEANUP — Always runs, even on failure
-  # ===========================================================================
-  post_tasks:
-    - name: Tear down DR Docker environment
-      ansible.builtin.command:
-        cmd: docker compose -p {{ dr_project_name }} down -v --remove-orphans
-        chdir: "{{ dr_compose_dir }}"
-      ignore_errors: true
-      tags: always
+    - name: "Run the drill (with guaranteed teardown)"
+      block:
+        - name: Record the drill's start time
+          ansible.builtin.set_fact:
+            dr_t_start: "{{ now(utc=true).strftime('%s') | int }}"
 
-    - name: Remove temporary DR compose directory
-      ansible.builtin.file:
-        path: "{{ dr_compose_dir }}"
-        state: absent
-      ignore_errors: true
-      tags: always
+        # ── PROVISION: an isolated scratch deployment ────────────────────
+        # The network is `internal`: nothing in it has a route out, so the app
+        # cannot reach a provider or a push relay whatever the restored data says.
+        # All credentials are generated for this run and die with it.
+        - name: Generate throwaway credentials for this run
+          ansible.builtin.set_fact:
+            dr_pg_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=32') }}"
+            dr_storage_key: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=24') }}"
+            dr_storage_secret: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=32') }}"
+            dr_hmac_secret: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=64') | lower }}"
+            dr_server_secret: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=64') | lower }}"
+            dr_server_kek: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=64') | lower }}"
+          no_log: true
+
+        # BAN_HASH_KEY and MESSAGING_HASH_KEY are file-only secrets the app refuses
+        # to start without (validateConfig). Throwaway values: this environment
+        # holds no real key. 0444 because the container's user is not the owner.
+        - name: Write the hash key secret files
+          ansible.builtin.copy:
+            dest: "{{ dr_dir.path }}/{{ item }}"
+            mode: "0444"
+            content: "{{ lookup('ansible.builtin.password', '/dev/null chars=hexdigits length=64') | lower }}\n"
+          loop:
+            - ban-hash-key
+            - messaging-hash-key
+          no_log: true
+
+        - name: Write the scratch Compose project
+          ansible.builtin.copy:
+            dest: "{{ dr_dir.path }}/docker-compose.yml"
+            mode: "0600"
+            content: |
+              name: {{ dr_project_name }}
+
+              services:
+                postgres:
+                  image: {{ dr_postgres_image }}
+                  environment:
+                    POSTGRES_USER: llamenos
+                    POSTGRES_PASSWORD: {{ dr_pg_password }}
+                    POSTGRES_DB: llamenos
+                  networks: [drill]
+                  healthcheck:
+                    # -h 127.0.0.1: the image runs a temporary server on the unix
+                    # socket while initialising; only the final one listens on TCP.
+                    test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U llamenos -d llamenos"]
+                    interval: 3s
+                    timeout: 3s
+                    retries: 40
+                  volumes:
+                    - pgdata:/var/lib/postgresql/data
+
+                rustfs:
+                  image: {{ dr_rustfs_image }}
+                  command: server /data
+                  environment:
+                    RUSTFS_ACCESS_KEY: {{ dr_storage_key }}
+                    RUSTFS_SECRET_KEY: {{ dr_storage_secret }}
+                  networks: [drill]
+                  healthcheck:
+                    test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
+                    interval: 5s
+                    timeout: 3s
+                    retries: 20
+                    start_period: 10s
+                  volumes:
+                    - rustfs-data:/data
+
+                app:
+                  image: {{ llamenos_app_image }}
+                  depends_on:
+                    postgres:
+                      condition: service_healthy
+                    rustfs:
+                      condition: service_healthy
+                  environment:
+                    PLATFORM: bun
+                    PORT: "3000"
+                    ENVIRONMENT: production
+                    DATABASE_URL: postgresql://llamenos:{{ dr_pg_password }}@postgres:5432/llamenos
+                    HMAC_SECRET: "{{ dr_hmac_secret }}"
+                    SERVER_SECRET: "{{ dr_server_secret }}"
+                    SERVER_KEK: "{{ dr_server_kek }}"
+                    STORAGE_ENDPOINT: http://rustfs:9000
+                    STORAGE_ACCESS_KEY: {{ dr_storage_key }}
+                    STORAGE_SECRET_KEY: {{ dr_storage_secret }}
+                    STORAGE_BUCKET: llamenos-files
+                    HOTLINE_NAME: DR drill
+                    # Required in production; the scratch network has no route, so
+                    # nothing can ever call this.
+                    WEBHOOK_BASE_URL: https://dr-drill.invalid
+                  secrets:
+                    - ban-hash-key
+                    - messaging-hash-key
+                  read_only: true
+                  tmpfs:
+                    - /tmp:size=64M
+                  networks: [drill]
+
+              secrets:
+                ban-hash-key:
+                  file: ./ban-hash-key
+                messaging-hash-key:
+                  file: ./messaging-hash-key
+
+              networks:
+                drill:
+                  internal: true
+
+              volumes:
+                pgdata:
+                rustfs-data:
+          no_log: true
+
+        # A drill that crashed earlier may have left its project behind; it is
+        # scratch by construction, so clear it before starting.
+        - name: Clear any leftover scratch project
+          ansible.builtin.command:
+            cmd: docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml down -v --remove-orphans
+          changed_when: false
+
+        - name: Start the scratch PostgreSQL and create the scratch volumes
+          ansible.builtin.command:
+            cmd: docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml {{ item }}
+          loop:
+            - up -d --wait postgres
+            - create rustfs
+          changed_when: true
+
+        - name: Record the end of provisioning
+          ansible.builtin.set_fact:
+            dr_t_provisioned: "{{ now(utc=true).strftime('%s') | int }}"
+
+        # ── RESTORE ──────────────────────────────────────────────────────
+        - name: Restore the PostgreSQL dump into the scratch database
+          ansible.builtin.shell: |
+            set -euo pipefail
+            compose() { docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml "$@"; }
+            expected="$({{ dr_read_pg }} | compose exec -T postgres pg_restore --list \
+              | grep -c '^[0-9]*; [0-9]* [0-9]* TABLE public ' || true)"
+            # pg_restore exits non-zero on warnings it can carry on past; whether the
+            # restore is good is decided below, from what the database holds.
+            {{ dr_read_pg }} | compose exec -T postgres \
+              pg_restore -U llamenos -d llamenos --no-owner --no-privileges || true
+            actual="$(compose exec -T postgres psql -U llamenos -d llamenos -tAc \
+              "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p')")"
+            echo "${expected} ${actual}"
+          args:
+            executable: /bin/bash
+          register: dr_pg_counts
+          changed_when: true
+
+        - name: Restore the RustFS archive into the scratch volume
+          ansible.builtin.shell: |
+            set -euo pipefail
+            vol="{{ dr_project_name }}_rustfs-data"
+            expected="$({{ dr_read_rustfs }} | tar -tzf - | grep -vc '/$' || true)"
+            {{ dr_read_rustfs }} | docker run --rm -i -v "${vol}:/data" {{ dr_helper_image | quote }} \
+              sh -c 'tar -xzf - -C /data'
+            actual="$(docker run --rm -v "${vol}:/data:ro" {{ dr_helper_image | quote }} \
+              sh -c 'find /data -type f | wc -l')"
+            echo "${expected} ${actual}"
+          args:
+            executable: /bin/bash
+          register: dr_rustfs_counts
+          changed_when: true
+          when: dr_holds_rustfs | bool
+
+        - name: Record the end of the data restore
+          ansible.builtin.set_fact:
+            dr_t_restored: "{{ now(utc=true).strftime('%s') | int }}"
+
+        # ── VALIDATE ─────────────────────────────────────────────────────
+        - name: The restored database must hold exactly the tables the dump lists
+          ansible.builtin.assert:
+            that:
+              - (dr_pg_counts.stdout | trim).split()[0] | int > 0
+              - (dr_pg_counts.stdout | trim).split()[0] == (dr_pg_counts.stdout | trim).split()[1]
+            fail_msg: >-
+              {{ dr_pg_file | basename }} lists {{ (dr_pg_counts.stdout | trim).split()[0] }}
+              tables and the restored database holds {{ (dr_pg_counts.stdout | trim).split()[1] }}.
+              This backup does not restore.
+            success_msg: "PostgreSQL: {{ (dr_pg_counts.stdout | trim).split()[1] }} tables restored, as the dump lists"
+            quiet: false
+
+        - name: The restored object store must hold exactly the files the archive lists
+          ansible.builtin.assert:
+            that:
+              - (dr_rustfs_counts.stdout | trim).split()[0] | int > 0
+              - (dr_rustfs_counts.stdout | trim).split()[0] == (dr_rustfs_counts.stdout | trim).split()[1]
+            fail_msg: >-
+              {{ dr_rustfs_file | basename }} lists {{ (dr_rustfs_counts.stdout | trim).split()[0] }}
+              files and the restored volume holds {{ (dr_rustfs_counts.stdout | trim).split()[1] }}.
+              This backup does not restore.
+            success_msg: "RustFS: {{ (dr_rustfs_counts.stdout | trim).split()[1] }} files restored, as the archive lists"
+          when: dr_holds_rustfs | bool
+
+        - name: Start the scratch object store and the deployed app image
+          ansible.builtin.command:
+            cmd: docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml up -d {{ item }}
+          loop:
+            - rustfs
+            - app
+          changed_when: true
+
+        # `bun -e fetch`: the app image has neither curl nor wget (its own
+        # healthcheck does the same). The container exits non-zero until the app
+        # reports ready, so the retry loop is a wait on a real condition, not a sleep.
+        - name: Wait for the app to report ready on the restored data
+          ansible.builtin.command:
+            cmd: >-
+              docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml
+              exec -T app bun -e
+              "fetch('http://localhost:3000/api/health/ready').then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)}).catch(e=>{console.log(String(e));process.exit(1)})"
+          register: dr_ready
+          retries: "{{ dr_ready_retries }}"
+          delay: "{{ dr_ready_delay }}"
+          until: dr_ready.rc == 0
+          changed_when: false
+
+        - name: Record the end of validation
+          ansible.builtin.set_fact:
+            dr_t_end: "{{ now(utc=true).strftime('%s') | int }}"
+
+        # ── RESULT ───────────────────────────────────────────────────────
+        - name: Compute the recovery times
+          ansible.builtin.set_fact:
+            dr_time_provision: "{{ (dr_t_provisioned | int) - (dr_t_start | int) }}"
+            dr_time_restore: "{{ (dr_t_restored | int) - (dr_t_provisioned | int) }}"
+            dr_time_validate: "{{ (dr_t_end | int) - (dr_t_restored | int) }}"
+            dr_time_total: "{{ (dr_t_end | int) - (dr_t_start | int) }}"
+
+        - name: Create the results directory
+          ansible.builtin.file:
+            path: "{{ dr_results_dir }}"
+            state: directory
+            mode: "0755"
+          become: true
+          become_user: root
+
+        - name: Write the drill result
+          ansible.builtin.copy:
+            dest: "{{ dr_results_dir }}/dr-{{ ansible_facts.date_time.iso8601_basic_short }}.json"
+            mode: "0644"
+            content: "{{ dr_result | to_nice_json }}\n"
+          vars:
+            dr_result:
+              date: "{{ ansible_facts.date_time.iso8601 }}"
+              host: "{{ inventory_hostname }}"
+              postgres_backup: "{{ dr_pg_file | basename }}"
+              rustfs_backup: "{{ (dr_rustfs_file | basename) if (dr_holds_rustfs | bool) else '' }}"
+              encrypted: "{{ dr_encrypted | bool }}"
+              tables_restored: "{{ (dr_pg_counts.stdout | trim).split()[1] | int }}"
+              files_restored: "{{ ((dr_rustfs_counts.stdout | trim).split()[1] | int) if (dr_holds_rustfs | bool) else 0 }}"
+              app_ready: true
+              timing:
+                provision_seconds: "{{ dr_time_provision | int }}"
+                restore_seconds: "{{ dr_time_restore | int }}"
+                validate_seconds: "{{ dr_time_validate | int }}"
+                total_seconds: "{{ dr_time_total | int }}"
+              rto:
+                target_seconds: "{{ dr_rto_target | int }}"
+                met: "{{ (dr_time_total | int) <= (dr_rto_target | int) }}"
+          become: true
+          become_user: root
+
+        - name: Display the drill result
+          ansible.builtin.debug:
+            msg: |
+              DISASTER RECOVERY DRILL: restored and booted
+                PostgreSQL: {{ (dr_pg_counts.stdout | trim).split()[1] }} tables from {{ dr_pg_file | basename }}
+                RustFS:     {{ ((dr_rustfs_counts.stdout | trim).split()[1] ~ ' files from ' ~ (dr_rustfs_file | basename)) if (dr_holds_rustfs | bool) else 'not held on this host' }}
+                App:        ready on the restored data
+              TIMING  provision {{ dr_time_provision }}s  restore {{ dr_time_restore }}s  validate {{ dr_time_validate }}s  total {{ dr_time_total }}s
+              RTO target {{ dr_rto_target }}s: {{ 'MET' if (dr_time_total | int) <= (dr_rto_target | int) else 'MISSED' }}
+
+        - name: Fail the drill if the RTO target was missed
+          ansible.builtin.assert:
+            that:
+              - (dr_time_total | int) <= (dr_rto_target | int)
+            fail_msg: >-
+              Recovery took {{ dr_time_total }}s; the target is {{ dr_rto_target }}s.
+            quiet: true
+
+      # A failed drill must say why. The scratch app's logs hold only what the
+      # scratch app saw (throwaway credentials, restored schema), and are printed
+      # before the teardown destroys them. The failure is then re-raised: this
+      # does not turn a failed drill into a passed one.
+      rescue:
+        # `|| true` inside the shell, not failed_when/ignore_errors: collecting
+        # diagnostics must never replace the real failure with its own.
+        - name: Collect the scratch app's logs
+          ansible.builtin.shell: >-
+            docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml
+            logs --no-color --tail 60 app rustfs 2>&1 || true
+          register: dr_failure_logs
+          changed_when: false
+
+        - name: Show why the drill failed
+          ansible.builtin.debug:
+            msg: |
+              The drill failed at: {{ ansible_failed_task.name | default('unknown task') }}
+              {{ (ansible_failed_result.msg | default('')) | truncate(600) }}
+
+              Scratch app / object store log (last lines):
+              {{ dr_failure_logs.stdout | default('(no logs)') }}
+
+        - name: Fail the drill
+          ansible.builtin.fail:
+            msg: "Disaster recovery drill FAILED at: {{ ansible_failed_task.name | default('unknown task') }}"
+
+      always:
+        - name: Tear down the scratch project and its volumes
+          ansible.builtin.command:
+            cmd: docker compose -p {{ dr_project_name }} -f {{ dr_dir.path }}/docker-compose.yml down -v --remove-orphans
+          changed_when: true
+          when: dr_dir is defined and dr_dir.path is defined
+
+        - name: Remove the scratch directory
+          ansible.builtin.file:
+            path: "{{ dr_dir.path }}"
+            state: absent
+          when: dr_dir is defined and dr_dir.path is defined
