@@ -53,18 +53,20 @@
 #
 # Deliberately NOT touched, each for a measured reason:
 #
-#   * `~/Library/Developer/Xcode/DerivedData` — CI does not write here: both
-#     iOS build jobs pass `-derivedDataPath "$RUNNER_TEMP/llamenos-build"` and
-#     the `ui` shards' `test-without-building` passes one under RUNNER_TEMP
-#     too. Each Xcode directory's info.plist names its WorkspacePath. Only
-#     entries whose workspace is gone and whose directory has been idle for at
-#     least 60 minutes are reclaimed; live, recent, and uninspectable entries
-#     are retained and reported. ONE plist-less shape is reclaimed: the entry
-#     a `test-without-building` run leaves when it is NOT given a
-#     -derivedDataPath (until 2026-11-05 every `ui` shard did, 85-110 MiB of
-#     coverage .profraw each, and a branch whose workflow predates the fix
-#     still does). It is recognised by its exact contents, not its name alone
-#     — see is_test_run_derived_data.
+#   * `~/Library/Developer/Xcode/DerivedData` — the SHARED per-user root. CI's
+#     own build jobs never write here (both pass `-derivedDataPath
+#     "$RUNNER_TEMP/llamenos-build"` and delete it themselves), but an
+#     operator's Xcode session and ssh-driven builds do. Ownership is proved by
+#     the entry's info.plist: only one whose WorkspacePath is gone and which has
+#     been idle for 60 minutes is reclaimed. The single plist-less exception is
+#     a `Llamenos-<hash>` entry holding nothing but run output (#2530: 60 of
+#     them, 0.1 GiB each, were measured and none held compiled products).
+#     Live, recent and uninspectable entries are retained and reported.
+#   * a DerivedData root INSIDE a runner's install tree
+#     (`~/actions-runner-*/_work/DerivedData`) is the opposite case: only that
+#     runner's jobs write there, so an idle entry is CI's by location and is
+#     reclaimed whether or not Xcode finished writing its info.plist. See
+#     "DerivedData ownership" below for the classifier both modes share.
 #   * simulator devices not covered by the rules above — a booted device, or
 #     a Shutdown one younger than MAC_SIM_STALE_MAX_AGE_HOURS. `report`
 #     surfaces the fat ones and what reclaiming them would cost; the decision
@@ -192,6 +194,15 @@ SIM_LOG_MAX_AGE_DAYS="${MAC_SIM_LOG_MAX_AGE_DAYS:-7}"
 
 SIM_DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
 DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
+# A DerivedData root inside a runner's own install tree (#2530). Nobody but the
+# CI jobs of that runner writes under `_work`, so an entry here is CI's because
+# of WHERE it is: the proof cannot be an info.plist, which is the very file a
+# build interrupted early never got to write. A glob, matched with `case`, and
+# overridable so the selftest can point it at a sandbox.
+RUNNER_DD_GLOB="${MAC_RUNNER_DD_GLOB:-$HOME/actions-runner-*/_work/DerivedData}"
+# A directory nothing has written to for this long is not a live build. 60 min
+# is the figure the plist rule already used.
+DD_IDLE_MIN=60
 
 # Path prefixes this script refuses to delete under, whatever else it is told.
 # These include the operator's files, worktrees, Tart VM, and Xcode build state.
@@ -275,8 +286,19 @@ free_gib() {
 # allowed parent. Fails closed and loudly: a refusal here means this script
 # was asked to delete something it has no business deleting, which is a defect
 # worth seeing rather than silently skipping.
-# Exit status: 0 deleted, 2 nothing to delete, 1 refused (a defect in this
-# script's own target selection, deliberately fatal rather than skipped).
+#
+# A delete is proved, not assumed (#2566): the path counts as deleted only if
+# rm succeeded AND the path is gone afterwards. On 2026-11-07 /Volumes/CIScratch
+# answered unlink with EINTR while staying mounted: `rm -rf` exited 1 and the
+# tree was still there. Path presence is the discriminator on purpose: APFS
+# returns space asynchronously, so df straight after a GOOD delete can still
+# show the old figure. df lag therefore never makes a delete look failed, and
+# a failed delete never passes for df lag.
+#
+# Exit status: 0 deleted (verified gone), 2 nothing to delete, 3 delete
+# attempted but the path is still there (RM_ERROR says why), 1 refused (a
+# defect in this script's own target selection, deliberately fatal).
+RM_ERROR=""
 rm_ci_path() {
   local target="$1" parent allowed ok=0 deny
   [ -n "$target" ] || return 2
@@ -304,26 +326,183 @@ rm_ci_path() {
   for allowed in "${ALLOW_PARENTS[@]}"; do
     [ "$parent" = "$allowed" ] && ok=1 && break
   done
+  # shellcheck disable=SC2254  # the glob is the point
+  case "$parent" in $RUNNER_DD_GLOB) ok=1 ;; esac
   if [ "$ok" != "1" ]; then
     log "::error::mac-runner-disk-guard REFUSED to delete '$target': '$parent' is not one of the CI-owned parents this script may prune."
     return 1
   fi
 
-  [ -e "$target" ] || return 2
-  rm -rf "$target"
+  [ -e "$target" ] || [ -L "$target" ] || return 2
+  local err rc=0
+  err="$(rm -rf "$target" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -e "$target" ] || [ -L "$target" ]; then
+    if [ -n "$err" ]; then
+      RM_ERROR="$(printf '%s\n' "$err" | head -n 1)"
+    else
+      RM_ERROR="rm exited $rc but the path is still present"
+    fi
+    return 3
+  fi
+}
+
+# Deletes that were attempted and did not happen. Counted, named, and carried
+# to the gate's verdict; never added to anything reported as freed. A failed
+# delete is not fatal by itself: the gate decides on MEASURED free space, so a
+# job still runs when the disk really has room, and is refused (with these
+# paths named) when it does not.
+DELETE_FAILURES=0
+DELETE_FAILED_LIST=""
+
+# note_delete_failed <path> <what> [apparent-gib]
+# Deliberately does not `du` the survivor: on the volume that produced #2566,
+# readdir also returned EINTR and mkdir hung, so walking it here could wedge
+# the guard. Callers that measured the size before the delete pass it in.
+note_delete_failed() {
+  local size=""
+  [ -n "${3:-}" ] && size=" (${3} GiB apparent, NOT freed)"
+  DELETE_FAILURES=$((DELETE_FAILURES + 1))
+  DELETE_FAILED_LIST="${DELETE_FAILED_LIST}    $1: ${RM_ERROR}
+"
+  log "::warning::mac-runner-disk-guard delete FAILED — $2: '$1' is still on disk${size}: ${RM_ERROR}. Not counted as reclaimed; free space here is measured, never assumed (#2566)."
 }
 
 # prune <path> <message> — delete a CI-owned path and say so. A refusal from
 # rm_ci_path means this script targeted something it must not, which is a
-# defect: it aborts rather than continuing quietly.
+# defect: it aborts rather than continuing quietly. A delete the filesystem
+# would not perform is not this script's defect: it is named and counted, and
+# the rest of the reclaim still runs.
 prune() {
   local rc=0
   rm_ci_path "$1" || rc=$?
   case "$rc" in
     0) log "  $2"; deleted_any=1 ;;
     2) : ;;
+    3) note_delete_failed "$1" "not done: $2" ;;
     *) exit 1 ;;
   esac
+}
+
+# ── DerivedData ownership ───────────────────────────────────────────────────
+#
+# ONE classifier, used by both `report` and `reclaim`, so what the report says
+# will be kept or removed cannot drift from what reclaim does (#2530: the
+# report listed 0.55 GiB as "skipped" while reclaim declined it too, and the
+# rule behind both was the wrong one).
+#
+# An entry is CI's for one of two reasons, never by name alone:
+#
+#   runner  The entry sits in a DerivedData root inside a runner's own install
+#           tree (RUNNER_DD_GLOB). Only that runner's jobs write there, so
+#           location is the proof. The plist is NOT consulted: an interrupted
+#           build is exactly the case where it was never written, and the CI
+#           checkout persists between jobs, so "WorkspacePath exists" would
+#           protect every leftover for ever.
+#   host    The shared per-user root (~/Library/Developer/Xcode/DerivedData),
+#           where an operator's Xcode session may own a folder. Here the
+#           plist stays the discriminator: reclaim only an entry whose
+#           WorkspacePath is gone. The one plist-less exception is a
+#           `Llamenos-<hash>` directory holding nothing but run output (logs,
+#           test results, coverage; see dd_is_headless_leftover): there is no
+#           incremental state in it for anyone to lose.
+#
+# Both need the entry to be idle: nothing under it modified in DD_IDLE_MIN
+# minutes, so a build running right now is never a candidate. The plist-less
+# headless shape needs the longer SIM_MAX_AGE_MIN instead: a live
+# `test-without-building` (the `ui` job) has no plist either, writes its
+# coverage only at the end, and is capped at 65 min, so 60 quiet minutes does
+# not prove it is dead.
+#
+# Where this root points: the default stays on the internal disk. CI's data
+# does not go to /Volumes/CIScratch (the runner service is denied it by TCC),
+# and out-of-CI ssh builds use an explicit -derivedDataPath under
+# CIScratch/llamenos-ios-build (scripts/lib/ios-build-data.sh), never this
+# root. A symlink from this root onto CIScratch is the 2026-10-21 incident
+# shape, not the norm, and nothing here depends on it.
+
+DD_VERDICT=""   # reclaim | retain
+DD_REASON=""
+
+# True when nothing at all under $1 changed in the last $2 minutes (default
+# DD_IDLE_MIN). A find that cannot read the tree is NOT idle: when in doubt,
+# keep.
+dd_is_idle() {
+  local newest
+  newest="$(find "$1" -mmin "-${2:-$DD_IDLE_MIN}" -print -quit 2>/dev/null)" || return 1
+  [ -z "$newest" ]
+}
+
+# Xcode names an entry <Workspace>-<28 lowercase letters>. True only for that
+# shape under the Llamenos name whose whole content is run output: Logs/,
+# TestResults/ and a Build/ holding nothing but ProfileData/ (coverage). That is
+# exactly what every one of the 60 plist-less entries on the CI host held
+# (measured 2026-11-06): a headless `xcodebuild test` that was pointed at
+# another derived-data path for its products and left only its results here.
+# Compiled products or indexes (Build/Products, Build/Intermediates.noindex,
+# Index.noindex, ModuleCache.noindex, SourcePackages) are reusable state, and
+# any of them keeps the entry out, as does any name not listed here.
+dd_is_headless_leftover() {
+  local dir="$1" entry shape='^Llamenos-[a-z]{28}$'
+  [[ "$(basename "$dir")" =~ $shape ]] || return 1
+  while IFS= read -r entry; do
+    case "$entry" in
+      Logs|TestResults) ;;
+      Build)
+        while IFS= read -r entry; do
+          [ "$entry" = "ProfileData" ] || return 1
+        done < <(find "$dir/Build" -mindepth 1 -maxdepth 1 -exec basename {} ';' 2>/dev/null)
+        ;;
+      *) return 1 ;;
+    esac
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -exec basename {} ';' 2>/dev/null)
+}
+
+# dd_classify <dir> <runner|host> — sets DD_VERDICT and DD_REASON.
+dd_classify() {
+  local dir="$1" owner="$2" plist workspace
+  plist="$dir/info.plist"
+  DD_VERDICT="retain"
+
+  if [ "$owner" = "runner" ]; then
+    if dd_is_idle "$dir"; then
+      DD_VERDICT="reclaim"; DD_REASON="inside a runner's own DerivedData root, idle"
+    else
+      DD_REASON="modified within the last ${DD_IDLE_MIN} min; needs ${DD_IDLE_MIN} min idle (a live job's output)"
+    fi
+    return 0
+  fi
+
+  if [ ! -e "$plist" ]; then
+    if ! dd_is_headless_leftover "$dir"; then
+      DD_REASON="missing info.plist"
+    elif dd_is_idle "$dir" "$SIM_MAX_AGE_MIN"; then
+      DD_VERDICT="reclaim"; DD_REASON="no info.plist, only run output (logs, test results, coverage)"
+    else
+      # Longer than the plist rule on purpose: a live `test-without-building`
+      # (the `ui` job, capped at 65 min) has no info.plist either and writes
+      # its coverage only at the end, so 60 min of quiet does not prove it is
+      # dead. SIM_MAX_AGE_MIN is above that cap.
+      DD_REASON="modified within the last ${SIM_MAX_AGE_MIN} min; needs ${SIM_MAX_AGE_MIN} min idle (could be a live test run)"
+    fi
+  elif ! workspace="$(workspace_path_from_plist "$plist")"; then
+    DD_REASON="info.plist unreadable/unparseable or WorkspacePath missing"
+  elif [ -e "$workspace" ]; then
+    DD_REASON="WorkspacePath exists ($workspace)"
+  elif dd_is_idle "$dir"; then
+    DD_VERDICT="reclaim"; DD_REASON="WorkspacePath missing"
+  else
+    DD_REASON="modified within the last ${DD_IDLE_MIN} min; needs ${DD_IDLE_MIN} min idle"
+  fi
+}
+
+# Existing runner DerivedData roots, one per line.
+runner_dd_roots() {
+  local root
+  # shellcheck disable=SC2086  # the glob is the point
+  for root in $RUNNER_DD_GLOB; do
+    [ -d "$root" ] && printf '%s\n' "$root"
+  done
+  return 0
 }
 
 # ── report ──────────────────────────────────────────────────────────────────
@@ -373,32 +552,39 @@ report() {
   log ""
 
   log "── Xcode DerivedData (apparent sizes; df below, not du, measures reclaimed space) ──"
-  if [ -d "$DERIVED_DATA" ]; then
-    local dir plist workspace age_min apparent mtime
-    for dir in "$DERIVED_DATA"/*/; do
-      [ -d "$dir" ] || continue
-      dir="${dir%/}"
-      plist="$dir/info.plist"
-      apparent="$(apparent_gib "$dir")"
-      if [ ! -e "$plist" ]; then
-        log "  ${apparent} GiB apparent  $(basename "$dir"): skipped (missing info.plist)"
-      elif ! workspace="$(workspace_path_from_plist "$plist")"; then
-        log "  ${apparent} GiB apparent  $(basename "$dir"): skipped (unreadable/unparseable info.plist or missing WorkspacePath)"
-      elif [ -e "$workspace" ]; then
-        log "  ${apparent} GiB apparent  $(basename "$dir"): retained (WorkspacePath exists: $workspace)"
-      elif ! mtime="$(path_mtime_epoch "$dir" 2>/dev/null)"; then
-        log "  ${apparent} GiB apparent  $(basename "$dir"): retained (could not determine modification time)"
-      else
-        age_min=$(( ($(date +%s) - mtime) / 60 ))
-        if [ "$age_min" -lt 60 ]; then
-          log "  ${apparent} GiB apparent  $(basename "$dir"): retained (modified ${age_min} min ago; needs 60 min)"
-        else
-          log "  ${apparent} GiB apparent  $(basename "$dir"): orphan candidate (WorkspacePath missing; reclaim checks run during reclaim)"
-        fi
-      fi
-    done
-  fi
+  local root owner
+  while IFS='|' read -r owner root; do
+    [ -n "$root" ] || continue
+    log "  [$owner root] $root"
+    report_derived_data "$root" "$owner"
+  done < <(derived_data_roots)
   log ""
+}
+
+# Lists one root's entries with the verdict reclaim will reach.
+report_derived_data() {
+  local root="$1" owner="$2" dir apparent
+  for dir in "$root"/*/; do
+    [ -d "$dir" ] || continue
+    dir="${dir%/}"
+    apparent="$(apparent_gib "$dir")"
+    dd_classify "$dir" "$owner"
+    if [ "$DD_VERDICT" = "reclaim" ]; then
+      log "  ${apparent} GiB apparent  $(basename "$dir"): orphan candidate ($DD_REASON; reclaim checks run during reclaim)"
+    else
+      log "  ${apparent} GiB apparent  $(basename "$dir"): retained ($DD_REASON)"
+    fi
+  done
+}
+
+# "owner|root" for every DerivedData root this script looks at, host first.
+derived_data_roots() {
+  local root
+  [ -d "$DERIVED_DATA" ] && printf 'host|%s\n' "$DERIVED_DATA"
+  while IFS= read -r root; do
+    printf 'runner|%s\n' "$root"
+  done < <(runner_dd_roots)
+  return 0
 }
 
 # ── reclaim ─────────────────────────────────────────────────────────────────
@@ -434,7 +620,6 @@ reclaim() {
             deleted_any=1
           else
             prune "$dir" "removed orphaned CI simulator directory: $name ($udid)"
-            deleted_any=1
           fi
           ;;
       esac
@@ -476,7 +661,6 @@ reclaim() {
       else
         # simctl no longer knows the device; the directory is an orphan.
         prune "$dir" "removed orphaned stale simulator directory: $name ($udid)"
-        deleted_any=1
       fi
     done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${stale_min}" \
                -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
@@ -501,10 +685,11 @@ reclaim() {
   done < <(find "$HOME/Library/Logs/CoreSimulator" -maxdepth 1 -mindepth 1 \
              -mtime "+${SIM_LOG_MAX_AGE_DAYS}" -print 2>/dev/null || true)
 
-  # 4. Xcode caches for worktrees that no longer exist. CI uses RUNNER_TEMP,
-  #    so only an old cache whose own plist proves its workspace is gone is
-  #    eligible. rm_ci_path applies both the denylist and direct-parent allowlist.
-  reclaim_derived_data "$DERIVED_DATA"
+  # 4. DerivedData CI left behind. Ownership by location inside a runner's own
+  #    tree, by plist (or a logs-only shape) in the shared per-user root; see
+  #    "DerivedData ownership" above. rm_ci_path applies both the denylist and
+  #    direct-parent allowlist.
+  reclaim_all_derived_data
 
   # 5. The runner agents' own `_diag` logs. Pruned by age so the file the live
   #    agent is writing is never a candidate, and across every runner install
@@ -512,9 +697,15 @@ reclaim() {
   #    both agents died in the same second. Not routed through rm_ci_path:
   #    these are files under a runner install rather than leaves of a CI-owned
   #    parent, so the name pattern and age bound are the proof instead.
+  local err
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    rm -f "$p" && { log "  pruned stale runner log: ${p#"$HOME"/}"; deleted_any=1; }
+    if err="$(rm -f "$p" 2>&1)" && [ ! -e "$p" ]; then
+      log "  pruned stale runner log: ${p#"$HOME"/}"; deleted_any=1
+    else
+      RM_ERROR="${err:-rm exited 0 but the file is still present}"
+      note_delete_failed "$p" "stale runner log"
+    fi
   done < <(find "$HOME"/actions-runner-*/_diag -maxdepth 1 -type f \
              \( -name '*.log' -o -name '*.log.*' \) -mtime "+${DIAG_MAX_AGE_DAYS}" \
              -print 2>/dev/null || true)
@@ -530,6 +721,10 @@ reclaim() {
 
   after="$(free_kib)"
   freed=$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')
+  if [ "$DELETE_FAILURES" -gt 0 ]; then
+    log "::warning::mac-runner-disk-guard: ${DELETE_FAILURES} delete(s) FAILED and freed nothing; still on disk:"
+    printf '%s' "$DELETE_FAILED_LIST"
+  fi
   if awk -v f="$freed" 'BEGIN { exit !(f > 0) }'; then
     log "  reclaimed ${freed} GiB (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
   elif [ "$deleted_any" -gt 0 ]; then
@@ -538,6 +733,8 @@ reclaim() {
     # it). Saying "nothing left to reclaim" here is how #1861's report read
     # while a 3.86 GiB device sat deleted-but-unmeasured.
     log "  deletions issued; df shows no delta yet — APFS reclaims asynchronously, the space appears on a later read (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+  elif [ "$DELETE_FAILURES" -gt 0 ]; then
+    log "  nothing reclaimed: every delete attempted FAILED (listed above) (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
   else
     # Free space is a live number on a shared host; a non-positive delta means
     # there was nothing of CI's left to take, not that reclaim failed.
@@ -546,82 +743,35 @@ reclaim() {
   log ""
 }
 
-# The DerivedData entry `xcodebuild test-without-building -xctestrun` creates
-# when it is given no -derivedDataPath: named Llamenos-<hash>, no info.plist
-# (there is no workspace), and nothing at the top but Logs/, TestResults/ and
-# a Build/ holding only ProfileData/ (the coverage .profraw). A real build's
-# entry has an info.plist and Build/Intermediates.noindex, so it can never
-# match. Idle means NOTHING inside was modified within SIM_MAX_AGE_MIN, which
-# is above the `ui` job's cap, so a live shard's entry is never a candidate.
-is_test_run_derived_data() {
-  local dir="$1" child name
-  case "$(basename "$dir")" in Llamenos-*) : ;; *) return 1 ;; esac
-  [ ! -e "$dir/info.plist" ] || return 1
-  [ -d "$dir/Logs" ] || return 1
-  for child in "$dir"/* "$dir"/.[!.]*; do
-    [ -e "$child" ] || continue
-    name="$(basename "$child")"
-    case "$name" in
-      Logs|TestResults) : ;;
-      Build)
-        local sub
-        for sub in "$child"/* "$child"/.[!.]*; do
-          [ -e "$sub" ] || continue
-          [ "$(basename "$sub")" = "ProfileData" ] || return 1
-        done
-        ;;
-      *) return 1 ;;
-    esac
-  done
-  [ -z "$(find "$dir" -mmin "-${SIM_MAX_AGE_MIN}" -print -quit 2>/dev/null)" ]
+# Reclaim every DerivedData root this script looks at.
+reclaim_all_derived_data() {
+  local root owner
+  while IFS='|' read -r owner root; do
+    [ -n "$root" ] || continue
+    reclaim_derived_data "$root" "$owner"
+  done < <(derived_data_roots)
 }
 
-# Remove only old DerivedData entries with a parseable plist naming a workspace
-# that no longer exists. Keep apparent size informational; df deltas are the
-# only measurement of actual reclaimed capacity, especially on APFS clones.
+# reclaim_derived_data <root> <runner|host> — delete the idle entries of one
+# root that dd_classify proves are CI's. Apparent size is informational; df
+# deltas are the only measurement of actual reclaimed capacity, especially on
+# APFS clones.
 reclaim_derived_data() {
-  local data_root="${1:-$DERIVED_DATA}" dir plist workspace mtime age_min before after freed apparent rc
+  local data_root="$1" owner="$2" dir mtime age_min before after freed apparent rc
   [ -d "$data_root" ] || return 0
 
   for dir in "$data_root"/*/; do
     [ -d "$dir" ] || continue
     dir="${dir%/}"
-    plist="$dir/info.plist"
     apparent="$(apparent_gib "$dir")"
-    if [ ! -e "$plist" ]; then
-      if is_test_run_derived_data "$dir"; then
-        rc=0
-        rm_ci_path "$dir" || rc=$?
-        case "$rc" in
-          0) deleted_any=1
-             log "  removed leaked test-run DerivedData $(basename "$dir") (${apparent} GiB apparent): no info.plist, only Logs/TestResults/Build/ProfileData, idle > ${SIM_MAX_AGE_MIN} min" ;;
-          2) : ;;
-          *) exit 1 ;;
-        esac
-        continue
-      fi
-      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): missing info.plist"
-      continue
-    fi
-    if ! workspace="$(workspace_path_from_plist "$plist")"; then
-      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): info.plist unreadable/unparseable or WorkspacePath missing"
-      continue
-    fi
-    if [ -e "$workspace" ]; then
-      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): WorkspacePath exists ($workspace)"
+    dd_classify "$dir" "$owner"
+    if [ "$DD_VERDICT" != "reclaim" ]; then
+      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): $DD_REASON"
       continue
     fi
 
-    mtime="$(path_mtime_epoch "$dir" 2>/dev/null)" || {
-      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): could not determine modification time"
-      continue
-    }
+    mtime="$(path_mtime_epoch "$dir" 2>/dev/null || date +%s)"
     age_min=$(( ($(date +%s) - mtime) / 60 ))
-    if [ "$age_min" -lt 60 ]; then
-      log "  retained DerivedData $(basename "$dir") (${apparent} GiB apparent): modified ${age_min} min ago; needs 60 min"
-      continue
-    fi
-
     before="$(df_available_kib "$dir")"
     rc=0
     rm_ci_path "$dir" || rc=$?
@@ -630,9 +780,10 @@ reclaim_derived_data() {
         after="$(df_available_kib "$data_root")"
         freed="$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')"
         deleted_any=1
-        log "  removed orphaned DerivedData $(basename "$dir") (WorkspacePath missing; ${age_min} min old); df available: $(awk -v k="$before" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after" 'BEGIN{printf "%.2f", k/1048576}') GiB (delta ${freed} GiB)"
+        log "  removed orphaned DerivedData $(basename "$dir") ($DD_REASON; ${age_min} min old); df available: $(awk -v k="$before" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after" 'BEGIN{printf "%.2f", k/1048576}') GiB (delta ${freed} GiB)"
         ;;
       2) : ;;
+      3) note_delete_failed "$dir" "orphaned DerivedData $(basename "$dir") ($DD_REASON)" "$apparent" ;;
       *) exit 1 ;;
     esac
   done
@@ -718,12 +869,19 @@ of size on this host, and read the script header before touching any of them:
     the device, which is usually what you want for an Xcode default.
   * ~/Library/Developer/Xcode/DerivedData — the operator's incremental build
     state, NOT CI's. Reclaim removes only entries whose info.plist names a
-    WorkspacePath that no longer exists and whose directory is at least 60
-    minutes old. The report above names anything retained and why; apparent
-    directory sizes are informational, while df deltas measure actual space.
+    WorkspacePath that no longer exists (or run-output-only Llamenos-<hash>
+    entries with no plist), idle for at least 60 minutes. Entries under a
+    runner's own _work/DerivedData are removed on location alone. The report
+    above names anything retained and why; apparent directory sizes are
+    informational, while df deltas measure actual space.
   * /System/Volumes/VM/swapfile* — grows on demand, returned only by a reboot.
 
 EOF
+    if [ "$DELETE_FAILURES" -gt 0 ]; then
+      log "Reclaim also TRIED to free the ${DELETE_FAILURES} path(s) below and the filesystem refused. They are"
+      log "still on disk and none of their space is in the figure above. Fix the volume first (#2566):"
+      printf '%s' "$DELETE_FAILED_LIST"
+    fi
     return 1
   fi
 
@@ -816,8 +974,8 @@ selftest() {
   # Plist-less entries: the leaked test-run shape (reclaimed when idle), the
   # same shape still being written (retained), and look-alikes that hold
   # anything a real build would (retained).
-  local testrun="$DERIVED_DATA/Llamenos-selftestidle" testrun_live="$DERIVED_DATA/Llamenos-selftestlive"
-  local testrun_build="$DERIVED_DATA/Llamenos-selftestbuild" testrun_extra="$DERIVED_DATA/Llamenos-selftestextra"
+  local testrun="$DERIVED_DATA/Llamenos-ttttttttttttttttttttttttiiii" testrun_live="$DERIVED_DATA/Llamenos-ttttttttttttttttttttttttllll"
+  local testrun_build="$DERIVED_DATA/Llamenos-ttttttttttttttttttttttttbbbb" testrun_extra="$DERIVED_DATA/Llamenos-ttttttttttttttttttttttttxxxx"
   mkdir -p "$orphan" "$live" "$missing" "$malformed" "$fresh" "$sandbox/live-workspace"
   mkdir -p "$testrun/Logs/Test" "$testrun/TestResults" "$testrun/Build/ProfileData/X"
   : > "$testrun/Build/ProfileData/X/a.profraw"
@@ -848,9 +1006,11 @@ EOF
   # Use allocated random data so df can prove actual free-space movement. du is
   # informational only; APFS clones can make its apparent size misleading.
   dd if=/dev/urandom of="$orphan/payload" bs=1048576 count=64 2>/dev/null
-  touch -t 202001010000 "$orphan"
+  # Idleness is judged on the newest file anywhere in the tree, not the top
+  # directory, so the whole fixture has to be old.
+  find "$orphan" -exec touch -t 202001010000 {} +
   before_kib="$(df_available_kib "$sandbox")"
-  reclaim_output="$(reclaim_derived_data "$DERIVED_DATA")"
+  reclaim_output="$(reclaim_derived_data "$DERIVED_DATA" host)"
   after_kib="$(df_available_kib "$sandbox")"
   log "$reclaim_output"
   if [ ! -e "$orphan" ]; then
@@ -929,12 +1089,216 @@ EOF
     log "  ok    refuses a dangling symlink (what an unmounted drive leaves behind)"
   fi
 
+  selftest_derived_data_ownership "$sandbox"
+  fails=$((fails + SELFTEST_OWNERSHIP_FAILS))
+  selftest_failed_delete "$sandbox"
+  fails=$((fails + SELFTEST_FAILED_DELETE_FAILS))
+
   log ""
   if [ "$fails" -ne 0 ]; then
     log "::error::mac-runner-disk-guard selftest FAILED: $fails case(s). Do not ship this script."
     return 1
   fi
   log "selftest passed: every protected path refused, every CI-owned path handled"
+}
+
+# Ownership of a DerivedData entry is proved by WHERE it is, or, where a human
+# could own the folder, by what is inside it (#2530). Each case below is a
+# break-it: the first group must be reclaimed (they are the leftovers the old
+# plist-only rule protected), the second must survive.
+selftest_derived_data_ownership() {
+  local sandbox="$1" host runner out before_kib after_kib name rc fails=0
+  local hash_a="Llamenos-aaaaaaaaaaaaaaaaaaaaaaaaaaaa" hash_b="Llamenos-bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  local hash_c="Llamenos-cccccccccccccccccccccccccccc" hash_d="Llamenos-dddddddddddddddddddddddddddd"
+  local hash_e="Llamenos-eeeeeeeeeeeeeeeeeeeeeeeeeeee" hash_f="Llamenos-ffffffffffffffffffffffffffff"
+  local hash_h="Llamenos-hhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+  host="$sandbox/host-dd"
+  runner="$sandbox/actions-runner-9/_work/DerivedData"
+  RUNNER_DD_GLOB="$sandbox/actions-runner-*/_work/DerivedData"
+  DERIVED_DATA="$host"
+  DENY=("${DENY[@]}" "$host")
+  ALLOW_PARENTS=("${ALLOW_PARENTS[@]}" "$host")
+  mkdir -p "$host" "$runner" "$sandbox/ws-alive"
+
+  age() { find "$1" -exec touch -t 202001010000 {} + ; }
+  # age_min <dir> <minutes>: BSD date (-v) on the Mac, GNU date (-d) elsewhere.
+  age_min() {
+    local stamp
+    stamp="$(date -v-"$2"M +%Y%m%d%H%M 2>/dev/null || date -d "$2 minutes ago" +%Y%m%d%H%M)"
+    find "$1" -exec touch -t "$stamp" {} +
+  }
+  plist_for() { # plist_for <dir> <workspace>
+    cat > "$1/info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>WorkspacePath</key><string>$2</string></dict></plist>
+PLIST
+  }
+  expect_gone() { # expect_gone <label> <path>
+    if [ ! -e "$2" ]; then log "  ok    $1"; else log "  FAIL  $1: survived: $2"; fails=$((fails + 1)); fi
+  }
+  expect_kept() {
+    if [ -e "$2" ]; then log "  ok    $1"; else log "  FAIL  $1: was deleted: $2"; fails=$((fails + 1)); fi
+  }
+
+  log "── selftest: DerivedData ownership (#2530) ──"
+
+  # Reclaimed ----------------------------------------------------------------
+  # (1) the incident: an interrupted CI build under the RUNNER's own root, no
+  #     plist, real bytes. Must be gone, and its bytes reported as reclaimed.
+  mkdir -p "$runner/$hash_a/Build/Products"
+  dd if=/dev/urandom of="$runner/$hash_a/Build/Products/payload" bs=1048576 count=64 2>/dev/null
+  # (2) runner root, plist whose workspace still exists: the CI checkout
+  #     persists between jobs, so "workspace exists" would protect every
+  #     leftover forever. Location is the proof, not the plist.
+  mkdir -p "$runner/$hash_b/Build"; plist_for "$runner/$hash_b" "$sandbox/ws-alive"
+  # (3) host root, no plist, only logs/results: an automated headless build.
+  mkdir -p "$host/$hash_c/Build/ProfileData/UUID" "$host/$hash_c/Logs" "$host/$hash_c/TestResults"
+  : > "$host/$hash_c/TestResults/a.xcresult"
+  age "$runner/$hash_a"; age "$runner/$hash_b"; age "$host/$hash_c"
+
+  # Survives -----------------------------------------------------------------
+  # (4) runner root but modified just now: a live job's output.
+  mkdir -p "$runner/$hash_d/Build"
+  # (5) host root, no plist, but holds Build/Products — incremental state somebody may reuse.
+  mkdir -p "$host/$hash_e/Build/Products" "$host/$hash_e/Logs"; age "$host/$hash_e"
+  # (6) host root, plist names a workspace that exists — a human's project.
+  mkdir -p "$host/$hash_f/Build"; plist_for "$host/$hash_f" "$sandbox/ws-alive"; age "$host/$hash_f"
+  # (7) host root, no plist, logs only, but not Llamenos's hash shape.
+  mkdir -p "$host/SomeoneElse-aaaaaaaaaaaaaaaaaaaaaaaaaaaa/Logs"; age "$host/SomeoneElse-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  # (8) host root, correct shape, logs only, but written to just now: a live headless build.
+  mkdir -p "$host/Llamenos-gggggggggggggggggggggggggggg/Logs"
+  # (8b) the same shape idle 90 min: past the 60-min rule the plist cases use but
+  #      inside the `ui` job's 65-min cap plus margin (SIM_MAX_AGE_MIN, 120). A
+  #      live test-without-building has no plist and writes coverage only at
+  #      the end, so 90 quiet minutes does not prove it is dead.
+  mkdir -p "$host/$hash_h/Build/ProfileData/UUID" "$host/$hash_h/Logs"; age_min "$host/$hash_h" 90
+  # (9) a sibling dir that is NOT a runner DerivedData root.
+  mkdir -p "$sandbox/actions-runner-9/_work/NotDerivedData/$hash_a"; age "$sandbox/actions-runner-9/_work/NotDerivedData"
+
+  before_kib="$(df_available_kib "$sandbox")"
+  out="$(reclaim_all_derived_data)"
+  after_kib="$(df_available_kib "$sandbox")"
+  log "$out"
+
+  expect_gone "runner-root leftover with NO info.plist was reclaimed" "$runner/$hash_a"
+  expect_gone "runner-root leftover whose workspace still exists was reclaimed (location, not plist)" "$runner/$hash_b"
+  expect_gone "host-root plist-less logs-only headless build was reclaimed" "$host/$hash_c"
+  if awk -v b="$before_kib" -v a="$after_kib" 'BEGIN { exit !(a > b) }'; then
+    log "  ok    df shows the bytes returned: $(awk -v k="$before_kib" 'BEGIN{printf "%.2f", k/1048576}') -> $(awk -v k="$after_kib" 'BEGIN{printf "%.2f", k/1048576}') GiB"
+  else
+    log "  FAIL  df did not show space returned: ${before_kib} -> ${after_kib} KiB"; fails=$((fails + 1))
+  fi
+  case "$out" in
+    *"removed orphaned DerivedData $hash_a"*"delta "*) log "  ok    the removal line reports the reclaimed bytes" ;;
+    *) log "  FAIL  no 'removed ... delta' line for $hash_a in the reclaim output"; fails=$((fails + 1)) ;;
+  esac
+  expect_kept "fresh runner-root entry survives (live job)" "$runner/$hash_d"
+  expect_kept "host-root plist-less entry holding Build/Products survives" "$host/$hash_e"
+  expect_kept "host-root entry whose workspace exists survives" "$host/$hash_f"
+  expect_kept "host-root plist-less entry with a foreign name survives" "$host/SomeoneElse-aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  expect_kept "fresh host-root headless entry survives (live build)" "$host/Llamenos-gggggggggggggggggggggggggggg"
+  expect_kept "host-root headless entry idle 90 min survives (could be a live test run)" "$host/$hash_h"
+  expect_kept "entry outside any DerivedData root survives" "$sandbox/actions-runner-9/_work/NotDerivedData/$hash_a"
+
+  # The delete guard itself must still refuse a path outside every root.
+  name="$sandbox/actions-runner-9/_work/NotDerivedData/$hash_a"
+  rc=0; rm_ci_path "$name" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = "1" ]; then log "  ok    rm_ci_path refuses a hash dir outside every DerivedData root"
+  else log "  FAIL  rm_ci_path rc=$rc for a hash dir outside every DerivedData root"; fails=$((fails + 1)); fi
+
+  SELFTEST_OWNERSHIP_FAILS="$fails"
+}
+
+# selftest_reclaim_with_failing_rm <sandbox> <eintr-name> <ghost-name>
+# A SUBSHELL body, so the `rm` override dies with it. Kept out of a `$( )` on
+# purpose: macOS /bin/bash 3.2 (what the install-timer LaunchAgent runs)
+# misparses a `case` inside command substitution and echoes the source instead.
+selftest_reclaim_with_failing_rm() (
+  RUNNER_DD_GLOB="$1/actions-runner-8/_work/DerivedData"
+  DERIVED_DATA="$1/empty-host-dd"
+  SHIM_EINTR="$2"; SHIM_GHOST="$3"
+  DELETE_FAILURES=0; DELETE_FAILED_LIST=""
+  rm() {
+    case "$*" in
+      *"$SHIM_EINTR"*) printf 'rm: %s: Interrupted system call\n' "${!#}" >&2; return 1 ;;
+      *"$SHIM_GHOST"*) return 0 ;;
+      *) command rm "$@" ;;
+    esac
+  }
+  reclaim_all_derived_data
+  printf 'DELETE_FAILURES=%s\n' "$DELETE_FAILURES"
+)
+
+# A delete the filesystem refuses must be NAMED and must not count as freed
+# (#2566: /Volumes/CIScratch returned EINTR on unlink while staying mounted).
+# `rm` is shadowed by a function, inside a subshell, so the failure is the
+# exact shape that host produced (rm exits 1 with EINTR, the path survives)
+# on any filesystem and as any user. A second shim exits 0 and deletes
+# nothing: the verdict must come from the path, not from rm's exit code.
+selftest_failed_delete() {
+  local sandbox="$1" root out rc fails=0
+  local eintr="Llamenos-eintreintreintreintreintreintr" ghost="Llamenos-ghostghostghostghostghostghost"
+  local healthy="Llamenos-zzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+  root="$sandbox/actions-runner-8/_work/DerivedData"
+  mkdir -p "$root/$eintr/Build/Products" "$root/$ghost/Build" "$root/$healthy/Build/Products" "$sandbox/empty-host-dd"
+  dd if=/dev/urandom of="$root/$eintr/Build/Products/payload" bs=1048576 count=8 2>/dev/null
+  dd if=/dev/urandom of="$root/$healthy/Build/Products/payload" bs=1048576 count=8 2>/dev/null
+  find "$root" -exec touch -t 202001010000 {} +
+
+  log "── selftest: a delete that fails is named, never counted as freed (#2566) ──"
+  rc=0
+  out="$(selftest_reclaim_with_failing_rm "$sandbox" "$eintr" "$ghost")" || rc=$?
+  log "$out"
+
+  # expect <label> <command...>: `if`, never a bare test, so a failing case is
+  # reported instead of tripping `set -e` and ending the selftest unreported.
+  expect() {
+    local label="$1"; shift
+    if "$@"; then log "  ok    $label"; else log "  FAIL  $label"; fails=$((fails + 1)); fi
+  }
+  # matches <string> <glob> / lacks <string> <glob>
+  # shellcheck disable=SC2053  # the glob is the point
+  matches() { [[ "$1" == $2 ]]; }
+  # shellcheck disable=SC2053  # the glob is the point
+  lacks() { [[ "$1" != $2 ]]; }
+
+  expect "reclaim survived the failed deletes (rc=$rc), it did not abort" [ "$rc" = "0" ]
+  expect "the EINTR entry is still on disk" [ -d "$root/$eintr" ]
+  expect "the rm-exited-0 entry is still on disk" [ -d "$root/$ghost" ]
+  expect "the healthy entry after them was still reclaimed" [ ! -e "$root/$healthy" ]
+  expect "the EINTR failure is named with its error and marked NOT freed" \
+    matches "$out" "*delete FAILED*$eintr*NOT freed*Interrupted system call*"
+  expect "an rm that exits 0 but leaves the path is a failure, not a delete" \
+    matches "$out" "*delete FAILED*$ghost*rm exited 0 but the path is still present*"
+  expect "the EINTR entry is not reported as removed" lacks "$out" "*removed orphaned DerivedData $eintr*"
+  expect "the rm-exited-0 entry is not reported as removed" lacks "$out" "*removed orphaned DerivedData $ghost*"
+  expect "the healthy entry is reported as removed" matches "$out" "*removed orphaned DerivedData $healthy*"
+  expect "exactly the two failed deletes are counted" matches "$out" "*DELETE_FAILURES=2*"
+
+  # The gate decides on measured space. Failures name themselves in a refusal,
+  # and do not by themselves refuse a disk that really has room.
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=999999; DELETE_FAILURES=1
+          DELETE_FAILED_LIST="    $root/$eintr: rm: Interrupted system call
+"
+          gate 2>&1 )" || rc=$?
+  expect "a refusal exits 1" [ "$rc" = "1" ]
+  expect "a refusal names the paths reclaim failed to free" \
+    matches "$out" "*TRIED to free*$root/$eintr*Interrupted system call*"
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=0; WARN_FREE_GIB=0; DELETE_FAILURES=1
+          DELETE_FAILED_LIST="    $root/$eintr: rm: Interrupted system call
+"
+          gate 2>&1 )" || rc=$?
+  expect "a failed delete does not fail closed when measured space is enough" \
+    matches "$rc:$out" "0:*disk headroom OK*"
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=0; WARN_FREE_GIB=0; DELETE_FAILURES=0; gate 2>&1 )" || rc=$?
+  expect "a healthy gate passes" matches "$rc:$out" "0:*disk headroom OK*"
+  expect "a healthy gate mentions no failures" lacks "$out" "*TRIED to free*"
+
+  SELFTEST_FAILED_DELETE_FAILS="$fails"
 }
 
 install_timer() {
@@ -1016,10 +1380,14 @@ case "$MODE" in
     fi
     report
     reclaim
+    failed_note=""
+    if [ "$DELETE_FAILURES" -gt 0 ]; then
+      failed_note=" ${DELETE_FAILURES} reclaim delete(s) FAILED and are not counted as freed (#2566)."
+    fi
     if gate; then
-      summarize "disk headroom OK — $(free_gib) GiB free (need ${MIN_FREE_GIB} GiB)"
+      summarize "disk headroom OK — $(free_gib) GiB free (need ${MIN_FREE_GIB} GiB).${failed_note}"
     else
-      summarize "REFUSED: only $(free_gib) GiB free, need ${MIN_FREE_GIB} GiB. Environmental, not this PR (#1665)."
+      summarize "REFUSED: only $(free_gib) GiB free, need ${MIN_FREE_GIB} GiB. Environmental, not this PR (#1665).${failed_note}"
       exit 1
     fi
     ;;
