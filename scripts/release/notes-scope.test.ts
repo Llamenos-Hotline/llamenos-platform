@@ -18,6 +18,7 @@ import {
   type Commit,
   excludedCommits,
   highestReleaseTag,
+  isListableCommit,
   loadNoteSections,
   loadProductScopes,
   MAX_LISTED_OTHER_TYPES,
@@ -541,6 +542,14 @@ describe('changesets and verify', () => {
 
   test('an entry in an OLDER release section does not satisfy the new one', () => {
     expect(verifyEntries(changelog(security.slice(1), perf), '0.21.8', entries)).toHaveLength(1)
+  })
+
+  // c0917426f `feat: EP05a channel configuration UI` was a merge commit knope
+  // listed; a blanket --no-merges lost it.
+  test('a merge counts only when its subject is conventional', () => {
+    expect(isListableCommit(commit('feat: EP05a channel configuration UI'), true)).toBe(true)
+    expect(isListableCommit(commit('Merge pull request #296 from x/y\n\nfeat: body text'), true)).toBe(false)
+    expect(isListableCommit(commit('chore: a plain commit'), false)).toBe(true)
   })
 
   test('the release is built on the highest bare-semver tag; platform tags do not count', () => {

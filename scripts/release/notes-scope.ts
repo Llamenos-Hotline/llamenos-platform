@@ -455,7 +455,7 @@ export function verifyEntries(changelog: string, version: string, entries: reado
 
 function gitLog(range: string): Commit[] {
   // --no-renames: a file moved out of the product into tests/ is a product change.
-  const r = Bun.spawnSync(['git', 'log', '--no-merges', '--no-renames', '--name-only', '--format=%x01%H%x00%B%x02', range], {
+  const r = Bun.spawnSync(['git', 'log', '--no-renames', '--name-only', '--format=%x01%H%x00%P%x00%B%x02', range], {
     cwd: ROOT,
     stderr: 'pipe',
   })
@@ -464,11 +464,21 @@ function gitLog(range: string): Commit[] {
     .toString()
     .split('\x01')
     .slice(1)
-    .map((record) => {
+    .flatMap((record) => {
       const [header, paths = ''] = record.split('\x02')
-      const [sha, message] = header.split('\0')
-      return { sha, message: message.trim(), paths: paths.split('\n').filter(Boolean) }
+      const [sha, parents, message] = header.split('\0')
+      const commit: Commit = { sha, message: message.trim(), paths: paths.split('\n').filter(Boolean) }
+      return isListableCommit(commit, parents.includes(' ')) ? [commit] : []
     })
+}
+
+/**
+ * A merge commit whose subject is conventional counts, exactly as it did when
+ * knope read commits: a branch merged as `feat: x` is that feature. Every other
+ * merge is a `Merge pull request …` line, not a change anyone needs listed.
+ */
+export function isListableCommit(commit: Commit, isMerge: boolean): boolean {
+  return !isMerge || parseMessage(commit.message) !== null
 }
 
 function semver(json: string, where: string): string {
