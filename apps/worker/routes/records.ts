@@ -39,7 +39,7 @@ import { determineEnvelopeRecipients } from '../lib/envelope-recipients'
 import type { HubMemberInfo } from '../lib/envelope-recipients'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { Services } from '../services'
-import { hubOnly, pathHubId } from '../lib/hub-scope'
+import { hubOnly, hubsWithPermission, pathHubId } from '../lib/hub-scope'
 
 const records = new Hono<AppEnv>()
 
@@ -165,7 +165,11 @@ records.get('/',
 
     const crossHub = query.crossHub === 'true'
 
-    // Cross-hub requires cases:read-cross-hub permission
+    // Cross-hub requires cases:read-cross-hub in this hub, and then reaches only
+    // the hubs where the caller holds it. The permission is a hub-scoped grant
+    // (`role-hub-admin` carries it through `cases:*`), so holding it HERE says
+    // nothing about any other hub: being sealed into another hub's envelopes
+    // is not a licence to list that hub's records.
     if (crossHub && !checkPermission(permissions, 'cases:read-cross-hub')) {
       return c.json({ error: 'Forbidden', required: 'cases:read-cross-hub' }, 403)
     }
@@ -176,8 +180,9 @@ records.get('/',
       limit: query.limit,
       entityTypeId: query.entityTypeId,
       parentRecordId: query.parentRecordId,
-      crossHub,
-      requestingPubkey: crossHub ? pubkey : undefined,
+      crossHub: crossHub
+        ? { hubIds: hubsWithPermission(c, 'cases:read-cross-hub'), requestingPubkey: pubkey }
+        : undefined,
       blindIndexToken: query.blindIndexToken,
       blindIndexField: query.blindIndexField,
     }
@@ -225,8 +230,8 @@ records.get('/by-number/:number',
     }
 
     const services = c.get('services')
-    const record = await services.cases.getByNumber(number)
-    if (record.hubId !== pathHubId(c)) return c.json({ error: 'Record not found' }, 404)
+    // The hub is part of the key: case numbers are unique per hub, not globally.
+    const record = await services.cases.getByNumber(pathHubId(c), number)
 
     // If user can only see assigned records, verify assignment
     if (accessLevel !== 'all') {
@@ -358,7 +363,7 @@ records.get('/interactions/by-source/:sourceId',
     }
 
     const services = c.get('services')
-    const result = await services.cases.getBySource(sourceId)
+    const result = await services.cases.getBySource(pathHubId(c), sourceId)
     return c.json(result)
   },
 )
