@@ -378,6 +378,7 @@ import { mkdirSync } from "fs";
 import {
   classifyAndroid,
   evaluateAndroidGate,
+  findMobileSharedScenarios,
   matchesTagExpression,
   readAndroidRunnerTags,
   readAndroidShippedDirs,
@@ -596,5 +597,40 @@ describe("stripKotlinComments", () => {
         expect(classifyAndroid(scenarios, paths).funnel.executed).toBe(0);
       }
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// platform/mobile/ coupling note (#1753): only scenarios in platform/mobile/
+// tagged BOTH @ios and @android are flagged — those are the files Android
+// ships into the test APK AND iOS maps to test methods, so one edit changes
+// two suites. A scenario tagged both ways outside platform/mobile/ is not
+// flagged: Android never ships the file, so the edit cannot break the
+// on-device run.
+// ---------------------------------------------------------------------------
+describe("findMobileSharedScenarios", () => {
+  const sc = (featureFile: string, allTags: string[]): Scenario => ({
+    title: "T",
+    featureFile,
+    featureName: "F",
+    featureTags: [],
+    scenarioTags: [],
+    allTags,
+    isOutline: false,
+  });
+
+  test("flags only platform/mobile scenarios tagged BOTH @ios and @android", () => {
+    const flagged = findMobileSharedScenarios([
+      sc("platform/mobile/cases/a.feature", ["ios", "android"]),
+      sc("platform/mobile/cases/b.feature", ["android"]),
+      sc("platform/mobile/cases/c.feature", ["ios"]),
+      sc("core/auth-login.feature", ["ios", "android"]),
+      sc("platform/desktop/cases/d.feature", ["ios", "android"]),
+    ]);
+    expect(flagged.map((s) => s.featureFile)).toEqual(["platform/mobile/cases/a.feature"]);
+  });
+
+  test("no shared scenarios means no note", () => {
+    expect(findMobileSharedScenarios([sc("platform/mobile/cases/a.feature", ["android"])])).toEqual([]);
   });
 });

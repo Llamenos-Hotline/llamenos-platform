@@ -91,7 +91,13 @@
  * Exit codes:
  *   0 — all scenarios have matching tests (or coverage is at/above threshold)
  *   1 — coverage is below the required threshold for a validated platform,
- *       or a @wip/@fixme/@skip tag has no linked issue
+ *       or a @wip/@fixme/@skip tag has no linked issue,
+ *       or a hard gate fails independent of any percentage:
+ *         - an @android scenario selected by the runner AND shipped in the
+ *           test APK has an unbound or ambiguous step — an on-device
+ *           UndefinedStepException that ejects the merge queue (#1753), or
+ *         - an @android dead-tag baseline entry is new or its count rose
+ *           (see evaluateAndroidGate).
  */
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "fs";
@@ -1490,6 +1496,43 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
   }
 }
 
+// ---- Shared mobile-suite coupling (#1753) ----
+
+/**
+ * `platform/mobile/` feature files feed BOTH mobile platforms at once:
+ * Android ships them into the test APK (`copyFeatureFiles` in
+ * apps/android/app/build.gradle.kts) and binds their step text on-device,
+ * while iOS maps their scenario titles to Swift test methods. Editing a step
+ * or title there changes two suites in one edit, and nothing else in the
+ * tooling says so — which is how #1753 shipped an Android-undefined step in
+ * an `@ios @android` scenario. This makes the coupling visible at validation
+ * time. Scenarios outside platform/mobile/ tagged both ways are excluded on
+ * purpose: Android never ships those files, so an edit there cannot break the
+ * on-device run.
+ */
+export function findMobileSharedScenarios(scenarios: Scenario[]): Scenario[] {
+  return scenarios.filter(
+    (s) =>
+      s.featureFile.startsWith("platform/mobile/") &&
+      s.allTags.includes("ios") &&
+      s.allTags.includes("android")
+  );
+}
+
+function reportMobileSharedScenarios(scenarios: Scenario[]): void {
+  const shared = findMobileSharedScenarios(scenarios);
+  if (shared.length === 0) return;
+  const files = [...new Set(shared.map((s) => s.featureFile))].sort();
+  console.log(
+    `NOTE: ${shared.length} scenario(s) in ${files.length} platform/mobile/ file(s) are tagged @ios @android — BOTH mobile platforms run them.\n` +
+      `  Editing a step changes Android's on-device suite (an unbound step is an UndefinedStepException and a merge-queue ejection);\n` +
+      `  editing or renaming a title changes iOS's suite (the title maps 1:1 to a Swift test method name).\n` +
+      `  Coupled files:\n` +
+      files.map((f) => `    - ${f}`).join("\n") +
+      "\n"
+  );
+}
+
 // ---- Coverage thresholds ----
 
 /**
@@ -1540,6 +1583,18 @@ function checkDuplicateFeatureNames(featureFiles: string[]) {
  * their own names. Raising this number means naming (and, where they fall
  * short, extending) tests for the scenarios they actually implement — never
  * renaming a test onto a scenario whose Then-steps it does not assert.
+ *
+ * Platform asymmetry for unbound steps (#1753): a scenario the runtime is told
+ * to execute but cannot bind is a HARD failure here, not percentage slack —
+ * Android: evaluateAndroidGate fails any selected+shipped scenario with an
+ * unbound/ambiguous step regardless of the percentage (UndefinedStepException
+ * ejects the merge queue). Desktop/backend: the threshold is 100 and
+ * `missingSteps: "fail-on-gen"` makes bddgen fail, so any unbound scenario
+ * fails both there and here. iOS has no Gherkin runner — a scenario whose
+ * title maps to no Swift test method earns no credit but crashes nothing, so
+ * the percentage model is the right one there. Deliberately parked scenarios
+ * (@wip/@fixme/@skip with a linked issue) are deselected everywhere and stay
+ * soft on every platform.
  */
 const COVERAGE_THRESHOLDS: Record<Platform, number> = {
   desktop: 100,
@@ -1574,6 +1629,9 @@ function main() {
 
   // Check for duplicate feature basenames
   checkDuplicateFeatureNames(featureFiles);
+
+  // Surface the platform/mobile/ iOS+Android coupling once, up top (#1753)
+  reportMobileSharedScenarios(allScenarios);
 
   // Every deliberate exclusion must name its issue
   const untrackedSkipCount = reportUntrackedSkipTags(featureFiles);
