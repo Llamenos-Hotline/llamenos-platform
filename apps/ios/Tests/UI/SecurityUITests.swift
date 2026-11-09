@@ -11,17 +11,12 @@ final class SecurityUITests: BaseUITest {
     /// times to reach `PINLockout.maxAttempts`, and the two lockout tests do
     /// the same five and six times.
     ///
-    /// Measured on one commit, one shard, the same 62 tests: 168s on a fast
-    /// GitHub macOS runner and 313s on a slow one — a 1.86x spread in the
-    /// machine alone. The 300s default sits inside that spread, so the suite
-    /// failed whenever the macOS pool was contended, killing the runner
-    /// mid-test and taking the whole shard with it ("** TEST EXECUTE
-    /// FAILED **"), while every other test in the shard passed.
-    ///
-    /// The allowance is raised rather than the work reduced because the work
-    /// IS the behaviour under test. `enterPIN` was also made substantially
-    /// cheaper in the same change; this exists so the outcome does not depend
-    /// on that saving being larger than the runner-to-runner variance.
+    /// The entry cost that motivated the original allowance is gone — the digit
+    /// pad's 160 hierarchy walks per test became one `typeText` when the unlock
+    /// screen moved to a SecureField (#2303). The allowance stays as headroom:
+    /// hosted macOS runners have shown a 1.86x machine-only spread (168s vs
+    /// 313s for the same 62 tests), so the 300s default still sits inside the
+    /// variance and a contended runner would kill the shard mid-test.
     override func setUp() {
         super.setUp()
         executionTimeAllowance = 900
@@ -29,7 +24,7 @@ final class SecurityUITests: BaseUITest {
 
     // MARK: - Helpers
 
-    /// Lock the app from the dashboard (or Settings) and wait for the PIN pad.
+    /// Lock the app from the dashboard (or Settings) and wait for the unlock field.
     private func lockApp() {
         let lockButton = find("lock-app")
         if lockButton.waitForExistence(timeout: 10) {
@@ -40,13 +35,12 @@ final class SecurityUITests: BaseUITest {
             XCTAssertTrue(settingsLock.exists, "No lock button found on the dashboard or in Settings")
             settingsLock.tap()
         }
-        XCTAssertTrue(find("pin-pad").waitForExistence(timeout: 10), "Locking the app should show the PIN pad")
+        XCTAssertTrue(find("pin-input").waitForExistence(timeout: 10), "Locking the app should show the unlock field")
     }
 
-    /// A wrong PIN as long as the pad takes: it submits when the last digit of a 6-digit PIN
-    /// is tapped, so a longer string would leave digits in the next attempt and count it
-    /// twice.
-    private let wrongPIN = "999999"
+    /// A wrong but well-formed credential (8 digits — the field's submit is gated
+    /// at 8, and every stored credential satisfies the 8+ creation rule).
+    private let wrongPIN = "99999999"
 
     /// Enter a wrong PIN and wait for the error that answers it.
     @discardableResult
@@ -59,8 +53,8 @@ final class SecurityUITests: BaseUITest {
 
     // MARK: - Emergency Wipe (emergency-wipe.feature)
 
-    /// A launch with nothing in the keychain starts at the login screen: no unlock pad, no
-    /// main tab view — there is no session to resume.
+    /// A launch with nothing in the keychain starts at the login screen: no unlock
+    /// field, no main tab view — there is no session to resume.
     func testEmergencyWipeFromLoginScreen() {
         given("the keychain is empty") {
             launchClean()
@@ -68,12 +62,12 @@ final class SecurityUITests: BaseUITest {
         then("the app shows the login screen and nothing of a session") {
             XCTAssertTrue(find("hub-url-input").waitForExistence(timeout: 20), "A clean launch should show login")
             XCTAssertTrue(find("create-identity").exists, "Login should offer to create an identity")
-            XCTAssertFalse(find("pin-pad").exists, "There is no identity to unlock")
+            XCTAssertFalse(find("pin-input").exists, "There is no identity to unlock")
             XCTAssertFalse(find("main-tab-view").exists, "There is no session to resume")
         }
     }
 
-    func testLockScreenShowsPINPad() {
+    func testLockScreenShowsPINEntry() {
         given("I am authenticated") {
             launchAuthenticated()
         }
@@ -92,11 +86,11 @@ final class SecurityUITests: BaseUITest {
             }
             lockButton.tap()
         }
-        then("I should see the PIN pad on the lock screen") {
-            let pinPad = find("pin-pad")
+        then("I should see the credential field on the lock screen") {
+            let pinInput = find("pin-input")
             XCTAssertTrue(
-                pinPad.waitForExistence(timeout: 5),
-                "PIN pad should be displayed on lock screen"
+                pinInput.waitForExistence(timeout: 5),
+                "The unlock credential field should be displayed on the lock screen"
             )
         }
         and("I should see the locked identity") {
@@ -130,78 +124,28 @@ final class SecurityUITests: BaseUITest {
                 "A first wrong PIN is 'Incorrect PIN', not a lockout (got '\(pinError.label)')"
             )
         }
-        and("the PIN pad should still be visible, and the app still locked") {
-            XCTAssertTrue(find("pin-pad").exists, "PIN pad should remain for retry")
+        and("the unlock field should still be visible, and the app still locked") {
+            XCTAssertTrue(find("pin-input").exists, "The unlock field should remain for retry")
             XCTAssertFalse(find("main-tab-view").exists, "A wrong PIN must not unlock the app")
         }
     }
 
-    // MARK: - PIN Pad Security
+    // MARK: - Unlock Entry (#2303)
 
-    // NOTE: "confirm-backup" and "continue-to-pin" were steps in the pre-v3
-    // onboarding flow (device key display + backup confirmation before PIN
-    // set). They no longer exist: AuthViewModel now goes straight from
-    // create-identity to the PIN set screen (see AuthViewModel.swift's "V3
-    // device key model" doc comment). They also assumed the digit-based
-    // PINPadView ("pin-pad", "pin-\(digit)", "pin-dots") is shown during
-    // onboarding — it isn't: PINSetView.swift uses a free-text SecureField
-    // ("pin-input"/"pin-submit") so a PIN or passphrase (8+ characters) can
-    // be entered. PINPadView is only used on the lock/unlock screen
-    // (PINUnlockView.swift), so these tests are rewritten to exercise it
-    // there — preserving the original intent (verify the digit pad renders
-    // all its digits, backspace, and dots indicator) against the screen
-    // where that component actually appears today.
-    func testPINPadHasAllDigits() {
-        given("I am authenticated and lock the app") {
-            launchAuthenticated()
-            let lockButton = find("lock-app")
-            guard lockButton.waitForExistence(timeout: 10) else {
-                XCTFail("Lock button should exist")
-                return
-            }
-            lockButton.tap()
-        }
-        then("the PIN pad should have digits 0-9 and backspace") {
-            let pinPad = find("pin-pad")
-            guard pinPad.waitForExistence(timeout: 5) else {
-                XCTFail("PIN pad should appear on the lock screen")
-                return
-            }
-            for digit in 0...9 {
-                let button = find("pin-\(digit)")
-                XCTAssertTrue(button.exists, "PIN button \(digit) should exist")
-            }
-            let backspace = find("pin-backspace")
-            XCTAssertTrue(backspace.exists, "Backspace button should exist")
-        }
-    }
-
-    func testPINDotsIndicator() {
-        given("I am authenticated and lock the app") {
-            launchAuthenticated()
-            let lockButton = find("lock-app")
-            guard lockButton.waitForExistence(timeout: 10) else {
-                XCTFail("Lock button should exist")
-                return
-            }
-            lockButton.tap()
-        }
-        then("I should see the PIN dots indicator") {
-            let pinDots = find("pin-dots")
-            XCTAssertTrue(
-                pinDots.waitForExistence(timeout: 5),
-                "PIN dots indicator should be displayed on the lock screen"
-            )
-        }
-    }
+    // The digit pad these tests used to exercise ("pin-pad", "pin-\(digit)",
+    // "pin-dots") is deleted: the unlock screen is a free-text SecureField, the
+    // same component the set screen uses, because a credential may be any 8+
+    // characters and a 6/8-digit pad could never type one (#2303). Entry-level
+    // coverage now lives in AuthFlowUITests (typed-PIN unlock, passphrase
+    // unlock); this suite keeps the lockout policy tests below.
 
     // MARK: - Epic 260: Biometric Unlock (C5)
 
     /// The biometric button is offered only when biometric unlock is enabled for the
     /// identity AND the device has biometry enrolled. An authenticated test launch
     /// enables neither (a simulator has no enrolment, and `--test-authenticated` never
-    /// turns the preference on), so the lock screen must offer the PIN pad alone —
-    /// the button is not a maybe, it must be absent.
+    /// turns the preference on), so the lock screen must offer the credential field
+    /// alone — the button is not a maybe, it must be absent.
     func testBiometricUnlockButtonHiddenWhenBiometricUnlockIsOff() {
         given("I am authenticated with biometric unlock off") {
             launchAuthenticated()
@@ -211,10 +155,10 @@ final class SecurityUITests: BaseUITest {
             XCTAssertTrue(lockButton.waitForExistence(timeout: 10), "The lock button should exist on the dashboard")
             lockButton.tap()
         }
-        then("I should see the PIN pad and no biometric unlock button") {
+        then("I should see the unlock field and no biometric unlock button") {
             XCTAssertTrue(
-                find("pin-pad").waitForExistence(timeout: 5),
-                "PIN pad should always be available as fallback"
+                find("pin-input").waitForExistence(timeout: 5),
+                "The credential field should always be available as fallback"
             )
             XCTAssertFalse(
                 find("biometric-unlock").exists,
@@ -317,8 +261,8 @@ final class SecurityUITests: BaseUITest {
                 "The fifth wrong PIN should lock the pad for 30 seconds (got '\(pinError.label)')"
             )
         }
-        and("the PIN pad should still be visible for when lockout expires") {
-            XCTAssertTrue(find("pin-pad").exists, "PIN pad should remain visible during lockout")
+        and("the unlock field should still be visible for when lockout expires") {
+            XCTAssertTrue(find("pin-input").exists, "The unlock field should remain visible during lockout")
             XCTAssertFalse(find("main-tab-view").exists)
         }
     }
@@ -364,7 +308,7 @@ final class SecurityUITests: BaseUITest {
                     && find("pin-error").label.contains("Please wait and try again"),
                 "Attempts during a lockout should be refused (got '\(find("pin-error").label)')"
             )
-            XCTAssertTrue(find("pin-pad").exists, "The app should still be locked")
+            XCTAssertTrue(find("pin-input").exists, "The app should still be locked")
             XCTAssertFalse(find("hub-url-input").exists, "Refused attempts must not wipe the keys")
             XCTAssertFalse(find("main-tab-view").exists)
         }

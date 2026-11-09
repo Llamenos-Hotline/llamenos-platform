@@ -258,10 +258,10 @@ final class SettingsUITests: BaseUITest {
             lockButton.tap()
         }
         then("I should see the PIN unlock screen") {
-            let pinPad = find("pin-pad")
+            let pinInput = find("pin-input")
             XCTAssertTrue(
-                pinPad.waitForExistence(timeout: 5),
-                "PIN pad should appear after locking from settings"
+                pinInput.waitForExistence(timeout: 5),
+                "The unlock credential field should appear after locking from settings"
             )
         }
     }

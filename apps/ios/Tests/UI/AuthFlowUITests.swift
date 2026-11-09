@@ -165,50 +165,53 @@ final class AuthFlowUITests: XCTestCase {
         XCTAssertTrue(lockButton.waitForExistence(timeout: 5))
         lockButton.tap()
 
-        // PIN pad should appear (PIN unlock screen)
-        let pinPad = find("pin-pad")
+        // The unlock screen's credential field should appear
+        let pinInput = find("pin-input")
         XCTAssertTrue(
-            pinPad.waitForExistence(timeout: 5),
-            "PIN pad should appear after locking"
+            pinInput.waitForExistence(timeout: 5),
+            "The unlock credential field should appear after locking"
         )
     }
 
-    // MARK: - PIN Pad Interaction (unlock screen — the only digit pad in v3)
+    // MARK: - Unlock Entry (the lock screen is a SecureField, #2303)
 
-    func testPINPadDigitButtons() {
+    func testUnlockWithTypedPIN() {
         navigateToFullyAuthenticated()
         lockApp()
 
-        let pinPad = find("pin-pad")
-        guard pinPad.waitForExistence(timeout: 5) else {
-            XCTFail("PIN pad should exist on the unlock screen")
-            return
-        }
-
-        for digit in 0...9 {
-            XCTAssertTrue(find("pin-\(digit)").exists, "PIN button \(digit) should exist")
-        }
-        XCTAssertTrue(find("pin-backspace").exists, "Backspace button should exist")
-    }
-
-    func testPINPadBackspace() {
-        navigateToFullyAuthenticated()
-        lockApp()
-
-        guard find("pin-pad").waitForExistence(timeout: 5) else {
-            XCTFail("PIN pad should exist on the unlock screen")
-            return
-        }
-
-        // 1-2-3-4-5-6, delete the 6, then 6-7-8: the correct PIN only if backspace
-        // removed exactly one digit. Without it the pad would submit 12345667.
-        for digit in ["1", "2", "3", "4", "5", "6"] { find("pin-\(digit)").tap() }
-        find("pin-backspace").tap()
-        for digit in ["6", "7", "8"] { find("pin-\(digit)").tap() }
+        submitPIN("12345678")
 
         XCTAssertTrue(
             find("dashboard-title").waitForExistence(timeout: 20),
-            "The corrected PIN should unlock the app"
+            "The typed PIN should unlock the app"
+        )
+    }
+
+    /// Scenario: A passphrase longer than 8 characters unlocks the app
+    func testAPassphraseLongerThan8CharactersUnlocksTheApp() {
+        navigateToOnboarding()
+        navigateToPINSet()
+
+        // 12 characters, letters and digits — the digit pad this unlock screen
+        // used to show could never have typed it (#2303).
+        let passphrase = "passw0rd1234"
+        submitPIN(passphrase)
+
+        // Confirm phase
+        XCTAssertTrue(find("pin-input").waitForExistence(timeout: 5), "PIN entry should remain for confirmation")
+        submitPIN(passphrase)
+
+        XCTAssertTrue(
+            find("dashboard-title").waitForExistence(timeout: 20),
+            "Dashboard should appear after setting the passphrase"
+        )
+
+        lockApp()
+        submitPIN(passphrase)
+
+        XCTAssertTrue(
+            find("dashboard-title").waitForExistence(timeout: 20),
+            "A 12-character alphanumeric passphrase should unlock the app"
         )
     }
 
@@ -243,7 +246,9 @@ final class AuthFlowUITests: XCTestCase {
         )
     }
 
-    /// Type a PIN into the PIN set screen's field and submit it.
+    /// Type a credential into the "pin-input" field and submit it. Both PIN
+    /// screens (set and unlock) share the field and button identifiers since the
+    /// unlock screen moved to the same SecureField (#2303).
     private func submitPIN(_ pin: String) {
         let pinInput = find("pin-input")
         guard pinInput.waitForExistence(timeout: 10) else {

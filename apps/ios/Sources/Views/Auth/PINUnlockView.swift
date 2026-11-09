@@ -1,14 +1,16 @@
 import SwiftUI
 
-/// PIN unlock screen: user enters their PIN (+ optional biometric) to unlock
-/// a stored identity. Shown on app launch when encrypted keys exist, or after
-/// background lock timeout.
+/// PIN unlock screen: user enters their PIN or passphrase (+ optional biometric)
+/// to unlock a stored identity. Shown on app launch when encrypted keys exist, or
+/// after background lock timeout.
+///
+/// Entry is a `SecureField`, not a digit pad: a credential may be any 8+
+/// characters (letters included), which a 6/8-digit pad could never accept (#2303).
 struct PINUnlockView: View {
     @Environment(AppState.self) private var appState
     @Environment(Router.self) private var router
     @State private var pinViewModel: PINViewModel?
     @State private var hasAttemptedBiometric: Bool = false
-    @State private var shakeOnError = false
     @State private var breatheScale: CGFloat = 1.0
     @State private var biometricPulse: CGFloat = 1.0
 
@@ -62,18 +64,39 @@ struct PINUnlockView: View {
                     .accessibilityIdentifier("pin-error")
             }
 
-            // PIN pad
-            PINPadView(
-                pin: Binding(
+            // Credential entry (secure text field — a credential may be any 8+
+            // characters, so a digit-only pad cannot unlock it, #2303). Submit is
+            // gated at 8 characters: every stored credential satisfies the
+            // creation rule (`is_valid_credential`), so a shorter entry can only
+            // be wrong — refusing it locally keeps a typo from burning one of the
+            // ten lockout attempts.
+            SecureField(
+                NSLocalizedString("pin_enter_pin", comment: "Enter your PIN or passphrase"),
+                text: Binding(
                     get: { vm.pin },
                     set: { vm.pin = $0 }
-                ),
-                maxLength: vm.maxLength,
-                shake: $shakeOnError,
-                onComplete: { completedPIN in
-                    vm.onPINComplete(completedPIN)
-                }
+                )
             )
+            .textFieldStyle(.roundedBorder)
+            .font(.brand(.title3))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 40)
+            .textContentType(.password)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .accessibilityIdentifier("pin-input")
+            .onSubmit {
+                if vm.pin.count >= 8 {
+                    vm.onPINComplete(vm.pin)
+                }
+            }
+
+            Button(NSLocalizedString("unlock_title", comment: "Unlock")) {
+                vm.onPINComplete(vm.pin)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(vm.pin.count < 8)
+            .accessibilityIdentifier("pin-submit")
 
             // Biometric button (if available and enabled)
             if vm.isBiometricAvailable {
@@ -100,11 +123,6 @@ struct PINUnlockView: View {
             )
             .ignoresSafeArea()
         )
-        .onChange(of: vm.errorMessage) { _, newValue in
-            if newValue != nil {
-                shakeOnError = true
-            }
-        }
         .loadingOverlay(
             isPresented: vm.isLoading,
             message: NSLocalizedString("pin_unlock_verifying", comment: "Verifying...")
@@ -142,11 +160,9 @@ struct PINUnlockView: View {
         if let vm = pinViewModel {
             return vm
         }
-        let storedLength = appState.authService.keychainService.getPINLength()
         let vm = PINViewModel(
             mode: .unlock,
             authService: appState.authService,
-            maxLength: storedLength,
             onSuccess: {
                 appState.didUnlock()
                 // Router will auto-navigate via authStatus change

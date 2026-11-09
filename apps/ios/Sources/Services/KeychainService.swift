@@ -37,7 +37,6 @@ enum KeychainKey {
     static let biometricEnabled = "biometric-enabled"
     static let pinHash = "pin-verification"
     static let biometricPIN = "biometric-pin"
-    static let pinLength = "pin-length"
     static let pinLockoutAttempts = "pin-lockout-attempts"
     static let pinLockoutUntil = "pin-lockout-until"
     static let adminDecryptionPubkey = "admin-decryption-pubkey"
@@ -172,7 +171,6 @@ final class KeychainService: @unchecked Sendable {
             KeychainKey.biometricEnabled,
             KeychainKey.pinHash,
             KeychainKey.biometricPIN,
-            KeychainKey.pinLength,
             KeychainKey.pinLockoutAttempts,
             KeychainKey.pinLockoutUntil,
             KeychainKey.adminDecryptionPubkey,
@@ -255,26 +253,6 @@ final class KeychainService: @unchecked Sendable {
         delete(key: KeychainKey.biometricPIN)
     }
 
-    // MARK: - PIN Length Persistence
-
-    /// Store the user's chosen PIN length (6 or 8) for unlock screen.
-    func storePINLength(_ length: Int) {
-        let data = withUnsafeBytes(of: length) { Data($0) }
-        setKeychainItem(account: KeychainKey.pinLength, data: data)
-    }
-
-    /// Retrieve the stored PIN length. Returns 6 as default if not set.
-    func getPINLength() -> Int {
-        guard let data = getKeychainItem(account: KeychainKey.pinLength),
-              data.count == MemoryLayout<Int>.size else { return 6 }
-        // `loadUnaligned`, here and below: a small `Data` keeps its bytes inline with no
-        // alignment guarantee, and `load(as:)` traps on a misaligned pointer. Thread
-        // Sanitizer's allocator exposed it — `AuthLoginBDDTests` crashed with "load from
-        // misaligned raw pointer" on every TSan run (#1920 audit).
-        let length = data.withUnsafeBytes { $0.loadUnaligned(as: Int.self) }
-        return (length == 6 || length == 8) ? length : 6
-    }
-
     // MARK: - PIN Lockout Persistence (H7)
 
     /// Persist the PIN failed attempt count in the Keychain.
@@ -287,6 +265,11 @@ final class KeychainService: @unchecked Sendable {
     func getLockoutAttempts() -> Int {
         guard let data = getKeychainItem(account: KeychainKey.pinLockoutAttempts),
               data.count == MemoryLayout<Int>.size else { return 0 }
+        // `loadUnaligned`, here and in `getLockoutUntil`: a small `Data` keeps its
+        // bytes inline with no alignment guarantee, and `load(as:)` traps on a
+        // misaligned pointer. Thread Sanitizer's allocator exposed it —
+        // `AuthLoginBDDTests` crashed with "load from misaligned raw pointer" on
+        // every TSan run (#1920 audit).
         return data.withUnsafeBytes { $0.loadUnaligned(as: Int.self) }
     }
 
