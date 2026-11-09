@@ -123,12 +123,33 @@ all:
       llamenos_disk_encrypted: true
 INV
 
+run_playbook() {
+  ANSIBLE_ROLES_PATH="${ANSIBLE_DIR}/roles" \
+  ansible-playbook \
+    -i "${INVENTORY}" \
+    -e "roundtrip_vars=${SCRATCH}/vars.yml" \
+    -e "@${SCRATCH}/vars.yml" \
+    -e ansible_become=false \
+    "$@"
+}
+
 log "running the round trip"
 cd "${ANSIBLE_DIR}"
-ANSIBLE_ROLES_PATH="${ANSIBLE_DIR}/roles" \
-ansible-playbook \
-  -i "${INVENTORY}" \
-  -e "roundtrip_vars=${SCRATCH}/vars.yml" \
-  -e "@${SCRATCH}/vars.yml" \
-  -e ansible_become=false \
-  playbooks/verify-backup-restore.yml "$@"
+run_playbook playbooks/verify-backup-restore.yml "$@"
+
+# The round trip proves a GOOD backup comes back. It cannot see a restore that
+# clears its target before it can write the replacement, because it only ever
+# hands restore.yml a good archive. These cases hand it bad ones and require
+# that the restore FAILS and that the live data is exactly what it was.
+for safety_case in 1 2; do
+  log "restore safety, case ${safety_case}: an unrestorable backup must fail the restore and cost nothing"
+  run_playbook playbooks/verify-restore-safety.yml --tags plant -e "safety_case=${safety_case}"
+  if run_playbook playbooks/restore.yml -e "restore_timestamp=99990101-00000${safety_case}" \
+       > "${SCRATCH}/restore-safety-${safety_case}.log" 2>&1; then
+    cat "${SCRATCH}/restore-safety-${safety_case}.log"
+    echo "${RED}restore.yml SUCCEEDED against an unrestorable backup (case ${safety_case})${RESET}" >&2
+    exit 1
+  fi
+  log "restore.yml failed against the bad backup, as it must; checking the live data"
+  run_playbook playbooks/verify-restore-safety.yml --tags assert
+done

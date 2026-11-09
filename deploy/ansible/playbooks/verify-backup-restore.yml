@@ -150,9 +150,14 @@
         - "{{ llamenos_compose_postgres }}"
         - "{{ llamenos_compose_rustfs }}"
 
+    # -h 127.0.0.1, not the default unix socket: the image starts a temporary
+    # server on the socket alone while it initialises, and pg_isready on that
+    # socket reports ready a moment before that server shuts down and the real
+    # one starts -- the next command then lands in "the database system is
+    # shutting down". Only the final server listens on TCP.
     - name: Wait for PostgreSQL
       ansible.builtin.command:
-        cmd: docker compose -f {{ llamenos_compose_postgres }} exec -T postgres pg_isready -U llamenos -d llamenos
+        cmd: docker compose -f {{ llamenos_compose_postgres }} exec -T postgres pg_isready -h 127.0.0.1 -U llamenos -d llamenos
       register: rt_pg_ready
       retries: 30
       delay: 2

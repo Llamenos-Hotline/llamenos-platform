@@ -11,6 +11,13 @@
 #   ansible-playbook playbooks/test-restore.yml --ask-vault-pass -e test_service=rustfs
 #
 # This playbook is non-destructive — it does NOT touch any production services.
+#
+# The decrypted dump is fed to pg_restore on stdin. It is never bind-mounted
+# into the scratch container: under Docker's userns-remap (which harden.yml
+# enables) the container's root is an unprivileged sub-UID that cannot read a
+# 0700 host directory, so the old `-v <tmp>:/restore:ro` failed with "could not
+# open input file ... Permission denied" and reported a restorable backup as
+# "not restorable".
 
 - name: Test backup restoration
   hosts: all
@@ -20,7 +27,14 @@
     - ../vars.yml
 
   vars:
-    test_service: all # all, postgres, config
+    test_service: all # all, postgres, rustfs, config
+    # Same placement rule as roles/backup-rustfs: a host that does not hold the
+    # object store has no object-store archive to test.
+    test_rustfs: >-
+      {{ test_service in ['all', 'rustfs']
+         and (llamenos_rustfs_enabled | default(true))
+         and not (groups.get('llamenos_storage', []) | length > 0
+                  and inventory_hostname not in groups.get('llamenos_storage', [])) }}
 
   tasks:
     - name: Skip hosts without disk encryption (this play keeps data at rest)
@@ -101,7 +115,6 @@
               -e POSTGRES_DB=llamenos
               -e POSTGRES_USER=llamenos
               -e POSTGRES_PASSWORD=restore-test-password
-              -v {{ restore_tmpdir.path }}:/restore:ro
               postgres:17-alpine
           register: restore_container
           when: latest_pg_backup is defined
@@ -116,10 +129,10 @@
           when: latest_pg_backup is defined
 
         - name: Restore PostgreSQL backup (custom format)
-          ansible.builtin.command:
-            cmd: >
-              docker exec llamenos-restore-test
-              pg_restore -U llamenos -d llamenos --no-owner --no-privileges /restore/dump.sql
+          ansible.builtin.shell: |
+            docker exec -i llamenos-restore-test \
+              pg_restore -U llamenos -d llamenos --no-owner --no-privileges \
+              < {{ restore_tmpdir.path }}/dump.sql
           register: pg_restore_result
           when:
             - latest_pg_backup is defined
@@ -183,6 +196,55 @@
               - Tables in "public": {{ restored_table_count.stdout | trim }}
               - Sample: {{ restored_table_sample.stdout_lines | default([]) | join(', ') }}
           when: latest_pg_backup is defined
+
+        # ── RustFS archive test ────────────────────────────────────────
+        #
+        # Reads the newest object-store archive end to end -- decrypt, gunzip,
+        # walk the tar -- on the host, with the plaintext only ever in a pipe.
+        # That proves the archive is intact and non-empty; restore.yml's own
+        # staged swap proves it can be written back.
+
+        - name: Find latest RustFS backup
+          ansible.builtin.find:
+            paths: "{{ app_dir }}/backups/rustfs/daily"
+            patterns: "llamenos-rustfs-*"
+            file_type: file
+          register: rustfs_backup_files
+          when: test_rustfs | bool
+
+        - name: Check RustFS backup exists
+          ansible.builtin.assert:
+            that: rustfs_backup_files.matched > 0
+            fail_msg: "No RustFS backups found under {{ app_dir }}/backups/rustfs/daily"
+            success_msg: "Found {{ rustfs_backup_files.matched }} RustFS backup(s)"
+          when: test_rustfs | bool
+
+        - name: Read the newest RustFS archive end to end
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {% set newest = (rustfs_backup_files.files | sort(attribute='mtime') | last).path %}
+            {% if newest is search('.age$') %}
+            age -d -i {{ backup_age_private_key_path }} {{ newest }} \
+            {% else %}
+            cat {{ newest }} \
+            {% endif %}
+              | tar -tzf - | grep -vc '/$' || true
+          args:
+            executable: /bin/bash
+          register: rustfs_archive_files
+          changed_when: false
+          when: test_rustfs | bool
+
+        - name: Assert the RustFS archive holds objects
+          ansible.builtin.assert:
+            that:
+              - (rustfs_archive_files.stdout | trim | int) > 0
+            fail_msg: >-
+              The newest RustFS archive lists no files, or could not be read.
+              The attachments it should protect are not recoverable from it.
+            success_msg: >-
+              RustFS archive OK: {{ rustfs_archive_files.stdout | trim }} files
+          when: test_rustfs | bool
 
         # ── Config restore test ────────────────────────────────────────
 

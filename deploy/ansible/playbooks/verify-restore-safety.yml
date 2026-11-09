@@ -1,0 +1,152 @@
+---
+# Restore Safety Verification — LOCALHOST ONLY
+#
+# The companion to verify-backup-restore.yml. That one proves a GOOD backup
+# comes back. This one proves a BAD backup does not take the live data with it:
+# a restore is run by someone who has just lost data, and the data they still
+# have may be the only copy. A restore step that clears its target before it can
+# prove it can write the replacement turns a corrupt archive into a second
+# disaster -- and the round trip alone cannot see that, because it only ever
+# feeds restore.yml a good archive.
+#
+# Two phases, driven by scripts/verify-backup-restore.sh against the scratch
+# deployment the round trip just left running:
+#
+#   --tags plant   -e safety_case=<n>   write a newer, deliberately unrestorable
+#                                       backup (age-encrypted, so decryption
+#                                       succeeds and the failure happens where
+#                                       it matters: after the target would have
+#                                       been cleared by a careless restore)
+#   (the script then runs playbooks/restore.yml against it and requires it to
+#    FAIL)
+#   --tags assert                       the live database and object store must
+#                                       be exactly as they were, and the restore
+#                                       must have left none of its own debris
+#
+# Cases (safety_case):
+#   1  the RustFS archive and the PostgreSQL dump are not archives at all
+#   2  the RustFS archive is a valid but EMPTY tar.gz; the PostgreSQL dump is a
+#      valid dump of a database with no tables
+#
+# It never touches a real host: the same guard as the round trip.
+
+- name: Guard — this playbook must never run against a real host
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Assert localhost-only and scratch-directory-only
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'localhost'
+          - ansible_connection | default('') == 'local'
+          - app_dir is defined
+          - "'llamenos-roundtrip' in app_dir"
+        fail_msg: >-
+          verify-restore-safety.yml refuses to run: it plants unrestorable
+          backups and may only target localhost with app_dir inside a scratch
+          tree whose path contains 'llamenos-roundtrip'. Use
+          deploy/ansible/scripts/verify-backup-restore.sh.
+        quiet: true
+      tags: always
+
+- name: Plant an unrestorable backup
+  hosts: all
+  gather_facts: false
+  tags: [plant]
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  vars:
+    safety_case: 1
+    safety_ts: "99990101-00000{{ safety_case }}"
+  tasks:
+    - name: Plant the unrestorable archives (case {{ safety_case }})
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pub="{{ backup_age_public_key }}"
+          pgdir="{{ app_dir }}/backups/postgres/daily"
+          rfdir="{{ app_dir }}/backups/rustfs/daily"
+          pgf="${pgdir}/llamenos-postgres-{{ safety_ts }}.dump.age"
+          rff="${rfdir}/llamenos-rustfs-{{ safety_ts }}.tar.gz.age"
+          {% if safety_case | int == 1 %}
+          printf 'this is not an archive' | age -r "${pub}" -o "${pgf}"
+          printf 'this is not an archive' | age -r "${pub}" -o "${rff}"
+          {% else %}
+          tar -czf - -T /dev/null | age -r "${pub}" -o "${rff}"
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS safety_empty;" -c "CREATE DATABASE safety_empty OWNER llamenos;"
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            pg_dump -U llamenos -d safety_empty -Fc | age -r "${pub}" -o "${pgf}"
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d postgres -c "DROP DATABASE safety_empty;"
+          {% endif %}
+          ls -l "${pgf}" "${rff}"
+      changed_when: true
+
+- name: Assert the live data survived the failed restore
+  hosts: all
+  gather_facts: false
+  tags: [assert]
+  vars_files:
+    - "{{ roundtrip_vars }}"
+  tasks:
+    - name: Read the live rows back
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+          psql -U llamenos -d llamenos -tAc
+          "SELECT id || '|' || volunteer || '|' || ciphertext FROM crisis_notes ORDER BY id"
+      register: rs_rows
+      changed_when: false
+
+    - name: Read the live object back
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs
+          cat /data/llamenos-files/note-1.bin
+      register: rs_object
+      changed_when: false
+      failed_when: false
+
+    - name: List what the failed restore may have left behind
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          echo "databases=$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+            psql -U llamenos -d postgres -tAc "SELECT string_agg(datname, ',' ORDER BY datname) FROM pg_database")"
+          echo "volume=$(docker compose -f {{ llamenos_compose_rustfs }} exec -T rustfs \
+            sh -c 'ls -A /data | tr "\n" ","')"
+      register: rs_debris
+      changed_when: false
+
+    - name: Show the evidence
+      ansible.builtin.debug:
+        msg: |
+          rows    : {{ rs_rows.stdout_lines }}
+          object  : {{ rs_object.stdout | default('(unreadable)') | trim }}
+          debris  : {{ rs_debris.stdout_lines }}
+
+    - name: The failed restore must not have cost any data
+      ansible.builtin.assert:
+        that:
+          - rs_rows.stdout_lines | length == 3
+          - "'1|volunteer-a|' ~ roundtrip_marker ~ '-one' in rs_rows.stdout_lines"
+          - rs_object.stdout | trim == roundtrip_marker ~ '-attachment'
+        fail_msg: >-
+          A restore that FAILED destroyed live data. Database rows now:
+          {{ rs_rows.stdout_lines }}; object now:
+          '{{ rs_object.stdout | default('(missing)') | trim }}'. A restore
+          must never clear its target before it can prove it can write the
+          replacement.
+        quiet: true
+
+    - name: The failed restore must not have left its own debris behind
+      ansible.builtin.assert:
+        that:
+          - "'llamenos_restore' not in rs_debris.stdout"
+          - "'llamenos_pre_restore' not in rs_debris.stdout"
+          - "'.restore-' not in rs_debris.stdout"
+        fail_msg: "A failed restore left scratch state behind: {{ rs_debris.stdout_lines }}"
+        quiet: true

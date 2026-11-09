@@ -2126,6 +2126,15 @@ jobs:
           fi
           echo "OK: no kv_store references"
 
+      # harden.yml turns on Docker userns-remap, under which a container's root
+      # cannot read a 0700 host directory. restore.yml and test-restore.yml
+      # bind-mounted a decrypted temp directory into a container and failed
+      # there -- after restore.yml had already emptied the RustFS volume. The
+      # round trip below runs without userns-remap so cannot see the first, and
+      # proves the second behaviourally; this keeps the first from coming back.
+      - name: Check restores stream data instead of bind-mounting it
+        run: python3 deploy/ansible/scripts/check-restore-no-bind-mounts.py
+
   # ─── Backup/Restore Round Trip ────────────────────────────
   #
   # The acceptance evidence for #1125. Not a lint and not a syntax check:
@@ -2161,6 +2170,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y age
 
+      # Also hands restore.yml unrestorable backups and requires it to fail
+      # without costing the live database or object store a byte.
       - name: Run the backup/restore round trip
         run: deploy/ansible/scripts/verify-backup-restore.sh
 
