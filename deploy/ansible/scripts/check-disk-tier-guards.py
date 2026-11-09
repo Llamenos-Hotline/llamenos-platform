@@ -270,6 +270,17 @@ def deploy_alone_cases(r: Runner) -> None:
     rc, out = r.run("playbooks/deploy.yml", inventory(hosts={**HOSTS, "llamenos-relay1": {}}), extra, "--check")
     r.expect("deploy-alone: a host without llamenos_disk_encrypted is refused", False, out, rc,
              must=["REQUIRED: set `llamenos_disk_encrypted: true` or `false`"])
+    # The guard must judge the same switches the roles act on, and those live in
+    # vars.yml: a guard play that does not load it judges the defaults only.
+    plays = (ANSIBLE_DIR / "playbooks" / "deploy.yml").read_text().split("\n- name:")
+    guard_play = next((p for p in plays if "guard-disk-tier.yml" in p), "")
+    if "../vars.yml" in guard_play:
+        print("ok    deploy-alone: the guard play loads vars.yml (the switches the roles act on)")
+    else:
+        r.failures.append("deploy-alone: guard play loads vars.yml")
+        print("FAIL  deploy-alone: the guard play loads vars.yml (the switches the roles act on)")
+        print("        playbooks/deploy.yml's disk-tier guard play has no `vars_files: ../vars.yml`")
+
     # --check cannot complete a deploy (a role that starts a container fails in check
     # mode), so the exit code is not what is asserted: the guard must have RUN and
     # PASSED for both hosts, and nothing may have been refused.
