@@ -221,8 +221,8 @@ describe('TelnyxAdapter (TeXML)', () => {
 
   describe('ringVolunteers (#1135)', () => {
     const volunteers = [
-      { pubkey: 'pk1', phone: '+15550000001', callToken: 'tok one' },
-      { pubkey: 'pk2', phone: '+15550000002', callToken: 'tok-two' },
+      { phone: '+15550000001', callToken: 'tok one' },
+      { phone: '+15550000002', callToken: 'tok-two' },
     ]
     const params = { callSid: 'v3:call-1', callerNumber: '+15559876543', volunteers, callbackUrl: 'https://cb.example.org', hubId: 'hub-1' }
     const created = () => (fetchSpy.mock.calls as Array<[string, RequestInit]>).map(([url, init]) => ({ url, body: JSON.parse(String(init.body)) }))
