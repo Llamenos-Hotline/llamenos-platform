@@ -19,11 +19,14 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.R
 
@@ -42,10 +45,12 @@ fun AdminSidebarDrawerHost(
     selectedSlug: String?,
     onNavigateToAdminSection: (String) -> Unit,
     modifier: Modifier = Modifier,
+    sidebarViewModel: AdminSidebarViewModel = hiltViewModel(),
     content: @Composable (openDrawer: () -> Unit) -> Unit,
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val sidebarState by sidebarViewModel.state.collectAsState()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -54,6 +59,8 @@ fun AdminSidebarDrawerHost(
             AdminSidebarDrawer(
                 drawerState = drawerState,
                 selectedSlug = selectedSlug,
+                state = sidebarState,
+                onRetry = sidebarViewModel::load,
                 onItemClick = { slug ->
                     scope.launch {
                         drawerState.close()
@@ -86,6 +93,8 @@ fun AdminSidebarToggle(onClick: () -> Unit) {
 fun AdminSidebarDrawer(
     drawerState: DrawerState,
     selectedSlug: String?,
+    state: AdminSidebarState,
+    onRetry: () -> Unit,
     onItemClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,19 +105,37 @@ fun AdminSidebarDrawer(
                 .padding(horizontal = 12.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            AdminSidebarScopeHeader(
-                text = stringResource(R.string.admin_nav_scopes_this_hub),
-                testTag = "admin-sidebar-scope-hub",
-            )
-            AdminSidebarItems(AdminNavConfig.thisHubItems, selectedSlug, onItemClick)
+            when (state) {
+                AdminSidebarState.Loading -> Unit
+                AdminSidebarState.Failed -> NavigationDrawerItem(
+                    label = { Text(stringResource(R.string.common_retry)) },
+                    selected = false,
+                    onClick = onRetry,
+                    modifier = Modifier.testTag("admin-sidebar-retry"),
+                )
+                is AdminSidebarState.Loaded -> {
+                    val hubItems = AdminNavConfig.thisHubItems.visibleTo(state.permissions)
+                    val platformItems = AdminNavConfig.platformItems.visibleTo(state.permissions)
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            AdminSidebarScopeHeader(
-                text = stringResource(R.string.admin_nav_scopes_platform),
-                testTag = "admin-sidebar-scope-platform",
-            )
-            AdminSidebarItems(AdminNavConfig.platformItems, selectedSlug, onItemClick)
+                    if (hubItems.isNotEmpty()) {
+                        AdminSidebarScopeHeader(
+                            text = stringResource(R.string.admin_nav_scopes_this_hub),
+                            testTag = "admin-sidebar-scope-hub",
+                        )
+                        AdminSidebarItems(hubItems, selectedSlug, onItemClick)
+                    }
+                    if (hubItems.isNotEmpty() && platformItems.isNotEmpty()) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                    if (platformItems.isNotEmpty()) {
+                        AdminSidebarScopeHeader(
+                            text = stringResource(R.string.admin_nav_scopes_platform),
+                            testTag = "admin-sidebar-scope-platform",
+                        )
+                        AdminSidebarItems(platformItems, selectedSlug, onItemClick)
+                    }
+                }
+            }
         }
     }
 }
@@ -144,8 +171,8 @@ data class AdminNavItem(
     val slug: String,
     val labelRes: Int,
     val testTag: String,
+    /** Permissions the viewer must hold, ALL of them. Empty means no gate. */
     val requiredPermissions: List<String> = emptyList(),
-    val requiredRole: String? = null,
 )
 
 object AdminNavConfig {
@@ -163,8 +190,8 @@ object AdminNavConfig {
         AdminNavItem("call-settings", R.string.admin_nav_items_call_settings, "admin-sidebar-item-call-settings", listOf("settings:read")),
         AdminNavItem("voice-prompts", R.string.admin_nav_items_voice_prompts, "admin-sidebar-item-voice-prompts", listOf("settings:read")),
         AdminNavItem("phone-menu-languages", R.string.admin_nav_items_phone_menu_languages, "admin-sidebar-item-phone-menu-languages", listOf("settings:read")),
-        AdminNavItem("transcription", R.string.admin_nav_items_transcription, "admin-sidebar-item-transcription", listOf("settings:read")),
-        AdminNavItem("spam-protection", R.string.admin_nav_items_spam_protection, "admin-sidebar-item-spam-protection", listOf("settings:read")),
+        AdminNavItem("transcription", R.string.admin_nav_items_transcription, "admin-sidebar-item-transcription", listOf("settings:manage-transcription")),
+        AdminNavItem("spam-protection", R.string.admin_nav_items_spam_protection, "admin-sidebar-item-spam-protection", listOf("settings:manage-spam")),
         AdminNavItem("phone-provider", R.string.admin_nav_items_phone_provider, "admin-sidebar-item-phone-provider", listOf("settings:read")),
         AdminNavItem("messaging-sms", R.string.admin_nav_items_messaging_sms, "admin-sidebar-item-messaging-sms", listOf("settings:read")),
         AdminNavItem("rcs", R.string.admin_nav_items_rcs, "admin-sidebar-item-rcs", listOf("settings:read")),
@@ -178,14 +205,14 @@ object AdminNavConfig {
     )
 
     val platformItems = listOf(
-        AdminNavItem("hubs", R.string.admin_nav_items_hubs, "admin-sidebar-item-hubs", listOf("system:manage-hubs"), "role-super-admin"),
-        AdminNavItem("platform-roles", R.string.admin_nav_items_platform_roles, "admin-sidebar-item-platform-roles", listOf("system:manage-roles"), "role-super-admin"),
-        AdminNavItem("platform-bans", R.string.admin_nav_items_platform_bans, "admin-sidebar-item-platform-bans", listOf("bans:read"), "role-super-admin"),
-        AdminNavItem("platform-audit", R.string.admin_nav_items_platform_audit, "admin-sidebar-item-platform-audit", listOf("audit:read"), "role-super-admin"),
-        AdminNavItem("platform-analytics", R.string.admin_nav_items_platform_analytics, "admin-sidebar-item-platform-analytics", listOf("calls:read-history", "audit:read"), "role-super-admin"),
-        AdminNavItem("platform-health", R.string.admin_nav_items_platform_health, "admin-sidebar-item-platform-health", listOf("settings:read"), "role-super-admin"),
-        AdminNavItem("platform-settings", R.string.admin_nav_items_platform_settings, "admin-sidebar-item-platform-settings", emptyList(), "role-super-admin"),
-        AdminNavItem("gdpr-erasure", R.string.admin_nav_items_gdpr_erasure, "admin-sidebar-item-gdpr-erasure", listOf("settings:manage"), "role-super-admin"),
+        AdminNavItem("hubs", R.string.admin_nav_items_hubs, "admin-sidebar-item-hubs", listOf("system:manage-hubs")),
+        AdminNavItem("platform-roles", R.string.admin_nav_items_platform_roles, "admin-sidebar-item-platform-roles", listOf("system:manage-roles")),
+        AdminNavItem("platform-bans", R.string.admin_nav_items_platform_bans, "admin-sidebar-item-platform-bans", listOf("system:view-bans")),
+        AdminNavItem("platform-audit", R.string.admin_nav_items_platform_audit, "admin-sidebar-item-platform-audit", listOf("system:view-audit")),
+        AdminNavItem("platform-analytics", R.string.admin_nav_items_platform_analytics, "admin-sidebar-item-platform-analytics", listOf("system:view-analytics")),
+        AdminNavItem("platform-health", R.string.admin_nav_items_platform_health, "admin-sidebar-item-platform-health", listOf("system:view-health")),
+        AdminNavItem("platform-settings", R.string.admin_nav_items_platform_settings, "admin-sidebar-item-platform-settings", listOf("system:manage-instance")),
+        AdminNavItem("gdpr-erasure", R.string.admin_nav_items_gdpr_erasure, "admin-sidebar-item-gdpr-erasure", listOf("system:manage-instance")),
     )
 
     /** The nav item for [slug], or null for a section the sidebar does not list. */
