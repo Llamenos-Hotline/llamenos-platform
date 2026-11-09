@@ -104,10 +104,10 @@ restore_rustfs_retries: 1
 restore_rustfs_delay: 1
 VARS
 
-# The inventory lives inside deploy/ansible, not in the scratch tree, so
-# that group_vars/all/ is picked up the same way it is on a real run --
-# that is where the canonical Compose paths are defined, and a test that
-# supplied them itself would not prove the wiring works.
+# The inventory lives inside deploy/ansible, not in the scratch tree. The canonical
+# Compose paths come from playbooks/group_vars/all/ -- found next to the playbooks
+# whatever the inventory's location -- and a test that supplied them itself would
+# not prove that wiring works.
 INVENTORY="${ANSIBLE_DIR}/.roundtrip-inventory.yml"
 cat > "${INVENTORY}" <<INV
 ---

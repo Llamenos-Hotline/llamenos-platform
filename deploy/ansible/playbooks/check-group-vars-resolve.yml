@@ -6,14 +6,16 @@
 # reaches a playbook under playbooks/ whatever directory the INVENTORY is in.
 #
 # Ansible loads group_vars from the inventory's directory and from the
-# playbook's directory. group_vars/ lives at deploy/ansible/, which is neither
-# when the inventory is kept elsewhere -- a private directory, a scratch
+# playbook's directory. group_vars/ used to live at deploy/ansible/, which is
+# neither when the inventory is kept elsewhere -- a private directory, a scratch
 # directory, `-i /somewhere/else/inventory.yml`. Every playbook that reads one of
 # those variables then died with "'llamenos_compose_glob' is undefined" -- for
-# harden.yml, in its LAST role, after sshd had already moved port.
-# playbooks/group_vars is a symlink to ../group_vars so the playbook-directory
-# lookup finds them. This plays against an inventory in another directory and
-# fails if they do not resolve.
+# harden.yml, in its LAST role, after sshd had already moved port. It now lives
+# in playbooks/group_vars, next to the playbooks that need it, so the lookup by
+# playbook directory finds it and the inventory can be anywhere. (It is a real
+# directory, not a symlink: a directory symlink breaks every tool that walks the
+# repo and reads what it finds.) This plays against an inventory in another
+# directory and fails if the variables do not resolve.
 #
 # Usage (CI does exactly this):
 #   d="$(mktemp -d)"; printf 'all:\n  hosts:\n    localhost:\n      ansible_connection: local\n' > "$d/inventory.yml"
@@ -38,5 +40,5 @@
         fail_msg: >-
           group_vars/all/compose.yml was not loaded. The inventory is in
           {{ inventory_dir }}; Ansible looks for group_vars there and next to the
-          playbook. playbooks/group_vars must be a symlink to ../group_vars.
+          playbook. playbooks/group_vars/all/compose.yml must exist next to the playbooks.
         quiet: true

@@ -2018,11 +2018,11 @@ jobs:
       - name: Check nothing starts the app before the migration gate
         run: python3 deploy/ansible/scripts/check-app-gate-ordering.py
 
-      # group_vars/ is found next to the inventory or next to the playbook. With
-      # the inventory kept anywhere else (the normal case for a private
-      # inventory) every playbook under playbooks/ lost it and died on
-      # "'llamenos_compose_glob' is undefined". Plays against an inventory in a
-      # different directory.
+      # group_vars/ is found next to the inventory or next to the playbook. It sat
+      # at deploy/ansible/, so with the inventory kept anywhere else (the normal
+      # case for a private inventory) every playbook under playbooks/ lost it and
+      # died on "'llamenos_compose_glob' is undefined". It now lives next to the
+      # playbooks; this plays against an inventory in a different directory.
       - name: Check group_vars resolve with the inventory outside deploy/ansible
         run: |
           set -euo pipefail
@@ -2120,7 +2120,7 @@ jobs:
                deploy/ansible \
                | grep -v '^deploy/ansible/roles/llamenos/' \
                | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
-               | grep -v '^deploy/ansible/group_vars/all/compose.yml' \
+               | grep -v '^deploy/ansible/playbooks/group_vars/all/compose.yml' \
                | grep -vE '^[^:]+:[0-9]+: *#' \
                `# update.yml and rollback.yml still assume the monolithic` \
                `# layout. Their blue/green and snapshot logic needs a` \
