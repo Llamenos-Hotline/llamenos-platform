@@ -70,6 +70,9 @@ VALID_VARS = {
     "storage_access_key": secrets.token_hex(16),
     "storage_secret_key": secrets.token_urlsafe(24),
     "ssh_allowed_cidrs": ["203.0.113.7/32"],
+    # Preflight asserts the exact shape age1 + 58 bech32 characters. A public key,
+    # and not a real one: nothing is encrypted to it.
+    "backup_age_public_key": "age1" + "q" * 58,
     "llamenos_ntfy_enabled": True,
     "ntfy_domain": "push.hotline.example.org",
     "llamenos_dns_validation_enabled": False,
@@ -241,6 +244,41 @@ def skip_cases(r: Runner) -> None:
                  must_not=[f"TASK [{first_task}"])
 
 
+def deploy_alone_cases(r: Runner) -> None:
+    """playbooks/deploy.yml run WITHOUT preflight (every `just deploy-*` recipe) must
+    still refuse to place secret-bearing services on an unencrypted host."""
+    app_dir = r.tmp / "app"
+    extra = {
+        "app_dir": str(app_dir),
+        "deploy_user": getpass.getuser(),
+        "deploy_group": grp.getgrgid(os.getgid()).gr_name,
+    }
+    refusals = [
+        ("unencrypted host in llamenos_app", {**GROUPS, "llamenos_app": ["llamenos-platform1", "llamenos-relay1"]},
+         ["REFUSING TO DEPLOY: llamenos-relay1", "the `llamenos_app` service"]),
+        ("unencrypted host in llamenos_db", {**GROUPS, "llamenos_db": ["llamenos-platform1", "llamenos-relay1"]},
+         ["REFUSING TO DEPLOY: llamenos-relay1", "the `llamenos_db` service"]),
+        ("empty llamenos_storage (falls back to every host)", {**GROUPS, "llamenos_storage": []},
+         ["REFUSING TO DEPLOY: llamenos-relay1", "the `llamenos_storage` service"]),
+    ]
+    for tags in ([], ["--tags", "app"], ["--tags", "caddy,ntfy"]):
+        label = f"deploy.yml {' '.join(tags) or '(no tags)'}"
+        for name, groups, must in refusals:
+            rc, out = r.run("playbooks/deploy.yml", inventory(groups=groups), extra, "--check", *tags)
+            r.expect(f"deploy-alone: {label}: {name} is refused", False, out, rc, must=must,
+                     must_not=["TASK [service-discovery"])
+    rc, out = r.run("playbooks/deploy.yml", inventory(hosts={**HOSTS, "llamenos-relay1": {}}), extra, "--check")
+    r.expect("deploy-alone: a host without llamenos_disk_encrypted is refused", False, out, rc,
+             must=["REQUIRED: set `llamenos_disk_encrypted: true` or `false`"])
+    # --check cannot complete a deploy (a role that starts a container fails in check
+    # mode), so the exit code is not what is asserted: the guard must have RUN and
+    # PASSED for both hosts, and nothing may have been refused.
+    rc, out = r.run("playbooks/deploy.yml", inventory(), extra, "--check", "--tags", "postgres,ntfy")
+    r.expect("deploy-alone: the two-tier layout is accepted and the guard visibly ran", rc == 0, out, rc,
+             must=["llamenos-relay1: llamenos_disk_encrypted=False", "llamenos-platform1: llamenos_disk_encrypted=True"],
+             must_not=["REFUSING TO DEPLOY"])
+
+
 def gating_case(r: Runner) -> None:
     """Service roles must skip per host. With the old `meta: end_play` the gate
     was evaluated for the first host only, so llamenos-relay1 (not in
@@ -399,7 +437,7 @@ def tag_cases(r: Runner) -> None:
     # tasks visibly ran (a guard that was skipped would also "pass").
     rc, out = r.run(pf, inventory(), {"ansible_facts": warm}, "--tags", "app")
     r.expect("tags[--tags app]: two-tier layout passes and the guards actually ran", True, out, rc,
-             must=["llamenos-relay1: llamenos_disk_encrypted=False", "Production safety guard passed",
+             must=["llamenos-relay1: llamenos_disk_encrypted=False", "/api/test-* surface guard passed",
                    "RAM OK: 7929 MiB"])
 
     # Data-at-rest playbooks skip an unencrypted host even when a tag is selected.
@@ -427,7 +465,7 @@ def main() -> int:
     if not shutil.which("ansible-playbook"):
         print("ansible-playbook not found on PATH", file=sys.stderr)
         return 2
-    groups = {"preflight": preflight_cases, "guards": harness_cases, "skip": skip_cases, "gating": gating_case, "tags": tag_cases}
+    groups = {"preflight": preflight_cases, "guards": harness_cases, "skip": skip_cases, "gating": gating_case, "deploy-alone": deploy_alone_cases, "tags": tag_cases}
     only = sys.argv[sys.argv.index("--only") + 1:] if "--only" in sys.argv else list(groups)
     unknown = [g for g in only if g not in groups]
     if unknown:
