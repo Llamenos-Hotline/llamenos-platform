@@ -31,25 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
-- add SERVER_NOSTR_SECRET to e2e-docker CI env
-- include .github/ in CI change detection patterns
 - CI change detection + WebSocket relay dependency for Docker E2E
 - disable WebSocket relay in Docker E2E tests, replace --wait with targeted health check
-
-### Documentation
-
-- comprehensive security audit and zero-knowledge architecture redesign
-- sync protocol spec with code and add domain label table
-- add key revocation runbook with response procedures
-- close threat model gaps (APNs/FCM, CF trust, supply chain)
-- enrich all 9 epic files with execution context appendices
-- update backlogs with Zero-Knowledge Architecture completion status
-- update backlogs — Epic 78 client-side transcription complete
-- update security documentation for ZK architecture
-- update architecture and protocol docs for ZK architecture
-- update deployment guides for relay, Caddy ingress, reproducible builds
-- update project docs (CLAUDE.md, backlogs)
-- update marketing site docs for ZK architecture
 
 ### Features
 
@@ -69,8 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.18.0] - 2026-02-25
 
-### Bug Fixes
-
 ### Features
 
 - implement volunteer assignment and two-way conversation UI
@@ -83,21 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.1] - 2026-02-24
 
-### Bug Fixes
+### Notes
 
-### Documentation
-
-- add screenshots and Mermaid diagrams to documentation
+- No product changes in this release.
 
 ## [0.16.0] - 2026-02-24
-
-### Bug Fixes
-
-- match bun versions
-
-### Documentation
-
-- update backlog to reflect all completed epics
 
 ### Features
 
@@ -133,8 +104,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.14.0] - 2026-02-22
 
-### Bug Fixes
-
 ### Features
 
 - add demo mode with sample data and one-click login
@@ -144,10 +113,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug Fixes
 
 - use correct CallSettings property names in status summary
-
-### Documentation
-
-- add pre-push typecheck/build requirement to CLAUDE.md
 
 ### Features
 
@@ -167,8 +132,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.11.0] - 2026-02-19
 
-### Bug Fixes
-
 ### Features
 
 - add multi-platform deployment (Docker Compose + Helm)
@@ -176,9 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.1] - 2026-02-18
 
-### Documentation
+### Notes
 
-- update documentation for Epic 54 architecture changes
+- No product changes in this release.
 
 ## [0.9.0] - 2026-02-18
 
@@ -196,7 +159,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - call lifecycle — hibernation-safe WS, polling fallback, audit enrichment, transcription flag
 - call lifecycle, transcription pipeline, and UI cleanup
 - show masked phone numbers in audit/history, deploy to custom domain
-- add telephony and call history logging
 - add call lifecycle logging, debug endpoint, and error visibility
 - StatusCallbackEvent params and call-recording lifecycle
 - clickable transcript badges, Whisper model upgrade, call status map
@@ -207,22 +169,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - security hardening from comprehensive audit
 - medium-severity security hardening
 - redesign logo with recognizable phone handset silhouette
-
-### Documentation
-
-- overhaul README for user-facing setup guide
-- epic specs 24–27 for shift awareness, palette, IVR audio, polish
-- update backlog with security audit findings
-- update completed backlog with marketing site i18n details
-- update backlogs for Epics 33-36, remove completed epic docs
-- broaden Twilio-specific references to multi-provider language
-- update backlog with security audit findings
-- mark medium-severity security fixes as complete
-- epics 42-46 — multi-channel messaging, reporter role, encrypted uploads
-- add Epic 43 (setup wizard), renumber 43-46 → 44-47, make voice optional
-- update backlog — mark Epics 42-47 and help features complete
-- update all documentation for multi-channel messaging, reporter role, and setup wizard
-- update all documentation for Epic 54 device-centric auth & forward secrecy
 
 ### Features
 
@@ -284,7 +230,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - five admin deletes require a confirmation token only their dialog mints (#2540) (#2543)
 - the security upgrade re-runs when Debian publishes, not once per cache lifetime (#2564) (#2567)
 - admin deletes need a dialog-minted confirmation; override changes and unbans are audited (#2575) (#2583)
-- the UI test target shares the app's Localizable variant group, which Xcode 27.2 requires (#2576) (#2577)
 - signal-notifier and sip-bridge stop trusting the compromised eMudhra hierarchy (#2582) (#2588)
 
 ## 0.21.7 (2026-11-07)
@@ -418,7 +363,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - no idle lock mid-call on any hub; in-call note draft survives the lock (#2210) (#2270)
 - pin curl/libcurl >= 8.23.0-r0 in the static stage (CVE-2026-92392) (#2274)
 - a logout that ends the last live session clocks the user out (#2205) (#2271)
-- ui (3) — per-runner bun HOME (Killed: 9 race) + wait for Add Ban field focus (#2279)
 - STOP matches every identifier shape a sender carries (#2280) (#2281)
 - Call Ended / Add Note prompt; Android can save a call note (#1341) (#2275)
 - stop two parallel-only 500/409s that eject merge groups from backend-bdd (#2282)
@@ -493,7 +437,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - admin clients re-wrap pre-claim messages for the claimer; desktop relay events decode (#2046) (#2074)
 - wire the 12 #1997 client calls to mounted routes (baseline 19 → 8) (#2079)
 - wire #1701 iOS calls and #2068 webhook URLs to mounted routes (baseline 8 → 2) (#2081)
-- bind step definitions for ban list BDD coverage (#1182)
 - ephemeral ECDH for device provisioning, signed claim (#1865) (#1975)
 - keep esbuild, vite and the marketing-site toolchain out of the app image (#1990)
 
@@ -537,9 +480,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - events list no longer claims "No events" while loading (android-e2e shard 3) (#1402)
 - gate readiness on load-bearing deps only, keep Signal wired (#1420)
 - stop %@ format specifiers being handed non-object arguments (#1414)
-- stop the PIN wipe test dying on slow runners, and stop a dead shard reporting green (#1425)
 - refuse to issue the hub's shared SIP trunk credential (#1435)
-- create test hubs through the real API on iOS and Android (#1436)
 - let every shipped call-answering template role clock in (and be importable at all) (#1406)
 - enforce first-pickup-wins (atomic answer, ring-set eligibility, cancel losing legs) (#1072)
 - let the default Volunteer role clock in (#1441)
@@ -572,7 +513,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - make the sigchain append path fork-proof (#1501)
 - wire the hub crypto-shred executor into the scheduler (#1567)
 - one ADMIN_DECRYPTION_PUBKEY assignment per template, not two (#1571)
-- migrate the wdio crypto spec off six nonexistent IPC commands (#1503)
 - fail /setup/complete when default-hub creation fails (#1488)
 - make six read-modify-write races atomic (#1513)
 - wire retention/erasure/cleanup/signal-drain workers into the scheduler (#1516)
@@ -644,14 +584,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - pin Dashboard and Events state to the main actor; make Admin › Events reachable with an honest load state (#1924)
 - pin the LABEL_MESSAGE stored-record AAD with a server-written vector; add mobile_encrypt_message (#1928)
 - seal/open stored records via Rust's no-AAD readers; regenerate stale UniFFI binding and arm its integrity check (#1934)
-- crypto-tests red on main — Android label-id guard still required constants #1934 deleted (#1942)
 - seal and open LABEL_MESSAGE with the shared no-AAD functions (#1933)
 - conversation detail loads its conversation + exposes inner ids; API reads fail fast (#1916)
 - delete the AAD-bearing message/call-record functions that disagree with the stored-record fixture (#1937)
 - pin the desktop stored-record readers to the server-written fixture (#1927) (#1938)
 - redact international phone numbers and telephony field names (#1378)
 - stop the env-var gate passing on stale renders, restore unreachable (#1383)
-- HubScopedReloadTests flake — MockHubAPIService data race corrupts memory (#1943)
 
 ## 0.19.18 (2026-09-26)
 
@@ -718,7 +656,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - keep apps/desktop/Cargo.lock in lockstep with knope releases (#919)
 - point the updater at the current signing keypair (#927)
 - updater pubkey must match the key CI signs with (#931)
-- classify lockfile-rail failures instead of blaming the lockfile (#929)
 - derive APNs topic from a single source, default to org.llamenos.hotline (#856)
 - remove AUTO_RECEIVE_SCHEDULE from signal-cli (fatal with MODE=json-rpc) (#945)
 - gate api_config_clear behind a Rust-owned confirmation token (#822)
@@ -868,12 +805,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add GET/PATCH hub erasure config routes (#691)
 - DemoBanner now renders the demo-mode body text (#824)
 - repoint update.yml at role templates, delete stale ansible dupes (#825)
-- rewrite stale device-key-import UI tests to assert v3 behavior (#826)
 - typed-report location picker, disable file field honestly (#827)
 - gate MLS/OpenMLS behind a real default-off `mls` feature (#830)
 - SecurityEventService durably queues and uploads security events (#833)
 - PR #212 review issues — add permission bypass tests (#614)
-- fix flaky wait for case detail load in E2E steps (#625)
 - restore missing Gemfile for fastlane release workflow (#613)
 
 ## 0.19.12 (2026-09-20)
@@ -993,12 +928,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add GET/PATCH hub erasure config routes (#691)
 - DemoBanner now renders the demo-mode body text (#824)
 - repoint update.yml at role templates, delete stale ansible dupes (#825)
-- rewrite stale device-key-import UI tests to assert v3 behavior (#826)
 - typed-report location picker, disable file field honestly (#827)
 - gate MLS/OpenMLS behind a real default-off `mls` feature (#830)
 - SecurityEventService durably queues and uploads security events (#833)
 - PR #212 review issues — add permission bypass tests (#614)
-- fix flaky wait for case detail load in E2E steps (#625)
 
 ## 0.19.11 (2026-07-07)
 
@@ -1151,7 +1084,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bulk rename Channels to SharedChannelConfig (#420)
 - resolve orphaned Category type and dedup envelope references (#421)
 - bulk rename all remaining typealias references to codegen names (#422)
-- rename HubKeyEnvelopeResponseEnvelope to SharedAdminEnvelope in tests
 
 ### Security
 
@@ -1209,7 +1141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - contact merge, entity merge, bulk ops, batch import, cross-hub entity query
 - blind index filtering, EntityTemplatesSection, and i18n fixes
 - CMS advanced ops — merge, bulk, import, cross-hub, views
-- add BDD feature file and backend step definitions
 - add test-kdf feature flag for fast Argon2id in emulator tests
 - implement platform roles CRUD with HPKE envelope encryption
 - add template role import dialog to hub roles section
@@ -1259,8 +1190,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - address PR #293 review — hubId threading, plaintext removal, label versioning, i18n
 - hub-scope guard, /me permission documentation
 - remove orphaned items, fix gdpr permission, dedup canSeeGroup
-- correct liveness proof BDD test — enroll admin as share holder
-- update ScreenshotTests Shift constructors to use encryptedName
 - CI test fixes (round 1)
 - CI test fixes (round 1)
 - CI test fixes (round 1)
@@ -1289,20 +1218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - regenerate UniFFI Kotlin bindings to match current Rust FFI
 - include regenerated llamenos_core.kt bindings
 - un-wip 2 BDD scenarios with proper access control
-- fix admin toggles E2E regression — use count() not isVisible() for expansion check
-- re-add @wip to admin toggles test (pre-existing issue)
 - fix blast schedule E2E test
-- remove migration BDD scenarios — endpoints removed, migration complete
-- fix AnalyticsRepository unit test path assertions
-- re-add @wip to 3 event linking scenarios (not fully implemented)
-- fix shift card E2E interaction after React Query migration
-- @wip linked cases tab + relationships empty state (UI not fully wired)
-- @wip 4 shift detail scenarios (React Query cache race in E2E)
-- @wip relationships tab scenario (UI step not wired)
-- @wip navigate-to-shift-detail (same cache race)
-- shift detail @wip scenarios — cache invalidation (#336)
 - admin settings toggles @wip scenario (#338)
-- resolve rate limit BDD test flakes (#356)
 - add 7 missing labels + CI drift guard tests
 - Epic I Phase 1 — JSON parse safety and error disclosure (AST-01..03, W05-H01/M03/M05)
 - Epic F — supply chain & infrastructure hardening
@@ -1314,7 +1231,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - reject control characters in blast content (H02)
 - fail closed on DNS resolution failure (H07)
 - use upsert for PUK envelope distribution (H09)
-- use plain Application in Robolectric to avoid JNI load
 - remove autoVerify from custom scheme intent filter
 - use stringResource() for biometric prompt strings
 - add test-ext-junit dep, fix FLAG_SECURE test types
@@ -1327,7 +1243,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add missing response schemas for cross-platform codegen (#199)
 - add Play Store assets and submission checklist (#182)
 - add 6 domain supervisor agents with proper dispatch integration
-- generate supervisor agent instructions
 - Rust FFI server bridge + Ed25519 auth purge (#225)
 - add provider auto-config schemas, DB tables, PBAC permissions (Phase 1) (#257)
 - add provider capability registry + 8 provider implementations (Phase 2) (#258)
@@ -1342,24 +1257,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixes
 
 - add missing iOS strings — error_credential_too_short, pin_placeholder
-- regenerated UniFFI bindings + CryptoServiceTests PIN fixes (verified on M4) (#167)
-- update CryptoServiceTest for Argon2 params (iterations → kdfVersion/argon2MCost/argon2TCost/argon2PCost)
 - start server after migration to prevent restart loop (#186)
-- clarify dispatch-one.sh timeout is in seconds, not minutes
-- document all available models in supervisor-common.md
 - restore bun run supervisors aliases, fix zsh local output noise
 - files
-- backend-bdd does not depend on tauri build
 - 3 bugs found in backend core unit test audit (#211)
 - security and logic bugs found in backend unit test audit (#212)
 - bugs found during unit test audit of PRs #206-209 (#210)
 - add 9 missing table migrations for fresh DB (#205)
 - add missing reported_by column to active_calls (#214)
-- add WASM build step to test-desktop.sh (#217)
 - resolve active call card never rendering in E2E tests (#224)
 - guard c.env access with optional chaining in hub middleware (#230)
 - recover unmerged Android fixes — E2E, Argon2, schema, Play Store (#237)
-- cherry-pick safe unit tests and bug fixes from closed #238 (#242)
 - cherry-pick safe DX, site, and test fixes from closed #234 (#243)
 - ansible templates
 - sync i18n locale keys + resolve migration drift (#265)
@@ -1373,7 +1281,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - add missing i18n keys, fix build and crypto label issues
 - address code review findings — OAuth CSRF state, credential clearing, ephemeral session
 - add missing i18n keys and use crypto label constants
-- fix 9 failing E2E tests — hub management and triage queue
 - make 0010 idempotent for fresh databases
 - worktree script, bun lockfile
 - worktree setup
@@ -1381,7 +1288,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - remove Nostr references from backend unit tests and system health
 - remove remaining Nostr/strfry/MinIO references across codebase
 - update remaining SERVER_NOSTR_SECRET refs in tests, docs, and site content
-- delete strfry write-policy test (source script already removed)
 - scope telephony provider config to active hub to prevent parallel test interference
 - restore EP01 full spec (rebase conflict resolution error)
 - close 13/14 security gaps from PR #286 audit
@@ -1390,7 +1296,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve 62+ BDD failures from hub self-service PR #285
 - check hub permissions in requirePermission middleware
 - add EphemeralKeyPair + generate_ephemeral_keypair_mobile to Rust FFI
-- use hub-scoped endpoint in rate limit test to prevent cross-worker flake
 - resolve all E2E test failures (557 passing, 0 failing)
 - add get_public_key FFI export for WakeKeyService
 - scope messaging conversations and CMS report types to workerHub
@@ -1496,9 +1401,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Epic 96 — CI/CD pipeline with tests, clippy, and release builds
 - mobile build pipeline, interop tests, and dev tooling (Epics 100, 105, 108)
 - desktop polish, version sync, crypto interop, docs (Epics 108-110)
-- expand crypto test vectors to v2 (14 categories + adversarial)
-- expand crypto interop tests to 24 cases, fix @noble v2 compat
-- add cross-repo CI dispatch on main push
 - add repository_dispatch trigger for cross-repo CI
 - add adversarial crypto tests for ECIES, encryption, auth, WebSocket
 - add docs site pages — mobile guide, architecture, troubleshooting, API reference (Epics 114, 118)
@@ -1515,7 +1417,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add worker package boundary and move wrangler config (Epic 203)
 - extract i18n into standalone package with mobile codegen (Epic 205)
 - add protocol schema package with cross-platform codegen (Epic 202)
-- add crypto-tests job and ci-status gate to CI (Epic 204)
 - add native iOS and Android client foundations (Epics 206-207)
 - add notes, shifts, push encryption, and tab navigation (Epic 208)
 - add conversations, admin panel, device linking (Epic 209)
@@ -1527,7 +1428,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add Signal channel to admin settings and message blasts
 - restore 353+ Playwright tests on desktop branch (Epic 216)
 - implement BDD E2E test suite (Epics 218-222, 106 tests)
-- cross-platform BDD abstraction layer (Epic 223)
 - migrate Android E2E tests to cucumber-android 7.18.1 (Epic 224)
 - desktop BDD feature specs + playwright-bdd integration (Epics 225-226)
 - Android BDD step definitions for full feature coverage (Epic 228)
@@ -1557,13 +1457,11 @@ Also shipped in 0.19.6, which has no release of its own:
 - add note thread reply support with encrypted replies
 - add language selection and spoken languages to settings
 - add calls today count to dashboard
-- shared BDD spec consolidation (Epic 231)
 - worker backend test suite (Epic 233)
 - worker backend test suite + backend BDD features (Epic 233)
 - implement Epics 235-237 — Node.js E2E parity, deployment hardening, iOS build pipeline
 - cross-platform quality pass — FFI exports, bundle optimization, DO integration tests
 - link UniFFI XCFramework to iOS app — replace stand-in crypto (Epic 214-iOS)
-- iOS BDD test infrastructure + test expansion (Epics 227/234)
 - iOS xcodegen project for XCUITest host app
 - Epic 239 — desktop BDD test quality overhaul (245/250 pass, 98%)
 - Epics 247-251 — recover behavioral depth in 28 BDD step definition files
@@ -1597,12 +1495,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - admin cards, help accordions, device link brand styling (Epic 273)
 - remaining UX overhaul source changes — logo asset, async auth, i18n strings
 - codegen converts camelCase to snake_case for mobile output
-- add 8 Claude Code skills for monorepo workflows
 - add React error boundary for graceful crash recovery
 - add sliding session expiry for active volunteers
 - add offline connectivity banner for crisis volunteers
-- add 5 Claude Code skills for core architecture patterns
-- add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
@@ -1633,7 +1528,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - disaster recovery testing framework with 5 scenarios
 - admin system health dashboard with 6 status cards
 - mobile admin feature parity — iOS + Android settings screens
-- add backend BDD step definitions (Task 2)
 - wire backend BDD into Playwright config (Task 3)
 - integration verification + dry-run phased workflow
 - backend BDD coverage expansion — 413 tests passing
@@ -1648,7 +1542,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - retire validate.ts middleware and clean up AppEnv types
 - add RelayCapture test helper for WebSocket event assertions
 - BDD scenarios for WebSocket relay event delivery
-- BDD scenarios for in-call ban+hangup and notes
 - add OpenAPI BDD scenarios + fix duplicate step definitions
 - make publishWebSocketEvent async + add route error handlers
 - add decrypt_server_event_hex FFI + wire desktop relay decryption
@@ -1688,7 +1581,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
-- replace JS crypto mock with WASM — single Rust implementation (Epic 81)
 - case management views + active call panel (Epics 337, 351)
 - case management views + active call card (Epics 337, 351)
 - enhance case list + detail screens (Epics 337, 353)
@@ -1776,7 +1668,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add admin UI for registration, identity trust, and queue
 - Phase 3 — core services (CRUD, inference client, agent)
 - Phase 4 — messaging integration (Signal group observer)
-- add unit tests and BDD feature file
 - port Telegram adapter from v1
 - Phase 5 — API routes (11 endpoints)
 - Phase 3 — MLS integration via OpenMLS 0.8
@@ -1785,7 +1676,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Phase 5 — SFrame voice E2EE key derivation
 - Phase 7 — desktop admin UI
 - port Telnyx, Bandwidth, and FreeSwitch adapters from v1
-- Phase 8 — BDD feature spec and step definitions
 - rewrite crypto.rs IPC to v3 Ed25519/HPKE API
 - cherry-pick HPKE/PUK/Sigchain/MLS/SFrame rewrite
 - cherry-pick firehose inference agent (Phases 1-8)
@@ -1842,22 +1732,15 @@ Also shipped in 0.19.6, which has no release of its own:
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
 - handle deep link section expansion on search-only navigation
-- match bun versions
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
 - Epic 82 — Tauri config fixes and platform.ts PIN flow
 - update E2E tests for Tauri-only migration (313/322 pass)
 - CI workflow issues — sed on Windows, Flatpak offline build, stale ref
-- typo in release.yml — libllamenoscorecore → libllamenoscore
-- Desktop E2E — ubuntu-24.04, WebKit env vars, port cleanup
-- Desktop E2E specs — use __TAURI_INTERNALS__ for webview API access
 - Desktop E2E — correct Rust command names, add window permissions
 - sync isolation allowlist with registered commands, fix crypto test camelCase
-- Desktop E2E — remove Jasmine-only .withContext(), handle headless minimize
 - add screenshots to site
-- add SERVER_NOSTR_SECRET to e2e-docker CI env
-- include .github/ in CI change detection patterns
 - CI change detection + WebSocket relay dependency for Docker E2E
 - disable WebSocket relay in Docker E2E tests, replace --wait with targeted health check
 - fix WebSocket relay config for CI instead of disabling it
@@ -1866,12 +1749,7 @@ Also shipped in 0.19.6, which has no release of its own:
 - add proper accented characters to French WhatsApp setup guide
 - add proper accented characters to French mobile-guide and troubleshooting
 - update nav.notes label to "Call Notes" in all 13 locale files
-- use direct Microsoft download for msedgedriver in Windows CI
-- add waitUntil for Tauri internals in Windows crypto E2E test
 - resolve clippy warnings for Rust 1.93
-- make WASM build non-blocking in release, install wasm-pack via cargo
-- use runner's pre-installed NDK for Android cross-compilation
-- use --platform flag for cargo-ndk (not -p which conflicts with cargo)
 - wrap iOS static libs in .framework bundles for CocoaPods compatibility
 - rename XCFramework to LlamenosCoreFFI to match inner framework name
 - add mobile feature to enable UniFFI scaffolding in library builds
@@ -1882,12 +1760,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - stop false WebSocket WebSocket errors and auto-lock in demo mode
 - enable SMS + Signal channels in demo mode so Conversations appears
 - resolve stale closure bug in PinInput causing sequential input loss
-- achieve 100% BDD coverage — fix validator Cucumber escapes + add missing step aliases
 - add missing error state display to CallHistory and Contacts screens
 - polish dashboard refresh, add error states to dashboard and reports
-- relocate worker tests to apps/worker/ and fix vitest config paths
 - repair E2E step definitions for desktop sidebar layout
-- add assembleDebugAndroidTest to CI to catch E2E compilation errors
 - Android E2E step definitions — camera, nav, sections, buttons
 - Android E2E step definitions batch 2 + parallel runner package names
 - shift-scheduling navigates to admin tab + parallel script NUM_EMU_SHARDS fix
@@ -1895,28 +1770,12 @@ Also shipped in 0.19.6, which has no release of its own:
 - Android E2E batch 4 — scrollTo for admin tabs, tag mismatches, script exit codes
 - iOS build + test verification on Mac M4 (Xcode 26.2)
 - Android E2E batch 5 — CameraX crash guard, tag fixes, nav routing
-- Android E2E batch 6 — create data via UI when lists are empty
-- Android E2E batch 7 — report tags, device-link tags, validation handling
-- Android E2E batch 8 — ScrollableTabRow scroll, report nav, soft assertions
-- Android E2E batch 8b — horizontal swipe for ScrollableTabRow, heading skips
-- revert ScrollableTabRow navigation to simple performClick()
 - sync router to initial auth state on app launch
 - add lock-app button and dashboard-title identifier to DashboardView
-- batch 9 — defensive assertions, timing fixes, tag mappings (20 files)
-- dashboard UI test fixes — error states and missing identifiers
-- Android E2E batch 9b — catch Throwable for ComposeTimeoutException
-- Android E2E batch 10 — defensive assertions across 16 step files
-- Android E2E batch 10b — defensive assertions in 3 more step files
 - universal XCUITest element queries + accessibility containers
 - add missing closing brace in DashboardView titleBar
-- Android E2E batch 10c — GenericSteps defensive + bulk catch Throwable
 - Android E2E batch 11 — deep defensive pass + emulator -read-only
-- Android E2E batch 11b — BaseSteps navigation defensive
-- batch 12 — comprehensive defensive assertions across all Android E2E steps
-- batch 12b — defensive assertions for HelpScreen, Onboarding, CallDateFilter, ContactsList
 - XCUITest accessibility + scrolling + keyboard dismiss
-- universal element queries in NoteFlow/ConversationFlow + keyboard dismiss in BaseUITest
-- remove duplicate dismissKeyboard() in SecurityUITests (inherited from BaseUITest)
 - Group→ZStack for accessibility, PINPad children contain, logout button index
 - iOS XCUITest 76/76 pass — accessibility containment, double NavStack, stale auth cache
 - BDD test infrastructure — unblock 91 desktop tests, fix fixture injection, enable demo mode
@@ -1933,7 +1792,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - resolve 2 upstream SecurityUITests failures — 118/118 XCUITests pass
 - update all XCUITests for UX overhaul navigation restructure — 118/118 pass
 - align all i18n string references to codegen output
-- add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
 - contacts pagination, silent error swallowing, relay tab reconnection
@@ -1942,7 +1800,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add cancellation guards to async decrypt effects in calls/notes
 - add 8 missing iOS keys for blasts and custom fields
 - iOS PIN creation supports 6 or 8 digit PINs with length selector
-- update BaseUITest default PIN to 6 digits, restore project.yml keys
 - replace silent error swallowing with user-visible toasts, improve type safety
 - correct settings title to "Settings", add missing emergency footer key
 - iOS API bootstrap auth — real keypair derivation, two-step login, correct /api/auth/me
@@ -1952,9 +1809,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - migration array syntax and async offline queue headers
 - restore contact methods and fix `now` scope in conversation-do.ts
 - resolve iOS build errors and Playwright test failures from E295/E300
-- exclude backend steps from desktop BDD config (Task 4)
-- resolve backend BDD test failures against Docker Compose
-- restore ScreenshotAuditTests.swift deleted during E301 reorganization
 - resolve 5 of 6 iOS XCUITest failures + add Epic 304 plan
 - NodeWebSocketPublisher rejects on relay rejection/timeout
 - mobile clients subscribe to all event kinds, fix type string parsing
@@ -1980,9 +1834,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
 - user-friendly terminology, help text, onboarding strings
-- wire CMS step definitions into desktop BDD config
-- add backendRequest fixture for desktop BDD API setup
-- batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
 - step definition improvements + contacts search error handling
@@ -1996,7 +1847,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
 - resolve remaining CMS view compilation errors
-- clean up unused variable warnings in CaseManagementUITests
 - make CaseListView accessibility identifiers discoverable by XCUITest
 - only copy mobile feature files for Cucumber runner
 - CMS case screens render without backend data (4/10 BDD pass)
@@ -2066,7 +1916,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
 - mount entity-schema routes under hubScoped
-- resolve LinphoneService scope error + LlamenosApp binding
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
 - remove hardcoded admin key and unsafe print statements from iOS
@@ -2113,8 +1962,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
 - remove duplicate mobileIsUnlocked stub causing compilation failure
-- correct @noble/* import paths for Vite 8/Rolldown compatibility
-- update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
@@ -2122,9 +1969,7 @@ Also shipped in 0.19.6, which has no release of its own:
 - whitelist docker-entrypoint.sh in .dockerignore
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
-- update BDD step definitions — crypto v3, auth, dashboard, ban management
 
 ### Security
 
@@ -2226,9 +2071,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Epic 96 — CI/CD pipeline with tests, clippy, and release builds
 - mobile build pipeline, interop tests, and dev tooling (Epics 100, 105, 108)
 - desktop polish, version sync, crypto interop, docs (Epics 108-110)
-- expand crypto test vectors to v2 (14 categories + adversarial)
-- expand crypto interop tests to 24 cases, fix @noble v2 compat
-- add cross-repo CI dispatch on main push
 - add repository_dispatch trigger for cross-repo CI
 - add adversarial crypto tests for ECIES, encryption, auth, WebSocket
 - add docs site pages — mobile guide, architecture, troubleshooting, API reference (Epics 114, 118)
@@ -2245,7 +2087,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add worker package boundary and move wrangler config (Epic 203)
 - extract i18n into standalone package with mobile codegen (Epic 205)
 - add protocol schema package with cross-platform codegen (Epic 202)
-- add crypto-tests job and ci-status gate to CI (Epic 204)
 - add native iOS and Android client foundations (Epics 206-207)
 - add notes, shifts, push encryption, and tab navigation (Epic 208)
 - add conversations, admin panel, device linking (Epic 209)
@@ -2257,7 +2098,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add Signal channel to admin settings and message blasts
 - restore 353+ Playwright tests on desktop branch (Epic 216)
 - implement BDD E2E test suite (Epics 218-222, 106 tests)
-- cross-platform BDD abstraction layer (Epic 223)
 - migrate Android E2E tests to cucumber-android 7.18.1 (Epic 224)
 - desktop BDD feature specs + playwright-bdd integration (Epics 225-226)
 - Android BDD step definitions for full feature coverage (Epic 228)
@@ -2287,13 +2127,11 @@ Also shipped in 0.19.6, which has no release of its own:
 - add note thread reply support with encrypted replies
 - add language selection and spoken languages to settings
 - add calls today count to dashboard
-- shared BDD spec consolidation (Epic 231)
 - worker backend test suite (Epic 233)
 - worker backend test suite + backend BDD features (Epic 233)
 - implement Epics 235-237 — Node.js E2E parity, deployment hardening, iOS build pipeline
 - cross-platform quality pass — FFI exports, bundle optimization, DO integration tests
 - link UniFFI XCFramework to iOS app — replace stand-in crypto (Epic 214-iOS)
-- iOS BDD test infrastructure + test expansion (Epics 227/234)
 - iOS xcodegen project for XCUITest host app
 - Epic 239 — desktop BDD test quality overhaul (245/250 pass, 98%)
 - Epics 247-251 — recover behavioral depth in 28 BDD step definition files
@@ -2327,12 +2165,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - admin cards, help accordions, device link brand styling (Epic 273)
 - remaining UX overhaul source changes — logo asset, async auth, i18n strings
 - codegen converts camelCase to snake_case for mobile output
-- add 8 Claude Code skills for monorepo workflows
 - add React error boundary for graceful crash recovery
 - add sliding session expiry for active volunteers
 - add offline connectivity banner for crisis volunteers
-- add 5 Claude Code skills for core architecture patterns
-- add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
@@ -2363,7 +2198,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - disaster recovery testing framework with 5 scenarios
 - admin system health dashboard with 6 status cards
 - mobile admin feature parity — iOS + Android settings screens
-- add backend BDD step definitions (Task 2)
 - wire backend BDD into Playwright config (Task 3)
 - integration verification + dry-run phased workflow
 - backend BDD coverage expansion — 413 tests passing
@@ -2378,7 +2212,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - retire validate.ts middleware and clean up AppEnv types
 - add RelayCapture test helper for WebSocket event assertions
 - BDD scenarios for WebSocket relay event delivery
-- BDD scenarios for in-call ban+hangup and notes
 - add OpenAPI BDD scenarios + fix duplicate step definitions
 - make publishWebSocketEvent async + add route error handlers
 - add decrypt_server_event_hex FFI + wire desktop relay decryption
@@ -2418,7 +2251,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
-- replace JS crypto mock with WASM — single Rust implementation (Epic 81)
 - case management views + active call panel (Epics 337, 351)
 - case management views + active call card (Epics 337, 351)
 - enhance case list + detail screens (Epics 337, 353)
@@ -2506,7 +2338,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add admin UI for registration, identity trust, and queue
 - Phase 3 — core services (CRUD, inference client, agent)
 - Phase 4 — messaging integration (Signal group observer)
-- add unit tests and BDD feature file
 - port Telegram adapter from v1
 - Phase 5 — API routes (11 endpoints)
 - Phase 3 — MLS integration via OpenMLS 0.8
@@ -2515,7 +2346,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Phase 5 — SFrame voice E2EE key derivation
 - Phase 7 — desktop admin UI
 - port Telnyx, Bandwidth, and FreeSwitch adapters from v1
-- Phase 8 — BDD feature spec and step definitions
 - rewrite crypto.rs IPC to v3 Ed25519/HPKE API
 - cherry-pick HPKE/PUK/Sigchain/MLS/SFrame rewrite
 - cherry-pick firehose inference agent (Phases 1-8)
@@ -2572,22 +2402,15 @@ Also shipped in 0.19.6, which has no release of its own:
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
 - handle deep link section expansion on search-only navigation
-- match bun versions
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
 - Epic 82 — Tauri config fixes and platform.ts PIN flow
 - update E2E tests for Tauri-only migration (313/322 pass)
 - CI workflow issues — sed on Windows, Flatpak offline build, stale ref
-- typo in release.yml — libllamenoscorecore → libllamenoscore
-- Desktop E2E — ubuntu-24.04, WebKit env vars, port cleanup
-- Desktop E2E specs — use __TAURI_INTERNALS__ for webview API access
 - Desktop E2E — correct Rust command names, add window permissions
 - sync isolation allowlist with registered commands, fix crypto test camelCase
-- Desktop E2E — remove Jasmine-only .withContext(), handle headless minimize
 - add screenshots to site
-- add SERVER_NOSTR_SECRET to e2e-docker CI env
-- include .github/ in CI change detection patterns
 - CI change detection + WebSocket relay dependency for Docker E2E
 - disable WebSocket relay in Docker E2E tests, replace --wait with targeted health check
 - fix WebSocket relay config for CI instead of disabling it
@@ -2596,12 +2419,7 @@ Also shipped in 0.19.6, which has no release of its own:
 - add proper accented characters to French WhatsApp setup guide
 - add proper accented characters to French mobile-guide and troubleshooting
 - update nav.notes label to "Call Notes" in all 13 locale files
-- use direct Microsoft download for msedgedriver in Windows CI
-- add waitUntil for Tauri internals in Windows crypto E2E test
 - resolve clippy warnings for Rust 1.93
-- make WASM build non-blocking in release, install wasm-pack via cargo
-- use runner's pre-installed NDK for Android cross-compilation
-- use --platform flag for cargo-ndk (not -p which conflicts with cargo)
 - wrap iOS static libs in .framework bundles for CocoaPods compatibility
 - rename XCFramework to LlamenosCoreFFI to match inner framework name
 - add mobile feature to enable UniFFI scaffolding in library builds
@@ -2612,12 +2430,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - stop false WebSocket WebSocket errors and auto-lock in demo mode
 - enable SMS + Signal channels in demo mode so Conversations appears
 - resolve stale closure bug in PinInput causing sequential input loss
-- achieve 100% BDD coverage — fix validator Cucumber escapes + add missing step aliases
 - add missing error state display to CallHistory and Contacts screens
 - polish dashboard refresh, add error states to dashboard and reports
-- relocate worker tests to apps/worker/ and fix vitest config paths
 - repair E2E step definitions for desktop sidebar layout
-- add assembleDebugAndroidTest to CI to catch E2E compilation errors
 - Android E2E step definitions — camera, nav, sections, buttons
 - Android E2E step definitions batch 2 + parallel runner package names
 - shift-scheduling navigates to admin tab + parallel script NUM_EMU_SHARDS fix
@@ -2625,28 +2440,12 @@ Also shipped in 0.19.6, which has no release of its own:
 - Android E2E batch 4 — scrollTo for admin tabs, tag mismatches, script exit codes
 - iOS build + test verification on Mac M4 (Xcode 26.2)
 - Android E2E batch 5 — CameraX crash guard, tag fixes, nav routing
-- Android E2E batch 6 — create data via UI when lists are empty
-- Android E2E batch 7 — report tags, device-link tags, validation handling
-- Android E2E batch 8 — ScrollableTabRow scroll, report nav, soft assertions
-- Android E2E batch 8b — horizontal swipe for ScrollableTabRow, heading skips
-- revert ScrollableTabRow navigation to simple performClick()
 - sync router to initial auth state on app launch
 - add lock-app button and dashboard-title identifier to DashboardView
-- batch 9 — defensive assertions, timing fixes, tag mappings (20 files)
-- dashboard UI test fixes — error states and missing identifiers
-- Android E2E batch 9b — catch Throwable for ComposeTimeoutException
-- Android E2E batch 10 — defensive assertions across 16 step files
-- Android E2E batch 10b — defensive assertions in 3 more step files
 - universal XCUITest element queries + accessibility containers
 - add missing closing brace in DashboardView titleBar
-- Android E2E batch 10c — GenericSteps defensive + bulk catch Throwable
 - Android E2E batch 11 — deep defensive pass + emulator -read-only
-- Android E2E batch 11b — BaseSteps navigation defensive
-- batch 12 — comprehensive defensive assertions across all Android E2E steps
-- batch 12b — defensive assertions for HelpScreen, Onboarding, CallDateFilter, ContactsList
 - XCUITest accessibility + scrolling + keyboard dismiss
-- universal element queries in NoteFlow/ConversationFlow + keyboard dismiss in BaseUITest
-- remove duplicate dismissKeyboard() in SecurityUITests (inherited from BaseUITest)
 - Group→ZStack for accessibility, PINPad children contain, logout button index
 - iOS XCUITest 76/76 pass — accessibility containment, double NavStack, stale auth cache
 - BDD test infrastructure — unblock 91 desktop tests, fix fixture injection, enable demo mode
@@ -2663,7 +2462,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - resolve 2 upstream SecurityUITests failures — 118/118 XCUITests pass
 - update all XCUITests for UX overhaul navigation restructure — 118/118 pass
 - align all i18n string references to codegen output
-- add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
 - contacts pagination, silent error swallowing, relay tab reconnection
@@ -2672,7 +2470,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add cancellation guards to async decrypt effects in calls/notes
 - add 8 missing iOS keys for blasts and custom fields
 - iOS PIN creation supports 6 or 8 digit PINs with length selector
-- update BaseUITest default PIN to 6 digits, restore project.yml keys
 - replace silent error swallowing with user-visible toasts, improve type safety
 - correct settings title to "Settings", add missing emergency footer key
 - iOS API bootstrap auth — real keypair derivation, two-step login, correct /api/auth/me
@@ -2682,9 +2479,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - migration array syntax and async offline queue headers
 - restore contact methods and fix `now` scope in conversation-do.ts
 - resolve iOS build errors and Playwright test failures from E295/E300
-- exclude backend steps from desktop BDD config (Task 4)
-- resolve backend BDD test failures against Docker Compose
-- restore ScreenshotAuditTests.swift deleted during E301 reorganization
 - resolve 5 of 6 iOS XCUITest failures + add Epic 304 plan
 - NodeWebSocketPublisher rejects on relay rejection/timeout
 - mobile clients subscribe to all event kinds, fix type string parsing
@@ -2710,9 +2504,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
 - user-friendly terminology, help text, onboarding strings
-- wire CMS step definitions into desktop BDD config
-- add backendRequest fixture for desktop BDD API setup
-- batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
 - step definition improvements + contacts search error handling
@@ -2726,7 +2517,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
 - resolve remaining CMS view compilation errors
-- clean up unused variable warnings in CaseManagementUITests
 - make CaseListView accessibility identifiers discoverable by XCUITest
 - only copy mobile feature files for Cucumber runner
 - CMS case screens render without backend data (4/10 BDD pass)
@@ -2796,7 +2586,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
 - mount entity-schema routes under hubScoped
-- resolve LinphoneService scope error + LlamenosApp binding
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
 - remove hardcoded admin key and unsafe print statements from iOS
@@ -2843,8 +2632,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
 - remove duplicate mobileIsUnlocked stub causing compilation failure
-- correct @noble/* import paths for Vite 8/Rolldown compatibility
-- update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
@@ -2852,9 +2639,7 @@ Also shipped in 0.19.6, which has no release of its own:
 - whitelist docker-entrypoint.sh in .dockerignore
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
-- update BDD step definitions — crypto v3, auth, dashboard, ban management
 
 ## 0.19.3 (2026-04-29)
 
@@ -2944,9 +2729,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Epic 96 — CI/CD pipeline with tests, clippy, and release builds
 - mobile build pipeline, interop tests, and dev tooling (Epics 100, 105, 108)
 - desktop polish, version sync, crypto interop, docs (Epics 108-110)
-- expand crypto test vectors to v2 (14 categories + adversarial)
-- expand crypto interop tests to 24 cases, fix @noble v2 compat
-- add cross-repo CI dispatch on main push
 - add repository_dispatch trigger for cross-repo CI
 - add adversarial crypto tests for ECIES, encryption, auth, WebSocket
 - add docs site pages — mobile guide, architecture, troubleshooting, API reference (Epics 114, 118)
@@ -2963,7 +2745,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add worker package boundary and move wrangler config (Epic 203)
 - extract i18n into standalone package with mobile codegen (Epic 205)
 - add protocol schema package with cross-platform codegen (Epic 202)
-- add crypto-tests job and ci-status gate to CI (Epic 204)
 - add native iOS and Android client foundations (Epics 206-207)
 - add notes, shifts, push encryption, and tab navigation (Epic 208)
 - add conversations, admin panel, device linking (Epic 209)
@@ -2975,7 +2756,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add Signal channel to admin settings and message blasts
 - restore 353+ Playwright tests on desktop branch (Epic 216)
 - implement BDD E2E test suite (Epics 218-222, 106 tests)
-- cross-platform BDD abstraction layer (Epic 223)
 - migrate Android E2E tests to cucumber-android 7.18.1 (Epic 224)
 - desktop BDD feature specs + playwright-bdd integration (Epics 225-226)
 - Android BDD step definitions for full feature coverage (Epic 228)
@@ -3005,13 +2785,11 @@ Also shipped in 0.19.6, which has no release of its own:
 - add note thread reply support with encrypted replies
 - add language selection and spoken languages to settings
 - add calls today count to dashboard
-- shared BDD spec consolidation (Epic 231)
 - worker backend test suite (Epic 233)
 - worker backend test suite + backend BDD features (Epic 233)
 - implement Epics 235-237 — Node.js E2E parity, deployment hardening, iOS build pipeline
 - cross-platform quality pass — FFI exports, bundle optimization, DO integration tests
 - link UniFFI XCFramework to iOS app — replace stand-in crypto (Epic 214-iOS)
-- iOS BDD test infrastructure + test expansion (Epics 227/234)
 - iOS xcodegen project for XCUITest host app
 - Epic 239 — desktop BDD test quality overhaul (245/250 pass, 98%)
 - Epics 247-251 — recover behavioral depth in 28 BDD step definition files
@@ -3045,12 +2823,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - admin cards, help accordions, device link brand styling (Epic 273)
 - remaining UX overhaul source changes — logo asset, async auth, i18n strings
 - codegen converts camelCase to snake_case for mobile output
-- add 8 Claude Code skills for monorepo workflows
 - add React error boundary for graceful crash recovery
 - add sliding session expiry for active volunteers
 - add offline connectivity banner for crisis volunteers
-- add 5 Claude Code skills for core architecture patterns
-- add 7 Claude Code skills for core architecture patterns
 - add request resilience and accessibility hardening
 - add missing i18n keys for PIN length selector and shifts empty state
 - iOS feature parity — blast scheduling, brand empty states, UX fixes
@@ -3081,7 +2856,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - disaster recovery testing framework with 5 scenarios
 - admin system health dashboard with 6 status cards
 - mobile admin feature parity — iOS + Android settings screens
-- add backend BDD step definitions (Task 2)
 - wire backend BDD into Playwright config (Task 3)
 - integration verification + dry-run phased workflow
 - backend BDD coverage expansion — 413 tests passing
@@ -3096,7 +2870,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - retire validate.ts middleware and clean up AppEnv types
 - add RelayCapture test helper for WebSocket event assertions
 - BDD scenarios for WebSocket relay event delivery
-- BDD scenarios for in-call ban+hangup and notes
 - add OpenAPI BDD scenarios + fix duplicate step definitions
 - make publishWebSocketEvent async + add route error handlers
 - add decrypt_server_event_hex FFI + wire desktop relay decryption
@@ -3136,7 +2909,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add PostgreSQL-backed relay event outbox (Epic 352)
 - add ban reason prompt to desktop ActiveCallPanel (Epic 351 Phase 3)
 - add WASM crypto module + Vite integration (Epic 81 Phase 6)
-- replace JS crypto mock with WASM — single Rust implementation (Epic 81)
 - case management views + active call panel (Epics 337, 351)
 - case management views + active call card (Epics 337, 351)
 - enhance case list + detail screens (Epics 337, 353)
@@ -3224,7 +2996,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add admin UI for registration, identity trust, and queue
 - Phase 3 — core services (CRUD, inference client, agent)
 - Phase 4 — messaging integration (Signal group observer)
-- add unit tests and BDD feature file
 - port Telegram adapter from v1
 - Phase 5 — API routes (11 endpoints)
 - Phase 3 — MLS integration via OpenMLS 0.8
@@ -3233,7 +3004,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - Phase 5 — SFrame voice E2EE key derivation
 - Phase 7 — desktop admin UI
 - port Telnyx, Bandwidth, and FreeSwitch adapters from v1
-- Phase 8 — BDD feature spec and step definitions
 - rewrite crypto.rs IPC to v3 Ed25519/HPKE API
 - cherry-pick HPKE/PUK/Sigchain/MLS/SFrame rewrite
 - cherry-pick firehose inference agent (Phases 1-8)
@@ -3290,22 +3060,15 @@ Also shipped in 0.19.6, which has no release of its own:
 - add token verification fallback and fix test token creation
 - strip query params from token path to match server pathname
 - handle deep link section expansion on search-only navigation
-- match bun versions
 - handle WebSocket upgrades directly for Node.js platform
 - fix presence endpoint — use correct ShiftManagerDO response key
 - promote WebSocket relay (WebSocket relay) from optional profile to core service
 - Epic 82 — Tauri config fixes and platform.ts PIN flow
 - update E2E tests for Tauri-only migration (313/322 pass)
 - CI workflow issues — sed on Windows, Flatpak offline build, stale ref
-- typo in release.yml — libllamenoscorecore → libllamenoscore
-- Desktop E2E — ubuntu-24.04, WebKit env vars, port cleanup
-- Desktop E2E specs — use __TAURI_INTERNALS__ for webview API access
 - Desktop E2E — correct Rust command names, add window permissions
 - sync isolation allowlist with registered commands, fix crypto test camelCase
-- Desktop E2E — remove Jasmine-only .withContext(), handle headless minimize
 - add screenshots to site
-- add SERVER_NOSTR_SECRET to e2e-docker CI env
-- include .github/ in CI change detection patterns
 - CI change detection + WebSocket relay dependency for Docker E2E
 - disable WebSocket relay in Docker E2E tests, replace --wait with targeted health check
 - fix WebSocket relay config for CI instead of disabling it
@@ -3314,12 +3077,7 @@ Also shipped in 0.19.6, which has no release of its own:
 - add proper accented characters to French WhatsApp setup guide
 - add proper accented characters to French mobile-guide and troubleshooting
 - update nav.notes label to "Call Notes" in all 13 locale files
-- use direct Microsoft download for msedgedriver in Windows CI
-- add waitUntil for Tauri internals in Windows crypto E2E test
 - resolve clippy warnings for Rust 1.93
-- make WASM build non-blocking in release, install wasm-pack via cargo
-- use runner's pre-installed NDK for Android cross-compilation
-- use --platform flag for cargo-ndk (not -p which conflicts with cargo)
 - wrap iOS static libs in .framework bundles for CocoaPods compatibility
 - rename XCFramework to LlamenosCoreFFI to match inner framework name
 - add mobile feature to enable UniFFI scaffolding in library builds
@@ -3330,12 +3088,9 @@ Also shipped in 0.19.6, which has no release of its own:
 - stop false WebSocket WebSocket errors and auto-lock in demo mode
 - enable SMS + Signal channels in demo mode so Conversations appears
 - resolve stale closure bug in PinInput causing sequential input loss
-- achieve 100% BDD coverage — fix validator Cucumber escapes + add missing step aliases
 - add missing error state display to CallHistory and Contacts screens
 - polish dashboard refresh, add error states to dashboard and reports
-- relocate worker tests to apps/worker/ and fix vitest config paths
 - repair E2E step definitions for desktop sidebar layout
-- add assembleDebugAndroidTest to CI to catch E2E compilation errors
 - Android E2E step definitions — camera, nav, sections, buttons
 - Android E2E step definitions batch 2 + parallel runner package names
 - shift-scheduling navigates to admin tab + parallel script NUM_EMU_SHARDS fix
@@ -3343,28 +3098,12 @@ Also shipped in 0.19.6, which has no release of its own:
 - Android E2E batch 4 — scrollTo for admin tabs, tag mismatches, script exit codes
 - iOS build + test verification on Mac M4 (Xcode 26.2)
 - Android E2E batch 5 — CameraX crash guard, tag fixes, nav routing
-- Android E2E batch 6 — create data via UI when lists are empty
-- Android E2E batch 7 — report tags, device-link tags, validation handling
-- Android E2E batch 8 — ScrollableTabRow scroll, report nav, soft assertions
-- Android E2E batch 8b — horizontal swipe for ScrollableTabRow, heading skips
-- revert ScrollableTabRow navigation to simple performClick()
 - sync router to initial auth state on app launch
 - add lock-app button and dashboard-title identifier to DashboardView
-- batch 9 — defensive assertions, timing fixes, tag mappings (20 files)
-- dashboard UI test fixes — error states and missing identifiers
-- Android E2E batch 9b — catch Throwable for ComposeTimeoutException
-- Android E2E batch 10 — defensive assertions across 16 step files
-- Android E2E batch 10b — defensive assertions in 3 more step files
 - universal XCUITest element queries + accessibility containers
 - add missing closing brace in DashboardView titleBar
-- Android E2E batch 10c — GenericSteps defensive + bulk catch Throwable
 - Android E2E batch 11 — deep defensive pass + emulator -read-only
-- Android E2E batch 11b — BaseSteps navigation defensive
-- batch 12 — comprehensive defensive assertions across all Android E2E steps
-- batch 12b — defensive assertions for HelpScreen, Onboarding, CallDateFilter, ContactsList
 - XCUITest accessibility + scrolling + keyboard dismiss
-- universal element queries in NoteFlow/ConversationFlow + keyboard dismiss in BaseUITest
-- remove duplicate dismissKeyboard() in SecurityUITests (inherited from BaseUITest)
 - Group→ZStack for accessibility, PINPad children contain, logout button index
 - iOS XCUITest 76/76 pass — accessibility containment, double NavStack, stale auth cache
 - BDD test infrastructure — unblock 91 desktop tests, fix fixture injection, enable demo mode
@@ -3381,7 +3120,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - resolve 2 upstream SecurityUITests failures — 118/118 XCUITests pass
 - update all XCUITests for UX overhaul navigation restructure — 118/118 pass
 - align all i18n string references to codegen output
-- add .gitkeep for test fixtures directory
 - pass DEV_RESET_SECRET through to Hono c.env
 - add missing DEMO_RESET_CRON and NOSTR_RELAY_PUBLIC_URL to env
 - contacts pagination, silent error swallowing, relay tab reconnection
@@ -3390,7 +3128,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - add cancellation guards to async decrypt effects in calls/notes
 - add 8 missing iOS keys for blasts and custom fields
 - iOS PIN creation supports 6 or 8 digit PINs with length selector
-- update BaseUITest default PIN to 6 digits, restore project.yml keys
 - replace silent error swallowing with user-visible toasts, improve type safety
 - correct settings title to "Settings", add missing emergency footer key
 - iOS API bootstrap auth — real keypair derivation, two-step login, correct /api/auth/me
@@ -3400,9 +3137,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - migration array syntax and async offline queue headers
 - restore contact methods and fix `now` scope in conversation-do.ts
 - resolve iOS build errors and Playwright test failures from E295/E300
-- exclude backend steps from desktop BDD config (Task 4)
-- resolve backend BDD test failures against Docker Compose
-- restore ScreenshotAuditTests.swift deleted during E301 reorganization
 - resolve 5 of 6 iOS XCUITest failures + add Epic 304 plan
 - NodeWebSocketPublisher rejects on relay rejection/timeout
 - mobile clients subscribe to all event kinds, fix type string parsing
@@ -3428,9 +3162,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - upgrade templates v1.1 — date fields, multi-court-date, richer fields
 - integrate timeline + evidence tabs into case detail view
 - user-friendly terminology, help text, onboarding strings
-- wire CMS step definitions into desktop BDD config
-- add backendRequest fixture for desktop BDD API setup
-- batch-fix data-testid mismatches in desktop BDD step defs
 - Epic 335 batch pre-fixes — contact API, CSS selectors, testids
 - resolve 7 backend BDD failures + add esbuild watch mode
 - step definition improvements + contacts search error handling
@@ -3444,7 +3175,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - handle optional Color(hex:) init across all CMS views
 - use Color.brandPrimary explicitly in QuickStatusSheet
 - resolve remaining CMS view compilation errors
-- clean up unused variable warnings in CaseManagementUITests
 - make CaseListView accessibility identifiers discoverable by XCUITest
 - only copy mobile feature files for Cucumber runner
 - CMS case screens render without backend data (4/10 BDD pass)
@@ -3514,7 +3244,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - use hp() helper for all hub-scoped API calls
 - make case_number unique per-hub, not globally
 - mount entity-schema routes under hubScoped
-- resolve LinphoneService scope error + LlamenosApp binding
 - pin WebSocket relay image to SHA-256 digest in compose and Helm
 - pin RustFS to digest in Linux CI and verify checksum in macOS CI
 - remove hardcoded admin key and unsafe print statements from iOS
@@ -3561,8 +3290,6 @@ Also shipped in 0.19.6, which has no release of its own:
 - make iOS app + tests compile against v3 crypto API
 - resolve merge conflicts — take main's CI workflow + guardrails
 - remove duplicate mobileIsUnlocked stub causing compilation failure
-- correct @noble/* import paths for Vite 8/Rolldown compatibility
-- update androidTest steps from V2 nsec/npub to V3 device key API
 - remove stale lockfile before install in Dockerfile
 - fix sidecar build contexts + healthchecks for CI
 - fix sip-bridge lockfile glob + dev compose build contexts
@@ -3570,6 +3297,4 @@ Also shipped in 0.19.6, which has no release of its own:
 - whitelist docker-entrypoint.sh in .dockerignore
 - sync tauri.conf.json version to 0.19.2 — unblocks knope prepare-release
 - resolve 5 CI failures on main — crypto flake, RustFS hash, android paths
-- thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
-- update BDD step definitions — crypto v3, auth, dashboard, ban management
