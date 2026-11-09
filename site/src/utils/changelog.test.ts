@@ -45,6 +45,20 @@ describe('parseChangelog', () => {
     const versions = releases.map(r => r.version);
     expect(new Set(versions).size).toBe(versions.length);
   });
+
+  // The historical security/perf fixes were backfilled by hand (#2581) because
+  // knope never put them in a release note; losing a heading on a regenerate
+  // would silently drop them from the public changelog page again.
+  test('keeps the backfilled Security and Performance sections of historical releases', () => {
+    const releases = parseChangelog(readFileSync(new URL('../../../CHANGELOG.md', import.meta.url), 'utf8'));
+    const items = (version: string, title: string): string[] =>
+      releases.find(r => r.version === version)?.sections.find(s => s.title === title)?.items ?? [];
+    expect(items('0.19.5', 'Security')).toHaveLength(5);
+    expect(items('0.19.5', 'Performance')).toHaveLength(1);
+    expect(items('0.19.7', 'Security')).toHaveLength(7);
+    expect(items('0.19.9', 'Security')).toHaveLength(1);
+    expect(items('0.19.16', 'Security')).toEqual(['upgrade hono past GHSA-88fw-hqm2-52qc (#922)']);
+  });
 });
 
 describe('tokenizeEntry', () => {

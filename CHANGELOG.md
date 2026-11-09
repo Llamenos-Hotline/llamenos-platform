@@ -728,6 +728,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - encrypt evidence uploads client-side; derive hash/size from ciphertext (#951)
 - accept UnifiedPush endpoints only on configured ntfy origins (#960) (#963)
 
+### Security
+
+- upgrade hono past GHSA-88fw-hqm2-52qc (#922)
+
 ## 0.19.15 (2026-09-20)
 
 ### Fixes
@@ -1149,6 +1153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bulk rename all remaining typealias references to codegen names (#422)
 - rename HubKeyEnvelopeResponseEnvelope to SharedAdminEnvelope in tests
 
+### Security
+
+- debug log cleanup + protocol spec updates (#401)
+
 ## 0.19.8 (2026-05-19)
 
 ### Features
@@ -1386,6 +1394,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - resolve all E2E test failures (557 passing, 0 failing)
 - add get_public_key FFI export for WakeKeyService
 - scope messaging conversations and CMS report types to workerHub
+
+### Security
+
+- signal-notifier hardening — PostgreSQL migration + security improvements (#146)
+
+Also shipped in 0.19.6, which has no release of its own:
+
+- Nostr hardening Phase 1 — write policy, publisher verification, per-hub keys (#133)
+- Nostr hardening Phase 2 — auth state machine, key separation, epochs, Rust decrypt (#132)
+- payload padding for traffic analysis resistance (#137)
+- metadata reduction — hash callerNumber, User-Agent; remove country from audit (#138)
+- PIN minimum 8 digits + alphanumeric passphrase + Argon2id (#139)
+- Signal-first delivery + SMS notification-only mode (#140)
 
 ## 0.19.5 (2026-04-29)
 
@@ -2104,6 +2125,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - thread-safe test mocks for concurrent hub key loading
 - schema updates — blasts, cases, contacts, conversations, settings, users
 - update BDD step definitions — crypto v3, auth, dashboard, ban management
+
+### Security
+
+- CRIT-C1/C2/C3 — ECIES salt, v1 removal, provisioning KDF unification
+- HIGH-C1/C2/C3 — zeroize key material, PublicKeyPair FFI type
+- HIGH-C5 — remove get_nsec WASM export, add generateProvisioningEphemeral
+- fix 3 audit findings (#3, #4, #6)
+- increase minimum PIN length from 4-6 to 6-8 digits
+
+### Performance
+
+- add 30s TTL cache for getRoles() — eliminates per-request DB round-trip in auth middleware
 
 ## 0.19.4 (2026-04-29)
 

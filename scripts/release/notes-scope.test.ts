@@ -80,6 +80,29 @@ describe('the rule knope applies', () => {
     expect(eligible('test(worker): x')).toBe(false)
     expect(eligible('chore: prepare release 0.21.7 (#2538)')).toBe(false)
   })
+
+  // `ci` as a commit TYPE (not just the scope in `fix(ci)`): internal-only, so
+  // it must never produce an entry — scoped to a product area or not — and
+  // must never be bridged into the Security/Performance sections.
+  test('ci as a commit type is never changelog-eligible, even under a product scope', () => {
+    expect(eligible('ci: tier the iOS gate (#1272)')).toBe(false)
+    expect(eligible('ci(worker): cache bun install')).toBe(false)
+    expect(eligible('ci(ios): shard XCUITests')).toBe(false)
+    expect(sections.has('ci')).toBe(false)
+    expect(
+      noteEntries(
+        [
+          { sha: '1'.repeat(40), subject: 'ci: tier the iOS gate (#1272)' },
+          { sha: '2'.repeat(40), subject: 'ci(worker): cache bun install' },
+        ],
+        scopes,
+        sections,
+      ),
+    ).toEqual([])
+    expect(
+      excludedCommits([{ sha: '3'.repeat(40), subject: 'ci(worker): cache bun install' }], scopes, sections),
+    ).toEqual([])
+  })
 })
 
 describe('excludedCommits — what the release PR body lists', () => {
