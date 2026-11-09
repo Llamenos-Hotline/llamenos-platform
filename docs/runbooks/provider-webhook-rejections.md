@@ -48,7 +48,7 @@ cause one. Attribution says how much a refusal can be trusted.
 
 `own_account` is only ever produced when **both** the address allowlist is on
 **and** the provider puts its account identifier in its webhooks. Today that is
-Twilio and SignalWire (`AccountSid`), Telnyx (`connection_id`) and Bandwidth
+Twilio and SignalWire (`AccountSid`), Telnyx (`ConnectionId`) and Bandwidth
 (`accountId`). For Plivo, Vonage and the SIP bridge, and for any deployment with
 no allowlist, refusals are `unattributed` and the alerts rely on the
 inbound-traffic check below. The same reading classifies the hub's
