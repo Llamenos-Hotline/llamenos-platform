@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.llamenos.hotline.FakeBiometricKeyStore
 import org.llamenos.hotline.InMemoryKeyValueStore
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.mockPushRegistrationManager
@@ -52,6 +53,9 @@ class IdentityDestructionTest {
     private lateinit var keyValueStore: InMemoryKeyValueStore
     private lateinit var viewModel: AuthViewModel
 
+    /** Whether the device keys were still stored at each moment the relay was closed. */
+    private val keysStoredAtRelayClose = mutableListOf<Boolean>()
+
     @Before
     fun setUp() {
         cryptoService = CryptoService()
@@ -66,6 +70,11 @@ class IdentityDestructionTest {
             mockk(),
             mockk(relaxed = true),
             mockPushRegistrationManager(),
+            mockk<WebSocketService> {
+                every { disconnect() } answers {
+                    keysStoredAtRelayClose += keyValueStore.contains(KeystoreService.KEY_ENCRYPTED_KEYS)
+                }
+            },
         )
     }
 
@@ -155,6 +164,27 @@ class IdentityDestructionTest {
         composeRule.onNodeWithTag("confirm-logout-button").performClick()
 
         composeRule.onNodeWithTag("logout-confirmation-dialog").assertDoesNotExist()
+        assertKeysDestroyed()
+    }
+
+    /**
+     * #2527: the relay must be closed BEFORE the identity is cleared. Closed only when the
+     * unlocked screens were later popped, a relay handshake still in flight at logout
+     * completed for the destroyed identity, announced CONNECTED, and its listeners re-read
+     * the server with no hub URL — which crashed the app (the M1 probe's `logout` flow).
+     */
+    @Test
+    fun `confirming log out closes the relay while the identity still exists`() {
+        composeRule.setContent {
+            TestSettingsScreen(onLogout = { viewModel.destroyIdentity(it) })
+        }
+
+        composeRule.onNodeWithTag("settings-logout-button").performScrollTo().performClick()
+        assertEquals(emptyList<Boolean>(), keysStoredAtRelayClose)
+
+        composeRule.onNodeWithTag("confirm-logout-button").performClick()
+
+        assertEquals(listOf(true), keysStoredAtRelayClose)
         assertKeysDestroyed()
     }
 

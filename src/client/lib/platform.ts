@@ -1086,6 +1086,42 @@ export async function encryptNote(
 }
 
 /**
+ * The envelope of `note` that THIS device can open: the admin envelope
+ * addressed to one of its keys, else the author envelope when this device's
+ * user wrote the note. `null` when it holds neither.
+ *
+ * A note carries one admin envelope per admin of its hub (#1035), so the reader
+ * must find its own. Picking by the user's Ed25519 identity key and falling
+ * back to `adminEnvelopes[0]` — what the notes and contacts pages did — handed
+ * every admin but the first someone else's envelope, and a second admin could
+ * open nothing.
+ */
+export async function noteEnvelopeForThisDevice(note: NoteEnvelopes): Promise<KeyEnvelope | null> {
+  const deviceState = await getDevicePubkeys()
+  return deviceState ? pickNoteEnvelope(note, deviceState) : null
+}
+
+/** The envelopes a stored note carries, as `noteEnvelopeForThisDevice` reads them. */
+export interface NoteEnvelopes {
+  authorPubkey: string
+  authorEnvelope?: KeyEnvelope
+  adminEnvelopes?: readonly RecipientEnvelope[]
+}
+
+/** {@link noteEnvelopeForThisDevice} for a known device: pure, so it is testable without IPC. */
+export function pickNoteEnvelope(
+  note: NoteEnvelopes,
+  device: Pick<DeviceKeyState, 'signingPubkeyHex' | 'encryptionPubkeyHex'>,
+): KeyEnvelope | null {
+  const own = note.adminEnvelopes?.find(e =>
+    e.pubkey === device.signingPubkeyHex || e.pubkey === device.encryptionPubkeyHex,
+  )
+  if (own) return own
+  if (note.authorEnvelope && note.authorPubkey === device.signingPubkeyHex) return note.authorEnvelope
+  return null
+}
+
+/**
  * Decrypt a note by HPKE-opening the key envelope and AES-GCM decrypting content.
  */
 export async function decryptNote(

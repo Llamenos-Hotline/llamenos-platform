@@ -28,6 +28,7 @@ import { MessageSquare, X, UserCheck, Lock, UserCog, StickyNote, RotateCcw } fro
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ReassignDialog } from '@/components/ReassignDialog'
+import { hubAdminReaders } from '@/lib/admin-recipient'
 
 export const Route = createFileRoute('/conversations')({
   component: ConversationsPage,
@@ -37,7 +38,7 @@ const ENVELOPE_KINDS = [KIND_CONVERSATION_ASSIGNED]
 
 function ConversationsPage() {
   const { t } = useTranslation()
-  const { isAdmin, hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { isAdmin, hasDeviceKey, publicKey } = useAuth()
   const { channels, isLoading: configLoading } = useConfig()
   const { toast } = useToast()
   const { conversations, waitingConversations, applyConversation } = useConversations()
@@ -123,15 +124,11 @@ function ConversationsPage() {
   const handleComposerSend = useCallback(async (plaintext: string) => {
     if (!selectedId || !selectedHubId || !hasDeviceKey || !publicKey) return
 
-    // Build reader list: current user + admin decryption pubkey
-    const readerPubkeys = [publicKey]
-    if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-      readerPubkeys.push(adminDecryptionPubkey)
-    }
-
-    const encrypted = await encryptMessage(plaintext, readerPubkeys)
-
     try {
+      // Readers: this user's devices and every admin of the CONVERSATION's
+      // hub, which may not be the active one (#1035).
+      const readerPubkeys = [publicKey, ...await hubAdminReaders(selectedHubId)]
+      const encrypted = await encryptMessage(plaintext, readerPubkeys)
       const msg = await sendConversationMessage(selectedHubId, selectedId, {
         encryptedContent: encrypted.encryptedContent,
         readerEnvelopes: encrypted.readerEnvelopes,
@@ -141,7 +138,7 @@ function ConversationsPage() {
     } catch {
       toast(t('conversations.sendError', { defaultValue: 'Failed to send message' }), 'error')
     }
-  }, [selectedId, selectedHubId, hasDeviceKey, publicKey, adminDecryptionPubkey, t, toast])
+  }, [selectedId, selectedHubId, hasDeviceKey, publicKey, t, toast])
 
   const hasAnyMessaging = channels.sms || channels.whatsapp || channels.signal || channels.reports
 

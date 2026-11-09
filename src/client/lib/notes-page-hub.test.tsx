@@ -20,13 +20,17 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
-    hasDeviceKey: true, publicKey: 'pk-me', isAdmin: false, adminDecryptionPubkey: 'pk-admin',
+    hasDeviceKey: true, publicKey: 'pk-me', isAdmin: false,
   }),
 }))
 vi.mock('@/lib/config', () => ({ useConfig: () => ({ currentHubId: 'hub-A' }) }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: () => {} }) }))
 vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true }))
-vi.mock('@/lib/admin-recipient', () => ({ adminHpkeRecipient: () => 'pk-admin' }))
+vi.mock('@/lib/admin-recipient', () => ({
+  hubAdminReaders: async () => ['pk-admin'],
+  activeHubAdminReaders: async () => ['pk-admin'],
+  NoAdminReaderError: class NoAdminReaderError extends Error {},
+}))
 vi.mock('@/lib/platform', () => ({
   encryptNote: async () => ({ encryptedContent: 'ct', authorEnvelope: undefined, adminEnvelopes: [] }),
   encryptMessage: async () => ({ encryptedContent: 'ct', readerEnvelopes: [] }),

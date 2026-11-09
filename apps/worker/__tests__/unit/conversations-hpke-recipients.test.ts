@@ -24,7 +24,7 @@ import { describe, it, expect } from 'vitest'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { ConversationsService } from '@worker/services/conversations'
+import { ConversationsService, InboundUnreadableError } from '@worker/services/conversations'
 import { encryptMessageForStorage } from '@worker/lib/crypto'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes, bytesToUtf8 } from '@shared/encoding'
@@ -111,7 +111,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       senderIdentifier: '+15551110000',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash1', ADMIN_X25519, 'hub-1')
+    }, 'hash1', [ADMIN_X25519], 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     expect(msg).toBeDefined()
@@ -165,7 +165,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       senderIdentifier: '+15551110000',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash2', ADMIN_X25519, 'hub-1')
+    }, 'hash2', [ADMIN_X25519], 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     const recipients = (msg!.readerEnvelopes as Array<{ pubkey: string }>).map(e => e.pubkey)
@@ -174,7 +174,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     expect(recipients).toEqual([ADMIN_X25519])
   })
 
-  it('stores the inbound message even when NO reader exists anywhere — never drops it', async () => {
+  it('refuses an inbound message no hub admin can read, before writing anything (#1034)', async () => {
     const { db } = createMockDb(['conversations', 'messages', 'files', 'contactIdentifiers'])
 
     const insertedValues: Array<Record<string, unknown>> = []
@@ -192,8 +192,6 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
     }
 
     const service = new ConversationsService(db as any, 'hmac-secret', 'admin-pubkey')
-    // An unassigned waiting conversation: no assignee device lookup runs, and
-    // this test passes NO admin recipient — the reader list is empty.
     const conv = {
       id: 'conv-3', hubId: 'hub-1', channelType: 'sms',
       contactIdentifierHash: 'hash3',
@@ -201,28 +199,23 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       metadata: null, messageCount: 0,
       lastMessageAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
     }
-    // handleIncoming's conversation lookup, then addMessage's getById.
-    db.$setSelectResults([[conv], [conv]])
+    db.$setSelectResults([[], [conv]])
     db.$setInsertResult([{ id: 'msg-3', conversationId: 'conv-3' }])
 
-    // The previous behaviour threw out of here (encryptMessageForStorage
-    // refuses an empty reader list): the webhook answered 500, the provider
-    // retried, and the replay guard answered the retry with an idempotent 200
-    // — the crisis message silently dropped. The contract is loud-but-stored.
-    const result = await service.handleIncoming({
+    // The previous contract was "loud but stored": an empty content, no
+    // envelope, and a 200 — the text was gone while the provider believed it
+    // delivered. The hub's admin reader set being empty is now a refusal the
+    // webhook answers with a 503 and a released replay slot, so the message
+    // survives at the provider and a redelivery is processed.
+    await expect(service.handleIncoming({
       channelType: 'sms',
       externalId: 'SM-3',
       senderIdentifier: '+15551110000',
       body: 'crisis inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash3', undefined, 'hub-1')
+    }, 'hash3', [], 'hub-1')).rejects.toBeInstanceOf(InboundUnreadableError)
 
-    expect(result.messageId).toBe('msg-3')
-    const msg = insertedValues.find(v => v.direction === 'inbound')
-    expect(msg).toBeDefined()
-    // No plaintext anywhere in the row, no envelope claiming a phantom reader.
-    expect(msg!.readerEnvelopes).toEqual([])
-    expect(msg!.encryptedContent).toBe('')
-    expect(JSON.stringify(msg)).not.toContain('crisis inbound body')
+    // Nothing written: no conversation stub, no contact identifier, no empty row.
+    expect(insertedValues).toEqual([])
   })
 })

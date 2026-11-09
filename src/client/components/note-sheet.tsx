@@ -6,7 +6,7 @@ import { useCalls } from '@/lib/calls-context'
 import { getCallNoteDraft, setCallNoteDraft } from '@/lib/call-note-drafts'
 import { useDraft } from '@/lib/use-draft'
 import { encryptNote } from '@/lib/platform'
-import { adminHpkeRecipient } from '@/lib/admin-recipient'
+import { hubAdminReaders, NoAdminReaderError } from '@/lib/admin-recipient'
 import { resolveCallHubId } from '@/lib/call-hubs'
 
 import { createNote, updateNote, getCallHistory, getCustomFields, getActiveHub, type CallRecord } from '@/lib/api'
@@ -32,7 +32,7 @@ import { CustomFieldInputs, validateCustomFields } from '@/components/notes/cust
 
 export function NoteSheet() {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin } = useAuth()
   const { isOpen, mode, editNoteId, initialCallId, initialConversationId, initialHubId, initialText, initialFields, close, onSaved } = useNoteSheet()
   const { toast } = useToast()
   const { dismissEndedCall } = useCalls()
@@ -110,27 +110,38 @@ export function NoteSheet() {
       }
       // V2 per-note ephemeral key encryption (forward secrecy)
       const authorPub = publicKey
-      // No admin recipient means no admin can ever read this note. The old
+      // The note's hub: a conversation note and a held call's note belong to
+      // that conversation's / call's hub, which may not be the active one. An
+      // edit is written through the active hub.
+      const noteHubId = mode === 'edit' && editNoteId
+        ? getActiveHub()
+        : isConversationNote || heldCallId
+          ? initialHubId
+          : resolveCallHubId(callId, getActiveHub())
+      // Sealed to EVERY admin of that hub — the hub's admin reader set — so a
+      // second admin reads it too (#1035). No reader means no admin could ever
+      // open it: refuse, keep the text in the editor, and say why. The old
       // `adminDecryptionPubkey || authorPub` wrapped it twice to the author
       // instead, which saved, showed as saved, and left admins locked out with
-      // no error at either end (#1468). Refusing is the lesser loss: the text
-      // is still in the editor and the operator gets a reason.
-      const adminPub = adminHpkeRecipient(adminDecryptionPubkey)
-      if (!adminPub) {
-        toast(t('notes.noAdminRecipient'), 'error')
-        return
+      // no error at either end (#1468).
+      let admins
+      try {
+        admins = await hubAdminReaders(noteHubId)
+      } catch (err) {
+        if (err instanceof NoAdminReaderError) {
+          toast(t('notes.noAdminRecipient'), 'error')
+          return
+        }
+        throw err
       }
-      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, [adminPub])
+      const { encryptedContent, authorEnvelope, adminEnvelopes } = await encryptNote(JSON.stringify(payload), authorPub, admins)
 
       if (mode === 'edit' && editNoteId) {
         await updateNote(editNoteId, { encryptedContent, authorEnvelope, adminEnvelopes })
       } else if (isConversationNote) {
-        // A conversation note belongs to the conversation's hub, not the active one.
-        await createNote({ conversationId: initialConversationId, encryptedContent, authorEnvelope, adminEnvelopes }, initialHubId)
+        await createNote({ conversationId: initialConversationId, encryptedContent, authorEnvelope, adminEnvelopes }, noteHubId)
       } else {
-        // A call note belongs to the call's hub, which may not be the active one.
-        const hubId = heldCallId ? initialHubId : resolveCallHubId(callId, getActiveHub())
-        await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, hubId)
+        await createNote({ callId, encryptedContent, authorEnvelope, adminEnvelopes }, noteHubId)
       }
       if (heldCallId) {
         // Written up: no longer an unsaved draft, and the call stops asking for a note.

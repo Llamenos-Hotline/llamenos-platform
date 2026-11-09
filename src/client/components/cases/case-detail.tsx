@@ -49,7 +49,7 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
   // Who may read this record's working content — the server decides. This was
   // `[]`, which left every timeline comment readable only by its author and
   // the platform admin, never by the volunteers assigned to the case.
-  const fieldRecipients = useRecordFieldRecipients(record.id)
+  const fieldRecipients = useRecordFieldRecipients(record.id, record.hubId)
 
   const isEvent = entityType.category === 'event'
 
@@ -155,6 +155,7 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
         {activeTab === 'timeline' && (
           <CaseTimeline
             recordId={record.id}
+            hubId={record.hubId}
             volunteerNames={{}}
             readerPubkeys={fieldRecipients}
             statusLabels={Object.fromEntries(

@@ -163,6 +163,8 @@ function EvidenceListRow({
 export interface EvidenceTabProps {
   /** Record/case ID */
   recordId: string
+  /** The record's own hub (`record.hubId`) */
+  hubId: string
   /** Map of pubkey -> display name */
   volunteerNames: Record<string, string>
   /** Reader pubkeys for encrypting evidence descriptions */
@@ -171,6 +173,7 @@ export interface EvidenceTabProps {
 
 export function EvidenceTab({
   recordId,
+  hubId,
   volunteerNames,
   readerPubkeys,
 }: EvidenceTabProps) {
@@ -190,14 +193,14 @@ export function EvidenceTab({
       const classification = classificationFilter !== 'all'
         ? classificationFilter as EvidenceClassification
         : undefined
-      const result = await listEvidence(recordId, { classification, limit: 100 })
+      const result = await listEvidence(recordId, { classification, limit: 100 }, hubId)
       setEvidence(result.evidence)
     } catch {
       toast(t('cases.evidence.loadError', { defaultValue: 'Failed to load evidence' }), 'error')
     } finally {
       setLoading(false)
     }
-  }, [recordId, classificationFilter, t, toast])
+  }, [recordId, hubId, classificationFilter, t, toast])
 
   useEffect(() => {
     setLoading(true)
@@ -331,6 +334,7 @@ export function EvidenceTab({
       {/* Upload dialog */}
       <EvidenceUploadDialog
         recordId={recordId}
+        hubId={hubId}
         open={showUpload}
         onOpenChange={setShowUpload}
         onUploadComplete={handleUploadComplete}

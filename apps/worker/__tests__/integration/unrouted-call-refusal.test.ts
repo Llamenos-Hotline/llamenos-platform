@@ -175,6 +175,9 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
     await fresh.db.delete(schema.hubs)
     const admin = 'e'.repeat(64)
     await fresh.db.insert(schema.users).values({ pubkey: admin, displayName: 'Setup admin' }).onConflictDoNothing()
+    // The wizard registers the admin's device before completing setup: the hub's
+    // first admin must be its reader (#1034).
+    await fresh.db.insert(schema.devices).values({ pubkey: admin, platform: 'desktop', x25519Pubkey: 'ab'.repeat(32) })
 
     const { default: setup } = await import('../../routes/setup')
     const setupApp = new Hono<AppEnv>()

@@ -25,7 +25,8 @@ import type { RecipientEnvelope } from '@shared/types'
 import type { Database } from '../db'
 import { unsealAgentKey } from '../lib/agent-identity'
 import { encryptMessageForStorage } from '../lib/crypto'
-import { transitionalInstanceRecipient, type Ed25519AuthPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
+import type { Ed25519AuthPubkey } from '../lib/hpke-recipient'
+import { readersFor } from '../lib/readers'
 import { CircuitBreaker } from '../lib/circuit-breaker'
 import { createLogger } from '../lib/logger'
 import { clearWindowKeyCache } from '../messaging/firehose-observer'
@@ -81,8 +82,6 @@ export class FirehoseAgentService {
       SERVER_SECRET?: string
       /** Ed25519, for signature verification. Never an envelope recipient. */
       ADMIN_PUBKEY?: Ed25519AuthPubkey | string
-      /** X25519, the HPKE recipient admin envelopes are sealed to. */
-      ADMIN_DECRYPTION_PUBKEY?: HpkeRecipientPubkey | string
     },
   ) {}
 
@@ -407,19 +406,20 @@ export class FirehoseAgentService {
       extractedAt: new Date().toISOString(),
     })
 
-    // The admin reader for this report is the X25519 HPKE recipient, and only
-    // that. ADMIN_PUBKEY used to be added here too: an Ed25519 signing key,
-    // accepted by DHKEM(X25519) as 32 arbitrary bytes, producing a second
-    // envelope that no secret key could ever open (#1283).
-    const adminRecipient = transitionalInstanceRecipient(this.env)
-
-    const recipientPubkeys = [
-      ...new Set([conn.agentPubkey, ...(adminRecipient ? [adminRecipient] : [])]),
-    ]
-
-    if (recipientPubkeys.length === 0) {
-      throw new Error('No valid recipient pubkeys for report envelope')
+    // The report is hub content: sealed to the agent and to the hub's admin
+    // readers (`readersFor`, the hub admins' registered devices and its escrow
+    // key) — never the instance-wide ADMIN_DECRYPTION_PUBKEY, which a
+    // wizard-bootstrapped deployment does not have and D1 removes as a reader
+    // (#1034). Never an Ed25519 key either (#1283).
+    //
+    // With no admin reader the report is refused, not written for the agent
+    // alone: the cluster's messages stay unextracted and are retried next tick,
+    // once a hub admin has registered a device.
+    const adminReaders = await readersFor(this._db, conn.hubId, 'admin')
+    if (adminReaders.length === 0) {
+      throw new Error(`Hub ${conn.hubId} has no admin reader: refusing a firehose report no admin could read`)
     }
+    const recipientPubkeys = [...new Set([conn.agentPubkey, ...adminReaders])]
 
     // Envelope-encrypt the report content
     const { encryptedContent, readerEnvelopes } = encryptMessageForStorage(
