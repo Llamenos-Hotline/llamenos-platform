@@ -164,10 +164,11 @@ backup_age_public_key: ""        # age1...  (62 chars)
 #                               was provided."
 #   playbooks/test-restore.yml — used directly, with NO default, so an unset
 #                               value is an undefined-variable error.
-#   playbooks/dr-test.yml     — does NOT read this var; it has its own
-#                               `age_identity_file`, defaulting to
-#                               /root/backup-key.txt. Set that one separately
-#                               (or point it here) if you run DR drills.
+#   playbooks/dr-test.yml     — used directly, with no default (as in
+#                               test-restore.yml). It restores the newest
+#                               backups into an isolated scratch project on
+#                               THIS host and boots the deployed app image on
+#                               them, so the key must be readable here.
 #
 # DECIDE THIS BEFORE YOUR FIRST BACKUP — the repo genuinely pulls both ways
 # and cannot pick for you:

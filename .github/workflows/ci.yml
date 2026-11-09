@@ -2013,6 +2013,14 @@ jobs:
       - name: Check no result test reads a skipped task as a pass
         run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
 
+      # dr-test.yml was a "recovery drill" that ran on the control node, looked for
+      # backup files that no longer exist, started an image that does not exist and
+      # printed PASS from ignore_errors checks -- so it could never fail, and a
+      # test that cannot fail reads as coverage. CI cannot run the drill (it needs
+      # the deployed app image and real backups); this keeps its shape honest.
+      - name: Check the DR drill can fail
+        run: python3 deploy/ansible/scripts/check-dr-test-can-fail.py
+
       # Issue #1636: before it, the suite had three behaviours and named one.
       # A FAIL stopped the deploy except where it quietly did not (the Kamailio
       # probe reported NOT READY and the deploy succeeded), so "Smoke check
