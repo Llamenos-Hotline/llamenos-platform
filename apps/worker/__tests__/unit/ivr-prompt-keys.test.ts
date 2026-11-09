@@ -16,18 +16,20 @@ import { TwilioAdapter } from '@worker/telephony/twilio'
 import { VonageAdapter } from '@worker/telephony/vonage'
 import { PlivoAdapter } from '@worker/telephony/plivo'
 import { BandwidthAdapter } from '@worker/telephony/bandwidth'
+import { TelnyxAdapter } from '@worker/telephony/telnyx'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
 import { SettingsService } from '@worker/services/settings'
 import { createMockDb } from './mock-db'
 import { fakeSpeech } from '../helpers/fake-speech'
 
-/** The adapters that play uploaded prompts. Telnyx takes no audio map at all. */
+/** The adapters that play uploaded prompts. */
 const ADAPTERS: Record<string, () => TelephonyAdapter> = {
   twilio: () => new TwilioAdapter('AC1', 'token', '+15551234567'),
   vonage: () => new VonageAdapter('key', 'secret', 'app', '+15551234567'),
   plivo: () => new PlivoAdapter('id', 'token', '+15551234567'),
   bandwidth: () => new BandwidthAdapter('acct', 'token', 'secret', 'app', '+15551234567'),
+  telnyx: () => new TelnyxAdapter('key', 'conn', '+15551234567', 'https://app.example'),
   asterisk: () => new AsteriskAdapter('http://ari', 'u', 'p', '+15551234567', 'http://cb', 'secret'),
   freeswitch: () => new FreeSwitchAdapter('+15551234567', 'http://cb', 'secret', 'http://app'),
 }

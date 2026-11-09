@@ -268,7 +268,7 @@ function createAdapterFromConfig(config: TelephonyProviderConfig, webhookBaseUrl
         config.bridgeSecret!,
       )
     case 'telnyx':
-      return new TelnyxAdapter(config.apiKey!, config.connectionId!, config.phoneNumber)
+      return new TelnyxAdapter(config.apiKey!, config.connectionId!, config.phoneNumber, webhookBaseUrl)
     case 'bandwidth':
       return new BandwidthAdapter(
         config.authId!, // accountId

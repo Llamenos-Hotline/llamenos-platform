@@ -164,24 +164,27 @@ export const telnyxProvider: ProviderCapabilityImpl = {
       'Content-Type': 'application/json',
     }
 
+    // A TeXML application: Telnyx fetches the call's instructions from voice_url
+    // and every later step names its own URL, so a callback's route says which
+    // step it belongs to. (A Call Control application posts every event to one
+    // webhook URL, which is why a caller could never get past the language menu.)
+    // voice_method is post: the signature covers the request body, which a GET
+    // does not have.
     const appBody: Record<string, unknown> = {
-      application_name: `Llamenos - ${urls.voiceIncoming}`,
-      webhook_event_url: urls.voiceIncoming,
-      webhook_event_failover_url: urls.voiceStatus,
+      friendly_name: `Llamenos - ${urls.voiceIncoming}`,
+      voice_url: urls.voiceIncoming,
+      voice_method: 'post',
       active: true,
     }
-    if (urls.sms) {
-      appBody.inbound_message_webhook_url = urls.sms
-    }
 
-    const appRes = await safeFetch('https://api.telnyx.com/v2/call_control_applications', {
+    const appRes = await safeFetch('https://api.telnyx.com/v2/texml_applications', {
       method: 'POST',
       headers,
       body: JSON.stringify(appBody),
     })
     if (!appRes.ok) {
       const text = await appRes.text()
-      throw new ProviderApiError('Failed to create Telnyx application', appRes.status, text)
+      throw new ProviderApiError('Failed to create Telnyx TeXML application', appRes.status, text)
     }
     const appData = (await appRes.json()) as { data: { id: string } }
 
