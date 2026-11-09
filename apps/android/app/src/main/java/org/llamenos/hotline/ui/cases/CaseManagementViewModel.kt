@@ -17,6 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.llamenos.core.CasePurpose
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
@@ -267,7 +268,7 @@ class CaseManagementViewModel @Inject constructor(
             }
             try {
                 val query = buildString {
-                    append(apiService.hp("/api/records"))
+                    append(apiService.activeHubPath("/api/records"))
                     append("?limit=20&page=$page")
                     if (entityTypeId != null) {
                         append("&entityTypeId=$entityTypeId")
@@ -289,6 +290,11 @@ class CaseManagementViewModel @Inject constructor(
                         isLoadingRecords = false,
                         isRefreshingRecords = false,
                     )
+                }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
+                _uiState.update {
+                    it.copy(records = emptyList(), recordsTotal = 0, hasMoreRecords = false, isLoadingRecords = false, isRefreshingRecords = false)
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -340,7 +346,7 @@ class CaseManagementViewModel @Inject constructor(
                 )
             }
             try {
-                val record = apiService.request<CaseRecord>("GET", apiService.hp("/api/records/$recordId"))
+                val record = apiService.request<CaseRecord>("GET", apiService.activeHubPath("/api/records/$recordId"))
                 _uiState.update {
                     it.copy(
                         selectedRecord = record,
@@ -380,7 +386,7 @@ class CaseManagementViewModel @Inject constructor(
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
                 val request = UpdateRecordRequest(statusHash = statusHash)
-                val updated = apiService.request<CaseRecord>("PATCH", apiService.hp("/api/records/$recordId"), request)
+                val updated = apiService.request<CaseRecord>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
                 _uiState.update {
                     it.copy(
                         selectedRecord = updated,
@@ -414,7 +420,7 @@ class CaseManagementViewModel @Inject constructor(
             try {
                 val response = apiService.request<InteractionsResponse>(
                     "GET",
-                    apiService.hp("/api/records/$recordId/interactions") + "?limit=50",
+                    apiService.activeHubPath("/api/records/$recordId/interactions") + "?limit=50",
                 )
                 _uiState.update {
                     it.copy(
@@ -470,7 +476,7 @@ class CaseManagementViewModel @Inject constructor(
                 )
                 apiService.request<Interaction>(
                     "POST",
-                    apiService.hp("/api/records/$recordId/interactions"),
+                    apiService.activeHubPath("/api/records/$recordId/interactions"),
                     request,
                 )
                 _uiState.update {
@@ -502,7 +508,7 @@ class CaseManagementViewModel @Inject constructor(
             try {
                 val response = apiService.request<RecordContactsResponse>(
                     "GET",
-                    apiService.hp("/api/records/$recordId/contacts"),
+                    apiService.activeHubPath("/api/records/$recordId/contacts"),
                 )
                 _uiState.update {
                     it.copy(
@@ -532,7 +538,7 @@ class CaseManagementViewModel @Inject constructor(
             try {
                 val response = apiService.request<org.llamenos.protocol.EvidenceListResponse>(
                     "GET",
-                    apiService.hp("/api/records/$recordId/evidence") + "?limit=50",
+                    apiService.activeHubPath("/api/records/$recordId/evidence") + "?limit=50",
                 )
                 _uiState.update {
                     it.copy(
@@ -571,7 +577,7 @@ class CaseManagementViewModel @Inject constructor(
                 val request = AssignRecordRequest(pubkeys = listOf(pubkey))
                 val response = apiService.request<AssignResponse>(
                     "POST",
-                    apiService.hp("/api/records/$recordId/assign"),
+                    apiService.activeHubPath("/api/records/$recordId/assign"),
                     request,
                 )
                 // Update the selected record's assignedTo list from the response
@@ -613,7 +619,7 @@ class CaseManagementViewModel @Inject constructor(
                 val request = UnassignBody(pubkey = pubkey)
                 val response = apiService.request<AssignResponse>(
                     "POST",
-                    apiService.hp("/api/records/$recordId/unassign"),
+                    apiService.activeHubPath("/api/records/$recordId/unassign"),
                     request,
                 )
                 _uiState.update {

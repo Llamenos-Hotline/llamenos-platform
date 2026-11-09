@@ -39,8 +39,14 @@ import { determineEnvelopeRecipients } from '../lib/envelope-recipients'
 import type { HubMemberInfo } from '../lib/envelope-recipients'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { Services } from '../services'
+import { hubOnly, hubsWithPermission, pathHubId } from '../lib/hub-scope'
 
 const records = new Hono<AppEnv>()
+
+// A record belongs to a hub, so this router is served only under /hubs/:hubId
+// (#2461). Registered first: a stray unscoped mount answers 404 before any
+// handler could create a record in no hub or read another hub's by id.
+records.use('*', hubOnly)
 
 // --- Helper: determine the caller's access level from permissions ---
 function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | null {
@@ -60,8 +66,8 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
  * HPKE-wraps record keys for exactly this list, so a cross-hub entry here would
  * hand another hub's member a key to this hub's records (#1037).
  *
- * Without a hub (an unscoped request for a hubless record) only global roles
- * apply, as for every other unscoped route.
+ * There is no hubless form (#2461): resolving recipients from GLOBAL roles
+ * would seal a record to whoever holds a global role and to no hub admin.
  */
 async function resolveHubMembers(services: Services, hubId: string): Promise<HubMemberInfo[]> {
   const { roles: roleDefs } = await services.settings.getRoles()
@@ -70,9 +76,7 @@ async function resolveHubMembers(services: Services, hubId: string): Promise<Hub
   const members = allUsers
     .filter(v => v.active)
     .map(v => {
-      const roleIds = hubId
-        ? resolveHubRoleIds(v.roles, v.hubRoles ?? [], roleDefs, hubId)
-        : v.roles
+      const roleIds = resolveHubRoleIds(v.roles, v.hubRoles ?? [], roleDefs, hubId)
       return {
         pubkey: v.pubkey,
         roles: roleIds
@@ -108,15 +112,20 @@ const NON_RECORD_SEGMENTS = new Set([
 ])
 
 /**
- * Inside /hubs/:hubId, every /:id route may only touch a record of that hub.
- * A record of another hub is indistinguishable from a missing one (404) —
- * otherwise a member of Hub B could read, edit, assign or delete Hub A's
- * records by id through Hub B's URL.
+ * Every /:id route may only touch a record of the path hub. A record of another
+ * hub is indistinguishable from a missing one (404) — otherwise a member of
+ * Hub B could read, edit, assign or delete Hub A's records by id through Hub B's
+ * URL. There is always a path hub here (`hubOnly`), so the binding always
+ * applies; it never degrades to a lookup by id alone (#2461).
+ *
+ * Past this guard `pathHubId(c)` IS the record's hub, which is why handlers
+ * audit and seal with it: the auditable subject of a change to a record is the
+ * hub that owns the record, and here that is provably the path hub.
  */
 const recordInPathHub = createMiddleware<AppEnv>(async (c, next) => {
-  const hubId = c.get('hubId')
+  const hubId = pathHubId(c)
   const id = c.req.param('id')
-  if (!hubId || !id || NON_RECORD_SEGMENTS.has(id)) return next()
+  if (!id || NON_RECORD_SEGMENTS.has(id)) return next()
   const record = await c.get('services').cases.get(id)
   if (record.hubId !== hubId) return c.json({ error: 'Record not found' }, 404)
   return next()
@@ -146,7 +155,7 @@ records.get('/',
     const pubkey = c.get('pubkey')
     const permissions = c.get('permissions')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const query = c.req.valid('query')
 
     const accessLevel = getAccessLevel(permissions)
@@ -156,7 +165,11 @@ records.get('/',
 
     const crossHub = query.crossHub === 'true'
 
-    // Cross-hub requires cases:read-cross-hub permission
+    // Cross-hub requires cases:read-cross-hub in this hub, and then reaches only
+    // the hubs where the caller holds it. The permission is a hub-scoped grant
+    // (`role-hub-admin` carries it through `cases:*`), so holding it HERE says
+    // nothing about any other hub: being sealed into another hub's envelopes
+    // is not a licence to list that hub's records.
     if (crossHub && !checkPermission(permissions, 'cases:read-cross-hub')) {
       return c.json({ error: 'Forbidden', required: 'cases:read-cross-hub' }, 403)
     }
@@ -167,8 +180,9 @@ records.get('/',
       limit: query.limit,
       entityTypeId: query.entityTypeId,
       parentRecordId: query.parentRecordId,
-      crossHub,
-      requestingPubkey: crossHub ? pubkey : undefined,
+      crossHub: crossHub
+        ? { hubIds: hubsWithPermission(c, 'cases:read-cross-hub'), requestingPubkey: pubkey }
+        : undefined,
       blindIndexToken: query.blindIndexToken,
       blindIndexField: query.blindIndexField,
     }
@@ -216,9 +230,8 @@ records.get('/by-number/:number',
     }
 
     const services = c.get('services')
-    const record = await services.cases.getByNumber(number)
-    const pathHub = c.get('hubId')
-    if (pathHub && record.hubId !== pathHub) return c.json({ error: 'Record not found' }, 404)
+    // The hub is part of the key: case numbers are unique per hub, not globally.
+    const record = await services.cases.getByNumber(pathHubId(c), number)
 
     // If user can only see assigned records, verify assignment
     if (accessLevel !== 'all') {
@@ -268,7 +281,7 @@ records.get('/envelope-recipients',
 
     // Resolve hub members with permissions — the members of the hub the new
     // record will belong to (the path hub)
-    const hubMembers = await resolveHubMembers(services, c.get('hubId') ?? '')
+    const hubMembers = await resolveHubMembers(services, pathHubId(c))
 
     // assignedTo from query (for existing records) or empty for new records
     const assignedToParam = c.req.query('assignedTo')
@@ -301,7 +314,7 @@ records.get('/by-contact/:contactId',
     const contactId = c.req.param('contactId')
     const pubkey = c.get('pubkey')
     const permissions = c.get('permissions')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     const accessLevel = getAccessLevel(permissions)
     if (!accessLevel) {
@@ -350,7 +363,7 @@ records.get('/interactions/by-source/:sourceId',
     }
 
     const services = c.get('services')
-    const result = await services.cases.getBySource(sourceId)
+    const result = await services.cases.getBySource(pathHubId(c), sourceId)
     return c.json(result)
   },
 )
@@ -393,7 +406,7 @@ records.post('/convert-from-report',
       if (entityType.numberingEnabled && entityType.numberPrefix) {
         const result = await services.settings.generateCaseNumber({
           prefix: entityType.numberPrefix,
-          hubId: c.get('hubId') ?? '',
+          hubId: pathHubId(c),
         })
         caseNumber = result.number
       }
@@ -401,7 +414,7 @@ records.post('/convert-from-report',
       // Entity type not found — proceed with defaults
     }
 
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     const result = await services.cases.convertFromReport({
       ...body,
@@ -449,7 +462,7 @@ records.post('/convert-from-report',
       recordId: result.recordId,
       reportId: body.reportId,
       entityTypeId: body.entityTypeId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ...result, autoAssigned, assignedTo }, 201)
   },
@@ -535,7 +548,7 @@ records.get('/:id/envelope-recipients',
     const entityType = await services.settings.getEntityTypeById(record.entityTypeId)
 
     // Resolve the members of the hub the record belongs to
-    const hubMembers = await resolveHubMembers(services, record.hubId ?? '')
+    const hubMembers = await resolveHubMembers(services, pathHubId(c))
 
     const recipients = determineEnvelopeRecipients(entityType, record.assignedTo, hubMembers)
     return c.json(recipients)
@@ -574,7 +587,7 @@ records.post('/',
       if (entityType.numberingEnabled && entityType.numberPrefix) {
         const result = await services.settings.generateCaseNumber({
           prefix: entityType.numberPrefix,
-          hubId: c.get('hubId') ?? '',
+          hubId: pathHubId(c),
         })
         caseNumber = result.number
       }
@@ -584,7 +597,7 @@ records.post('/',
 
     const record = await services.cases.create({
       ...body,
-      hubId: c.get('hubId') ?? '',
+      hubId: pathHubId(c),
       createdBy: pubkey,
       caseNumber,
     })
@@ -593,7 +606,7 @@ records.post('/',
     if (entityType?.autoAssign) {
       try {
         const threshold = entityType.autoAssignThreshold ?? 30
-        const hubId = c.get('hubId') ?? ''
+        const hubId = pathHubId(c)
         const onShiftPubkeys = await services.shifts.getCurrentVolunteers(hubId)
         const { users: allUsers } = await services.identity.getUsers()
         const activeCaseCounts = new Map<string, number>()
@@ -637,7 +650,7 @@ records.post('/',
       recordId: record.id,
       entityTypeId: record.entityTypeId,
       caseNumber: record.caseNumber,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(record, 201)
   },
@@ -693,7 +706,7 @@ records.patch('/:id',
       recordId: id,
     }, updated.hubId ?? '')
 
-    await audit(services.audit, 'recordUpdated', pubkey, { recordId: id }, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'recordUpdated', pubkey, { recordId: id }, undefined, pathHubId(c))
 
     return c.json(updated)
   },
@@ -725,7 +738,7 @@ records.delete('/:id',
 
     await services.cases.delete(id)
 
-    await audit(services.audit, 'recordDeleted', pubkey, { recordId: id }, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'recordDeleted', pubkey, { recordId: id }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -763,7 +776,7 @@ records.post('/:id/contacts',
       recordId: id,
       contactId: body.contactId,
       role: body.role,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result, 201)
   },
@@ -799,7 +812,7 @@ records.delete('/:id/contacts/:contactId',
     await audit(services.audit, 'recordContactUnlinked', pubkey, {
       recordId: id,
       contactId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -863,7 +876,7 @@ records.get('/:id/suggest-assignees',
   async (c) => {
     const id = c.req.param('id')
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
 
     // 1. Get the record to check entity type and current assignments
     const record = await services.cases.get(id)
@@ -941,14 +954,14 @@ records.post('/:id/assign',
       type: 'record:assigned',
       recordId: id,
       pubkeys: body.pubkeys,
-      hubId: c.get('hubId') ?? '',
+      hubId: pathHubId(c),
       entityTypeId: record.entityTypeId,
     }, record.hubId ?? '')
 
     await audit(services.audit, 'recordAssigned', pubkey, {
       recordId: id,
       assignedPubkeys: body.pubkeys,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result)
   },
@@ -988,14 +1001,14 @@ records.post('/:id/unassign',
       type: 'record:unassigned',
       recordId: id,
       pubkey: body.pubkey,
-      hubId: c.get('hubId') ?? '',
+      hubId: pathHubId(c),
       entityTypeId: unassignRecord.entityTypeId,
     }, unassignRecord.hubId ?? '')
 
     await audit(services.audit, 'recordUnassigned', pubkey, {
       recordId: id,
       unassignedPubkey: body.pubkey,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result)
   },
@@ -1096,7 +1109,7 @@ records.post('/:id/interactions',
     await audit(services.audit, 'interactionCreated', pubkey, {
       caseId: id,
       interactionType: body.interactionType,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(interaction, 201)
   },
@@ -1132,7 +1145,7 @@ records.delete('/:id/interactions/:interactionId',
     await audit(services.audit, 'interactionDeleted', pubkey, {
       caseId: id,
       interactionId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -1174,7 +1187,7 @@ records.post('/:id/reports',
     await audit(services.audit, 'reportLinkedToCase', pubkey, {
       caseId: id,
       reportId: body.reportId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(result, 201)
   },
@@ -1210,7 +1223,7 @@ records.delete('/:id/reports/:reportId',
     await audit(services.audit, 'reportUnlinkedFromCase', pubkey, {
       caseId: id,
       reportId,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json({ ok: true })
   },
@@ -1337,7 +1350,7 @@ records.post('/:id/notify-contacts',
       recordId: id,
       notified,
       skipped,
-    }, undefined, c.get('hubId') ?? null)
+    }, undefined, pathHubId(c))
 
     return c.json(response)
   },
@@ -1361,13 +1374,13 @@ records.post('/merge',
   validator('json', mergeRecordsBodySchema),
   async (c) => {
     const services = c.get('services')
-    const hubId = c.get('hubId') ?? ''
+    const hubId = pathHubId(c)
     const { primaryId, secondaryId } = c.req.valid('json')
     const pubkey = c.get('pubkey') ?? ''
 
     const result = await services.cases.mergeRecords(hubId, primaryId, secondaryId)
 
-    await audit(services.audit, 'recordMerged', pubkey, { primaryId, secondaryId }, undefined, c.get('hubId') ?? null)
+    await audit(services.audit, 'recordMerged', pubkey, { primaryId, secondaryId }, undefined, pathHubId(c))
     return c.json(result)
   },
 )

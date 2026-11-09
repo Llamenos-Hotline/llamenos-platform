@@ -156,7 +156,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
 
     const { status, data } = await apiPost<Record<string, unknown>>(
       request,
-      '/records',
+      `/hubs/${workerHub}/records`,
       {
         entityTypeId: etRes.data.id,
         statusHash: 'active',
@@ -292,7 +292,7 @@ When('the {string} is fetched via the API', async ({ request, world, workerHub }
   }
 
   if (entityType === 'record blindIndexes' || entityType === 'record summaryEnvelopes') {
-    const { status, data } = await apiGet<Record<string, unknown>>(request, `/records/${id}`)
+    const { status, data } = await apiGet<Record<string, unknown>>(request, `/hubs/${workerHub}/records/${id}`)
     expect(status).toBe(200)
     state.apiResponses.set(entityType, data)
     return

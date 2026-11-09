@@ -1,7 +1,7 @@
 /**
  * Unit tests for routes/records.ts
  *
- * Tests: getAccessLevel helper, IDOR prevention on get/:id and by-number/:number,
+ * Tests: getAccessLevel helper, IDOR prevention on get/:id and the path-hub binding of by-number/:number,
  * PATCH update ownership, permission gates, interaction access control.
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -471,10 +471,16 @@ describe('records — hub isolation', () => {
     expect(mockCases.assign).not.toHaveBeenCalled()
   })
 
-  it('GET /by-number/:number returns 404 for a record of another hub', async () => {
-    const { app } = makeApp({ hubId: 'hub-B', record: { ...foreign, caseNumber: 'CASE-1' } })
-    const res = await app.request('/by-number/CASE-1')
-    expect(res.status).toBe(404)
+  // The hub filter lives in the service query (a case number is unique per hub,
+  // not globally, so a lookup by number alone can return another hub's row).
+  // The service is mocked here, so what this pins is that the route hands it the
+  // PATH hub; records-hub-scope.test.ts runs the real query against two hubs.
+  it('GET /by-number/:number and /interactions/by-source/:id look up within the path hub', async () => {
+    const { app, mockCases } = makeApp({ hubId: 'hub-B' })
+    await app.request('/by-number/CASE-1')
+    expect(mockCases.getByNumber).toHaveBeenCalledWith('hub-B', 'CASE-1')
+    await app.request('/interactions/by-source/src-1')
+    expect(mockCases.getBySource).toHaveBeenCalledWith('hub-B', 'src-1')
   })
 
   // --- Envelope recipients: who, and by WHICH key ------------------------
@@ -580,5 +586,45 @@ describe('records — hub isolation', () => {
       expect(everyone.has(user.pubkey)).toBe(false)
     }
     expect(body.fields).toContain(DEV.assignee)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2461 — a change to a record is audited to the hub that owns it
+// ---------------------------------------------------------------------------
+
+describe('record mutations audit to the record\'s hub, never the platform chain (#2461)', () => {
+  const mutations: Array<[string, string, string, unknown]> = [
+    ['recordUpdated', 'PATCH', '/rec-1', { statusHash: 'closed-hash' }],
+    ['recordDeleted', 'DELETE', '/rec-1', undefined],
+    ['recordAssigned', 'POST', '/rec-1/assign', { pubkeys: ['b'.repeat(64)] }],
+    ['recordContactLinked', 'POST', '/rec-1/contacts', { contactId: '550e8400-e29b-41d4-a716-446655440000', role: 'caller' }],
+  ]
+
+  for (const [event, method, path, body] of mutations) {
+    it(`${method} ${path} → '${event}' lands in the record's hub chain`, async () => {
+      const { app, mockAudit } = makeApp({ hubId: 'hub-owner' })
+      const res = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      expect(res.status, await res.clone().text()).toBeLessThan(300)
+      const call = mockAudit.log.mock.calls.find((c: unknown[]) => c[0] === event)
+      expect(call, `${event} was audited`).toBeDefined()
+      // AuditService.log(event, actor, details, hubId): `null` is the platform chain.
+      expect(call?.[3]).toBe('hub-owner')
+    })
+  }
+
+  it('a record of another hub is refused before anything is changed or audited', async () => {
+    const { app, mockAudit, mockCases } = makeApp({
+      hubId: 'hub-path',
+      record: { id: 'rec-1', createdBy: 'owner-pub', assignedTo: [], hubId: 'hub-owner' },
+    })
+    const res = await app.request('/rec-1', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+    expect(mockCases.delete).not.toHaveBeenCalled()
+    expect(mockAudit.log).not.toHaveBeenCalled()
   })
 })

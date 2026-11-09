@@ -1,5 +1,6 @@
 /**
  * #2395 — notes, reports, contacts and the audit log have no unscoped route.
+ * #2461 — nor have records, events, evidence, calls, shifts or ring groups.
  *
  * Each of these used to go through `hp()`, which falls back to the bare path
  * when no hub is active: a request with no hub in it, which the server answered
@@ -14,6 +15,12 @@ import { listTriageQueue } from './triage'
 import { listNotes, createNote, listNoteReplies } from './notes'
 import { listContacts, getContactTimeline } from './contacts'
 import { listAuditLog, listPlatformAuditLog } from './audit'
+import { listRecords, getRecord, createRecord, deleteRecord, listEventLinkedRecords } from './records'
+import { listInteractions } from './interactions'
+import { listEvidence, getEvidenceMetadata } from './evidence'
+import { getCallHistory, getCallsTodayCount, getUserPresence } from './calls'
+import { listShifts, getMyShiftStatus, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
+import { listRingGroups, createRingGroup } from './ring-groups'
 
 let urls: string[]
 
@@ -43,6 +50,31 @@ const hubOwnedReads: Array<[string, () => Promise<unknown>, string]> = [
   ['listContacts', () => listContacts(), '/contacts'],
   ['getContactTimeline', () => getContactTimeline('h1'), '/contacts/h1'],
   ['listAuditLog', () => listAuditLog(), '/audit'],
+  // #2461: records, events, evidence, calls, shifts and ring groups. These went
+  // through `hp()` too, and the server's unscoped mount wrote them into hub ''
+  // and read any hub's row by id.
+  ['listRecords', () => listRecords(), '/records'],
+  ['getRecord', () => getRecord('rec-1'), '/records/rec-1'],
+  ['listEventLinkedRecords', () => listEventLinkedRecords('ev-1'), '/events/ev-1/records'],
+  ['listInteractions', () => listInteractions('rec-1'), '/records/rec-1/interactions'],
+  ['listEvidence', () => listEvidence('rec-1'), '/records/rec-1/evidence'],
+  ['getEvidenceMetadata', () => getEvidenceMetadata('evd-1'), '/evidence/evd-1'],
+  ['getCallHistory', () => getCallHistory(), '/calls/history'],
+  ['getCallsTodayCount', () => getCallsTodayCount(), '/calls/today-count'],
+  ['getUserPresence', () => getUserPresence(), '/calls/presence'],
+  ['listShifts', () => listShifts(), '/shifts'],
+  ['getMyShiftStatus', () => getMyShiftStatus(), '/shifts/my-status'],
+  ['getFallbackGroup', () => getFallbackGroup(), '/shifts/fallback'],
+  ['listRingGroups', () => listRingGroups(), '/ring-groups'],
+]
+
+/** Writes that used to land in hub '' when no hub was active (#2461). */
+const hubOwnedWrites: Array<[string, () => Promise<unknown>, string]> = [
+  ['createRecord', () => createRecord({ entityTypeId: 'et-1', statusHash: 's', encryptedSummary: 'c', summaryEnvelopes: [] }), '/records'],
+  ['deleteRecord', () => deleteRecord('rec-1'), '/records/rec-1'],
+  ['clockIn', () => clockIn(), '/shifts/clock-in'],
+  ['sendHeartbeat', () => sendHeartbeat(), '/shifts/heartbeat'],
+  ['createRingGroup', () => createRingGroup({ id: 'rg-1', encryptedName: 'n' }), '/ring-groups'],
 ]
 
 describe('hub-owned resources (#2395)', () => {
@@ -53,6 +85,17 @@ describe('hub-owned resources (#2395)', () => {
   })
 
   it.each(hubOwnedReads)('%s with no active hub sends nothing and throws NoActiveHubError', async (_name, call) => {
+    await expect(call()).rejects.toBeInstanceOf(NoActiveHubError)
+    expect(urls).toEqual([])
+  })
+
+  it.each(hubOwnedWrites)('%s is sent to the active hub', async (_name, call, path) => {
+    setActiveHub('hub-1')
+    await call()
+    expect(urls).toEqual([`/api/hubs/hub-1${path}`])
+  })
+
+  it.each(hubOwnedWrites)('%s with no active hub writes nothing and throws NoActiveHubError (#2461)', async (_name, call) => {
     await expect(call()).rejects.toBeInstanceOf(NoActiveHubError)
     expect(urls).toEqual([])
   })

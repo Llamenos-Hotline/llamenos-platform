@@ -20,6 +20,10 @@ import XCTest
 final class AdminReaderEnvelopeTests: XCTestCase {
 
     private let testBaseURL = URL(string: "https://hub.example.org")!
+    /// Records and events are hub-owned (#2461): with no active hub the write has no
+    /// path to go to, so every test below writes into this one explicitly — never into
+    /// whatever `activeHubId` an earlier test left in `UserDefaults`.
+    private let hubId = "hub-envelopes"
 
     override func setUp() {
         super.setUp()
@@ -30,6 +34,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
 
     override func tearDown() {
         MockURLProtocol.reset()
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
         super.tearDown()
     }
 
@@ -51,7 +56,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         let viewModel = CaseManagementViewModel(apiService: apiService, cryptoService: crypto)
         await viewModel.addComment(recordId: "rec-1", text: "handled, caller safe", adminPubkeys: [adminPubkey])
 
-        let json = try onlyPostedBody(pathSuffix: "/records/rec-1/interactions")
+        let json = try onlyPostedBody(path: "/api/hubs/\(hubId)/records/rec-1/interactions")
 
         // camelCase keys, or `createInteractionBodySchema` rejects the request.
         XCTAssertEqual(json["interactionType"] as? String, "comment", "got \(json.keys.sorted())")
@@ -84,7 +89,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         let viewModel = CaseManagementViewModel(apiService: apiService, cryptoService: crypto)
         await viewModel.addComment(recordId: "rec-1", text: "note to self", adminPubkeys: [])
 
-        let json = try onlyPostedBody(pathSuffix: "/records/rec-1/interactions")
+        let json = try onlyPostedBody(path: "/api/hubs/\(hubId)/records/rec-1/interactions")
         let pubkeys = try envelopePubkeys(json["contentEnvelopes"])
         XCTAssertEqual(pubkeys, [authorPubkey], "with no admin configured the author is the only reader")
     }
@@ -126,7 +131,7 @@ final class AdminReaderEnvelopeTests: XCTestCase {
             adminPubkeys: [adminPubkey]
         )
 
-        let json = try onlyPostedBody(pathSuffix: "/events")
+        let json = try onlyPostedBody(path: "/api/hubs/\(hubId)/events")
 
         // camelCase keys, or `createEventBodySchema` rejects the request.
         XCTAssertNotNil(json["entityTypeId"], "got \(json.keys.sorted())")
@@ -143,6 +148,72 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         XCTAssertTrue(
             pubkeys.contains(adminPubkey),
             "every admin reader must be wrapped for client-side — the server never adds one; envelopes: \(pubkeys)"
+        )
+    }
+
+    // MARK: - No active hub
+
+    /// A comment with no hub to write into must fail where the volunteer can see it.
+    /// Before #2461 the write went to the unscoped path; now there is no path, and a
+    /// write that silently never fired would be a note the volunteer believes is saved.
+    @MainActor
+    func testAddCommentWithNoActiveHubSurfacesAnErrorAndSendsNothing() async throws {
+        let (crypto, _, adminPubkey) = try makeAuthorAndAdminKeys()
+        let apiService = makeAPIService(cryptoService: crypto, withActiveHub: false)
+        MockURLProtocol.requestHandler = { _ in (201, Data(#"{"id":"int-1"}"#.utf8)) }
+
+        let viewModel = CaseManagementViewModel(apiService: apiService, cryptoService: crypto)
+        await viewModel.addComment(recordId: "rec-1", text: "handled, caller safe", adminPubkeys: [adminPubkey])
+
+        XCTAssertEqual(
+            MockURLProtocol.capturedRequests.map { $0.url?.path ?? "?" }, [],
+            "with no hub there is no hub-owned path to write to"
+        )
+        XCTAssertEqual(
+            viewModel.errorMessage, APIError.noActiveHub.errorDescription,
+            "a comment that was not saved must say so, never no-op"
+        )
+    }
+
+    /// The same for an event: `createEvent` reports failure and says why.
+    @MainActor
+    func testCreateEventWithNoActiveHubSurfacesAnErrorAndSendsNothing() async throws {
+        let (crypto, _, adminPubkey) = try makeAuthorAndAdminKeys()
+        let apiService = makeAPIService(cryptoService: crypto, withActiveHub: false)
+        let eventTypes = ProtocolFixtures.entityTypeListJSON([
+            ProtocolFixtures.entityTypeJSON(id: "et-1", name: "meeting", category: "event"),
+        ])
+        MockURLProtocol.requestHandler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/settings/cms/case-management") {
+                return (200, Data(#"{"enabled":true}"#.utf8))
+            }
+            if path.hasSuffix("/settings/cms/entity-types") {
+                return (200, Data(eventTypes.utf8))
+            }
+            return (201, Data(#"{"id":"evt-1"}"#.utf8))
+        }
+
+        let viewModel = EventsViewModel(apiService: apiService, cryptoService: crypto)
+        await viewModel.loadInitial()
+        let created = await viewModel.createEvent(
+            entityTypeId: "et-1",
+            title: "community meeting",
+            description: nil,
+            startDate: Date(timeIntervalSince1970: 1_800_000_000),
+            endDate: nil,
+            location: nil,
+            adminPubkeys: [adminPubkey]
+        )
+
+        XCTAssertFalse(created, "an event that was not saved must not report success")
+        XCTAssertEqual(
+            MockURLProtocol.capturedRequests.filter { $0.httpMethod == "POST" }.map { $0.url?.path ?? "?" }, [],
+            "with no hub there is no hub-owned path to write to"
+        )
+        XCTAssertEqual(
+            viewModel.errorMessage, APIError.noActiveHub.errorDescription,
+            "an event that was not saved must say so, never no-op"
         )
     }
 
@@ -164,12 +235,18 @@ final class AdminReaderEnvelopeTests: XCTestCase {
         return (authorService, authorPubkey, adminPubkey)
     }
 
-    private func makeAPIService(cryptoService: CryptoService) -> APIService {
+    /// A client browsing `hubId`, or — `withActiveHub: false` — one with no hub selected.
+    private func makeAPIService(cryptoService: CryptoService, withActiveHub: Bool = true) -> APIService {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        let hubContext = HubContext()
+        if withActiveHub {
+            hubContext.setActiveHub(hubId)
+        }
         let apiService = APIService(
             cryptoService: cryptoService,
-            hubContext: HubContext(),
+            hubContext: hubContext,
             sessionConfiguration: config
         )
         apiService.configure(baseURL: testBaseURL)
@@ -177,16 +254,14 @@ final class AdminReaderEnvelopeTests: XCTestCase {
     }
 
     /// The single POST body captured by the mock. Only writes carry a body, so
-    /// `capturedBodies` holds exactly the POST this test performed. `suffix` is
-    /// matched on the tail of the path because `APIService.hp` rewrites
-    /// `/api/records/...` to `/api/hubs/<id>/records/...` whenever a hub is
-    /// active, and this test is not about hub scoping.
-    private func onlyPostedBody(pathSuffix suffix: String) throws -> [String: Any] {
+    /// `capturedBodies` holds exactly the POST this test performed. `path` is the
+    /// full hub-scoped path: records and events have no unscoped route (#2461).
+    private func onlyPostedBody(path expected: String) throws -> [String: Any] {
         let posts = MockURLProtocol.capturedRequests.filter { $0.httpMethod == "POST" }
         XCTAssertEqual(posts.count, 1, "expected exactly one POST, got \(posts.map { $0.url?.path ?? "?" })")
-        XCTAssertTrue(
-            posts.first?.url?.path.hasSuffix(suffix) == true,
-            "POST went to \(posts.first?.url?.path ?? "?"), expected a path ending in \(suffix)"
+        XCTAssertEqual(
+            posts.first?.url?.path, expected,
+            "POST went to \(posts.first?.url?.path ?? "?"), expected \(expected)"
         )
         let body = try XCTUnwrap(MockURLProtocol.capturedBodies.first, "the POST carried no body")
         return try XCTUnwrap(

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.EntityTypeDefinition
 import org.llamenos.hotline.model.EntityTypesResponse
@@ -234,7 +235,7 @@ class EventsViewModel @Inject constructor(
             val firstEventType = eventTypes.first()
             val response = apiService.request<RecordsListResponse>(
                 "GET",
-                apiService.hp("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
+                apiService.activeHubPath("/api/records") + "?entityTypeId=${firstEventType.id}&limit=50",
             )
             _uiState.update {
                 it.copy(
@@ -244,6 +245,9 @@ class EventsViewModel @Inject constructor(
                     isRefreshing = false,
                 )
             }
+        } catch (_: NoActiveHubException) {
+            // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
+            _uiState.update { it.copy(events = emptyList(), total = 0, isLoading = false, isRefreshing = false) }
         } catch (e: Exception) {
             _uiState.update {
                 it.copy(
@@ -270,7 +274,7 @@ class EventsViewModel @Inject constructor(
                 )
             }
             try {
-                val record = apiService.request<Record>("GET", apiService.hp("/api/records/$eventId"))
+                val record = apiService.request<Record>("GET", apiService.activeHubPath("/api/records/$eventId"))
                 _uiState.update {
                     it.copy(
                         selectedEvent = record,
@@ -303,7 +307,7 @@ class EventsViewModel @Inject constructor(
             try {
                 val response = apiService.request<RecordsListResponse>(
                     "GET",
-                    apiService.hp("/api/records") + "?parentRecordId=$eventId&limit=50",
+                    apiService.activeHubPath("/api/records") + "?parentRecordId=$eventId&limit=50",
                 )
                 _uiState.update {
                     it.copy(
@@ -330,7 +334,7 @@ class EventsViewModel @Inject constructor(
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
                 val request = UpdateRecordRequest(statusHash = statusHash)
-                apiService.request<Record>("PATCH", apiService.hp("/api/records/$recordId"), request)
+                apiService.request<Record>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
                 _uiState.update {
                     it.copy(
                         isUpdatingStatus = false,
@@ -374,7 +378,7 @@ class EventsViewModel @Inject constructor(
 
                 apiService.requestNoContent(
                     "POST",
-                    apiService.hp("/api/records"),
+                    apiService.activeHubPath("/api/records"),
                     CreateBody(entityTypeId, defaultStatus, summaryJson, emptyList()),
                 )
                 loadEvents()

@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { listNotes, NoActiveHubError, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
+import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, createNoteReply, getCallHistory, listUsers, getCustomFields, type EncryptedNote, type CallRecord, type User, type ConversationMessage } from '@/lib/api'
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
@@ -10,7 +10,8 @@ import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTra
 import * as keyManager from '@/lib/key-manager'
 import { resolveCallHubId } from '@/lib/call-hubs'
 import { useToast } from '@/lib/toast'
-import { useConfig } from '@/lib/config'
+import { useHubOwned } from '@/lib/hub-owned'
+import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 import type { NotePayload } from '@shared/types'
 import { StickyNote, Plus, Pencil, Lock, Mic, X, Search, ChevronLeft, ChevronRight, Download, MessageCircle, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -41,15 +42,16 @@ interface DecryptedNote extends EncryptedNote {
   isTranscription: boolean
 }
 
+type NotesPage = { notes: DecryptedNote[]; total: number }
+const EMPTY_NOTES_PAGE: NotesPage = { notes: [], total: 0 }
+const NO_CALLS: CallRecord[] = []
+
 function NotesPage() {
   const { t } = useTranslation()
   const { hasDeviceKey, publicKey, isAdmin, adminDecryptionPubkey } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate({ from: '/notes' })
   const { page, callId, search } = Route.useSearch()
-  const [notes, setNotes] = useState<DecryptedNote[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showNewNote, setShowNewNote] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -58,29 +60,29 @@ function NotesPage() {
   const [threadLoading, setThreadLoading] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [sendingReply, setSendingReply] = useState(false)
-  const [recentCalls, setRecentCalls] = useState<CallRecord[]>([])
+  const [searchInput, setSearchInput] = useState(search)
+  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
+  const [users, setUsers] = useState<User[]>([])
+  const limit = 50
+
+  const loadRecentCalls = useCallback(
+    () => (isAdmin ? getCallHistory({ limit: 100 }).then(r => r.calls) : Promise.resolve<CallRecord[]>([])),
+    [isAdmin],
+  )
+  const { data: recentCalls, setData: setRecentCalls, loading: recentCallsLoading } = useHubOwned(loadRecentCalls, {
+    empty: NO_CALLS,
+    onError: () => toast(t('common.error'), 'error'),
+  })
   // NewNoteForm renders a plain call-id input when there are no recent calls and a
   // select when there are. Opening the form before the history settles let that
   // control swap under the user mid-typing (their input discarded), so the form
   // stays closed until the call-id control is decided.
-  const [recentCallsLoaded, setRecentCallsLoaded] = useState(false)
-  const [searchInput, setSearchInput] = useState(search)
-  const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const { currentHubId } = useConfig()
-  const limit = 50
+  const recentCallsLoaded = !recentCallsLoading
 
   useEffect(() => {
     getCustomFields().then(r => setCustomFields(r.fields)).catch(() => toast(t('common.error'), 'error'))
     if (isAdmin) {
-      setRecentCallsLoaded(false)
-      getCallHistory({ limit: 100 })
-        .then(r => setRecentCalls(r.calls))
-        .catch(() => toast(t('common.error'), 'error'))
-        .finally(() => setRecentCallsLoaded(true))
       listUsers().then(r => setUsers(r.users)).catch(() => toast(t('common.error'), 'error'))
-    } else {
-      setRecentCallsLoaded(true)
     }
   }, [isAdmin, t, toast])
 
@@ -101,7 +103,7 @@ function NotesPage() {
         if (meta) return { ...call, answeredBy: meta.answeredBy, callerNumber: meta.callerNumber }
         return call
       }))
-      if (!cancelled) setRecentCalls(decrypted)
+      if (!cancelled) setRecentCalls(() => decrypted)
     })()
     return () => { cancelled = true }
   }, [recentCalls, hasDeviceKey, publicKey])
@@ -118,59 +120,56 @@ function NotesPage() {
     return map
   }, [recentCalls])
 
-  const loadNotes = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await listNotes({ callId: callId || undefined, page, limit })
-      const filtered = res.notes.filter(note => {
-        if (note.authorPubkey === 'system:transcription:admin') return isAdmin
-        if (note.authorPubkey === 'system:transcription') return !isAdmin
-        return true
-      })
-      const canDecrypt = hasDeviceKey && keyManager.isUnlocked()
-      const decryptedNotes: DecryptedNote[] = await Promise.all(
-        filtered.map(async note => {
-          const isTranscription = note.authorPubkey.startsWith('system:transcription')
-          let payload: NotePayload
-          if (isTranscription && canDecrypt) {
-            // Transcriptions are encrypted as messages with reader envelopes in adminEnvelopes
-            const text = note.adminEnvelopes?.length
-              ? await decryptTranscription(note.encryptedContent, note.adminEnvelopes) || '[Decryption failed]'
-              : note.encryptedContent
-            payload = { text }
-          } else if (isTranscription) {
-            payload = { text: note.encryptedContent }
-          } else if (canDecrypt) {
-            // Decrypt per-note HPKE envelope
-            const myPubkey = publicKey ?? ''
-            const envelope = isAdmin
-              ? note.adminEnvelopes?.find(e => e.pubkey === myPubkey) ?? note.adminEnvelopes?.[0]
-              : note.authorEnvelope
-            if (envelope) {
-              const decryptedJson = await decryptNote(note.encryptedContent, envelope)
-              payload = decryptedJson ? JSON.parse(decryptedJson) : { text: '[Decryption failed]' }
-            } else {
-              payload = await decryptLegacyNote(note.encryptedContent) || { text: '[Decryption failed]' }
-            }
+  const loadNotes = useCallback(async (): Promise<NotesPage> => {
+    const res = await listNotes({ callId: callId || undefined, page, limit })
+    const filtered = res.notes.filter(note => {
+      if (note.authorPubkey === 'system:transcription:admin') return isAdmin
+      if (note.authorPubkey === 'system:transcription') return !isAdmin
+      return true
+    })
+    const canDecrypt = hasDeviceKey && keyManager.isUnlocked()
+    const decryptedNotes: DecryptedNote[] = await Promise.all(
+      filtered.map(async note => {
+        const isTranscription = note.authorPubkey.startsWith('system:transcription')
+        let payload: NotePayload
+        if (isTranscription && canDecrypt) {
+          // Transcriptions are encrypted as messages with reader envelopes in adminEnvelopes
+          const text = note.adminEnvelopes?.length
+            ? await decryptTranscription(note.encryptedContent, note.adminEnvelopes) || '[Decryption failed]'
+            : note.encryptedContent
+          payload = { text }
+        } else if (isTranscription) {
+          payload = { text: note.encryptedContent }
+        } else if (canDecrypt) {
+          // Decrypt per-note HPKE envelope
+          const myPubkey = publicKey ?? ''
+          const envelope = isAdmin
+            ? note.adminEnvelopes?.find(e => e.pubkey === myPubkey) ?? note.adminEnvelopes?.[0]
+            : note.authorEnvelope
+          if (envelope) {
+            const decryptedJson = await decryptNote(note.encryptedContent, envelope)
+            payload = decryptedJson ? JSON.parse(decryptedJson) : { text: '[Decryption failed]' }
           } else {
-            payload = { text: '[No key]' }
+            payload = await decryptLegacyNote(note.encryptedContent) || { text: '[Decryption failed]' }
           }
-          return { ...note, decrypted: payload.text, payload, isTranscription }
-        })
-      )
-      setNotes(decryptedNotes)
-      setTotal(res.total)
-    } catch (err) {
-      // No hub to browse is an empty list, not a failure to load one (#2405).
-      if (!(err instanceof NoActiveHubError)) toast(t('common.error'), 'error')
-    } finally {
-      setLoading(false)
-    }
-    // currentHubId: notes are hub-scoped, so switching hubs must re-read them
-    // rather than leave another hub's list on screen (#1708).
-  }, [page, callId, hasDeviceKey, isAdmin, currentHubId])
-
-  useEffect(() => { loadNotes() }, [loadNotes])
+        } else {
+          payload = { text: '[No key]' }
+        }
+        return { ...note, decrypted: payload.text, payload, isTranscription }
+      })
+    )
+    return { notes: decryptedNotes, total: res.total }
+    // A change of active hub re-reads the notes through `useHubOwned` (#1708, #2478).
+  }, [page, callId, hasDeviceKey, isAdmin, publicKey])
+  const { data: notesPage, setData: setNotesPage, noHub, loading } = useHubOwned(loadNotes, {
+    empty: EMPTY_NOTES_PAGE,
+    onError: () => toast(t('common.error'), 'error'),
+  })
+  const { notes, total } = notesPage
+  const setNotes = useCallback(
+    (update: (prev: DecryptedNote[]) => DecryptedNote[]) => setNotesPage(prev => ({ ...prev, notes: update(prev.notes) })),
+    [setNotesPage],
+  )
 
   async function handleSaveEdit(noteId: string, text: string, fields: Record<string, string | number | boolean>) {
     if (!hasDeviceKey || !publicKey || !text.trim()) return
@@ -221,8 +220,10 @@ function NotesPage() {
       // until that hub is active — listing it here would aim its edits and replies at the
       // wrong hub.
       if (hubId === getActiveHub()) {
-        setNotes(prev => [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev])
-        setTotal(prev => prev + 1)
+        setNotesPage(prev => ({
+          notes: [{ ...res.note, decrypted: text, payload, isTranscription: false }, ...prev.notes],
+          total: prev.total + 1,
+        }))
       }
       setShowNewNote(false)
     } catch {
@@ -395,7 +396,13 @@ function NotesPage() {
         />
       )}
 
-      {loading ? (
+      {noHub ? (
+        <Card>
+          <CardContent>
+            <NoActiveHubNotice />
+          </CardContent>
+        </Card>
+      ) : loading ? (
         <Card>
           <CardContent className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (

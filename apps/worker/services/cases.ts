@@ -17,7 +17,7 @@
  * - evidence: case_id
  * - custody_entries: evidence_id+timestamp
  */
-import { eq, and, desc, asc, sql, count, isNull } from 'drizzle-orm'
+import { eq, and, desc, asc, sql, count, isNull, inArray, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   caseRecords,
@@ -69,8 +69,15 @@ export interface ListCasesInput {
   assignedTo?: string
   entityTypeId?: string
   parentRecordId?: string
-  crossHub?: boolean
-  requestingPubkey?: string
+  /**
+   * Widen the list past `hubId` to other hubs. The caller's authority over each
+   * of those hubs is decided by the route, not here: `hubIds` is the set of
+   * hubs in which they hold `cases:read-cross-hub` (`null` = every hub, a
+   * super-admin), and a row is returned only if it is in that set AND sealed
+   * to `requestingPubkey`. An envelope alone is never the entitlement: a
+   * removed member's pubkey stays in old envelopes until they are rewrapped.
+   */
+  crossHub?: { hubIds: string[] | null; requestingPubkey: string }
   blindIndexToken?: string
   blindIndexField?: string
 }
@@ -388,13 +395,20 @@ export class CasesService {
     const limit = Math.min(input.limit ?? 20, 100)
     const offset = (page - 1) * limit
 
-    // Cross-hub query: check if requesting pubkey appears in any summaryEnvelopes element
-    const conditions = input.crossHub && input.requestingPubkey
-      ? [sql`EXISTS (
-          SELECT 1 FROM jsonb_array_elements(${caseRecords.summaryEnvelopes}) AS el
-          WHERE el->>'pubkey' = ${input.requestingPubkey}
-        )`]
-      : [eq(caseRecords.hubId, input.hubId)]
+    const conditions: SQL[] = []
+    if (input.crossHub) {
+      const { hubIds, requestingPubkey } = input.crossHub
+      conditions.push(sql`EXISTS (
+        SELECT 1 FROM jsonb_array_elements(${caseRecords.summaryEnvelopes}) AS el
+        WHERE el->>'pubkey' = ${requestingPubkey}
+      )`)
+      if (hubIds !== null) {
+        // inArray() with no values is not valid SQL, and "no hub" must match no row.
+        conditions.push(hubIds.length > 0 ? inArray(caseRecords.hubId, hubIds) : sql`false`)
+      }
+    } else {
+      conditions.push(eq(caseRecords.hubId, input.hubId))
+    }
 
     if (input.statusHash) {
       conditions.push(eq(caseRecords.statusHash, input.statusHash))
@@ -456,11 +470,16 @@ export class CasesService {
   // Get by case number
   // =========================================================================
 
-  async getByNumber(caseNumber: string): Promise<CaseRecordRow> {
+  /**
+   * Case numbers are unique per hub, not globally (`case_records_hub_id_case_number_idx`),
+   * so the hub is part of the key: looked up by number alone, a number two hubs
+   * both use would answer with whichever row Postgres returned first.
+   */
+  async getByNumber(hubId: string, caseNumber: string): Promise<CaseRecordRow> {
     const rows = await this.db
       .select()
       .from(caseRecords)
-      .where(eq(caseRecords.caseNumber, caseNumber))
+      .where(and(eq(caseRecords.hubId, hubId), eq(caseRecords.caseNumber, caseNumber)))
 
     if (rows.length === 0) {
       throw new ServiceError(404, 'Record not found')
@@ -1484,7 +1503,11 @@ export class CasesService {
     }
   }
 
-  async getBySource(sourceId: string): Promise<{
+  /**
+   * Is `sourceId` linked to a case of `hubId`? A link to another hub's case is
+   * reported as not linked: answering with that case's id would disclose it.
+   */
+  async getBySource(hubId: string, sourceId: string): Promise<{
     linked: boolean
     caseId?: string
     interactionId?: string
@@ -1495,7 +1518,8 @@ export class CasesService {
         caseId: caseInteractions.caseId,
       })
       .from(caseInteractions)
-      .where(eq(caseInteractions.sourceId, sourceId))
+      .innerJoin(caseRecords, eq(caseRecords.id, caseInteractions.caseId))
+      .where(and(eq(caseInteractions.sourceId, sourceId), eq(caseRecords.hubId, hubId)))
       .limit(1)
 
     if (rows.length === 0) {
@@ -1790,11 +1814,13 @@ export class CasesService {
     const { reportId, entityTypeId, hubId, createdBy, caseNumber, defaultStatusHash } = params
 
     return await this.db.transaction(async (tx) => {
-      // 1. Fetch report — validates existence
+      // 1. Fetch report — validates existence, in this hub. A report of another
+      // hub is a missing one: converting it would create a case here from a
+      // report this hub does not own and rewrite that report's conversion status.
       const reportRows = await tx
         .select()
         .from(conversations)
-        .where(eq(conversations.id, reportId))
+        .where(and(eq(conversations.id, reportId), eq(conversations.hubId, hubId)))
         .limit(1)
       if (reportRows.length === 0) {
         throw new ServiceError(404, `Report not found: ${reportId}`)

@@ -153,8 +153,10 @@ final class ShiftFlowUITests: BaseUITest {
     // MARK: - Error State
 
     /// A hub that cannot be reached is an error, not an empty schedule: the volunteer is
-    /// told the schedule failed to load. Port 9 (discard) has no listener, so the
-    /// request is refused at the socket.
+    /// told the schedule failed to load. Port 9 (discard) has no listener, so every
+    /// request is refused at the socket — the session's hub-list fetch first, so no hub is
+    /// ever selected. "No active hub" then means the hub could not be asked, not that the
+    /// volunteer belongs to none, and the Shifts tab must report it (#2478).
     func testErrorMessageDisplays() {
         given("I am authenticated against a hub that cannot be reached") {
             app.launchArguments.append(contentsOf: [

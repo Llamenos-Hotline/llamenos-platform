@@ -32,7 +32,7 @@ struct RetentionSettingsView: View {
             viewModel.isLoadingRetention = false
             await viewModel.loadRetentionSettings()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadRetentionSettings()
         }
         .accessibilityIdentifier("retention-settings-view")

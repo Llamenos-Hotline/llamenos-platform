@@ -468,7 +468,9 @@ const SWIFT_ENTRY: Entry = { callees: ['request', 'rawRequest', 'publicRequest']
 const KOTLIN_ENTRY: Entry = { callees: ['request', 'requestNoContent', 'requestRawNoContent', 'requestBytes'], style: 'positional' }
 
 /** Request entry points: a bare own-parameter path handed on from one of these is plumbing. */
-const ENTRY_NAMES = new Set(['request', 'rawRequest', 'publicRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve'])
+// `getHubOwned` (iOS, #2478) is checked at its callers — see the `getHubOwned(` scan in
+// `sitesForFile` — so the GET inside it is plumbing like the others.
+const ENTRY_NAMES = new Set(['request', 'rawRequest', 'publicRequest', 'requestNoContent', 'requestRawNoContent', 'requestBytes', 'resolve', 'getHubOwned'])
 
 function isPassThrough(m: FileModel, at: number, expr: string): boolean {
   const fn = enclosingFn(m, at)
@@ -542,6 +544,31 @@ function sitesForFile(client: ClientId, m: FileModel, g: Globals, consumed: Set<
   }
 
   if (lang === 'swift') {
+    // `getHubOwned("/api/x", as: T.self)` (#2478): a GET of a hub-owned resource in the
+    // active hub. Like `activeHubPath(...)`, it never falls back to the unscoped path —
+    // with no hub it sends nothing — so it always calls the hub route.
+    const hubOwned = /\bgetHubOwned\s*(?:<[^()]*?>)?\s*\(/g
+    for (let r = hubOwned.exec(text); r; r = hubOwned.exec(text)) {
+      const lineStart = text.lastIndexOf('\n', r.index) + 1
+      if (/\bfunc\b[^{=]*$/.test(text.slice(lineStart, r.index))) continue // the declaration
+      const open = r.index + r[0].length - 1
+      let close: number
+      try {
+        close = findClose(text, open, lang)
+      } catch {
+        continue
+      }
+      const ctx = mkCtx(m, g, r.index, consumed)
+      const pathArg = parseArgs(ctx, open, close).find(a => !a.name)
+      if (!pathArg) continue
+      const inner = evalRange(ctx, ...pathArg.range)
+      const scoped: Res = isUnres(inner)
+        ? inner
+        : { alts: inner.alts.map(a => ({ path: scopeToHub(a.path), scoping: 'explicit' as HubScoping })) }
+      const get: Res = { alts: [{ path: 'GET', scoping: 'none' }] }
+      sites.push(...toSites(client, m, lineAt(m.source, r.index), get, scoped, exprText(m, pathArg.range), 'call', r.index))
+    }
+
     // Direct URL construction: `Self.resolve(path: …)` and `baseURL.appendingPathComponent("/api/…")`.
     const direct = /\b(resolve|appendingPathComponent)\s*\(/g
     for (let r = direct.exec(text); r; r = direct.exec(text)) {

@@ -49,6 +49,15 @@ private final class CaseListStubURLProtocol: URLProtocol {
         self.onFirstArrival = onFirstArrival
     }
 
+    /// How many requests reached `route` since the last `reset(_:)`. A test that
+    /// asserts what the screen shows after a response must first know the request was
+    /// made — a guard that returns before asking would otherwise pass it vacuously.
+    static func arrivalCount(_ route: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return arrivals[route, default: 0]
+    }
+
     /// Let the held response on `route` answer.
     static func release(_ route: String) {
         lock.lock()
@@ -156,12 +165,25 @@ final class CaseManagementViewModelTests: XCTestCase {
     private static let noEntityTypes = ProtocolFixtures.entityTypeListJSON([])
     private static let noRecords = ProtocolFixtures.emptyRecordList
 
+    /// Records are hub-owned (#2461): with no active hub `loadRecords()` has nothing to
+    /// ask and never sends the request. Every test here is about what the hub answered,
+    /// so each one browses an explicit hub rather than whatever `activeHubId` an earlier
+    /// test left in `UserDefaults` (which `HubContext.init` reads).
+    private static let hubId = "hub-cases"
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "activeHubId")
+        super.tearDown()
+    }
+
     private func makeViewModel() throws -> CaseManagementViewModel {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [Stub.self]
+        let hubContext = HubContext()
+        hubContext.setActiveHub(Self.hubId)
         let api = APIService(
             cryptoService: CryptoService(),
-            hubContext: HubContext(),
+            hubContext: hubContext,
             sessionConfiguration: configuration
         )
         try api.configure(hubURLString: "https://case-list.test")
@@ -249,6 +271,10 @@ final class CaseManagementViewModelTests: XCTestCase {
 
         await viewModel.loadInitial()
 
+        XCTAssertEqual(
+            Stub.arrivalCount(CaseListRoute.records), 1,
+            "The records fetch must have been made for its failure to be what the screen shows"
+        )
         guard case .failed = viewModel.screen else {
             return XCTFail("A failed records fetch must not render as \"No cases yet\", got \(viewModel.screen)")
         }

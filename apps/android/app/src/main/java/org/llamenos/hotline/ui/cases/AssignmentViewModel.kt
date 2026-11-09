@@ -48,7 +48,7 @@ class AssignmentViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                var path = apiService.hp("/api/records/$recordId/suggest-assignees")
+                var path = apiService.activeHubPath("/api/records/$recordId/suggest-assignees")
                 if (language != null) path += "?language=$language"
                 val response = apiService.request<SuggestAssigneesResponse>("GET", path)
                 _uiState.update { it.copy(suggestions = response.suggestions, isLoading = false) }
@@ -64,7 +64,7 @@ class AssignmentViewModel @Inject constructor(
             try {
                 apiService.request<Map<String, Any>>(
                     "POST",
-                    apiService.hp("/api/records/$recordId/assign"),
+                    apiService.activeHubPath("/api/records/$recordId/assign"),
                     body = mapOf("pubkeys" to listOf(pubkey)),
                 )
                 _uiState.update { it.copy(isAssigning = false, assignedSuccess = true) }

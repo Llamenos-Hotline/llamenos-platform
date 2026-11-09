@@ -50,7 +50,7 @@ struct NotesView: View {
             .refreshable {
                 await vm.refresh()
             }
-            .task(id: hubContext.activeHubId) {
+            .task(id: hubContext.browsing) {
                 await vm.loadNotes()
             }
             .navigationDestination(for: String.self) { noteId in

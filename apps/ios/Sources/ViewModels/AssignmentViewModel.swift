@@ -34,7 +34,7 @@ final class AssignmentViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            var path = apiService.hp("/api/records/\(recordId)/suggest-assignees")
+            var path = try apiService.activeHubPath("/api/records/\(recordId)/suggest-assignees")
             if let lang = language {
                 path += "?language=\(lang)"
             }
@@ -53,7 +53,7 @@ final class AssignmentViewModel {
             let body = ["pubkeys": [pubkey]]
             let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "POST",
-                path: apiService.hp("/api/records/\(recordId)/assign"),
+                path: try apiService.activeHubPath("/api/records/\(recordId)/assign"),
                 body: body
             )
             isAssigning = false

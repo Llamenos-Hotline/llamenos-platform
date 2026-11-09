@@ -55,13 +55,13 @@ Feature: API Contract Validation
     Then the response status should be 400
 
   Scenario: Create shift rejects missing name
-    When an admin sends "POST" to "/api/shifts" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/shifts" with body:
       | startTime        | 09:00 |
       | endTime          | 17:00 |
     Then the response status should be 400
 
   Scenario: Create shift rejects missing days
-    When an admin sends "POST" to "/api/shifts" with body:
+    When an admin sends "POST" to "/api/hubs/:hubId/shifts" with body:
       | name      | Test Shift |
       | startTime | 09:00      |
       | endTime   | 17:00      |
@@ -151,11 +151,11 @@ Feature: API Contract Validation
     Then the response status should be 400
 
   Scenario: Shift days rejects day value over 6
-    When an admin sends "POST" to "/api/shifts" with invalid day body
+    When an admin sends "POST" to "/api/hubs/:hubId/shifts" with invalid day body
     Then the response status should be 400
 
   Scenario: Shift days rejects negative day value
-    When an admin sends "POST" to "/api/shifts" with negative day body
+    When an admin sends "POST" to "/api/hubs/:hubId/shifts" with negative day body
     Then the response status should be 400
 
   # ─── Enum Validation ───────────────────────────────────────────────
@@ -172,11 +172,11 @@ Feature: API Contract Validation
   # ─── Date Format Validation ────────────────────────────────────────
 
   Scenario: Call history rejects invalid date format
-    When an admin sends "GET" to "/api/calls/history?dateFrom=not-a-date"
+    When an admin sends "GET" to "/api/hubs/:hubId/calls/history?dateFrom=not-a-date"
     Then the response status should be 400
 
   Scenario: Call history accepts YYYY-MM-DD format
-    When an admin sends "GET" to "/api/calls/history?dateFrom=2026-01-01"
+    When an admin sends "GET" to "/api/hubs/:hubId/calls/history?dateFrom=2026-01-01"
     Then the response status should not be 400
 
   # ─── Valid Request Acceptance ──────────────────────────────────────

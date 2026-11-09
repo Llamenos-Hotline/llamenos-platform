@@ -45,6 +45,12 @@ import reportsRoutes from '@worker/routes/reports'
 import contactsRoutes from '@worker/routes/contacts'
 import auditRoutes, { platformAuditRoutes } from '@worker/routes/audit'
 import conversationsRoutes from '@worker/routes/conversations'
+import callsRoutes from '@worker/routes/calls'
+import recordsRoutes from '@worker/routes/records'
+import eventsRoutes from '@worker/routes/events'
+import evidenceRoutes from '@worker/routes/evidence'
+import shiftsRoutes from '@worker/routes/shifts'
+import ringGroupsRoutes from '@worker/routes/ring-groups'
 
 interface RouteEntry { method: string; path: string; handler: unknown }
 
@@ -99,6 +105,16 @@ function hubMounts(routes: readonly RouteEntry[]): string[] {
  * tracked for removal in #2404. Nothing may be added here to make this test
  * pass: a new entry is a decision that a missing hub id is safe for EVERY
  * handler of that router, and it is reviewed as one.
+ *
+ * A fallback hub id is NOT "no hub" (#2461). This ledger used to excuse
+ * /calls, /records, /events, /shifts and /ring-groups because their handlers
+ * "fall back to `hubId ?? ''`, which names no hub". It named a hub: `''` was a
+ * populated bucket the handlers wrote records, events, shifts and ring groups
+ * into (a record there sealed to global roles and no hub admin), and their
+ * `/:id` guards bound nothing without a path hub, so a global role read, edited
+ * and deleted any hub's row by id, audited to the platform chain. Those routers
+ * and /evidence are hub-only now. A row justified by a fallback value must say
+ * who can write that value and who can read it back.
  */
 const LEDGER: Record<string, string> = {
   '/settings':
@@ -109,20 +125,12 @@ const LEDGER: Record<string, string> = {
     'Alias of /users, same router and guard.',
   '/identity':
     'WIDENS (#2404): /identity/members with no hub lists every user to a global `users:read` holder.',
-  '/shifts':
-    'Handlers fall back to `hubId ?? \'\'`, which names no hub; /my-status is the caller\'s own (#2381 audit).',
-  '/calls':
-    'Handlers fall back to `hubId ?? \'\'`, which names no hub (#2381 audit).',
   '/bans':
     'Unscoped = the platform ban list (`hub_id IS NULL`), a deployment-wide list by design.',
   '/blasts':
     'WIDENS (#2404): listSubscribers / listBlasts / getSubscriberStats drop the hub filter with no hub.',
   '/directory':
     'WIDENS (#2404): POST takes `body.hubId` when unscoped — scope from the body, not the path (#2376 class).',
-  '/records':
-    'Handlers fall back to `hubId ?? \'\'`, which names no hub; /by-number checks the path hub (#2381 audit).',
-  '/events':
-    'Handlers fall back to `hubId ?? \'\'`, which names no hub.',
   '/analytics':
     'WIDENS (#2404): `hubId ?? \'\'` reaches services that filter `if (hubId)`, so a global `audit:read` holder gets every hub\'s aggregates. The desktop always calls it unscoped. /me is the caller\'s own.',
   '/messaging':
@@ -133,12 +141,8 @@ const LEDGER: Record<string, string> = {
     'Handlers refuse with 400 when there is no hub; should be `hubOnly` (#2404).',
   '/erasure':
     'Self-erasure is account-wide by design (a person, not a hub row); admin queue handlers take the path hub.',
-  '/evidence':
-    'Mounted at `/`; with no hub, evidence audit reads `listForEvidence(id, undefined)` across hubs (#2404).',
   '/firehose':
     'Falls back to a literal `\'global\'` namespace, which names no hub.',
-  '/ring-groups':
-    'Handlers fall back to `hubId ?? \'\'`, which names no hub.',
 }
 
 const routes = (app as unknown as { routes: RouteEntry[] }).routes
@@ -219,8 +223,20 @@ describe('hubOnly fails closed when a hub-owned router is mounted unscoped (#239
     '/contacts': contactsRoutes,
     '/audit': auditRoutes,
     '/conversations': conversationsRoutes,
+    // #2461: the ring set (shifts, ring groups), calls, and case records with
+    // their events and evidence. Each used to be served unscoped as well.
+    '/calls': callsRoutes,
+    '/records': recordsRoutes,
+    '/events': eventsRoutes,
+    '/shifts': shiftsRoutes,
+    '/ring-groups': ringGroupsRoutes,
+    // Mounted at the root: its own paths are /records/:id/evidence and /evidence/*.
+    '/': evidenceRoutes,
   }
   for (const [mount, router] of Object.entries(mounted)) stray.route(mount, router)
+
+  const join = (mount: string, path: string) =>
+    path === '/' ? mount : mount === '/' ? path : `${mount}${path}`
 
   // Every endpoint each router declares, with its path params filled in; read
   // from the routers themselves, so a route added to one is covered unasked.
@@ -229,7 +245,7 @@ describe('hubOnly fails closed when a hub-owned router is mounted unscoped (#239
       .filter(r => r.method !== 'ALL')
       .map(r => ({
         method: r.method,
-        path: (r.path === '/' ? mount : `${mount}${r.path}`).replace(/:[^/]+/g, 'x').replace(/\*/g, 'x'),
+        path: join(mount, r.path).replace(/:[^/]+/g, 'x').replace(/\*/g, 'x'),
       })),
   )
 

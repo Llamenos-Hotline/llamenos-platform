@@ -787,11 +787,14 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingAdminShifts = true, adminShiftsError = null) }
             try {
                 val response = apiService.request<ShiftsListResponse>(
-                    "GET", apiService.hp("/api/shifts"),
+                    "GET", apiService.activeHubPath("/api/shifts"),
                 )
                 _uiState.update {
                     it.copy(adminShifts = response.shifts, isLoadingAdminShifts = false)
                 }
+            } catch (_: NoActiveHubException) {
+                // No hub to browse: nothing to load, which is not a failure (#2405, #2461).
+                _uiState.update { it.copy(adminShifts = emptyList(), isLoadingAdminShifts = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -838,7 +841,7 @@ class AdminViewModel @Inject constructor(
                     days = days.map { it.toLong() },
                     userPubkeys = volunteerIds,
                 )
-                apiService.requestNoContent("POST", apiService.hp("/api/shifts"), request)
+                apiService.requestNoContent("POST", apiService.activeHubPath("/api/shifts"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -878,7 +881,7 @@ class AdminViewModel @Inject constructor(
                 // (`shifts.patch('/:id')`). The `PUT` sent here before answered
                 // 404, so no shift edit from Android was ever stored — the same
                 // defect as the nine admin settings screens in #1724.
-                apiService.requestNoContent("PATCH", apiService.hp("/api/shifts/$shiftId"), request)
+                apiService.requestNoContent("PATCH", apiService.activeHubPath("/api/shifts/$shiftId"), request)
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -893,7 +896,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
-                apiService.requestNoContent("DELETE", apiService.hp("/api/shifts/$shiftId"))
+                apiService.requestNoContent("DELETE", apiService.activeHubPath("/api/shifts/$shiftId"))
                 loadAdminShifts()
             } catch (e: Exception) {
                 _uiState.update {
@@ -908,7 +911,7 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(adminShiftsError = null) }
             try {
                 val request = FallbackGroup(userPubkeys = volunteerIds)
-                apiService.requestNoContent("PUT", apiService.hp("/api/shifts/fallback"), request)
+                apiService.requestNoContent("PUT", apiService.activeHubPath("/api/shifts/fallback"), request)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(adminShiftsError = e.message ?: "Failed to set fallback group")

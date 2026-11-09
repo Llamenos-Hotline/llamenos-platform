@@ -50,7 +50,7 @@ struct ShiftOverridesView: View {
         .refreshable {
             await viewModel.loadOverrides()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await viewModel.loadOverrides()
             await viewModel.loadShifts()
             await viewModel.loadUsers()

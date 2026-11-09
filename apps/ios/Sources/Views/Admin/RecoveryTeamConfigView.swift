@@ -32,7 +32,7 @@ struct RecoveryTeamConfigView: View {
         }
         .navigationTitle(NSLocalizedString("recovery_group_title", comment: "Recovery Team"))
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await loadRecoveryGroup()
         }
         .alert(

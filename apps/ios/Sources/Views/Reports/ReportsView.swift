@@ -87,7 +87,7 @@ struct ReportsView: View {
         .refreshable {
             await vm.refresh()
         }
-        .task(id: hubContext.activeHubId) {
+        .task(id: hubContext.browsing) {
             await vm.loadReports()
         }
         .navigationDestination(for: String.self) { reportId in

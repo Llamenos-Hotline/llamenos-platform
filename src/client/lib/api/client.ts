@@ -255,8 +255,23 @@ export class OfflineQueuedError extends Error {
 // --- Hub context for hub-scoped API calls ---
 
 let activeHubId: string | null = null
-export function setActiveHub(id: string | null) { activeHubId = id }
+const activeHubListeners = new Set<() => void>()
+export function setActiveHub(id: string | null) {
+  if (activeHubId === id) return
+  activeHubId = id
+  for (const listener of activeHubListeners) listener()
+}
 export function getActiveHub(): string | null { return activeHubId }
+
+/**
+ * Be told when the active hub changes — including when it is cleared without the
+ * React hub context noticing (`endServerSession()`). `useHubOwned` subscribes so
+ * that rows loaded in one hub can never stay on screen once that hub is not active.
+ */
+export function subscribeActiveHub(listener: () => void): () => void {
+  activeHubListeners.add(listener)
+  return () => { activeHubListeners.delete(listener) }
+}
 
 /** Prefix a path with the active hub scope. No-op when no hub is active. */
 export function hp(path: string): string {

@@ -255,7 +255,7 @@ describe('CasesService.getByNumber', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeCaseRow({ caseNumber: 'CASE-001' })])
 
-    const result = await service.getByNumber('CASE-001')
+    const result = await service.getByNumber('hub-1', 'CASE-001')
     expect(result.caseNumber).toBe('CASE-001')
   })
 
@@ -263,7 +263,7 @@ describe('CasesService.getByNumber', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.getByNumber('NONEXISTENT')).rejects.toMatchObject({ status: 404 })
+    await expect(service.getByNumber('hub-1', 'NONEXISTENT')).rejects.toMatchObject({ status: 404 })
   })
 })
 

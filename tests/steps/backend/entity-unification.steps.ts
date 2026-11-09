@@ -58,9 +58,9 @@ Given('an entity type with category {string} exists for the hub', async ({ reque
 })
 
 Given('a record exists with blindIndexes containing {string} for field {string}',
-  async ({ request, world }, token: string, field: string) => {
+  async ({ request, world, workerHub }, token: string, field: string) => {
     const state = getState_(world)
-    const res = await apiPost<{ id: string }>(request, '/records', {
+    const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
       entityTypeId: state.entityTypeId,
       statusHash: 'active',
       encryptedSummary: `enc-${token}`,
@@ -108,10 +108,10 @@ Given('an event entity type exists with start_date field \\(indexType=date\\)',
 )
 
 Given('a record exists with start_date blind indexes for {string}',
-  async ({ request, world }, month: string) => {
+  async ({ request, world, workerHub }, month: string) => {
     const state = getState_(world)
     const token = `month:${month}`
-    const res = await apiPost<{ id: string }>(request, '/records', {
+    const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
       entityTypeId: state.entityTypeId,
       statusHash: 'active',
       encryptedSummary: `enc-${token}`,
@@ -136,7 +136,7 @@ Given('a user has permission {string} but not {string}',
   },
 )
 
-Given('{int} events exist without deprecated_at set', async ({ request, world }, count: number) => {
+Given('{int} events exist without deprecated_at set', async ({ request, world, workerHub }, count: number) => {
   const state = getState_(world)
   if (!state.entityTypeId) {
     const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
@@ -153,7 +153,7 @@ Given('{int} events exist without deprecated_at set', async ({ request, world },
   }
   // Create events via the events API (writes to the events table, not case_records)
   for (let i = 0; i < count; i++) {
-    const res = await apiPost<{ id: string }>(request, '/events', {
+    const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/events`, {
       entityTypeId: state.entityTypeId,
       statusHash: 'active',
       eventTypeHash: 'legacy',
@@ -167,9 +167,9 @@ Given('{int} events exist without deprecated_at set', async ({ request, world },
   }
 })
 
-When('the admin creates a record with that entity type', async ({ request, world }) => {
+When('the admin creates a record with that entity type', async ({ request, world, workerHub }) => {
   const state = getState_(world)
-  const res = await apiPost<{ id: string }>(request, '/records', {
+  const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/records`, {
     entityTypeId: state.entityTypeId,
     statusHash: 'active',
     encryptedSummary: 'encrypted-test-summary',
@@ -179,8 +179,9 @@ When('the admin creates a record with that entity type', async ({ request, world
   state.recordId = res.data.id
 })
 
-When('a client sends GET \\/api\\/events', async ({ request, world }) => {
-  const fullPath = '/api/events'
+When('a client sends GET \\/api\\/events', async ({ request, world, workerHub }) => {
+  // Events are hub-only (#2461); the deprecated listing is the hub's.
+  const fullPath = `/api/hubs/${workerHub}/events`
   const res = await request.get(fullPath, {
     headers: {
       'Authorization': `Bearer ${JSON.stringify({ pubkey: seedHexToPubkey(ADMIN_SEED), timestamp: Date.now(), token: '' })}`,
@@ -197,12 +198,12 @@ When('a client sends GET \\/api\\/events', async ({ request, world }) => {
 })
 
 When('the admin lists records with blindIndexToken {string} and field {string}',
-  async ({ request, world }, token: string, field: string) => {
+  async ({ request, world, workerHub }, token: string, field: string) => {
     const state = getState_(world)
     const encoded = encodeURIComponent(token)
     const res = await apiGet<{ records: Array<Record<string, unknown>> }>(
       request,
-      `/records?entityTypeId=${state.entityTypeId}&blindIndexToken=${encoded}&blindIndexField=${encodeURIComponent(field)}`,
+      `/hubs/${workerHub}/records?entityTypeId=${state.entityTypeId}&blindIndexToken=${encoded}&blindIndexField=${encodeURIComponent(field)}`,
     )
     expect(res.status).toBe(200)
     state.listResult = res.data
@@ -227,12 +228,12 @@ When('I apply the builtin template {string}', async ({ request, world }, templat
 })
 
 When('I filter records by blindIndexToken {string} on field {string}',
-  async ({ request, world }, token: string, field: string) => {
+  async ({ request, world, workerHub }, token: string, field: string) => {
     const state = getState_(world)
     const encoded = encodeURIComponent(token)
     const res = await apiGet<{ records: Array<Record<string, unknown>> }>(
       request,
-      `/records?entityTypeId=${state.entityTypeId}&blindIndexToken=${encoded}&blindIndexField=${encodeURIComponent(field)}`,
+      `/hubs/${workerHub}/records?entityTypeId=${state.entityTypeId}&blindIndexToken=${encoded}&blindIndexField=${encodeURIComponent(field)}`,
     )
     expect(res.status).toBe(200)
     state.listResult = res.data
@@ -257,25 +258,25 @@ When('I POST \\/api\\/admin\\/events\\/migrate', async ({ request, world }) => {
   }
 })
 
-Then('the record should be persisted', async ({ request, world }) => {
+Then('the record should be persisted', async ({ request, world, workerHub }) => {
   const state = getState_(world)
   expect(state.recordId).toBeDefined()
-  const res = await apiGet(request, `/records/${state.recordId}`)
+  const res = await apiGet(request, `/hubs/${workerHub}/records/${state.recordId}`)
   expect(res.status).toBe(200)
 })
 
-Then('the record entity type category should be {string}', async ({ request, world }, category: string) => {
+Then('the record entity type category should be {string}', async ({ request, world, workerHub }, category: string) => {
   const state = getState_(world)
-  const res = await apiGet<{ entityTypeId: string }>(request, `/records/${state.recordId}`)
+  const res = await apiGet<{ entityTypeId: string }>(request, `/hubs/${workerHub}/records/${state.recordId}`)
   expect(res.status).toBe(200)
   const etRes = await apiGet<{ category: string }>(request, `/settings/cms/entity-types/${res.data.entityTypeId}`)
   expect(etRes.data.category).toBe(category)
 })
 
 Then('the record should use 3-tier encryption \\(summary fields pii\\)',
-  async ({ request, world }) => {
+  async ({ request, world, workerHub }) => {
     const state = getState_(world)
-    const res = await apiGet<Record<string, unknown>>(request, `/records/${state.recordId}`)
+    const res = await apiGet<Record<string, unknown>>(request, `/hubs/${workerHub}/records/${state.recordId}`)
     expect(res.status).toBe(200)
     expect(res.data).toHaveProperty('encryptedSummary')
     expect(res.data).toHaveProperty('summaryEnvelopes')
