@@ -14,10 +14,10 @@ import type { ConversationWorld } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { Navigation } from '../../pages/index'
-import { ADMIN_SEED, apiGet, apiPost, enableMessagingViaApi } from '../../api-helpers'
+import { ADMIN_SEED, apiGet, enableMessagingViaApi } from '../../api-helpers'
 import { encryptMessageForDesktop } from '../../crypto-helpers'
 import { seedConversationViaApi, type SeededConversation } from '../../conversation-seeding'
-import { simulateIncomingMessage, simulateDeliveryStatus, uniqueCallerNumber } from '../../simulation-helpers'
+import { simulateIncomingMessage, simulateOutboundMessage, simulateDeliveryStatus, uniqueCallerNumber } from '../../simulation-helpers'
 
 // --- Admin messaging settings ---
 
@@ -137,16 +137,22 @@ When('I type a message and click send', async ({ page }) => {
 })
 
 Given('I sent a message in a conversation', async ({ page, backendRequest, workerHub, conversationWorld }) => {
-  // Seed + claim, then post an outbound message through the real conversations
-  // API so the thread contains an outbound message carrying a delivery status.
+  // Seed + claim, then put an outbound message in the thread in the state a real
+  // reply reaches once the messaging provider has accepted it: stored `sent`,
+  // with the provider's message id, which is what delivery receipts are matched
+  // on. A test instance has no SMS provider, so the real send route stores a
+  // `failed` record here — honestly, nothing was transmitted — and a `delivered`
+  // receipt can never advance a `failed` message. It also refuses an
+  // external-channel send that lacks the `plaintextForSending` the carrier
+  // transmits (#2500); the desktop client always sends it, so that requirement is
+  // pinned where the send route is exercised (messaging-outbound-delivery.feature),
+  // not re-asserted here.
   // The message is sealed client-side — exactly as the desktop client's
   // encryptMessage does, for the admin reader — because the desktop client under
   // Playwright can only open envelopes sealed with the mock HPKE primitive
   // (tests/mocks/hpke-mock.ts); content the server seals with real RFC 9180
   // HPKE would render as "[Encrypted]" and could never satisfy the thread
-  // assertion. The delivery-status simulation endpoint requires the message to
-  // have an externalId, which the server only assigns when a provider is
-  // configured — passing one explicitly is the documented test fallback.
+  // assertion.
   const seeded = await seedAndSelectConversation(
     page,
     backendRequest,
@@ -157,17 +163,12 @@ Given('I sent a message in a conversation', async ({ page, backendRequest, worke
   )
 
   const outboundBody = `Outbound delivery probe ${Date.now()}`
-  const base = `/hubs/${workerHub}/conversations/${seeded.conversationId}`
   const { encryptedContent, readerEnvelopes } = await encryptMessageForDesktop(outboundBody, [ADMIN_SEED])
-  const send = await apiPost<{ id?: string }>(backendRequest, `${base}/messages`, {
+  const { messageId } = await simulateOutboundMessage(backendRequest, {
+    conversationId: seeded.conversationId,
     encryptedContent,
     readerEnvelopes,
-    externalId: `sim-${Date.now()}`,
   })
-  if (send.status !== 201 || !send.data?.id) {
-    throw new Error(`Seeding: sending outbound message failed (${send.status})`)
-  }
-  const messageId = send.data.id
   await simulateDeliveryStatus(backendRequest, {
     conversationId: seeded.conversationId,
     messageId,

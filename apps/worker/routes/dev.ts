@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
-import type { Hub, MessagingChannelType } from '@shared/types'
+import type { Hub, MessagingChannelType, RecipientEnvelope } from '@shared/types'
 import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
 import { banHashes, sealCallerNumber } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
@@ -838,6 +838,13 @@ interface SimulateIncomingMessageBody {
   hubId: string
 }
 
+interface SimulateOutboundMessageBody {
+  conversationId: string
+  /** Client-sealed content, exactly as the send route stores it. */
+  encryptedContent: string
+  readerEnvelopes: RecipientEnvelope[]
+}
+
 interface SimulateDeliveryStatusBody {
   conversationId: string
   messageId: string
@@ -1061,6 +1068,53 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   }, body.hubId)
 
   return c.json({ ok: true, conversationId: result.conversationId, messageId: result.messageId })
+})
+
+// 5b. Simulate a provider-accepted outbound message
+//
+// The state a real reply is in once the carrier has taken it: stored `sent`,
+// with the provider's message id — the id delivery receipts are matched on. The
+// real send route (`POST /conversations/:id/messages`) produces this only when a
+// provider accepts the dispatch, and a test instance has no SMS provider, so it
+// stores a `failed` record there (honestly — nothing was transmitted), and a
+// `delivered` receipt can never advance a `failed` message. A scenario about what
+// happens AFTER the provider accepted a send needs that state; this is the only
+// way to reach it without a carrier. It does not exercise the send route — the
+// sealed-reply and plaintext requirements are pinned by
+// `messaging-outbound-delivery.feature` and the route's unit tests (#2500).
+dev.post('/test-simulate/outbound-message', async (c) => {
+  const denied = simulationGuard(c)
+  if (denied) return denied
+
+  const body = await c.req.json() as SimulateOutboundMessageBody
+  if (!body.conversationId || !body.encryptedContent || !Array.isArray(body.readerEnvelopes) || body.readerEnvelopes.length === 0) {
+    return c.json({ error: 'conversationId, encryptedContent and readerEnvelopes are required' }, 400)
+  }
+
+  const services = c.get('services')
+  const conversation = await services.conversations.getById(body.conversationId)
+  // A reply is written by whoever holds the conversation; an unclaimed one has no author.
+  if (!conversation.assignedTo) {
+    return c.json({ error: 'Conversation is unassigned — claim it before simulating a reply' }, 409)
+  }
+
+  const msg = await services.conversations.addMessage({
+    conversationId: conversation.id,
+    direction: 'outbound',
+    authorPubkey: conversation.assignedTo,
+    encryptedContent: body.encryptedContent,
+    readerEnvelopes: body.readerEnvelopes,
+    externalId: `sim-${crypto.randomUUID()}`,
+    status: 'sent',
+  })
+
+  publishEvent(c.env, KIND_MESSAGE_NEW, {
+    type: 'message:new',
+    conversationId: conversation.id,
+    channelType: 'outbound',
+  }, conversation.hubId)
+
+  return c.json({ ok: true, conversationId: conversation.id, messageId: msg.id })
 })
 
 // 6. Simulate delivery status update
