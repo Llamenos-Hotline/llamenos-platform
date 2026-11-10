@@ -54,11 +54,20 @@
 import { readFileSync } from "fs";
 import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
-import { findFiles } from "./validate-coverage";
+import {
+  classifyAndroid,
+  type AndroidPaths,
+  extractScenarioSteps,
+  findFiles,
+  parseFeatureFile,
+  stepMatchesCucumberPhrase,
+  type Scenario,
+} from "./validate-coverage";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "../../..");
 const DESKTOP_BACKEND_STEPS_DIR = join(ROOT, "tests/steps");
+const FEATURES_DIR = join(ROOT, "packages/test-specs/features");
 const ANDROID_STEPS_DIR = join(
   ROOT,
   "apps/android/app/src/androidTest/java/org/llamenos/hotline/steps"
@@ -272,6 +281,81 @@ function hasAssertion(
   return null;
 }
 
+// ---- Swallowed failures ----
+
+/**
+ * A step whose failure is caught and discarded. This is the sibling of the two
+ * silent-pass reasons above and the one they cannot see: `hasAssertion` only
+ * asks whether the body *calls* something assertion-shaped, never whether a
+ * failure of that call can escape. In
+ *
+ *   try { onNodeWithTag("device-key-error").assertDoesNotExist() }
+ *   catch (_: Throwable) { /* Error state unclear *\/ }
+ *
+ * the body contains an `assert…(` call, so the `Then` passes the audit, and the
+ * step passes on every run regardless of what the screen shows (#2675).
+ *
+ * It matters for `Given`/`When` as well. `I start typing in the device key
+ * field` caught the failure of its own `performTextInput` ("device key input
+ * not available"), so on an app that has no such field the action was skipped
+ * and the assertion after it was evaluated against a screen nobody touched.
+ */
+export type SwallowKind = "catch-without-rethrow" | "runCatching-without-getOrThrow" | "promise-catch-swallow";
+
+export interface SwallowingStepFinding {
+  platform: AuditPlatform;
+  file: string;
+  line: number;
+  keyword: string;
+  pattern: string;
+  how: SwallowKind;
+}
+
+/** A catch block that re-raises: `throw`, or a call that throws (`fail`, `error`). */
+const RETHROWS_RE = /\b(throw|fail|error)\b/;
+
+/**
+ * Returns how the body discards a failure, or null if it does not.
+ *
+ *  - `try { … } catch (…) { … }` whose catch block never throws or fails.
+ *    Every catch type counts: a narrow `catch (_: AssertionError)` swallows an
+ *    assertion exactly as `Throwable` does, and a narrow type that is *not* the
+ *    thing being asserted is a step that still passes when the assertion fails
+ *    in a different way.
+ *  - Kotlin `runCatching { … }` with no `getOrThrow()` in the body.
+ *  - TypeScript `.catch(() => …)` / `.catch(async () => …)` whose handler
+ *    returns a value instead of throwing (the Playwright idiom for "ignore a
+ *    timeout").
+ */
+function findSwallow(body: string, lang: "kotlin" | "ts"): SwallowKind | null {
+  const stripped = stripComments(body);
+
+  const catchRe = lang === "kotlin" ? /\bcatch\s*\([^)]*\)\s*\{/g : /\bcatch\s*(?:\([^)]*\))?\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = catchRe.exec(stripped)) !== null) {
+    const handler = extractBracedBody(stripped, m.index + m[0].length - 1);
+    if (handler !== null && !RETHROWS_RE.test(handler)) return "catch-without-rethrow";
+  }
+
+  if (lang === "kotlin") {
+    if (/\brunCatching\s*\{/.test(stripped) && !/\bgetOrThrow\s*\(/.test(stripped)) {
+      return "runCatching-without-getOrThrow";
+    }
+  } else {
+    const promiseCatchRe = /\.catch\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*/g;
+    while ((m = promiseCatchRe.exec(stripped)) !== null) {
+      const rest = stripped.slice(m.index + m[0].length);
+      if (rest.startsWith("{")) {
+        const handler = extractBracedBody(stripped, m.index + m[0].length);
+        if (handler !== null && !RETHROWS_RE.test(handler)) return "promise-catch-swallow";
+      } else if (!/^\s*(?:\(\s*)?throw\b/.test(rest)) {
+        return "promise-catch-swallow";
+      }
+    }
+  }
+  return null;
+}
+
 // ---- Desktop/backend (TypeScript, playwright-bdd) ----
 
 /**
@@ -283,14 +367,19 @@ function hasAssertion(
  */
 const TS_CALL_RE = /\b(Given|When|Then)\s*\(\s*(['"])((?:\\.|(?!\2)[\s\S])*)\2/g;
 
-export function findSilentTsSteps(path: string, content: string): SilentStepFinding[] {
-  const findings: SilentStepFinding[] = [];
-  const relPath = relative(ROOT, path);
+interface StepBody {
+  keyword: string;
+  pattern: string;
+  /** Index of the keyword call / annotation in the file content. */
+  index: number;
+  body: string;
+}
+
+/** Every `Given/When/Then('…', async (…) => { body })` call whose callback has a block body. */
+function* tsStepBodies(content: string): Generator<StepBody> {
   let match: RegExpExecArray | null;
   TS_CALL_RE.lastIndex = 0;
   while ((match = TS_CALL_RE.exec(content)) !== null) {
-    const keyword = match[1];
-    const pattern = match[3];
     const callEnd = match.index + match[0].length;
     const arrowIndex = findTopLevel(content, callEnd, "=>");
     if (arrowIndex === -1) continue; // not an arrow-function callback; nothing to inspect
@@ -298,15 +387,42 @@ export function findSilentTsSteps(path: string, content: string): SilentStepFind
     if (openBrace === -1) continue; // not a block-bodied callback; nothing to inspect
     const body = extractBracedBody(content, openBrace);
     if (body === null) continue;
-    const reason = hasAssertion(body, TS_ASSERTION_RE, keyword === "Then");
+    yield { keyword: match[1], pattern: match[3], index: match.index, body };
+  }
+}
+
+export function findSilentTsSteps(path: string, content: string): SilentStepFinding[] {
+  const findings: SilentStepFinding[] = [];
+  const relPath = relative(ROOT, path);
+  for (const step of tsStepBodies(content)) {
+    const reason = hasAssertion(step.body, TS_ASSERTION_RE, step.keyword === "Then");
     if (reason !== null) {
       findings.push({
         platform: "desktop-backend",
         file: relPath,
-        line: lineNumberAt(content, match.index),
-        keyword,
-        pattern,
+        line: lineNumberAt(content, step.index),
+        keyword: step.keyword,
+        pattern: step.pattern,
         reason,
+      });
+    }
+  }
+  return findings;
+}
+
+export function findSwallowingTsSteps(path: string, content: string): SwallowingStepFinding[] {
+  const relPath = relative(ROOT, path);
+  const findings: SwallowingStepFinding[] = [];
+  for (const step of tsStepBodies(content)) {
+    const how = findSwallow(step.body, "ts");
+    if (how !== null) {
+      findings.push({
+        platform: "desktop-backend",
+        file: relPath,
+        line: lineNumberAt(content, step.index),
+        keyword: step.keyword,
+        pattern: step.pattern,
+        how,
       });
     }
   }
@@ -329,14 +445,11 @@ export function auditDesktopBackendSteps(): SilentStepFinding[] {
 const KOTLIN_ANNOTATION_RE = /@(Given|When|Then|And|But)\("((?:\\.|[^"\\])*)"\)/g;
 const KOTLIN_FUN_RE = /\bfun\s+\w+\s*\([^)]*\)/;
 
-export function findSilentKotlinSteps(path: string, content: string): SilentStepFinding[] {
-  const findings: SilentStepFinding[] = [];
-  const relPath = relative(ROOT, path);
+/** Every `@Given/@When/@Then/@And/@But("…") fun …() { body }` with a block body. */
+function* kotlinStepBodies(content: string): Generator<StepBody> {
   let match: RegExpExecArray | null;
   KOTLIN_ANNOTATION_RE.lastIndex = 0;
   while ((match = KOTLIN_ANNOTATION_RE.exec(content)) !== null) {
-    const keyword = match[1];
-    const pattern = match[2];
     const afterAnnotation = match.index + match[0].length;
     const funMatch = KOTLIN_FUN_RE.exec(content.slice(afterAnnotation));
     if (!funMatch || funMatch.index === undefined) continue;
@@ -345,15 +458,42 @@ export function findSilentKotlinSteps(path: string, content: string): SilentStep
     if (openBrace === -1) continue;
     const body = extractBracedBody(content, openBrace);
     if (body === null) continue;
-    const reason = hasAssertion(body, KOTLIN_ASSERTION_RE, keyword === "Then");
+    yield { keyword: match[1], pattern: match[2], index: match.index, body };
+  }
+}
+
+export function findSilentKotlinSteps(path: string, content: string): SilentStepFinding[] {
+  const findings: SilentStepFinding[] = [];
+  const relPath = relative(ROOT, path);
+  for (const step of kotlinStepBodies(content)) {
+    const reason = hasAssertion(step.body, KOTLIN_ASSERTION_RE, step.keyword === "Then");
     if (reason !== null) {
       findings.push({
         platform: "android",
         file: relPath,
-        line: lineNumberAt(content, match.index),
-        keyword,
-        pattern,
+        line: lineNumberAt(content, step.index),
+        keyword: step.keyword,
+        pattern: step.pattern,
         reason,
+      });
+    }
+  }
+  return findings;
+}
+
+export function findSwallowingKotlinSteps(path: string, content: string): SwallowingStepFinding[] {
+  const relPath = relative(ROOT, path);
+  const findings: SwallowingStepFinding[] = [];
+  for (const step of kotlinStepBodies(content)) {
+    const how = findSwallow(step.body, "kotlin");
+    if (how !== null) {
+      findings.push({
+        platform: "android",
+        file: relPath,
+        line: lineNumberAt(content, step.index),
+        keyword: step.keyword,
+        pattern: step.pattern,
+        how,
       });
     }
   }
@@ -368,6 +508,67 @@ export function auditAndroidSteps(): SilentStepFinding[] {
     findings.push(...findSilentKotlinSteps(file, content));
   }
   return findings;
+}
+
+export function auditSwallowingSteps(platforms: AuditPlatform[]): SwallowingStepFinding[] {
+  const findings: SwallowingStepFinding[] = [];
+  if (platforms.includes("desktop-backend")) {
+    for (const file of findFiles(DESKTOP_BACKEND_STEPS_DIR, ".ts")) {
+      findings.push(...findSwallowingTsSteps(file, readFileSync(file, "utf-8")));
+    }
+  }
+  if (platforms.includes("android")) {
+    for (const file of findFiles(ANDROID_STEPS_DIR, ".kt")) {
+      findings.push(...findSwallowingKotlinSteps(file, readFileSync(file, "utf-8")));
+    }
+  }
+  return findings;
+}
+
+export interface ScenarioThroughSwallow {
+  scenario: Scenario;
+  /** The scenario step text that binds to a swallowing step definition. */
+  step: string;
+  swallow: SwallowingStepFinding;
+}
+
+/**
+ * The blast radius of the Android swallowing steps, measured on what runs on a
+ * device: scenarios the runner selects, ships and binds (`executed` in
+ * `classifyAndroid`), not every scenario carrying an `@android` tag. A scenario
+ * is listed when at least one of its steps binds to a swallowing step
+ * definition of the given keyword set.
+ *
+ * `onlyThen` narrows this to the case that can never fail an assertion: a
+ * `Then` whose own failure is discarded. A swallowing `Given`/`When` is
+ * frequently benign (dismiss an optional dialog) and only weakens the scenario;
+ * a swallowing `Then` makes its scenario's verdict independent of the app.
+ */
+export function androidScenariosThroughSwallow(
+  scenarios: Scenario[],
+  swallowing: SwallowingStepFinding[],
+  onlyThen: boolean,
+  paths?: AndroidPaths
+): ScenarioThroughSwallow[] {
+  const featuresDir = paths?.featuresDir ?? FEATURES_DIR;
+  const android = swallowing.filter((f) => f.platform === "android" && (!onlyThen || f.keyword === "Then"));
+  const { verdicts } = classifyAndroid(scenarios, paths);
+  const hits: ScenarioThroughSwallow[] = [];
+  for (const v of verdicts) {
+    if (!v.executed) continue;
+    for (const step of extractScenarioSteps(join(featuresDir, v.scenario.featureFile), v.scenario.title)) {
+      const swallow = android.find((f) => stepMatchesCucumberPhrase(step, f.pattern));
+      if (swallow) {
+        hits.push({ scenario: v.scenario, step, swallow });
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+function loadAllScenarios(): Scenario[] {
+  return findFiles(FEATURES_DIR, ".feature").flatMap((f) => parseFeatureFile(f));
 }
 
 // ---- Ratchet baseline ----
@@ -402,6 +603,22 @@ const BASELINE: Record<AuditPlatform, number> = {
   android: 87,
 };
 
+/**
+ * Ratchet for swallowed failures (#2675), measured 2026-11-10 when the rule was
+ * introduced. Same contract as BASELINE: it only ever moves DOWN.
+ *
+ * `steps` is the number of step definitions that catch and discard a failure.
+ * `androidExecutedThroughThen` is the number of scenarios that actually run on a
+ * device (selected, shipped and bound — see classifyAndroid) and contain a step
+ * bound to a swallowing `Then`. That is the number that matters: for each of
+ * those scenarios an assertion exists in the source and cannot fail. It starts at
+ * 4 and the right end state is 0; the four are listed by every run.
+ */
+const SWALLOW_BASELINE: { steps: Record<AuditPlatform, number>; androidExecutedThroughThen: number } = {
+  steps: { "desktop-backend": 66, android: 291 },
+  androidExecutedThroughThen: 4,
+};
+
 // ---- CLI ----
 
 function parsePlatformArg(): AuditPlatform[] {
@@ -414,6 +631,55 @@ function parsePlatformArg(): AuditPlatform[] {
   process.exit(1);
 }
 
+function reportSwallowing(
+  platforms: AuditPlatform[],
+  swallowing: SwallowingStepFinding[],
+  throughThen: ScenarioThroughSwallow[],
+  asJson: boolean
+): boolean {
+  let failed = false;
+  const lines: string[] = ["\nSwallowed-failure audit (#2675)\n"];
+  for (const platform of platforms) {
+    const findings = swallowing.filter((f) => f.platform === platform);
+    const baseline = SWALLOW_BASELINE.steps[platform];
+    const over = findings.length > baseline;
+    if (over) failed = true;
+    const thens = findings.filter((f) => f.keyword === "Then").length;
+    lines.push(
+      `  [${over ? "FAIL" : "ok"}] ${platform}: ${findings.length} step(s) catch and discard a failure, ` +
+        `${thens} of them Then (baseline: ${baseline})`
+    );
+    if (over) {
+      for (const f of findings) lines.push(`      ${f.file}:${f.line}  @${f.keyword}("${f.pattern}")  — ${f.how}`);
+      lines.push(
+        `      Baseline exceeded: ${findings.length} > ${baseline}. A step now catches an exception and carries on,` +
+          ` so it passes whether or not the app does what it claims. Rethrow, or assert the absence of the failure.`
+      );
+    }
+  }
+  if (platforms.includes("android")) {
+    const over = throughThen.length > SWALLOW_BASELINE.androidExecutedThroughThen;
+    if (over) failed = true;
+    lines.push(
+      `  [${over ? "FAIL" : "ok"}] android: ${throughThen.length} scenario(s) that run on a device contain a Then` +
+        ` whose failure is discarded (baseline: ${SWALLOW_BASELINE.androidExecutedThroughThen})`
+    );
+    for (const t of throughThen) {
+      lines.push(
+        `      ${t.scenario.featureFile} :: "${t.scenario.title}"\n` +
+          `        "${t.step}"  →  ${t.swallow.file}:${t.swallow.line}`
+      );
+    }
+  }
+  lines.push(
+    failed
+      ? "\nFAILED: swallowed-failure baseline exceeded."
+      : "\nPASSED: swallowed-failure counts are at or below baseline."
+  );
+  if (!asJson) console.log(lines.join("\n"));
+  return failed;
+}
+
 function main() {
   const asJson = process.argv.includes("--json");
   const platforms = parsePlatformArg();
@@ -422,8 +688,13 @@ function main() {
   if (platforms.includes("desktop-backend")) allFindings.push(...auditDesktopBackendSteps());
   if (platforms.includes("android")) allFindings.push(...auditAndroidSteps());
 
+  const swallowing = auditSwallowingSteps(platforms);
+  const throughThen = platforms.includes("android")
+    ? androidScenariosThroughSwallow(loadAllScenarios(), swallowing, true)
+    : [];
+
   if (asJson) {
-    console.log(JSON.stringify(allFindings, null, 2));
+    console.log(JSON.stringify({ silent: allFindings, swallowing, androidExecutedThroughSwallowingThen: throughThen.map((t) => ({ feature: t.scenario.featureFile, scenario: t.scenario.title, step: t.step, definition: `${t.swallow.file}:${t.swallow.line}` })) }, null, 2));
   } else {
     console.log("Silent-pass step audit (#709)\n");
   }
@@ -461,6 +732,9 @@ function main() {
     );
   }
 
+  const swallowFailed = reportSwallowing(platforms, swallowing, throughThen, asJson);
+  if (swallowFailed) failed = true;
+
   process.exit(failed ? 1 : 0);
 }
 
@@ -472,6 +746,8 @@ export const __testing = {
   TS_ASSERTION_RE,
   KOTLIN_ASSERTION_RE,
   BASELINE,
+  SWALLOW_BASELINE,
+  findSwallow,
 };
 
 if (import.meta.main) {

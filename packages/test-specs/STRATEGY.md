@@ -100,7 +100,7 @@ Run it with:
 bun packages/test-specs/tools/audit-silent-steps.ts              # both platforms
 bun packages/test-specs/tools/audit-silent-steps.ts --platform desktop-backend
 bun packages/test-specs/tools/audit-silent-steps.ts --platform android
-bun packages/test-specs/tools/audit-silent-steps.ts --json        # machine-readable
+bun packages/test-specs/tools/audit-silent-steps.ts --json        # machine-readable: {silent, swallowing, androidExecutedThroughSwallowingThen}
 ```
 
 ### The ratchet
@@ -119,24 +119,91 @@ Baseline measured 2026-10-08, when this audit was introduced:
 | `desktop-backend` | 52 | Filed as [#1747](https://github.com/Llamenos-Hotline/llamenos-platform/issues/1747) (not fixed here — none fall under `tests/steps/crypto/`, which this lane owns and which the audit confirms already carries zero violations under the #1222 rule; the rest are in desktop/backend-owned step files this lane has no write access to). |
 | `android` | 87 | Handed to [#765](https://github.com/rhonda-rodododo/llamenos-platform/issues/765) (Android substitute/empty-step sweep), which already owns fixing this exact category. |
 
+### Swallowed failures (#2675)
+
+The two reasons above ask whether a step body *contains* an assertion. They
+cannot see one whose failure is caught and discarded:
+
+```kotlin
+@Then("the error should disappear")
+fun theErrorShouldDisappear() {
+    try { onNodeWithTag("device-key-error").assertDoesNotExist() }
+    catch (_: Throwable) { /* Error state unclear */ }
+}
+```
+
+That body has an `assert…(` call, so it passed the audit, and the step passed
+on every run. It was the Android half of a scenario tagged
+`@desktop @ios @android` whose desktop half caught a real defect (#1307).
+
+`audit-silent-steps.ts` now also reports, for every keyword (a swallowing
+`When` is why the assertion after it checks a screen nobody touched), a step
+body that:
+
+- has a `try { … } catch (…) { … }` / `catch { … }` whose handler never
+  `throw`s, `fail`s or `error`s — any exception type: a narrow
+  `catch (_: AssertionError)` swallows an assertion as surely as `Throwable`;
+- uses Kotlin `runCatching { … }` with no `getOrThrow()`;
+- uses TypeScript `.catch(() => …)` with a handler that returns a value.
+
+It reports two ratcheted numbers, both of which may only move DOWN
+(`SWALLOW_BASELINE`): the count of swallowing step definitions per platform, and
+— the one that measures harm — the number of scenarios that **run on a device**
+(selected, shipped and bound, per `classifyAndroid`) and contain a step bound to
+a swallowing `Then`. Each of those has an assertion in the source that cannot
+fail. Measured 2026-11-10: 291 swallowing Android steps (117 `Then`) and 66
+desktop/backend steps (13 `Then`); **4 executed Android scenarios** run through
+a swallowing `Then` (the audit lists them on every run). The right end state for
+that second number is 0.
+
+Not every swallow is a defect — dismissing an optional dialog legitimately
+ignores a timeout — which is why this is a ratchet and not a ban: it stops the
+count growing and keeps the list in front of whoever touches a step.
+
+### Inherited platform tags (#2675)
+
+A platform tag is a claim, and Gherkin makes claims additive: a scenario carries
+its own tags **and** every tag on the `Feature:` line. A `@desktop` scenario in
+a file headed `@ios @android` is therefore selected by the Android runner
+(`@android and not @wip`) and credited to iOS by `validate-coverage.ts`, exactly
+as if the author had written all three. Narrowing the tag at the scenario does
+nothing; the scenario has to live in a file whose header says what it means.
+
+`validate-coverage.ts` ratchets this per feature file
+(`tools/platform-tag-widening.baseline.json`, regenerated with
+`bun run test-specs:validate --write-widening-baseline`): a scenario that names a
+platform of its own but inherits a wider claim from the file-level tags is
+counted, and a file whose count rises (or a new file) fails the run and names the
+scenarios. Measured 2026-11-10: 14 files, 164 scenarios, almost all of them
+backend/desktop scenarios in files headed `@ios @android`. Lowering a number means
+moving the scenario (or the file-level tags) — never raising it.
+
+What an `@ios` / `@android` tag without a runner means is unchanged and stays
+the ratified model above: iOS has no Gherkin runner and is credited only by a
+correctly-named Swift test (a percentage ratchet); Android is credited only when
+the scenario is shipped and bound (the `android-dead-tags.baseline.json`
+ratchet). A tag with nothing behind it is reported as uncovered, not dropped.
+
 ### Known limitation: CI wiring
 
-The script is deterministic, self-contained, and directly runnable (shown
-above); its exit code already distinguishes a passing from a failing
-ratchet, including the real red/green demonstration described above. What
-it does **not** yet have is an actual step in `.github/workflows/ci.yml`
-or a named script in root `package.json` (parallel to
-`"test-specs:validate"`) — both files are reserved to `@rhonda-rodododo`
-in `CODEOWNERS` and outside every lane's write grant, this one included.
-Wiring it in is a two-line, low-risk change:
-
-```jsonc
-// package.json, next to "test-specs:validate"
-"test-specs:audit-silent-steps": "bun packages/test-specs/tools/audit-silent-steps.ts",
-```
+The script is deterministic, self-contained and directly runnable
+(`bun run test-specs:audit-silent-steps`, added to root `package.json` in
+#2675); its exit code distinguishes a passing from a failing ratchet. What it
+does **not** have is a step in `.github/workflows/ci.yml`, which is reserved to
+`@rhonda-rodododo` in `CODEOWNERS` and outside every lane's write grant. Wiring
+it is a two-line change:
 
 ```yaml
 # .github/workflows/ci.yml, next to the "Validate test-specs coverage" step
 - name: Audit silent-pass BDD steps
   run: bun run test-specs:audit-silent-steps
 ```
+
+**Do that only after the first ratchet is reconciled.** Because nothing runs
+the script, its silent-pass baselines have drifted: on 2026-11-10 it reports 53
+desktop/backend (baseline 52) and 93 Android (baseline 87) and exits 1 on an
+unmodified `main`. Wiring it in as-is would turn CI red on code nobody touched;
+raising the baseline to match would be the "never to make a red run green" move
+the ratchet forbids. The drift is the finding — someone has to fix, or
+consciously triage, the seven added silent steps first. The swallowed-failure
+ratchet added in #2675 is exact today.

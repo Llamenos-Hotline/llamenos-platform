@@ -331,15 +331,6 @@ Feature: Authentication & Login
     And I tap "Log in"
     Then I should be redirected away from login
 
-  @desktop @ios @android @regression
-  Scenario: Error clears when typing in device key field
-    Given the app is freshly installed
-    And I am on the login screen
-    When I tap "Log in"
-    And I should see an error message
-    And I start typing in the device key field
-    Then the error should disappear
-
   # ── Desktop/Mobile: Invite Onboarding ─────────────────────────────
   # Desktop invite → paste → redeem is covered end to end, from a fresh
   # install, in platform/desktop/auth/invite-redemption.feature.

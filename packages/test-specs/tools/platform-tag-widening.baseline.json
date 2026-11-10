@@ -1,0 +1,19 @@
+{
+  "description": "Ratchet for #2675: per feature file, how many scenarios name their own platform tag(s) but also inherit a wider platform claim from the file-level tag line (Gherkin tags are additive, so a `@desktop` scenario under a file headed `@ios @android` is selected by the iOS/Android runners and credited to them). validate-coverage fails when a file's count rises or a new file appears. Lower it by moving the scenario to a file whose header says what it means, or by moving the file-level tags onto the scenarios - never by raising the number. Regenerate with: bun run test-specs:validate --write-widening-baseline",
+  "widenedScenariosByFeature": {
+    "admin/audit-log.feature": 6,
+    "admin/ban-management.feature": 2,
+    "admin/settings.feature": 4,
+    "core/auth-login.feature": 16,
+    "core/call-routing.feature": 43,
+    "core/dashboard.feature": 3,
+    "core/messaging-flow.feature": 7,
+    "core/note-encryption.feature": 8,
+    "core/reports.feature": 21,
+    "core/volunteer-lifecycle.feature": 1,
+    "platform/desktop/cases/cms-case-management.feature": 4,
+    "security/e2ee-roundtrip.feature": 6,
+    "security/network-security.feature": 31,
+    "security/session-management.feature": 11
+  }
+}

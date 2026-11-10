@@ -353,7 +353,7 @@ function parseCucumberStepPhrases(path: string): string[] {
  * Handles Cucumber expression parameters like {string}, {int}, {word},
  * escaped characters like \\(, and DataTable steps (ending with :).
  */
-function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: string): boolean {
+export function stepMatchesCucumberPhrase(gherkinStep: string, cucumberPhrase: string): boolean {
   const step = gherkinStep.trim();
 
   // Convert cucumber expression pattern to regex
@@ -504,7 +504,7 @@ function extractRawScenarioSteps(featurePath: string, scenarioTitle: string): Ra
 }
 
 /** Legacy string-only accessor, kept for the Android Cucumber matcher which does plain text matching. */
-function extractScenarioSteps(featurePath: string, scenarioTitle: string): string[] {
+export function extractScenarioSteps(featurePath: string, scenarioTitle: string): string[] {
   return extractRawScenarioSteps(featurePath, scenarioTitle).map((s) => s.text);
 }
 
@@ -1533,6 +1533,101 @@ function reportMobileSharedScenarios(scenarios: Scenario[]): void {
   );
 }
 
+// ---- Inherited platform tags (#2675) ----
+
+const PLATFORM_TAGS: readonly Platform[] = ["backend", "desktop", "ios", "android"];
+
+export interface WidenedPlatformClaim {
+  scenario: Scenario;
+  /** Platforms the scenario names for itself. */
+  own: Platform[];
+  /** Platforms it claims only because the file-level tag line grants them to every scenario. */
+  inherited: Platform[];
+}
+
+/**
+ * Gherkin tags are additive: a scenario carries its own tags AND every tag on the
+ * Feature line. So a `@desktop` scenario in a file headed `@ios @android` is selected
+ * by the Android runner (`@android and not @wip`) and credited to iOS by this tool as
+ * well as to desktop. The scenario author narrowed the tag; nothing narrowed the claim.
+ *
+ * That is how #2675 happened: "Error clears when typing in device key field" read
+ * `@desktop @ios @android` at the scenario, but the field exists only on desktop, and
+ * even a scenario-level edit to `@desktop` could not have helped - core/auth-login.feature
+ * is headed `@ios @android`, so the scenario would have kept both. A scenario that
+ * names platforms of its own and sits under a wider file-level claim is listed here.
+ *
+ * Scenarios with no platform tag of their own are not listed: they mean "whatever the
+ * file says", which is a coherent reading.
+ */
+export function findWidenedPlatformClaims(scenarios: Scenario[]): WidenedPlatformClaim[] {
+  const widened: WidenedPlatformClaim[] = [];
+  for (const scenario of scenarios) {
+    const own = PLATFORM_TAGS.filter((p) => scenario.scenarioTags.includes(p));
+    if (own.length === 0) continue;
+    const inherited = PLATFORM_TAGS.filter((p) => scenario.featureTags.includes(p) && !own.includes(p));
+    if (inherited.length > 0) widened.push({ scenario, own, inherited });
+  }
+  return widened;
+}
+
+export function widenedClaimsByFeature(widened: WidenedPlatformClaim[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const w of widened) counts[w.scenario.featureFile] = (counts[w.scenario.featureFile] ?? 0) + 1;
+  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+const DEFAULT_WIDENING_BASELINE = join(__dirname, "platform-tag-widening.baseline.json");
+
+export function writeWideningBaseline(widened: WidenedPlatformClaim[], path: string): void {
+  const body = {
+    description:
+      "Ratchet for #2675: per feature file, how many scenarios name their own platform tag(s) but also " +
+      "inherit a wider platform claim from the file-level tag line (Gherkin tags are additive, so a " +
+      "`@desktop` scenario under a file headed `@ios @android` is selected by the iOS/Android runners and " +
+      "credited to them). validate-coverage fails when a file's count rises or a new file appears. Lower " +
+      "it by moving the scenario to a file whose header says what it means, or by moving the file-level " +
+      "tags onto the scenarios - never by raising the number. Regenerate with: " +
+      "bun run test-specs:validate --write-widening-baseline",
+    widenedScenariosByFeature: widenedClaimsByFeature(widened),
+  };
+  writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`);
+}
+
+export interface WideningGateResult {
+  failures: string[];
+  /** Baseline entries that are now too high (progress not yet locked in). */
+  stale: string[];
+}
+
+export function evaluateWideningGate(widened: WidenedPlatformClaim[], baselinePath: string): WideningGateResult {
+  const baseline: Record<string, number> = existsSync(baselinePath)
+    ? (JSON.parse(readFileSync(baselinePath, "utf-8")).widenedScenariosByFeature ?? {})
+    : {};
+  const counts = widenedClaimsByFeature(widened);
+  const failures: string[] = [];
+  const stale: string[] = [];
+  for (const [file, count] of Object.entries(counts)) {
+    const allowed = baseline[file] ?? 0;
+    if (count > allowed) {
+      const titles = widened
+        .filter((w) => w.scenario.featureFile === file)
+        .map((w) => `          - ${w.scenario.title}  (@${w.own.join(" @")} + inherited @${w.inherited.join(" @")})`)
+        .join("\n");
+      failures.push(
+        `${file}: ${count} scenario(s) name their own platform but inherit a wider claim from the file-level tags (baseline ${allowed}).\n` +
+          `        A file-level @ios/@android/@desktop/@backend is granted to EVERY scenario in the file; a scenario-level tag cannot narrow it.\n` +
+          `        Put the scenario in a file whose header says what it means.\n${titles}`
+      );
+    }
+  }
+  for (const [file, allowed] of Object.entries(baseline)) {
+    const count = counts[file] ?? 0;
+    if (count < allowed) stale.push(`${file}: ${allowed} → ${count}`);
+  }
+  return { failures, stale };
+}
+
 // ---- Coverage thresholds ----
 
 /**
@@ -1644,6 +1739,12 @@ function main() {
     return;
   }
 
+  if (process.argv.includes("--write-widening-baseline")) {
+    writeWideningBaseline(findWidenedPlatformClaims(allScenarios), DEFAULT_WIDENING_BASELINE);
+    console.log(`Wrote ${relative(ROOT, DEFAULT_WIDENING_BASELINE)}`);
+    return;
+  }
+
   for (const platform of platforms) {
     // Android reads its own selection from the runner; the others use PLATFORM_EXCLUDE_TAGS.
     const platformScenarios = platform === "android" ? allScenarios : scenariosForPlatform(allScenarios, platform);
@@ -1698,6 +1799,19 @@ function main() {
     failed = true;
   }
 
+  const widening = evaluateWideningGate(findWidenedPlatformClaims(allScenarios), DEFAULT_WIDENING_BASELINE);
+  for (const f of widening.failures) {
+    console.log(`  ✗ ${f}`);
+    failed = true;
+  }
+  if (widening.stale.length > 0) {
+    console.log(
+      `  note: platform-tag-widening.baseline.json is higher than reality for ${widening.stale.length} file(s) - lower it:\n` +
+        widening.stale.map((l) => `        ${l}`).join("\n") +
+        `\n        (bun run test-specs:validate --write-widening-baseline)`
+    );
+  }
+
   for (const r of results) {
     const pct = r.total > 0 ? (r.covered / r.total) * 100 : 100;
     const pctStr = r.total > 0 ? pct.toFixed(1) : "N/A";
@@ -1735,6 +1849,7 @@ export const __testing = {
   newParameterTypeRegistry,
   checkIosCoverage,
   COVERAGE_THRESHOLDS,
+  DEFAULT_WIDENING_BASELINE,
 };
 
 if (import.meta.main) {
