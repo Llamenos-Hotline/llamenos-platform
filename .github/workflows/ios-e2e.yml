@@ -17,7 +17,10 @@
 # library; N shard jobs each start a native backend
 # (apps/ios/scripts/native-backend.sh — Homebrew PostgreSQL + `bun`, no
 # Docker) and run a disjoint, count-balanced slice of the test classes
-# (apps/ios/scripts/ui-tests.py). No retries: a flaky test is a failing test.
+# (apps/ios/scripts/ui-tests.py). A flaky test is a failing test: the only
+# retries are the bounded, announced ones in the XCUITest step (zero tests run,
+# infrastructure signatures, and one failed-tests-only re-run when a sibling
+# shard of the same run passed, #2618).
 
 name: iOS E2E
 
@@ -703,6 +706,10 @@ jobs:
     runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
     permissions:
       contents: read
+      # Read-only, used ONLY by the XCUITest step to ask what this run's other
+      # shards concluded (#2618). Without it that read fails, the step sees no
+      # sibling evidence, and every failure stands exactly as before.
+      actions: read
     timeout-minutes: 65
 
     strategy:
@@ -719,9 +726,16 @@ jobs:
         # `testClockInViaAPI` / `testShiftStatusWithAPI` (10s waits that a
         # contended runner misses) and shard 3 on
         # `testPINWipeAfterTenFailedAttempts` at 313s against XCTest's 300s
-        # allowance. Shards 1 and 2 have passed on hosted runners twice each.
-        # So the fragile pair goes to the hardware where they pass, and the
-        # proven pair goes to the capacity that is otherwise idle.
+        # allowance. Shards 1 and 2 had passed on hosted runners twice each when
+        # this was measured. So the fragile pair goes to the hardware where they
+        # pass, and the proven pair goes to the capacity that is otherwise idle.
+        #
+        # That premise has since been falsified for both (#2618): shard 2 failed
+        # `SettingsUITests.testCallSoundsToggleExists` and shard 1 failed
+        # `TriageUITests.testTriageFilterButtonVisible`, each on a hosted runner
+        # with its siblings green, ejecting PRs that touched no iOS code. The
+        # split is unchanged here -- it is a capacity trade, not a toggle -- and
+        # the XCUITest step now gives such a lone failure one retry.
         #
         # This also puts 5 of the 7 day-one-critical classes
         # (apps/ios/Tests/UI/ci-smoke.txt) on the Mac: shard 0 carries
@@ -1156,6 +1170,18 @@ jobs:
         timeout-minutes: 50
         env:
           SHARD: ${{ matrix.shard }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # The cross-shard retry's bounds (#2618). STEP_TIMEOUT_MIN must equal
+          # this step's `timeout-minutes` (tests/orchestrator/guards.test.ts
+          # fails if they drift): the wait is sized from the time the step has
+          # left, so a wait can never be what runs the step into its timeout.
+          STEP_TIMEOUT_MIN: "50"
+          SIBLING_WAIT_MAX_MIN: "15"
+          SIBLING_POLL_SEC: "30"
+          # Time kept back for the one retry itself (a handful of tests, not a shard).
+          RETRY_RESERVE_MIN: "8"
+          # More failed tests than this and the failure is not a lone flake.
+          CROSS_SHARD_MAX_TESTS: "3"
         run: |
           set -o pipefail
           # xcodebuild strips the TEST_RUNNER_ prefix and forwards the rest
@@ -1224,7 +1250,29 @@ jobs:
           #    the failed tests are re-run, ONCE, so a shard that already spent
           #    most of its budget is not re-run whole.
           #
-          # NEITHER condition is the exit code. 65 is also what a genuine failing
+          # 3. A GENUINE FAILURE WHILE A SIBLING SHARD PASSED (#2618). The two
+          #    above need the log to name the runner, and a hardware-timing flake
+          #    inside a real assertion never does: three merge-queue ejections in
+          #    one night were `XCTAssertTrue failed` on a hosted runner, each with
+          #    its sibling shards green in the same run, on PRs touching no iOS
+          #    code. The only evidence is the siblings, and it is only evidence: a
+          #    regression confined to one shard's tests looks the same. So it buys
+          #    EXACTLY ONE retry of the failed tests (at most CROSS_SHARD_MAX_TESTS
+          #    of them), and a second failure is genuine and ejects as before.
+          #    Wrongly retrying costs a few tests' re-run; wrongly not retrying
+          #    costs the merge queue head for up to its 240-minute timeout.
+          #
+          #    Sibling conclusions are unknown when a shard finishes, so this step
+          #    WAITS for one to pass, bounded by SIBLING_WAIT_MAX_MIN and by what is
+          #    left of the step's own timeout; shards are balanced, so a sibling has
+          #    usually finished. No other job is held: the group waits for its
+          #    slowest shard in any case, and `ci-status` is the only required check.
+          #    It cannot live in a later job: that job could not undo this one's
+          #    failed conclusion (the caller's result is the aggregate of every job
+          #    in this workflow), would wait for ALL shards before starting, and
+          #    would queue for a fresh runner and boot a fresh simulator and backend.
+          #
+          # NONE of these conditions is the exit code. 65 is also what a genuine failing
           # XCUITest returns, and retrying on it would re-run — and could hide —
           # a real failure. A failure is classified infrastructure only if EVERY
           # failed test recorded at least one issue and every recorded issue
@@ -1249,8 +1297,38 @@ jobs:
           attempt=1
           partial_retry=0   # 1 once the failed-tests-only retry has been spent
           retest=""
+          retry_reason=infra   # infra | cross-shard: why the one partial retry was spent
           cur_args=$(cat "$RUNNER_TEMP/shard-args.txt")
           kv() { printf '%s\n' "$verdict" | sed -n "s/^$1=//p"; }
+
+          # Has a sibling shard of THIS run passed? Waits for one while none has
+          # but some are still running. Returns 0 only on a passed sibling; every
+          # other outcome (none passed, unreadable, out of wait) returns 1 and the
+          # failure stands. Sets sib_state / sib_table / sib_detail for the log.
+          sibling_evidence() {
+            local avail polls unreadable=0 out
+            avail=$(( STEP_TIMEOUT_MIN * 60 - SECONDS - RETRY_RESERVE_MIN * 60 ))
+            [ "$avail" -le $(( SIBLING_WAIT_MAX_MIN * 60 )) ] || avail=$(( SIBLING_WAIT_MAX_MIN * 60 ))
+            [ "$avail" -gt 0 ] || avail=0
+            polls=$(( avail / SIBLING_POLL_SEC ))
+            while :; do
+              out=$(python3 "$classifier" siblings "$SHARD" 2>&1) || out=""
+              sib_state=$(printf '%s\n' "$out" | sed -n 's/^sibling_state=//p')
+              sib_table=$(printf '%s\n' "$out" | sed -n 's/^siblings=//p')
+              sib_detail=$(printf '%s\n' "$out" | sed -n 's/^detail=//p')
+              [ -n "$sib_state" ] || { sib_state=unreadable; sib_detail="the sibling check printed nothing"; }
+              case "$sib_state" in
+                passed) return 0 ;;
+                pending) ;;
+                unreadable) unreadable=$(( unreadable + 1 )); [ "$unreadable" -lt 3 ] || return 1 ;;
+                *) return 1 ;;
+              esac
+              [ "$polls" -gt 0 ] || return 1
+              polls=$(( polls - 1 ))
+              echo "ios-e2e/ui shard $SHARD: failed; no sibling has passed yet ($sib_state: $sib_table); re-checking in ${SIBLING_POLL_SEC}s ($polls checks left)"
+              sleep "$SIBLING_POLL_SEC"
+            done
+          }
           while :; do
             # xcodebuild refuses to write a result bundle over an existing one.
             rm -rf "$xcresult"
@@ -1276,11 +1354,23 @@ jobs:
 
             if [ "$partial_retry" = "1" ]; then
               # This was the failed-tests-only retry: fold it into the log
-              # `report` reads, say what happened, and take its exit code.
+              # `report` reads, say what happened, and take its exit code. It is
+              # the ONLY retry either reason gets: there is no way back to the
+              # classification below from here, so a second failure is final.
               # shellcheck disable=SC2086
-              python3 "$classifier" ios-merge "$attempt1_log" "$log" "$log.merged" $retest
+              python3 "$classifier" ios-merge "$attempt1_log" "$log" "$log.merged" --reason="$retry_reason" $retest
               mv "$log.merged" "$log"
-              if [ "$rc" -eq 0 ]; then
+              if [ "$retry_reason" = "cross-shard" ]; then
+                if [ "$rc" -eq 0 ]; then
+                  echo "::warning title=PASSED AFTER A CROSS-SHARD RETRY::ios-e2e/ui shard $SHARD did NOT pass first time: its failed tests passed when re-run once because a sibling shard had passed. That points at the host, but an intermittent product defect reads the same way — count these. Attempt 1 is in xcodebuild-infra-retry-attempts.log in the results artifact."
+                  printf '### ios-e2e/ui shard %s: passed after a cross-shard retry\n\nAttempt 1 failed "%s" while a sibling shard passed (%s); they passed when re-run once. NOT a clean first-attempt pass.\n' \
+                    "$SHARD" "$retest" "$sib_table" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                else
+                  echo "::error::ios-e2e/ui FAILED after a cross-shard retry — shard $SHARD re-ran its failed tests once (a sibling had passed) and they failed AGAIN (xcodebuild exit $rc). The failure reproduced, so it is genuine and not a host flake. Read the attempt-2 section of xcodebuild-test.log."
+                  printf '### ios-e2e/ui shard %s: FAILED after a cross-shard retry\n\nThe retry of "%s" failed again (xcodebuild exit %s): reproducible, so genuine.\n' \
+                    "$SHARD" "$retest" "$rc" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                fi
+              elif [ "$rc" -eq 0 ]; then
                 echo "::warning::ios-e2e/ui shard $SHARD: the infrastructure-failed tests passed on their retry — this shard is PASSING AFTER AN INFRASTRUCTURE RETRY, not on its first attempt. Attempt 1 is in xcodebuild-infra-retry-attempts.log in the results artifact."
                 printf '### ios-e2e/ui shard %s: passed after an infrastructure retry\n\nAttempt 1 lost these tests to infrastructure signatures (not assertions) and they passed when re-run: "%s"\n' \
                   "$SHARD" "$retest" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -1321,13 +1411,43 @@ jobs:
                 cur_args=""
                 for t in $retest; do cur_args="$cur_args -only-testing:$t"; done
                 partial_retry=1
+                retry_reason=infra
                 attempt=$(( attempt + 1 ))
                 sleep 20
                 ;;
               *)
-                # Genuine (or unclassifiable): exactly the behaviour before #2446.
-                echo "ios-e2e/ui shard $SHARD: failure is not an infrastructure signature ($(kv detail)); not retried."
-                exit "$rc"
+                # Genuine (or unclassifiable). Before #2618 this was final. It still
+                # is, unless a sibling shard of this run passed AND every failed
+                # test can be named AND there are few of them: then those tests, and
+                # only those, get one more run.
+                failed_tests=$(kv failed)
+                # shellcheck disable=SC2086
+                set -- $failed_tests
+                n_failed=$#
+                if [ "$n_failed" -eq 0 ]; then
+                  echo "ios-e2e/ui shard $SHARD: failure is not an infrastructure signature ($(kv detail)); not retried (its failed tests cannot all be named, so there is nothing safe to re-run)."
+                  exit "$rc"
+                fi
+                if [ "$n_failed" -gt "$CROSS_SHARD_MAX_TESTS" ]; then
+                  echo "ios-e2e/ui shard $SHARD: failure is not an infrastructure signature ($(kv detail)); not retried ($n_failed tests failed, more than the $CROSS_SHARD_MAX_TESTS a lone flake can account for)."
+                  exit "$rc"
+                fi
+                if ! sibling_evidence; then
+                  echo "ios-e2e/ui shard $SHARD: failure is not an infrastructure signature ($(kv detail)); not retried. Sibling shards: $sib_state ($sib_table) — $sib_detail."
+                  exit "$rc"
+                fi
+                retest=$failed_tests
+                echo "::warning title=CROSS-SHARD RETRY::ios-e2e/ui shard $SHARD attempt $attempt FAILED ($(kv detail)) while a sibling shard of this run passed (siblings: $sib_table). That is evidence of a host problem, not proof. Re-running ONLY the failed tests, ONCE (attempt $(( attempt + 1 )), the last); if they fail again the failure is genuine. Tests: $retest"
+                printf '### ios-e2e/ui shard %s: cross-shard retry\n\nFailed "%s" while a sibling passed (%s). Re-running once; a second failure is genuine.\n' \
+                  "$SHARD" "$retest" "$sib_table" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+                { echo "=== attempt $attempt: exit $rc, genuine failure with a passing sibling ($sib_table), retrying: $retest ==="; cat "$log"; } >> "$infra_attempts"
+                cp "$log" "$attempt1_log"
+                cur_args=""
+                for t in $retest; do cur_args="$cur_args -only-testing:$t"; done
+                partial_retry=1
+                retry_reason=cross-shard
+                attempt=$(( attempt + 1 ))
+                sleep 20
                 ;;
             esac
           done

@@ -3118,6 +3118,9 @@ jobs:
     if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
+      # A called workflow can hold no permission its caller does not grant. The
+      # `ui` shards read their siblings' conclusions with it (#2618).
+      actions: read
     uses: ./.github/workflows/ios-e2e.yml
     with:
       # full when the diff can rebuild the iOS binary (apps/ios/, crypto,
