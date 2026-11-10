@@ -64,12 +64,14 @@ function createTestApp(opts: {
   pubkey?: string
   services?: Record<string, unknown>
   user?: Record<string, unknown>
+  env?: Record<string, string>
 } = {}) {
   const {
     permissions = ['*'],
     hubId = 'hub-1',
     pubkey = 'test-pubkey-' + '0'.repeat(50),
     services = {},
+    env,
     user = {
       pubkey,
       name: 'Test User',
@@ -173,6 +175,7 @@ function createTestApp(opts: {
         // factors a deployed host needs. Without the flag the recorder is off,
         // which is correct: `GET /api/test-push-log` would 404 too.
         DEV_ROUTES_ENABLED: 'true',
+        ...env,
       },
       writable: true,
       configurable: true,
@@ -654,6 +657,119 @@ describe('conversations route', () => {
       expect(res.status).toBe(201)
       expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({
         status: 'failed',
+      }))
+    })
+
+    it('marks failed, not sent, when the provider bridge is unreachable (#2551)', async () => {
+      const getSpy = vi.fn().mockResolvedValue(convRow({
+        id: 'conv-1',
+        assignedTo: 'test-pubkey-' + '0'.repeat(50),
+        status: 'active',
+        channelType: 'signal',
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
+      const sendSpy = vi.fn().mockResolvedValue({ success: false, error: 'Signal bridge request failed: fetch failed' })
+      const adapterSpy = vi.fn().mockResolvedValue({ sendMessage: sendSpy })
+
+      vi.spyOn(serviceFactories, 'getMessagingAdapterFromService').mockImplementation(adapterSpy)
+
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        services: { conversations: { getById: getSpy, addMessage: addSpy, getContactIdentifier: vi.fn().mockResolvedValue('+15551234567') } },
+      })
+
+      const res = await app.request('/conv-1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          encryptedContent: 'encrypted123',
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          plaintextForSending: 'Hello',
+        }),
+      })
+
+      expect(res.status).toBe(201)
+      // The caller receives nothing, so the record must not claim otherwise.
+      expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'failed',
+        failureReason: 'Signal bridge request failed: fetch failed',
+      }))
+    })
+
+    it('marks failed when the channel is not configured and the dev surface is closed (#2551)', async () => {
+      const getSpy = vi.fn().mockResolvedValue(convRow({
+        id: 'conv-1',
+        assignedTo: 'test-pubkey-' + '0'.repeat(50),
+        status: 'active',
+        channelType: 'signal',
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
+
+      vi.spyOn(serviceFactories, 'getMessagingAdapterFromService')
+        .mockRejectedValue(new Error('Signal is not configured'))
+
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        // production is refused by the dev-surface gate before any flag is read.
+        env: { ENVIRONMENT: 'production' },
+        services: { conversations: { getById: getSpy, addMessage: addSpy, getContactIdentifier: vi.fn().mockResolvedValue('+15551234567') } },
+      })
+
+      const res = await app.request('/conv-1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          encryptedContent: 'encrypted123',
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          plaintextForSending: 'Hello',
+        }),
+      })
+
+      expect(res.status).toBe(201)
+      expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'failed',
+        failureReason: 'Signal is not configured',
+      }))
+    })
+
+    it('a dev-surface host sends through the simulated provider when the channel is not configured (#2551)', async () => {
+      const getSpy = vi.fn().mockResolvedValue(convRow({
+        id: 'conv-1',
+        assignedTo: 'test-pubkey-' + '0'.repeat(50),
+        status: 'active',
+        channelType: 'signal',
+      }))
+      const addSpy = vi.fn().mockResolvedValue(msgRow({ id: 'msg-new' }))
+
+      vi.spyOn(serviceFactories, 'getMessagingAdapterFromService')
+        .mockRejectedValue(new Error('Signal is not configured'))
+
+      const app = createTestApp({
+        permissions: ['conversations:read-assigned'],
+        services: {
+          conversations: { getById: getSpy, addMessage: addSpy, getContactIdentifier: vi.fn().mockResolvedValue('+15551234567') },
+          messagingSuppression: { blocksOutbound: vi.fn().mockResolvedValue(false) },
+        },
+      })
+
+      const res = await app.request('/conv-1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          encryptedContent: 'encrypted123',
+          readerEnvelopes: [{ pubkey: 'a'.repeat(64), enc: 'b'.repeat(64), ct: 'key1' }],
+          plaintextForSending: 'Hello',
+          externalId: '1700000000000',
+        }),
+      })
+
+      expect(res.status).toBe(201)
+      // The simulated provider genuinely accepted the send, and the
+      // simulation's pinned external id (not the simulator's minted one) is
+      // what the stored row carries, so receipt simulations match on it.
+      expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'sent',
+        externalId: '1700000000000',
       }))
     })
   })

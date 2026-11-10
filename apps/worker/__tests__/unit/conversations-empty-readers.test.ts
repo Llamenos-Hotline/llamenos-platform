@@ -36,9 +36,9 @@ function createSmsServices() {
     retryCount: 0,
     createdAt: new Date('2026-11-01T12:00:00.000Z'),
   }))
-  // The messaging adapter is not configured in this test — the route treats
-  // that as "stored as sent", the same outcome the contact-identifier failure
-  // path has always had.
+  // The contact-identifier lookup fails the way an unconfigured channel makes
+  // it fail. The route stores the reply as `failed` with the reason — `sent`
+  // means a provider accepted the message (#2551), and none did here.
   const getContactIdentifier = vi.fn().mockRejectedValue(new Error('sms adapter not configured'))
   const getHpkeRecipients = vi.fn().mockResolvedValue([])
   const services = {
@@ -83,6 +83,9 @@ describe('POST /conversations/:id/messages — empty-reader crisis contract', ()
     const stored = addMessage.mock.calls[0][0]
     expect(stored.readerEnvelopes).toEqual([])
     expect(stored.encryptedContent).toBe('')
+    // No provider accepted this reply, so it is not `sent` (#2551).
+    expect(stored.status).toBe('failed')
+    expect(stored.failureReason).toContain('not configured')
     // The author's device list was genuinely consulted (not skipped).
     expect(getHpkeRecipients).toHaveBeenCalledWith(VALID_PUBKEY)
     expect(res.status).toBe(201)

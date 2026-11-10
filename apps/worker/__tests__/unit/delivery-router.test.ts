@@ -198,4 +198,57 @@ describe('delivery-router', () => {
     expect(result.success).toBe(true)
     expect(result.externalId).toBe('ext-123')
   })
+
+  it('falls back to the simulated provider on a dev-surface host when the channel is not configured (#2551)', async () => {
+    const deps = {
+      ...createDeps({ preferSignalDelivery: false }),
+      env: { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' },
+    }
+    vi.mocked(getMessagingAdapterFromService).mockRejectedValue(new Error('SMS is not enabled'))
+
+    const { result, actualChannel } = await routeOutboundMessage(deps, {
+      channelType: 'sms',
+      recipientIdentifier: '+15551234567',
+      identifierHash: 'hash123',
+      body: 'Hello world',
+      conversationId: 'conv-1',
+    })
+
+    // The simulator accepted and recorded the send, minting its own provider id.
+    expect(actualChannel).toBe('sms')
+    expect(result.success).toBe(true)
+    expect(result.externalId).toMatch(/^sim-/)
+  })
+
+  it('rethrows the unconfigured-channel error when the dev surface is closed (#2551)', async () => {
+    const deps = {
+      ...createDeps({ preferSignalDelivery: false }),
+      env: { ENVIRONMENT: 'production' },
+    }
+    vi.mocked(getMessagingAdapterFromService).mockRejectedValue(new Error('SMS is not enabled'))
+
+    await expect(routeOutboundMessage(deps, {
+      channelType: 'sms',
+      recipientIdentifier: '+15551234567',
+      identifierHash: 'hash123',
+      body: 'Hello world',
+      conversationId: 'conv-1',
+    })).rejects.toThrow('SMS is not enabled')
+  })
+
+  it('never falls back to the simulator for a transient provider failure (#2551)', async () => {
+    const deps = {
+      ...createDeps({ preferSignalDelivery: false }),
+      env: { ENVIRONMENT: 'development', DEV_ROUTES_ENABLED: 'true' },
+    }
+    vi.mocked(getMessagingAdapterFromService).mockRejectedValue(new Error('fetch failed'))
+
+    await expect(routeOutboundMessage(deps, {
+      channelType: 'sms',
+      recipientIdentifier: '+15551234567',
+      identifierHash: 'hash123',
+      body: 'Hello world',
+      conversationId: 'conv-1',
+    })).rejects.toThrow('fetch failed')
+  })
 })

@@ -383,6 +383,16 @@ export class TestDB {
     await (await sql()).unsafe('DELETE FROM provider_configs WHERE hub_id IS NULL')
   }
 
+  /**
+   * Reset the instance-wide messaging config (the `system_settings` singleton's
+   * `messaging_config`). The API has no unset, so the @global-setting scenarios
+   * that write one reset it here: a leaked channel config would change which
+   * provider every other messaging scenario reaches.
+   */
+  static async resetGlobalMessagingConfig(): Promise<void> {
+    await (await sql()).unsafe(`UPDATE system_settings SET messaging_config = '{}'::jsonb WHERE id = 1`)
+  }
+
   /** Close the database connection pool. */
   static async close(): Promise<void> {
     // Deliberately does NOT go through sql(): closing a connection that was
