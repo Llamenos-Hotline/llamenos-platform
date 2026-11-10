@@ -218,11 +218,13 @@ final class APIServiceWireFormatTests: XCTestCase {
                 interactionTypeHash: nil
             )),
 
-            // POST /api/conversations/:id/messages — sendMessageBodySchema. BOTH the
-            // ciphertext and the envelopes are `.optional()` here.
+            // POST /api/conversations/:id/messages — sendMessageBodySchema. The ciphertext,
+            // the envelopes and `plaintextForSending` are all `.optional()` here, which is
+            // exactly why a drop of any of them is invisible to the validator (#2500).
             ("sendMessage", SendMessageRequest(
                 encryptedContent: Self.ct,
-                readerEnvelopes: [Self.recipient]
+                readerEnvelopes: [Self.recipient],
+                plaintextForSending: "We hear you. Help is on the way."
             )),
 
             // POST /api/directory — createContactBodySchema. Generated type; `hubID`
@@ -410,10 +412,13 @@ final class APIServiceWireFormatTests: XCTestCase {
 
         let message = try await wireBytes(body: SendMessageRequest(
             encryptedContent: Self.ct,
-            readerEnvelopes: [Self.recipient]
+            readerEnvelopes: [Self.recipient],
+            plaintextForSending: "We hear you."
         ))
         let messageKeys = try allKeys(message)
-        for key in ["encryptedContent", "readerEnvelopes"] {
+        // `plaintextForSending` is what the carrier transmits: without it the server
+        // refuses the send (#2500), and a snake_cased key is dropped by the validator.
+        for key in ["encryptedContent", "readerEnvelopes", "plaintextForSending"] {
             XCTAssertTrue(messageKeys.contains(key), "sendMessage lost \(key); keys were \(messageKeys.sorted())")
         }
         XCTAssertFalse(

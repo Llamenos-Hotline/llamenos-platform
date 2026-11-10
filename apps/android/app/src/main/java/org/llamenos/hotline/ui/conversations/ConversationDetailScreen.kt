@@ -526,6 +526,15 @@ private fun MessageBubble(
 
                 Spacer(Modifier.height(4.dp))
 
+                if (isOutbound && message.deliveryFailed) {
+                    Text(
+                        text = stringResource(R.string.conversations_failed),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.testTag("message-failed-${message.id}"),
+                    )
+                }
+
                 Text(
                     text = formatMessageTime(message.createdAt),
                     style = MaterialTheme.typography.labelSmall,

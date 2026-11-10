@@ -5,6 +5,7 @@
 import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import {
+  apiGet,
   apiPost,
 } from '../../api-helpers'
 import {
@@ -16,14 +17,18 @@ import { getScenarioState } from './common.steps'
 import {
   adminHpkeRecipient,
   decryptStoredRecordContent,
+  encryptContent,
+  generateContentKey,
   openStoredRecordKey,
+  wrapKeyForRecipient,
 } from '../../crypto-helpers'
-import { LABEL_MESSAGE } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_NOTE_KEY } from '@shared/crypto-labels'
 
 // ── State ───────────────────────────────────────────────────────────
 
 interface OutboundEncryptionState {
   conversationId?: string
+  refusal?: { status: number; code?: string }
   outboundMessageId?: string
   plaintextSent?: string
 }
@@ -76,7 +81,51 @@ When(
   },
 )
 
+// #2500: the mobile clients sealed the reply for the hub's readers and sent no
+// plaintext, so the server stored it `pending` and no provider ever received
+// it. The send must be refused outright, with nothing stored.
+When(
+  'a volunteer sends an outbound message sealed for the hub readers but carrying no plaintext',
+  async ({ request, world }) => {
+    const state = getOEState(world)
+    const hubId = getScenarioState(world).hubId
+    expect(state.conversationId).toBeDefined()
+
+    const admin = adminHpkeRecipient()
+    const contentKey = generateContentKey()
+    const encryptedContent = encryptContent('a sealed reply with nothing for the carrier', contentKey, LABEL_NOTE_KEY)
+    const envelope = await wrapKeyForRecipient(contentKey, admin.pubkeyHex, admin.skHex, LABEL_NOTE_KEY)
+
+    const { status, data } = await apiPost<{ code?: string }>(
+      request,
+      `/hubs/${hubId}/conversations/${state.conversationId}/messages`,
+      { encryptedContent, readerEnvelopes: [{ pubkey: admin.pubkeyHex, ...envelope }] },
+    )
+    state.refusal = { status, code: data?.code }
+    setState(world, STATE_KEY, state)
+  },
+)
+
 // ── Then ────────────────────────────────────────────────────────────
+
+Then('the send is refused with status {int} and code {string}', async ({ world }, status: number, code: string) => {
+  const refusal = getOEState(world).refusal
+  expect(refusal, 'a send was attempted').toBeDefined()
+  expect(refusal!.status).toBe(status)
+  expect(refusal!.code).toBe(code)
+})
+
+Then('no outbound message was stored for that conversation', async ({ request, world }) => {
+  const state = getOEState(world)
+  const hubId = getScenarioState(world).hubId
+  const { status, data } = await apiGet<{ messages: Array<{ direction: string }> }>(
+    request,
+    `/hubs/${hubId}/conversations/${state.conversationId}/messages`,
+  )
+  expect(status).toBe(200)
+  // The inbound that opened the conversation is there; a refused reply is not.
+  expect(data.messages.filter(m => m.direction === 'outbound')).toEqual([])
+})
 
 Then(
   'the stored message encryptedContent should not contain {string}',

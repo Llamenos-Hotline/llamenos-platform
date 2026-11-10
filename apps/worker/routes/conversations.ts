@@ -287,8 +287,11 @@ conversations.get('/:id/messages',
 
 /**
  * POST /conversations/:id/messages — send outbound message
- * Body: { encryptedContent, readerEnvelopes, plaintextForSending? }
- * If plaintext is provided, it's sent via the messaging adapter then discarded.
+ * Body: { encryptedContent, readerEnvelopes, plaintextForSending }
+ * On an external channel (SMS/WhatsApp/Signal/RCS) `plaintextForSending` is REQUIRED:
+ * it is what the carrier transmits, and the server keeps no plaintext to rebuild it
+ * from. It is handed to the messaging adapter and then discarded — never stored or
+ * logged. A request without it is refused 422 before anything is written (#2500).
  */
 conversations.post('/:id/messages',
   describeRoute({
@@ -303,6 +306,7 @@ conversations.post('/:id/messages',
           },
         },
       },
+      422: { description: 'Refused: an external-channel send needs plaintextForSending (code plaintext_for_sending_required), or a client-sealed message names no admin reader. Nothing is stored.' },
       ...authErrors,
       ...notFoundError,
     },
@@ -325,6 +329,27 @@ conversations.post('/:id/messages',
 
     // Normalize: `body` field is an alias for `plaintextForSending`
     const plaintextForSending = body.plaintextForSending ?? body.body
+
+    // An outbound message on an external channel carries TWO things: the sealed
+    // copy for the hub's readers, and the plaintext the carrier transmits. The
+    // server keeps no plaintext, so it cannot rebuild the second from the first.
+    // A request without it used to be stored as `pending` and never handed to any
+    // provider — the volunteer saw a reply that went nowhere (#2500). Refuse it
+    // here, before anything is sealed, sent or stored, so no client — present or
+    // future — can regress into that silently. The refusal is counted and logged:
+    // a defence nobody can see is a defence nobody can trust (rule V).
+    if (conv.channelType !== 'web' && !plaintextForSending?.trim()) {
+      incCounter('llamenos_outbound_message_refused_total', { reason: 'no_plaintext', channel: conv.channelType })
+      logger.warn('outbound message REFUSED: external-channel send carries no plaintextForSending, so no carrier could transmit it', {
+        conversationId: id,
+        channel: conv.channelType,
+        hadSealedCopy: Boolean(body.encryptedContent),
+      })
+      return c.json({
+        error: 'plaintextForSending is required to send on an external channel: the sealed copy is for the hub\'s readers, the carrier transmits the plaintext',
+        code: 'plaintext_for_sending_required',
+      }, 422)
+    }
 
     // Determine encrypted content + envelopes for storage.
     // If the client provided pre-encrypted content (web channel E2EE), use it directly.
@@ -387,11 +412,6 @@ conversations.post('/:id/messages',
     // Web channel requires real E2EE envelope
     if (conv.channelType === 'web' && (!body.encryptedContent || !body.readerEnvelopes?.length)) {
       return c.json({ error: 'encryptedContent and readerEnvelopes are required for web channel' }, 400)
-    }
-
-    // External channels require at least plaintext for dispatch
-    if (conv.channelType !== 'web' && !plaintextForSending && !body.encryptedContent) {
-      return c.json({ error: 'plaintextForSending or body is required for external channels' }, 400)
     }
 
     // A client-sealed message is readable by exactly the envelopes it brought.
