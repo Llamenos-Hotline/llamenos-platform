@@ -9,8 +9,10 @@
  * order.
  *
  * Chains are per hub (`hub_id`), plus one platform chain (`hub_id IS NULL`).
- * Append order is `created_at` then `id`; `log()` guarantees `created_at` is
- * strictly increasing within a chain (see there), so the order is total.
+ * Append order is the `seq` column: `log()` assigns it as the locked tip's
+ * seq + 1 inside the per-chain advisory-lock transaction, so the order is
+ * total and structural (unique per chain) rather than an application-level
+ * invariant. `created_at` records when the event happened and nothing else.
  */
 import { randomBytes } from 'node:crypto'
 import { eq, and, asc, desc, sql, count, gte, lte, inArray } from 'drizzle-orm'
@@ -181,6 +183,15 @@ function stableJsonStringify(value: unknown): string {
   })
 }
 
+/**
+ * Hashed content deliberately does NOT include `seq` (#1175): append order is
+ * already attested by the previousEntryHash linkage — verifyChain walks the
+ * chain in seq order and checks that linkage, so rewriting seq values to
+ * reorder the log breaks verification exactly as reordering the rows would.
+ * Hashing seq would add no guarantee, and changing this content format would
+ * make every existing entry unverifiable (its stored hash could no longer be
+ * recomputed), including for any client that re-verifies an exported chain.
+ */
 export function computeEntryHash(entry: {
   id: string
   action: string
@@ -356,16 +367,17 @@ export class AuditService {
    * the newer tip the winner inserted, so both entries chain from the same
    * predecessor (forked chain), and an empty chain has no row to lock at all.
    *
-   * `created_at` is taken after the lock and forced strictly past the tip's,
-   * so append order is recoverable from `created_at` alone even when two
-   * writers' wall clocks tie or disagree.
+   * The same lock makes the new entry's `seq` one past the tip's: append
+   * order is the lock's output, unique per chain and enforced in the schema
+   * (#1175). `created_at` is NOT adjusted — a timestamp that has to lie to
+   * preserve ordering corrupts both facts it records.
    */
   async log(
     action: string,
     actorPubkey: string,
     rawDetails: Record<string, unknown> = {},
     hubId?: string | null,
-    /** Explicit timestamp — only for seeding the historical sample dataset. Entries must be appended in chronological order. */
+    /** Explicit timestamp — only for seeding the historical sample dataset. Append order is `seq`; the timestamp no longer needs to be chronological. */
     at?: Date,
   ): Promise<AuditEntry> {
     // Validate actorPubkey format: 'system' or 64-char hex
@@ -424,19 +436,16 @@ export class AuditService {
       }
 
       const [latest] = await tx
-        .select({ entryHash: auditLog.entryHash, createdAt: auditLog.createdAt })
+        .select({ entryHash: auditLog.entryHash, seq: auditLog.seq })
         .from(auditLog)
         .where(chainCondition(hubId))
-        .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+        .orderBy(desc(auditLog.seq))
         .limit(1)
 
       const previousEntryHash = latest?.entryHash ?? null
+      const seq = (latest?.seq ?? 0) + 1
 
-      let createdAtMs = (at ?? new Date()).getTime()
-      if (latest && createdAtMs <= latest.createdAt.getTime()) {
-        createdAtMs = latest.createdAt.getTime() + 1
-      }
-      const createdAt = new Date(createdAtMs).toISOString()
+      const createdAt = (at ?? new Date()).toISOString()
 
       const entryHash = computeEntryHash({
         id,
@@ -452,6 +461,7 @@ export class AuditService {
         .values({
           id,
           hubId: hubId ?? null,
+          seq,
           action,
           actorPubkey: entryActor,
           details: storedDetails,
@@ -550,7 +560,7 @@ export class AuditService {
         .select()
         .from(auditLog)
         .where(where)
-        .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+        .orderBy(desc(auditLog.seq))
 
       const keyCache = new Map<string, Uint8Array | null>()
       const matched: AuditEntry[] = []
@@ -570,7 +580,7 @@ export class AuditService {
         .select()
         .from(auditLog)
         .where(where)
-        .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+        .orderBy(desc(auditLog.seq))
         .limit(limit)
         .offset(offset),
       this.db
@@ -611,7 +621,7 @@ export class AuditService {
         .select()
         .from(auditLog)
         .where(and(...conditions))
-        .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+        .orderBy(asc(auditLog.seq))
     }
 
     // Encrypted details are opaque to SQL. Evidence-custody entries are few
@@ -625,7 +635,7 @@ export class AuditService {
       .select()
       .from(auditLog)
       .where(and(...conditions))
-      .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+      .orderBy(asc(auditLog.seq))
 
     const keyCache = new Map<string, Uint8Array | null>()
     const out: AuditEntry[] = []
@@ -647,7 +657,7 @@ export class AuditService {
       .select({ entryHash: auditLog.entryHash })
       .from(auditLog)
       .where(chainCondition(hubId))
-      .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+      .orderBy(desc(auditLog.seq))
       .limit(1)
 
     return row?.entryHash ?? null
@@ -656,7 +666,7 @@ export class AuditService {
   /**
    * Verify the integrity of the hash chain for a hub (or global if no hubId).
    *
-   * Walks entries in append order (created_at, id) and checks:
+   * Walks entries in append order (seq) and checks:
    * 1. Each entry's stored entryHash matches the recomputed hash
    * 2. Each entry's previousEntryHash matches the prior entry's entryHash
    *
@@ -690,7 +700,7 @@ export class AuditService {
         .select({ entryHash: auditLog.entryHash })
         .from(auditLog)
         .where(condition)
-        .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+        .orderBy(asc(auditLog.seq))
         .limit(1)
         .offset(offset - 1)
 
@@ -702,7 +712,7 @@ export class AuditService {
       .select()
       .from(auditLog)
       .where(condition)
-      .orderBy(asc(auditLog.createdAt), asc(auditLog.id))
+      .orderBy(asc(auditLog.seq))
 
     const entries = limit != null
       ? await baseQuery.limit(limit).offset(offset)

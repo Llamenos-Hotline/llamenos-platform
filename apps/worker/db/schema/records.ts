@@ -4,6 +4,7 @@
  */
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   index,
   integer,
   pgTable,
@@ -148,6 +149,17 @@ export const auditLog = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     hubId: text('hub_id'),
+    // Append order within a chain (#1175), assigned by AuditService.log() as
+    // the locked tip's seq + 1 under the per-chain advisory lock — the lock's
+    // output, not a second source of truth. created_at no longer carries
+    // ordering, so it records when the event happened and nothing else. The
+    // DEFAULT exists only so a previous release's INSERT (which does not name
+    // seq) still succeeds against this schema during a rolling upgrade: it
+    // issues globally unique values far above any per-chain counter, so such
+    // a row can neither collide with nor sort before a real append.
+    seq: bigint('seq', { mode: 'number' })
+      .notNull()
+      .default(sql`nextval('audit_log_seq_default_seq')`),
     action: text('action').notNull(),
     actorPubkey: text('actor_pubkey').notNull(),
     details: jsonb('details'),
@@ -164,5 +176,12 @@ export const auditLog = pgTable(
       table.createdAt.desc(),
     ),
     index('audit_log_action_idx').on(table.action),
+    // seq is unique per chain. As with bans below, Postgres treats NULL hub_id
+    // as distinct in the composite index, so the platform chain gets its own
+    // partial index.
+    uniqueIndex('audit_log_hub_id_seq_idx').on(table.hubId, table.seq),
+    uniqueIndex('audit_log_platform_seq_idx')
+      .on(table.seq)
+      .where(sql`hub_id IS NULL`),
   ],
 )

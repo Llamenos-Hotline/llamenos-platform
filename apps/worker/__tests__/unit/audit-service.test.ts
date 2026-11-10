@@ -12,6 +12,7 @@ function makeAuditRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'audit-1',
     hubId: null,
+    seq: 1,
     action: 'login',
     actorPubkey: 'a'.repeat(64),
     details: {},
@@ -158,10 +159,10 @@ describe('AuditService.log', () => {
     const prevHash = 'c'.repeat(64)
 
     // Return an existing entry with a hash
-    db.$setSelectResults([[{ entryHash: prevHash, createdAt: new Date('2026-01-01T00:00:00.000Z') }]])
+    db.$setSelectResults([[{ entryHash: prevHash, seq: 41 }]])
 
     // The inserted row should have previousEntryHash set
-    const insertedRow = makeAuditRow({ previousEntryHash: prevHash })
+    const insertedRow = makeAuditRow({ previousEntryHash: prevHash, seq: 42 })
     db.$setInsertResult([insertedRow])
 
     const result = await service.log('noteCreated', 'a'.repeat(64))
@@ -184,7 +185,7 @@ describe('AuditService.log', () => {
   /** The values object passed to the (first) insert inside log(). */
   function insertedValues(db: ReturnType<typeof setupAuditDb>['db']) {
     const insertResult = (db.insert as unknown as { mock: { results: Array<{ value: { values: { mock: { calls: unknown[][] } } } }> } }).mock.results[0]
-    return insertResult.value.values.mock.calls[0][0] as { id: string; createdAt: unknown; entryHash: string; previousEntryHash: string | null }
+    return insertResult.value.values.mock.calls[0][0] as { id: string; seq: number; createdAt: unknown; entryHash: string; previousEntryHash: string | null }
   }
 
   it('takes the chain advisory lock before reading the tip', async () => {
@@ -202,25 +203,28 @@ describe('AuditService.log', () => {
     expect(db.execute.mock.invocationCallOrder[0]).toBeLessThan(txSelect.mock.invocationCallOrder[0])
   })
 
-  it('forces created_at strictly past the tip so append order is total', async () => {
+  it('assigns seq as one past the locked tip, and never falsifies created_at (#1175)', async () => {
     const { db } = setupAuditDb()
     const service = new AuditService(db as any)
     const prevHash = 'c'.repeat(64)
-    // Tip stamped in the future relative to this writer's clock (skew / same-ms tie).
-    const tipCreatedAt = new Date(Date.now() + 60_000)
+    // A timestamp EARLIER than the tip's: under the old code this was bumped
+    // 1 ms past the tip to keep (created_at, id) total. Append order is seq
+    // now, so the recorded time must be the time given, and only seq moves.
+    const at = new Date('2026-01-01T00:00:00.000Z')
 
-    db.$setSelectResults([[{ entryHash: prevHash, createdAt: tipCreatedAt }]])
-    db.$setInsertResult([makeAuditRow()])
+    db.$setSelectResults([[{ entryHash: prevHash, seq: 41 }]])
+    db.$setInsertResult([makeAuditRow({ seq: 42 })])
 
-    await service.log('noteCreated', 'a'.repeat(64), { k: 'v' }, 'hub-1')
+    await service.log('noteCreated', 'a'.repeat(64), { k: 'v' }, 'hub-1', at)
 
     const values = insertedValues(db)
+    expect(values.seq).toBe(42)
+    expect(values.previousEntryHash).toBe(prevHash)
     // createdAt is passed as a `${iso}::timestamptz` SQL fragment; the ISO string is its first param.
     const chunks = (values.createdAt as { queryChunks: unknown[] }).queryChunks
     const iso = chunks.find((c) => typeof c === 'string' && c.startsWith('20')) as string
-    expect(new Date(iso).getTime()).toBe(tipCreatedAt.getTime() + 1)
-    expect(values.previousEntryHash).toBe(prevHash)
-    // The stored hash must have been computed over the bumped timestamp.
+    expect(iso).toBe(at.toISOString())
+    // The stored hash must have been computed over the true timestamp.
     expect(values.entryHash).toBe(computeEntryHash({
       id: values.id,
       action: 'noteCreated',
@@ -231,17 +235,19 @@ describe('AuditService.log', () => {
     }))
   })
 
-  it('uses the current time when it is already past the tip', async () => {
+  it('starts seq at 1 on an empty chain and uses the current time', async () => {
     const { db } = setupAuditDb()
     const service = new AuditService(db as any)
     const before = Date.now()
 
-    db.$setSelectResults([[{ entryHash: 'c'.repeat(64), createdAt: new Date(before - 60_000) }]])
+    db.$setSelectResults([[]])
     db.$setInsertResult([makeAuditRow()])
 
     await service.log('noteCreated', 'a'.repeat(64), {}, 'hub-1')
 
-    const chunks = (insertedValues(db).createdAt as { queryChunks: unknown[] }).queryChunks
+    const values = insertedValues(db)
+    expect(values.seq).toBe(1)
+    const chunks = (values.createdAt as { queryChunks: unknown[] }).queryChunks
     const iso = chunks.find((c) => typeof c === 'string' && c.startsWith('20')) as string
     expect(new Date(iso).getTime()).toBeGreaterThanOrEqual(before)
   })

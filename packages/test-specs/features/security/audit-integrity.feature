@@ -24,7 +24,7 @@ Feature: Audit Integrity
 
   Scenario: Audit hash chain is verifiable
     And an admin performs 5 sequential operations
-    When the audit log is fetched ordered by creation time
+    When the audit log is fetched in append order
     Then each entry should have an "entryHash" field
     And for entries 1 through 4, previousEntryHash should equal the prior entry's entryHash
     And the full chain should pass database-level verification
