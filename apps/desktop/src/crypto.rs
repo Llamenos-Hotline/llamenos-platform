@@ -30,9 +30,42 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit, Payload},
 };
+use rand::Rng;
 
 fn err_str(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+// ── Random sources: randomness is the value's ONLY initialisation ────
+//
+// A nonce, salt or key must never be born as a literal. The
+// zero-init-then-fill idiom (`let mut b = [0u8; N]; fill_bytes(&mut b)`)
+// compiles fine with the fill dropped, reordered or misplaced — and under
+// AES-GCM a fixed nonce with a fixed key destroys both confidentiality and
+// integrity, so the failure mode that idiom invites is the most severe one
+// available, reached by an edit that looks harmless. Returning the value from
+// `OsRng.r#gen()` makes a missing fill UNREPRESENTABLE rather than merely
+// wrong, and leaves no constant for a reader or a static analyser to have to
+// rule out. Same remedy as packages/crypto/src/backup.rs (#1718). (#1726)
+//
+// This does NOT apply to `[0u8; N]` buffers an API writes into with no
+// returning form — HKDF/Argon2 output buffers, recovered-seed destinations.
+// Those are sinks, not sources, and stay as they are.
+
+/// A fresh random 12-byte AES-GCM nonce.
+fn random_nonce() -> [u8; 12] {
+    rand::rngs::OsRng.r#gen()
+}
+
+/// A fresh random 32-byte KDF salt. See the module comment above for why it
+/// is returned rather than written into a zeroed buffer.
+fn random_salt() -> [u8; 32] {
+    rand::rngs::OsRng.r#gen()
+}
+
+/// A fresh random 32-byte key or seed. See the module comment above.
+fn random_key() -> [u8; 32] {
+    rand::rngs::OsRng.r#gen()
 }
 
 /// Acquire a mutex lock, converting a poisoned-mutex error to a descriptive String.
@@ -795,8 +828,7 @@ pub fn hpke_unwrap_and_set_hub_key(
 /// The key NEVER enters JavaScript — only wrapped envelopes leave Rust.
 #[tauri::command]
 pub fn generate_hub_key_in_state(state: tauri::State<'_, CryptoState>) -> Result<(), String> {
-    let mut key = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+    let key = random_key();
     *lock_mutex(&state.hub_key)? = Some(key.to_vec());
     Ok(())
 }
@@ -895,8 +927,7 @@ pub fn encrypt_hub_field(
     let hub_key = lock_mutex(&state.hub_key)?;
     let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
 
-    let mut nonce_bytes = [0u8; 12];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
+    let nonce_bytes = random_nonce();
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
@@ -1018,11 +1049,12 @@ fn shamir_split(secret_hex: String, total: u8, threshold: u8) -> Result<ShamirSp
     let secret_len = secret.len();
 
     // Random polynomial coefficients for each byte (degree = threshold - 1)
-    // coefficients[i] are the non-constant-term coefficients for the i-th degree
+    // coefficients[i] are the non-constant-term coefficients for the i-th degree.
+    // Randomness is the only initialisation (see random_nonce) — a dropped fill
+    // here would ship zero coefficients, making every share equal to the secret.
     let mut coefficients: Vec<Vec<u8>> = Vec::new();
     for _ in 0..threshold - 1 {
-        let mut coeff = vec![0u8; secret_len];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut coeff);
+        let coeff: Vec<u8> = (0..secret_len).map(|_| rand::rngs::OsRng.r#gen()).collect();
         coefficients.push(coeff);
     }
 
@@ -1527,8 +1559,7 @@ pub fn wipe_keys(
 /// The secret is stored in CryptoState. Only the pubkey is returned.
 #[tauri::command]
 pub fn provision_create_session(state: tauri::State<'_, CryptoState>) -> Result<String, String> {
-    let mut ephemeral_secret = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut ephemeral_secret);
+    let ephemeral_secret = random_key();
 
     let ephemeral_public =
         x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(ephemeral_secret));
@@ -1664,11 +1695,10 @@ fn encrypt_secrets_with_pin(
     credential: &str,
     device_state: &device_keys::DeviceKeyState,
 ) -> Result<device_keys::EncryptedDeviceKeys, String> {
-    // Generate salt and nonce
-    let mut salt = [0u8; 32];
-    let mut nonce_bytes = [0u8; 12];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
+    // Salt and nonce come from OsRng as their only initialisation — a literal
+    // never reaches either (see random_nonce).
+    let salt = random_salt();
+    let nonce_bytes = random_nonce();
 
     // Derive KEK with Argon2id (using llamenos_core's parameters)
     use argon2::Argon2;
@@ -2068,10 +2098,8 @@ mod ipc_surface_tests {
     }
 
     fn device() -> TestDevice {
-        let mut signing_seed = [0u8; 32];
-        let mut encryption_seed = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut signing_seed);
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut encryption_seed);
+        let signing_seed = random_key();
+        let encryption_seed = random_key();
         let secrets = device_keys::DeviceSecrets {
             signing_seed,
             encryption_seed,
@@ -2172,8 +2200,7 @@ mod ipc_surface_tests {
     /// A fresh challenge nonce, as the relay would send one. The binding tests
     /// need two distinct nonces, not particular ones.
     fn fresh_nonce() -> String {
-        let mut bytes = [0u8; 16];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+        let bytes: [u8; 16] = rand::rngs::OsRng.r#gen();
         hex::encode(bytes)
     }
 
@@ -2626,5 +2653,68 @@ mod case_record_conformance_tests {
                 .unwrap();
             assert_eq!(opened, "desktop-sealed");
         }
+    }
+}
+
+// ── #1726: an all-zero nonce must be a test failure, not a code review ──
+//
+// These tests are the "verify by breaking it" half of #1726: reverting any
+// random source in this file to the zero-init-then-fill shape and dropping
+// the fill makes one of them fail deterministically. Without them, an
+// all-zero nonce reaching AES-GCM was something only a code reviewer — or a
+// static analyser — could catch.
+#[cfg(test)]
+mod random_source_tests {
+    use super::*;
+
+    fn test_secrets() -> (device_keys::DeviceSecrets, device_keys::DeviceKeyState) {
+        let secrets = device_keys::DeviceSecrets {
+            signing_seed: random_key(),
+            encryption_seed: random_key(),
+        };
+        let ds = device_keys::DeviceKeyState {
+            device_id: "random-source-test".into(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+        (secrets, ds)
+    }
+
+    /// If a refactor ever turns one of these helpers back into a literal (the
+    /// zero-init-then-fill shape with the fill dropped), this fails
+    /// deterministically instead of shipping an all-zero nonce.
+    #[test]
+    fn random_helpers_never_return_all_zero() {
+        assert_ne!(random_nonce(), [0u8; 12]);
+        assert_ne!(random_salt(), [0u8; 32]);
+        assert_ne!(random_key(), [0u8; 32]);
+    }
+
+    /// The site #1726 names. With a dropped nonce fill, two encryptions of the
+    /// same secrets under the same PIN would reuse one all-zero nonce under
+    /// one Argon2-derived KEK — the AES-GCM fixed-nonce/fixed-key break. A
+    /// dropped salt fill is caught the same way.
+    #[test]
+    fn encrypt_secrets_with_pin_draws_a_fresh_salt_and_nonce_per_call() {
+        let (secrets, ds) = test_secrets();
+        let a = encrypt_secrets_with_pin(&secrets, "correct horse", &ds).unwrap();
+        let b = encrypt_secrets_with_pin(&secrets, "correct horse", &ds).unwrap();
+
+        assert_ne!(
+            hex::decode(&a.nonce).unwrap(),
+            [0u8; 12],
+            "all-zero nonce reached AES-GCM"
+        );
+        assert_ne!(
+            hex::decode(&a.salt).unwrap(),
+            [0u8; 32],
+            "all-zero salt reached Argon2id"
+        );
+        assert_ne!(a.nonce, b.nonce, "nonce reused across calls");
+        assert_ne!(a.salt, b.salt, "salt reused across calls");
+        assert_ne!(
+            a.ciphertext, b.ciphertext,
+            "same plaintext under the same PIN must not produce the same ciphertext"
+        );
     }
 }
