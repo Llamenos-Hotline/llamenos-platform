@@ -37,16 +37,7 @@ export const callRecordResponseSchema = z.object({
   callerNumber: z.string().optional(),
 })
 
-export const activeCallResponseSchema = z.object({
-  id: z.string(),
-  callerNumber: z.string(),
-  answeredBy: z.string().nullable().optional(),
-  startedAt: z.string(),
-  status: callStatusSchema,
-})
-
 export type CallRecord = z.infer<typeof callRecordResponseSchema>
-export type ActiveCall = z.infer<typeof activeCallResponseSchema>
 export type UserPresence = z.infer<typeof callPresenceResponseSchema>['users'][number]
 
 export const callPresenceResponseSchema = z.object({

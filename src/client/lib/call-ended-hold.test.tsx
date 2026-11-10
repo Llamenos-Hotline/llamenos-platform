@@ -42,7 +42,7 @@ import { setActiveHub } from './api'
 import { CallsProvider, useCalls } from './calls-context'
 
 const ringOnB = {
-  callId: 'CA-on-hub-B', hubId: 'hub-B', callerNumber: '[redacted]', startedAt: '2026-01-01T00:00:00Z', status: 'ringing',
+  id: 'CA-on-hub-B', hubId: 'hub-B', startedAt: '2026-01-01T00:00:00Z', status: 'ringing',
 }
 
 function lastCallHandler(): RelayEventHandler {
