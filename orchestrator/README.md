@@ -102,7 +102,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing`, `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
-| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
+| `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Bounds only the ADDITION of never-admitted PRs by queue depth — an ejected or dequeued PR (last merge-queue timeline event a removal) is re-armed at any depth (#2619), and a fleet-dispatched one is given the `queue-cleared` label first, because the queue guard reads it inside the group. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
 ### `queue-feed`: the queue had no owner (#2036)
 
@@ -117,7 +117,21 @@ same state from birth.
 
 The feed runs on its own timer (every 15 minutes, offset from the tick) and
 tops the queue up to the live ruleset's `min_entries_to_merge`, never past
-`max_entries_to_merge`. A PR is queued only if **all** of:
+`max_entries_to_merge`. That depth bound applies to **adding** a PR the queue
+never admitted; it does not apply to **re-arming** one the queue admitted and
+dropped (#2619). An ejected or dequeued PR is recognised by the *last* event of
+its merge-queue timeline being a removal (`autoMergeRequest` is null for a
+queued PR and an ejected one alike, and the queue listing only says who is
+queued now), and it is restored at any queue depth — the old single
+"`satisfied`" early return skipped the whole scan exactly when ejections are
+most likely, and left seven green PRs unarmed for ~75 minutes at depth 18.
+A history that cannot be read is never taken as an ejection. A fleet-dispatched
+PR (`fleet/<lane>/<item>`) is given the `queue-cleared` label before it is
+armed — the queue guard (`fleet-verify.yml`) reads the PR inside the merge
+group, after the auto-merge request is consumed, so without the label the entry
+is rejected again in seconds — and a PR whose last attempt failed *only*
+because the guard refused that unsignalled entry is eligible again (the failure
+is the entry's, not the diff's). A PR is queued only if **all** of:
 
 1. A **per-PR** `gh pr view` says `CLEAN` — the list form's
    `mergeStateStatus` is stale, so the list enumerates numbers and never
