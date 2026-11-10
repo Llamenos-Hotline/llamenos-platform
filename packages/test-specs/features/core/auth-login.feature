@@ -331,8 +331,7 @@ Feature: Authentication & Login
     And I tap "Log in"
     Then I should be redirected away from login
 
-  # @fixme: typing in the device key field does not clear the login error — #1307
-  @desktop @ios @android @regression @fixme
+  @desktop @ios @android @regression
   Scenario: Error clears when typing in device key field
     Given the app is freshly installed
     And I am on the login screen

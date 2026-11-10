@@ -559,7 +559,10 @@ function LoginPage() {
                     data-testid="device-key-input"
                     type="password"
                     value={seedHex}
-                    onChange={(e) => setSeedHex(e.target.value)}
+                    onChange={(e) => {
+                      setSeedHex(e.target.value)
+                      if (validationError) setValidationError('')
+                    }}
                     placeholder={t('auth.secretKeyPlaceholder')}
                     autoComplete="off"
                   />
