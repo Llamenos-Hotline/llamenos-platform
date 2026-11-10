@@ -37,7 +37,7 @@ Hoặc tạo file `values-production.yaml` để triển khai tái lập:
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/rhonda-rodododo/llamenos-platform
+    repository: ghcr.io/llamenos-hotline/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -136,7 +136,7 @@ Mở `https://hotline.yourdomain.com` trong trình duyệt. Đăng nhập bằng
 
 | Tham số | Mô tả | Mặc định |
 |---------|-------|----------|
-| `app.image.repository` | Container image | `ghcr.io/rhonda-rodododo/llamenos-platform` |
+| `app.image.repository` | Container image | `ghcr.io/llamenos-hotline/llamenos-platform` |
 | `app.image.tag` | Image tag | Chart appVersion |
 | `app.port` | Cổng ứng dụng | `3000` |
 | `app.replicas` | Số bản sao Pod | `2` |

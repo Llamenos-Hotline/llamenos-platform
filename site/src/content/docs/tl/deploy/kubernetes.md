@@ -37,7 +37,7 @@ O gumawa ng `values-production.yaml` file para sa mga reproducible deploy:
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/rhonda-rodododo/llamenos-platform
+    repository: ghcr.io/llamenos-hotline/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -139,7 +139,7 @@ Buksan ang `https://hotline.yourdomain.com` sa iyong browser. Mag-login gamit an
 
 | Parameter | Paglalarawan | Default |
 |-----------|-------------|---------|
-| `app.image.repository` | Container image | `ghcr.io/rhonda-rodododo/llamenos-platform` |
+| `app.image.repository` | Container image | `ghcr.io/llamenos-hotline/llamenos-platform` |
 | `app.image.tag` | Image tag | Chart appVersion |
 | `app.port` | Application port | `3000` |
 | `app.replicas` | Pod replicas | `2` |

@@ -27,25 +27,15 @@ import {
  *
  * `docker-stable` used to be excluded here on the theory that folding its
  * case "would make an unwritable push *look* fixed". That reasoning was
- * backwards and is retired. The address this repo's GITHUB_TOKEN cannot
- * write is the *advertised* one — `ghcr.io/rhonda-rodododo/...`, still the
- * value of `registry.app` in site/src/config.ts, whose package lives under
- * an owner this repository has no `packages: write` on (`denied:
- * permission_denied`, ci-base-image-nightly run 36309067787). The address
- * the fold produces is this repository's OWN namespace, which the job's
- * `packages: write` token can write. So folding does not mask an unwritable
- * push — without it the push is unwritable *and* malformed, rejected by the
- * registry before a permission is ever consulted. With it, `docker-stable`
- * has the only publishable address available to it.
+ * backwards and is retired: the folded address is this repository's OWN
+ * namespace, which the job's `packages: write` token can write. Without the
+ * fold the push is malformed, rejected by the registry before a permission
+ * is ever consulted.
  *
- * The consequence is a knowing, tracked divergence: the address computed
- * and pushed here (`ghcr.io/llamenos-hotline/llamenos-platform`) is NOT the
- * address site/src/config.ts advertises. #1223 is the follow-up that moves
- * the advertised one onto the pushed one, once the new package exists and
- * is public. That divergence is pinned from both ends — and made to fail
- * loudly the moment either end moves — in
- * tests/orchestrator/release-ghcr-publish.test.ts. This file only asserts
- * the narrower property: whatever address is computed, it is lowercase and
+ * That the folded address is also the one advertised to operators
+ * (`registry.app` in site/src/config.ts and every deploy doc) is asserted in
+ * tests/orchestrator/release-ghcr-publish.test.ts. This file only asserts the
+ * narrower property: whatever address is computed, it is lowercase and
  * therefore legal for a registry to accept.
  *
  * Why a rail and not a code read. GitHub Actions has no lowercase function

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { siteConfig } from '../../site/src/config.js'
+import { actualRepository } from './repo-identity.js'
 
 /**
  * Rail for the `docker-stable` job's registry migration off Docker Hub
@@ -16,31 +18,20 @@ import { parse as parseYaml } from 'yaml'
  *
  * 1. The image reference the job actually publishes to
  *    (`${REGISTRY}/${IMAGE_NAME}`, lowercase-folded, computed from the real
- *    workflow YAML) and `registry.app` in `site/src/config.ts` — the
- *    address the download page tells operators to `docker pull` — are
- *    currently DIFFERENT, knowingly, and both ends are pinned here.
+ *    workflow YAML with `${{ github.repository }}` resolved from outside the
+ *    tree) is the ONLY app-image address anything advertises: `registry.app`
+ *    in `site/src/config.ts`, and every deploy doc that names one.
  *
- *    This used to assert the two were equal, and passed only because the
- *    resolver below returned the pre-org-move literal
- *    `rhonda-rodododo/llamenos-platform` for `${{ github.repository }}`.
- *    That is not what the workflow computes: the repository moved to
- *    `Llamenos-Hotline`, so the job pushes to
- *    `ghcr.io/llamenos-hotline/llamenos-platform` while the site still
- *    advertises `ghcr.io/rhonda-rodododo/llamenos-platform`. The old
- *    assertion therefore reported parity between two addresses that had
- *    already diverged — it papered over exactly the drift it claimed to
- *    police.
- *
- *    So the resolver now resolves to the real current repository and
- *    applies the same fold the workflow applies, and the rail pins BOTH
- *    addresses explicitly. The divergence is a tracked state, not an
- *    accident: the advertised package lives under an owner this repo has no
- *    `packages: write` on, and GHCR creates new packages private, so moving
- *    the advertised address before the new package exists and is public
- *    would replace a working `docker pull` with a 404. #1223 moves it. When
- *    #1223 lands, this rail MUST go red and force the two pins to be
- *    collapsed back into one — it accepts no other pairing, in either
- *    direction. A MUTATION proves the pin is not vacuous.
+ *    History, because it is the reason this is a scan and not a pin. After
+ *    the org move the job pushed to `ghcr.io/llamenos-hotline/…` while the
+ *    site and 22 localized coopcloud.md copies kept advertising
+ *    `ghcr.io/rhonda-rodododo/…` (#1223), whose last tag is 0.19.18. That
+ *    divergence used to be pinned here from both ends; a pin only restates
+ *    an answer, so it went on agreeing while self-hosters were left 2 minor
+ *    versions behind. `registry.app` is now derived the same way the job
+ *    derives its address, and the docs are scanned for any other owner.
+ *    Whether that one address is anonymously PULLABLE is a live property,
+ *    checked by verify-release-live.yml's container-image surface.
  *
  * 2. A push/scan/attest failure still fails the job loudly. Since
  *    `docker/build-push-action` and friends are `uses:` steps (not `run:`
@@ -55,7 +46,6 @@ import { parse as parseYaml } from 'yaml'
  */
 
 const RELEASE_YML = join(process.cwd(), '.github', 'workflows', 'release.yml')
-const SITE_CONFIG_TS = join(process.cwd(), 'site', 'src', 'config.ts')
 
 interface WorkflowStep {
   name?: string
@@ -88,37 +78,11 @@ function step(j: WorkflowJob, name: string): WorkflowStep {
   return s
 }
 
-/**
- * What `${{ github.repository }}` actually evaluates to on this repository
- * today — the owner in GitHub's display casing, which is what broke the
- * push in the first place (OCI rejects a mixed-case repository path).
- */
-const GITHUB_REPOSITORY = 'Llamenos-Hotline/llamenos-platform'
-
-/**
- * The address `docker-stable` genuinely pushes to: `${REGISTRY}/${IMAGE_NAME}`
- * after the `${IMAGE,,}` fold in the "Compute stable tags" step. This
- * repository's own namespace, writable by the job's `packages: write` token.
- */
-const EXPECTED_PUSH_IMAGE = 'ghcr.io/llamenos-hotline/llamenos-platform'
-
-/**
- * The address `registry.app` in site/src/config.ts still advertises. Under
- * the pre-move owner, where the live, public package actually is — and which
- * this repository's GITHUB_TOKEN cannot write.
- */
-const EXPECTED_ADVERTISED_IMAGE = 'ghcr.io/rhonda-rodododo/llamenos-platform'
-
-/** Failure text for either pin, so a red run says what to do about it. */
-const DIVERGENCE_NOTE =
-  'The pushed and advertised GHCR addresses are pinned as a known #1223 divergence. ' +
-  `Expected push=${EXPECTED_PUSH_IMAGE} and advertised=${EXPECTED_ADVERTISED_IMAGE}. ` +
-  'One of them moved. If this is #1223 landing, collapse BOTH pins onto the single ' +
-  'address and delete this note; do not just re-pin the value that changed.'
-
-/** Resolves `${{ github.repository }}` to the value the runner supplies. */
+/** Resolves `${{ github.repository }}` to the value the runner supplies —
+ *  read from outside the source tree (repo-identity.ts), never from a literal
+ *  here, because a literal is what let this rail agree with a stale address. */
 function resolveImageName(rawImageNameEnv: string): string {
-  if (rawImageNameEnv === '${{ github.repository }}') return GITHUB_REPOSITORY
+  if (rawImageNameEnv === '${{ github.repository }}') return actualRepository()
   return rawImageNameEnv
 }
 
@@ -137,15 +101,68 @@ function computePushImage(j: WorkflowJob): string {
   return `${registry}/${imageName}`.toLowerCase()
 }
 
-/** Reads `registry.app` out of site/src/config.ts. */
+/** `registry.app` from site/src/config.ts, evaluated — it is derived there,
+ *  so reading its source text would test the template, not the value. */
 function advertisedImage(): string {
-  const siteConfigSrc = readFileSync(SITE_CONFIG_TS, 'utf8')
-  const app = siteConfigSrc.match(/app:\s*'([^']+)'/)?.[1]
-  if (!app) throw new Error('could not find registry.app in site/src/config.ts — the parser must not pass vacuously')
-  return app
+  return siteConfig.registry.app
 }
 
-describe('rail: docker-stable publishes to GHCR under this repository\'s own lowercase namespace, diverging from the advertised address only as tracked by #1223', () => {
+/**
+ * Every place outside the build itself that tells an operator which app image
+ * to pull. Docs are hand-maintained per locale (there is no codegen for
+ * `site/src/content/docs/`), so each copy can go stale on its own — which is
+ * what 22 copies of coopcloud.md did after the org move.
+ *
+ * Deliberately NOT scanned: `docs/superpowers/`, `docs/epics/` and the
+ * changelogs, which are dated records of what was true at the time.
+ */
+const DEPLOY_DOC_ROOTS = [
+  join('site', 'src', 'content', 'docs'),
+  join('docs', 'runbooks'),
+  join('docs', 'deployment'),
+  'deploy',
+]
+const DEPLOY_DOC_EXT = /\.(md|mdx|ya?ml|j2|example|sh)$/
+
+/** `ghcr.io/<owner>/llamenos-platform`, with a concrete owner. A documented
+ *  placeholder such as `ghcr.io/<owner>/…` is not an address and is skipped
+ *  by construction (the owner must start with a letter or digit). */
+const APP_IMAGE_REF = /ghcr\.io\/([A-Za-z0-9][-A-Za-z0-9_.]*)\/llamenos-platform\b/g
+
+function walk(dir: string, out: string[]): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue
+    const rel = join(dir, entry.name)
+    if (entry.isDirectory()) walk(rel, out)
+    else if (DEPLOY_DOC_EXT.test(entry.name)) out.push(rel)
+  }
+}
+
+/** Every concrete app-image address in `text`, as `ghcr.io/<owner>/llamenos-platform`. */
+function appImageRefs(text: string): string[] {
+  return [...text.matchAll(APP_IMAGE_REF)].map((m) => m[0])
+}
+
+/** file -> addresses in it that are not `expected`. Throws if the scan found
+ *  no address at all: a rail that finds nothing to check must not pass. */
+function staleDeployDocRefs(expected: string): Record<string, string[]> {
+  const files: string[] = []
+  for (const root of DEPLOY_DOC_ROOTS) walk(join(process.cwd(), root), files)
+  let seen = 0
+  const stale: Record<string, string[]> = {}
+  for (const file of files) {
+    const refs = appImageRefs(readFileSync(file, 'utf8'))
+    seen += refs.length
+    const wrong = [...new Set(refs.filter((r) => r !== expected))]
+    if (wrong.length > 0) stale[relative(process.cwd(), file)] = wrong
+  }
+  if (seen === 0) {
+    throw new Error('no ghcr.io/<owner>/llamenos-platform reference found in any deploy doc — the scan must not pass vacuously')
+  }
+  return stale
+}
+
+describe('rail: docker-stable publishes to GHCR under this repository\'s own lowercase namespace, and that is the only address advertised', () => {
   it('finds a non-trivial docker-stable job with a real env block — the parser must not pass vacuously', () => {
     const doc = loadWorkflow()
     const j = dockerStableJob(doc)
@@ -165,44 +182,53 @@ describe('rail: docker-stable publishes to GHCR under this repository\'s own low
     expect(j.env?.['IMAGE_NAME']).toBe('${{ github.repository }}')
   })
 
-  // Both ends of the #1223 divergence, pinned. Neither is allowed to move
-  // on its own: the pushed address is the only one the job's token can
-  // write, the advertised one is the only one that currently serves images,
-  // and they are reunited by #1223 — at which point this test goes red on
-  // purpose and whoever lands it must collapse the two pins into one.
-  it('the pushed address and the advertised registry.app are the pinned, tracked #1223 divergence', () => {
-    const computedImage = computePushImage(dockerStableJob(loadWorkflow()))
-
-    expect(computedImage, DIVERGENCE_NOTE).toBe(EXPECTED_PUSH_IMAGE)
-    expect(advertisedImage(), DIVERGENCE_NOTE).toBe(EXPECTED_ADVERTISED_IMAGE)
+  // One address. The advertised one is derived in site/src/config.ts the way
+  // docker-stable derives the pushed one, and both are compared here against
+  // the repository as resolved from outside the tree — so a rename on either
+  // side, or a dropped fold, turns this red instead of agreeing with itself.
+  it('the advertised registry.app is exactly the address docker-stable pushes to', () => {
+    const pushed = computePushImage(dockerStableJob(loadWorkflow()))
+    expect(pushed).toBe(`ghcr.io/${actualRepository().toLowerCase()}`)
+    expect(advertisedImage()).toBe(pushed)
   })
 
-  // MUTATION GUARD: prove the pin above is a real rail, not a string that
-  // happens to match today. Both ways the computed address can go wrong —
-  // a renamed repository, and a dropped lowercase fold — are shown to miss
-  // the pin, and to be equally unusable as the advertised address.
-  it('MUTATION: a drifted IMAGE_NAME, or a dropped lowercase fold, misses the pinned push address', () => {
+  it('every deploy doc that names the app image names the address docker-stable pushes to', () => {
+    const pushed = computePushImage(dockerStableJob(loadWorkflow()))
+    expect(
+      staleDeployDocRefs(pushed),
+      `these docs tell an operator to pull an app image from somewhere docker-stable does not publish (${pushed}) — ` +
+        'whoever follows them gets an old release or nothing',
+    ).toEqual({})
+  })
+
+  // MUTATION GUARD: prove the comparisons above are discriminating rather
+  // than universally true.
+  it('MUTATION: a drifted IMAGE_NAME, a dropped lowercase fold, or a stale doc owner is caught', () => {
     const j = dockerStableJob(loadWorkflow())
     const registry = j.env?.['REGISTRY']
     const realImageName = resolveImageName(j.env?.['IMAGE_NAME'] ?? '')
     const advertised = advertisedImage()
 
     // 1. The repository is renamed and nothing else changes.
-    const drifted = `${registry}/${realImageName}-renamed`.toLowerCase()
-    expect(drifted).not.toBe(EXPECTED_PUSH_IMAGE)
-    expect(drifted).not.toBe(advertised)
+    expect(`${registry}/${realImageName}-renamed`.toLowerCase()).not.toBe(advertised)
 
     // 2. The `${IMAGE,,}` fold is removed from "Compute stable tags". This is
     //    the defect that made the release image unpushable at all: the raw
     //    display casing reaches the ref and the registry rejects it.
     const unfolded = `${registry}/${realImageName}`
-    expect(unfolded).toContain('Llamenos-Hotline')
-    expect(unfolded).not.toBe(EXPECTED_PUSH_IMAGE)
+    expect(unfolded).not.toBe(unfolded.toLowerCase())
     expect(unfolded).not.toBe(advertised)
 
-    // Sanity: the unmutated computation does hit the pin, so the assertions
-    // above are discriminating rather than universally true.
-    expect(computePushImage(j)).toBe(EXPECTED_PUSH_IMAGE)
+    // 3. A doc still on the pre-move owner — the exact state this replaced.
+    const staleDoc = '| **app** | `ghcr.io/rhonda-rodododo/llamenos-platform` | Bun application server |'
+    expect(appImageRefs(staleDoc).filter((r) => r !== advertised)).toEqual([
+      'ghcr.io/rhonda-rodododo/llamenos-platform',
+    ])
+    // ...while a placeholder owner is not mistaken for an address.
+    expect(appImageRefs('llamenos_app_image: ghcr.io/<owner>/llamenos-platform:<version>')).toEqual([])
+
+    // Sanity: the unmutated computation does match.
+    expect(computePushImage(j)).toBe(advertised)
   })
 
   it('the "Compute stable tags" step derives its image from job env, folded to lowercase, not a hardcoded literal', () => {

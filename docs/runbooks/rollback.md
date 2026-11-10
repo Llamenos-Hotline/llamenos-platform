@@ -8,17 +8,18 @@ Roll back a failed deployment to the previous working state.
 
 ### Via Ansible (recommended)
 
-The image owner below is deliberately still `rhonda-rodododo` (#1218): the repo
-moved to the `Llamenos-Hotline` org, but the GHCR package did not follow the
-transfer — the old path returns 200 with live tags, the new one 403s. It moves
-in #1223 once the new package exists and is public.
+Releases 0.19.19 and later are published to `ghcr.io/llamenos-hotline/llamenos-platform`.
+Releases up to 0.19.18 were published before the repository moved to the
+`Llamenos-Hotline` org, and exist only under the pre-move owner: to roll back to
+one of those, put `rhonda-rodododo` in place of `llamenos-hotline` below (a
+repository transfer does not move its container packages).
 
 ```bash
 cd deploy/ansible
 ansible-playbook playbooks/rollback.yml \
   -i inventory.yml \
   -e "@vars.yml" \
-  -e "rollback_to_image=ghcr.io/rhonda-rodododo/llamenos-platform:<previous_tag>"
+  -e "rollback_to_image=ghcr.io/llamenos-hotline/llamenos-platform:<previous_tag>"
 ```
 
 ### Manual Docker rollback

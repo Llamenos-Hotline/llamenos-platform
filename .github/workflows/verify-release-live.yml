@@ -31,12 +31,13 @@
 #      and every platform binary it points at downloads and matches the
 #      published CHECKSUMS.txt.
 #   6. container-image — the latest `v<ver>` release's app image can be pulled
-#      ANONYMOUSLY at both addresses an operator can reach it by: where
-#      release.yml's `docker-stable` job publishes it, and where
-#      site/src/config.ts tells them to `docker pull` from. `docker-stable`
-#      reports success when the push lands, so a package GHCR created private
-#      (or a download page still pointing at a stale namespace) left self-
-#      hosters on the previous version while every job here stayed green.
+#      ANONYMOUSLY from where release.yml's `docker-stable` job publishes it.
+#      That is also the only address operators are told to pull from:
+#      site/src/config.ts derives `registry.app` the same way, and
+#      tests/orchestrator/release-ghcr-publish.test.ts fails if it or any
+#      deploy doc names another. `docker-stable` reports success when the push
+#      lands, so a package GHCR created private left self-hosters on the
+#      previous version while every job here stayed green.
 #
 # RE-SCOPE (#956, milestone #769): on 2026-09-24 the first internal beta was
 # re-scoped to Android + desktop ONLY, with no production auto-update channel.
@@ -428,6 +429,11 @@ jobs:
     needs: config
     if: ${{ needs.config.outputs.play-track == 'true' }}
     runs-on: ubuntu-latest
+    # `credential` when the check could not run because the Play credential is
+    # malformed or refused — the Summary reports that as UNVERIFIED, not as a
+    # broken release. Unset (or `release`) for every other failure.
+    outputs:
+      failure-class: ${{ steps.query.outputs.failure-class }}
     steps:
       - name: Checkout (package name only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -524,6 +530,7 @@ jobs:
           echo "Latest release $TAG targeted versionCode $VC"
 
       - name: Query live Play Console internal track and compare
+        id: query
         env:
           PLAY_API_BASE: ${{ inputs.play_api_base_url || 'https://androidpublisher.googleapis.com' }}
           PLAY_SERVICE_ACCOUNT_JSON: ${{ inputs.play_service_account_json || secrets.PLAY_SERVICE_ACCOUNT }}
@@ -531,9 +538,21 @@ jobs:
           EXPECTED_TAG: ${{ steps.expected.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
-            echo "::error::SURFACE BROKEN: Play internal track — no Play service account credential is configured (secrets.PLAY_SERVICE_ACCOUNT is unset); refusing to report green without checking"
+          # Two different failures, kept apart on purpose:
+          #   UNVERIFIED (credential) — the check could not ask Play at all:
+          #     the secret is missing, malformed, or refused. Says nothing about
+          #     the release; the fix is the secret's value, an operator action.
+          #   SURFACE BROKEN — Play answered, and the internal track does not
+          #     carry what the latest release built.
+          # Both fail the job. Only the label differs, so a bad secret is never
+          # read as a broken release, nor a broken release as a bad secret.
+          unverified() {
+            echo "failure-class=credential" >> "$GITHUB_OUTPUT"
+            echo "::error::UNVERIFIED (credential): Play internal track — $1. This is NOT evidence about the release; the check could not run."
             exit 1
+          }
+          if [ -z "${PLAY_SERVICE_ACCOUNT_JSON:-}" ]; then
+            unverified "secrets.PLAY_SERVICE_ACCOUNT is unset; refusing to report green without checking"
           fi
 
           PKG=$(grep -oE 'package_name\("[^"]+"\)' apps/android/fastlane/Appfile | sed -E 's/package_name\("([^"]+)"\)/\1/')
@@ -543,7 +562,7 @@ jobs:
           fi
           echo "Package: $PKG"
 
-          echo "$PLAY_SERVICE_ACCOUNT_JSON" > /tmp/play-sa.json
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > /tmp/play-sa.json
           # --break-system-packages: ubuntu-latest runners ship a
           # PEP 668 "externally-managed-environment" system Python; this
           # is a throwaway CI container, not a managed system, so a
@@ -551,37 +570,86 @@ jobs:
           pip install --quiet --disable-pip-version-check --break-system-packages google-auth requests
 
           cat > /tmp/play_check.py << 'PYEOF'
+          import base64
+          import binascii
           import json
           import sys
 
+          from google.auth.exceptions import GoogleAuthError, RefreshError
           from google.auth.transport.requests import AuthorizedSession
           from google.oauth2 import service_account
 
+          # Exit codes the shell step maps to a verdict.
+          CREDENTIAL = 3  # the secret is malformed or refused: check did not run
+          EMPTY_TRACK = 4  # Play answered: nothing on the internal track
+          REQUIRED_KEYS = ("type", "client_email", "private_key", "token_uri")
+
           pkg, api_base = sys.argv[1], sys.argv[2]
 
-          # A secret that is not the key file verbatim (base64, a placeholder,
-          # a pasted path) fails json.load at char 0 with no hint which input
-          # was wrong. Say so, without echoing any of the secret's content.
+
+          def credential(msg):
+              print(msg, file=sys.stderr)
+              sys.exit(CREDENTIAL)
+
+
+          def describe_non_json(raw):
+              """Name the shape of a secret that is not JSON, without echoing it."""
+              text = raw.strip()
+              if not text:
+                  return "it is whitespace only"
+              try:
+                  decoded = json.loads(base64.b64decode(text, validate=True))
+              except (binascii.Error, ValueError, UnicodeDecodeError):
+                  decoded = None
+              if isinstance(decoded, dict):
+                  return ("it is the key file BASE64-ENCODED; store the decoded JSON "
+                          "(the contents of the downloaded .json file) instead")
+              if "{" not in text and text.endswith(".json"):
+                  return "it looks like a file path; store the file's contents, not its name"
+              return f"it is {len(text)} characters that parse as neither JSON nor base64-encoded JSON"
+
+
+          raw = open("/tmp/play-sa.json", encoding="utf-8", errors="replace").read()
           try:
-              info = json.load(open("/tmp/play-sa.json"))
+              info = json.loads(raw)
           except json.JSONDecodeError:
-              sys.exit(
-                  "secrets.PLAY_SERVICE_ACCOUNT is not a JSON document - it must hold "
-                  "the service-account key file verbatim; reissue it"
+              credential("secrets.PLAY_SERVICE_ACCOUNT is not a JSON document: "
+                         + describe_non_json(raw)
+                         + ". It must hold the service-account key file verbatim")
+          if not isinstance(info, dict):
+              credential(f"secrets.PLAY_SERVICE_ACCOUNT is JSON but a {type(info).__name__}, not a key-file object")
+          missing = [k for k in REQUIRED_KEYS if k not in info]
+          if missing or info.get("type") != "service_account":
+              credential("secrets.PLAY_SERVICE_ACCOUNT is JSON but not a service-account key file "
+                         f"(type={info.get('type')!r}, missing keys: {', '.join(missing) or 'none'})")
+          try:
+              creds = service_account.Credentials.from_service_account_info(
+                  info, scopes=["https://www.googleapis.com/auth/androidpublisher"]
               )
-          creds = service_account.Credentials.from_service_account_info(
-              info, scopes=["https://www.googleapis.com/auth/androidpublisher"]
-          )
+          except (ValueError, GoogleAuthError) as e:
+              credential(f"secrets.PLAY_SERVICE_ACCOUNT is a key file Google cannot load ({type(e).__name__})")
+
           session = AuthorizedSession(creds)
           base = f"{api_base}/androidpublisher/v3/applications/{pkg}"
 
-          resp = session.post(f"{base}/edits", timeout=20)
-          resp.raise_for_status()
-          edit_id = resp.json()["id"]
 
-          resp = session.get(f"{base}/edits/{edit_id}/tracks/internal", timeout=20)
-          resp.raise_for_status()
-          releases = resp.json().get("releases", [])
+          def call(method, url):
+              try:
+                  resp = session.request(method, url, timeout=20)
+              except RefreshError as e:
+                  credential("Google refused to issue a token for secrets.PLAY_SERVICE_ACCOUNT "
+                             f"(key revoked, account disabled or deleted): {e.args[0] if e.args else type(e).__name__}")
+              if resp.status_code in (401, 403):
+                  # Not naming client_email: Actions masks the whole secret, not
+                  # its fields, and this log is public.
+                  credential("the configured service account authenticated but Play answered "
+                             f"HTTP {resp.status_code} for {pkg}: it has no Play Console access to this app")
+              resp.raise_for_status()
+              return resp
+
+
+          edit_id = call("POST", f"{base}/edits").json()["id"]
+          releases = call("GET", f"{base}/edits/{edit_id}/tracks/internal").json().get("releases", [])
 
           try:
               session.delete(f"{base}/edits/{edit_id}", timeout=20)
@@ -591,7 +659,7 @@ jobs:
           codes = [int(v) for rel in releases for v in rel.get("versionCodes", [])]
           if not codes:
               print("no releases/versionCodes on the internal track", file=sys.stderr)
-              sys.exit(1)
+              sys.exit(EMPTY_TRACK)
           print(max(codes))
           PYEOF
 
@@ -599,10 +667,17 @@ jobs:
           ACTUAL_VC=$(python3 /tmp/play_check.py "$PKG" "$PLAY_API_BASE" 2>/tmp/play_check.err)
           RC=$?
           set -e
-          if [ "$RC" != "0" ]; then
-            echo "::error::SURFACE BROKEN: Play internal track — could not query the Play Console API ($(tail -1 /tmp/play_check.err))"
-            exit 1
-          fi
+          REASON=$(tail -1 /tmp/play_check.err)
+          case "$RC" in
+            0) ;;
+            3) unverified "$REASON" ;;
+            4)
+              echo "::error::SURFACE BROKEN: Play internal track — $REASON (expected versionCode $EXPECTED_VC from release $EXPECTED_TAG)"
+              exit 1 ;;
+            *)
+              echo "::error::CHECK FAILED: Play internal track — could not query the Play Console API ($REASON)"
+              exit 1 ;;
+          esac
 
           echo "Live internal track versionCode: $ACTUAL_VC (expected $EXPECTED_VC from release $EXPECTED_TAG)"
           if [ "$ACTUAL_VC" != "$EXPECTED_VC" ]; then
@@ -823,18 +898,11 @@ jobs:
     if: ${{ needs.config.outputs.container-image == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (advertised registry address only)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: |
-            site/src/config.ts
-          sparse-checkout-cone-mode: false
-
       # Deliberately UNauthenticated against the registry: the runner's own
       # GITHUB_TOKEN can always read a package this repository wrote, which is
       # exactly why `docker-stable` goes green on an image nobody else can
       # pull. A self-hoster has no token, so neither does this check.
-      - name: Verify the latest release's image tag resolves anonymously at every address
+      - name: Verify the latest release's image tag resolves anonymously
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION_OVERRIDE: ${{ inputs.container_version_override }}
@@ -856,66 +924,56 @@ jobs:
             VERSION="${LATEST_V#v}"
           fi
 
-          # (label, image path). The first is computed the way release.yml's
-          # docker-stable job computes it (lowercase fold of the repository);
-          # the second is read out of the download page's config so the two
-          # cannot drift apart unnoticed.
-          PUBLISHED="${REPO,,}"
-          ADVERTISED=$(sed -nE "/registry:[[:space:]]*\{/,/\}/ s#^[[:space:]]*app:[[:space:]]*'ghcr\.io/([^']+)'.*#\1#p" site/src/config.ts | head -1)
-          if [ -z "$ADVERTISED" ]; then
-            echo "::error::SURFACE BROKEN: container image — could not read registry.app from site/src/config.ts"
+          # Computed the way release.yml's docker-stable job computes it
+          # (lowercase fold of the repository).
+          IMAGE_PATH="${REPO,,}"
+          REF="ghcr.io/${IMAGE_PATH}:${VERSION}"
+
+          {
+            echo "### Surface 6 — Container image \`$REF\` (anonymous pull)"
+            echo
+          } >> "$SUMMARY"
+          broken() {
+            echo "::error::SURFACE BROKEN: container image — $1"
+            echo "❌ $1" >> "$SUMMARY"
             exit 1
+          }
+
+          # GHCR's token endpoint answers an anonymous pull scope with a token
+          # only for a public package. Its error code says which other case
+          # this is, and the two need different fixes:
+          #   UNAUTHORIZED — the package exists and is private (an operator
+          #                  setting; nothing in this repository can change it)
+          #   DENIED       — no package by that name exists at all (nothing was
+          #                  ever published there; a release problem)
+          TOKEN_RESP=$(curl -sS "https://ghcr.io/token?service=ghcr.io&scope=repository:${IMAGE_PATH}:pull") \
+            || broken "could not reach the ghcr.io token endpoint for ${IMAGE_PATH}"
+          TOKEN=$(jq -r '.token // empty' <<<"$TOKEN_RESP" 2>/dev/null || true)
+          if [ -z "$TOKEN" ]; then
+            CODE=$(jq -r '.errors[0].code // empty' <<<"$TOKEN_RESP" 2>/dev/null || true)
+            case "$CODE" in
+              UNAUTHORIZED)
+                broken "the package ghcr.io/${IMAGE_PATH} exists but is PRIVATE, so self-hosters cannot pull $VERSION. Operator action: make the package public (package settings → Change visibility → Public). GHCR creates every new package private." ;;
+              DENIED)
+                broken "no package ghcr.io/${IMAGE_PATH} exists — release.yml's docker-stable job never published one. Check that job's run for v$VERSION." ;;
+              *)
+                broken "ghcr.io refused an anonymous pull token for ${IMAGE_PATH} with an unrecognised answer (code '${CODE:-none}')" ;;
+            esac
           fi
 
           ACCEPT='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
-          {
-            echo "### Surface 6 — Container image \`:$VERSION\` (anonymous pull)"
-            echo
-            echo "| Address | Result |"
-            echo "|---|---|"
-          } >> "$SUMMARY"
-
-          FAILED=0
-          check() {
-            local label="$1" path="$2" token code
-            # GHCR's token endpoint itself refuses an anonymous pull scope for
-            # a private package, so "no token" is the private case, not an outage.
-            token=$(curl -sS "https://ghcr.io/token?service=ghcr.io&scope=repository:${path}:pull" | jq -r '.token // empty' 2>/dev/null) || token=""
-            if [ -z "$token" ]; then
-              code=401
-            else
-              code=$(curl -sS -o /dev/null -w '%{http_code}' -I \
-                -H "Authorization: Bearer $token" -H "Accept: $ACCEPT" \
-                "https://ghcr.io/v2/${path}/manifests/${VERSION}") || code="000"
-            fi
-            case "$code" in
-              200)
-                echo "OK: ghcr.io/${path}:${VERSION} ($label) resolves anonymously"
-                echo "| \`ghcr.io/${path}\` ($label) | ✅ |" >> "$SUMMARY" ;;
-              401|403)
-                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path}:${VERSION} ($label) answers HTTP $code to an anonymous pull: the package is private or does not exist. Self-hosters cannot pull this release. Operator action: make the GHCR package public (a package GHCR creates is private by default)."
-                echo "| \`ghcr.io/${path}\` ($label) | ❌ HTTP $code — private or missing |" >> "$SUMMARY"
-                FAILED=1 ;;
-              404)
-                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path} ($label) is reachable but has no tag ${VERSION}: nothing published this release there, so anyone pulling from this address stays on an older version."
-                echo "| \`ghcr.io/${path}\` ($label) | ❌ tag ${VERSION} not found |" >> "$SUMMARY"
-                FAILED=1 ;;
-              *)
-                echo "::error::SURFACE BROKEN: container image — ghcr.io/${path}:${VERSION} ($label) answered HTTP $code"
-                echo "| \`ghcr.io/${path}\` ($label) | ❌ HTTP $code |" >> "$SUMMARY"
-                FAILED=1 ;;
-            esac
-          }
-
-          check "published by release.yml" "$PUBLISHED"
-          if [ "$ADVERTISED" != "$PUBLISHED" ]; then
-            check "advertised by site/src/config.ts" "$ADVERTISED"
-          fi
-
-          if [ "$FAILED" != "0" ]; then
-            exit 1
-          fi
-          echo "Image tag $VERSION is anonymously pullable at every address."
+          HTTP=$(curl -sS -o /dev/null -w '%{http_code}' -I \
+            -H "Authorization: Bearer $TOKEN" -H "Accept: $ACCEPT" \
+            "https://ghcr.io/v2/${IMAGE_PATH}/manifests/${VERSION}") || HTTP="000"
+          case "$HTTP" in
+            200)
+              echo "OK: $REF resolves anonymously"
+              echo "✅ \`$REF\` resolves anonymously" >> "$SUMMARY" ;;
+            404)
+              broken "ghcr.io/${IMAGE_PATH} is public but has no tag $VERSION: docker-stable did not publish this release, so anyone pulling stays on an older version." ;;
+            *)
+              broken "$REF answered HTTP $HTTP to an anonymous manifest request" ;;
+          esac
 
   # ─── Aggregate: name exactly which surface broke ─────────────────
   report:
@@ -950,6 +1008,7 @@ jobs:
           # Whether a surface is required is read from the config job's outputs;
           # a required surface passes ONLY on `success` (skipped/cancelled fail).
           BROKEN=()
+          UNVERIFIED=()
           EXCLUDED=()
           VERIFIED=()
           echo "## Internal Availability — verify-release-live" >> "$SUMMARY"
@@ -971,6 +1030,12 @@ jobs:
               if [ "$RESULT" = "success" ]; then
                 VERIFIED+=("$ID")
                 echo "| $ID | yes | ✅ verified live |" >> "$SUMMARY"
+              elif [ "$RESULT" = "failure" ] && [ "$(jq -r --arg id "$ID" '.[$id].outputs["failure-class"] // empty' <<< "$NEEDS_JSON")" = "credential" ]; then
+                # The check could not run (credential malformed or refused).
+                # Still fails the aggregate — an unchecked surface is never
+                # green — but it is not reported as a broken release.
+                UNVERIFIED+=("$ID")
+                echo "| $ID | yes | ⚠️ UNVERIFIED — credential malformed or refused (operator: fix the secret; see the job log) |" >> "$SUMMARY"
               else
                 BROKEN+=("$ID=$RESULT")
                 echo "| $ID | yes | ❌ $RESULT |" >> "$SUMMARY"
@@ -987,10 +1052,15 @@ jobs:
             fi
           done
 
-          if [ "${#BROKEN[@]}" -eq 0 ]; then
+          if [ "${#BROKEN[@]}" -eq 0 ] && [ "${#UNVERIFIED[@]}" -eq 0 ]; then
             echo "Internal Availability: ${#VERIFIED[@]} required surface(s) verified live (${VERIFIED[*]}). Excluded, NOT verified: ${EXCLUDED[*]:-none}."
             exit 0
           fi
 
-          echo "::error::Internal Availability BROKEN: ${BROKEN[*]}"
+          if [ "${#UNVERIFIED[@]}" -gt 0 ]; then
+            echo "::error::Internal Availability NOT VERIFIED (credential malformed or refused, the check could not run): ${UNVERIFIED[*]}"
+          fi
+          if [ "${#BROKEN[@]}" -gt 0 ]; then
+            echo "::error::Internal Availability BROKEN: ${BROKEN[*]}"
+          fi
           exit 1
