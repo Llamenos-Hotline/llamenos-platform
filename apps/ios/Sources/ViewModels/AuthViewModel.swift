@@ -83,6 +83,7 @@ final class AuthViewModel {
     /// it. A hub the user already typed is never replaced: a link is whoever sent it, and
     /// the typed hub is the one the user chose to trust.
     func inviteInputChanged() {
+        errorMessage = nil
         guard hubURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let linkedHub = InviteCodeParser.parse(inviteEnrollment.input)?.hubURL
         else { return }
@@ -90,6 +91,12 @@ final class AuthViewModel {
     }
 
     // MARK: - Hub URL
+
+    /// The user is editing the hub field: whatever the last attempt said about the hub or
+    /// the invite no longer describes what is on screen, so stop showing it (#2677, #1307).
+    func hubURLChanged() {
+        errorMessage = nil
+    }
 
     /// Validate hub URL format, persist it, and test connectivity.
     /// Returns true if the hub is reachable, false otherwise (sets errorMessage).
