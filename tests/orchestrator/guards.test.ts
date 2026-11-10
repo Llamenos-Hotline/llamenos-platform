@@ -5186,7 +5186,18 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
   })
 
   describe('Android', () => {
-    function android(opts: { marker: boolean; log?: string; xml?: string }) {
+    // Verbatim from the failed shard of run 42802239979 (#2657): the text the test helper
+    // and the M1 probe produce when the emulator booted with no default route.
+    const CONNECT = 'java.net.ConnectException: Failed to connect to /10.0.2.2:3000'
+    const FRAMES = 'at com.android.okhttp.internal.io.RealConnection.connectSocket(RealConnection.java:147)\nat com.android.okhttp.internal.io.RealConnection.connect(RealConnection.java:116)'
+    const wrapped = (cause: string) => `java.lang.AssertionError: createTestHub FAILED after 3 attempts (hubUrl=http://10.0.2.2:3000): ${cause.split(': ').slice(1).join(': ')}\nat org.llamenos.hotline.steps.ScenarioHooks.createScenarioHub(ScenarioHooks.kt:119)\nCaused by: ${cause}\n${FRAMES}`
+    const xmlOf = (...bodies: string[]) => `<?xml version='1.0' encoding='UTF-8' ?>\n<testsuites tests="${bodies.length}" failures="${bodies.length}"><testsuite name=".Admin Sidebar Navigation">${bodies.map((b, i) => `<testcase name="t${i}" classname=".x"><failure>${b}</failure></testcase>`).join('')}</testsuite></testsuites>`
+    const probeReport = (name: string, cause: string) => `\norg.llamenos.hotline.discovery.M1CapabilityProbe:\nError in ${name}(org.llamenos.hotline.discovery.M1CapabilityProbe):\n${cause}\n\t${FRAMES.split('\n')[0]}\n\nTime: 0.096\nThere was 1 failure:\n1) ${name}(org.llamenos.hotline.discovery.M1CapabilityProbe)\n${cause}\n\nFAILURES!!!\nTests run: 1,  Failures: 1\n`
+    const PROBE_PASS = '\norg.llamenos.hotline.discovery.M1CapabilityProbe:\n\nTime: 1.2\n\nOK (1 test)\n\n'
+    const NO_ROUTE = '11-10 11:02:18.068 E/netd    (  328): Error adding route 0.0.0.0/0 -> 10.0.2.2 wlan0 to table 1016: Network is unreachable'
+    const SHARD_LOG = `${'\n'}.Admin Sidebar Navigation > t0[emulator-5554 - 14] FAILED\n\t${CONNECT}\n> Task :app:connectedDebugAndroidTest FAILED\n> Task :app:m1ProbeGate\nM1 probe FAIL auth\n\n> There were failing tests. See the report at: file:///x\n`
+
+    function android(opts: { marker: boolean; log?: string; xml?: string; probe?: Record<string, string>; logcat?: string; backend?: 'up' | 'down' | null }) {
       const dir = mkdtempSync(join(tmpdir(), 'classify-and-'))
       try {
         const results = join(dir, 'androidTest-results')
@@ -5196,7 +5207,19 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
         if (opts.marker) writeFileSync(marker, '')
         const log = join(dir, 'gradle.log')
         if (opts.log !== undefined) writeFileSync(log, opts.log)
-        return run(['android', opts.log === undefined ? '-' : log, marker, results])
+        const extra: string[] = []
+        if (opts.probe !== undefined) {
+          const probeDir = join(dir, 'm1-probe')
+          mkdirSync(probeDir)
+          for (const [name, text] of Object.entries(opts.probe)) writeFileSync(join(probeDir, `${name}.instrument.txt`), text)
+          extra.push('--probe-dir', probeDir)
+        }
+        if (opts.logcat !== undefined) {
+          writeFileSync(join(dir, 'logcat.txt'), opts.logcat)
+          extra.push('--logcat', join(dir, 'logcat.txt'))
+        }
+        if (opts.backend) extra.push('--host-backend', opts.backend)
+        return run(['android', opts.log === undefined ? '-' : log, marker, results, ...extra])
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
@@ -5224,6 +5247,62 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
     ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
       const v = android(opts)
       expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    // ── #2657: an emulator with no default route reaches the tests as ConnectException, not as an
+    // emulator-level line. Evidence is the ROOT CAUSE of every failure, not a log pattern. ──
+    const noRoute = {
+      marker: true, log: SHARD_LOG, logcat: `${NO_ROUTE}\n`, backend: 'up' as const,
+      xml: xmlOf(wrapped(CONNECT), wrapped(CONNECT), wrapped(CONNECT)),
+      probe: { auth: probeReport('auth', CONNECT), hubs: probeReport('hubs', CONNECT), logout: PROBE_PASS },
+    }
+
+    it('#2657: every scenario AND every failing probe flow rooted in a connect failure to 10.0.2.2, backend live, is infrastructure', () => {
+      const v = android(noRoute)
+      expect(v).toMatchObject({ kind: 'infra', signatures: 'host-unreachable,no-default-route' })
+      // The reason is visible: the cause is named and counted, not just "infra".
+      expect(v.detail).toContain('3 failing scenario(s) and 2 failing probe flow(s)')
+      expect(v.detail).toContain('Failed to connect to /10.0.2.2:3000')
+    })
+
+    it('#2657: the netd route line only NAMES the cause — without it the verdict is the same, without the signature', () => {
+      const v = android({ ...noRoute, logcat: 'nothing relevant\n' })
+      expect(v).toMatchObject({ kind: 'infra', signatures: 'host-unreachable' })
+    })
+
+    it.each([
+      ['one scenario fails with an assertion among connect failures', { ...noRoute, xml: xmlOf(wrapped(CONNECT), 'java.lang.AssertionError: expected 1 was 0\nat org.x.Steps.check(Steps.kt:9)') }],
+      ['a scenario fails with a connect failure to a DIFFERENT host (the app pointing elsewhere is code, not the harness link)', { ...noRoute, xml: xmlOf(wrapped('java.net.ConnectException: Failed to connect to /192.0.2.7:3000')) }],
+      ['a connect failure to the right host that is only QUOTED inside an assertion (root cause is the assertion)', { ...noRoute, xml: xmlOf(`java.lang.AssertionError: wanted a banner, saw "${CONNECT}"\nat org.x.Steps.check(Steps.kt:9)`) }],
+      ['a timeout, not a connect failure, even to 10.0.2.2', { ...noRoute, xml: xmlOf(wrapped('java.net.SocketTimeoutException: failed to connect to /10.0.2.2 (port 3000) after 10000ms')) }],
+      ['a probe flow fails for another reason while every scenario is a connect failure', { ...noRoute, probe: { auth: probeReport('auth', CONNECT), hubs: probeReport('hubs', 'java.lang.AssertionError: probe saw 500') } }],
+      ['the probe gate failed but its reports are not there to attribute', { ...noRoute, probe: undefined }],
+      ['the probe gate failed but no report records a failing flow', { ...noRoute, probe: { auth: PROBE_PASS } }],
+      ['the host backend is DOWN (the PR may have crashed it, so the emulator is not the one to blame)', { ...noRoute, backend: 'down' as const }],
+      ['the host backend was never checked (a mis-wired caller must not buy a retry)', { ...noRoute, backend: null }],
+      ['Gradle reports failing tests but the JUnit results record none', { ...noRoute, xml: undefined }],
+      ['a JUnit file that cannot be parsed', { ...noRoute, xml: '<testsuites><testcase' }],
+      ['the route line in logcat ALONE, with an assertion failure', { marker: true, log: GENUINE_FAILURE, backend: 'up' as const, logcat: `${NO_ROUTE}\n`, xml: xmlOf('java.lang.AssertionError: expected 1 was 0') }],
+    ])('#2657 BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
+      const v = android(opts)
+      expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    it('#2657: a genuine verdict names the root causes it found, so the next unmatched shape is read off the job output', () => {
+      const v = android({ ...noRoute, xml: xmlOf(wrapped(CONNECT), 'java.lang.IllegalStateException: no hub selected\nat org.x.Y.z(Y.kt:1)') })
+      expect(v.kind).toBe('genuine')
+      expect(v.detail).toContain('java.lang.IllegalStateException: no hub selected')
+    })
+
+    it('#2657: the workflow hands the classifier the evidence it needs (an unwired call is a silent genuine)', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const call = ci.split('\n').findIndex((l) => l.includes('classify-infra-failure.py android'))
+      expect(call, 'the android classify call moved').toBeGreaterThan(0)
+      const stmt = ci.split('\n').slice(call - 3, call + 3).join('\n')
+      expect(stmt).toContain('--probe-dir "$ANDROID_BUILD_DIR/reports/m1-probe"')
+      expect(stmt).toContain('--logcat /tmp/logcat.txt')
+      expect(stmt).toContain('--host-backend "$backend"')
+      expect(stmt).toContain('http://localhost:3000/api/health/live')
     })
   })
 })

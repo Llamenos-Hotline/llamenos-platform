@@ -10,6 +10,7 @@ confidently comes back `genuine`, and the caller leaves the job failing.
     classify-infra-failure.py ios <xcodebuild-log>
     classify-infra-failure.py ios-merge <attempt1-log> <attempt2-log> <out-log> <Class/test>...
     classify-infra-failure.py android <gradle-log|-> <script-started-marker> <androidTest-results-dir>
+        [--probe-dir <m1-probe-report-dir>] [--logcat <logcat.txt>] [--host-backend up|down]
     classify-infra-failure.py siblings <shard-index>
 
 `siblings` is NOT an infrastructure signature, and is kept apart from them on
@@ -43,6 +44,8 @@ import re
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 
 # ---------------------------------------------------------------- iOS --------
@@ -208,15 +211,100 @@ ANDROID_INFRA_LINES = (
 # `Feature > scenario[Pixel_5(AVD) - 14] FAILED`, and the summary sentence.
 ANDROID_TEST_FAILED_RE = re.compile(r"^\S.* > .*\[[^\]]*\] FAILED\s*$", re.MULTILINE)
 ANDROID_FAILING_TESTS_RE = re.compile(r"There were failing tests", re.IGNORECASE)
-ANDROID_XML_FAILURE_RE = re.compile(r"<(failure|error)\b")
+# `M1 probe FAIL <flow>`: the M1 probe gate (apps/android/app/build.gradle.kts)
+# re-runs every required flow once per shard and writes one report per flow.
+ANDROID_PROBE_FAIL_RE = re.compile(r"^M1 probe FAIL ", re.MULTILINE)
+ANDROID_PROBE_PASS_RE = re.compile(r"^OK \(1 test\)", re.MULTILINE)
+
+# The emulator reaches the host (where the backend runs) at this fixed alias.
+# Every test and probe talks to the backend through it, so a connect failure to
+# it is the harness's own link being down — not the code under test.
+ANDROID_TEST_HOST = "10.0.2.2"
+# One line of an exception chain: `java.net.ConnectException: Failed to ...` or
+# `Caused by: java.net.ConnectException: ...`.
+EXCEPTION_LINE_RE = re.compile(r"^(?:Caused by: )?(?P<cls>[A-Za-z_][\w.$]*(?:Exception|Error|Throwable))(?::\s*(?P<msg>.*))?$")
+HOST_UNREACHABLE_CLASSES = ("java.net.ConnectException", "java.net.NoRouteToHostException")
+# The netd line that says WHY: the emulator booted with no default route.
+ANDROID_NO_DEFAULT_ROUTE_RE = re.compile(r"Error adding route 0\.0\.0\.0/0 .*Network is unreachable")
 
 
-def classify_android(log: str, marker_exists: bool, results_dir: Path | None) -> dict[str, str]:
+def root_cause(text: str) -> str:
+    """The line that names what actually went wrong in a failure's stack text:
+    the LAST exception line of the chain (`Caused by:` included), or the first
+    non-blank line when the text carries none. A test helper wraps the real
+    exception in an AssertionError (`createTestHub FAILED after 3 attempts: ...`),
+    so the top line alone says "assertion" about what was a dead network."""
+    last = ""
+    first = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        first = first or line
+        if EXCEPTION_LINE_RE.match(line):
+            last = line
+    cause = last or first
+    return (cause[len("Caused by: "):] if cause.startswith("Caused by: ") else cause)[:300]
+
+
+def is_host_unreachable(cause: str) -> bool:
+    """A root cause that is the emulator failing to connect to the test host."""
+    m = EXCEPTION_LINE_RE.match(cause)
+    return bool(m) and m["cls"] in HOST_UNREACHABLE_CLASSES and ANDROID_TEST_HOST in (m["msg"] or "")
+
+
+def junit_failure_causes(results_dir: Path | None) -> list[str] | None:
+    """Root cause of every failed testcase in the JUnit XML, or None when the
+    results cannot be read (the caller then cannot attribute anything)."""
+    causes: list[str] = []
+    if results_dir is None or not results_dir.is_dir():
+        return causes
+    for xml in sorted(results_dir.rglob("*.xml")):
+        try:
+            tree = ET.parse(xml)
+        except (ET.ParseError, OSError):
+            return None
+        for el in tree.iter():
+            if el.tag in ("failure", "error"):
+                causes.append(root_cause((el.text or "").strip() or el.get("message", "")))
+    return causes
+
+
+def probe_failure_causes(probe_dir: Path | None) -> list[str] | None:
+    """Root cause of every probe flow that did not pass; None if unreadable."""
+    causes: list[str] = []
+    if probe_dir is None or not probe_dir.is_dir():
+        return None
+    for rep in sorted(probe_dir.glob("*.instrument.txt")):
+        try:
+            text = rep.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        if not ANDROID_PROBE_PASS_RE.search(text):
+            causes.append(root_cause(text))
+    return causes
+
+
+def _summarise(causes: list[str]) -> str:
+    common = Counter(causes).most_common(3)
+    return "; ".join(f"{n}x {c}" for c, n in common) + ("; ..." if len(set(causes)) > 3 else "")
+
+
+def classify_android(log: str, marker_exists: bool, results_dir: Path | None, probe_dir: Path | None = None,
+                     logcat: str = "", host_backend: str | None = None) -> dict[str, str]:
     """Verdict on ONE failed android-e2e test step.
 
     `marker_exists` is the file the test script writes as its first action. If
     it is absent the emulator never came up and not one test ran — there is no
     assertion result to lose, whatever the action's own log said.
+
+    A failed run is infrastructure when EVERY failure — each scenario in the JUnit
+    XML and each M1 probe flow — has, as its root cause, a connect failure to the
+    host the emulator reaches the backend through, AND the backend is live on the
+    host (so it is the emulator's link that is dead, not the backend the PR may
+    have crashed). One failure with any other root cause, or any failure we cannot
+    attribute, keeps the whole run genuine. This is the Android counterpart of the
+    iOS rule that every failed test must carry only an infrastructure message.
     """
     if not marker_exists:
         return {"kind": "script-never-started", "signatures": "emulator-did-not-boot", "retest": "",
@@ -225,15 +313,37 @@ def classify_android(log: str, marker_exists: bool, results_dir: Path | None) ->
     def genuine(why: str) -> dict[str, str]:
         return {"kind": "genuine", "signatures": "", "retest": "", "detail": why}
 
-    if ANDROID_FAILING_TESTS_RE.search(log) or ANDROID_TEST_FAILED_RE.search(log):
-        return genuine("Gradle reported failing tests")
-    if results_dir is not None and results_dir.is_dir():
-        for xml in results_dir.rglob("*.xml"):
-            try:
-                if ANDROID_XML_FAILURE_RE.search(xml.read_text(encoding="utf-8", errors="replace")):
-                    return genuine(f"{xml.name} records a failing test")
-            except OSError:
-                return genuine(f"could not read {xml.name}")
+    scenario = junit_failure_causes(results_dir)
+    if scenario is None:
+        return genuine("could not read the JUnit results, so the failures cannot be attributed")
+    log_says_failed = bool(ANDROID_FAILING_TESTS_RE.search(log) or ANDROID_TEST_FAILED_RE.search(log))
+    probe_says_failed = bool(ANDROID_PROBE_FAIL_RE.search(log))
+    probe: list[str] = []
+    if probe_says_failed:
+        got = probe_failure_causes(probe_dir)
+        if got is None:
+            return genuine("the M1 probe gate failed and its per-flow reports are unreadable")
+        probe = got
+
+    if log_says_failed or scenario or probe_says_failed:
+        if log_says_failed and not scenario:
+            return genuine("Gradle reported failing tests but the JUnit results record none")
+        if probe_says_failed and not probe:
+            return genuine("the M1 probe gate failed but no probe report records a failing flow")
+        causes = scenario + probe
+        what = f"{len(scenario)} failing scenario(s) and {len(probe)} failing probe flow(s)"
+        other = [c for c in causes if not is_host_unreachable(c)]
+        if other:
+            return genuine(f"{what}; {len(other)} did not fail with a connect failure to {ANDROID_TEST_HOST}: {_summarise(other)}")
+        if host_backend != "up":
+            return genuine(f"{what} all failed to connect to {ANDROID_TEST_HOST}, but the host backend is "
+                           f"{'down' if host_backend == 'down' else 'unchecked'} - that is not proof the emulator's link is the broken part")
+        sigs = ["host-unreachable"]
+        if ANDROID_NO_DEFAULT_ROUTE_RE.search(logcat):
+            sigs.append("no-default-route")
+        return {"kind": "infra", "signatures": ",".join(sigs), "retest": "",
+                "detail": f"{what}, every one rooted in a connect failure to {ANDROID_TEST_HOST} while the host backend is live: {_summarise(causes)}"}
+
     sigs = [name for name, rx in ANDROID_INFRA_LINES if rx.search(log)]
     if not sigs:
         return genuine("no infrastructure signature in the Gradle output")
@@ -316,6 +426,17 @@ def emit(verdict: dict[str, str]) -> None:
         print(f"{key}={verdict.get(key, '')}")
 
 
+def parse_android_options(rest: list[str]) -> dict[str, str] | None:
+    """`--probe-dir X --logcat Y --host-backend up|down`; anything else is a usage error."""
+    allowed = {"--probe-dir", "--logcat", "--host-backend"}
+    if len(rest) % 2 or any(rest[i] not in allowed for i in range(0, len(rest), 2)):
+        return None
+    opts = {rest[i][2:]: rest[i + 1] for i in range(0, len(rest), 2)}
+    if opts.get("host-backend", "up") not in ("up", "down"):
+        return None
+    return opts
+
+
 def main(argv: list[str]) -> int:
     if len(argv) >= 3 and argv[1] == "ios":
         emit(classify_ios(Path(argv[2]).read_text(encoding="utf-8", errors="replace")))
@@ -338,9 +459,15 @@ def main(argv: list[str]) -> int:
         for key in ("sibling_state", "siblings", "detail"):
             print(f"{key}={verdict.get(key, '')}")
         return 0
-    if len(argv) == 5 and argv[1] == "android":
+    if len(argv) >= 5 and argv[1] == "android":
+        opts = parse_android_options(argv[5:])
+        if opts is None:
+            print(__doc__, file=sys.stderr)
+            return 2
         log = "" if argv[2] == "-" or not Path(argv[2]).is_file() else Path(argv[2]).read_text(encoding="utf-8", errors="replace")
-        emit(classify_android(log, Path(argv[3]).exists(), Path(argv[4])))
+        logcat = Path(opts["logcat"]).read_text(encoding="utf-8", errors="replace") if "logcat" in opts and Path(opts["logcat"]).is_file() else ""
+        emit(classify_android(log, Path(argv[3]).exists(), Path(argv[4]),
+                              Path(opts["probe-dir"]) if "probe-dir" in opts else None, logcat, opts.get("host-backend")))
         return 0
     print(__doc__, file=sys.stderr)
     return 2
