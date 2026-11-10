@@ -356,7 +356,12 @@ export const DEFAULT_ROLES: Omit<Role, 'createdAt' | 'updatedAt'>[] = [
       // server 403s — #1342. #1406 made exactly this grant to every call-answering hub
       // TEMPLATE role; this is the same decision for the global default role, which that
       // PR did not touch.
-      'shifts:read-own', 'shifts:set-availability', 'bans:report',
+      //
+      // `shifts:request-join` is the same bug class one namespace over (#1518):
+      // `POST /hubs/:hubId/shifts/requests` is requirePermission('shifts:request-join'),
+      // and EP07's volunteer self-service flow ("request to join or leave a shift")
+      // 403'd for the one role that flow exists for.
+      'shifts:read-own', 'shifts:set-availability', 'shifts:request-join', 'bans:report',
       'reports:read-assigned', 'reports:read-types', 'reports:send-message',
       'settings:read',
       'files:upload', 'files:download-own',
