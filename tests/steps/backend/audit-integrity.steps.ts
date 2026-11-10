@@ -25,6 +25,7 @@ import { TestDB } from '../../db-helpers'
 
 interface AuditEntry {
   id: string
+  seq: number
   action: string
   actorPubkey: string
   details: Record<string, unknown> | null
@@ -171,13 +172,14 @@ Then('no two audit entries should share the same previousEntryHash', async ({ re
 })
 
 When(
-  'the audit log is fetched ordered by creation time',
+  'the audit log is fetched in append order',
   async ({ request, world }) => {
     const hubId = getScenarioState(world).hubId
     const result = await listAuditLogViaApi(request, { limit: 100, hubId })
-    // The API returns entries — sort by createdAt ascending
+    // The API returns newest first; append order is seq ascending (#1175) —
+    // created_at can tie and no longer defines order.
     getAuditTestState(world).entries = (result.entries as unknown as AuditEntry[]).sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      (a, b) => a.seq - b.seq,
     )
   },
 )

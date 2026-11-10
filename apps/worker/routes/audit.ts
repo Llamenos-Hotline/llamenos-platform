@@ -47,7 +47,7 @@ auditExtra.get(
     tags: ['Audit'],
     summary: 'Verify audit log hash chain integrity',
     description:
-      'Walks the hub\'s hash chain in chronological order and verifies each entry\'s hash and linkage. ' +
+      'Walks the hub\'s hash chain in append order and verifies each entry\'s hash and linkage. ' +
       'Supports pagination via limit/offset for large chains.',
     responses: {
       200: {
@@ -87,7 +87,7 @@ platformAuditRoutes.get(
     tags: ['Audit'],
     summary: 'Verify the platform audit chain',
     description:
-      'Walks the platform (deployment-level) hash chain in chronological order. No hub\'s entries are on it.',
+      'Walks the platform (deployment-level) hash chain in append order. No hub\'s entries are on it.',
     responses: {
       200: {
         description: 'Chain verification result',

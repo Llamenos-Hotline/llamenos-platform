@@ -18,121 +18,35 @@
  * so a replay that got past authentication would also leave a second entry.
  *
  * Requires postgres at DATABASE_URL (default: local dev postgres). Each run
- * uses an isolated schema that is dropped on teardown.
+ * gets its own database, created with the real migrations (freshHubDb) and
+ * dropped on teardown. The tables are deliberately NOT hand-written here: a
+ * hand-mirrored `audit_log` went stale the moment #1175 added `seq`, and nothing
+ * but a failing audit() call said so.
  */
 
 // pg-array-patch must be imported before any schema is loaded.
 import '../../db/pg-array-patch'
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import postgres from 'postgres'
-import { drizzle } from 'drizzle-orm/postgres-js'
 import { Hono } from 'hono'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import type { AppEnv } from '@worker/types'
-import type { Database } from '../../db'
 import * as schema from '../../db/schema'
-import { IdentityService } from '../../services/identity'
-import { AuditService } from '../../services/audit'
 import { ServiceError } from '../../services/settings'
 import { buildAuthMessage } from '../../lib/auth'
+import { freshHubDb } from './hub-shred-helpers'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
-
-const TEST_SCHEMA = `test_inviteredeem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-
-const DDL = `
-  CREATE TABLE ${TEST_SCHEMA}.users (
-    pubkey TEXT PRIMARY KEY,
-    roles TEXT[] NOT NULL DEFAULT '{"role-volunteer"}',
-    display_name TEXT,
-    phone TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    hub_roles JSONB NOT NULL DEFAULT '[]',
-    availability TEXT NOT NULL DEFAULT 'unavailable',
-    on_break BOOLEAN DEFAULT FALSE,
-    call_preference TEXT,
-    spoken_languages TEXT[] NOT NULL DEFAULT '{}',
-    ui_language TEXT,
-    transcription_enabled BOOLEAN DEFAULT TRUE,
-    profile_completed BOOLEAN DEFAULT FALSE,
-    active BOOLEAN NOT NULL DEFAULT TRUE,
-    encrypted_secret_key TEXT DEFAULT '',
-    supported_messaging_channels TEXT[] NOT NULL DEFAULT '{}',
-    messaging_enabled BOOLEAN,
-    specializations TEXT[] NOT NULL DEFAULT '{}',
-    max_case_assignments INTEGER,
-    team_id TEXT,
-    supervisor_pubkey TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE ${TEST_SCHEMA}.invite_codes (
-    code TEXT PRIMARY KEY,
-    name TEXT NOT NULL DEFAULT '',
-    phone TEXT NOT NULL DEFAULT '',
-    role_ids TEXT[] NOT NULL DEFAULT '{}',
-    created_by TEXT,
-    hub_id TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    used_at TIMESTAMPTZ,
-    used_by TEXT
-  );
-  CREATE TABLE ${TEST_SCHEMA}.auth_nonces (
-    nonce_hash TEXT PRIMARY KEY,
-    pubkey TEXT NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL
-  );
-  CREATE TABLE ${TEST_SCHEMA}.hubs (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL DEFAULT 'active'
-  );
-  CREATE TABLE ${TEST_SCHEMA}.audit_log (
-    id TEXT PRIMARY KEY,
-    hub_id TEXT,
-    action TEXT NOT NULL,
-    actor_pubkey TEXT NOT NULL,
-    details JSONB,
-    previous_entry_hash TEXT,
-    entry_hash TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    erased_at TIMESTAMPTZ
-  );
-`
-
-const JSONB_TYPE = {
-  to: 3802,
-  from: [3802],
-  serialize: (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v)),
-  parse: (v: string) => {
-    try { return JSON.parse(v) } catch { return v }
-  },
-}
-const TIMESTAMPTZ_TYPE = {
-  to: 1184,
-  from: [1114, 1184],
-  serialize: (v: unknown) => (v instanceof Date ? v.toISOString() : String(v)),
-  parse: (v: string) => new Date(v),
-}
+const fresh = freshHubDb('invite_redeem')
 
 const REDEEM_PATH = '/api/invites/redeem'
 
-let adminSql: ReturnType<typeof postgres>
-let testSql: ReturnType<typeof postgres>
-let db: Database
-let identity: IdentityService
-let audit: AuditService
-
 async function makeApp() {
   const services = {
-    identity,
-    audit,
+    identity: fresh.identity,
+    audit: fresh.audit,
     settings: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
   }
   const { default: invites } = await import('@worker/routes/invites')
@@ -191,8 +105,11 @@ async function seedInvite(): Promise<string> {
   // An invite names the hub it admits into: with no hub to grant, redemption is
   // refused rather than falling back to a global role (#2153). Replay protection
   // is about the credential, so the invite is a well-formed one.
-  await testSql`INSERT INTO hubs (id) VALUES ('hub-replay') ON CONFLICT DO NOTHING`
-  await db.insert(schema.inviteCodes).values({
+  await fresh.db
+    .insert(schema.hubs)
+    .values({ id: 'hub-replay', name: 'Replay hub', slug: 'hub-replay', createdBy: 'admin' })
+    .onConflictDoNothing()
+  await fresh.db.insert(schema.inviteCodes).values({
     code,
     name: 'Invitee',
     phone: '',
@@ -205,37 +122,22 @@ async function seedInvite(): Promise<string> {
 }
 
 const inviteRow = async (code: string) =>
-  (await testSql`SELECT used_by FROM invite_codes WHERE code = ${code}`)[0] as { used_by: string | null }
+  (await fresh.raw`SELECT used_by FROM invite_codes WHERE code = ${code}`)[0] as { used_by: string | null }
 /** Join entries for a redeemer: the act is theirs, in the invite's hub. */
 const joinEntries = async (pubkey: string) =>
-  (await testSql`
+  (await fresh.raw`
     SELECT hub_id FROM audit_log WHERE action = 'userAdded' AND actor_pubkey = ${pubkey}
   `) as unknown as { hub_id: string | null }[]
 const userCount = async (pubkey: string) =>
-  Number((await testSql`SELECT count(*)::int AS n FROM users WHERE pubkey = ${pubkey}`)[0].n)
+  Number((await fresh.raw`SELECT count(*)::int AS n FROM users WHERE pubkey = ${pubkey}`)[0].n)
 
-beforeAll(async () => {
-  adminSql = postgres(DATABASE_URL, { max: 1 })
-  await adminSql`CREATE SCHEMA IF NOT EXISTS ${adminSql(TEST_SCHEMA)}`
-  await adminSql.unsafe(DDL)
-  testSql = postgres(DATABASE_URL, {
-    max: 5,
-    connection: { search_path: TEST_SCHEMA },
-    types: { jsonb: JSONB_TYPE, timestamptz: TIMESTAMPTZ_TYPE },
-  })
-  db = drizzle({ client: testSql, schema }) as unknown as Database
-  identity = new IdentityService(db)
-  audit = new AuditService(db)
-})
+beforeAll(fresh.setup, 180_000)
+afterAll(fresh.teardown, 60_000)
 
-afterAll(async () => {
-  await adminSql`DROP SCHEMA IF EXISTS ${adminSql(TEST_SCHEMA)} CASCADE`
-  await adminSql.end()
-  await testSql.end()
-})
-
+// Per-test state: users, invites, nonces and audit entries. The hub is seeded
+// idempotently by seedInvite, and the role catalog (no FK to these) survives.
 beforeEach(async () => {
-  await testSql`TRUNCATE TABLE users, invite_codes, auth_nonces, hubs, audit_log CASCADE`
+  await fresh.raw`TRUNCATE TABLE users, invite_codes, auth_nonces, audit_log CASCADE`
 })
 
 describe('POST /api/invites/redeem — replay protection (#1367)', () => {

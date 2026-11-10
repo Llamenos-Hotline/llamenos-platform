@@ -239,21 +239,21 @@ export class TestDB {
         ? await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
-            FROM audit_log WHERE hub_id = ${hubId} ORDER BY created_at ASC LIMIT ${limit}`
+            FROM audit_log WHERE hub_id = ${hubId} ORDER BY seq ASC LIMIT ${limit}`
         : await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
-            FROM audit_log WHERE hub_id = ${hubId} ORDER BY created_at ASC`
+            FROM audit_log WHERE hub_id = ${hubId} ORDER BY seq ASC`
     } else {
       rows = limit !== undefined
         ? await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
-            FROM audit_log WHERE hub_id IS NULL ORDER BY created_at ASC LIMIT ${limit}`
+            FROM audit_log WHERE hub_id IS NULL ORDER BY seq ASC LIMIT ${limit}`
         : await (await sql())`
             SELECT id, action, actor_pubkey, details, previous_entry_hash, entry_hash,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as created_at
-            FROM audit_log WHERE hub_id IS NULL ORDER BY created_at ASC`
+            FROM audit_log WHERE hub_id IS NULL ORDER BY seq ASC`
     }
 
     if (rows.length === 0) {
