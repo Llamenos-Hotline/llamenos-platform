@@ -343,10 +343,8 @@ mod tests {
     #[test]
     fn erasure_override_message_format() {
         let msg = build_erasure_override_message("user-123", 1708900000000, "safety concern");
-        let expected = format!(
-            "{}:user-123:1708900000000:safety concern",
-            LABEL_ERASURE_OVERRIDE_SIG
-        );
+        let expected =
+            format!("{LABEL_ERASURE_OVERRIDE_SIG}:user-123:1708900000000:safety concern");
         assert_eq!(msg, expected.as_bytes());
     }
 

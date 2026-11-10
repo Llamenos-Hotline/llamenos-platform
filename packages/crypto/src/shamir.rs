@@ -480,7 +480,7 @@ mod tests {
         for combo in &[[0, 1], [0, 2], [1, 2]] {
             let subset: Vec<Share> = combo.iter().map(|&i| shares[i].clone()).collect();
             let recovered = combine(&subset, 2).unwrap();
-            assert_eq!(recovered, secret, "failed with shares {:?}", combo);
+            assert_eq!(recovered, secret, "failed with shares {combo:?}");
         }
 
         // All 3 shares should also work

@@ -600,8 +600,11 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path packages/crypto/Cargo.toml --features mobile
 
+      # `--all-targets` is deliberate (#1686): without it clippy lints only the
+      # library and never looks at the crate's test code — where #1484, #1658
+      # and the harness defects behind #1641 all lived.
       - name: Clippy
-        run: cargo clippy --manifest-path packages/crypto/Cargo.toml --features mobile -- -D warnings
+        run: cargo clippy --manifest-path packages/crypto/Cargo.toml --features mobile --all-targets -- -D warnings
 
       - name: Format check
         run: cargo fmt --manifest-path packages/crypto/Cargo.toml --check

@@ -139,7 +139,7 @@ mod tests {
         // Derived from a registered label so the raw spelling lives only in
         // labels.rs; the registry must still reject it.
         let unknown = format!("{LABEL_MESSAGE}-not-a-real-label");
-        assert_eq!(content_aad_hex(&unknown).is_err(), true);
-        assert_eq!(key_wrap_aad_hex(&unknown).is_err(), true);
+        assert!(content_aad_hex(&unknown).is_err());
+        assert!(key_wrap_aad_hex(&unknown).is_err());
     }
 }

@@ -116,6 +116,6 @@ fn identity_init_chain_vectors() {
     );
 
     // A server that reorders or drops the genesis link must not verify.
-    assert!(verify_sigchain(&[epoch.clone()]).is_err());
+    assert!(verify_sigchain(std::slice::from_ref(&epoch)).is_err());
     assert!(verify_sigchain(&[epoch, genesis]).is_err());
 }
