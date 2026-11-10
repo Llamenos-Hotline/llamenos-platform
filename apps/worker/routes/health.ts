@@ -35,13 +35,23 @@ interface HealthResult {
  * and `sipBridge: failing`. Nothing anywhere said the call path was dead,
  * because the probe that would have said so had removed itself.
  *
- * So: a probe can no longer omit itself. A missing variable is a `failing`
- * check naming the variable. Whether that failure matters is a question about
- * the DEPLOYMENT, not about the app — a hotline that never deployed Signal is
- * not broken — and the deployment is where it is answered: the smoke check
- * reads these values back and applies its own fatal/advisory ruling per
- * dependency (deploy/ansible/playbooks/smoke-check.yml). What the app owes it
- * is a complete report. See issue #1636.
+ * So: a probe can no longer omit itself BECAUSE ITS CONFIGURATION VARIABLE
+ * WENT UNSET. A missing variable is a `failing` check naming the variable.
+ * Whether that failure matters is a question about the DEPLOYMENT, not about
+ * the app — a hotline that never deployed Signal is not broken — and the
+ * deployment is where it is answered: the smoke check reads these values back
+ * and applies its own fatal/advisory ruling per dependency
+ * (deploy/ansible/playbooks/smoke-check.yml). What the app owes it is a
+ * complete report. See issue #1636.
+ *
+ * One principled exception: an OPTIONAL integration whose deployment intent
+ * is keyed on a credential that has no default anywhere — `signalNotifier`,
+ * gated on the notifier API key (#1422). When that credential is absent the
+ * integration was never deployed, there is nothing to report, and the check
+ * is omitted rather than left crying `failing` forever. The #1636 defect
+ * cannot recur through that path: omission there is keyed on a value that is
+ * only ever set by deliberate operator action, never on a value that was
+ * supposed to be rendered and silently was not.
  *
  * Readiness GATING is unchanged (#1418): only postgres, storage and relay can
  * make this instance unable to serve, so only they turn the response 503. An
@@ -118,10 +128,24 @@ async function checkSipBridge(env: Record<string, unknown>): Promise<CheckResult
   }
 }
 
-async function checkSignalNotifier(env: Record<string, unknown>): Promise<CheckResult> {
+async function checkSignalNotifier(env: Record<string, unknown>): Promise<CheckResult | null> {
+  // "Was Signal deployed?" is keyed on the CREDENTIAL, never on the URL
+  // (#1422). Compose defaults NOTIFIER_URL to the sidecar hostname whether or
+  // not the `signal` profile is running, so a set URL says nothing about
+  // intent — testing `!url` reported `signalNotifier: failing` forever on
+  // every non-Signal deployment, indistinguishable from a real outage. The
+  // API key has no default, and the app cannot authenticate to the sidecar
+  // without it, so its presence genuinely means an operator configured Signal
+  // and its absence genuinely means they did not. When nothing was deployed
+  // there is nothing to report: the check is omitted from `checks` entirely.
+  const credential = (env.SIGNAL_NOTIFIER_BEARER_TOKEN ?? env.NOTIFIER_API_KEY) as string | undefined
+  if (!credential) return null
   const notifierUrl = (env.SIGNAL_NOTIFIER_URL ?? env.NOTIFIER_URL) as string | undefined
   if (!notifierUrl) {
-    return unconfigured('SIGNAL_NOTIFIER_URL', 'Signal notifications are unavailable')
+    // Credential without an endpoint is a MISCONFIGURATION: the operator
+    // deployed Signal but the app has nowhere to send to. That is reported,
+    // not omitted — omission is only honest when nothing was deployed at all.
+    return unconfigured('SIGNAL_NOTIFIER_URL', 'a notifier credential is set but no endpoint is configured, so Signal notifications cannot be delivered')
   }
   const t0 = Date.now()
   try {
@@ -146,10 +170,17 @@ async function runChecks(env: Record<string, unknown>): Promise<HealthResult> {
     checkSignalNotifier(env),
   ])
 
-  // Every check, unconditionally. No `if (x !== null)` — that conditional IS
-  // the defect: it let a probe delete itself from its own report, and an
-  // absent measurement then read as a healthy one. See `unconfigured` above.
-  const checks: Record<string, CheckResult> = { postgres, storage, relay, sipBridge, signalNotifier }
+  // Every always-present dependency reports unconditionally — the #1636
+  // defect was a probe deleting itself when its config went unrendered, and
+  // an absent measurement then read as a healthy one. The one exception is
+  // `signalNotifier` (#1422): its presence is keyed on a credential with no
+  // default anywhere, so `null` from the probe means the integration was
+  // never deployed and the key is omitted — not dropped because a variable
+  // that should have been rendered was not. When the credential IS set the
+  // probe always reports, including a missing-URL misconfiguration, so a
+  // deployed-but-broken sidecar can never remove itself from the report.
+  const checks: Record<string, CheckResult> = { postgres, storage, relay, sipBridge }
+  if (signalNotifier !== null) checks.signalNotifier = signalNotifier
 
   // Readiness answers one question: can this instance serve traffic? Only
   // dependencies that make the answer "no" may gate it.
@@ -162,9 +193,9 @@ async function runChecks(env: Record<string, unknown>): Promise<HealthResult> {
   // Signal is not broken at all. Letting either gate readiness left the app
   // container `unhealthy` forever on any deployment not running the `signal`
   // profile, and hung `first-run.sh` on a condition that could never become
-  // true (#1418). Their status is still REPORTED in `checks`, so a
-  // configured-but-failing sidecar stays visible to an operator — it just no
-  // longer claims the whole instance cannot serve.
+  // true (#1418). When their intent markers ARE set their status is still
+  // REPORTED in `checks`, so a configured-but-failing sidecar stays visible to
+  // an operator — it just no longer claims the whole instance cannot serve.
   const GATING = ['postgres', 'storage', 'relay']
   const status = Object.entries(checks)
     .filter(([name]) => GATING.includes(name))
