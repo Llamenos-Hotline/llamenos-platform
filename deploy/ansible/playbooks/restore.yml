@@ -9,6 +9,23 @@
 # 6. Verify data integrity
 # 7. Start services
 #
+# A restore never clears its target before it can prove it can write the
+# replacement. A recovery is run by someone who has just lost data, and the
+# data they still have may be the only copy:
+#   - PostgreSQL is restored into a side database, which must hold a schema
+#     before it is swapped in by rename; the old database is dropped last.
+#   - RustFS is extracted into a staging directory on the SAME volume, counted,
+#     and only then swapped in; the old objects are deleted last.
+# A failure at any point before the swap leaves the live data untouched.
+#
+# Decrypted data is streamed to the container that needs it (stdin), never
+# handed over through a bind mount of a host directory: Docker's userns-remap
+# (which harden.yml enables) maps the container's root to an unprivileged
+# sub-UID that cannot traverse a 0700 host directory. A restore that bind-mounts
+# one fails on exactly the hosts that were hardened -- and it used to do so after
+# it had already emptied the volume. A static guard in
+# scripts/check-restore-no-bind-mounts.py keeps it that way.
+#
 # Supports:
 # - Point-in-time restore from a specific manifest or timestamp
 # - Dry-run mode (--check or -e restore_dry_run=true)
@@ -20,6 +37,7 @@
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_dry_run=true
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass --tags postgres
 #   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_source_host=old-server
+#   ansible-playbook playbooks/restore.yml --ask-vault-pass -e restore_discard_previous=true   # after inspecting a kept llamenos_pre_restore
 
 - name: Restore from backup
   hosts: all
@@ -251,28 +269,175 @@
             - not restore_dry_run
           tags: [postgres]
 
-        - name: Drop and recreate database
+        # The live database is not touched until the dump has been proven
+        # readable AND restored into a side database that holds a schema. The
+        # old order -- DROP DATABASE, then pg_restore under ignore_errors --
+        # turned any unreadable or corrupt dump into a database that no
+        # longer existed.
+        - name: Prove the PostgreSQL dump is a readable archive before touching the live database
           ansible.builtin.shell: |
-            docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
-              psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos;"
-            docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
-              psql -U llamenos -d postgres -c "CREATE DATABASE llamenos OWNER llamenos;"
+            set -euo pipefail
+            n="$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+                  pg_restore --list < {{ restore_tmpdir.path }}/pg.dump | grep -c '^[0-9]' || true)"
+            if [ "${n}" -eq 0 ]; then
+              echo "ERROR: {{ pg_backup_file }} lists no restorable entries; the live database was not touched" >&2
+              exit 1
+            fi
+            echo "dump lists ${n} entries"
+          args:
+            executable: /bin/bash
+          changed_when: false
           when:
             - pg_backup_file is defined
             - not restore_dry_run
           tags: [postgres]
 
-        - name: Restore PostgreSQL from backup
+        - name: Restore PostgreSQL into a side database
           ansible.builtin.shell: |
+            set -u
+            psql_admin() {
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+                psql -U llamenos -d postgres -v ON_ERROR_STOP=1 "$@"
+            }
+            psql_admin -c "DROP DATABASE IF EXISTS llamenos_restore;" || exit 1
+            psql_admin -c "CREATE DATABASE llamenos_restore OWNER llamenos;" || exit 1
+            # pg_restore exits non-zero on warnings it can carry on past; whether
+            # the restore is good is decided below by what the side database
+            # holds, not by this exit code.
             docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
-              pg_restore -U llamenos -d llamenos --no-owner --no-privileges \
+              pg_restore -U llamenos -d llamenos_restore --no-owner --no-privileges \
               < {{ restore_tmpdir.path }}/pg.dump
+            echo "pg_restore exit: $?"
+          args:
+            executable: /bin/bash
           register: pg_restore_result
+          changed_when: true
           when:
             - pg_backup_file is defined
             - not restore_dry_run
           tags: [postgres]
-          ignore_errors: true
+
+        - name: Count the tables in the side database
+          ansible.builtin.command:
+            cmd: >
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+              psql -U llamenos -d llamenos_restore -tAc
+              "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+          register: pg_side_count
+          changed_when: false
+          failed_when: false
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
+
+        # pg_restore exits non-zero on warnings it can carry on past, so its
+        # exit code cannot decide whether the restore is good. What can: the
+        # dump's table of contents says how many tables it holds, and the side
+        # database must hold exactly that many. A restore that silently dropped
+        # a table (an error mid-restore) is refused before the swap.
+        - name: Count the tables the dump says it holds, and the tables the side database holds
+          ansible.builtin.shell: |
+            set -euo pipefail
+            expected="$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres               pg_restore --list < {{ restore_tmpdir.path }}/pg.dump | grep -c '^[0-9]*; [0-9]* [0-9]* TABLE public ' || true)"
+            actual="$(docker compose -f {{ llamenos_compose_postgres }} exec -T postgres               psql -U llamenos -d llamenos_restore -tAc               "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p')")"
+            echo "${expected} ${actual}"
+          args:
+            executable: /bin/bash
+          register: pg_toc_vs_side
+          changed_when: false
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
+
+        - name: Drop a side database that is empty or incomplete
+          ansible.builtin.command:
+            cmd: >
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+              psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos_restore;"
+          changed_when: true
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+            - (pg_side_count.stdout | default('0') | trim | int) == 0
+              or (pg_toc_vs_side.stdout | default('0 0') | trim).split()[0] != (pg_toc_vs_side.stdout | default('0 0') | trim).split()[1]
+          tags: [postgres]
+
+        - name: Refuse to swap in a side database that is empty or incomplete
+          ansible.builtin.fail:
+            msg: >-
+              Restoring {{ pg_backup_file }} did not produce the database the
+              dump describes (tables in the dump / tables restored:
+              {{ pg_toc_vs_side.stdout | default('unknown') | trim }}), so the
+              live database was NOT replaced. pg_restore said:
+              {{ pg_restore_result.stdout | default('no output') }}
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+            - (pg_side_count.stdout | default('0') | trim | int) == 0
+              or (pg_toc_vs_side.stdout | default('0 0') | trim).split()[0] != (pg_toc_vs_side.stdout | default('0 0') | trim).split()[1]
+          tags: [postgres]
+
+        # Only now is the live database replaced. The app and every other
+        # client are stopped; ALLOW_CONNECTIONS false plus a terminate keeps
+        # a straggler (a metrics exporter) from holding the old database open
+        # across the rename. If the second rename fails the first is undone.
+        # The replaced database is KEPT as llamenos_pre_restore until the
+        # restored one has been validated below; only then is it dropped.
+        - name: Swap the restored database in
+          ansible.builtin.shell: |
+            set -u
+            psql_admin() {
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres \
+                psql -U llamenos -d postgres -v ON_ERROR_STOP=1 "$@"
+            }
+            exists() {
+              [ "$(psql_admin -tAc "SELECT count(*) FROM pg_database WHERE datname = '$1'")" = "1" ]
+            }
+            if ! exists llamenos; then
+              if exists llamenos_pre_restore; then
+                echo "ERROR: there is no 'llamenos' database but there is a 'llamenos_pre_restore': an earlier restore stopped mid-swap and that is your data. Rename it back by hand before restoring again." >&2
+                exit 1
+              fi
+              echo "ERROR: there is no 'llamenos' database to replace" >&2
+              exit 1
+            fi
+            # llamenos_pre_restore is the previous live database, kept until a
+            # restore has validated its replacement. One still here means an
+            # earlier restore did not get that far, so it may be the only good
+            # copy: refuse rather than delete it, as the RustFS swap does with
+            # its marker. -e restore_discard_previous=true is the operator saying
+            # they have looked.
+            if exists llamenos_pre_restore; then
+              {% if restore_discard_previous | default(false) | bool %}
+              psql_admin -c "DROP DATABASE llamenos_pre_restore;" || exit 1
+              {% else %}
+              echo "ERROR: 'llamenos_pre_restore' exists: an earlier restore replaced the database but did not validate its replacement, so it may hold your only good copy. Inspect it, then drop it by hand or re-run with -e restore_discard_previous=true. The live database was not touched." >&2
+              exit 1
+              {% endif %}
+            fi
+            psql_admin -c "ALTER DATABASE llamenos ALLOW_CONNECTIONS false;" || exit 1
+            psql_admin -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'llamenos' AND pid <> pg_backend_pid();" >/dev/null || true
+            if ! psql_admin -c "ALTER DATABASE llamenos RENAME TO llamenos_pre_restore;"; then
+              psql_admin -c "ALTER DATABASE llamenos ALLOW_CONNECTIONS true;" || true
+              echo "ERROR: could not move the live database aside; it is unchanged" >&2
+              exit 1
+            fi
+            if ! psql_admin -c "ALTER DATABASE llamenos_restore RENAME TO llamenos;"; then
+              psql_admin -c "ALTER DATABASE llamenos_pre_restore RENAME TO llamenos;" || true
+              psql_admin -c "ALTER DATABASE llamenos ALLOW_CONNECTIONS true;" || true
+              echo "ERROR: could not move the restored database into place; the original was put back" >&2
+              exit 1
+            fi
+            echo "swapped"
+          args:
+            executable: /bin/bash
+          changed_when: true
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
 
         # This used to query kv_store -- a Durable-Objects-era table that has
         # not existed in any migration for a long time -- with no
@@ -324,6 +489,20 @@
             - (pg_restored_tables | default(0) | int) == 0
           tags: [postgres]
 
+        # The replaced database has been kept until now. The restored one holds
+        # the schema the dump described and passed the check above, so this is
+        # the first moment the old data is no longer the only complete copy.
+        - name: Drop the replaced database now that the restored one is validated
+          ansible.builtin.command:
+            cmd: >
+              docker compose -f {{ llamenos_compose_postgres }} exec -T postgres
+              psql -U llamenos -d postgres -c "DROP DATABASE IF EXISTS llamenos_pre_restore;"
+          changed_when: true
+          when:
+            - pg_backup_file is defined
+            - not restore_dry_run
+          tags: [postgres]
+
         - name: "[DRY RUN] Would restore PostgreSQL from {{ pg_backup_file | default('N/A') }}"
           ansible.builtin.debug:
             msg: "PostgreSQL restore skipped (dry run)"
@@ -349,25 +528,12 @@
           tags: [rustfs]
           ignore_errors: true
 
-        - name: Decrypt and extract RustFS backup
-          ansible.builtin.shell: |
-            mkdir -p {{ restore_tmpdir.path }}/rustfs-restore
-            {% if backup_age_public_key | default('') | length > 0 %}
-            age -d -i {{ restore_age_key_path }} {{ rustfs_backup_file }} | tar -xzf - -C {{ restore_tmpdir.path }}/rustfs-restore
-            {% else %}
-            tar -xzf {{ rustfs_backup_file }} -C {{ restore_tmpdir.path }}/rustfs-restore
-            {% endif %}
-          when:
-            - rustfs_backup_file is defined
-            - not restore_dry_run
-          tags: [rustfs]
-
         # This used to `aws s3 sync` inside the rustfs image, which has no
         # AWS CLI, under ignore_errors -- so attachments were never restored
-        # and the summary said "RESTORED" anyway (#1125). The backup now
-        # archives the /data volume, so the restore writes that volume back
-        # with the same helper container. RustFS must be stopped while its
-        # data directory is replaced underneath it.
+        # and the summary said "RESTORED" anyway (#1125). The backup archives
+        # the /data volume, so the restore writes that volume back with the
+        # same helper container. RustFS must be stopped while its data
+        # directory is replaced underneath it.
         - name: Stop RustFS before replacing its data volume
           ansible.builtin.command:
             cmd: docker compose -f {{ llamenos_compose_rustfs }} stop rustfs
@@ -377,7 +543,24 @@
           changed_when: true
           tags: [rustfs]
 
-        - name: Write restored objects back into the RustFS data volume
+        # The archive is streamed into the helper container on stdin. It is
+        # never decrypted to a host directory and never bind-mounted: a
+        # container under userns-remap cannot read a 0700 host directory, and
+        # this step used to fail on that after `rm -rf /data/*` had already
+        # emptied the volume.
+        #
+        # Inside the helper the archive is extracted into a staging directory
+        # on the SAME volume (so the swap is a rename, not a copy), counted,
+        # and only then swapped in: the live objects are moved aside, the
+        # staged ones moved in, and the old ones deleted last. Any failure
+        # before the swap leaves the live objects exactly as they were; a
+        # failure during it moves them back. It needs room for the live data
+        # and the restored data at once.
+        #
+        # .restore-swap marks a swap in progress. If one is found the previous
+        # restore died mid-swap and .restore-previous holds the live data, so
+        # this refuses to proceed rather than delete it.
+        - name: Restore the RustFS data volume (staged, then swapped in)
           ansible.builtin.shell: |
             set -euo pipefail
             CONTAINER_ID="$(docker compose -f {{ llamenos_compose_rustfs }} ps -aq rustfs)"
@@ -394,12 +577,99 @@
               echo "ERROR: could not resolve the volume behind rustfs /data" >&2
               exit 1
             fi
-            docker run --rm \
-              -v "${DATA_VOLUME}:/data" \
-              -v "{{ restore_tmpdir.path }}/rustfs-restore:/in:ro" \
-              "{{ backup_rustfs_helper_image | default('alpine:3.22') }}" \
-              sh -c 'rm -rf /data/* /data/..?* /data/.[!.]* 2>/dev/null || true; cp -a /in/. /data/'
-            echo "Restored $(find {{ restore_tmpdir.path }}/rustfs-restore -type f | wc -l) files into ${DATA_VOLUME}"
+            read -r -d '' HELPER_SCRIPT <<'EOS' || true
+            set -eu
+            STAGE=/data/.restore-staging
+            PREV=/data/.restore-previous
+            MARK=/data/.restore-swap
+            # `find -exec mv` would report success whatever mv did (the exit
+            # status is about find itself), so entries are moved by an explicit loop that
+            # stops at the first failure. The glob trio covers ordinary, dot- and
+            # double-dot-prefixed names; an unmatched glob stays literal and is
+            # skipped by the existence test.
+            move_entries() {
+              for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+                case "${e##*/}" in .restore-*) continue ;; esac
+                mv "$e" "$2"/ || return 1
+              done
+            }
+            count_entries() {
+              n=0
+              for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+                if [ ! -e "$e" ] && [ ! -L "$e" ]; then continue; fi
+                case "${e##*/}" in .restore-*) continue ;; esac
+                n=$((n + 1))
+              done
+              echo "$n"
+            }
+            if [ -e "${MARK}" ]; then
+              echo "ERROR: an earlier restore stopped part-way through swapping. The live objects are in ${PREV} on this volume. Move them back by hand before restoring again; nothing was changed." >&2
+              exit 4
+            fi
+            rm -rf "${STAGE}" "${PREV}"
+            mkdir "${STAGE}"
+            if ! tar -xzf - -C "${STAGE}"; then
+              rm -rf "${STAGE}"
+              echo "ERROR: the archive could not be extracted; the live objects were not touched" >&2
+              exit 3
+            fi
+            count="$(find "${STAGE}" -type f | wc -l)"
+            if [ "${count}" -eq 0 ]; then
+              rm -rf "${STAGE}"
+              echo "ERROR: the archive holds no files; the live objects were not touched" >&2
+              exit 3
+            fi
+            staged_entries="$(count_entries "${STAGE}")"
+            live_entries="$(count_entries /data)"
+            touch "${MARK}"
+            mkdir "${PREV}"
+            # The marker is removed only when a rollback is VERIFIED: nothing left
+            # in PREV and /data holding as many entries as the live data had.
+            # Otherwise it stays, so the next run refuses (exit 4) instead of
+            # deleting live objects that are still in PREV or STAGE.
+            finish_rollback() {
+              if [ "$(count_entries "${PREV}")" -eq 0 ] && [ "$(count_entries /data)" -eq "${live_entries}" ]; then
+                rm -rf "${PREV}" "${STAGE}"; rm -f "${MARK}"
+                echo "$1; the live objects were put back" >&2
+              else
+                echo "$1, and the rollback could not be verified: live objects may be in ${PREV} or ${STAGE}. Move them back by hand; the marker ${MARK} stays so a second restore cannot delete them." >&2
+              fi
+            }
+            if ! move_entries /data "${PREV}"; then
+              # Part of the live data was moved: bring only that back. Entries still
+              # in /data ARE the live data and must not be touched.
+              move_entries "${PREV}" /data || true
+              finish_rollback "ERROR: could not move the live objects aside"
+              exit 5
+            fi
+            if ! move_entries "${STAGE}" /data || [ "$(count_entries /data)" -ne "${staged_entries}" ]; then
+              # Everything live is in PREV, so what is in /data now came from STAGE.
+              move_entries /data "${STAGE}" || true
+              move_entries "${PREV}" /data || true
+              finish_rollback "ERROR: could not move the restored objects into place"
+              exit 5
+            fi
+            # The replacement is in place and complete. Only now is the old data
+            # deleted, and only if what was moved aside is still what was found.
+            if [ "$(count_entries "${PREV}")" -ne "${live_entries}" ]; then
+              echo "WARNING: ${PREV} holds a different number of entries than the live data had; keeping it and the marker ${MARK}. Check it, then delete both by hand." >&2
+            else
+              rm -f "${MARK}"
+              rm -rf "${PREV}"
+            fi
+            rm -rf "${STAGE}"
+            echo "Restored ${count} files"
+            EOS
+            {% if backup_age_public_key | default('') | length > 0 %}
+            age -d -i {{ restore_age_key_path }} {{ rustfs_backup_file }} \
+            {% else %}
+            cat {{ rustfs_backup_file }} \
+            {% endif %}
+              | docker run --rm -i \
+                  -v "${DATA_VOLUME}:/data" \
+                  "{{ backup_rustfs_helper_image | default('alpine:3.22') }}" \
+                  sh -c "${HELPER_SCRIPT}"
           args:
             executable: /bin/bash
           register: rustfs_restore_result
