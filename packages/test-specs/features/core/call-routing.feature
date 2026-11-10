@@ -224,7 +224,9 @@ Feature: Call Routing & History
     And 2 calls were completed today
     And 1 call went to voicemail today
     When the call history is filtered by status "completed"
-    Then the call history contains 2 entries
+    Then the filtered call history reports exactly 2 entries with status "completed"
+    When the call history is filtered by status "unanswered"
+    Then the filtered call history reports exactly 1 entries with status "unanswered"
 
   @backend
   Scenario: Call history filters by date range

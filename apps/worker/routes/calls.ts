@@ -237,6 +237,7 @@ calls.get('/history',
     const query = c.req.valid('query')
     const result = await services.calls.listCallHistory(hubId, {
       search: query.search,
+      status: query.status,
       dateFrom: query.dateFrom,
       dateTo: query.dateTo,
       page: query.page,

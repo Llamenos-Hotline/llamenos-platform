@@ -139,9 +139,6 @@ function CallHistoryPage() {
   }
 
   const totalPages = Math.ceil(total / limit)
-  // The status filter is sent to the API; rows are also matched here so the list stays
-  // correct against a server that does not filter by status yet.
-  const visibleCalls = status ? calls.filter(c => c.status === status) : calls
 
   function formatDuration(seconds: number) {
     const m = Math.floor(seconds / 60)
@@ -238,14 +235,14 @@ function CallHistoryPage() {
                 </div>
               ))}
             </div>
-          ) : visibleCalls.length === 0 ? (
+          ) : calls.length === 0 ? (
             <div data-testid="empty-state" className="py-8 text-center text-muted-foreground">
               <PhoneIncoming className="mx-auto mb-2 h-8 w-8 opacity-40" />
               {hasFilters ? t('callHistory.noResults') : t('callHistory.noCalls')}
             </div>
           ) : (
             <div data-testid="call-list" className="divide-y divide-border">
-              {visibleCalls.map(call => (
+              {calls.map(call => (
                 <div key={call.id} data-testid="call-row" data-call-status={call.status} className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
                   <div className="min-w-0 flex-1 sm:flex-none sm:w-48">
                     {call.status === 'unanswered' ? (
