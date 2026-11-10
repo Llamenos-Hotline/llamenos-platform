@@ -642,20 +642,38 @@ extension XCTestCase {
 
     /// Drive a Form `Toggle` to `wanted` with ONE tap, then wait on the value it reports.
     ///
+    /// Two waits, each on the thing it is about, and one tap between them:
+    ///
+    /// 1. **Before the tap, the row must be settled** (`awaitSettled`: hittable, enabled, frame
+    ///    unchanged). A screen that was just pushed reports `exists` while it is still sliding in,
+    ///    and a tap that lands then is swallowed with no error (#2091). That is a different failure
+    ///    from a slow flip, and no wait *after* the tap can cure it: the failure that kept
+    ///    ejecting PRs from the merge queue (`testCallSoundsToggleChangesValueWhenTapped`, then named `testCallSoundsToggleExists`, #2618) already waited
+    ///    the whole `eventBackstop` plus a fresh sample for a value that was never going to
+    ///    change, because the one tap had gone nowhere. Retrying the tap is not the answer either:
+    ///    a flip that is merely late would be flipped back, which is what the earlier
+    ///    tap-poll-tap version did (merge group 41489316840).
+    /// 2. **After the tap, wait for the value.** The toggle is the event; no clock paces it.
+    ///
     /// `.accessibilityIdentifier` on a Form `Toggle` lands on the merged row, whose frame is the
     /// whole row: `tap()` hits the centre, over the label, and tapping a Form Toggle's label does
     /// not toggle it (measured on `transcription-enabled-toggle` and `ivr-language-de`). The
-    /// control is at the trailing edge, so that is where the one tap goes. This used to tap the
-    /// centre, poll 3s, then tap the trailing edge — and a switch that flipped later than 3s on a
-    /// hosted simulator was flipped back by the second tap, reading as "the toggle never changed"
-    /// (merge group 41489316840, `testCallSoundsToggleExists`). Tapping a second time because a
-    /// first one has not shown up yet is guessing at the app; the value is the event.
+    /// control is at the trailing edge, so that is where the one tap goes.
     func setToggle(
         _ toggle: XCUIElement, to wanted: Bool, timeout: TimeInterval,
         file: StaticString = #filePath, line: UInt = #line
     ) {
         let isOn = { (toggle.value as? String) == "1" }
         if isOn() == wanted { return }
+        let settled = awaitSettled(toggle, timeout: timeout)
+        guard settled.settled else {
+            XCTFail(
+                "\(toggle) should be on screen, enabled and still before it is tapped"
+                    + " (last seen: \(settled.lastSeen))",
+                file: file, line: line
+            )
+            return
+        }
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertTrue(
             awaitCondition(timeout: timeout) { isOn() == wanted },
