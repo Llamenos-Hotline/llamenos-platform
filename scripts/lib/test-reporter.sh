@@ -500,21 +500,74 @@ parse_playwright_results() {
   done < <(_reporter_strip_ansi "$log_file")
 }
 
+# xcodebuild (XCTest) prints an "Executed N tests, with M failures" line after
+# EVERY suite it closes, and each one nests inside the next:
+#
+#     Test Suite 'FooTests' passed at ...                 <- a class
+#          Executed 3 tests, with 0 failures ...
+#     Test Suite 'LlamenosTests.xctest' passed at ...     <- the bundle (re-counts its classes)
+#          Executed 10 tests, with 0 failures ...
+#     Test Suite 'Selected tests' passed at ...           <- the run (re-counts the bundles)
+#          Executed 10 tests, with 0 failures ...
+#
+# Summing every line therefore counts each test once per nesting level (#2522).
+# Only the run-level total is read: the line that follows the closing header of
+# 'All tests' / 'Selected tests'. A log holding several runs (one per
+# destination) sums those, which are disjoint. If no run-level header is present
+# (the log was filtered), the LAST "Executed" line is the final summary xcodebuild
+# printed; it is read alone. No "Executed" line at all leaves PARSED_FOUND=false,
+# which callers record as an error, never as zero tests passed.
 parse_xcodebuild_results() {
   local log_file="$1"
   _reporter_parse_reset
   [[ -r "$log_file" ]] || return 0
 
-  # xcodebuild: "Executed N tests, with M failures" -- sum all lines
-  local executed_line
-  while IFS= read -r executed_line; do
-    PARSED_FOUND=true
-    local total failures
-    total="$(echo "$executed_line" | grep -oE '[0-9]+ test' | head -1 | grep -oE '[0-9]+' || echo 0)"
-    failures="$(echo "$executed_line" | grep -oE '[0-9]+ failure' | head -1 | grep -oE '[0-9]+' || echo 0)"
-    PARSED_PASSED=$(( PARSED_PASSED + total - failures ))
-    PARSED_FAILED=$(( PARSED_FAILED + failures ))
-  done < <(_reporter_strip_ansi "$log_file" | grep "Executed" || true)
+  local header_re="^[[:space:]]*Test Suite '(All tests|Selected tests)' (passed|failed) at "
+  local any_header_re="^[[:space:]]*Test Suite '.*' (passed|failed) at "
+  local executed_re="^[[:space:]]*Executed ([0-9]+) tests?, with "
+  local line pending_top=false
+  local run_found=false run_total=0 run_failed=0 run_skipped=0
+  local last_found=false last_total=0 last_failed=0 last_skipped=0
+  local total failures skipped
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ $header_re ]]; then
+      pending_top=true
+      continue
+    fi
+    if [[ "$line" =~ $any_header_re ]]; then
+      pending_top=false
+      continue
+    fi
+    [[ "$line" =~ $executed_re ]] || continue
+    total="${BASH_REMATCH[1]}"
+    failures=0
+    skipped=0
+    [[ "$line" =~ ([0-9]+)\ failures? ]] && failures="${BASH_REMATCH[1]}"
+    [[ "$line" =~ ([0-9]+)\ tests?\ skipped ]] && skipped="${BASH_REMATCH[1]}"
+
+    last_found=true
+    last_total=$total; last_failed=$failures; last_skipped=$skipped
+    if [[ "$pending_top" == "true" ]]; then
+      run_found=true
+      run_total=$(( run_total + total ))
+      run_failed=$(( run_failed + failures ))
+      run_skipped=$(( run_skipped + skipped ))
+      pending_top=false
+    fi
+  done < <(_reporter_strip_ansi "$log_file")
+
+  if [[ "$run_found" == "true" ]]; then
+    total=$run_total; failures=$run_failed; skipped=$run_skipped
+  elif [[ "$last_found" == "true" ]]; then
+    total=$last_total; failures=$last_failed; skipped=$last_skipped
+  else
+    return 0
+  fi
+  PARSED_FOUND=true
+  PARSED_PASSED=$(( total - failures - skipped ))
+  PARSED_FAILED=$failures
+  PARSED_SKIPPED=$skipped
 }
 
 # If run directly, show help

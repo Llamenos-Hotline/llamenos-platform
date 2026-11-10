@@ -290,3 +290,68 @@ describe('a finished run releases its stdout', () => {
     expect(outcome).toBe('eof')
   }, 20_000)
 })
+
+describe('xcodebuild totals are not multiplied by suite nesting (#2522)', () => {
+  /** One closed XCTest suite: header line plus the "Executed" line under it. */
+  const closed = (name: string, n: number, failures = 0, ts = '2026-11-10 10:00:00.000') =>
+    [`Test Suite '${name}' ${failures ? 'failed' : 'passed'} at ${ts}.`, `\t Executed ${n} test${n === 1 ? '' : 's'}, with ${failures} failure${failures === 1 ? '' : 's'} (0 unexpected) in 0.5 (0.6) seconds`]
+  const log = (...blocks: string[][]) => blocks.flat().join('\n')
+
+  const MULTI_SUITE = log(
+    ["Test Suite 'Selected tests' started at 2026-11-10 10:00:00.000"],
+    closed('AuthTests', 3),
+    closed('NoteTests', 4),
+    closed('SyncTests', 5),
+    closed('LlamenosTests.xctest', 12),
+    closed('Selected tests', 12),
+  )
+  const parse = (name: string, text: string, exit = 0) =>
+    suite(
+      runReporter(`
+        reporter_run_step ${shq(name)} ${emit(text, exit)} || true
+        reporter_record_step_results ${shq(name)} xcodebuild
+      `),
+      name,
+    )
+
+  test('several suites report the true total, not the sum of every Executed line', () => {
+    // A blind sum reads 3+4+5+12+12 = 36.
+    expect(parse('multi', MULTI_SUITE)).toMatchObject({ status: 'ok', passed: 12, failed: 0, skipped: 0 })
+  })
+
+  test('a single suite is still right', () => {
+    const one = log(closed('AuthTests', 3), closed('LlamenosTests.xctest', 3), closed('All tests', 3))
+    expect(parse('one', one)).toMatchObject({ status: 'ok', passed: 3, failed: 0 })
+  })
+
+  test('failures and skips are taken from the run-level line', () => {
+    const skipped = `\t Executed 12 tests, with 2 tests skipped and 1 failure (0 unexpected) in 1.0 (1.1) seconds`
+    const text = log(
+      closed('AuthTests', 3, 1),
+      closed('LlamenosTests.xctest', 12, 1),
+      [`Test Suite 'All tests' failed at 2026-11-10 10:00:00.000.`, skipped],
+    )
+    expect(parse('mixed', text, 65)).toMatchObject({ status: 'ok', passed: 9, failed: 1, skipped: 2 })
+  })
+
+  test('a log holding two runs adds the two run totals, each once', () => {
+    const text = log(closed('AuthTests', 3), closed('Selected tests', 3), closed('NoteTests', 4), closed('Selected tests', 4))
+    expect(parse('two', text)).toMatchObject({ status: 'ok', passed: 7 })
+  })
+
+  test('a filtered log with no run-level header reads the final summary line alone', () => {
+    const text = ['\t Executed 3 tests, with 0 failures (0 unexpected) in 0.1 (0.1) seconds', '\t Executed 8 tests, with 0 failures (0 unexpected) in 0.2 (0.2) seconds'].join('\n')
+    expect(parse('filtered', text)).toMatchObject({ status: 'ok', passed: 8 })
+  })
+
+  test('ANSI colouring does not hide the run-level line', () => {
+    const esc = '\u001b'
+    const text = MULTI_SUITE.replace("Test Suite 'Selected tests' passed", `${esc}[32mTest Suite 'Selected tests' passed${esc}[0m`)
+    expect(parse('ansi', text)).toMatchObject({ status: 'ok', passed: 12 })
+  })
+
+  test('a log with no Executed line is an error, not zero passed', () => {
+    const s = parse('none', ["Test Suite 'Selected tests' started at 2026-11-10 10:00:00.000", 'error: test runner hung before establishing connection'].join('\n'), 65)
+    expect(s).toMatchObject({ status: 'error', passed: null, failed: null })
+  })
+})
