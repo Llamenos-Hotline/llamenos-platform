@@ -557,9 +557,10 @@ describe('entity-schema routes', () => {
 
     it('returns 400 when a role contains an invalid permission', async () => {
       const getRolesSpy = vi.fn().mockResolvedValue({ roles: [] })
+      const createRoleSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['system:manage-roles'],
-        serviceMock: { settings: { getRoles: getRolesSpy, createRole: vi.fn() } },
+        serviceMock: { settings: { getRoles: getRolesSpy, createRole: createRoleSpy } },
       })
 
       const res = await app.request('/cms/roles/from-template', {
@@ -576,6 +577,10 @@ describe('entity-schema routes', () => {
       const json = await res.json()
       expect(typeof json.error).toBe('string')
       expect(json.error).toMatch(/invalid permissions/i)
+      expect(json.error).toContain('not:a:real:permission')
+      expect(json.role).toBe('Bad Role')
+      expect(json.invalidPermissions).toEqual(['not:a:real:permission'])
+      expect(createRoleSpy).not.toHaveBeenCalled()
     })
 
     it('requires system:manage-roles permission', async () => {
@@ -657,6 +662,19 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({ permissions: ['other:read'] })
       const res = await app.request('/cms/report-types')
       expect(res.status).toBe(403)
+    })
+
+    it('accepts reports:read-types in place of settings:read (#1363)', async () => {
+      const getCmsReportTypesSpy = vi.fn().mockResolvedValue({ reportTypes: [] })
+      const { app } = createTestApp({
+        permissions: ['reports:read-types'],
+        hubId: 'hub-1',
+        serviceMock: { settings: { getCmsReportTypes: getCmsReportTypesSpy } },
+      })
+
+      const res = await app.request('/cms/report-types')
+      expect(res.status).toBe(200)
+      expect(getCmsReportTypesSpy).toHaveBeenCalledWith('hub-1')
     })
   })
 })

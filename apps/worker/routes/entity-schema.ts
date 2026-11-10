@@ -539,6 +539,7 @@ deployment.post('/roles/from-template',
         return c.json({
           error: `Invalid permissions: ${invalidPerms.join(', ')}`,
           role: suggested.name,
+          invalidPermissions: invalidPerms,
         }, 400)
       }
     }
@@ -575,10 +576,11 @@ deployment.post('/roles/from-template',
 
 // --- CMS Report Type Definitions (Epic 343) ---
 
-// GET /report-types (list) stays hand-written — uses settings:read which differs
-// from the CRUD permission (cases:manage-types). The factory list could handle it
-// via permissionOverrides, but keeping it explicit for clarity alongside the
-// factory-generated GET /:id which also uses settings:read.
+// GET /report-types (list) stays hand-written — uses settings:read (or the
+// dedicated reports:read-types grant, #1363) which differs from the CRUD
+// permission (cases:manage-types). The factory list could handle it via
+// permissionOverrides, but keeping it explicit for clarity alongside the
+// factory-generated GET /:id which uses settings:read alone.
 entitySchema.get('/report-types',
   describeRoute({
     tags: ['Case Management'],
@@ -591,10 +593,10 @@ entitySchema.get('/report-types',
       ...authErrors,
     },
   }),
-  requirePermission('settings:read'),
+  requireAnyPermission('settings:read', 'reports:read-types'),
   async (c) => {
     const services = c.get('services')
-    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    const target = resolveTargetHub(c, c.req.query('hubId'), ['settings:read', 'reports:read-types'])
     if (!target.ok) return c.json({ error: target.error }, target.status)
     const result = await services.settings.getCmsReportTypes(target.hubId)
     return c.json(result)

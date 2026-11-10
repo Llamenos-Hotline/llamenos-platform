@@ -193,6 +193,14 @@ describe('GET /contacts/search', () => {
     const res = await app.request('/search?tokens=joh')
     expect(res.status).toBe(403)
   })
+
+  it('accepts contacts:search in place of contacts:view (#1363)', async () => {
+    const { app, mockContacts } = makeApp({ permissions: ['contacts:search'] })
+
+    const res = await app.request('/search?tokens=joh')
+    expect(res.status).toBe(200)
+    expect(mockContacts.searchByTrigramTokens).toHaveBeenCalledWith('hub-1', ['joh'])
+  })
 })
 
 // ---------------------------------------------------------------------------

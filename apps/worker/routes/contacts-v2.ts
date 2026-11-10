@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { requirePermission } from '../middleware/permission-guard'
+import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import {
   contactSchema,
   contactListResponseSchema,
@@ -137,7 +137,7 @@ contactsV2.get('/search',
       ...authErrors,
     },
   }),
-  requirePermission('contacts:view'),
+  requireAnyPermission('contacts:view', 'contacts:search'),
   async (c) => {
     const tokens = c.req.query('tokens')
     if (!tokens) return c.json({ contacts: [] })

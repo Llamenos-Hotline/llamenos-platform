@@ -1091,9 +1091,8 @@
         "reports:read-all",
         "reports:create",
         "evidence:upload",
-        "evidence:read",
         "evidence:download",
-        "blasts:create",
+        "blasts:send",
         "blasts:read",
         "contacts:search",
         "reports:read-types",
@@ -1106,7 +1105,6 @@
       "description": "On-site at sweeps documenting conditions, submitting observation reports with photos/video",
       "permissions": [
         "reports:create",
-        "reports:read-own",
         "events:read",
         "evidence:upload",
         "reports:read-types"
@@ -1138,7 +1136,6 @@
         "contacts:view-pii",
         "events:read",
         "reports:read-all",
-        "evidence:read",
         "evidence:download",
         "contacts:search",
         "reports:read-types",

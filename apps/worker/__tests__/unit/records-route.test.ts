@@ -377,6 +377,32 @@ describe('DELETE /records/:id', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Unlink endpoints
+// ---------------------------------------------------------------------------
+
+describe('unlink endpoints honor cases:unlink as well as cases:link', () => {
+  it('DELETE /records/:id/contacts/:contactId rejects with neither link nor unlink', async () => {
+    const { app } = makeApp({ permissions: ['cases:read-all'] })
+    const res = await app.request('/rec-1/contacts/con-1', { method: 'DELETE' })
+    expect(res.status).toBe(403)
+  })
+
+  it('DELETE /records/:id/contacts/:contactId allows cases:unlink without cases:link', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['cases:read-all', 'cases:unlink'] })
+    const res = await app.request('/rec-1/contacts/con-1', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(mockCases.unlinkContact).toHaveBeenCalledWith('rec-1', 'con-1')
+  })
+
+  it('DELETE /records/:id/reports/:reportId allows cases:unlink without cases:link', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['cases:read-all', 'cases:unlink'] })
+    const res = await app.request('/rec-1/reports/rep-1', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(mockCases.unlinkReportCase).toHaveBeenCalledWith('rec-1', 'rep-1')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // POST /:id/interactions — access control
 // ---------------------------------------------------------------------------
 

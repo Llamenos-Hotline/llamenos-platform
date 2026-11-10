@@ -436,7 +436,6 @@
         "cases:read-all",
         "cases:update",
         "cases:assign",
-        "cases:close",
         "contacts:view",
         "contacts:view-pii",
         "contacts:edit",
