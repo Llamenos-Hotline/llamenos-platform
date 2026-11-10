@@ -9,6 +9,7 @@ import {
 } from './ci.js'
 import { cacheArtifactName, reviewSetTag, verdictArtifactState, isTreeSha } from './review-cache.js'
 import { tierFor } from './impact.js'
+import { laneIdFromBranch, QUEUE_CLEARED_LABEL } from './ci.js'
 import { releasePrShape } from './release-shape.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } from './specialist.js'
@@ -47,11 +48,25 @@ import {
  *     This read failing is "cannot decide", never "queue is empty" — a
  *     detector without the queue subtraction reports the whole queue as
  *     stranded (see the eject detector below).
- *  3. If the queue already holds `min_entries_to_merge` entries, does
- *     nothing.
- *  4. Otherwise walks the open PRs against that base (ascending number —
- *     oldest first) and queues a PR only if ALL of the issue's four
- *     conditions hold:
+ *  3. Splits what it may do by what kind of PR it is looking at (#2619):
+ *
+ *     - ADDING a PR the queue never admitted is bounded by queue depth. A
+ *       queue already holding `min_entries_to_merge` entries can form a
+ *       group; nothing is added to it.
+ *     - RE-ARMING a PR the queue admitted and then dropped (ejected, or
+ *       dequeued) restores an entry that already existed, so depth is no
+ *       argument against it and does not bound it. "Dropped" is read from the
+ *       PR's merge-queue timeline (its LAST queue event is a removal), since
+ *       `autoMergeRequest` reads null for a queued PR and an ejected one alike
+ *       and the queue listing only says who is queued NOW. A history that
+ *       cannot be read is not evidence of an ejection.
+ *
+ *     This was one early return ("satisfied"), which skipped the whole scan at
+ *     depth: ejections are most likely and most expensive exactly then, and six
+ *     passes at depth 18 left seven green PRs unarmed for ~75 minutes. Both
+ *     paths face the SAME four conditions below — only the depth bound differs.
+ *  4. Walks the open PRs against that base (ascending number — oldest first)
+ *     and arms a PR only if ALL of the issue's four conditions hold:
  *
  *     a. A PER-PR `gh pr view` says `mergeStateStatus: CLEAN` — the list
  *        form's `mergeStateStatus` is stale and reports BLOCKED where the
@@ -93,6 +108,15 @@ import {
  *        `scripts/` change — 7 of 9 open PRs — and left
  *        `max_entries_to_merge` inert.
  *
+ *     A fleet-dispatched PR (`fleet/<lane>/<item>`) is first given the
+ *     `queue-cleared` label (QUEUE_CLEARED_LABEL, ci.ts). The queue guard in
+ *     fleet-verify.yml runs INSIDE the merge group, after GitHub has consumed
+ *     the auto-merge request, so the label is the only admission signal it can
+ *     still see; arming without it ejects the entry again in seconds, which a
+ *     re-arm path would then repeat forever. The label is applied only after
+ *     every readiness proof, a label that cannot be applied means the PR is not
+ *     armed, and it is handed back if the arm does not happen.
+ *
  *  5. Arms each selected PR through the ONE existing arming call
  *     (`enableAutoMerge`, cli.ts — `gh pr merge --auto --squash`, no bypass
  *     flags), injected here so the guards.test.ts rail ("exactly one
@@ -131,6 +155,12 @@ import {
  *    a second infra ejection on the same head is skipped and left for a
  *    human — a signal, not noise. An unreadable comment list, or a comment
  *    that cannot be posted, re-queues nothing.
+ *  - `admission-unsignalled` (#2619) — every failed job is fleet-verify's
+ *    queue guard refusing the ENTRY (`queue-entry-unsignalled`): a verdict on
+ *    how the PR was queued, not on its diff. Eligible, uncapped — the label
+ *    applied above is what changes the guard's answer, unlike a bare retry.
+ *    A guard failure of any other kind (`queue-pr-lookup`, a genuine failure
+ *    beside it) is not this and stays `own-diff`.
  *  - `not-infra` — cancelled, but not provably by infrastructure (a human,
  *    a concurrency rule, a job killed nowhere near its limit, a limit or a
  *    normal duration that cannot be established). Skipped, with the evidence
@@ -247,6 +277,11 @@ export interface QueueFeedDeps {
    *  branch HAS no merge queue; `undefined` when the read failed (cannot
    *  decide). */
   listQueueEntries(branch: string): Promise<{ queue: true; prs: number[] } | { queue: false } | undefined>
+  /** The most recent merge-queue timeline event on the PR: `removed` when its
+   *  last queue event was a removal (ejected, or dequeued), `added` when it
+   *  was an entry, `none` when it has never been queued. `undefined` on any
+   *  failure — an unreadable history is never "ejected". */
+  lastQueueEvent(pr: number): Promise<'added' | 'removed' | 'none' | undefined>
   /** The base branch's LIVE ruleset. THROWS on failure — a failed read is
    *  never an empty rule list (missing-checks.ts's contract). */
   fetchBranchRules(branch: string): Promise<unknown>
@@ -293,6 +328,10 @@ export interface QueueFeedDeps {
   listPrComments(pr: number): Promise<string[] | undefined>
   /** Posts a PR comment. THROWS on failure. */
   postPrComment(pr: number, body: string): Promise<void>
+  /** Applies the supervisor's `queue-cleared` admission label. THROWS on failure. */
+  addQueueClearedLabel(pr: number): Promise<void>
+  /** Best-effort inverse, for an arm that did not happen. Never throws. */
+  removeQueueClearedLabel(pr: number): Promise<void>
   /** cli.ts's `enableAutoMerge` — the fleet's one arming call, injected so
    *  this module never adds a second `gh pr merge --auto` call site (the
    *  guards.test.ts rail). */
@@ -404,6 +443,9 @@ export interface BranchFeedResult {
   config?: MergeQueueConfig
   queuedBefore: number
   armed: number[]
+  /** The subset of `armed` that were EJECTED, still-green entries restored —
+   *  admitted by the queue before, so not bounded by queue depth (#2619). */
+  rearmed: number[]
   armFailed: number[]
   /** PRs armed BECAUSE their last attempt was an infrastructure ejection
    *  (#2458) — a subset of `armed`, each with the evidence that triggered it. */
@@ -426,7 +468,7 @@ export interface QueueFeedResult {
 }
 
 const emptyBranch = (branch: string, outcome: BranchFeedResult['outcome'], queuedBefore = 0): BranchFeedResult =>
-  ({ branch, outcome, queuedBefore, armed: [], armFailed: [], infraRequeued: [], skipped: [], notes: [] })
+  ({ branch, outcome, queuedBefore, armed: [], rearmed: [], armFailed: [], infraRequeued: [], skipped: [], notes: [] })
 
 /**
  * The `fleet/review` coverage check — requirement 2. The artifact cache is
@@ -570,44 +612,41 @@ async function feedBranch(
 
   const result = emptyBranch(branch, 'satisfied', queued.size)
   result.config = config
+
+  // Two different actions share this pass and are bounded differently (#2619).
+  //
+  //  - ADDING a PR the queue has never admitted is what `min_entries_to_merge`
+  //    bounds: a queue that can already form a group needs nothing added.
+  //  - RE-ARMING a PR the queue admitted and then dropped (ejected, or
+  //    dequeued) restores an entry that already existed. Depth is no argument
+  //    against it — leaving it unarmed is pure loss, and it is exactly when the
+  //    queue is deep that ejections are most likely and most expensive. The
+  //    re-arm path is therefore NOT bounded by depth; it is bounded by the
+  //    evidence required to take it (below), which is the same as for an add.
+  //
+  // This used to be one early return (`satisfied`) that skipped the scan
+  // entirely, so six consecutive passes at depth 18 left seven ejected PRs
+  // sitting green and unarmed for ~75 minutes.
   const deficit = config.minEntriesToMerge - queued.size
-  if (deficit <= 0) {
-    result.notes.push(`queue holds ${queued.size} entr(ies) ≥ min_entries_to_merge=${config.minEntriesToMerge}`)
-    return result
-  }
-  // Fill toward min_entries_to_merge, never past max_entries_to_merge — a
-  // group cannot merge more than that anyway.
   const capacity = Math.max(0, config.maxEntriesToMerge - queued.size)
-  if (capacity === 0) {
-    result.notes.push(`queue holds ${queued.size} = max_entries_to_merge=${config.maxEntriesToMerge}`)
-    return result
+  // How many NEW entries this pass may add: fill toward min_entries_to_merge,
+  // never past max_entries_to_merge — a group cannot merge more than that anyway.
+  const newBudget = Math.max(0, Math.min(deficit, capacity))
+  if (deficit <= 0) {
+    result.notes.push(`queue holds ${queued.size} entr(ies) ≥ min_entries_to_merge=${config.minEntriesToMerge} — no new entry is added; ejected entries are still restored`)
+  } else if (capacity === 0) {
+    result.notes.push(`queue holds ${queued.size} = max_entries_to_merge=${config.maxEntriesToMerge} — no new entry is added; ejected entries are still restored`)
+  } else {
+    result.outcome = 'swept'
   }
-  result.outcome = 'swept'
 
-  // Every PR already in the queue, in queue order — the group a candidate
-  // would join, and requirement 3's first half.
+  // The group a candidate would join, the merge-group history for the
+  // not-a-retry guard, and the merge simulation's reads. Loaded once per
+  // branch and only when a candidate is actually about to need them — a deep
+  // queue with nothing ejected costs the per-PR reads and nothing more.
   const group: GroupMember[] = []
-  for (const n of entries.prs) {
-    const files = await deps.readPrFiles(n)
-    if (files === undefined) {
-      // Cannot simulate the merge against a queued PR whose files cannot be
-      // read: every addition this pass could be the ALLGREEN conflict that
-      // fails the group. Decide nothing rather than gamble the queue.
-      deps.log(`queue-feed: files of queued PR #${n} could not be read — the group's merge is unprovable, deciding nothing for ${branch}`)
-      return emptyBranch(branch, 'unreadable', queued.size)
-    }
-    group.push({ pr: n, files: new Set(files) })
-  }
-
-  // One read per branch, before the candidate loop — the not-a-retry guard.
-  const queueRuns = await deps.listMergeGroupRuns(branch)
-  const attempts = queueRuns === undefined ? undefined : latestQueueAttempts(queueRuns, branch)
-  if (attempts === undefined) {
-    deps.log(`queue-feed: recent merge_group runs for ${branch} could not be read — a failed-on-its-own-diff PR is indistinguishable from an ejected one, deciding nothing`)
-    return emptyBranch(branch, 'unreadable', queued.size)
-  }
+  let attempts: Map<number, QueueAttempt> | undefined
   const attemptCache: AttemptReadCache = newAttemptReadCache()
-
   const mergeCache = newMergeSimCache()
   const mergeReads: MergeSimReads = {
     readBranchHead: deps.readBranchHead,
@@ -616,9 +655,36 @@ async function feedBranch(
     readBlobAt: deps.readBlobAt,
     mergeContents: deps.mergeContents,
   }
-  for (const ref of [...candidates].sort((a, b) => a.number - b.number)) {
-    if (result.armed.length >= capacity) break
+  let prepared = false
+  /** `false` = a prerequisite read failed and the branch is undecidable. */
+  const prepare = async (): Promise<boolean> => {
+    if (prepared) return true
+    // Every PR already in the queue, in queue order — requirement 3's first half.
+    for (const n of entries.prs) {
+      const files = await deps.readPrFiles(n)
+      if (files === undefined) {
+        // Cannot simulate the merge against a queued PR whose files cannot be
+        // read: every addition this pass could be the ALLGREEN conflict that
+        // fails the group. Decide nothing rather than gamble the queue.
+        deps.log(`queue-feed: files of queued PR #${n} could not be read — the group's merge is unprovable, deciding nothing for ${branch}`)
+        return false
+      }
+      group.push({ pr: n, files: new Set(files) })
+    }
+    // One read per branch — the not-a-retry guard.
+    const queueRuns = await deps.listMergeGroupRuns(branch)
+    attempts = queueRuns === undefined ? undefined : latestQueueAttempts(queueRuns, branch)
+    if (attempts === undefined) {
+      deps.log(`queue-feed: recent merge_group runs for ${branch} could not be read — a failed-on-its-own-diff PR is indistinguishable from an ejected one, deciding nothing`)
+      return false
+    }
+    prepared = true
+    return true
+  }
+  if (newBudget > 0 && !(await prepare())) return emptyBranch(branch, 'unreadable', queued.size)
 
+  let heldBack = 0
+  for (const ref of [...candidates].sort((a, b) => a.number - b.number)) {
     const pr = await deps.readPr(ref.number)
     if (pr === undefined) {
       result.skipped.push({ pr: ref.number, reason: 'the per-PR read failed — a stale list verdict is never substituted' })
@@ -628,6 +694,23 @@ async function feedBranch(
     // are never CLEAN; an armed PR is en route on GitHub's own schedule.
     if (!isEjectedOrNeverArmed(pr, queued)) continue
 
+    // Ejected-and-restorable, or never admitted? `autoMergeRequest` reads null
+    // for both (and for a PR legitimately in the queue), so it cannot say. The
+    // PR's merge-queue timeline can: its LAST queue event is a removal only
+    // when the queue admitted it and then dropped it. A history that cannot be
+    // read, or that ends in an entry the queue listing does not show, is not
+    // evidence of an ejection — the PR is judged as a new addition.
+    const lastEvent = await deps.lastQueueEvent(pr.number)
+    if (lastEvent === undefined) {
+      deps.log(`queue-feed: pr ${pr.number}: its merge-queue history could not be read — judged as a new addition, not as an ejected entry`)
+    }
+    const ejected = lastEvent === 'removed'
+    if (!ejected && result.armed.length >= newBudget) {
+      heldBack += 1
+      continue
+    }
+
+    if (!(await prepare())) return emptyBranch(branch, 'unreadable', queued.size)
     const files = await deps.readPrFiles(pr.number)
     if (files === undefined) {
       result.skipped.push({ pr: pr.number, reason: 'the changed-file list could not be read — the group merge and platform flags are unprovable' })
@@ -638,7 +721,7 @@ async function feedBranch(
     // OWN diff is a defect to fix, not a retry; one whose attempt was only
     // cancelled is re-queued solely when the cancellation was provably an
     // infrastructure timeout, at most once per head (#2458).
-    let attempt = attempts.get(pr.number)
+    let attempt = attempts?.get(pr.number)
     let infra: InfraRequeue | undefined
     if (attempt !== undefined && !attempt.succeeded) {
       const headFirstSeen = await deps.readHeadFirstSeen(pr.headRefOid)
@@ -677,6 +760,12 @@ async function feedBranch(
       }
       if (verdict.kind === 'sibling') {
         result.notes.push(`pr ${pr.number}: last queue attempt failed on shard(s) its diff does not touch (${verdict.failed.join(', ')}) — ejected by a sibling or a flake, eligible`)
+      } else if (verdict.kind === 'admission-unsignalled') {
+        // The queue guard rejected the ENTRY, not the diff. The remedy is the
+        // `queue-cleared` label, which this pass applies before arming a
+        // fleet branch — so the same ejection cannot repeat, and no cap is
+        // needed (the label, unlike a retry, changes the guard's answer).
+        result.notes.push(`pr ${pr.number}: last queue attempt (${runLabel}) was rejected by the queue guard for lacking an admission signal (${verdict.jobs.join(', ')}), not for its diff — ${QUEUE_CLEARED_LABEL} is applied before re-arming, eligible`)
       } else {
         // verdict.kind is 'infra-timeout' or 'infra-declared' — the cap, read
         // from the PR itself.
@@ -742,6 +831,27 @@ async function feedBranch(
       result.notes.push(`pr ${pr.number}: shares ${merged.files.slice(0, 5).join(', ')}${merged.files.length > 5 ? `, +${merged.files.length - 5} more` : ''} with the queue or this pass's batch, and git merges each cleanly on top of the group — batchable`)
     }
 
+    // The queue guard (fleet-verify.yml, #1894) reads the PR INSIDE the merge
+    // group, after GitHub has consumed the auto-merge request, so for a
+    // fleet-dispatched branch an armed auto-merge is no longer visible there;
+    // `queue-cleared` is the only admission signal that survives. Arming such a
+    // PR without it recreates the ejection this pass exists to recover from.
+    // Applied only now — after every readiness proof — and handed back if the
+    // arm does not happen, so a clearance never outlives the act it cleared.
+    let labelled = false
+    if (laneIdFromBranch(pr.headRefName) !== undefined && !pr.labels.includes(QUEUE_CLEARED_LABEL)) {
+      try {
+        await deps.addQueueClearedLabel(pr.number)
+        labelled = true
+      } catch (e) {
+        result.skipped.push({ pr: pr.number, reason: `fleet-dispatched, and the ${QUEUE_CLEARED_LABEL} label the queue guard requires could not be applied (${describeGhFailure(e)}) — arming without it would be ejected again` })
+        continue
+      }
+    }
+    const revokeClearance = async (): Promise<void> => {
+      if (labelled) await deps.removeQueueClearedLabel(pr.number)
+    }
+
     // An infrastructure re-queue is recorded on the PR BEFORE arming: the
     // comment is the cap's ledger, so an unrecorded re-queue could repeat.
     // Recording first fails closed — a comment that lands with no arm after
@@ -751,6 +861,7 @@ async function feedBranch(
         await deps.postPrComment(pr.number, renderInfraRequeueComment(infra.head, infra.runIds, infra.evidence))
       } catch (e) {
         result.skipped.push({ pr: pr.number, reason: `an infrastructure re-queue could not be recorded on the PR (${describeGhFailure(e)}) — without the record the one-per-head cap is unenforceable, so it is not re-queued` })
+        await revokeClearance()
         continue
       }
       deps.log(`queue-feed: pr ${pr.number}: INFRA RE-QUEUE (1 of 1 for head ${infra.head.slice(0, 12)}) — merge-group run(s) ${infra.runIds.join(', ')} ejected by timeout only: ${infra.evidence.map(describeEvidence).join('; ')}`)
@@ -761,10 +872,11 @@ async function feedBranch(
     try {
       await deps.enableAutoMerge(String(pr.number))
       result.armed.push(pr.number)
+      if (ejected) result.rearmed.push(pr.number)
       if (infra !== undefined) result.infraRequeued.push(infra)
       group.push({ pr: pr.number, files: new Set(files) })
       mergeCache.heads.set(pr.number, Promise.resolve(pr.headRefOid))
-      deps.log(`queue-feed: armed pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
+      deps.log(`queue-feed: ${ejected ? 'RE-ARMED ejected' : 'armed'} pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
       if (isolation?.isolate === true) break // an iOS-gate-risk PR is the whole group — stop the pass here
     } catch (e) {
       // Fail-closed: nothing merges, which is the safe direction; the PR
@@ -772,7 +884,11 @@ async function feedBranch(
       // systemic arming failure is visible in the summary.
       result.armFailed.push(pr.number)
       deps.log(`queue-feed: could not arm pr ${pr.number}: ${describeGhFailure(e)}`)
+      await revokeClearance()
     }
+  }
+  if (heldBack > 0) {
+    result.notes.push(`${heldBack} ready-looking PR(s) never admitted to the queue were not added — it already holds ${queued.size} (min_entries_to_merge=${config.minEntriesToMerge}, max ${config.maxEntriesToMerge})`)
   }
   return result
 }
@@ -793,7 +909,7 @@ export function renderQueueFeed(result: QueueFeedResult): string {
       (b.config !== undefined ? ` (queue ${b.queuedBefore}, min ${b.config.minEntriesToMerge}, max ${b.config.maxEntriesToMerge}, ${b.config.groupingStrategy})` : '')
     lines.push(head)
     for (const n of b.notes) lines.push(`  note: ${n}`)
-    for (const pr of b.armed) lines.push(`  ARMED     #${pr}`)
+    for (const pr of b.armed) lines.push(`  ${b.rearmed.includes(pr) ? 'RE-ARMED ' : 'ARMED    '} #${pr}`)
     for (const r of b.infraRequeued) {
       lines.push(`  INFRA-REQUEUE #${r.pr} (head ${r.head.slice(0, 12)}, run ${r.runIds.join(', ')}) — ${r.evidence.map(describeEvidence).join('; ')}`)
     }
@@ -823,14 +939,33 @@ const MERGE_QUEUE_QUERY = `
 query($owner: String!, $repo: String!, $branch: String!) {
   repository(owner: $owner, name: $repo) {
     mergeQueue(branch: $branch) {
-      entries(first: 50) { nodes { position pullRequest { number } } }
+      entries(first: 50) { totalCount nodes { position pullRequest { number } } }
     }
   }
 }
 `.trim()
 
+/** The PR's most recent merge-queue event. `last: 1` over the two event types
+ *  only, so a long timeline costs one small node, not a paginated walk. */
+const LAST_QUEUE_EVENT_QUERY = `
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+        nodes { __typename }
+      }
+    }
+  }
+}
+`.trim()
+
+interface LastQueueEventResponse {
+  data?: { repository?: { pullRequest?: { timelineItems?: { nodes?: ({ __typename?: string } | null)[] | null } | null } | null } | null } | null
+  errors?: unknown
+}
+
 interface MergeQueueResponse {
-  data?: { repository?: { mergeQueue?: { entries?: { nodes?: { position?: number; pullRequest?: { number?: number } | null }[] | null } } | null } | null } | null
+  data?: { repository?: { mergeQueue?: { entries?: { totalCount?: number; nodes?: { position?: number; pullRequest?: { number?: number } | null }[] | null } } | null } | null } | null
   errors?: unknown
 }
 
@@ -947,7 +1082,30 @@ export function defaultQueueFeedDeps(
       const placed = nodes.flatMap((n) => (typeof n?.pullRequest?.number === 'number' && typeof n.position === 'number'
         ? [{ pr: n.pullRequest.number, position: n.position }] : []))
       if (placed.length !== nodes.length) return undefined
+      // The listing is the ONLY authority on who is queued, and it is one page
+      // of 50. A longer queue's tail would read as "not queued" and be taken
+      // for ejected — an incomplete listing is "cannot decide", never "absent".
+      if (typeof queue.entries?.totalCount === 'number' && queue.entries.totalCount > nodes.length) {
+        log(`queue-feed: the merge queue for ${branch} holds ${queue.entries.totalCount} entries but only ${nodes.length} were listed — cannot tell ejected from queued`)
+        return undefined
+      }
       return { queue: true, prs: placed.sort((a, b) => a.position - b.position).map((e) => e.pr) }
+    },
+    lastQueueEvent: async (pr) => {
+      const raw = await ghJson<LastQueueEventResponse>([
+        'api', 'graphql',
+        '-f', `query=${LAST_QUEUE_EVENT_QUERY}`,
+        '-f', `owner=${owner ?? ''}`,
+        '-f', `repo=${repoName ?? ''}`,
+        '-F', `pr=${pr}`,
+      ], 60_000, (d) => log(`queue-feed: reading PR #${pr}'s merge-queue history failed: ${d}`))
+      const nodes = raw?.data?.repository?.pullRequest?.timelineItems?.nodes
+      if (raw === undefined || raw.errors !== undefined || !Array.isArray(nodes)) return undefined
+      const type = nodes[0]?.__typename
+      if (nodes.length === 0) return 'none'
+      if (type === 'RemovedFromMergeQueueEvent') return 'removed'
+      if (type === 'AddedToMergeQueueEvent') return 'added'
+      return undefined
     },
     fetchBranchRules: async (branch) => {
       const pages = JSON.parse(await gh([
@@ -1129,6 +1287,16 @@ export function defaultQueueFeedDeps(
     },
     postPrComment: async (pr, body) => {
       await gh(['pr', 'comment', String(pr), '--body', body], 30_000)
+    },
+    addQueueClearedLabel: async (pr) => {
+      await gh(['pr', 'edit', String(pr), '--add-label', QUEUE_CLEARED_LABEL], 30_000)
+    },
+    removeQueueClearedLabel: async (pr) => {
+      try {
+        await gh(['pr', 'edit', String(pr), '--remove-label', QUEUE_CLEARED_LABEL], 30_000)
+      } catch (e) {
+        log(`queue-feed: could not remove ${QUEUE_CLEARED_LABEL} from PR #${pr}: ${describeGhFailure(e)}`)
+      }
     },
     enableAutoMerge,
     log,

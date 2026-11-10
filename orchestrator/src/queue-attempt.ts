@@ -473,6 +473,18 @@ const EXCERPT_CHARS = 160
 
 export interface EnvironmentalDeclaration { reason: string; excerpt: string }
 
+/** The refusal fleet-verify's queue guard prints when a fleet-dispatched
+ *  entry reaches the merge group with neither an armed auto-merge nor the
+ *  `queue-cleared` label (fleet-verify.yml, #1894). The token is the guard's
+ *  own, disjoint from `queue-pr-lookup` ("could not ask"), which is NOT
+ *  matched: an API failure is no statement about the entry. */
+export const QUEUE_ENTRY_UNSIGNALLED = /queue-guard FAILED: queue-entry-unsignalled/
+
+/** Whether a job's failure annotations carry the queue guard's refusal. */
+export function isQueueAdmissionRefusal(messages: readonly string[]): boolean {
+  return messages.some((m) => QUEUE_ENTRY_UNSIGNALLED.test(m))
+}
+
 /** The declaration in a job's failure annotations, if any. */
 export function environmentalDeclaration(messages: readonly string[]): EnvironmentalDeclaration | undefined {
   const hit = messages.find((m) => ENVIRONMENTAL_DECLARATION.test(m))
@@ -499,6 +511,10 @@ export type AttemptVerdict =
   | { kind: 'infra-timeout'; evidence: TimeoutEvidence[] }
   /** Every failure-class job declared itself environmental (#2529). */
   | { kind: 'infra-declared'; evidence: DeclaredEvidence[] }
+  /** Every failure-class job is the queue guard refusing the ENTRY for lacking
+   *  an admission signal (#2619) — a verdict on how the PR was queued, not on
+   *  its diff. Remedied by the label the feed applies before it arms. */
+  | { kind: 'admission-unsignalled'; jobs: string[] }
   /** Cancelled, but not provably by infrastructure — left for a human. */
   | { kind: 'not-infra'; reason: string }
   /** A read the verdict needs failed. */
@@ -519,9 +535,16 @@ export function failureVerdict(
   jobs: readonly AttemptJob[],
   flags: PlatformFlags,
   declared: ReadonlyMap<AttemptJob, EnvironmentalDeclaration> = new Map(),
+  refused: ReadonlySet<AttemptJob> = new Set(),
 ): AttemptVerdict | undefined {
   const failed = failedJobs(jobs)
   if (failed.length === 0) return undefined
+  // ONLY when the guard's refusal accounts for every failed job: a refusal
+  // alongside a genuine failure (or a declared one) says nothing that excuses
+  // the rest, so the mix falls through to the shard map as before.
+  if (refused.size > 0 && failed.every((j) => refused.has(j))) {
+    return { kind: 'admission-unsignalled', jobs: failed.map((j) => j.name) }
+  }
   const genuine = failed.filter((j) => !declared.has(j)).map((j) => j.name)
   if (genuine.length === 0) {
     return {
@@ -623,6 +646,7 @@ export async function classifyAttempt(
   // Reason over shard: a failed job the diff schedules is read for a
   // declaration of its own before the shard map judges it.
   const declared = new Map<AttemptJob, EnvironmentalDeclaration>()
+  const refused = new Set<AttemptJob>()
   const unread: AttemptJob[] = []
   const scheduled = new Set(ownDiffFailures(failedJobs(jobs).map((j) => j.name), flags))
   for (const j of failedJobs(jobs).filter((f) => scheduled.has(f.name))) {
@@ -630,8 +654,9 @@ export async function classifyAttempt(
     if (messages === undefined) { unread.push(j); continue }
     const d = environmentalDeclaration(messages)
     if (d !== undefined) declared.set(j, d)
+    if (isQueueAdmissionRefusal(messages)) refused.add(j)
   }
-  const failure = failureVerdict(jobs, flags, declared)
+  const failure = failureVerdict(jobs, flags, declared, refused)
   if (failure?.kind === 'own-diff' && unread.length > 0) {
     return {
       kind: 'unreadable',
