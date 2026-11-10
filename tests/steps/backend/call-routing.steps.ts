@@ -296,6 +296,18 @@ When('the call history is filtered by status {string}', async ({ request, world 
   getScenarioState(world).lastApiResponse = { status, data }
 })
 
+Then('the filtered call history reports exactly {int} entry/entries with status {string}', async ({ world }, count: number, expectedStatus: string) => {
+  const { lastApiResponse } = getScenarioState(world)
+  if (!lastApiResponse) throw new Error('no filtered response recorded — run the status-filter step first')
+  // The defect (#1139): the server ignored the status filter, so `total`
+  // described the unfiltered set while the rows were narrowed per page.
+  // The count and the page must describe the same, filtered, set.
+  const data = lastApiResponse.data as { calls: CallRecord[]; total: number }
+  expect(data.total).toBe(count)
+  expect(data.calls).toHaveLength(count)
+  expect(data.calls.every(c => c.status === expectedStatus)).toBe(true)
+})
+
 When('the call history is filtered to today\'s date', async ({ request, world }) => {
   const today = new Date().toISOString().split('T')[0]
   const { hubId } = getScenarioState(world)

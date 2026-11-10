@@ -106,6 +106,12 @@ export const banCallerBodySchema = z.object({
 export const callHistoryQuerySchema = paginationSchema.extend({
   cursor: z.string().optional(),
   search: z.string().max(100).optional(),
+  /**
+   * History rows only ever carry 'completed' or 'unanswered' (CallsService.endCall
+   * and the stale-call sweep), so those are the only filter values. Filtering is
+   * server-side: `total` and pagination describe the filtered set (#1139).
+   */
+  status: z.enum(['completed', 'unanswered']).optional(),
   dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD').optional(),
   dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD').optional(),
 })

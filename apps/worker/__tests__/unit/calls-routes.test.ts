@@ -414,11 +414,49 @@ describe('Calls Routes', () => {
       expect(body).toMatchObject({ total: 1, page: 1, limit: 10 })
       expect(callsSvc.listCallHistory).toHaveBeenCalledWith('hub-1', {
         search: undefined,
+        status: undefined,
         dateFrom: undefined,
         dateTo: undefined,
         page: 1,
         limit: 10,
       })
+    })
+
+    it('forwards the status filter the clients send (#1139)', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.listCallHistory.mockResolvedValue({ calls: [], total: 0, hasMore: false })
+
+      const services = makeServices({ calls: callsSvc })
+      const { app } = createTestApp({
+        permissions: ['calls:read-history'],
+        services,
+      })
+
+      const res = await app.request('/history?status=unanswered')
+      expect(res.status).toBe(200)
+      expect(callsSvc.listCallHistory).toHaveBeenCalledWith('hub-1', {
+        search: undefined,
+        status: 'unanswered',
+        dateFrom: undefined,
+        dateTo: undefined,
+        page: 1,
+        limit: 50,
+      })
+    })
+
+    it('rejects a status outside completed/unanswered — active-call states are not history (#1139)', async () => {
+      const callsSvc = makeMockCallsService()
+      const services = makeServices({ calls: callsSvc })
+      const { app } = createTestApp({
+        permissions: ['calls:read-history'],
+        services,
+      })
+
+      for (const bogus of ['ringing', 'in-progress', 'spam', 'Completed', '']) {
+        const res = await app.request(`/history?status=${bogus}`)
+        expect(res.status).toBe(400)
+      }
+      expect(callsSvc.listCallHistory).not.toHaveBeenCalled()
     })
 
     it('returns 403 when permission is missing', async () => {

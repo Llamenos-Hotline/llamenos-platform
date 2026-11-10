@@ -500,12 +500,15 @@ export class CallsService {
 
   /**
    * List call history with pagination and optional filters.
-   * Supports search by callId, and date range filtering.
+   * Supports search by callId, status, and date range filtering. Every filter
+   * feeds the same WHERE for the count and the page, so `total` describes the
+   * filtered set — a pager built on it is never a lie (#1139).
    */
   async listCallHistory(
     hubId: string,
     filters?: {
       search?: string
+      status?: 'completed' | 'unanswered'
       dateFrom?: string
       dateTo?: string
       page?: number
@@ -526,6 +529,10 @@ export class CallsService {
     if (filters?.search) {
       const q = filters.search.toLowerCase()
       conditions.push(sql`LOWER(${callRecords.callId}) LIKE ${'%' + q + '%'}`)
+    }
+
+    if (filters?.status) {
+      conditions.push(eq(callRecords.status, filters.status))
     }
 
     if (filters?.dateFrom) {
