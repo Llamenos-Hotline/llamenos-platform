@@ -10,9 +10,9 @@
  * nobody on every deployment. See services/presence.ts.
  */
 import { randomBytes } from 'node:crypto'
-import { eq, and, desc, sql, gte, lte, count, lt, isNull } from 'drizzle-orm'
+import { eq, and, desc, sql, gte, lte, count, lt, isNull, isNotNull } from 'drizzle-orm'
 import type { Database } from '../db'
-import { activeCalls, callRecords, callTokens } from '../db/schema'
+import { activeCalls, callRecords, callTokens, type CallRingSet } from '../db/schema'
 import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
 import { ServiceError } from './settings'
@@ -346,6 +346,63 @@ export class CallsService {
     // Instance-wide, no hub label: the cross-hub backstop for #2330.
     recordCallInbound()
     return { ...row, pushRef }
+  }
+
+  // =========================================================================
+  // Ring-leg persistence (#1176 — first-pickup-wins, cross-process)
+  // =========================================================================
+  // The legs a call rings and the volunteers it rang live ON THE CALL ROW, not
+  // in the dialling process's memory: a restart, a deploy, or the second
+  // replica the Helm chart runs must not leave the losing legs ringing out
+  // with nobody on the other end. The provider dial sits between the two
+  // writes, so they cannot share one transaction — the ring set is recorded
+  // once eligibility is resolved, the leg SIDs the moment the provider returns
+  // them. Each write is a single atomic UPDATE.
+
+  /** Record the volunteers this call rings (post-availability filter). */
+  async recordRingSet(callId: string, ringSet: Omit<CallRingSet, 'recordedAt'>): Promise<void> {
+    await this.db
+      .update(activeCalls)
+      .set({ ringSet: { ...ringSet, recordedAt: new Date().toISOString() } })
+      .where(eq(activeCalls.callId, callId))
+  }
+
+  /**
+   * Record the provider call SIDs of the legs just dialled for a call. A call
+   * that ended before the dial returned has no row, so the write is a no-op —
+   * there is nothing left to cancel.
+   */
+  async recordRingLegs(callId: string, legSids: string[]): Promise<void> {
+    if (legSids.length === 0) return
+    await this.db
+      .update(activeCalls)
+      .set({ ringLegSids: legSids })
+      .where(eq(activeCalls.callId, callId))
+  }
+
+  /**
+   * Atomically read AND clear a call's recorded legs — each call is answered at
+   * most once, so its legs are cancelled at most once, and a loser racing the
+   * winner's cancellation reads the cleared column and cancels nothing. The
+   * FOR UPDATE row lock serialises takers across processes: the second blocks
+   * until the first commits, then sees the cleared column and gets nothing.
+   * (UPDATE ... RETURNING would hand back the NEW value — the NULL just
+   * written — which is why this is a locked read, then the clear.)
+   */
+  async takeRingLegs(callId: string): Promise<string[]> {
+    return await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ legSids: activeCalls.ringLegSids })
+        .from(activeCalls)
+        .where(and(eq(activeCalls.callId, callId), isNotNull(activeCalls.ringLegSids)))
+        .for('update')
+      if (!row) return []
+      await tx
+        .update(activeCalls)
+        .set({ ringLegSids: null })
+        .where(eq(activeCalls.callId, callId))
+      return row.legSids ?? []
+    })
   }
 
   /**

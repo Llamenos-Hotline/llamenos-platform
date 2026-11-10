@@ -19,7 +19,6 @@ vi.mock('@worker/db', () => ({
   getDb: vi.fn().mockReturnValue({}),
 }))
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
-import { recordRingLegs } from '@worker/services/ringing'
 import { checkWebhookReplay } from '@worker/services/webhook-replay'
 import metricsRoutes from '@worker/routes/metrics'
 import { resetWebhookRejectionDamping } from '@worker/telephony/webhook-rejection'
@@ -96,6 +95,7 @@ function makeServices(): Services {
       markVoicemail: vi.fn().mockResolvedValue(undefined),
       addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
+      takeRingLegs: vi.fn().mockResolvedValue([]),
     },
     providerRecordings: {
       track: vi.fn().mockResolvedValue(undefined),
@@ -985,7 +985,7 @@ describe('Telephony routes', () => {
       vi.mocked(adapter.parseIncomingWebhook).mockResolvedValue({
         callSid: 'LEG-2', callerNumber: '+1', calledNumber: '+2', answeredByMachine: true,
       })
-      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      services.calls.takeRingLegs = vi.fn().mockResolvedValue(['LEG-1', 'LEG-2'])
       const res = await answer('CallSid=LEG-2&AnsweredBy=machine_start')
       await expectLegRefused(res)
       expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
@@ -1033,7 +1033,7 @@ describe('Telephony routes', () => {
       // another volunteer already won (or the call is gone / the token is spent).
       validToken()
       services.calls.answerCallWithToken = vi.fn().mockResolvedValue(null)
-      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      services.calls.takeRingLegs = vi.fn().mockResolvedValue(['LEG-1', 'LEG-2'])
       const res = await answer()
       await expectLegRefused(res)
       expect(services.calls.answerCallWithToken).toHaveBeenCalledWith('valid-token')
@@ -1042,7 +1042,7 @@ describe('Telephony routes', () => {
     it('cancels the other ringing legs, sparing the winner\'s own leg', async () => {
       validToken()
       vi.mocked(adapter.parseIncomingWebhook).mockResolvedValue({ callSid: 'LEG-2', callerNumber: '+1', calledNumber: '+2' } as never)
-      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2', 'LEG-3'])
+      services.calls.takeRingLegs = vi.fn().mockResolvedValue(['LEG-1', 'LEG-2', 'LEG-3'])
       const res = await answer()
       expect(res.status).toBe(200)
       expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2', 'LEG-3'], 'LEG-2')
@@ -1051,7 +1051,7 @@ describe('Telephony routes', () => {
     it('does not cancel any leg when the winner\'s leg SID is unknown (would hang up the winner)', async () => {
       validToken()
       vi.mocked(adapter.parseIncomingWebhook).mockRejectedValue(new Error('unparseable'))
-      recordRingLegs('CA-parent', ['LEG-1', 'LEG-2'])
+      services.calls.takeRingLegs = vi.fn().mockResolvedValue(['LEG-1', 'LEG-2'])
       const res = await answer()
       expect(res.status).toBe(200)
       expect(adapter.cancelRinging).not.toHaveBeenCalled()

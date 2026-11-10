@@ -287,48 +287,18 @@ export async function canAnswerInApp(
 }
 
 // ---------------------------------------------------------------------------
-// Ring-leg registry (first-pickup-wins)
+// Ring-leg cancellation (first-pickup-wins)
 // ---------------------------------------------------------------------------
-
-/** Legs older than this are dropped — matches the ringing-call staleness TTL. */
-const RING_LEG_TTL_MS = 3 * 60 * 1000
-
-/**
- * Provider call SIDs of the phone legs rung for a call, keyed by parent call SID.
- *
- * Process-local: the ring and the answer webhooks are served by the same server
- * process. After a restart the registry is empty, so the losing legs simply ring
- * out (30s provider timeout) — they can no longer win the call, because the
- * answer itself is an atomic conditional update (see CallsService.answerCall).
- * Durable storage needs a new column on active_calls (a drizzle migration).
- */
-const ringLegs = new Map<string, { legSids: string[]; recordedAt: number }>()
-
-function pruneRingLegs(now: number): void {
-  for (const [callSid, entry] of ringLegs) {
-    if (now - entry.recordedAt > RING_LEG_TTL_MS) ringLegs.delete(callSid)
-  }
-}
-
-export function recordRingLegs(callSid: string, legSids: string[]): void {
-  const now = Date.now()
-  pruneRingLegs(now)
-  if (legSids.length > 0) ringLegs.set(callSid, { legSids, recordedAt: now })
-}
-
-/** Remove and return the recorded legs for a call (each call is answered at most once). */
-export function takeRingLegs(callSid: string): string[] {
-  pruneRingLegs(Date.now())
-  const entry = ringLegs.get(callSid)
-  ringLegs.delete(callSid)
-  return entry?.legSids ?? []
-}
 
 /**
  * After a successful answer, stop every other phone leg still ringing.
  * `winnerLegSid` is the leg that answered (undefined for an in-app answer, where
  * every phone leg is a loser). Best-effort: the answer already won atomically,
  * so a provider failure here must not fail the answer.
+ *
+ * The legs are read from the call row (#1176), not from process memory, so the
+ * winner cancels the losers no matter which process dialled them and whether
+ * the dialling process still exists.
  */
 export async function cancelLosingLegs(
   env: Env,
@@ -337,7 +307,13 @@ export async function cancelLosingLegs(
   callSid: string,
   winnerLegSid?: string,
 ): Promise<void> {
-  const legSids = takeRingLegs(callSid)
+  let legSids: string[]
+  try {
+    legSids = await services.calls.takeRingLegs(callSid)
+  } catch (err) {
+    logger.error('Failed to read recorded ring legs — losing legs will ring out', err, { callSid })
+    return
+  }
   if (legSids.length === 0) return
   try {
     const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
@@ -377,7 +353,12 @@ export async function startParallelRinging(
       reportUnroutableCall(callSid, hubId, 'no-volunteers', 'No volunteers on shift and the fallback group is empty')
       return { ringing: false, reason: 'no-volunteers', volunteersNotified: 0 }
     }
-    const { available } = resolved
+    const { available, usedFallback } = resolved
+
+    // Persist the set this call actually rings (#1176) — recomputing eligibility
+    // at answer time can disagree with it across a shift boundary, and after a
+    // restart nothing else could say who was rung.
+    await services.calls.recordRingSet(callSid, { volunteers: available.map(v => v.pubkey), usedFallback })
 
     // Only ring phones for volunteers with phone or both preference (and who have a phone number)
     const toRingPhone = available
@@ -511,7 +492,11 @@ export async function startParallelRinging(
             },
           )
         )
-        recordRingLegs(callSid, legSids)
+        // Persist the dialled leg SIDs on the call row (#1176) so the winner —
+        // possibly served by another process, or after a restart — can cancel
+        // the losers. Separate from the ring-set write above: the SIDs only
+        // exist once the provider dial returns.
+        await services.calls.recordRingLegs(callSid, legSids)
         // #2309: every ring leg is a provider call whose log record names the
         // volunteer's phone number; where it can be deleted, track it for
         // deletion once the call has ended.
