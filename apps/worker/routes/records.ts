@@ -4,7 +4,7 @@ import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { scoreVolunteers } from '../lib/assignment-scorer'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
-import { requirePermission, checkPermission } from '../middleware/permission-guard'
+import { requirePermission, requireAnyPermission, checkPermission } from '../middleware/permission-guard'
 import {
   createRecordBodySchema,
   updateRecordBodySchema,
@@ -800,7 +800,7 @@ records.delete('/:id/contacts/:contactId',
       ...notFoundError,
     },
   }),
-  requirePermission('cases:link'),
+  requireAnyPermission('cases:link', 'cases:unlink'),
   async (c) => {
     const id = c.req.param('id')
     const contactId = c.req.param('contactId')
@@ -1211,7 +1211,7 @@ records.delete('/:id/reports/:reportId',
       ...notFoundError,
     },
   }),
-  requirePermission('cases:link'),
+  requireAnyPermission('cases:link', 'cases:unlink'),
   async (c) => {
     const id = c.req.param('id')
     const reportId = c.req.param('reportId')

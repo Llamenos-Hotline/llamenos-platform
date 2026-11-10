@@ -219,8 +219,8 @@
       "permissions": [
         "cases:create",
         "cases:read-assigned",
-        "cases:update-assigned",
-        "contacts:read",
+        "cases:update-own",
+        "contacts:view",
         "contacts:create",
         "events:*",
         "hubs:read"

@@ -651,7 +651,6 @@
       "permissions": [
         "cases:read-all",
         "cases:update",
-        "cases:close",
         "contacts:view",
         "contacts:view-pii",
         "contacts:edit",
