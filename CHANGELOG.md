@@ -210,6 +210,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.11 (2026-11-10)
+
+### Features
+
+- move Telnyx from Call Control to a TeXML application (#2624)
+
+### Fixes
+
+- a hub list that failed to load is a failure, not an empty schedule (#2565) (#2569)
+- admin sidebar gates sections on permissions, not a hardcoded role id (#2602)
+- calls, records, events, evidence, shifts and ring groups are hub-only; hub '' is not "no hub" (#2461) (#2478)
+- dr-test.yml proves a recovery instead of reading as coverage (#2614)
+- evaluate a hub's shift schedule in the hub's own time zone (#1054) (#2626)
+
 ## 0.21.10 (2026-11-09)
 
 ### Notes
