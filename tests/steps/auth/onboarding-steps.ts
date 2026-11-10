@@ -169,8 +169,8 @@ When('the app is relaunched by the invite deep link', async ({ page }) => {
   // The OS starts the app with the link (Rust's `get_current`). One launch only:
   // init scripts re-run on every navigation, the launch argument does not.
   await page.addInitScript((url) => {
-    if (sessionStorage.getItem('__test_launched_by_deep_link')) return
-    sessionStorage.setItem('__test_launched_by_deep_link', '1')
+if (sessionStorage.getItem('__TEST_LAUNCHED_BY_DEEP_LINK__')) return
+sessionStorage.setItem('__TEST_LAUNCHED_BY_DEEP_LINK__', '1')
     ;(window as unknown as Record<string, unknown>).__TEST_LAUNCH_DEEP_LINK__ = url
   }, deepLinkFor(page))
   await page.reload()

@@ -26,17 +26,12 @@ When('I re-enter the correct PIN', async ({ page }) => {
   await enterPin(page, TEST_PIN)
 })
 
-When('I make an unauthenticated API request to {string}', async ({ page }, endpoint: string) => {
+When('I make an unauthenticated API request to {string}', async ({ page, apiWorld }, endpoint: string) => {
   // Intentionally NO auth headers — verifying the server rejects unauthenticated requests
   const response = await page.request.get(endpoint)
-  await page.evaluate((status) => {
-    ;(window as unknown as Record<string, unknown>).__test_api_response_status = status
-  }, response.status())
+  apiWorld.responseStatus = response.status()
 })
 
-Then('the response status should be {int}', async ({ page }, expectedStatus: number) => {
-  const status = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_api_response_status,
-  )
-  expect(status).toBe(expectedStatus)
+Then('the response status should be {int}', async ({ apiWorld }, expectedStatus: number) => {
+  expect(apiWorld.responseStatus).toBe(expectedStatus)
 })

@@ -176,19 +176,14 @@ When('I visit the login page', async ({ page }) => {
   await page.waitForLoadState('domcontentloaded')
 })
 
-When('I check the API health endpoint', async ({ page }) => {
+When('I check the API health endpoint', async ({ page, apiWorld }) => {
   const response = await page.request.get('/api/health')
-  await page.evaluate((status) => {
-    (window as unknown as Record<string, unknown>).__test_api_status = status
-  }, response.status())
+  apiWorld.healthStatus = response.status()
 })
 
-When('I check the API config endpoint', async ({ page }) => {
+When('I check the API config endpoint', async ({ page, apiWorld }) => {
   const response = await page.request.get('/api/config')
-  const body = await response.text()
-  await page.evaluate((b) => {
-    (window as unknown as Record<string, unknown>).__test_api_config = b
-  }, body)
+  apiWorld.configBody = await response.text()
 })
 
 // --- Then navigation/page assertion steps ---
@@ -219,14 +214,12 @@ Then('I should see a validation error', async ({ page }) => {
   await expect(errorEl.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the response should be successful', async ({ page }) => {
-  const status = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_api_status)
-  expect(status).toBe(200)
+Then('the response should be successful', async ({ apiWorld }) => {
+  expect(apiWorld.healthStatus).toBe(200)
 })
 
-Then('the response should contain {string}', async ({ page }, text: string) => {
-  const body = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_api_config) as string
-  expect(body).toContain(text)
+Then('the response should contain {string}', async ({ apiWorld }, text: string) => {
+  expect(apiWorld.configBody).toContain(text)
 })
 
 Then('I should see the dashboard', async ({ page }) => {

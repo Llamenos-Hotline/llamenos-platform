@@ -433,10 +433,10 @@ Given('I have launched the hotline from the setup wizard', async ({ page }) => {
   await expect(page.locator('[role="progressbar"][aria-valuenow="6"]')).toBeVisible({ timeout: Timeouts.API })
 })
 
-When('I fill in the volunteer name', async ({ page }) => {
+When('I fill in the volunteer name', async ({ page, adminWorld }) => {
   const name = `SetupVol ${Date.now()}`
   await page.getByTestId(TestIds.INVITE_NAME_INPUT).fill(name)
-  await page.evaluate((n) => { (window as unknown as Record<string, unknown>).__test_setup_vol_name = n }, name)
+  adminWorld.setupVolunteerName = name
 })
 
 When('I fill in the volunteer phone', async ({ page }) => {
@@ -445,9 +445,9 @@ When('I fill in the volunteer phone', async ({ page }) => {
   await page.getByTestId(TestIds.INVITE_PHONE_INPUT).blur()
 })
 
-Then('the invite should name the hub the wizard launched and the role chosen', async ({ page, backendRequest }) => {
+Then('the invite should name the hub the wizard launched and the role chosen', async ({ backendRequest, adminWorld }) => {
   const { apiGet } = await import('../../api-helpers')
-  const name = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_setup_vol_name as string)
+  const name = adminWorld.setupVolunteerName
   expect(name, 'the volunteer name step records the name it typed').toBeTruthy()
   const { data } = await apiGet<{ invites: Array<{ name: string; hubId?: string | null; roleIds: string[] }> }>(backendRequest, '/invites')
   const invite = data.invites.find(i => i.name === name)
@@ -576,15 +576,13 @@ When('I navigate to the setup wizard summary step', async ({ page }) => {
 
 // --- Blasts ---
 
-When('I compose a blast message', async ({ page }) => {
+When('I compose a blast message', async ({ page, adminWorld }) => {
   // BlastComposer.tsx always renders both fields unconditionally.
   const nameInput = page.getByTestId(TestIds.BLAST_NAME)
   await expect(nameInput).toBeVisible({ timeout: Timeouts.ELEMENT })
   const name = `Blast ${Date.now()}`
   await nameInput.fill(name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_blast_name = n
-  }, name)
+  adminWorld.blastName = name
   await page.getByTestId(TestIds.BLAST_TEXT).fill('Test blast message content')
 })
 
@@ -596,12 +594,10 @@ When('I select recipients', async () => {
   // checkbox that does not exist in the current composer.
 })
 
-Then('the blast should appear in the blast list', async ({ page }) => {
+Then('the blast should appear in the blast list', async ({ page, adminWorld }) => {
   // The blast just composed, by name. The old `.or(getByText(/blast/i))` matched
   // the page's own "Blasts" heading, so it passed with an empty list.
-  const name = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_blast_name as string | undefined,
-  )
+  const name = adminWorld.blastName
   expect(name, 'the compose step must record the blast name').toBeTruthy()
   await expect(page.getByTestId(TestIds.BLAST_CARD).filter({ hasText: name as string })).toBeVisible({
     timeout: Timeouts.ELEMENT,

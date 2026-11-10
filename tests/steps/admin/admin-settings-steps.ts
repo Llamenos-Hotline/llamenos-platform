@@ -65,11 +65,10 @@ Then('transcription should be enabled', async ({ page }) => {
   await expect(toggle).toBeChecked()
 })
 
-Then('they should receive a {int} forbidden response', async ({}, statusCode: number) => {
+Then('they should receive a {int} forbidden response', async ({ rolesWorld }, statusCode: number) => {
   // The preceding When step ("...attempts to access an unauthorized endpoint") is a
   // pure API call — it never navigates the UI, so there is no admin nav / "access
   // denied" text to probe for. Read the real signal it recorded instead of racing
   // the page with a non-waiting isVisible() guess.
-  const status = (globalThis as Record<string, unknown>).__test_endpoint_status as number
-  expect(status).toBe(statusCode)
+  expect(rolesWorld.endpointStatus).toBe(statusCode)
 })

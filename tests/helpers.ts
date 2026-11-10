@@ -11,6 +11,7 @@ import type { ConversationListResponse } from '@protocol/schemas/conversations'
 import type { HubIncidentListResponse } from '@protocol/schemas/incidents'
 import type { ShiftStatus, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import type { UserListResponse } from '@protocol/schemas/users'
+import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './mocks/pin-lockout'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
 /** @deprecated Use ADMIN_SEED */
@@ -322,9 +323,9 @@ export async function loginAsAdmin(page: Page) {
   // In serial mode the browser context is reused, so failed PIN attempts from
   // stale cached storage compound across tests. Without this reset, the mock's
   // escalating lockout triggers a 10-minute lockout after ~9 loginAsAdmin calls.
-  await page.evaluate(() => {
-    localStorage.removeItem('__test_pin_lockout_state')
-  })
+  await page.evaluate((key) => {
+    localStorage.removeItem(key)
+  }, MOCK_PIN_LOCKOUT_STORAGE_KEY)
 
   await page.evaluate((state) => {
     sessionStorage.clear()
@@ -398,14 +399,14 @@ export async function loginAsVolunteer(page: Page, seedHex: string) {
   const secretHex = seedHex
 
   await page.goto('/login')
-  await page.evaluate(() => {
+  await page.evaluate((lockoutKey) => {
     sessionStorage.clear()
     localStorage.removeItem('llamenos:llamenos-encrypted-device-keys')
     localStorage.removeItem('llamenos:llamenos-encrypted-key')
     localStorage.removeItem('llamenos-encrypted-key')
     // Reset PIN lockout counter to prevent accumulation across serial tests
-    localStorage.removeItem('__test_pin_lockout_state')
-  })
+    localStorage.removeItem(lockoutKey)
+  }, MOCK_PIN_LOCKOUT_STORAGE_KEY)
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
 
@@ -664,28 +665,6 @@ export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promi
       body: JSON.stringify({ hubs: [hub] }),
     })
   })
-}
-
-/**
- * Shared "seed failed" signal for step definitions that create a resource via a
- * backend simulation helper (e.g. simulateIncomingMessage) and then need every
- * downstream step to take one deterministic branch instead of re-probing
- * visibility with isVisible().catch(() => false) at each step. Given steps that
- * seed data should call flagSeedFailed(page) exactly once when seeding did not
- * produce the expected UI element; When/Then steps should check
- * readSeedFailedFlag(page) first and return early (after asserting a safe
- * fallback state) rather than guarding their own click/fill on a fresh probe.
- */
-type SeedFlagWindow = Window & { __test_seed_failed?: boolean }
-
-export async function flagSeedFailed(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    (window as unknown as SeedFlagWindow).__test_seed_failed = true
-  })
-}
-
-export async function readSeedFailedFlag(page: Page): Promise<boolean> {
-  return page.evaluate(() => (window as unknown as SeedFlagWindow).__test_seed_failed === true).catch(() => false)
 }
 
 /**

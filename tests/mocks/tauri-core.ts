@@ -14,6 +14,7 @@ if (!import.meta.env.PLAYWRIGHT_TEST) {
 
 import { Store } from './tauri-store'
 import { hpkeSealMock, hpkeOpenMock, type MockHpkeEnvelope } from './hpke-mock'
+import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './pin-lockout'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
@@ -153,7 +154,7 @@ interface PinLockoutState {
   lockoutUntil: number // ms timestamp, 0 = no lockout
 }
 
-const LOCKOUT_STORAGE_KEY = '__test_pin_lockout_state'
+const LOCKOUT_STORAGE_KEY = MOCK_PIN_LOCKOUT_STORAGE_KEY
 
 function loadLockoutState(): PinLockoutState {
   try {
@@ -1222,7 +1223,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // Reset lockout state in memory without calling saveLockoutState().
     // localStorage.clear() has already run before wipe_keys is called (panic wipe
     // clears storage first, then calls wipeVaultFile which invokes this command).
-    // Calling saveLockoutState() would write __test_pin_lockout_state back into
+    // Calling saveLockoutState() would write the lockout key back into
     // the cleared storage, causing the "all local storage should be cleared" check
     // to see localStorage.length === 1 instead of 0.
     pinLockoutState = { failedAttempts: 0, lockoutUntil: 0 }

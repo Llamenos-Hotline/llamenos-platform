@@ -51,17 +51,14 @@ Then('I should see the volunteer assignment section', async ({ page }) => {
   await expect(combobox).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I tap a volunteer assignment card', async ({ page }) => {
+When('I tap a volunteer assignment card', async ({ page, shiftsWorld }) => {
   // Desktop: volunteer assignment is via UserMultiSelect combobox, not cards
   const form = page.getByTestId(TestIds.SHIFT_FORM)
   const combobox = form.getByRole('combobox')
   await expect(combobox).toBeVisible({ timeout: Timeouts.ELEMENT })
 
   // Count currently selected badges before toggling
-  const badgesBefore = await combobox.locator('[role="button"]').count()
-  await page.evaluate((count) => {
-    (window as unknown as Record<string, unknown>).__test_badge_count_before = count
-  }, badgesBefore)
+  shiftsWorld.badgeCountBefore = await combobox.locator('[role="button"]').count()
 
   // Open the dropdown and click the first volunteer
   await combobox.click()
@@ -70,13 +67,12 @@ When('I tap a volunteer assignment card', async ({ page }) => {
   await firstOption.click()
 })
 
-Then('the volunteer assignment should toggle', async ({ page }) => {
+Then('the volunteer assignment should toggle', async ({ page, shiftsWorld }) => {
   // Desktop: verify the badge count changed (volunteer added or removed)
   const form = page.getByTestId(TestIds.SHIFT_FORM)
   const combobox = form.getByRole('combobox')
-  const badgesBefore = (await page.evaluate(() =>
-    (window as unknown as Record<string, unknown>).__test_badge_count_before,
-  )) as number
+  const badgesBefore = shiftsWorld.badgeCountBefore
+  expect(badgesBefore, 'the tap step must record the badge count it started from').not.toBeUndefined()
   const badgesAfter = await combobox.locator('[role="button"]').count()
   expect(badgesAfter).not.toBe(badgesBefore)
 })

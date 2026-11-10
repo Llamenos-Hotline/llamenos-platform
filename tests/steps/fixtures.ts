@@ -22,6 +22,14 @@ export type AdminWorld = {
   spamCaptchaBefore?: boolean
   /** The hub the CAPTCHA toggle scenario acted in — its override is what `After` restores (#1137). */
   spamCaptchaHubId?: string
+  /** Volunteer name typed by 'I fill in the volunteer name' (setup wizard invite step). */
+  setupVolunteerName?: string
+  /** Blast name composed by 'I compose a blast message', checked in the blast list. */
+  blastName?: string
+  /** Whether a locked-crypto operation was rejected ('I attempt to create an auth token' etc.). */
+  cryptoRejected?: boolean
+  /** Name on the invite created by 'I create an invite for a new volunteer'. */
+  inviteVolunteerName?: string
 }
 
 export type RolesWorld = {
@@ -29,6 +37,19 @@ export type RolesWorld = {
   lastCreatedRoleId: string
   volunteerNsec: string
   reporterNsec: string
+  /** HTTP status recorded by an 'I attempt to access …' step, asserted by the paired Then. */
+  endpointStatus?: number
+  /** HTTP status recorded by a role-deletion attempt, asserted by the paired Then. */
+  deleteStatus?: number
+  /** Role fetched by 'I request the {string} role details'. */
+  inspectedRole?: RoleDefinition
+  /** HTTP status recorded by a role-creation attempt (plaintext-name refusal scenario). */
+  roleCreateStatus?: number
+  /** Result of 'I request the permissions catalog'. */
+  permissionsCatalog?: {
+    permissions: Record<string, string>
+    byDomain: Record<string, Array<{ key: string; label: string }>>
+  }
 }
 
 /** Backup restore scenarios (packages/test-specs/.../auth/backup-restore.feature). */
@@ -90,6 +111,153 @@ export type SasWorld = {
   mockNsec?: string
 }
 
+/** Ban scenarios (ban-steps.ts, interaction-steps.ts, user-steps.ts). */
+export type BanWorld = {
+  /** Number the scenario's add/import step banned — bans are located by reason, not number. */
+  phone?: string
+  /** Reason the scenario banned under — unique within the scenario's own hub. */
+  reason?: string
+  /** The two numbers a bulk-add/import step banned. */
+  phones?: string[]
+}
+
+/** Call scenarios (in-call-actions-steps.ts, custom-fields-steps.ts). */
+export type CallsWorld = {
+  /** Call established by 'I have an active call', ended by 'the call ends'. */
+  activeCallId?: string
+  /** Call a note was filed under ('I create a note with a specific call ID'). */
+  noteCallId?: string
+}
+
+/** Multi-hub scenarios (hub-steps.ts, multi-hub-call-steps.ts). */
+export type HubsWorld = {
+  /** The second hub 'a volunteer assigned to multiple hubs' created. */
+  secondHubId?: string
+  /** Pubkey of the volunteer holding membership in both hubs. */
+  multiHubVolunteerPubkey?: string
+  /** The call that rang on the second hub. */
+  multiHubCallId?: string
+}
+
+/** Shift scheduling scenarios (scheduling-steps.ts, shift-detail-steps.ts). */
+export type ShiftsWorld = {
+  /** Name of the shift the scenario created or renamed — unique per step that sets it. */
+  shiftName?: string
+  /** Selected-badge count before 'I tap a volunteer assignment card' toggled one. */
+  badgeCountBefore?: number
+}
+
+/** Dashboard scenarios (dashboard-steps.ts; written by auth-steps.ts's on-shift login). */
+export type DashboardWorld = {
+  /** Clock button label before 'I tap the dashboard clock button' flipped it. */
+  clockLabelBefore?: string
+  /** Pubkey the 'I am logged in as a volunteer on shift' step logged in as. */
+  volunteerPubkey?: string
+}
+
+/** Report scenarios (report-steps.ts, user-steps.ts). */
+export type ReportsWorld = {
+  /** Form-control count before a template report type was selected. */
+  controlsBefore?: number
+  /** Title 'they create a new report' saved under — unique per scenario. */
+  reportTitle?: string
+}
+
+/** Bare endpoint probes (navigation-steps.ts, auth-guards-steps.ts). */
+export type ApiWorld = {
+  /** Status 'I check the API health endpoint' received. */
+  healthStatus?: number
+  /** Body 'I check the API config endpoint' received. */
+  configBody?: string
+  /** Status of an intentionally unauthenticated request. */
+  responseStatus?: number
+}
+
+/** Shape returned by platform.deviceGenerateAndLoad / deviceImportAndLoad. */
+export type EncryptedDeviceKeys = {
+  kdfVersion: number
+  salt: string
+  nonce: string
+  ciphertext: string
+  argon2MCost: number
+  argon2TCost: number
+  argon2PCost: number
+  state: { deviceId: string; signingPubkeyHex: string; encryptionPubkeyHex: string }
+}
+
+/** Parsed body of a platform.createAuthToken token. */
+export type ParsedAuthToken = { pubkey: string; timestamp: number; token: string; nonce?: string }
+
+/** What platform.encryptNote returns, as the crypto steps consume it. */
+export type EncryptedNotePayload = {
+  encryptedContent: string
+  authorEnvelope: { enc: string; ct: string }
+  adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }>
+}
+
+/**
+ * Crypto-interop scenarios (crypto-steps.ts). Every value here is produced by a
+ * `window.__TEST_PLATFORM` call inside the page and handed back to the runner —
+ * no key material, only pubkeys, envelopes and booleans.
+ */
+export type CryptoWorld = {
+  /** Device public state from the last generate/import/unlock. */
+  device?: EncryptedDeviceKeys['state']
+  deviceA?: EncryptedDeviceKeys['state']
+  deviceB?: EncryptedDeviceKeys['state']
+  /** State of the same seed imported a second time under a different PIN. */
+  deviceReimported?: EncryptedDeviceKeys['state']
+  /** Public keys the admin bootstrap script issued; the seed is kept only to re-import. */
+  issued?: { seedHex: string; identityPubkey: string; decryptionPubkey: string }
+  /** Two provisioning-session pubkeys plus the device's own encryption pubkey. */
+  linkSession?: { first: string; second: string; deviceEncryptionPubkey: string }
+  /** The note the scenario last encrypted. */
+  note?: EncryptedNotePayload
+  /** Decrypt result of `note` — null when the envelope did not open. */
+  notePlaintext?: string | null
+  /** Admin encryption pubkeys a note was sealed to. */
+  admins?: string[]
+  /** Two encryptions of one payload, with their unwrapped-content-key comparison. */
+  notesPair?: {
+    one: { encryptedContent: string }
+    two: { encryptedContent: string }
+    keysEqual: boolean
+    keyLen: number
+  }
+  /** `note.encryptedContent` with one nibble flipped — must fail the GCM tag check. */
+  tampered?: string
+  /** A message sealed to this device and one other reader. */
+  msg?: {
+    msg: { encryptedContent: string; readerEnvelopes: Array<{ pubkey: string; enc: string; ct: string }> }
+    mine: string
+    other: string
+  }
+  /** A key wrapped under a named label, with the original key hex for in-page comparison. */
+  wrapped?: { env: unknown; keyHex: string }
+  /** Shape summary of a recoveryGroupCreate result (share envelope included for refusal checks). */
+  recoveryGroup?: { keys: string[]; envelopes: number; commitments: number; envelope: unknown }
+  /** Claims the simulated primary signed (and the ones that must be refused), plus the code it derived. */
+  sasClaims?: {
+    claim: string
+    expected: string
+    otherPrimaryClaim: string
+    otherRoomClaim: string
+    barePubkey: string
+  }
+  /** SAS codes: same input twice, then a different input. */
+  sas?: { first: string; again: string; different: string }
+  /** First auth token, with its request binding and the time the step started. */
+  token?: ParsedAuthToken & { method: string; path: string; createdAfter?: number }
+  /** Second auth token, for signature/coverage comparisons. */
+  token2?: ParsedAuthToken & { method: string; path: string }
+  /** Outcome of a token creation attempted while locked. */
+  lockedToken?: { rejected: boolean }
+  /** The full record 'I encrypt the key with PIN' persisted. */
+  encrypted?: EncryptedDeviceKeys
+  /** Outcome of the last unlock attempt. */
+  unlock?: { ok: boolean; error: string | null }
+}
+
 /**
  * Extended test fixture that monitors API responses and page errors.
  * Catches buried 401/403/500 errors and unhandled JS exceptions that
@@ -109,6 +277,14 @@ export const test = base.extend<
     backupWorld: BackupWorld
     conversationWorld: ConversationWorld
     sasWorld: SasWorld
+    banWorld: BanWorld
+    callsWorld: CallsWorld
+    hubsWorld: HubsWorld
+    shiftsWorld: ShiftsWorld
+    dashboardWorld: DashboardWorld
+    reportsWorld: ReportsWorld
+    apiWorld: ApiWorld
+    cryptoWorld: CryptoWorld
   },
   {
     workerHub: string
@@ -205,6 +381,30 @@ export const test = base.extend<
     await use({})
   },
   sasWorld: async ({}, use) => {
+    await use({})
+  },
+  banWorld: async ({}, use) => {
+    await use({})
+  },
+  callsWorld: async ({}, use) => {
+    await use({})
+  },
+  hubsWorld: async ({}, use) => {
+    await use({})
+  },
+  shiftsWorld: async ({}, use) => {
+    await use({})
+  },
+  dashboardWorld: async ({}, use) => {
+    await use({})
+  },
+  reportsWorld: async ({}, use) => {
+    await use({})
+  },
+  apiWorld: async ({}, use) => {
+    await use({})
+  },
+  cryptoWorld: async ({}, use) => {
     await use({})
   },
   // Worker-scoped hub: created once per Playwright worker process.

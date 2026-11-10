@@ -5,7 +5,7 @@
  *   - packages/test-specs/features/dashboard/shift-status.feature
  */
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import { Given, When, Then, type DashboardWorld } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { apiGet } from '../../api-helpers'
@@ -140,22 +140,18 @@ Then('the dashboard clock button should say {string}', async ({ page }, text: st
   await expect(clockBtn).toContainText(text)
 })
 
-When('I tap the dashboard clock button', async ({ page }) => {
+When('I tap the dashboard clock button', async ({ page, dashboardWorld }) => {
   const clockBtn = page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)
   await expect(clockBtn).toHaveText(/Clock (In|Out)/, { timeout: Timeouts.ELEMENT })
   const before = (await clockBtn.textContent())?.trim() ?? ''
-  await page.evaluate(label => {
-    ;(window as unknown as Record<string, unknown>).__test_clock_label_before = label
-  }, before)
+  dashboardWorld.clockLabelBefore = before
   await clockBtn.click()
 })
 
-Then('a clock-in request should be sent', async ({ page }) => {
+Then('a clock-in request should be sent', async ({ page, dashboardWorld }) => {
   // The control only changes its label after the availability request succeeds,
   // so a flipped label is the observable proof the request was sent and accepted.
-  const before = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_clock_label_before as string | undefined,
-  )
+  const before = dashboardWorld.clockLabelBefore
   expect(before, 'the tap step must record the label it started from').toMatch(/Clock (In|Out)/)
   const expected = before?.includes('Clock In') ? 'Clock Out' : 'Clock In'
   await expect(page.getByTestId(TestIds.CLOCK_TOGGLE_BTN)).toContainText(expected, { timeout: Timeouts.ELEMENT })
@@ -187,20 +183,20 @@ Then('the shift card should not say {string}', async ({ page }, text: string) =>
  * scenario of this worker, and another scenario's clocked-in volunteer must not
  * decide this one's outcome.
  */
-async function ringTargets(page: Page, request: APIRequestContext, hubId: string): Promise<{ targets: string[]; me: string }> {
-  const me = await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_vol_pubkey as string | undefined)
+async function ringTargets(dashboardWorld: DashboardWorld, request: APIRequestContext, hubId: string): Promise<{ targets: string[]; me: string }> {
+  const me = dashboardWorld.volunteerPubkey
   expect(me, 'the volunteer login step must record the logged-in pubkey').toBeTruthy()
   const res = await apiGet<{ users: Array<{ pubkey: string }> }>(request, `/hubs/${hubId}/calls/presence`)
   expect(res.status, 'GET /calls/presence as admin').toBe(200)
   return { targets: res.data.users.map(u => u.pubkey), me: me as string }
 }
 
-Then('the volunteer is a ring target', async ({ page, backendRequest, workerHub }) => {
-  const { targets, me } = await ringTargets(page, backendRequest, workerHub)
+Then('the volunteer is a ring target', async ({ backendRequest, workerHub, dashboardWorld }) => {
+  const { targets, me } = await ringTargets(dashboardWorld, backendRequest, workerHub)
   expect(targets).toContain(me)
 })
 
-Then('the volunteer is not a ring target', async ({ page, backendRequest, workerHub }) => {
-  const { targets, me } = await ringTargets(page, backendRequest, workerHub)
+Then('the volunteer is not a ring target', async ({ backendRequest, workerHub, dashboardWorld }) => {
+  const { targets, me } = await ringTargets(dashboardWorld, backendRequest, workerHub)
   expect(targets).not.toContain(me)
 })
