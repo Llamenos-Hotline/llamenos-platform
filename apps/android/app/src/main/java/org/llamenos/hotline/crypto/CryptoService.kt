@@ -248,8 +248,34 @@ class CryptoService @Inject constructor() {
         try {
             System.loadLibrary("llamenos_core")
             nativeLibLoaded = true
-        } catch (_: UnsatisfiedLinkError) {
+        } catch (e: UnsatisfiedLinkError) {
             nativeLibLoaded = false
+            // Never swallow this. Without the JNI libs the app accepts the hub URL and
+            // PIN, device-key generation throws, and the app simply never leaves
+            // onboarding — with nothing in logcat pointing at the cause (#1278 cost
+            // ~2h to diagnose; the E2E suite reported 45 identical
+            // "no node tagged 'dashboard-title'" timeouts).
+            android.util.Log.e(
+                "CryptoService",
+                "Failed to load native library 'llamenos_core' — the Rust JNI libs are " +
+                    "missing from this build. Build them with " +
+                    "packages/crypto/scripts/build-mobile.sh android and copy " +
+                    "dist/android/jniLibs-{debug,release}/ into " +
+                    "apps/android/app/src/{debug,release}/jniLibs/ " +
+                    "(see apps/android/README.md). Every crypto operation will fail " +
+                    "with 'Native crypto library not loaded.'",
+                e,
+            )
+            // A CryptoService that cannot do crypto has nothing useful to offer: in a
+            // debug build on a real Android runtime, die at construction with the
+            // cause instead of five screens later with none. JVM unit tests
+            // deliberately construct CryptoService without the native lib (plain JUnit
+            // reads Build.FINGERPRINT as null under isReturnDefaultValues; Robolectric
+            // reports "robolectric"), so they keep the survive-and-hard-fail-per-call
+            // behaviour.
+            if (org.llamenos.hotline.BuildConfig.DEBUG && isRealAndroidRuntime()) {
+                throw e
+            }
         }
         if (nativeLibLoaded) {
             // Arm UniFFI's binding/library integrity check: contract version plus a
@@ -260,6 +286,15 @@ class CryptoService @Inject constructor() {
             // surfacing as undefined behaviour at some later JNA call.
             org.llamenos.core.uniffiEnsureInitialized()
         }
+    }
+
+    /**
+     * True on a device/emulator, false in JVM unit tests. Plain JUnit reads static
+     * android.os.Build fields as null; Robolectric reports FINGERPRINT "robolectric".
+     */
+    private fun isRealAndroidRuntime(): Boolean {
+        val fingerprint = android.os.Build.FINGERPRINT ?: return false
+        return !fingerprint.contains("robolectric", ignoreCase = true)
     }
 
     // ---- Device Key Generation ----

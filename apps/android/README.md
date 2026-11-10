@@ -71,7 +71,11 @@ cp -r dist/android/jniLibs-debug/* ../../apps/android/app/src/debug/jniLibs/
 cp -r dist/android/jniLibs-release/* ../../apps/android/app/src/release/jniLibs/
 ```
 
-A placeholder mock crypto is active until the native libraries are linked (enables builds without a full Rust toolchain).
+There is no mock crypto fallback: without these `.so` files, `CryptoService` logs an
+ERROR at init naming the missing `llamenos_core` library, every crypto operation
+hard-fails with `IllegalStateException("Native crypto library not loaded.")`, and a
+debug build on a device/emulator crashes at the first `CryptoService` injection. Only
+JVM unit tests run without the native library.
 
 ## Version Management
 
