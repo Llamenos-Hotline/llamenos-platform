@@ -117,7 +117,7 @@ invites.post('/redeem',
     if (!isValid) {
       return c.json({ error: 'Authentication failed' }, 401)
     }
-    if (!(await consumeAuthToken(authPayload, services.identity))) {
+    if ((await consumeAuthToken(authPayload, services.identity)) !== 'consumed') {
       return c.json({ error: 'Authentication failed' }, 401)
     }
 

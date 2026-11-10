@@ -43,3 +43,12 @@ Feature: Hub membership is the isolation boundary
   Scenario: Invites that grant hub roles cannot be issued outside a hub
     When the admin creates a volunteer invite without a hub
     Then the response status should be 400
+
+  # #1700: a well-formed, authorised request naming a pubkey that was never
+  # enrolled used to be answered with an unlogged 500. The target user does
+  # not exist, so the answer is 404 — and the same holds for removal.
+  Scenario: Managing a never-registered pubkey answers 404, not 500
+    When the admin adds a never-registered pubkey to hub "A"
+    Then the response status should be 404
+    When the admin removes a never-registered pubkey from hub "A"
+    Then the response status should be 404

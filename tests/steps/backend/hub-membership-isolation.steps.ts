@@ -167,6 +167,20 @@ When('the admin creates a volunteer invite without a hub', async ({ request, wor
   }, ADMIN_SEED))
 })
 
+// A freshly generated keypair that has never been enrolled: well-formed
+// request, real authorization, target user does not exist (#1700).
+When('the admin adds a never-registered pubkey to hub {string}', async ({ request, world }, hubLabel: string) => {
+  const kp = generateTestKeypair()
+  setLastResponse(world, await apiPost(request, `/hubs/${hub(world, hubLabel)}/members`, {
+    pubkey: kp.pubkey, roleIds: ['role-volunteer'],
+  }, ADMIN_SEED))
+})
+
+When('the admin removes a never-registered pubkey from hub {string}', async ({ request, world }, hubLabel: string) => {
+  const kp = generateTestKeypair()
+  setLastResponse(world, await apiDelete(request, `/hubs/${hub(world, hubLabel)}/members/${kp.pubkey}`, ADMIN_SEED))
+})
+
 // ── Then ────────────────────────────────────────────────────────────
 
 Then('the user list does not include {string}', async ({ world }, name: string) => {

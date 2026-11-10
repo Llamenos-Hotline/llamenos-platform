@@ -131,7 +131,7 @@ describe('invites routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockVerifyAuthToken.mockReturnValue(true)
-    mockConsumeAuthToken.mockResolvedValue(true)
+    mockConsumeAuthToken.mockResolvedValue('consumed')
     mockCheckRateLimit.mockResolvedValue(false)
   })
 
@@ -252,7 +252,7 @@ describe('invites routes', () => {
     })
 
     it('rejects a replayed token without redeeming', async () => {
-      mockConsumeAuthToken.mockResolvedValue(false)
+      mockConsumeAuthToken.mockResolvedValue('replay_detected')
       const { app, services } = createApp()
 
       const res = await app.request('/invites/redeem', {

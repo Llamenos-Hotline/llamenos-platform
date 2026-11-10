@@ -202,7 +202,7 @@ describe('the signing keys whose seeds this repository published', () => {
       getUserInternal,
     } as unknown as IdentityService
     const request = new Request('http://rail/api/auth/me', { headers: { Authorization: 'Session rail-token' } })
-    expect(await authenticateRequest(request, identity)).toBeNull()
+    expect(await authenticateRequest(request, identity)).toEqual({ ok: false, reason: 'revoked_signing_key' })
     expect(getUserInternal).not.toHaveBeenCalled()
   })
 
