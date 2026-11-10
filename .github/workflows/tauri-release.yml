@@ -3,7 +3,7 @@
 # Generates latest.json manifest for auto-updater.
 #
 # Two publish channels, deliberately independent:
-#   1. GitHub Release `desktop-v<version>` — ALWAYS published. Carries every
+#   1. GitHub Release `v<version>-desktop` — ALWAYS published. Carries every
 #      installer plus its minisign .sig, CHECKSUMS.txt, SBOM and build-info.json.
 #      This is what internal-beta testers install from. It needs no secrets
 #      beyond the built-in GITHUB_TOKEN and the Tauri signing key.
@@ -13,11 +13,23 @@
 #      configured, or configured but broken => the job FAILS (issue #720): a
 #      broken channel must never be silently skipped.
 #
-# Why a dedicated `desktop-v<version>` release instead of attaching to `v<version>`:
+# Why a dedicated `v<version>-desktop` release instead of attaching to `v<version>`:
 # release.yml publishes `v<version>` BEFORE dispatching this workflow, and the
 # repo has immutable releases enabled — assets cannot be added to a published
 # release, so `gh release upload v<version>` is rejected. A separate release
 # tag is the only place this (asynchronously dispatched) workflow can publish.
+#
+# Why the tag is VERSION-first (`v<version>-desktop`, titled `v<version> Desktop`)
+# and never `desktop-v<version>` again: GitHub's Releases page orders releases
+# by the DAY of their commit, then by tag name descending. Every release of one
+# version shares a commit, so with platform-first tags two versions cut on one
+# day read `v0.21.6, v0.21.5, desktop-v0.21.6, desktop-v0.21.5, android-…` —
+# grouped by platform, versions interleaved. Version-first tags keep each
+# version's API / Desktop / Android / iOS releases together. mobile-release.yml
+# (`v<version>-android`, `v<version>-ios`) and release.yml (`v<version> API`)
+# follow the same `<semver> <scope>` title scheme. Releases cut before the
+# change keep their `desktop-v<version>` tags (tags are immutable), so readers
+# (verify-release-live.yml, site/src/utils/releases.ts) accept both forms.
 #
 # NEVER publishes an unsigned installer: every installer must carry a minisign
 # signature that verifies against plugins.updater.pubkey, or the job fails.
@@ -32,7 +44,7 @@
 # until this workflow has finished. The aliases (`llamenos-linux-x86_64.AppImage`,
 # `llamenos-windows-x64.msi`, ...) carry no version in the file name, so
 # `https://github.com/<repo>/releases/latest/download/<alias>` is a permanent,
-# never-stale download link. The versioned `desktop-v<version>` release above is
+# never-stale download link. The versioned `v<version>-desktop` release above is
 # still published unchanged.
 # Epics 87, 97: Desktop Auto-Updater & Release Pipeline.
 #
@@ -490,7 +502,7 @@ jobs:
           echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "Releasing v${RELEASE_VERSION}"
 
-      # Immutable releases: once `desktop-v<version>` is published its assets can
+      # Immutable releases: once `v<version>-desktop` is published its assets can
       # never change. A re-run would build DIFFERENT bytes, so it cannot converge
       # on the published release — stop before touching any channel rather than
       # half-publish (bucket updated, GitHub Release frozen with stale files).
@@ -498,7 +510,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="desktop-v${VERSION}"
+          TAG="v${VERSION}-desktop"
           PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
           if [ -n "$PUBLISHED" ]; then
@@ -924,7 +936,7 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           set -euo pipefail
-          TAG="desktop-v${VERSION}"
+          TAG="v${VERSION}-desktop"
 
           # ── Assemble the asset set ──
           mkdir -p release-assets
@@ -1002,7 +1014,7 @@ jobs:
             echo
             echo "- Windows installers are not Authenticode-signed, so SmartScreen will warn. The minisign signature above is your integrity check."
             echo "- AppImage: \`chmod +x\` it before running."
-            echo "- This is a separate \`desktop-v${VERSION}\` release because the \`v${VERSION}\` release is immutable once published and cannot accept desktop assets."
+            echo "- This is a separate \`v${VERSION}-desktop\` release because the \`v${VERSION}\` release is immutable once published and cannot accept desktop assets."
             if [ "$CHANNEL_CONFIGURED" != "true" ]; then
               echo "- The in-app auto-updater channel is not configured yet, so this build will **not** auto-update. Install new versions manually from their releases."
             fi
@@ -1034,7 +1046,7 @@ jobs:
               --draft \
               --latest=false \
               --target "${SOURCE_SHA}" \
-              --title "Desktop v${VERSION}" \
+              --title "v${VERSION} Desktop" \
               --notes-file release-body.md \
               "${PRERELEASE_FLAG[@]}" \
               "${ASSETS[@]}"; then
@@ -1060,7 +1072,7 @@ jobs:
           fi
 
           # ── Version-free aliases on the DRAFT v<version> release ──
-          # Done BEFORE desktop-v<version> is published: that publish is immutable and
+          # Done BEFORE v<version>-desktop is published: that publish is immutable and
           # a re-run is refused afterwards, so an alias upload that failed after it
           # could never be retried. Failing here leaves nothing public.
           #

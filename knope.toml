@@ -20,10 +20,73 @@ versioned_files = [
     { path = "deploy/helm/llamenos/Chart.yaml", regex = 'appVersion: "(?<version>[0-9]+[.][0-9]+[.][0-9]+)"' },
 ]
 changelog = "CHANGELOG.md"
+# Release notes contain only what an end user or self-hoster would care about
+# (operator ruling, 2026-11-08). A commit reaches them only if it passes, in
+# order — the full rule, in code, is placeCommit in scripts/release/notes-scope.ts:
+#
+#   1. TYPE. feat, fix, any breaking change, or a type opted in through
+#      extra_changelog_sections below, which is the ONE place to add one.
+#      Everything else — test, ci, chore, build, docs, refactor, style, revert,
+#      any unknown type — is out, whatever its scope.
+#   2. SCOPE. The allowlist below. A scope not listed is out by default.
+#   3. PATHS. A commit whose every path is test code, CI or test tooling is out
+#      even under a product scope: `fix(ios): flaky XCUITest` shipped nothing.
+#
+# Internal tooling (fleet, orchestrator, ci, tests, e2e, bdd, release pipeline,
+# scripts, lint, deps, site, agents, codegen, …) is deliberately absent from the
+# scopes and must stay absent: a `feat(fleet)` once shipped under "### Features"
+# in a user-facing release.
+#
+# knope no longer reads commits (see [changes] below); it still validates this
+# table, and notes-scope.ts applies it the way knope did (tested against 0.22.4):
+#   - `feat|fix(<scope>)` with <scope> in this list (case-insensitive) → in.
+#   - Any other scope → out, including a multi-scope `fix(desktop,worker)`: the
+#     whole scope string is compared. Give a product change ONE scope.
+#   - No scope at all → in. An unscoped `feat:`/`fix:` therefore claims to be a
+#     whole-product change.
+# Every commit the rule leaves out is listed in the release PR body
+# (knope-release-pr.yml → scripts/release/notes-scope.ts), so a misjudged commit
+# is visible at release review, not silently dropped.
+#
+# Adding a product area: add its scope here in the same PR that introduces it.
+scopes = [
+    # Clients
+    "desktop", "ios", "android", "mobile", "clients", "client", "ui", "a11y", "i18n",
+    # Server, sidecars and the shared layer
+    "worker", "backend", "server", "api", "crypto", "protocol", "schemas", "db",
+    "sip-bridge", "asterisk", "signal", "signal-notifier", "firehose", "cms",
+    # Product domains
+    "telephony", "messaging", "calls", "calling", "ringing", "ivr", "turn", "relay", "push",
+    "auth", "webauthn", "identity", "roles", "permissions", "provisioning", "devices",
+    "recovery", "recovery-group", "pin", "puk", "account", "hubs", "settings", "setup",
+    "bootstrap-admin", "shifts", "invites", "incidents", "notes", "readers", "records",
+    "contacts", "conversations", "channels", "events", "evidence", "files", "triage",
+    "bans", "blasts", "blast", "audit", "analytics", "erasure", "shred", "geocoding",
+    "templates", "teams", "entity", "contract", "scope", "config", "env", "cors",
+    "middleware", "logging", "observability", "health", "security", "ssrf",
+    # The self-hostable stack operators deploy from a release
+    "deploy", "ansible", "docker", "helm", "iso", "opentofu",
+]
+# THE type opt-in. A type listed here is a release-note type: nothing else
+# has to change for one to be added (notes-scope.ts reads this table, and has
+# no list of its own). Its commits become changesets of that type, under the
+# heading named here.
 extra_changelog_sections = [
     { name = "Security", types = ["security"] },
     { name = "Performance", types = ["perf"] },
 ]
+
+# knope reads no commits: scripts/release/notes-scope.ts is the one thing that
+# decides what is in the notes, and writes a changeset per entry it admits. With
+# knope's own parsing on, feat/fix commits could only be filtered by scope, so a
+# `fix(ios)` that touched only test files was listed.
+#
+# Bumps are unchanged (verified against 0.22.4): feat and fix → patch on 0.x,
+# breaking → minor. A release with no admitted commits has no changesets, so
+# PrepareRelease stops with `releases::no_release`; knope-release-pr.yml treats
+# that as "nothing to release".
+[changes]
+ignore_conventional_commits = true
 
 # All platform versions are managed by knope — never manually edit version fields.
 # packages/crypto has its own semver (0.x) and is NOT managed here.
@@ -35,8 +98,20 @@ name = "prepare-release"
 type = "Command"
 command = "git switch -c release"
 
+# Every commit the rule admits → a .changeset/ file (see [changes] above).
+# Untracked; PrepareRelease consumes them.
+[[workflows.steps]]
+type = "Command"
+command = "bun scripts/release/notes-scope.ts changesets"
+
 [[workflows.steps]]
 type = "PrepareRelease"
+
+# Loud by design: an admitted commit missing from (or doubled in) the notes fails
+# the release here, before anything is committed or pushed.
+[[workflows.steps]]
+type = "Command"
+command = "bun scripts/release/notes-scope.ts verify"
 
 [[workflows.steps]]
 type = "Command"

@@ -10,8 +10,8 @@ export const siteConfig = {
   //
   // `releasesUrl` is the Releases INDEX, deliberately not /releases/latest:
   // "latest" is the integrity-only v<version> release (CHECKSUMS.txt,
-  // provenance, SBOM — no installers). Installers ship on desktop-v<version>
-  // and the APK on android-v<version>; utils/releases.ts resolves those tag
+  // provenance, SBOM — no installers). Installers ship on v<version>-desktop
+  // and the APK on v<version>-android; utils/releases.ts resolves those tag
   // families via the GitHub API at build time and falls back to this index.
   //
   // Migrated rather than left on the redirect deliberately. GitHub serves the
@@ -58,7 +58,7 @@ export const siteConfig = {
     // Minisign public key for manual installer signature verification.
     // This MUST stay identical to `plugins.updater.pubkey` in
     // apps/desktop/tauri.conf.json — tauri-release.yml signs every installer
-    // on the desktop-v* releases with the matching private key, and the
+    // on the v*-desktop releases with the matching private key, and the
     // download page's verification instructions are worthless if they name
     // any other key. Provenance: docs/UPDATER_KEY_PROVENANCE.md.
     minisignKeyId: 'C8279C12F39DD35B',

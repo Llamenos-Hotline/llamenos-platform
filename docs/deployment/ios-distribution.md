@@ -32,13 +32,14 @@ no APK-style sideloading on iOS: double-clicking, AirDropping, or "Open in" an
 authorises it carries no device list at all (see below), so no device is entitled
 to run it outside Apple's distribution channels.
 
-**A published `ios-v*` release asset does not by itself mean a user can install it.**
+**A published `v<version>-ios` release asset does not by itself mean a user can install it.**
 The release exists so the exported IPA is a verifiable, downloadable *artifact*
 (release-artifacts-only policy) — not because that IPA is installable:
 
-- **Verified (repo):** `mobile-release.yml` now publishes `ios-v<version>` containing
+- **Verified (repo):** `mobile-release.yml` now publishes `v<version>-ios` (titled
+  `<version> iOS`; tags were `ios-v<version>` before the version-first scheme) containing
   the exported IPA, its `.sha256` and `ios-build-meta.json`, created as a draft and
-  published only after the asset set is verified (same flow as `android-v<version>`).
+  published only after the asset set is verified (same flow as `v<version>-android`).
   The dSYMs remain a 30-day *workflow artifact* (`ios-release`) for symbolication.
   This is **not yet exercised**: the iOS job cannot run until the signing secrets exist.
 - **Verified (repo, `gh release list`, as of v0.19.16, before this change):** the
@@ -53,7 +54,7 @@ The release exists so the exported IPA is a verifiable, downloadable *artifact*
 - **Verified (repo):** the iOS job cannot currently succeed. It stops at
   "Require iOS signing credentials" unless the secrets below exist, and none of them do.
 
-Contrast with Android, where a signed `app-release.apk` on the `android-v<version>`
+Contrast with Android, where a signed `app-release.apk` on the `v<version>-android`
 release installs on any device that allows unknown-source installs.
 
 ---
@@ -117,7 +118,7 @@ Two defects are now fixed. The rest are recorded; the operator has chosen
    alike). The export step also fails if it does not produce exactly one `.ipa`.
    *Not exercised end to end* — it needs the signing secrets.
 3. ~~**No `ios-v*` release / IPA only in a 30-day artifact**~~ — **Fixed.** The IPA and
-   its SHA-256 are attached to a draft-first `ios-v<version>` release alongside
+   its SHA-256 are attached to a draft-first `v<version>-ios` release alongside
    `ios-build-meta.json`. `mobile-release.yml` no longer contains `xcrun altool` or any
    `APPLE_API_KEY*` wiring.
 
@@ -144,7 +145,7 @@ Two defects are now fixed. The rest are recorded; the operator has chosen
 
 `mobile-release.yml` **fails honestly** without them: the `| xcpretty || true` that
 used to turn `** ARCHIVE FAILED **` into a green job was removed, the job checks the
-four signing secrets up front, and it only writes `ios-v<version>` after archive and
+four signing secrets up front, and it only writes `v<version>-ios` after archive and
 export both succeeded.
 
 ---

@@ -18,7 +18,7 @@ const GITHUB_RELEASES = siteConfig.github.releasesUrl;
 const macosIssueUrl = `${siteConfig.github.issuesUrl}/741`;
 
 // Build-time lookup of the releases that actually carry artifacts
-// (desktop-v* / android-v* — never the integrity-only v* release).
+// (v*-desktop / v*-android — never the integrity-only v* release).
 const { desktop, android } = await fetchLatestReleases();
 
 // A lookup failure must degrade to the Releases index, never to an invented URL.

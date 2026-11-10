@@ -6,8 +6,10 @@ How desktop updates are published to the update server, and how to manually re-u
 
 ## Status (read first)
 
-The **GitHub Release** `desktop-v<version>` is the working, always-on channel and
-needs nothing from the server. The self-hosted updater origin
+The **GitHub Release** `v<version>-desktop` (titled `<version> Desktop`) is the working,
+always-on channel and needs nothing from the server. Releases cut before the
+version-first tag scheme are tagged `desktop-v<version>` instead; tags are immutable, so
+both forms exist (try `v<version>-desktop` first, fall back to `desktop-v<version>`). The self-hosted updater origin
 (`updates.<domain>` / `releases.<domain>`) is an *additional* channel and is **not
 yet functional end to end**: `scripts/generate-update-manifest.sh` produces
 `"platforms": {}` for the real release artifacts (it searches for
@@ -33,7 +35,7 @@ Only `/desktop/*` and `/health` are served; everything else is 404.
 ## CI flow (`tauri-release.yml`)
 
 1. Builds and signs (minisign, `TAURI_SIGNING_PRIVATE_KEY`) the desktop artifacts.
-2. **Always** publishes the GitHub Release `desktop-v<version>` with every installer, its `.sig`, `CHECKSUMS.txt`, SBOM and `build-info.json`.
+2. **Always** publishes the GitHub Release `v<version>-desktop` (titled `<version> Desktop`) with every installer, its `.sig`, `CHECKSUMS.txt`, SBOM and `build-info.json`.
 3. **Only if all five** of `RELEASES_REPO_PAT`, `RUSTFS_ACCESS_KEY`, `RUSTFS_SECRET_KEY`, `RUSTFS_ENDPOINT`, `RUSTFS_STAGING_BUCKET` are set: uploads to `s3://<bucket>/desktop/v<version>/…` and `s3://<bucket>/desktop/latest.json`, and commits checksums/SBOM to the `llamenos-releases` repo. None set → skipped cleanly; some set → the job fails.
 4. The Tauri updater verifies the minisign signature against the pubkey embedded in `tauri.conf.json` before applying.
 
@@ -44,8 +46,10 @@ hand — one `platforms` entry per target with `signature` = the contents of the
 installer's `.sig` and `url` = `https://releases.<domain>/desktop/v<version>/<installer>`):
 
 ```bash
-# 1. get the signed artifacts (GitHub Release is the source of truth)
-gh release download desktop-v<version> --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts
+# 1. get the signed artifacts (GitHub Release is the source of truth).
+#    Tag is v<version>-desktop; a release cut before the version-first scheme is desktop-v<version>.
+gh release download v<version>-desktop --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts \
+  || gh release download desktop-v<version> --repo Llamenos-Hotline/llamenos-platform -D flat-artifacts
 
 # 2. manifest (URLs must point at the self-hosted origin)
 VERSION=<version> RUSTFS_PUBLIC_URL=https://releases.<domain> \

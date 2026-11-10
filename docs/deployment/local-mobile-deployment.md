@@ -91,13 +91,16 @@ that environment was **not verified**.
 
 ### Zero-build path: the published, signed APK
 
-`mobile-release.yml` publishes a signed APK to the dedicated `android-v<version>`
-release (for example `android-v0.19.16`; assets `app-release.apk`,
-`app-release.apk.sha256`, `android-build-meta.json` — verified with
-`gh release view android-v0.19.16`).
+`mobile-release.yml` publishes a signed APK to the dedicated `v<version>-android`
+release, titled `<version> Android` (assets `app-release.apk`,
+`app-release.apk.sha256`, `android-build-meta.json`). Releases cut before the
+version-first tags are tagged `android-v<version>` instead; tags are immutable, so both
+forms exist. Try the version-first tag and fall back to the old one:
 
 ```bash
-gh release download android-v0.19.16 --repo Llamenos-Hotline/llamenos-platform \
+gh release download v<version>-android --repo Llamenos-Hotline/llamenos-platform \
+  --pattern 'app-release.apk*' \
+  || gh release download android-v<version> --repo Llamenos-Hotline/llamenos-platform \
   --pattern 'app-release.apk*'
 sha256sum -c app-release.apk.sha256       # the .sha256 records the bare file name
 adb install app-release.apk               # or open the file on the phone
@@ -317,7 +320,7 @@ on 2026-09-25 as noted.
    **Consequence for this guide:** simulator *and* device installs driven from
    `ssh mac` may be blocked until that is fixed; a developer's own Mac with Xcode is
    the reliable alternative.
-3. **No CI substitute.** The `ios-v<version>` release is metadata-only and the
+3. **No CI substitute.** The `v<version>-ios` release is metadata-only and the
    iOS release job cannot run without the signing secrets — see
    [`ios-distribution.md`](./ios-distribution.md). There is no downloadable iOS artifact
    to fall back to, unlike Android.
@@ -342,7 +345,7 @@ PR's owned paths, and the iOS README point is cosmetic):
 
 | I want to… | Do this |
 |---|---|
-| Try Android with no build | `gh release download android-v<ver> --pattern 'app-release.apk*'`, verify sha256, `adb install` |
+| Try Android with no build | `gh release download v<ver>-android --pattern 'app-release.apk*'` (`android-v<ver>` if that tag does not exist — a release cut before the version-first scheme), verify sha256, `adb install` |
 | Build Android for an ARM phone | jniLibs (both variants) → `./gradlew assembleRelease` with a keystore |
 | Build Android for the emulator | jniLibs (debug) → `./gradlew assembleDebug` → `adb install` (never for testers) |
 | Run the iOS simulator build | `bun run ios:xcframework && bun run ios:build` |

@@ -9,7 +9,7 @@
 # This workflow is the missing check (#721).
 #
 # Five independent surfaces, five independent jobs (numbered as before):
-#   1. desktop-installer — the latest desktop GitHub Release (`desktop-v<ver>`,
+#   1. desktop-installer — the latest desktop GitHub Release (`v<ver>-desktop`,
 #      published by tauri-release.yml, and the version must match the latest
 #      `v<ver>` release) carries a signed installer (+ .sig) for every
 #      required platform, and each installer's SHA-256 matches CHECKSUMS.txt.
@@ -22,11 +22,11 @@
 #      never from Actions. Its number is not reused.
 #   3. play-track — the Play Console internal track's live versionCode
 #      matches what the most recent mobile-release.yml run targeted for
-#      the most recent `android-v<version>` GitHub Release (recorded as
+#      the most recent `v<version>-android` GitHub Release (recorded as
 #      android-build-meta.json on that release — mobile builds publish to
 #      their own release because `v<version>` is immutable once published).
 #   4. testflight — same idea for the TestFlight build number, via
-#      ios-build-meta.json on the most recent `ios-v<version>` release.
+#      ios-build-meta.json on the most recent `v<version>-ios` release.
 #   5. desktop-updater — the canonical Tauri updater manifest resolves,
 #      and every platform binary it points at downloads and matches the
 #      published CHECKSUMS.txt.
@@ -75,7 +75,7 @@ on:
         required: false
         type: string
       desktop_release_tag_override:
-        description: "Check this desktop GitHub Release tag (e.g. desktop-v0.19.15) instead of the one matching the latest v<ver> release (testing only)"
+        description: "Check this desktop GitHub Release tag (e.g. v0.21.8-desktop, or desktop-v0.19.15 for a release cut before the version-first tags) instead of the one matching the latest v<ver> release (testing only)"
         required: false
         type: string
       updater_url:
@@ -189,7 +189,7 @@ jobs:
     steps:
       # Matches how testers actually install desktop: tauri-release.yml
       # publishes every installer + its minisign .sig + CHECKSUMS.txt to the
-      # `desktop-v<version>` GitHub Release (v<version> is immutable by the time
+      # `v<version>-desktop` GitHub Release (v<version> is immutable by the time
       # the desktop build finishes, so it cannot carry them).
       - name: Verify a signed installer per required platform, each matching CHECKSUMS.txt
         env:
@@ -206,15 +206,23 @@ jobs:
             echo "Using overridden desktop release tag: $TAG (testing only)"
           else
             # The desktop release for the LATEST product release must exist:
-            # a `v<ver>` release with no `desktop-v<ver>` is exactly the
+            # a `v<ver>` release with no `v<ver>-desktop` is exactly the
             # "dispatch swallowed / desktop build never published" failure.
             LATEST_V=$(gh release list --repo "$REPO" --limit 50 --json tagName,isDraft \
-              --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^v[0-9]"))) | .tagName) // empty')
+              --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^v[0-9]")) and (.tagName | test("-(desktop|android|ios)$") | not)) | .tagName) // empty')
             if [ -z "$LATEST_V" ]; then
               echo "::error::SURFACE BROKEN: desktop installers — no published v<version> GitHub Release exists to compare against"
               exit 1
             fi
-            TAG="desktop-${LATEST_V}"
+            # Platform releases are tagged `v<ver>-desktop` so GitHub's
+            # same-day ordering (by tag name) keeps a version's releases
+            # together. Tags cut before that change are `desktop-v<ver>` and
+            # immutable, so the release of an older version keeps that name.
+            TAG="${LATEST_V}-desktop"
+            if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+              && gh release view "desktop-${LATEST_V}" --repo "$REPO" >/dev/null 2>&1; then
+              TAG="desktop-${LATEST_V}"
+            fi
           fi
           echo "Checking desktop release: $TAG"
 
@@ -497,9 +505,9 @@ jobs:
             exit 0
           fi
 
-          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft --jq 'first(.[] | select((.isDraft | not) and (.tagName | startswith("android-v"))) | .tagName) // empty')
+          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^(v[0-9].*-android|android-v[0-9].*)$"))) | .tagName) // empty')
           if [ -z "$TAG" ]; then
-            echo "::error::SURFACE BROKEN: Play internal track — no published android-v<version> GitHub Release exists to compare against"
+            echo "::error::SURFACE BROKEN: Play internal track — no published v<version>-android GitHub Release exists to compare against"
             exit 1
           fi
 
@@ -680,9 +688,9 @@ jobs:
             exit 0
           fi
 
-          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft --jq 'first(.[] | select((.isDraft | not) and (.tagName | startswith("ios-v"))) | .tagName) // empty')
+          TAG=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^(v[0-9].*-ios|ios-v[0-9].*)$"))) | .tagName) // empty')
           if [ -z "$TAG" ]; then
-            echo "::error::SURFACE BROKEN: TestFlight — no published ios-v<version> GitHub Release exists to compare against"
+            echo "::error::SURFACE BROKEN: TestFlight — no published v<version>-ios GitHub Release exists to compare against"
             exit 1
           fi
 
@@ -840,7 +848,7 @@ jobs:
             echo "Using overridden image tag: $VERSION (testing only)"
           else
             LATEST_V=$(gh release list --repo "$REPO" --limit 50 --json tagName,isDraft \
-              --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^v[0-9]"))) | .tagName) // empty')
+              --jq 'first(.[] | select((.isDraft | not) and (.tagName | test("^v[0-9]")) and (.tagName | test("-(desktop|android|ios)$") | not)) | .tagName) // empty')
             if [ -z "$LATEST_V" ]; then
               echo "::error::SURFACE BROKEN: container image — no published v<version> GitHub Release exists to compare against"
               exit 1

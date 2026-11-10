@@ -3,8 +3,8 @@
 # with the next version bump and a CHANGELOG.md entry. Merging that PR
 # triggers release.yml to cut the actual release.
 #
-# Uses RELEASE_BOT_TOKEN (a fine-grained PAT with Contents:write and
-# Pull requests:write), NOT GITHUB_TOKEN.
+# Uses RELEASE_BOT_TOKEN (a classic PAT — see below for why it cannot be
+# fine-grained), NOT GITHUB_TOKEN.
 #
 # Why: the repo's fork-PR approval policy is `all_external_contributors`,
 # which is load-bearing — this is a public repo and nearly every other
@@ -81,7 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::RELEASE_BOT_TOKEN is not set. Create a fine-grained PAT on this repo with Contents:write and Pull requests:write, then: gh secret set RELEASE_BOT_TOKEN"
+            echo "::error::RELEASE_BOT_TOKEN is not set. Create a classic PAT with the public_repo scope, owned by llamenos-auto (a fine-grained PAT cannot write to this repo — see the header), then: gh secret set RELEASE_BOT_TOKEN"
             exit 1
           fi
           if ! gh api user -q .login; then
@@ -120,13 +120,32 @@ jobs:
           version: 0.22.4
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tolerate exactly one failure: knope's `releases::no_release` — no
-      # commits since the last tag bump any version, so there is nothing to
-      # release. That error is raised by the PrepareRelease step, before
-      # anything is committed or pushed. Every other non-zero exit (a rejected
-      # push, a bad token, a knope crash) fails the job. This step used to be
-      # `continue-on-error: true`, which also swallowed a 403 on push and left
-      # release PRs silently dead while the workflow stayed green.
+      # Runs scripts/release/notes-scope.ts: knope.toml's prepare-release
+      # workflow calls it before PrepareRelease (one changeset for every commit
+      # the release-notes rule admits; knope reads no commits itself) and after
+      # it (fails unless every entry is in the notes as expected), and the two
+      # steps below call it too.
+      # No `bun install`: the script imports only node: built-ins and Bun's
+      # own TOML parser.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.5"
+
+      # The release being built on: the same tag PrepareRelease works from.
+      - name: Record the last release tag
+        id: last
+        run: echo "tag=$(bun scripts/release/notes-scope.ts last-tag)" >> "$GITHUB_OUTPUT"
+
+      # Tolerate exactly one failure: knope's `releases::no_release` when the
+      # release-notes rule really admitted nothing since the last tag. That
+      # error is raised by the PrepareRelease step, before anything is committed
+      # or pushed. If the rule DID admit commits, their changesets never reached
+      # knope, and treating that as "nothing to release" would stop the release
+      # PR updating with a green job — so it fails. Every other non-zero exit (a
+      # rejected push, a bad token, a knope crash) fails the job. This step used
+      # to be `continue-on-error: true`, which also swallowed a 403 on push and
+      # left release PRs silently dead while the workflow stayed green.
       - name: Prepare release PR
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
@@ -140,11 +159,50 @@ jobs:
             exit 0
           fi
           if grep -q 'releases::no_release' "${log}"; then
+            admitted=$(bun scripts/release/notes-scope.ts admitted)
+            if [ "${admitted}" != "0" ]; then
+              echo "::error::knope reported nothing to release, but the release-notes rule admitted ${admitted} entries since the last release tag: their changesets did not reach it. See knope.toml and scripts/release/notes-scope.ts."
+              exit 1
+            fi
             echo "::notice::No releasable commits since the last release tag; no release PR to open or update."
             exit 0
           fi
           echo "::error::knope prepare-release failed (exit ${status}) for a reason other than 'nothing to release'. See the log above."
           exit "${status}"
+
+      # Release notes contain only end-user-relevant changes: knope.toml and
+      # scripts/release/notes-scope.ts keep everything else out by commit type,
+      # scope and the paths a commit touched. That
+      # exclusion must be visible, not silent — a product change the rule
+      # misjudged would otherwise vanish from the notes. So every commit it
+      # drops is listed in the release PR body, where the release is reviewed:
+      # left-out security/perf-style commits first, then other release-note
+      # types under a non-product scope, then every other type in a collapsed
+      # block. knope's CreatePullRequest rewrites the body on every run, so
+      # appending here is idempotent per run.
+      - name: List what the notes leave out in the release PR body
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+          REPO: ${{ github.repository }}
+          LAST_TAG: ${{ steps.last.outputs.tag }}
+          MAIN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --repo "$REPO" --head release --base main --state open --json number --jq '.[0].number // empty')
+          if [[ -z "$pr" ]]; then
+            echo "::notice::No open release PR — nothing to annotate."
+            exit 0
+          fi
+          excluded=$(bun scripts/release/notes-scope.ts excluded "$LAST_TAG" "$MAIN_SHA")
+          echo "$excluded"
+          body="${RUNNER_TEMP}/release-pr-body.md"
+          gh pr view "$pr" --repo "$REPO" --json body --jq .body > "$body"
+          # A run that hit `no_release` did not rewrite the body; replace the
+          # previous section instead of stacking a second one under it.
+          marker='<!-- notes-scope -->'
+          sed -i "/^${marker}\$/,\$d" "$body"
+          printf '\n%s\n%s\n' "$marker" "$excluded" >> "$body"
+          gh pr edit "$pr" --repo "$REPO" --body-file "$body"
 
       # #1817 / #1114: the release PR can never earn `fleet/review` on its
       # own. It is authored by llamenos-auto, and GitHub refuses to request a

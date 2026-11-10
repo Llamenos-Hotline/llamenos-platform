@@ -24,7 +24,7 @@ UPDATER_URL="https://updates.llamenos.org/desktop/latest.json"
 # "${GITHUB_REPOSITORY}"`).
 #
 # KNOWN GAP, deliberately not guessed at here: desktop releases are tagged
-# `desktop-v<version>` and published with `--latest=false`, so
+# `v<version>-desktop` (`desktop-v<version>` for a release cut before the version-first scheme) and published with `--latest=false`, so
 # `/releases/latest/download/...` will not resolve to them and this check
 # still reports "not available". Fixing that means deciding what the fallback
 # should point at (the tagged asset URL, or marking desktop releases latest),

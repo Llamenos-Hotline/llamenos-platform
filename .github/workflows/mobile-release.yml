@@ -7,12 +7,12 @@
 # apps/ios/fastlane) from the signed AAB / IPA this workflow produces.
 #
 # GitHub Releases: each platform publishes to its OWN release —
-# `android-v<version>` (signed APK + SHA-256 + android-build-meta.json) and
-# `ios-v<version>` (exported IPA + SHA-256 + ios-build-meta.json) — never to `v<version>`. release.yml
+# `v<version>-android` (signed APK + SHA-256 + android-build-meta.json) and
+# `v<version>-ios` (exported IPA + SHA-256 + ios-build-meta.json) — never to `v<version>`. release.yml
 # publishes `v<version>` BEFORE dispatching this workflow and the repo has
 # immutable releases enabled, so assets cannot be added to it. Same scheme as
-# tauri-release.yml's `desktop-v<version>` (#957). verify-release-live.yml reads
-# the build metadata from the latest `android-v*` / `ios-v*` release.
+# tauri-release.yml's `v<version>-desktop` (#957). verify-release-live.yml reads
+# the build metadata from the latest `v*-android` / `v*-ios` release.
 #
 # Trigger: workflow_call from release.yml (Android, the normal path) and
 # workflow_dispatch from release.yml's `dispatch` job (iOS, see #712), or by hand.
@@ -30,7 +30,7 @@
 # still-DRAFT `v<version>` release, so `releases/latest/download/llamenos-android.apk`
 # is a permanent download link. A published release is immutable, which is why
 # release.yml holds `v<version>` as a draft until this has finished. The
-# `android-v<version>` release above is still published unchanged.
+# `v<version>-android` release above is still published unchanged.
 # Epic 210: Mobile Release Prep, Epic 290: Mobile App Distribution & Update Management.
 
 name: Mobile Release
@@ -127,7 +127,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # Immutable releases: once `android-v<version>` is published its assets can
+      # Immutable releases: once `v<version>-android` is published its assets can
       # never change, and a re-run builds DIFFERENT bytes (new versionCode), so it
       # cannot converge on the published release. Stop before spending a Rust +
       # Gradle build on a run whose upload is guaranteed to be refused.
@@ -136,7 +136,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESOLVED_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="android-v${RESOLVED_VERSION}"
+          TAG="v${RESOLVED_VERSION}-android"
           PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
           if [ -n "$PUBLISHED" ]; then
@@ -325,12 +325,12 @@ jobs:
       # `android-release` workflow artifact above; the release published here
       # carries the installable APK, its checksum and build metadata.
       #
-      # Published to a DEDICATED `android-v<version>` release, not `v<version>`:
+      # Published to a DEDICATED `v<version>-android` release, not `v<version>`:
       # release.yml publishes `v<version>` BEFORE dispatching this workflow and
       # the repo has immutable releases enabled, so `gh release upload
       # v<version>` is rejected — assets can never be added to a published
       # release. Same approach (and naming) as tauri-release.yml's
-      # `desktop-v<version>` (#957).
+      # `v<version>-desktop` (#957).
       #
       # Draft-first, then publish: the release is created with its full asset set,
       # the set is verified, and only then made public (and so immutable). Any
@@ -344,7 +344,7 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          TAG="android-v${VERSION}"
+          TAG="v${VERSION}-android"
 
           APK=$(find apps/android/app/build/outputs/apk/release -name "*.apk" | head -1)
           CHECKSUM=$(find apps/android/app/build/outputs/apk/release -name "*.sha256" | head -1)
@@ -383,7 +383,7 @@ jobs:
             echo
             echo "Build number (versionCode): \`${RUN_NUMBER}\`."
             echo
-            echo "This is a separate \`android-v${VERSION}\` release because the \`v${VERSION}\` release is immutable once published and cannot accept Android assets."
+            echo "This is a separate \`v${VERSION}-android\` release because the \`v${VERSION}\` release is immutable once published and cannot accept Android assets."
           } > release-body.md
 
           # bash-3.2-safe (macOS /bin/bash): no `mapfile`/`readarray` (bash 4+).
@@ -422,7 +422,7 @@ jobs:
               --draft \
               --latest=false \
               --target "$(git rev-parse HEAD)" \
-              --title "Android v${VERSION}" \
+              --title "v${VERSION} Android" \
               --notes-file release-body.md \
               ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
               "${ASSETS[@]}"; then
@@ -448,7 +448,7 @@ jobs:
           fi
 
           # ── Version-free alias on the DRAFT v<version> release ──
-          # Done BEFORE android-v<version> is published: that publish is immutable and a
+          # Done BEFORE v<version>-android is published: that publish is immutable and a
           # re-run is refused afterwards, so an alias upload that failed after it could
           # never be retried. Failing here leaves nothing public.
           #
@@ -500,7 +500,7 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # Immutable releases: once `ios-v<version>` is published its assets can
+      # Immutable releases: once `v<version>-ios` is published its assets can
       # never change. Stop before spending a macOS build on a run whose build
       # metadata upload is guaranteed to be refused.
       - name: Refuse to rebuild an already-published iOS release
@@ -508,7 +508,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESOLVED_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          TAG="ios-v${RESOLVED_VERSION}"
+          TAG="v${RESOLVED_VERSION}-ios"
           PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
             --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
           if [ -n "$PUBLISHED" ]; then
@@ -685,11 +685,11 @@ jobs:
             apps/ios/build/Llamenos.xcarchive/dSYMs/
           retention-days: 30
 
-      # Published to a DEDICATED `ios-v<version>` release, not `v<version>`:
+      # Published to a DEDICATED `v<version>-ios` release, not `v<version>`:
       # release.yml publishes `v<version>` BEFORE dispatching this workflow and
       # the repo has immutable releases enabled, so `gh release upload
       # v<version>` is rejected. Same approach (and naming) as tauri-release.yml's
-      # `desktop-v<version>` (#957) and this file's `android-v<version>` job.
+      # `v<version>-desktop` (#957) and this file's `v<version>-android` job.
       #
       # Draft-first, then publish: the release is created as a draft with its full
       # asset set (IPA + SHA-256 + ios-build-meta.json), the set is verified, and
@@ -713,7 +713,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$RESOLVED_VERSION"
-          TAG="ios-v${VERSION}"
+          TAG="v${VERSION}-ios"
 
           IPA=$(find apps/ios/build/export -maxdepth 1 -name "*.ipa" | head -1)
           CHECKSUM=$(find apps/ios/build/export -maxdepth 1 -name "*.sha256" | head -1)
@@ -739,7 +739,7 @@ jobs:
             echo
             echo "Build number (CFBundleVersion): \`${RUN_NUMBER}\`."
             echo
-            echo "This is a separate \`ios-v${VERSION}\` release because the \`v${VERSION}\` release is immutable once published and cannot accept iOS assets."
+            echo "This is a separate \`v${VERSION}-ios\` release because the \`v${VERSION}\` release is immutable once published and cannot accept iOS assets."
           } > release-body.md
 
           # bash-3.2-safe (macOS /bin/bash): no `mapfile`/`readarray` (bash 4+).
@@ -778,7 +778,7 @@ jobs:
               --draft \
               --latest=false \
               --target "$(git rev-parse HEAD)" \
-              --title "iOS v${VERSION}" \
+              --title "v${VERSION} iOS" \
               --notes-file release-body.md \
               ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
               "${ASSETS[@]}"; then
