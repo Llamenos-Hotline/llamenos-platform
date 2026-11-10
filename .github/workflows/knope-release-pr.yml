@@ -180,6 +180,14 @@ jobs:
       # types under a non-product scope, then every other type in a collapsed
       # block. knope's CreatePullRequest rewrites the body on every run, so
       # appending here is idempotent per run.
+      #
+      # The body is read and written through the REST pulls endpoint, never
+      # `gh pr view` / `gh pr edit`: those go through GraphQL and `gh pr edit`
+      # queries the `login` field of organization objects, which needs the
+      # `read:org` scope RELEASE_BOT_TOKEN does not (and must not) have — the
+      # step failed every release-PR prep run with "required scopes ...
+      # ['read:org']" on 918d623fc. PATCH /pulls/{n} needs only the pull-request
+      # write access the token already has.
       - name: List what the notes leave out in the release PR body
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
@@ -196,13 +204,13 @@ jobs:
           excluded=$(bun scripts/release/notes-scope.ts excluded "$LAST_TAG" "$MAIN_SHA")
           echo "$excluded"
           body="${RUNNER_TEMP}/release-pr-body.md"
-          gh pr view "$pr" --repo "$REPO" --json body --jq .body > "$body"
+          gh api "repos/${REPO}/pulls/${pr}" --jq '.body // ""' > "$body"
           # A run that hit `no_release` did not rewrite the body; replace the
           # previous section instead of stacking a second one under it.
           marker='<!-- notes-scope -->'
           sed -i "/^${marker}\$/,\$d" "$body"
           printf '\n%s\n%s\n' "$marker" "$excluded" >> "$body"
-          gh pr edit "$pr" --repo "$REPO" --body-file "$body"
+          gh api -X PATCH "repos/${REPO}/pulls/${pr}" -F "body=@${body}" --silent
 
       # #1817 / #1114: the release PR can never earn `fleet/review` on its
       # own. It is authored by llamenos-auto, and GitHub refuses to request a
