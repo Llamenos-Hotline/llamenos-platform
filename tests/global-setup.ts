@@ -89,10 +89,12 @@ async function verifyAdminAccess(baseUrl: string): Promise<void> {
   })
   if (!res.ok) {
     const text = await res.text()
-    // The server reports "signature_verification_failed" for an unknown user
-    // too (apps/worker/middleware/auth.ts logs that reason whenever an auth
-    // payload was present and `authenticateRequest` returned nothing), so a
-    // 401 here is NOT evidence that the signing is wrong.
+    // Since #1700 the server distinguishes the causes in its own log: a
+    // correctly-signed request from a key with no user row is logged as
+    // `unregistered_pubkey` (apps/worker/middleware/auth.ts), while
+    // `signature_verification_failed` means the signature genuinely did not
+    // verify. A 401 here is still NOT evidence that the signing is wrong —
+    // check the server's auth log for the reason.
     //
     // Against a deployed target it almost always means one thing, and it is
     // worth naming because the sequence is counter-intuitive: `api-bootstrap`

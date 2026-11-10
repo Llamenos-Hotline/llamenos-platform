@@ -294,10 +294,16 @@ describe('authenticateRequest', () => {
     checkAndMarkAuthNonce: overrides?.checkAndMarkAuthNonce ?? vi.fn().mockResolvedValue(true),
   })
 
-  it('returns null when no Authorization header', async () => {
+  it('fails with missing_credentials when no Authorization header', async () => {
     const svc = makeIdentityService()
     const req = makeRequest({})
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'missing_credentials' })
+  })
+
+  it('fails with malformed_auth_payload when a Bearer header is not parseable', async () => {
+    const svc = makeIdentityService()
+    const req = makeRequest({ Authorization: 'Bearer not-json' })
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'malformed_auth_payload' })
   })
 
   it('authenticates via session token when valid', async () => {
@@ -308,36 +314,36 @@ describe('authenticateRequest', () => {
     })
     const req = makeRequest({ Authorization: 'Session validtoken' })
     const result = await authenticateRequest(req, svc as never)
-    expect(result).not.toBeNull()
-    expect(result?.pubkey).toBe(pubkey)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.pubkey).toBe(pubkey)
   })
 
-  it('returns null when session token validation fails', async () => {
+  it('fails with invalid_session when session token validation fails', async () => {
     const svc = makeIdentityService({
       validateSession: vi.fn().mockRejectedValue(new Error('invalid')),
     })
     const req = makeRequest({ Authorization: 'Session badtoken' })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'invalid_session' })
   })
 
-  it('returns null when session user is inactive', async () => {
+  it('fails with inactive_user when session user is inactive', async () => {
     const pubkey = 'a'.repeat(64)
     const svc = makeIdentityService({
       validateSession: vi.fn().mockResolvedValue({ pubkey }),
       getUserInternal: vi.fn().mockResolvedValue({ pubkey, active: false }),
     })
     const req = makeRequest({ Authorization: 'Session token' })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'inactive_user' })
   })
 
-  it('returns null when session user not found', async () => {
+  it('fails with unregistered_pubkey when session user not found', async () => {
     const pubkey = 'a'.repeat(64)
     const svc = makeIdentityService({
       validateSession: vi.fn().mockResolvedValue({ pubkey }),
       getUserInternal: vi.fn().mockResolvedValue(null),
     })
     const req = makeRequest({ Authorization: 'Session token' })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'unregistered_pubkey' })
   })
 
   it('authenticates via valid Ed25519 signature', async () => {
@@ -352,10 +358,11 @@ describe('authenticateRequest', () => {
       headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
     })
     const result = await authenticateRequest(req, svc as never)
-    expect(result?.pubkey).toBe(pubkeyHex)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.pubkey).toBe(pubkeyHex)
   })
 
-  it('returns null when Ed25519 user is inactive', async () => {
+  it('fails with inactive_user when Ed25519 user is inactive', async () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
@@ -366,16 +373,10 @@ describe('authenticateRequest', () => {
     const req = new Request('http://localhost/api/me', {
       headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
     })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'inactive_user' })
   })
 
-  it('returns null when Bearer payload is malformed JSON', async () => {
-    const svc = makeIdentityService()
-    const req = makeRequest({ Authorization: 'Bearer not-json' })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
-  })
-
-  it('returns null when Ed25519 token is replayed (nonce already used)', async () => {
+  it('fails with replay_detected when Ed25519 token is replayed (nonce already used)', async () => {
     const { privKey, pubkeyHex } = makeEd25519Keys()
     const ts = Date.now()
     const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
@@ -388,7 +389,22 @@ describe('authenticateRequest', () => {
     const req = new Request('http://localhost/api/me', {
       headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
     })
-    expect(await authenticateRequest(req, svc as never)).toBeNull()
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'replay_detected' })
+  })
+
+  it('fails with nonce_store_unavailable when the nonce store cannot be reached (fail-closed)', async () => {
+    const { privKey, pubkeyHex } = makeEd25519Keys()
+    const ts = Date.now()
+    const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
+    const svc = makeIdentityService({
+      checkAndMarkAuthNonce: vi.fn().mockRejectedValue(new Error('db down')),
+      getUserInternal: vi.fn().mockResolvedValue({ pubkey: pubkeyHex, active: true }),
+    })
+    const req = new Request('http://localhost/api/me', {
+      headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
+    })
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'nonce_store_unavailable' })
   })
 
   it('calls checkAndMarkAuthNonce with SHA-256 hash of the token signature', async () => {
@@ -421,7 +437,8 @@ describe('authenticateRequest', () => {
     })
     const req = makeRequest({ Authorization: 'Session validtoken' })
     const result = await authenticateRequest(req, svc as never)
-    expect(result?.newSessionToken).toBe(newToken)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.newSessionToken).toBe(newToken)
   })
 
   it('does not set newSessionToken when session is valid without rotation', async () => {
@@ -432,6 +449,76 @@ describe('authenticateRequest', () => {
     })
     const req = makeRequest({ Authorization: 'Session validtoken' })
     const result = await authenticateRequest(req, svc as never)
-    expect(result?.newSessionToken).toBeUndefined()
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.newSessionToken).toBeUndefined()
+  })
+
+  // -------------------------------------------------------------------------
+  // Failure-reason precision (#1700)
+  //
+  // Every failure used to surface in the server log as
+  // "signature_verification_failed" whenever a Bearer payload parsed — even
+  // when the signature was valid and the key was simply never enrolled. The
+  // reason must name the real cause; the client's 401 stays uniform either way.
+  // -------------------------------------------------------------------------
+
+  it('fails with unregistered_pubkey for a VALID signature from a never-enrolled key', async () => {
+    const { privKey, pubkeyHex } = makeEd25519Keys()
+    const ts = Date.now()
+    const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token, nonce: ED25519_TEST_NONCE }
+    const svc = makeIdentityService({
+      getUserInternal: vi.fn().mockResolvedValue(null), // no user row for this key
+    })
+    const req = new Request('http://localhost/api/me', {
+      headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
+    })
+    // The signature verifies — the failure is enrollment, and the log must say so.
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'unregistered_pubkey' })
+  })
+
+  it('fails with signature_verification_failed only when the signature does not verify', async () => {
+    const { privKey, pubkeyHex } = makeEd25519Keys()
+    const ts = Date.now()
+    const token = await makeEd25519Token(privKey, pubkeyHex, ts, 'GET', '/api/me')
+    // Tamper: flip the last byte of the signature
+    const tampered = `${token.slice(0, -2)}${token.endsWith('00') ? '01' : '00'}`
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token: tampered, nonce: ED25519_TEST_NONCE }
+    const svc = makeIdentityService({
+      getUserInternal: vi.fn().mockResolvedValue({ pubkey: pubkeyHex, active: true }),
+    })
+    const req = new Request('http://localhost/api/me', {
+      headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
+    })
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'signature_verification_failed' })
+    // The user lookup must not run for a signature that did not verify
+    expect(svc.getUserInternal).not.toHaveBeenCalled()
+  })
+
+  it('fails with stale_token for an expired timestamp', async () => {
+    const { privKey, pubkeyHex } = makeEd25519Keys()
+    const staleTs = Date.now() - 10 * 60 * 1000
+    const token = await makeEd25519Token(privKey, pubkeyHex, staleTs, 'GET', '/api/me')
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: staleTs, token, nonce: ED25519_TEST_NONCE }
+    const svc = makeIdentityService()
+    const req = new Request('http://localhost/api/me', {
+      headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
+    })
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'stale_token' })
+  })
+
+  it('fails with missing_nonce when the token carries no nonce', async () => {
+    const { privKey, pubkeyHex } = makeEd25519Keys()
+    const ts = Date.now()
+    // Sign the nonce-less message shape — the signature is genuine, but the
+    // nonce-bearing header domain requires a nonce.
+    const message = buildAuthMessage(pubkeyHex, ts, 'GET', '/api/me', undefined)
+    const token = bytesToHex(ed25519.sign(message, privKey))
+    const payload: AuthPayload = { pubkey: pubkeyHex, timestamp: ts, token }
+    const svc = makeIdentityService()
+    const req = new Request('http://localhost/api/me', {
+      headers: { Authorization: `Bearer ${JSON.stringify(payload)}` },
+    })
+    expect(await authenticateRequest(req, svc as never)).toEqual({ ok: false, reason: 'missing_nonce' })
   })
 })

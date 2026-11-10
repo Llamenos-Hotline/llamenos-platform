@@ -241,7 +241,14 @@ routes.patch('/:hubId',
     try {
       const result = await services.settings.updateHub(hubId, body)
       return c.json(result)
-    } catch {
+    } catch (err) {
+      // A ServiceError carries its HTTP answer (e.g. 404 for an unknown hub) —
+      // honour it. Anything else is a server fault: log it (#1700 — a bare
+      // catch here answered 500 with no log line at all).
+      if (err instanceof ServiceError) {
+        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
+      }
+      logger.error('Failed to update hub', err, { hubId })
       return c.json({ error: 'Failed to update hub' }, 500)
     }
   },
@@ -289,8 +296,14 @@ routes.post('/:hubId/members',
       await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: body.roleIds }, undefined, hubId)
       return c.json(result)
     } catch (err) {
-      // A refusal (e.g. demoting the hub's last admin) is the caller's answer, not a server fault
-      if (err instanceof ServiceError && err.status === 409) return c.json({ error: err.message }, 409)
+      // A refusal is the caller's answer, not a server fault: the target
+      // pubkey is not a registered user (404 — previously served as an
+      // unlogged 500, #1700) or the change would demote the hub's last
+      // admin (409). Anything else must be logged, never swallowed.
+      if (err instanceof ServiceError) {
+        return c.json({ error: err.message }, err.status as 404 | 409)
+      }
+      logger.error('Failed to add hub member', err, { hubId })
       return c.json({ error: 'Failed to add member' }, 500)
     }
   },
@@ -336,8 +349,13 @@ routes.delete('/:hubId/members/:pubkey',
       await audit(services.audit, 'userRemoved', actorPubkey, { target: targetPubkey }, undefined, hubId)
       return c.json({ ok: true })
     } catch (err) {
-      // A refusal (the hub's last admin) is the caller's answer, not a server fault
-      if (err instanceof ServiceError && err.status === 409) return c.json({ error: err.message }, 409)
+      // A refusal is the caller's answer, not a server fault: the target
+      // pubkey is not a registered user (404) or is the hub's last admin
+      // (409). Anything else must be logged, never swallowed (#1700).
+      if (err instanceof ServiceError) {
+        return c.json({ error: err.message }, err.status as 404 | 409)
+      }
+      logger.error('Failed to remove hub member', err, { hubId })
       return c.json({ error: 'Failed to remove member' }, 500)
     }
   },
@@ -459,8 +477,15 @@ routes.get('/:hubId/key',
       if (!myEnvelope) return c.json({ error: 'No key envelope for this user' }, 404)
 
       return c.json({ envelope: myEnvelope })
-    } catch {
-      return c.json({ error: 'Hub not found' }, 404)
+    } catch (err) {
+      // hubContext has already 404'd an unknown hub, so reaching the catch at
+      // all means a store fault: answer 500 and log it (#1700 — a bare catch
+      // here reported a database failure as "Hub not found" and logged nothing).
+      if (err instanceof ServiceError) {
+        return c.json({ error: err.message }, err.status as 404 | 500)
+      }
+      logger.error('Failed to read hub key envelopes', err, { hubId })
+      return c.json({ error: 'Failed to read hub key' }, 500)
     }
   },
 )

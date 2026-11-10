@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import { authenticateRequest, parseAuthHeader, parseSessionHeader, validateToken } from '../lib/auth'
+import type { AuthSuccess } from '../lib/auth'
 import { resolveAllRoleIds, resolvePermissions, permissionGranted } from '@shared/permissions'
 import { createLogger } from '../lib/logger'
 import { incError } from '../lib/error-counter'
@@ -12,7 +13,12 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
   const requestId = c.get('requestId')
   const reqLog = requestId ? log.child({ requestId }) : log
 
-  let authResult = await authenticateRequest(c.req.raw, services.identity)
+  const result = await authenticateRequest(c.req.raw, services.identity)
+  // Why authentication failed — for the log line below. The client never sees
+  // it (uniform 401), so it names the real cause, e.g. `unregistered_pubkey`
+  // for a correctly-signed request from a never-enrolled key (#1700).
+  const failureReason = result.ok ? undefined : result.reason
+  let authResult: AuthSuccess | null = result.ok ? result : null
 
   // Store session token if session-based auth was used. A renewal rotates the
   // token inside validateSession, so the header's token no longer names a row:
@@ -52,14 +58,17 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
     // Log auth failure with minimal non-PII info
     const authHeader = c.req.header('Authorization') ?? null
     const authPayload = parseAuthHeader(authHeader)
-    const sessionToken = parseSessionHeader(authHeader)
 
     const pubkeyPrefix = authPayload?.pubkey?.slice(0, 8) || undefined
     const method = c.req.method
     const path = new URL(c.req.url).pathname
 
     reqLog.warn('Auth failed', {
-      reason: sessionToken ? 'invalid_session' : authPayload ? 'signature_verification_failed' : 'missing_credentials',
+      // The reason authenticateRequest computed, never a guess from the shape
+      // of the credentials — "payload parsed" used to be logged as
+      // `signature_verification_failed` even when the signature verified and
+      // the key was simply never enrolled (#1700).
+      reason: failureReason ?? 'missing_credentials',
       pubkeyPrefix,
       method,
       path,

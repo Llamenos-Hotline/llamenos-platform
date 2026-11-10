@@ -31,6 +31,7 @@ vi.mock('../../lib/auth', async (importOriginal) => {
     ...actual,
     verifyAuthToken: vi.fn().mockResolvedValue(true),
     authenticateRequest: vi.fn().mockResolvedValue({
+      ok: true,
       pubkey: FIXED_PUBKEY,
       user: {
         pubkey: FIXED_PUBKEY,

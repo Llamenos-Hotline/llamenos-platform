@@ -16,6 +16,12 @@ const mockAuthenticateRequest = vi.fn()
 const mockParseAuthHeader = vi.fn()
 const mockParseSessionHeader = vi.fn()
 const mockValidateToken = vi.fn()
+// Hoisted: the real createLogger runs at middleware module scope, i.e. during
+// import — before ordinary const initializers would execute.
+const { mockLoggerWarn, mockLoggerError } = vi.hoisted(() => ({
+  mockLoggerWarn: vi.fn(),
+  mockLoggerError: vi.fn(),
+}))
 
 vi.mock('@worker/lib/auth', () => ({
   authenticateRequest: (...args: unknown[]) => mockAuthenticateRequest(...args),
@@ -27,9 +33,9 @@ vi.mock('@worker/lib/auth', () => ({
 vi.mock('@worker/lib/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    warn: mockLoggerWarn,
+    error: mockLoggerError,
+    child: () => ({ info: vi.fn(), warn: mockLoggerWarn, error: mockLoggerError }),
   }),
 }))
 
@@ -111,7 +117,7 @@ describe('auth middleware', () => {
   })
 
   it('returns 401 when no auth header is present', async () => {
-    mockAuthenticateRequest.mockResolvedValue(null)
+    mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -121,7 +127,7 @@ describe('auth middleware', () => {
   })
 
   it('returns 401 for invalid auth token', async () => {
-    mockAuthenticateRequest.mockResolvedValue(null)
+    mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
     const { app } = createApp()
 
     const res = await req(app, '/test', { Authorization: 'Bearer invalid' })
@@ -130,7 +136,7 @@ describe('auth middleware', () => {
 
   it('authenticates valid request and sets context', async () => {
     const user = makeUser()
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -141,7 +147,7 @@ describe('auth middleware', () => {
 
   it('resolves permissions from user roles', async () => {
     const user = makeUser({ roles: ['role-volunteer'] })
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -153,7 +159,7 @@ describe('auth middleware', () => {
 
   it('resolves wildcard permissions for super admin', async () => {
     const user = makeUser({ roles: ['role-super-admin'] })
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -164,7 +170,7 @@ describe('auth middleware', () => {
 
   describe('dev-mode signature bypass', () => {
     it('falls back to dev bypass when DEV_AUTH_BYPASS=true and auth fails', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       const user = makeUser()
       mockParseAuthHeader.mockReturnValue({ pubkey: user.pubkey, timestamp: Date.now(), token: 'abc' })
       mockValidateToken.mockReturnValue(true)
@@ -182,7 +188,7 @@ describe('auth middleware', () => {
     })
 
     it('does NOT use dev bypass when DEV_AUTH_BYPASS is not set (even in development)', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       const user = makeUser()
       mockParseAuthHeader.mockReturnValue({ pubkey: user.pubkey, timestamp: Date.now(), token: 'abc' })
       mockValidateToken.mockReturnValue(true)
@@ -198,7 +204,7 @@ describe('auth middleware', () => {
     })
 
     it('does NOT use dev bypass in production even with DEV_AUTH_BYPASS=true', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       const { app } = createApp()
 
       const res = await req(app, '/test',
@@ -209,7 +215,7 @@ describe('auth middleware', () => {
     })
 
     it('dev bypass rejects inactive users', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       const user = makeUser({ active: false })
       mockParseAuthHeader.mockReturnValue({ pubkey: user.pubkey, timestamp: Date.now(), token: 'abc' })
       mockValidateToken.mockReturnValue(true)
@@ -225,7 +231,7 @@ describe('auth middleware', () => {
     })
 
     it('dev bypass rejects unregistered pubkeys', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       mockParseAuthHeader.mockReturnValue({ pubkey: 'unknown', timestamp: Date.now(), token: 'abc' })
       mockValidateToken.mockReturnValue(true)
 
@@ -240,7 +246,7 @@ describe('auth middleware', () => {
     })
 
     it('dev bypass still validates token freshness', async () => {
-      mockAuthenticateRequest.mockResolvedValue(null)
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
       mockParseAuthHeader.mockReturnValue({ pubkey: 'abc', timestamp: Date.now(), token: 'abc' })
       mockValidateToken.mockReturnValue(false) // Token is stale
 
@@ -257,7 +263,7 @@ describe('auth middleware', () => {
   it('sets X-New-Session-Token header when session was rotated', async () => {
     const user = makeUser()
     const newToken = 'rotated-session-token-hex' // gitleaks:allow
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user, newSessionToken: newToken })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user, newSessionToken: newToken })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -269,7 +275,7 @@ describe('auth middleware', () => {
     const user = makeUser()
     const newToken = 'rotated-session-token-hex' // gitleaks:allow
     mockParseSessionHeader.mockReturnValue('stale-header-token')
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user, newSessionToken: newToken })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user, newSessionToken: newToken })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -278,7 +284,7 @@ describe('auth middleware', () => {
 
   it('does not set X-New-Session-Token header when session was not rotated', async () => {
     const user = makeUser()
-    mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+    mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -287,7 +293,7 @@ describe('auth middleware', () => {
   })
 
   it('increments auth error counter on failure', async () => {
-    mockAuthenticateRequest.mockResolvedValue(null)
+    mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'missing_credentials' })
     const { app } = createApp()
 
     const res = await req(app, '/test')
@@ -296,10 +302,64 @@ describe('auth middleware', () => {
     expect(incError).toHaveBeenCalledWith('auth')
   })
 
+  // #1700: the logged reason is the artefact that diagnoses a failure, and no
+  // test used to assert it — so "valid signature, never-enrolled key" was
+  // reported as signature_verification_failed for months. Pin the passthrough.
+  describe('failure-reason logging', () => {
+    it('logs unregistered_pubkey, not signature_verification_failed, when authenticateRequest says so', async () => {
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'unregistered_pubkey' })
+      const pubkey = 'b'.repeat(64)
+      mockParseAuthHeader.mockReturnValue({ pubkey, timestamp: Date.now(), token: 'c'.repeat(128) })
+      const { app } = createApp()
+
+      const res = await req(app, '/test', { Authorization: `Bearer {"pubkey":"${pubkey}"}` })
+      expect(res.status).toBe(401)
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Auth failed', expect.objectContaining({
+        reason: 'unregistered_pubkey',
+        pubkeyPrefix: pubkey.slice(0, 8),
+      }))
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith('Auth failed', expect.objectContaining({
+        reason: 'signature_verification_failed',
+      }))
+    })
+
+    it('still logs signature_verification_failed when the signature genuinely does not verify', async () => {
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'signature_verification_failed' })
+      mockParseAuthHeader.mockReturnValue({ pubkey: 'b'.repeat(64), timestamp: Date.now(), token: 'c'.repeat(128) })
+      const { app } = createApp()
+
+      const res = await req(app, '/test', { Authorization: 'Bearer {"pubkey":"bb"}' })
+      expect(res.status).toBe(401)
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Auth failed', expect.objectContaining({
+        reason: 'signature_verification_failed',
+      }))
+    })
+
+    it('logs invalid_session for a failed session token', async () => {
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'invalid_session' })
+      mockParseSessionHeader.mockReturnValue('some-session-token')
+      const { app } = createApp()
+
+      const res = await req(app, '/test', { Authorization: 'Session some-session-token' })
+      expect(res.status).toBe(401)
+      expect(mockLoggerWarn).toHaveBeenCalledWith('Auth failed', expect.objectContaining({
+        reason: 'invalid_session',
+      }))
+    })
+
+    it('never lets the reason reach the client — the 401 body stays uniform', async () => {
+      mockAuthenticateRequest.mockResolvedValue({ ok: false, reason: 'unregistered_pubkey' })
+      const { app } = createApp()
+
+      const res = await req(app, '/test', { Authorization: 'Bearer {"pubkey":"bb"}' })
+      expect(await res.json()).toEqual({ error: 'Authentication failed' })
+    })
+  })
+
   describe('WebAuthn enforcement', () => {
     it('allows access when WebAuthn is not required', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
       const { app, services } = createApp()
       ;(services.identity.getWebAuthnSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
         requireForAdmins: false,
@@ -312,7 +372,7 @@ describe('auth middleware', () => {
 
     it('allows access when WebAuthn is required and user has passkeys', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
       const { app, services } = createApp()
       ;(services.identity.getWebAuthnSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
         requireForAdmins: false,
@@ -328,7 +388,7 @@ describe('auth middleware', () => {
 
     it('returns 403 when WebAuthn is required for users and user has no passkeys', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
       const { app, services } = createApp()
       ;(services.identity.getWebAuthnSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
         requireForAdmins: false,
@@ -346,7 +406,7 @@ describe('auth middleware', () => {
 
     it('returns 403 when WebAuthn is required for admins and admin has no passkeys', async () => {
       const user = makeUser({ roles: ['role-super-admin'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
       const { app, services } = createApp()
       ;(services.identity.getWebAuthnSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
         requireForAdmins: true,
@@ -364,7 +424,7 @@ describe('auth middleware', () => {
 
     it('allows access to /api/auth/me when WebAuthn is required but not registered', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
 
       const app = new Hono<AppEnv>()
       const services = makeServices()
@@ -390,7 +450,7 @@ describe('auth middleware', () => {
 
     it('allows access to /api/webauthn routes when WebAuthn is required but not registered', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
 
       const app = new Hono<AppEnv>()
       const services = makeServices()
@@ -416,7 +476,7 @@ describe('auth middleware', () => {
 
     it('allows access to /api/auth/me/logout when WebAuthn is required but not registered', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
 
       const app = new Hono<AppEnv>()
       const services = makeServices()
@@ -442,7 +502,7 @@ describe('auth middleware', () => {
 
     it('does not enforce WebAuthn for users when only requireForAdmins is true', async () => {
       const user = makeUser({ roles: ['role-volunteer'] })
-      mockAuthenticateRequest.mockResolvedValue({ pubkey: user.pubkey, user })
+      mockAuthenticateRequest.mockResolvedValue({ ok: true, pubkey: user.pubkey, user })
       const { app, services } = createApp()
       ;(services.identity.getWebAuthnSettings as ReturnType<typeof vi.fn>).mockResolvedValue({
         requireForAdmins: true,

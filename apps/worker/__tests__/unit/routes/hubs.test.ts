@@ -467,6 +467,41 @@ describe('hubs routes', () => {
       })
       expect(res.status).toBe(403)
     })
+
+    // #1700: a bare catch turned the service's 404 into an unlogged 500.
+    it('answers 404 when the hub does not exist (#1700)', async () => {
+      const updateHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { updateHub: updateHubSpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Updated' }),
+      })
+
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('Not found')
+    })
+
+    it('answers 500 for an unexpected store failure', async () => {
+      const updateHubSpy = vi.fn().mockRejectedValue(new Error('connection reset'))
+      const { app } = createTestApp({
+        permissions: ['system:manage-hubs'],
+        serviceMock: { settings: { updateHub: updateHubSpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Updated' }),
+      })
+
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toBe('Failed to update hub')
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -518,6 +553,47 @@ describe('hubs routes', () => {
       expect(res.status).toBe(409)
       expect((await res.json()).error).toContain('no admin')
       expect(auditLogSpy).not.toHaveBeenCalled()
+    })
+
+    // #1700: the target pubkey not being a registered user used to surface as
+    // an unlogged 500. It is a well-formed, authorised request about a user
+    // that does not exist — a 404, and the audit log stays silent.
+    it('answers 404 when the target pubkey is not a registered user (#1700)', async () => {
+      const setHubRoleSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'User not found'))
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['hubs:manage-members', ...VOLUNTEER_PERMISSIONS],
+        hubId: 'hub-1',
+        serviceMock: { identity: { setHubRole: setHubRoleSpy }, settings: {} },
+      })
+
+      const res = await app.request('/hubs/hub-1/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), roleIds: ['role-volunteer'] }),
+      })
+
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('User not found')
+      expect(auditLogSpy).not.toHaveBeenCalled()
+    })
+
+    it('answers 500 for an unexpected store failure', async () => {
+      const setHubRoleSpy = vi.fn().mockRejectedValue(new Error('connection reset'))
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-members', ...VOLUNTEER_PERMISSIONS],
+        hubId: 'hub-1',
+        serviceMock: { identity: { setHubRole: setHubRoleSpy }, settings: {} },
+      })
+
+      const res = await app.request('/hubs/hub-1/members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pubkey: 'b'.repeat(64), roleIds: ['role-volunteer'] }),
+      })
+
+      expect(res.status).toBe(500)
+      // The client gets a generic message — never the store's internals
+      expect((await res.json()).error).toBe('Failed to add member')
     })
 
     it('returns 403 without hubs:manage-members permission', async () => {
@@ -600,6 +676,22 @@ describe('hubs routes', () => {
 
       expect(res.status).toBe(409)
       expect((await res.json()).error).toContain('no admin')
+      expect(auditLogSpy).not.toHaveBeenCalled()
+    })
+
+    // #1700: removing a pubkey that is not a registered user used to surface
+    // as an unlogged 500 — removeHubRole throws ServiceError(404).
+    it('answers 404 when the target pubkey is not a registered user (#1700)', async () => {
+      const removeHubRoleSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'User not found'))
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['hubs:manage-members'],
+        serviceMock: { identity: { removeHubRole: removeHubRoleSpy }, settings: {} },
+      })
+
+      const res = await app.request('/hubs/hub-1/members/member-pubkey', { method: 'DELETE' })
+
+      expect(res.status).toBe(404)
+      expect((await res.json()).error).toBe('User not found')
       expect(auditLogSpy).not.toHaveBeenCalled()
     })
 
@@ -864,8 +956,8 @@ describe('hubs routes', () => {
       expect(res.status).toBe(403)
     })
 
-    it('returns 404 when hub not found', async () => {
-      const getHubKeyEnvelopesSpy = vi.fn().mockRejectedValue(new Error('Not found'))
+    it('honours a ServiceError status from the envelope store', async () => {
+      const getHubKeyEnvelopesSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
@@ -874,6 +966,21 @@ describe('hubs routes', () => {
 
       const res = await app.request('/hubs/hub-1/key')
       expect(res.status).toBe(404)
+    })
+
+    // #1700: a bare catch reported ANY store fault as 404 "Hub not found" and
+    // logged nothing. A database failure is a 500.
+    it('answers 500 when the envelope store fails unexpectedly', async () => {
+      const getHubKeyEnvelopesSpy = vi.fn().mockRejectedValue(new Error('Not found'))
+      const { app } = createTestApp({
+        permissions: ['hubs:read'],
+        userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
+        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+      })
+
+      const res = await app.request('/hubs/hub-1/key')
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toBe('Failed to read hub key')
     })
   })
 
