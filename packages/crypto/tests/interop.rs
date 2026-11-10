@@ -8,7 +8,6 @@
 //! Run with: cargo test --test interop
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use ed25519_dalek;
 use llamenos_core::auth::{
     build_auth_message, create_auth_token_from_signing_key,
     create_auth_token_from_signing_key_without_nonce, verify_auth_token, AuthToken,
@@ -370,8 +369,12 @@ fn generate_and_verify_test_vectors() {
 
     // --- Note encryption roundtrip ---
     let note_payload = r#"{"text":"Test note for interop","fields":{"severity":"high"}}"#;
-    let encrypted_note =
-        encrypt_note(note_payload, &author_x25519, &[admin_x25519.clone()]).unwrap();
+    let encrypted_note = encrypt_note(
+        note_payload,
+        &author_x25519,
+        std::slice::from_ref(&admin_x25519),
+    )
+    .unwrap();
 
     // Author can decrypt
     let author_decrypted = decrypt_note(
@@ -508,8 +511,11 @@ fn generate_and_verify_test_vectors() {
         r#"{"answeredBy":"vol-pubkey-here","callerNumber":"+15551234567","duration":120}"#;
 
     // Sealed for admin only (volunteer can NOT decrypt call records)
-    let call_record_msg =
-        seal_stored_record(call_record_json, &[admin_x25519.clone()], LABEL_CALL_META);
+    let call_record_msg = seal_stored_record(
+        call_record_json,
+        std::slice::from_ref(&admin_x25519),
+        LABEL_CALL_META,
+    );
 
     // Admin can decrypt
     let call_decrypted = open_stored_record(
@@ -561,7 +567,12 @@ fn generate_and_verify_test_vectors() {
     assert!(hpke_unwrap_key(&truncated_env, TEST_ADMIN_SECRET_KEY, LABEL_NOTE_KEY).is_err());
 
     // Note adversarial: tampered content
-    let adv_note = encrypt_note(note_payload, &author_x25519, &[admin_x25519.clone()]).unwrap();
+    let adv_note = encrypt_note(
+        note_payload,
+        &author_x25519,
+        std::slice::from_ref(&admin_x25519),
+    )
+    .unwrap();
     let tampered_note_content = tamper_hex(&adv_note.encrypted_content);
     assert!(decrypt_note(
         &tampered_note_content,
@@ -1025,7 +1036,11 @@ fn call_record_admin_only_decryption() {
     let vol_x25519 = x25519_pubkey(TEST_SECRET_KEY);
 
     let plaintext = r#"{"answeredBy":"vol123","callerNumber":"+1555000"}"#;
-    let encrypted = seal_stored_record(plaintext, &[admin_x25519.clone()], LABEL_CALL_META);
+    let encrypted = seal_stored_record(
+        plaintext,
+        std::slice::from_ref(&admin_x25519),
+        LABEL_CALL_META,
+    );
 
     // Admin can decrypt
     let decrypted = open_stored_record(

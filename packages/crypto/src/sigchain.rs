@@ -464,10 +464,8 @@ mod tests {
         )
         .unwrap();
 
-        let payload = format!(
-            r#"{{"type":"device_add","devicePubkey":"{}","deviceId":"dev-2"}}"#,
-            pubkey2
-        );
+        let payload =
+            format!(r#"{{"type":"device_add","devicePubkey":"{pubkey2}","deviceId":"dev-2"}}"#);
         let link2 = create_sigchain_link(
             &secrets1,
             "link-2",
@@ -502,10 +500,8 @@ mod tests {
         )
         .unwrap();
 
-        let add_payload = format!(
-            r#"{{"type":"device_add","devicePubkey":"{}","deviceId":"dev-2"}}"#,
-            pubkey2
-        );
+        let add_payload =
+            format!(r#"{{"type":"device_add","devicePubkey":"{pubkey2}","deviceId":"dev-2"}}"#);
         let link2 = create_sigchain_link(
             &secrets1,
             "l2",
@@ -517,10 +513,8 @@ mod tests {
         )
         .unwrap();
 
-        let remove_payload = format!(
-            r#"{{"type":"device_remove","devicePubkey":"{}","deviceId":"dev-2"}}"#,
-            pubkey2
-        );
+        let remove_payload =
+            format!(r#"{{"type":"device_remove","devicePubkey":"{pubkey2}","deviceId":"dev-2"}}"#);
         let link3 = create_sigchain_link(
             &secrets1,
             "l3",
@@ -807,9 +801,9 @@ mod tests {
 
         // Print vectors for cross-platform implementers (visible in test output with --nocapture)
         eprintln!("=== SIGCHAIN CROSS-LANGUAGE TEST VECTORS ===");
-        eprintln!("Vector 1 (genesis): {}", hash1);
-        eprintln!("Vector 2 (chained): {}", hash2);
-        eprintln!("Vector 3 (device_add): {}", hash3);
+        eprintln!("Vector 1 (genesis): {hash1}");
+        eprintln!("Vector 2 (chained): {hash2}");
+        eprintln!("Vector 3 (device_add): {hash3}");
         eprintln!("============================================");
     }
 

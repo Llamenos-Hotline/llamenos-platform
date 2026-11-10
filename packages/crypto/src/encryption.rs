@@ -837,7 +837,7 @@ mod tests {
         let (wrong_admin_sk, _wrong_admin_pk) = gen_keypair();
 
         let payload = r#"{"text":"Secret note"}"#;
-        let encrypted = encrypt_note(payload, &author_pk, &[admin_pk.clone()]).unwrap();
+        let encrypted = encrypt_note(payload, &author_pk, std::slice::from_ref(&admin_pk)).unwrap();
 
         let admin_envelope = KeyEnvelope {
             enc: encrypted.admin_envelopes[0].enc.clone(),
@@ -857,7 +857,7 @@ mod tests {
         let (_admin_sk, admin_pk) = gen_keypair();
 
         let payload = r#"{"text":"Tamper test"}"#;
-        let encrypted = encrypt_note(payload, &author_pk, &[admin_pk.clone()]).unwrap();
+        let encrypted = encrypt_note(payload, &author_pk, std::slice::from_ref(&admin_pk)).unwrap();
 
         let mut content_bytes = hex::decode(&encrypted.encrypted_content).unwrap();
         if content_bytes.len() > 15 {
@@ -967,7 +967,7 @@ mod tests {
 
     #[test]
     fn note_with_many_admins() {
-        let (author_sk, author_pk) = gen_keypair();
+        let (_author_sk, author_pk) = gen_keypair();
         let mut admin_pubkeys = vec![];
         let mut admin_sks = vec![];
         for _ in 0..10 {

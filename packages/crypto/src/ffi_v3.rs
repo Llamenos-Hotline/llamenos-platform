@@ -1930,7 +1930,7 @@ mod tests {
         // Derived from a registered label so the raw spelling lives only in
         // labels.rs; an unregistered label must not silently map to an ID.
         let unknown = format!("{}-not-a-real-label", crate::labels::LABEL_MESSAGE);
-        assert_eq!(mobile_label_to_id(unknown.into()).is_err(), true);
+        assert!(mobile_label_to_id(unknown).is_err());
     }
 
     #[test]
@@ -2069,7 +2069,7 @@ mod tests {
 
         let mut key = [0u8; 32];
         getrandom::getrandom(&mut key).unwrap();
-        let key_hex = hex::encode(&key);
+        let key_hex = hex::encode(key);
         let hub_id = "test-hub-1";
 
         mobile_set_hub_key(hub_id.into(), key_hex.clone()).unwrap();
@@ -2124,8 +2124,8 @@ mod tests {
         let mut key2 = [0u8; 32];
         getrandom::getrandom(&mut key1).unwrap();
         getrandom::getrandom(&mut key2).unwrap();
-        let key1_hex = hex::encode(&key1);
-        let key2_hex = hex::encode(&key2);
+        let key1_hex = hex::encode(key1);
+        let key2_hex = hex::encode(key2);
 
         // Helper to encrypt with AES-256-GCM
         let encrypt = |key: &[u8; 32], msg: &str| -> String {
@@ -2177,7 +2177,7 @@ mod tests {
     fn draft_encrypt_decrypt_with_hub_key() {
         let mut key = [0u8; 32];
         getrandom::getrandom(&mut key).unwrap();
-        let key_hex = hex::encode(&key);
+        let key_hex = hex::encode(key);
         let hub_id = "draft-hub-1";
 
         mobile_set_hub_key(hub_id.into(), key_hex).unwrap();
@@ -2200,7 +2200,7 @@ mod tests {
     fn lock_clears_hub_and_server_keys() {
         let mut key_bytes = [0u8; 32];
         getrandom::getrandom(&mut key_bytes).unwrap();
-        let key = hex::encode(&key_bytes);
+        let key = hex::encode(key_bytes);
         mobile_set_hub_key("hub-lock-test".into(), key.clone()).unwrap();
         mobile_set_server_event_keys(key, None).unwrap();
         assert!(mobile_has_hub_key("hub-lock-test".into()));

@@ -55,7 +55,7 @@
     "tauri:build": "bunx tauri build --config apps/desktop/tauri.conf.json",
     "tauri:icon": "bunx tauri icon apps/desktop",
     "crypto:test": "cargo test --manifest-path packages/crypto/Cargo.toml",
-    "crypto:clippy": "cargo clippy --manifest-path packages/crypto/Cargo.toml -- -D warnings",
+    "crypto:clippy": "cargo clippy --manifest-path packages/crypto/Cargo.toml --all-targets -- -D warnings",
     "crypto:fmt": "cargo fmt --manifest-path packages/crypto/Cargo.toml --check",
     "crypto:build:server": "packages/crypto/scripts/build-server.sh",
     "i18n:codegen": "bun run packages/i18n/tools/i18n-codegen.ts",

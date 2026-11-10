@@ -66,7 +66,7 @@ fn full_recovery_ceremony_flow() {
         .enumerate()
         .map(|(i, share)| {
             let share_bytes = serialize_share(share);
-            let aad = format!("hub-abc:share:{}", i);
+            let aad = format!("hub-abc:share:{i}");
             hpke_seal(
                 &share_bytes,
                 holder_pubkeys[i],
@@ -89,7 +89,7 @@ fn full_recovery_ceremony_flow() {
 
     for i in 0..2 {
         // Holder decrypts their stored share
-        let aad = format!("hub-abc:share:{}", i);
+        let aad = format!("hub-abc:share:{i}");
         let share_bytes = hpke_open(
             &share_envelopes[i],
             &holder_keys[i].0,
@@ -188,17 +188,14 @@ fn wrong_label_on_share_wrap_rejected() {
 #[test]
 fn aad_binding_prevents_cross_session_replay() {
     let (new_device_sk, new_device_pk) = generate_x25519_keypair();
-    let (holder_sk, holder_pk) = generate_x25519_keypair();
+    let (_holder_sk, holder_pk) = generate_x25519_keypair();
 
     let secret = vec![42u8; 32];
     let shares = split(&secret, 3, 2).unwrap();
     let share_bytes = serialize_share(&shares[0]);
 
     // Contribution for session A
-    let aad_a = format!(
-        "{}:session-A:{}",
-        LABEL_RECOVERY_SHARE_CONTRIBUTE, holder_pk
-    );
+    let aad_a = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:session-A:{holder_pk}");
     let envelope = hpke_seal(
         &share_bytes,
         &new_device_pk,
@@ -208,10 +205,7 @@ fn aad_binding_prevents_cross_session_replay() {
     .unwrap();
 
     // Try to open with session B AAD — should fail
-    let aad_b = format!(
-        "{}:session-B:{}",
-        LABEL_RECOVERY_SHARE_CONTRIBUTE, holder_pk
-    );
+    let aad_b = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:session-B:{holder_pk}");
     let result = hpke_open(
         &envelope,
         &new_device_sk,

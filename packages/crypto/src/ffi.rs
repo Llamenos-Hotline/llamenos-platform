@@ -407,7 +407,7 @@ mod tests {
         };
 
         let key = random_bytes_32();
-        let key_hex = hex::encode(&key);
+        let key_hex = hex::encode(key);
 
         let plaintext = r#"{"type":"call:ring","callId":"abc123"}"#;
         let mut nonce_bytes = [0u8; 12];

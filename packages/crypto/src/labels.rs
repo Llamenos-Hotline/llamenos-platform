@@ -1007,9 +1007,8 @@ mod tests {
             let expected_value = value
                 .as_str()
                 .unwrap_or_else(|| panic!("label {key} value is not a string"));
-            let found = LABEL_REGISTRY.iter().any(|&l| l == expected_value);
             assert!(
-                found,
+                LABEL_REGISTRY.contains(&expected_value),
                 "Label {key} = \"{expected_value}\" exists in crypto-labels.json but NOT in LABEL_REGISTRY"
             );
         }
