@@ -18,6 +18,10 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+- name: Ensure cron is installed (the cron jobs below need crontab)
+  ansible.builtin.include_role:
+    name: cron
+
 - name: Configure daily maintenance cron
   ansible.builtin.cron:
     name: "Llamenos daily maintenance"

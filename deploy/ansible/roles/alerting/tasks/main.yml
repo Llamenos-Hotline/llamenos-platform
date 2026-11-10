@@ -115,6 +115,10 @@
         "default" "white_check_mark"
       echo "Test alert sent. Check your ${ALERT_PROVIDER} client for the notification."
 
+- name: Ensure cron is installed (the cron jobs below need crontab)
+  ansible.builtin.include_role:
+    name: cron
+
 - name: Configure cron job (every 5 minutes)
   ansible.builtin.cron:
     name: "Llamenos operator alerting"

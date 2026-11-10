@@ -16,6 +16,10 @@
     group: "{{ deploy_group }}"
     mode: "0750"
 
+- name: Ensure cron is installed (the cron jobs below need crontab)
+  ansible.builtin.include_role:
+    name: cron
+
 - name: Configure NTP monitoring cron (every 15 minutes)
   ansible.builtin.cron:
     name: "Llamenos NTP drift monitor"
