@@ -51,7 +51,7 @@
  *       it because a step was added or had its assertion removed.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
@@ -75,13 +75,15 @@ const ANDROID_STEPS_DIR = join(
 
 export type AuditPlatform = "desktop-backend" | "android";
 
+export type SilentReason = "empty-or-comment-only-body" | "no-assertion-call" | "vacuous-assertion";
+
 export interface SilentStepFinding {
   platform: AuditPlatform;
   file: string; // relative to repo root
   line: number; // 1-indexed line of the keyword call/annotation
   keyword: string;
   pattern: string;
-  reason: "empty-or-comment-only-body" | "no-assertion-call";
+  reason: SilentReason;
 }
 
 // ---- Shared body-matching helpers ----
@@ -243,8 +245,30 @@ function lineNumberAt(content: string, index: number): number {
   return line;
 }
 
-const TS_ASSERTION_RE = /\b(expect|assert)[A-Za-z0-9_]*\s*\(/;
-const KOTLIN_ASSERTION_RE = /\b[A-Za-z0-9_.]*[Aa]ssert[A-Za-z0-9_]*\s*\(|\.check\s*\(/;
+/**
+ * Waits that THROW when their condition is never met. A `Then` that ends in one
+ * of these cannot pass unless the outcome happened, so it is an assertion even
+ * though its name does not say so (#2678: nine steps hardened to await the
+ * server's reflected state were counted as "no assertion" because the audit only
+ * knew `expect`/`assert`).
+ *
+ * Every Kotlin name here is a helper WE define, and `kotlinThrowingWaitDefinitions`
+ * in the tests re-reads each definition and fails if it stops throwing - so adding
+ * a name is a claim the suite checks, not an exemption. `waitForURL` is
+ * Playwright's own and rejects on timeout. A bare `waitUntil` is deliberately NOT
+ * accepted: only `composeRule.waitUntil` is (it throws ComposeTimeoutException);
+ * an unqualified one could be anything.
+ */
+export const KOTLIN_THROWING_WAIT_HELPERS = [
+  "awaitServerState", // helpers/SimulationClient.kt
+  "awaitSwitchState", // steps/BaseSteps.kt
+  "waitForNode", // steps/BaseSteps.kt
+] as const;
+const TS_ASSERTION_RE = /\b(expect|assert)[A-Za-z0-9_]*\s*\(|\.waitForURL\s*\(/;
+const KOTLIN_ASSERTION_RE = new RegExp(
+  "\\b[A-Za-z0-9_.]*[Aa]ssert[A-Za-z0-9_]*\\s*\\(|\\.check\\s*\\(|" +
+    `\\b(?:${KOTLIN_THROWING_WAIT_HELPERS.join("|")})\\s*\\(|\\bcomposeRule\\.waitUntil\\s*\\(`
+);
 
 /**
  * `requireAssertionCall` is only true for steps registered under the
@@ -273,13 +297,51 @@ const KOTLIN_ASSERTION_RE = /\b[A-Za-z0-9_.]*[Aa]ssert[A-Za-z0-9_]*\s*\(|\.check
 function hasAssertion(
   body: string,
   re: RegExp,
-  requireAssertionCall: boolean
-): "empty-or-comment-only-body" | "no-assertion-call" | null {
+  requireAssertionCall: boolean,
+  vacuous: RegExp[] = []
+): SilentReason | null {
   const stripped = stripComments(body).trim();
   if (stripped === "") return "empty-or-comment-only-body";
-  if (requireAssertionCall && !re.test(stripped)) return "no-assertion-call";
+  if (!requireAssertionCall) return null;
+  if (!re.test(stripped)) return "no-assertion-call";
+  // An assertion that cannot fail is not one (#2678). Remove the vacuous calls and ask again:
+  // a step that ALSO makes a real assertion is fine, one whose only assertions are vacuous is not.
+  const withoutVacuous = vacuous.reduce((acc, v) => acc.replace(v, ""), stripped);
+  if (withoutVacuous !== stripped && !re.test(withoutVacuous)) return "vacuous-assertion";
   return null;
 }
+
+/**
+ * Assertions that are true by construction, so the step passes whatever the app does.
+ *
+ * - TS: `expect(true).toBeTruthy()` / `.toBe(true)` and their `false` mirrors.
+ * - Kotlin: `assertTrue(true)` / `assertFalse(false)`, and `assertAnyTagDisplayed(...)`
+ *   given a screen ANCHOR alongside the tag the step is supposed to prove. An any-of
+ *   assertion is only as strong as its weakest alternative: `("recent-notes-card",
+ *   "dashboard-title")` passes on any dashboard, which is the screen the step is
+ *   already on. That is exactly the shape of the `create-identity` assertions in the
+ *   deleted `KeyImportSteps` (#2678) - they asserted the login screen was showing,
+ *   which it always is. A LONE anchor is not flagged: "I am on the dashboard" is a
+ *   legitimate thing to assert.
+ *
+ * Which tags are anchors is a judgement about the app, so the list is explicit.
+ * The audit cannot know that an arbitrary tag is always present; that is a limit
+ * of a static check, recorded in STRATEGY.md.
+ */
+export const KOTLIN_SCREEN_ANCHOR_TAGS = ["dashboard-title", "create-identity"] as const;
+const TS_VACUOUS_ASSERTIONS: RegExp[] = [
+  /\bexpect\s*\(\s*true\s*\)\s*\.\s*(?:toBeTruthy\s*\(\s*\)|toBe\s*\(\s*true\s*\))/g,
+  /\bexpect\s*\(\s*false\s*\)\s*\.\s*(?:toBeFalsy\s*\(\s*\)|toBe\s*\(\s*false\s*\))/g,
+];
+const KOTLIN_ANCHORED_ANY_OF_RE = new RegExp(
+  `\\bassertAnyTagDisplayed\\s*\\(\\s*(?=[^)]*"[^"]+"\\s*,\\s*"[^"]+")(?=[^)]*"(?:${KOTLIN_SCREEN_ANCHOR_TAGS.join("|")})")[^)]*\\)`,
+  "g"
+);
+const KOTLIN_VACUOUS_ASSERTIONS: RegExp[] = [
+  /\bassertTrue\s*\(\s*true\s*\)/g,
+  /\bassertFalse\s*\(\s*false\s*\)/g,
+  KOTLIN_ANCHORED_ANY_OF_RE,
+];
 
 // ---- Swallowed failures ----
 
@@ -395,7 +457,7 @@ export function findSilentTsSteps(path: string, content: string): SilentStepFind
   const findings: SilentStepFinding[] = [];
   const relPath = relative(ROOT, path);
   for (const step of tsStepBodies(content)) {
-    const reason = hasAssertion(step.body, TS_ASSERTION_RE, step.keyword === "Then");
+    const reason = hasAssertion(step.body, TS_ASSERTION_RE, step.keyword === "Then", TS_VACUOUS_ASSERTIONS);
     if (reason !== null) {
       findings.push({
         platform: "desktop-backend",
@@ -466,7 +528,7 @@ export function findSilentKotlinSteps(path: string, content: string): SilentStep
   const findings: SilentStepFinding[] = [];
   const relPath = relative(ROOT, path);
   for (const step of kotlinStepBodies(content)) {
-    const reason = hasAssertion(step.body, KOTLIN_ASSERTION_RE, step.keyword === "Then");
+    const reason = hasAssertion(step.body, KOTLIN_ASSERTION_RE, step.keyword === "Then", KOTLIN_VACUOUS_ASSERTIONS);
     if (reason !== null) {
       findings.push({
         platform: "android",
@@ -567,45 +629,107 @@ export function androidScenariosThroughSwallow(
   return hits;
 }
 
-function loadAllScenarios(): Scenario[] {
+export function loadAllScenarios(): Scenario[] {
   return findFiles(FEATURES_DIR, ".feature").flatMap((f) => parseFeatureFile(f));
 }
 
 // ---- Ratchet baseline ----
 
 /**
- * Baseline counts, measured 2026-10-08 when this audit was introduced
- * (#709). This is a RATCHET, like `COVERAGE_THRESHOLDS` in
- * validate-coverage.ts: it exists so that adding a new silent-pass step (or
- * stripping the assertion out of an existing one) fails CI instead of
- * passing silently. It must only ever move DOWN, as real findings are
- * fixed — never up, and never raised just to make a red run green.
+ * Per-step ratchet for silent-pass steps (#709, reworked in #2678).
  *
- * Neither number is zero because this audit's job is to make the existing
- * debt visible and non-growing, not to silently absorb a backlog it did
- * not create:
+ * This used to be one number per platform, and the number is what failed: it
+ * could not tell a step that was FIXED from a step that was ADDED, so each fix
+ * silently made room for a new offender, and with nothing running the audit the
+ * counts drifted (desktop 52 -> 53, android 87 -> 93) until the guard exited 1 on
+ * unmodified main. A count also gave a reviewer nothing to read: raising it looked
+ * the same as lowering it.
  *
- * `android` is 87 (65 empty/comment-only, 22 Then-without-assertion). These
- * are handed to #765 (Android substitute/empty-step sweep), which already
- * owns fixing this exact category — this script hands it the count and the
- * list, it does not fix them itself.
+ * `silent-steps.baseline.json` now names every known offender (file, keyword,
+ * pattern, reason - not line, which moves) with how many such definitions exist.
+ * A finding beyond that is "new" and fails the run BY NAME, so swapping one silent
+ * step for another is caught. An entry the code no longer produces is "stale":
+ * reported, not fatal, so two PRs that each fix a step do not fail each other in
+ * the merge queue - run `--write-baseline` to lock the progress in.
  *
- * `desktop-backend` is 52 (32 empty/comment-only, 20 Then-without-
- * assertion). None fall inside `tests/steps/crypto/` (confirmed — that
- * directory has carried a stricter "no empty/comment-only body" rule since
- * #1222 and this audit found zero violations of it). All 52 are in
- * desktop/backend-owned step files this issue's lane has no write access
- * to; they are filed as #1747 for those lanes rather than fixed here — see
- * packages/test-specs/STRATEGY.md.
+ * `exempt` is for steps that are deliberately empty and say why. Each carries a
+ * reason, because an exemption without one is just a bigger baseline.
  */
-const BASELINE: Record<AuditPlatform, number> = {
-  "desktop-backend": 52,
-  android: 87,
-};
+const SILENT_BASELINE_PATH = join(__dirname, "silent-steps.baseline.json");
+
+export interface SilentExemption {
+  platform: AuditPlatform;
+  file: string;
+  keyword: string;
+  pattern: string;
+  reason: string;
+}
+
+export interface SilentBaseline {
+  description: string;
+  /** key (see silentStepKey) -> number of definitions known to be silent. */
+  known: Record<string, number>;
+  exempt: SilentExemption[];
+}
+
+export function silentStepKey(f: Pick<SilentStepFinding, "platform" | "file" | "keyword" | "pattern" | "reason">): string {
+  return `${f.platform} :: ${f.file} :: @${f.keyword}("${f.pattern}") :: ${f.reason}`;
+}
+
+export interface SilentGateResult {
+  /** Findings beyond the baseline and the exemptions - each one a step that is new or newly silent. */
+  unexpected: SilentStepFinding[];
+  /** Baseline entries no finding matches any more (or fewer do): progress not yet locked in. */
+  stale: string[];
+  /** Findings accepted because the baseline names an exemption for them. */
+  exempted: SilentStepFinding[];
+}
+
+export function evaluateSilentGate(findings: SilentStepFinding[], baseline: SilentBaseline): SilentGateResult {
+  const exemptKeys = new Set(
+    baseline.exempt.map((e) =>
+      silentStepKey({ ...e, reason: "empty-or-comment-only-body" })
+    )
+  );
+  const remaining = new Map(Object.entries(baseline.known));
+  const unexpected: SilentStepFinding[] = [];
+  const exempted: SilentStepFinding[] = [];
+  const seen = new Map<string, number>();
+  for (const f of findings) {
+    const key = silentStepKey(f);
+    if (exemptKeys.has(key)) {
+      exempted.push(f);
+      continue;
+    }
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+    const left = remaining.get(key) ?? 0;
+    if (left > 0) remaining.set(key, left - 1);
+    else unexpected.push(f);
+  }
+  const stale = [...remaining.entries()].filter(([, n]) => n > 0).map(([k, n]) => (n > 1 ? `${k}  (x${n})` : k));
+  return { unexpected, stale, exempted };
+}
+
+export function loadSilentBaseline(path = SILENT_BASELINE_PATH): SilentBaseline {
+  return JSON.parse(readFileSync(path, "utf-8")) as SilentBaseline;
+}
+
+/** Rewrite `known` from the current findings, keeping `exempt` and the description. */
+export function writeSilentBaseline(findings: SilentStepFinding[], path = SILENT_BASELINE_PATH): void {
+  const previous = loadSilentBaseline(path);
+  const gate = evaluateSilentGate(findings, { ...previous, known: {} });
+  const known: Record<string, number> = {};
+  for (const f of gate.unexpected) {
+    const key = silentStepKey(f);
+    known[key] = (known[key] ?? 0) + 1;
+  }
+  const sorted = Object.fromEntries(Object.entries(known).sort(([a], [b]) => a.localeCompare(b)));
+  writeFileSync(path, `${JSON.stringify({ ...previous, known: sorted }, null, 2)}\n`);
+}
 
 /**
  * Ratchet for swallowed failures (#2675), measured 2026-11-10 when the rule was
- * introduced. Same contract as BASELINE: it only ever moves DOWN.
+ * introduced. Same contract as the silent-step baseline: it only ever moves DOWN.
  *
  * `steps` is the number of step definitions that catch and discard a failure.
  * `androidExecutedThroughThen` is the number of scenarios that actually run on a
@@ -702,27 +826,41 @@ function main() {
     console.log("Silent-pass step audit (#709)\n");
   }
 
+  if (process.argv.includes("--write-baseline")) {
+    if (platforms.length !== 2) {
+      console.error("--write-baseline rewrites the whole baseline; do not combine it with --platform.");
+      process.exit(1);
+    }
+    writeSilentBaseline(allFindings);
+    console.log(`Wrote ${relative(ROOT, SILENT_BASELINE_PATH)}`);
+    return;
+  }
+
+  const baseline = loadSilentBaseline();
   let failed = false;
   for (const platform of platforms) {
     const findings = allFindings.filter((f) => f.platform === platform);
-    const baseline = BASELINE[platform];
-    const overBaseline = findings.length > baseline;
-    if (overBaseline) failed = true;
+    const gate = evaluateSilentGate(findings, baseline);
+    const over = gate.unexpected.length > 0;
+    if (over) failed = true;
 
     if (!asJson) {
-      const status = overBaseline ? "FAIL" : "ok";
-      console.log(`  [${status}] ${platform}: ${findings.length} silent step(s) (baseline: ${baseline})`);
-      if (findings.length > 0) {
-        for (const f of findings) {
-          console.log(`      ${f.file}:${f.line}  @${f.keyword}("${f.pattern}")  — ${f.reason}`);
-        }
+      console.log(
+        `  [${over ? "FAIL" : "ok"}] ${platform}: ${findings.length} silent step(s), ` +
+          `${gate.exempted.length} exempt, ${gate.unexpected.length} not in the baseline`
+      );
+      for (const f of gate.unexpected) {
+        console.log(`      NEW  ${f.file}:${f.line}  @${f.keyword}("${f.pattern}")  — ${f.reason}`);
       }
-      if (overBaseline) {
+      if (over) {
         console.log(
-          `      Baseline exceeded: ${findings.length} > ${baseline}. A step was added without an` +
-            ` assertion, or an existing assertion was removed. Fix the step, or lower the baseline only`+
-            ` if this is a deliberate, reviewed reduction in the ratchet (never to make a red run green).`
+          "      A step was added without an assertion, or lost the one it had. Fix the step. If it is" +
+            " deliberately empty, add it to `exempt` in silent-steps.baseline.json WITH a reason; do not" +
+            " regenerate the baseline to make a red run green."
         );
+      }
+      for (const k of gate.stale.filter((k) => k.startsWith(`${platform} ::`))) {
+        console.log(`      stale baseline entry (fixed - lock it in with --write-baseline): ${k}`);
       }
     }
   }
@@ -730,8 +868,8 @@ function main() {
   if (!asJson) {
     console.log(
       failed
-        ? "\nFAILED: one or more platforms exceeded their silent-step baseline."
-        : "\nPASSED: all platforms are at or below their silent-step baseline."
+        ? "\nFAILED: a silent-pass step is not in the baseline."
+        : "\nPASSED: every silent-pass step is accounted for in the baseline."
     );
   }
 
@@ -748,7 +886,8 @@ export const __testing = {
   hasAssertion,
   TS_ASSERTION_RE,
   KOTLIN_ASSERTION_RE,
-  BASELINE,
+  TS_VACUOUS_ASSERTIONS,
+  KOTLIN_VACUOUS_ASSERTIONS,
   SWALLOW_BASELINE,
   findSwallow,
 };
