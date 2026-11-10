@@ -278,6 +278,19 @@ async function getSettings(db: Database) {
   return row
 }
 
+/**
+ * THE decision whether cross-hub sharing is on. `CasesService.list` asks this
+ * before it widens a listing past the path hub; the settings routes read it
+ * through `SettingsService.getCrossHubSharingEnabled`. There is one stored
+ * value (`system_settings.cross_hub_sharing_enabled`) and this is the one
+ * place that reads it for a decision — the platform-settings feature flag of
+ * the same name is a view of the same column, not a second store (#2605).
+ */
+export async function isCrossHubSharingEnabled(db: Database): Promise<boolean> {
+  const row = await getSettings(db)
+  return row.crossHubSharingEnabled ?? false
+}
+
 // ---------------------------------------------------------------------------
 // Module-level TTL cache for roles (30s TTL — roles change rarely, auth runs every request)
 // ---------------------------------------------------------------------------
@@ -2983,8 +2996,7 @@ export class SettingsService {
   // =========================================================================
 
   async getCrossHubSharingEnabled(): Promise<{ enabled: boolean }> {
-    const row = await getSettings(this.db)
-    return { enabled: row.crossHubSharingEnabled ?? false }
+    return { enabled: await isCrossHubSharingEnabled(this.db) }
   }
 
   async setCrossHubSharingEnabled(data: {
@@ -3014,13 +3026,21 @@ export class SettingsService {
     }
   }
 
+  /**
+   * An entity type of `hubId`. `hubId` is required, not optional: an entity
+   * type carries the numbering prefix, default status and auto-assignment of
+   * the hub that defined it, so a lookup by id alone would let one hub apply
+   * another hub's configuration (#2605). A type of another hub is
+   * indistinguishable from one that does not exist.
+   */
   async getEntityTypeById(
     id: string,
+    hubId: string,
   ): Promise<EntityTypeDefinition> {
     const [row] = await this.db
       .select()
       .from(entityTypeDefinitions)
-      .where(eq(entityTypeDefinitions.id, id))
+      .where(and(eq(entityTypeDefinitions.id, id), eq(entityTypeDefinitions.hubId, hubId)))
     if (!row) {
       throw new ServiceError(404, 'Entity type not found')
     }
@@ -4021,7 +4041,10 @@ export class SettingsService {
 
   async getPlatformSettings(): Promise<Record<string, unknown>> {
     const [row] = await this.db
-      .select({ platformSettings: systemSettings.platformSettings })
+      .select({
+        platformSettings: systemSettings.platformSettings,
+        crossHubSharingEnabled: systemSettings.crossHubSharingEnabled,
+      })
       .from(systemSettings)
       .where(eq(systemSettings.id, SINGLETON_ID))
       .limit(1)
@@ -4053,7 +4076,18 @@ export class SettingsService {
       }
     }
 
-    return (row.platformSettings ?? {}) as Record<string, unknown>
+    // `featureFlags.crossHubSharingEnabled` is a VIEW of the one stored switch
+    // (`system_settings.cross_hub_sharing_enabled`, what `CasesService.list`
+    // enforces), never a stored copy: a second copy is a toggle that reads
+    // "off" while the behaviour it names stays on (#2605).
+    const stored = (row.platformSettings ?? {}) as Record<string, unknown>
+    return {
+      ...stored,
+      featureFlags: {
+        ...((stored.featureFlags as Record<string, unknown> | undefined) ?? {}),
+        crossHubSharingEnabled: row.crossHubSharingEnabled ?? false,
+      },
+    }
   }
 
   async updatePlatformSettings(
@@ -4079,11 +4113,23 @@ export class SettingsService {
       }
     }
 
+    // The cross-hub flag is routed to its one stored home and never persisted
+    // in the platform-settings document (see `getPlatformSettings`).
+    const { crossHubSharingEnabled, ...storedFlags } = (merged.featureFlags ?? {}) as Record<string, unknown>
+    const incomingFlags = updates.featureFlags as Record<string, unknown> | undefined
+    // ONE statement writes the column and the document, so a failure cannot leave the
+    // switch flipped while the rest of the update is lost (or the reverse).
+    const crossHubUpdate = incomingFlags?.crossHubSharingEnabled !== undefined
+      ? { crossHubSharingEnabled: incomingFlags.crossHubSharingEnabled === true }
+      : {}
+    if (crossHubUpdate.crossHubSharingEnabled !== undefined) {
+      await getSettings(this.db) // ensure the singleton row exists before UPDATE
+    }
     await this.db
       .update(systemSettings)
-      .set({ platformSettings: merged })
+      .set({ platformSettings: { ...merged, featureFlags: storedFlags }, ...crossHubUpdate })
       .where(eq(systemSettings.id, SINGLETON_ID))
 
-    return merged
+    return { ...merged, featureFlags: { ...storedFlags, crossHubSharingEnabled } }
   }
 }

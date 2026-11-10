@@ -64,6 +64,22 @@ function makeCaseRow(overrides: Partial<{
   }
 }
 
+
+/**
+ * A select chain whose result is the same whether the query ends at `where`
+ * (awaited) or at `.limit()`: the reference checks `CasesService.create` makes
+ * before it writes (entity type, parent record, contacts — all hub-bound).
+ */
+function selectReturning(rows: unknown[]) {
+  return vi.fn().mockReturnValue({
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue(
+        Object.assign(Promise.resolve(rows), { limit: vi.fn().mockResolvedValue(rows) }),
+      ),
+    }),
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Case CRUD
 // ---------------------------------------------------------------------------
@@ -75,6 +91,7 @@ describe('CasesService — CRUD', () => {
 
       const insertValues = vi.fn()
       const db = {
+        select: selectReturning([{ id: 'et-incident' }]),
         insert: vi.fn().mockReturnValue({
           values: insertValues.mockReturnValue({
             returning: vi.fn().mockResolvedValue([row]),
@@ -105,6 +122,8 @@ describe('CasesService — CRUD', () => {
       })
 
       const db = {
+        // the entity type, then both contacts, all found in hub-1
+        select: selectReturning([{ id: 'contact-1' }, { id: 'contact-2' }]),
         insert: vi.fn()
           .mockReturnValueOnce({
             values: vi.fn().mockReturnValue({

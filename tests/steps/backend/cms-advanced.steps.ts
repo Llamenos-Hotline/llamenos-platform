@@ -103,10 +103,6 @@ Given('the requesting user has records in multiple hubs', async ({ world }) => {
   setAdv(world, {})
 })
 
-Given('the requesting user lacks cases:read-cross-hub permission', async ({ world }) => {
-  setAdv(world, {})
-})
-
 // ── Contact Merge ─────────────────────────────────────────────────────────
 
 When('I merge the secondary contact into the primary contact with re-encrypted merged data', async ({ world, request }) => {
@@ -395,6 +391,3 @@ Then('the response includes records from all hubs the user has access to', ({ wo
   expect(typeof adv.lastListResponse?.total).toBe('number')
 })
 
-Then('only records from the current hub are returned', ({ world }) => {
-  expect(getAdv(world).lastStatusCode).toBe(200)
-})

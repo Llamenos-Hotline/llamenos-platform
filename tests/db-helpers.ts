@@ -360,6 +360,19 @@ export class TestDB {
   }
 
   /**
+   * Link a contact to a case record WITHOUT the API's hub check. The API refuses a contact of
+   * another hub (#2605), so the one shape that check makes unreachable through it — a record
+   * linked to a contact of a different hub — can only be put in place here. It is how a scenario
+   * proves a read path still filters by hub when the stored data holds that shape anyway
+   * (rows from before the check, or written around it).
+   */
+  static async linkContactToRecordUnchecked(caseId: string, contactId: string, addedBy: string, role: string): Promise<void> {
+    await (await sql())`
+      INSERT INTO case_contacts (case_id, contact_id, role, added_by)
+      VALUES (${caseId}, ${contactId}, ${role}, ${addedBy})`
+  }
+
+  /**
    * Delete the instance-wide telephony provider config (the `provider_configs` row with
    * no hub). There is no API that removes one, so the @global-setting scenarios that
    * create it reset it here: every hub without its own provider falls back to this

@@ -86,12 +86,17 @@ Feature: CMS Advanced Operations (EP06-A4)
   # Cross-Hub Entity Queries
   # ---------------------------------------------------------------------------
 
-  Scenario: Admin can query records across all their hubs
-    Given the requesting user has records in multiple hubs
+  # The cross-hub switch is one deployment-wide setting, so these run in the serial
+  # @global-setting project and put it back afterwards (see cross-hub.steps.ts).
+  @global-setting @cross-hub
+  Scenario: Admin can query records across all their hubs once sharing is enabled
+    Given cross-hub sharing is enabled
+    And the requesting user has records in multiple hubs
     When I list records with crossHub=true
     Then the response includes records from all hubs the user has access to
 
-  Scenario: Cross-hub query respects cases:read-cross-hub permission
-    Given the requesting user lacks cases:read-cross-hub permission
+  @global-setting @cross-hub
+  Scenario: A cross-hub query is refused while cross-hub sharing is off
+    Given cross-hub sharing is disabled
     When I list records with crossHub=true
-    Then only records from the current hub are returned
+    Then the response status is 403

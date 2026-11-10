@@ -39,7 +39,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { caseInteractions, caseRecords, conversations, hubs, reportCases } from '../../db/schema'
+import { caseInteractions, caseRecords, conversations, entityTypeDefinitions, hubs, reportCases } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { CasesService } from '../../services/cases'
 import { ServiceError, SettingsService } from '../../services/settings'
@@ -134,6 +134,9 @@ async function call(actor: Actor, hubId: string, method: string, path: string, b
 const SHARED_NUMBER = `CASE-${suffix}`
 const ONLY_B_NUMBER = `ONLYB-${suffix}`
 const ENTITY_TYPE = crypto.randomUUID()
+/** A real entity type of hub A: convert-from-report refuses an unknown or foreign one (#2605). */
+let hubAType = ''
+let priorCrossHub = false
 const MISSING_ID = crypto.randomUUID()
 
 interface HubData { recordId: string; reportId: string; sourceId: string }
@@ -163,6 +166,10 @@ async function seedHub(hubId: string, owner: Actor, numbers: string[], sealedTo:
 }
 
 beforeAll(async () => {
+  // The cross-hub list is the deployment's opt-in (#2605): these cases are about
+  // WHICH hubs it reaches once sharing is on, so the switch is set explicitly.
+  priorCrossHub = (await svc.settings.getCrossHubSharingEnabled()).enabled
+  await svc.settings.setCrossHubSharingEnabled({ enabled: true })
   for (const [id, owner] of [[HUB_A, ADMIN_A], [HUB_B, ADMIN_B]] as const) {
     await db.insert(hubs).values({ id, name: id, slug: id, createdBy: owner.pubkey })
   }
@@ -170,6 +177,11 @@ beforeAll(async () => {
   // to hub B (or were sealed there as a reader) and are not entitled to it now.
   // That is the case that distinguishes "the envelope says so" from "the
   // caller may read this hub".
+  hubAType = (await svc.settings.createEntityType({
+    hubId: HUB_A, name: 'scope_a', label: 'scope_a', labelPlural: 'scope_as', category: 'case',
+    statuses: [{ value: 'open', label: 'Open', order: 0 }], defaultStatus: 'open', closedStatuses: [],
+    fields: [], numberingEnabled: false,
+  })).id
   data.A = await seedHub(HUB_A, ADMIN_A, [SHARED_NUMBER], [ADMIN_A.pubkey, BOTH.pubkey, SUPER.pubkey])
   data.B = await seedHub(HUB_B, ADMIN_B, [SHARED_NUMBER, ONLY_B_NUMBER], [ADMIN_B.pubkey, ADMIN_A.pubkey, BOTH.pubkey, SUPER.pubkey])
 })
@@ -184,7 +196,9 @@ afterAll(async () => {
   }
   await db.delete(caseRecords).where(inArray(caseRecords.hubId, ids))
   await db.delete(conversations).where(inArray(conversations.hubId, ids))
+  await db.delete(entityTypeDefinitions).where(inArray(entityTypeDefinitions.hubId, ids))
   await db.delete(hubs).where(inArray(hubs.id, ids))
+  await svc.settings.setCrossHubSharingEnabled({ enabled: priorCrossHub })
 })
 
 const recordHubs = (json: Record<string, unknown>) =>
@@ -257,8 +271,8 @@ describe('POST /convert-from-report', () => {
 
   it("a hub A admin cannot convert hub B's report: 404, identical to a missing id, nothing written", async () => {
     const before = await reportRow(data.B.reportId)
-    const cross = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.B.reportId, entityTypeId: ENTITY_TYPE })
-    const missing = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: MISSING_ID, entityTypeId: ENTITY_TYPE })
+    const cross = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.B.reportId, entityTypeId: hubAType })
+    const missing = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: MISSING_ID, entityTypeId: hubAType })
 
     expect(cross.status).toBe(404)
     expect(missing.status).toBe(404)
@@ -276,7 +290,7 @@ describe('POST /convert-from-report', () => {
   })
 
   it("converts a report of the path hub into a case of that hub", async () => {
-    const res = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.A.reportId, entityTypeId: ENTITY_TYPE })
+    const res = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.A.reportId, entityTypeId: hubAType })
     expect(res.status).toBe(201)
     const [created] = await db.select().from(caseRecords).where(eq(caseRecords.id, res.json.recordId as string))
     expect(created.hubId).toBe(HUB_A)

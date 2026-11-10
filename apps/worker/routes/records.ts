@@ -277,7 +277,7 @@ records.get('/envelope-recipients',
     const services = c.get('services')
 
     // Fetch entity type definition
-    const entityType = await services.settings.getEntityTypeById(entityTypeId)
+    const entityType = await services.settings.getEntityTypeById(entityTypeId, pathHubId(c))
 
     // Resolve hub members with permissions — the members of the hub the new
     // record will belong to (the path hub)
@@ -393,28 +393,24 @@ records.post('/convert-from-report',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Fetch entity type for numbering, default status, and autoAssign
-    let caseNumber: string | undefined
-    let defaultStatusHash: string | undefined
-    let autoAssign = false
-    let requiredSpecializations: string[] = []
-    try {
-      const entityType = await services.settings.getEntityTypeById(body.entityTypeId)
-      defaultStatusHash = entityType.defaultStatus || 'pending'
-      autoAssign = entityType.autoAssign === true
-      requiredSpecializations = entityType.requiredSpecializations ?? []
-      if (entityType.numberingEnabled && entityType.numberPrefix) {
-        const result = await services.settings.generateCaseNumber({
-          prefix: entityType.numberPrefix,
-          hubId: pathHubId(c),
-        })
-        caseNumber = result.number
-      }
-    } catch {
-      // Entity type not found — proceed with defaults
-    }
-
     const hubId = pathHubId(c)
+
+    // Entity type for numbering, default status, and autoAssign. It must be
+    // one of THIS hub's: a type that is another hub's, or does not exist, is a
+    // 404 — never "proceed with defaults", which would also have applied the
+    // wrong hub's configuration when the lookup was not hub-bound (#2605).
+    const entityType = await services.settings.getEntityTypeById(body.entityTypeId, hubId)
+    const defaultStatusHash = entityType.defaultStatus || 'pending'
+    const autoAssign = entityType.autoAssign === true
+    const requiredSpecializations = entityType.requiredSpecializations ?? []
+    let caseNumber: string | undefined
+    if (entityType.numberingEnabled && entityType.numberPrefix) {
+      const result = await services.settings.generateCaseNumber({
+        prefix: entityType.numberPrefix,
+        hubId,
+      })
+      caseNumber = result.number
+    }
 
     const result = await services.cases.convertFromReport({
       ...body,
@@ -545,7 +541,7 @@ records.get('/:id/envelope-recipients',
     }
 
     // Fetch entity type definition
-    const entityType = await services.settings.getEntityTypeById(record.entityTypeId)
+    const entityType = await services.settings.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
 
     // Resolve the members of the hub the record belongs to
     const hubMembers = await resolveHubMembers(services, pathHubId(c))
@@ -579,20 +575,17 @@ records.post('/',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    // Generate case number if entity type has numbering enabled
+    // The entity type must be one of THIS hub's. A type that is another hub's,
+    // or does not exist, is a 404 — the old "proceed without numbering" swallow
+    // turned a failed check into a confident pass (#2605).
+    const entityType = await services.settings.getEntityTypeById(body.entityTypeId, pathHubId(c))
     let caseNumber: string | undefined
-    let entityType: Awaited<ReturnType<typeof services.settings.getEntityTypeById>> | undefined
-    try {
-      entityType = await services.settings.getEntityTypeById(body.entityTypeId)
-      if (entityType.numberingEnabled && entityType.numberPrefix) {
-        const result = await services.settings.generateCaseNumber({
-          prefix: entityType.numberPrefix,
-          hubId: pathHubId(c),
-        })
-        caseNumber = result.number
-      }
-    } catch {
-      // Entity type not found — proceed without case number or auto-assignment
+    if (entityType.numberingEnabled && entityType.numberPrefix) {
+      const result = await services.settings.generateCaseNumber({
+        prefix: entityType.numberPrefix,
+        hubId: pathHubId(c),
+      })
+      caseNumber = result.number
     }
 
     const record = await services.cases.create({
@@ -603,7 +596,7 @@ records.post('/',
     })
 
     // Auto-assignment (EP06-A3): if entityType.autoAssign is enabled, score and assign
-    if (entityType?.autoAssign) {
+    if (entityType.autoAssign) {
       try {
         const threshold = entityType.autoAssignThreshold ?? 30
         const hubId = pathHubId(c)
@@ -899,7 +892,7 @@ records.get('/:id/suggest-assignees',
     let requiredSpecializations: string[] = []
     if (record.entityTypeId) {
       try {
-        const entityType = await services.settings.getEntityTypeById(record.entityTypeId)
+        const entityType = await services.settings.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
         requiredSpecializations = entityType.requiredSpecializations ?? []
       } catch {
         // Entity type not found — proceed with no specialization requirements

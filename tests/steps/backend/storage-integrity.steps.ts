@@ -143,7 +143,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
 
     // Records require a real entityTypeId (uuid) — there is no standalone
     // /cases endpoint anymore, everything goes through the unified /records API.
-    const etRes = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
+    const etRes = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/settings/cms/entity-types`, {
       name: uniqueName('storage_test_type', '_'),
       label: 'Storage Test Type',
       labelPlural: 'Storage Test Types',
