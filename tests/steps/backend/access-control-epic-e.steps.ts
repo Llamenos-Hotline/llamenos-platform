@@ -35,6 +35,7 @@ import {
   linkContactToRecordViaApi,
   listBansViaApi,
 } from '../../api-helpers'
+import { TestDB } from '../../db-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
@@ -68,6 +69,8 @@ interface EpicEState {
   hubEntityTypes: Record<string, string>
   /** Gherkin contact labels ("C-001", ...) -> real contact id */
   contacts: Record<string, string>
+  /** Gherkin contact labels -> id of the hub the contact was created in */
+  contactHubs: Record<string, string>
   /** Gherkin record labels ("R-001", ...) -> real record id */
   records: Record<string, string>
 
@@ -110,6 +113,7 @@ Before(async ({ world }) => {
     hubs: {},
     hubEntityTypes: {},
     contacts: {},
+    contactHubs: {},
     records: {},
   })
 })
@@ -163,14 +167,20 @@ async function hubHasRecordForContact(
     const contact = await createContactViaApi(request, { hubId })
     contactId = (contact as unknown as { id: string }).id
     s.contacts[contactLabel] = contactId
+    s.contactHubs[contactLabel] = hubId
   }
   const entityTypeId = s.hubEntityTypes[hubLabel]
   const record = await createRecordViaApi(request, entityTypeId, { hubId })
   const recordId = (record as unknown as { id: string }).id
-  // Cross-hub link is deliberate: the contact may belong to a different hub
-  // than this record (that is exactly the shape the IDOR fix protects —
-  // see apps/worker/services/cases.ts listByContact's hubId filter).
-  await linkContactToRecordViaApi(request, recordId, contactId, 'caller', undefined, hubId)
+  if (s.contactHubs[contactLabel] === hubId) {
+    await linkContactToRecordViaApi(request, recordId, contactId, 'caller', undefined, hubId)
+  } else {
+    // The contact belongs to ANOTHER hub than this record. The API refuses that link (#2605),
+    // so this is the shape the by-contact IDOR filter exists for — see
+    // apps/worker/services/cases.ts listByContact's hubId filter — put in place directly,
+    // because the scenario is about what the read path does with it.
+    await TestDB.linkContactToRecordUnchecked(recordId, contactId, seedHexToPubkey(ADMIN_SEED), 'caller')
+  }
   s.records[`${hubLabel}:${contactLabel}`] = recordId
 }
 

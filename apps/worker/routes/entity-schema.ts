@@ -247,29 +247,60 @@ entitySchema.get('/entity-types/:id',
   },
 )
 
-// POST, PATCH /:id, DELETE /:id via entity-router factory
+// POST /entity-types stays hand-written too, for the same reason as GET /:id above: the
+// factory (`hubScoped: false`) hands the service `[body, ctx]` and `createEntityType` reads the
+// hub out of `body.hubId`, which defaults to '' — so a type created at
+// `/api/hubs/:hubId/settings/cms/entity-types` landed in the PLATFORM scope, not in that hub,
+// and a body-supplied `hubId` could name any hub. Neither is a type error. Since records now
+// look their entity type up in the path hub (#2605), a hub-created type that did not belong to
+// the hub made `POST /hubs/:hubId/records` answer 404 for it (#2620).
+entitySchema.post('/entity-types',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Create an entity type definition',
+    responses: {
+      201: {
+        description: 'Entity type created',
+        content: { 'application/json': { schema: resolver(entityTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', createEntityTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const body = c.req.valid('json')
+    // The path hub wins; on the unscoped mount a body `hubId` is honoured only for a caller who
+    // may manage types there; neither → the platform's own types, stored under hub ''.
+    const target = resolveTargetHub(c, body.hubId || undefined, 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.settings.createEntityType({ ...body, hubId })
+    await audit(services.audit, 'entityTypeCreated', c.get('pubkey'), {}, undefined, hubId || null)
+    return c.json(result, 201)
+  },
+)
+
+// PATCH /:id, DELETE /:id via entity-router factory
 const entityTypeRouter = createEntityRouter({
   tag: 'Case Management',
   domain: 'cases-entity-types',
   service: 'settings',
   listResponseSchema: entityTypeListResponseSchema,
   itemResponseSchema: entityTypeDefinitionSchema,
-  createBodySchema: createEntityTypeBodySchema,
   updateBodySchema: updateEntityTypeBodySchema,
   permissionOverrides: {
-    create: 'cases:manage-types',
     update: 'cases:manage-types',
     delete: 'cases:manage-types',
   },
   disableList: true,
   disableGet: true,
   methods: {
-    create: 'createEntityType',
     update: 'updateEntityType',
     delete: 'deleteEntityType',
   },
   auditEvents: {
-    created: 'entityTypeCreated',
     updated: 'entityTypeUpdated',
     deleted: 'entityTypeDeleted',
   },

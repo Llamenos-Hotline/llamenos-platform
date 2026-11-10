@@ -101,8 +101,8 @@ async function call(actor: Actor, path: string, method = 'GET', body?: unknown) 
 const inHub = (hubId: string, suffixPath: string) => `/api/hubs/${hubId}/settings/cms/entity-types${suffixPath}`
 const unscoped = (suffixPath: string, query = '') => `/api/settings/cms/entity-types${suffixPath}${query}`
 
-const typeBody = (hubId: string, name: string, extra: Record<string, unknown> = {}) => ({
-  hubId,
+const typeBody = (hubId: string | undefined, name: string, extra: Record<string, unknown> = {}) => ({
+  ...(hubId === undefined ? {} : { hubId }),
   name,
   label: name,
   labelPlural: `${name}s`,
@@ -211,3 +211,55 @@ describe('POST / PATCH / DELETE /entity-types — factory dispatch against the r
     expect((await call(ADMIN_A, inHub(HUB_A, `/${id}`))).status).toBe(404)
   })
 })
+
+// The hub a type is created in is decided by the ROUTE, not by whatever the body says. The
+// factory handed the service `[body, ctx]` and `createEntityType` read the hub out of
+// `body.hubId` (default ''), so a client that — like `src/client/lib/api/cms.ts` — names the hub
+// only in the URL created a PLATFORM type, which a hub's own records then could not use (#2620:
+// `POST /hubs/:hubId/records` answered 404 for it). Every request below deliberately leaves the
+// hub out of the body, or contradicts the path with it.
+describe('POST /entity-types — the hub is bound by the route', () => {
+  const created: string[] = []
+  afterAll(async () => {
+    if (created.length > 0) await db.delete(entityTypeDefinitions).where(inArray(entityTypeDefinitions.id, created))
+  })
+
+  it('a type created on the hub mount with no hubId in the body belongs to that hub', async () => {
+    const res = await call(ADMIN_A, inHub(HUB_A, ''), 'POST', typeBody(undefined, 'bound_by_path'))
+    expect(res.status).toBe(201)
+    created.push(String(res.json.id))
+    expect(res.json.hubId).toBe(HUB_A)
+    // The lookup the hub's records make is the one that has to find it.
+    expect((await settings.getEntityTypeById(String(res.json.id), HUB_A)).name).toBe('bound_by_path')
+    expect((await call(ADMIN_A, inHub(HUB_A, `/${res.json.id}`))).status).toBe(200)
+  })
+
+  it('refuses a body hubId that names a different hub than the path, and stores nothing', async () => {
+    const res = await call(ADMIN_A, inHub(HUB_A, ''), 'POST', typeBody(HUB_B, 'smuggled_into_b'))
+    expect(res.status).toBe(403)
+    const rows = await db.select().from(entityTypeDefinitions).where(eq(entityTypeDefinitions.name, 'smuggled_into_b'))
+    expect(rows).toHaveLength(0)
+  })
+
+  it('on the unscoped mount, a caller cannot create into a hub they cannot manage types in', async () => {
+    const res = await call(ADMIN_A, unscoped(''), 'POST', typeBody(HUB_B, 'unscoped_into_b'))
+    expect(res.status).toBe(403)
+    const rows = await db.select().from(entityTypeDefinitions).where(eq(entityTypeDefinitions.name, 'unscoped_into_b'))
+    expect(rows).toHaveLength(0)
+  })
+
+  it('on the unscoped mount, a caller who can manage types in the named hub creates it there', async () => {
+    const res = await call(SUPER, unscoped(''), 'POST', typeBody(HUB_A, 'unscoped_into_a'))
+    expect(res.status).toBe(201)
+    created.push(String(res.json.id))
+    expect(res.json.hubId).toBe(HUB_A)
+  })
+
+  it("on the unscoped mount with no hub named, the type is the platform's own (hub '')", async () => {
+    const res = await call(SUPER, unscoped(''), 'POST', typeBody(undefined, `platform_by_default_${rand}`))
+    expect(res.status).toBe(201)
+    created.push(String(res.json.id))
+    expect(res.json.hubId).toBe('')
+  })
+})
+

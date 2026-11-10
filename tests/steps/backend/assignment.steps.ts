@@ -92,7 +92,8 @@ When('I fetch the entity type', async ({ request, world }) => {
   const state = getAssignmentState(world)
   const id = state.entityTypeId
   if (!id) return
-  const res = await apiGet<Record<string, unknown>>(request, `/settings/cms/entity-types/${id}`)
+  const hubId = getScenarioState(world).hubId
+  const res = await apiGet<Record<string, unknown>>(request, `/hubs/${hubId}/settings/cms/entity-types/${id}`)
   setLastResponse(world, res)
   state.entityTypeDetails = res.data as Record<string, unknown>
 })
