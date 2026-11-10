@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { DISPATCH_SCRIPT } from './paths.js'
 import { checkDispatchDependency, gitFactsFor } from './dependency.js'
 import { fleetRuntimeRoot } from './provenance.js'
+import { classifyTmuxOwner, dispatchGuard, isolatedLaunch, probeTmuxOwnership } from './tmux-isolation.js'
 import { fleetBranchFor } from './ci.js'
 import type { Lane, EngineId } from './config.js'
 import type { WorkItem } from './source.js'
@@ -570,7 +571,7 @@ const POLL_GRACE_MS = 30_000
 
 export interface LaunchOutcomeInput {
   /**
-   * Set when the initial `execFileAsync(DISPATCH_SCRIPT, ...)` call in
+   * Set when the initial `launchWorker(...)` call in
    * `dispatch()` itself threw or timed out. NEVER trusted as authoritative
    * on its own — see the long comment on `dispatch()` for why: dispatch-one.sh
    * starts the worker in a DETACHED tmux session and does only a little more
@@ -723,9 +724,18 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   // file ever appears -> `'DISPATCHED'` -> FAILED, via `resolveLaunchOutcome`,
   // unchanged), so there is nothing this catch needs to do beyond not
   // rethrowing.
+  //
+  // Issue #2655: the launch goes through `launchWorker`, never straight to
+  // `execFileAsync(DISPATCH_SCRIPT, …)`. The tmux server lives in the cgroup of
+  // whoever starts it, and this process is a oneshot systemd unit: a server it
+  // started took every worker on the box with it when a pass ended cleanly.
+  const guard = dispatchGuard(classifyTmuxOwner(probeTmuxOwnership()))
+  if (guard.refuse !== undefined) {
+    return { outcome: 'FAILED', note: guard.refuse }
+  }
   let launchError: string | undefined
   try {
-    await execFileAsync(DISPATCH_SCRIPT, args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })
+    await launchWorker(args)
   } catch (e) {
     launchError = e instanceof Error ? e.message : String(e)
   }
@@ -748,7 +758,7 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   }
 
   const dep = checkDispatchDependency()
-  return resolveLaunchOutcome({
+  const result = resolveLaunchOutcome({
     launchError,
     status,
     seed,
@@ -756,4 +766,23 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
     rtCommit: gitFactsFor(fleetRuntimeRoot()).commit,
     workerLog: readWorkerLog(req.name),
   })
+  // A defence that works silently is indistinguishable from one that does not:
+  // a worker attached to a fragile tmux owner says so in its ledger note.
+  return guard.warn === undefined ? result : { ...result, note: `tmux-owner: ${guard.warn} | ${result.note ?? ''}` }
 }
+
+/** Runs one command line; the seam `launchWorker` is tested through. */
+export type LaunchRunner = (file: string, args: string[], opts: { timeout: number; maxBuffer: number }) => Promise<unknown>
+
+/**
+ * Starts the worker: `dispatch-one.sh` run in its OWN systemd scope
+ * (`orchestrator/bin/llamenos-isolate`), so the tmux server it starts when none
+ * is running belongs to that scope and not to this process. This is the only
+ * place a launch happens — tests/orchestrator/tmux-isolation.test.ts fails if
+ * the dispatcher's cgroup can end up owning the server again.
+ */
+export function launchWorker(args: string[], run: LaunchRunner = execFileAsync): Promise<unknown> {
+  const cmd = isolatedLaunch(DISPATCH_SCRIPT, args)
+  return run(cmd.file, cmd.args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 })
+}
+

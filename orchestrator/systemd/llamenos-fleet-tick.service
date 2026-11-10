@@ -25,3 +25,14 @@ SuccessExitStatus=0
 # no tick completing for 2h). The two bounds are one invariant; change them
 # together.
 TimeoutStartSec=14400
+
+# KillMode is deliberately left at systemd's default (control-group), and that is
+# safe ONLY because no worker lives in this unit's cgroup. A dispatched worker runs
+# in a detached tmux session, and the one per-user tmux server lives in the cgroup
+# of whatever started it; this oneshot exits on purpose, so a server it owned took
+# every worker on the box with it when a pass ended cleanly (#2655: six lost, four
+# of them nothing to do with the fleet). engines.ts therefore launches the worker
+# through orchestrator/bin/llamenos-isolate, which runs it in its own transient
+# llamenos-tmux-*.scope. KillMode=process here was rejected: it would stop this
+# unit reaping the cgroup but leave every other dispatcher (a terminal's scope, the
+# next unit someone adds) free to capture the server the same way.
