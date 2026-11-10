@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve as resolvePath, sep } from 'node:path'
 import { checkScope, checkScopeAcross } from './scope.js'
 import { matchesPath } from './fragments.js'
-import { classifyImpact } from './impact.js'
+import { classifyImpact, isGeneratedArtifactPath } from './impact.js'
 import { NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS, TRUST_ANCHOR_APPROVERS } from './config.js'
 import {
   comparesBaseContent, isShippedClientSource, secretFinding, secretRefusal, trustAnchorEntry, trustAnchorFinding,
@@ -158,16 +158,36 @@ export function changedFilesFrom(diffNameOnly: string): string[] {
  */
 export function addedLinesFrom(diffText: string): number {
   let n = 0
+  // The file whose hunks we are inside, so a generated artifact's lines can be
+  // left out of the REVIEWABLE count (#2641). Read from the same positional
+  // `--- `/`+++ ` header pair; a path that does not parse (quoted, unusual) is
+  // simply counted — the conservative direction.
+  let generated = false
   const lines = diffText.split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (line === undefined) continue
     const prev = lines[i - 1]
     const isFileHeaderLine = prev !== undefined && prev.startsWith('--- ') && line.startsWith('+++ ')
-    if (isFileHeaderLine) continue
+    if (isFileHeaderLine) {
+      generated = isGeneratedArtifactPath(headerPath(line, prev))
+      continue
+    }
+    if (generated) {
+      continue
+    }
     if (line.startsWith('+')) n++
   }
   return n
+}
+
+/** The path a `--- a/x` / `+++ b/x` header pair names; a deletion's `+++` is
+ *  `/dev/null`, so it falls back to the `---` side. */
+function headerPath(plus: string, minus: string): string {
+  const strip = (header: string, prefix: string): string =>
+    header.slice(4).replace(/\t.*$/, '').replace(new RegExp(`^${prefix}/`), '')
+  const dst = plus.slice(4).replace(/\t.*$/, '')
+  return dst === '/dev/null' ? strip(minus, 'a') : strip(plus, 'b')
 }
 
 interface TestRoute {

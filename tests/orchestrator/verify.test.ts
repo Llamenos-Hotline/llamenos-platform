@@ -10,6 +10,7 @@ import {
   changedFilesFrom, addedLinesFrom, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
   judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases, scopeStrayAdvice,
 } from '../../orchestrator/src/verify.js'
+import { classifyImpact } from '../../orchestrator/src/impact.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { ISRG_ROOT_X1, throwawayPrivateKeyPem } from './pem-fixtures.js'
@@ -58,6 +59,60 @@ describe('addedLinesFrom', () => {
       '--- a/two.ts', '+++ b/two.ts', '@@', '+b', '+c',
     ].join('\n')
     expect(addedLinesFrom(diff)).toBe(3)
+  })
+})
+
+describe('addedLinesFrom — generated artifacts (#2641)', () => {
+  const SNAPSHOT = 'drizzle/migrations/meta/20261110050530_snapshot.json'
+  const fileDiff = (path: string, added: number, deleted = false): string[] => [
+    `diff --git a/${path} b/${path}`,
+    `--- a/${path}`,
+    deleted ? '+++ /dev/null' : `+++ b/${path}`,
+    '@@ -0,0 +1 @@',
+    ...Array.from({ length: added }, (_, i) => `+line ${i}`),
+  ]
+
+  it('counts a migration-bearing diff by its human-authored lines, however big the snapshot', () => {
+    // #2638 shape: 72 human lines beside a 10,748-line generated snapshot.
+    const diff = [
+      ...fileDiff('packages/shared/permissions.ts', 7),
+      ...fileDiff('drizzle/migrations/20261110050530_perm.sql', 37),
+      ...fileDiff(SNAPSHOT, 10_748),
+      ...fileDiff('docs/protocol/PROTOCOL.md', 19),
+      ...fileDiff('packages/test-specs/features/x.feature', 9),
+    ].join('\n')
+    expect(addedLinesFrom(diff)).toBe(72)
+  })
+
+  it('does not let the schema growing move the count', () => {
+    const base = fileDiff('apps/worker/x.ts', 5)
+    for (const size of [10, 10_000, 250_000]) {
+      expect(addedLinesFrom([...base, ...fileDiff(SNAPSHOT, size)].join('\n'))).toBe(5)
+    }
+  })
+
+  it('resumes counting after a snapshot section ends', () => {
+    const diff = [...fileDiff(SNAPSHOT, 100), ...fileDiff('apps/worker/after.ts', 3)].join('\n')
+    expect(addedLinesFrom(diff)).toBe(3)
+  })
+
+  it('still counts a lookalike path that is not the drizzle snapshot directory', () => {
+    for (const p of [
+      'apps/worker/drizzle/migrations/meta/1_snapshot.json',
+      'drizzle/migrations/meta/sub/1_snapshot.json',
+      'drizzle/migrations/1_snapshot.json',
+      'drizzle/migrations/meta/1_snapshot.json.bak',
+      'drizzle/migrations/meta/1_snapshot.ts',
+    ]) {
+      expect(addedLinesFrom(fileDiff(p, 40).join('\n')), p).toBe(40)
+    }
+  })
+
+  it('classifies a migration-bearing 72-line change as low impact end to end', () => {
+    const diff = [...fileDiff('drizzle/migrations/1_x.sql', 72), ...fileDiff(SNAPSHOT, 10_748)].join('\n')
+    const { impact, reasons } = classifyImpact(['drizzle/migrations/1_x.sql', SNAPSHOT], addedLinesFrom(diff))
+    expect(reasons.filter((r) => r.includes('review threshold'))).toEqual([])
+    expect(impact).toBe('low')
   })
 })
 
