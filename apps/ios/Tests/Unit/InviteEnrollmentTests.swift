@@ -435,6 +435,38 @@ final class InviteHubSelectionTests: XCTestCase {
 
         XCTAssertEqual(viewModel.hubURL, "")
     }
+
+    // MARK: - A stale error does not outlive the input it was about (#2677)
+
+    func testEditingTheHubFieldClearsTheLoginError() {
+        let viewModel = makeViewModel(hubURL: "")
+        viewModel.errorMessage = "Please enter the hub URL"
+
+        viewModel.hubURLChanged()
+
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testEditingTheInviteFieldClearsTheLoginError() {
+        let viewModel = makeViewModel(hubURL: "https://my-hub.example.org")
+        viewModel.errorMessage = "That invite code was not recognised"
+        viewModel.inviteEnrollment.input = code
+
+        viewModel.inviteInputChanged()
+
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testAPastedLinkThatFillsTheHubAlsoClearsTheLoginError() {
+        let viewModel = makeViewModel(hubURL: "")
+        viewModel.errorMessage = "Please enter the hub URL"
+        viewModel.inviteEnrollment.input = "https://hub.example.org/onboarding?code=\(code)"
+
+        viewModel.inviteInputChanged()
+
+        XCTAssertEqual(viewModel.hubURL, "https://hub.example.org")
+        XCTAssertNil(viewModel.errorMessage)
+    }
 }
 
 // MARK: - HubURLLocalhostTests

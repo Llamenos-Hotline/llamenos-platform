@@ -52,6 +52,47 @@ final class AuthFlowUITests: XCTestCase {
         XCTAssertFalse(find("link-device").exists, "Login must not offer linking from another device")
     }
 
+    // MARK: - Stale login errors (#2677)
+
+    /// An empty hub URL is refused with an error. Starting to type in the hub field must
+    /// take that error away: it described the empty field, not what is there now.
+    func testLoginErrorClearsWhenTheHubURLIsEdited() {
+        let hubURLInput = find("hub-url-input")
+        XCTAssertTrue(hubURLInput.waitForExistence(timeout: 20), "Hub URL input should exist")
+
+        let createButton = find("create-identity")
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5), "Create Identity button should exist")
+        createButton.tap()
+
+        let error = find("login-error")
+        XCTAssertTrue(error.waitForExistence(timeout: 5), "An empty hub URL should be refused with an error")
+
+        typeText("h", into: hubURLInput)
+
+        XCTAssertTrue(
+            error.waitForNonExistence(timeout: 5),
+            "The error should go away as soon as the hub URL is edited"
+        )
+    }
+
+    /// Same defect through the other field: a refusal shown for the hub must not stay on
+    /// screen once the user moves on to the invite input and changes it.
+    func testLoginErrorClearsWhenTheInviteIsEdited() {
+        let createButton = find("create-identity")
+        XCTAssertTrue(createButton.waitForExistence(timeout: 20), "Create Identity button should exist")
+        createButton.tap()
+
+        let error = find("login-error")
+        XCTAssertTrue(error.waitForExistence(timeout: 5), "An empty hub URL should be refused with an error")
+
+        typeText("x", into: find("invite-code-input"))
+
+        XCTAssertTrue(
+            error.waitForNonExistence(timeout: 5),
+            "The error should go away as soon as the invite input is edited"
+        )
+    }
+
     // MARK: - Onboarding Flow
 
     func testOnboardingFlowCreateIdentity() {

@@ -71,6 +71,7 @@ struct LoginView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("hub-url-input")
+                        .onChange(of: vm.hubURL) { vm.hubURLChanged() }
                     }
 
                     // Invite code or link
