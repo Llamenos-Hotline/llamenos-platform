@@ -16,7 +16,12 @@ services:
       - grafana-data:/var/lib/grafana
       - ./dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+      # Compose interpolates `$` in values, so a literal one is doubled; to_json
+      # quotes the whole entry so `:` or `#` in the password cannot change how the
+      # YAML parses. The role has already refused an empty or short value
+      # (playbooks/tasks/assert-grafana-admin-password.yml): empty would leave
+      # Grafana on its built-in admin/admin login.
+      - {{ ('GF_SECURITY_ADMIN_PASSWORD=' ~ (grafana_admin_password | replace('$', '$$'))) | to_json }}
       - GF_USERS_ALLOW_SIGN_UP={{ grafana_allow_signup | default(false) | string | lower }}
     networks:
       - llamenos-web

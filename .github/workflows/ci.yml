@@ -1996,6 +1996,16 @@ jobs:
       - name: Check consumed env vars are rendered
         run: python3 scripts/check-consumed-env.py
 
+      # GF_SECURITY_ADMIN_PASSWORD="" is "unset", and an unset Grafana keeps its
+      # built-in admin/admin login. The production vars template never listed the
+      # key, preflight never asserted it and the role defaulted it to "", so a
+      # deploy shipped a default credential. Judges the shared assertion against a
+      # table of good and bad values and checks preflight and the role still call it.
+      # Sits with the env/config guards it belongs with; appending every new guard
+      # at the tail of this list makes each one conflict with the next.
+      - name: Check an empty or weak Grafana admin password cannot be deployed
+        run: python3 deploy/ansible/scripts/check-grafana-password-guard.py
+
       # Neither `--syntax-check` nor `ansible-lint` evaluates Jinja, so a
       # filter naming a test that does not exist — `selectattr('status',
       # 'startswith', 'FAIL')` — is green here and raises on the target.
