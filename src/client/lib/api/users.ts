@@ -38,3 +38,25 @@ export async function updateUser(pubkey: string, data: Partial<{
 export async function deleteUser(pubkey: string) {
   return request<{ ok: true }>(hp(`/users/${pubkey}`), { method: 'DELETE' })
 }
+
+/**
+ * A user's effective permissions, optionally resolved for one hub.
+ *
+ * This is the set the server actually authorises with inside that hub — since
+ * #1064 authority is per hub, so the account-wide `/auth/me` union describes no
+ * single hub's authority. The desktop derives its UI gating from this for the
+ * active hub (#1101); the response type is declared inline on the route
+ * (`GET /api/settings/users/:id/effective-permissions`), not in the protocol
+ * schemas, so it is mirrored here.
+ *
+ * Server gate: `requirePermission('users:read')` on the unscoped mount, which
+ * resolves from GLOBAL roles — a caller whose roles are all hub-scoped gets
+ * 403, even asking about themselves. Callers fall back to the account-wide
+ * `/auth/me` set in that case (see auth.tsx).
+ */
+export async function getEffectivePermissions(userId: string, hubId?: string) {
+  const query = hubId ? `?hubId=${encodeURIComponent(hubId)}` : ''
+  return request<{ userId: string; permissions: string[] }>(
+    `/settings/users/${encodeURIComponent(userId)}/effective-permissions${query}`,
+  )
+}

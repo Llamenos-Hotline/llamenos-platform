@@ -9,7 +9,7 @@ import {
 } from './platform'
 import * as keyManager from './key-manager'
 import { clearCallNoteDrafts } from './call-note-drafts'
-import { getMe, login, logout as apiLogout, updateMyAvailability, setOnAuthExpired, setOnApiActivity } from './api'
+import { getMe, getEffectivePermissions, login, logout as apiLogout, updateMyAvailability, setOnAuthExpired, setOnApiActivity, ApiError } from './api'
 import { permissionGranted } from '@shared/permissions'
 import { loginWithPasskey as webauthnLogin } from './webauthn'
 import { useConfig, forgetHubPreference } from './config'
@@ -21,7 +21,16 @@ interface AuthState {
   isKeyUnlocked: boolean
   publicKey: string | null
   roles: string[]
+  /**
+   * The set `hasPermission`/`isAdmin` gate on: the caller's effective
+   * permissions in the ACTIVE hub (#1101). Until the per-hub answer arrives —
+   * or when the server will not give one (the effective-permissions route
+   * requires a global `users:read`) — this holds the account-wide union, which
+   * is also what describes the account when no hub is active.
+   */
   permissions: string[]
+  /** The account-wide union from `/auth/me` — never hub-resolved. */
+  accountPermissions: string[]
   primaryRoleName: string | null
   name: string | null
   isLoading: boolean
@@ -54,7 +63,15 @@ interface AuthContextValue extends AuthState {
   renewSession: () => Promise<void>
   unlockWithPin: (pin: string) => Promise<boolean>
   lockKey: () => void
+  /** Gates on the active hub's effective set — what the UI may offer HERE. */
   hasPermission: (permission: string) => boolean
+  /**
+   * Gates on the account-wide union across every hub. Only for work that acts
+   * on all member hubs at once (e.g. the assignee re-wrap relay listener) —
+   * the multi-hub axiom forbids gating that on the hub being browsed. UI
+   * gating uses `hasPermission`.
+   */
+  hasAccountPermission: (permission: string) => boolean
   isAdmin: boolean
   isAuthenticated: boolean
   hasDeviceKey: boolean
@@ -72,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     publicKey: null,
     roles: [],
     permissions: [],
+    accountPermissions: [],
     primaryRoleName: null,
     name: null,
     isLoading: true,
@@ -117,7 +135,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   //
   // AuthProvider owns the trigger because it is the only place that knows when
   // a session exists; ConfigProvider sits above it and cannot read auth state.
-  const { refreshMemberHubs, clearMemberHubs } = useConfig()
+  const { refreshMemberHubs, clearMemberHubs, currentHubId } = useConfig()
+
+  // --- Per-hub UI permissions (#1101) --------------------------------------
+  // `permissions` — the set `hasPermission`/`isAdmin` gate on — must describe
+  // what the user can do in the hub they are LOOKING AT, not the account-wide
+  // union /auth/me returns. The server's answer for that is
+  // `GET /settings/users/:id/effective-permissions?hubId=`.
+  //
+  // Browsing context only: nothing here feeds call routing, relay subscriptions
+  // or notification handling (the multi-hub axiom). Background work that acts
+  // on every member hub at once gates on `hasAccountPermission` instead.
+  //
+  // The route requires a global `users:read`, which hub-scoped-only members do
+  // not hold — a 403 there is sticky for the session, so the first one flips
+  // the UI back to the account-wide set and stops asking. Any other failure
+  // keeps the last known set: a dropped connection says nothing about what
+  // this user may do, and blanking gated UI on a transient error would lie.
+  const permCacheRef = useRef(new Map<string, string[]>())
+  const permCacheOwnerRef = useRef<string | null>(null)
+  const permEndpointDeniedRef = useRef(false)
+  const permFetchSeqRef = useRef(0)
+
+  useEffect(() => {
+    const pubkey = state.publicKey
+    if (!pubkey) return
+
+    // A different account on this device must never see the last user's sets.
+    if (permCacheOwnerRef.current !== pubkey) {
+      permCacheOwnerRef.current = pubkey
+      permCacheRef.current.clear()
+      permEndpointDeniedRef.current = false
+    }
+    if (permEndpointDeniedRef.current) {
+      setState(s => s.permissions === s.accountPermissions ? s : { ...s, permissions: s.accountPermissions })
+      return
+    }
+
+    const cacheKey = currentHubId ?? ''
+    const cached = permCacheRef.current.get(cacheKey)
+    if (cached) setState(s => ({ ...s, permissions: cached }))
+
+    const seq = ++permFetchSeqRef.current
+    getEffectivePermissions(pubkey, currentHubId)
+      .then(res => {
+        permCacheRef.current.set(cacheKey, res.permissions)
+        if (permFetchSeqRef.current !== seq) return // a newer hub/answer won
+        setState(s => ({ ...s, permissions: res.permissions }))
+      })
+      .catch(err => {
+        if (err instanceof ApiError && err.status === 403) {
+          permEndpointDeniedRef.current = true
+          if (permFetchSeqRef.current !== seq) return
+          setState(s => ({ ...s, permissions: s.accountPermissions }))
+        }
+        // Non-403: keep last known — a transient failure must not blank the UI.
+      })
+  }, [currentHubId, state.publicKey, state.accountPermissions])
 
   // Listen for key manager lock/unlock events
   useEffect(() => {
@@ -141,7 +215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...s,
         sessionExpired: true,
         sessionExpiring: false,
-        ...(s.isKeyUnlocked ? {} : { roles: [], permissions: [], primaryRoleName: null, name: null }),
+        ...(s.isKeyUnlocked ? {} : { roles: [], permissions: [], accountPermissions: [], primaryRoleName: null, name: null }),
       }))
     })
     return () => setOnAuthExpired(null)
@@ -219,6 +293,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             publicKey: me.pubkey,
             roles: me.roles || [],
             permissions: me.permissions || [],
+            accountPermissions: me.permissions || [],
             primaryRoleName: me.primaryRole?.name || null,
             name: me.name,
             isLoading: false,
@@ -260,6 +335,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             publicKey: me.pubkey,
             roles: me.roles || [],
             permissions: me.permissions || [],
+            accountPermissions: me.permissions || [],
             primaryRoleName: me.primaryRole?.name || null,
             name: me.name,
             isLoading: false,
@@ -319,6 +395,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         publicKey: pubkeyHex,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -368,6 +445,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         publicKey: pubkeyHex,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -411,6 +489,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         publicKey: pubkey,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -456,6 +535,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         publicKey: pubkey,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -495,6 +575,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         name: me.name,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         publicKey: me.pubkey,
         transcriptionEnabled: me.transcriptionEnabled,
@@ -528,6 +609,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         name: me.name,
         roles: me.roles || [],
         permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         publicKey: me.pubkey,
         transcriptionEnabled: me.transcriptionEnabled,
@@ -568,6 +650,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Revoke server-side session token before clearing local state
     apiLogout()
     keyManager.lock()
+    permCacheRef.current.clear()
+    permCacheOwnerRef.current = null
+    permEndpointDeniedRef.current = false
     // The next user of this device must not see this volunteer's unsaved call note.
     clearCallNoteDrafts()
     resetDeviceRegistrationCache()
@@ -582,6 +667,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       publicKey: null,
       roles: [],
       permissions: [],
+      accountPermissions: [],
       primaryRoleName: null,
       name: null,
       isLoading: false,
@@ -617,6 +703,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     unlockWithPin,
     lockKey,
     hasPermission: (permission: string) => permissionGranted(state.permissions, permission),
+    hasAccountPermission: (permission: string) => permissionGranted(state.accountPermissions, permission),
     isAdmin: permissionGranted(state.permissions, 'settings:manage'),
     isAuthenticated: sessionUsable,
     hasDeviceKey: state.isKeyUnlocked,

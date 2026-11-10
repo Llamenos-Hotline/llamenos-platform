@@ -3,6 +3,20 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { AuthProvider, useAuth } from './auth'
 import * as keyManager from './key-manager'
 
+const { getEffectivePermissionsMock, MockApiError, configState } = vi.hoisted(() => {
+  class MockApiError extends Error {
+    constructor(public status: number, public body: string) {
+      super(`API error ${status}: ${body}`)
+      this.name = 'ApiError'
+    }
+  }
+  return {
+    getEffectivePermissionsMock: vi.fn(),
+    MockApiError,
+    configState: { currentHubId: undefined as string | undefined },
+  }
+})
+
 vi.mock('./platform', () => ({
   deviceImportAndLoad: vi.fn(async () => ({
     state: {
@@ -39,11 +53,25 @@ vi.mock('./api', () => ({
     webauthnRequired: false,
     webauthnRegistered: false,
   })),
+  // Default: the hub answers with exactly the account-wide set, so tests that
+  // predate #1101 observe no change. Per-hub tests override this.
+  getEffectivePermissions: getEffectivePermissionsMock,
+  ApiError: MockApiError,
   login: vi.fn(),
   logout: vi.fn(),
   updateMyAvailability: vi.fn(),
   setOnAuthExpired: vi.fn(),
   setOnApiActivity: vi.fn(),
+}))
+
+// AuthProvider reads the active hub from ConfigContext; drive it directly.
+vi.mock('./config', () => ({
+  useConfig: () => ({
+    currentHubId: configState.currentHubId,
+    refreshMemberHubs: vi.fn(async () => {}),
+    clearMemberHubs: vi.fn(),
+  }),
+  forgetHubPreference: vi.fn(),
 }))
 
 vi.mock('./webauthn', () => ({
@@ -58,6 +86,12 @@ beforeEach(() => {
   keyManager.lock()
   sessionStorage.clear()
   localStorage.clear()
+  configState.currentHubId = undefined
+  getEffectivePermissionsMock.mockReset()
+  getEffectivePermissionsMock.mockResolvedValue({
+    userId: 'mock-pubkey',
+    permissions: ['notes:read', 'notes:write'],
+  })
 })
 
 describe('useAuth initial state', () => {
@@ -249,5 +283,122 @@ describe('useAuth error handling', () => {
     await waitFor(() => {
       expect(result.current.error).toBeNull()
     })
+  })
+})
+
+describe('per-hub UI permissions (#1101)', () => {
+  const seed = 'a'.repeat(64)
+
+  it('gates the UI on the hub-resolved answer, not the account-wide /auth/me set', async () => {
+    getEffectivePermissionsMock.mockResolvedValue({ userId: 'mock-pubkey', permissions: ['calls:answer'] })
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      await result.current.signIn(seed, '12345678')
+    })
+
+    await waitFor(() => {
+      expect(result.current.permissions).toEqual(['calls:answer'])
+    })
+    // The account-wide set stays visible through the account-level gate only.
+    expect(result.current.hasPermission('calls:answer')).toBe(true)
+    expect(result.current.hasPermission('notes:read')).toBe(false)
+    expect(result.current.hasAccountPermission('notes:read')).toBe(true)
+    expect(getEffectivePermissionsMock).toHaveBeenCalledWith('mock-pubkey', undefined)
+  })
+
+  it('falls back to the account-wide set when the endpoint refuses with 403', async () => {
+    getEffectivePermissionsMock.mockRejectedValue(new MockApiError(403, '{"error":"Forbidden"}'))
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      await result.current.signIn(seed, '12345678')
+    })
+
+    await waitFor(() => {
+      expect(getEffectivePermissionsMock).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(result.current.hasPermission('notes:read')).toBe(true)
+    })
+  })
+
+  it('keeps the last known set on a transient failure', async () => {
+    getEffectivePermissionsMock.mockRejectedValue(new Error('network down'))
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      await result.current.signIn(seed, '12345678')
+    })
+
+    await waitFor(() => {
+      expect(getEffectivePermissionsMock).toHaveBeenCalled()
+    })
+    // Blank is a lie here: the fetch failing says nothing about authority.
+    expect(result.current.permissions).toEqual(['notes:read', 'notes:write'])
+  })
+
+  it('re-derives when the active hub changes, and caches per hub', async () => {
+    configState.currentHubId = 'hub-A'
+    getEffectivePermissionsMock.mockImplementation(async (_id: string, hubId?: string) => ({
+      userId: 'mock-pubkey',
+      permissions: hubId === 'hub-A' ? ['calls:answer'] : ['notes:read-own'],
+    }))
+    const { result, rerender } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      await result.current.signIn(seed, '12345678')
+    })
+
+    await waitFor(() => {
+      expect(result.current.permissions).toEqual(['calls:answer'])
+    })
+    expect(getEffectivePermissionsMock).toHaveBeenCalledWith('mock-pubkey', 'hub-A')
+
+    configState.currentHubId = 'hub-B'
+    rerender()
+    await waitFor(() => {
+      expect(result.current.permissions).toEqual(['notes:read-own'])
+    })
+    expect(getEffectivePermissionsMock).toHaveBeenCalledWith('mock-pubkey', 'hub-B')
+
+    // Back to hub A: the cached set applies on the switch itself, before any
+    // answer — while a background revalidation still fires (a role revoked
+    // server-side must propagate on the next visit to the hub).
+    const callsBefore = getEffectivePermissionsMock.mock.calls.length
+    let resolveFetch: ((v: { userId: string; permissions: string[] }) => void) | undefined
+    getEffectivePermissionsMock.mockImplementation(
+      () => new Promise<{ userId: string; permissions: string[] }>(res => { resolveFetch = res }),
+    )
+    configState.currentHubId = 'hub-A'
+    rerender()
+    expect(result.current.permissions).toEqual(['calls:answer'])
+    expect(getEffectivePermissionsMock.mock.calls.length).toBe(callsBefore + 1)
+
+    await act(async () => {
+      resolveFetch?.({ userId: 'mock-pubkey', permissions: ['calls:answer', 'calls:hangup'] })
+    })
+    await waitFor(() => {
+      expect(result.current.permissions).toEqual(['calls:answer', 'calls:hangup'])
+    })
+  })
+
+  it('signOut clears the per-hub cache so the next user never sees it', async () => {
+    configState.currentHubId = 'hub-A'
+    getEffectivePermissionsMock.mockResolvedValue({ userId: 'mock-pubkey', permissions: ['calls:answer'] })
+    const { result } = renderHook(() => useAuth(), { wrapper })
+
+    await act(async () => {
+      await result.current.signIn(seed, '12345678')
+    })
+    await waitFor(() => {
+      expect(result.current.permissions).toEqual(['calls:answer'])
+    })
+
+    act(() => {
+      result.current.signOut()
+    })
+    expect(result.current.permissions).toEqual([])
+    expect(result.current.accountPermissions).toEqual([])
   })
 })

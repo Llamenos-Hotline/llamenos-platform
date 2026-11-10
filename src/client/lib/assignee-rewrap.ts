@@ -266,10 +266,14 @@ function describe(err: unknown): string {
  * is decided per message by `rewrapMessageKey`.
  */
 export function useAssigneeRewrap(): void {
-  const { hasPermission } = useAuth()
+  // Account-wide, not the active hub's set (#1101): this listens on EVERY
+  // member hub and re-wraps in the hub the assignment happened in, so gating
+  // it on the hub being browsed would silently stop re-wraps elsewhere
+  // (multi-hub axiom). The server enforces per-hub authority on the write.
+  const { hasAccountPermission } = useAuth()
   const memberHubIds = useMemberHubIds()
   const relayConnected = useRelayState() === 'connected'
-  const canRewrap = REWRAP_PERMISSIONS.every(p => hasPermission(p))
+  const canRewrap = REWRAP_PERMISSIONS.every(p => hasAccountPermission(p))
 
   useRelaySubscriptions(memberHubIds, REWRAP_KINDS, (_kind, content, hubId) => {
     if (content.type !== 'conversation:assigned') return

@@ -102,6 +102,19 @@ describe('deployment-wide settings', () => {
     expect(calls).toEqual([{ method: 'POST', url: '/api/settings/cms/roles/from-template' }])
   })
 
+  it('reads effective permissions on the unscoped settings route, hub as a query param', async () => {
+    // #1101: the desktop derives UI gating from this route. It lives only on the
+    // unscoped mount (#2367) — under /hubs/:hubId it does not exist — and the
+    // hub is a QUERY parameter, so the active hub must not prefix the path.
+    const { getEffectivePermissions } = await import('./users')
+    await getEffectivePermissions('pk-1', 'hub-9')
+    await getEffectivePermissions('pk-1')
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/settings/users/pk-1/effective-permissions?hubId=hub-9' },
+      { method: 'GET', url: '/api/settings/users/pk-1/effective-permissions' },
+    ])
+  })
+
   it('manages the admin report-type vocabulary on the unscoped settings route', async () => {
     // Archiving takes the admin's confirmation (#2575), obtained from its dialog before
     // the recorded calls start.
