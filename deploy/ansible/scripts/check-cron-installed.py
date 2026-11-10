@@ -6,7 +6,7 @@ Why this gate exists
 ``ansible.builtin.cron`` shells out to ``crontab``. A minimal Debian image
 (a cloud image, a bare VPS) does not ship the ``cron`` package, and nothing in
 this repo installed it, so the first cron task on a host built from one died with
-``Failed to find required executable "crontab"``. Ten tasks across eight
+``Failed to find required executable "crontab"``. Ten tasks across six
 roles/playbooks wrote cron jobs; none of them said where cron came from.
 
 ``--syntax-check`` and ``ansible-lint`` cannot see a missing runtime dependency,

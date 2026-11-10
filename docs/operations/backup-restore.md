@@ -263,5 +263,5 @@ are restorable. Do both.
 - `deploy/ansible/playbooks/backup.yml` — backup orchestration, imported by `setup.yml`
 - `deploy/ansible/playbooks/restore.yml` — restore
 - `deploy/ansible/playbooks/test-restore.yml` — on-host restore drill
-- `deploy/ansible/group_vars/all/compose.yml` — canonical per-service Compose paths
+- `deploy/ansible/playbooks/group_vars/all/compose.yml` — canonical per-service Compose paths
 - `docs/runbooks/disaster-recovery.md` — full server-loss recovery
