@@ -195,6 +195,19 @@ When('I enter a valid phone number', async ({ page }) => {
   await page.getByLabel(/phone/i).blur()
 })
 
+Then('saving the profile should send only the phone number', async ({ page }) => {
+  // Update Profile must send just the fields the form changed. Re-sending the
+  // name as it was loaded reverts a rename made elsewhere since the form mounted (#1315).
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (req) => req.method() === 'PATCH' && new URL(req.url()).pathname.endsWith('/auth/me/profile'),
+      { timeout: Timeouts.ELEMENT },
+    ),
+    page.getByTestId(TestIds.SETTINGS_UPDATE_PROFILE_BTN).click(),
+  ])
+  expect(Object.keys(request.postDataJSON() as Record<string, unknown>)).toEqual(['phone'])
+})
+
 When('I enter an invalid phone number {string}', async ({ page }, phone: string) => {
   await page.getByLabel(/phone/i).fill(phone)
   await page.getByLabel(/phone/i).blur()

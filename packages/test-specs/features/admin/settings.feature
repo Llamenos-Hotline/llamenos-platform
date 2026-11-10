@@ -175,8 +175,7 @@ Feature: Admin & User Settings
 
   # ── Profile Settings ──────────────────────────────────────────────
 
-  # @fixme: races other admin scenarios that save the shared admin profile (passes alone) — #1315
-  @desktop @ios @android @fixme
+  @desktop @ios @android
   Scenario: Admin can edit profile name and it persists
     Given I am logged in as an admin
     When I navigate to the "Settings" page
