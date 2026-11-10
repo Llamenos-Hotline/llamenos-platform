@@ -11,10 +11,18 @@
 -- default the previous release's INSERT can take: its AuditService.log does
 -- not name seq. The audit_log_seq_default_seq sequence provides that default.
 -- Its values start at 2^32 — far above any per-chain counter — so a row
--- written by the previous release during a rolling upgrade is globally unique
--- (never collides with a per-chain value in any chain) and sorts after every
--- real append (it was, in fact, appended later). Once every writer assigns
--- seq explicitly the default is never taken again.
+-- written by the previous release during a rolling upgrade never collides
+-- with a per-chain value, and sorts after every real append (it was, in fact,
+-- appended later).
+--
+-- The other direction needs the new code's help, and has it: once a chain's
+-- tip is in this sequence's space (>= 2^32), AuditService.log draws its seq
+-- from the same sequence instead of using tip + 1 (#2634). tip + 1 would be
+-- a value the sequence has yet to issue, and the previous release's next
+-- INSERT would take it and abort on the (hub_id, seq) unique index. Both
+-- writers drawing from one sequence cannot issue a value twice, and appends
+-- to one chain are serialised by the per-chain advisory lock, so within a
+-- chain each draw lands past the tip.
 -- IF NOT EXISTS: the ledger runner replays this file when reconciling a
 -- pre-ledger database whose schema already has the sequence.
 CREATE SEQUENCE IF NOT EXISTS "audit_log_seq_default_seq" START WITH 4294967296;
@@ -40,7 +48,7 @@ UPDATE "audit_log" AS "a" SET "seq" = "s"."rn" FROM (
 -- migration-safety: constrain column public.audit_log.seq because the previous release's only INSERT (AuditService.log) does not name seq, so it takes this column's DEFAULT nextval('audit_log_seq_default_seq') and can never write NULL
 ALTER TABLE "audit_log" ALTER COLUMN "seq" SET NOT NULL;
 --> statement-breakpoint
--- migration-safety: constrain column public.audit_log.hub_id because the previous release's INSERT names hub_id but not seq, so seq takes the sequence default above whose values are globally unique — no previous-release write can produce a duplicate (hub_id, seq)
+-- migration-safety: constrain column public.audit_log.hub_id because the previous release's INSERT names hub_id but not seq, so seq takes the sequence default, and this release's AuditService.log draws from that same sequence whenever the chain tip is in its space, so the two never issue the same (hub_id, seq)
 CREATE UNIQUE INDEX "audit_log_hub_id_seq_idx" ON "audit_log" ("hub_id", "seq");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "audit_log_platform_seq_idx" ON "audit_log" ("seq") WHERE "hub_id" IS NULL;

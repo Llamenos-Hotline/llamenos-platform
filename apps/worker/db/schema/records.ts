@@ -155,8 +155,10 @@ export const auditLog = pgTable(
     // ordering, so it records when the event happened and nothing else. The
     // DEFAULT exists only so a previous release's INSERT (which does not name
     // seq) still succeeds against this schema during a rolling upgrade: it
-    // issues globally unique values far above any per-chain counter, so such
-    // a row can neither collide with nor sort before a real append.
+    // issues values far above any per-chain counter, so such a row can
+    // neither collide with nor sort before a real append; once a chain's tip
+    // is in that space, log() draws from the same sequence (#2634), so the
+    // two writers never issue the same value.
     seq: bigint('seq', { mode: 'number' })
       .notNull()
       .default(sql`nextval('audit_log_seq_default_seq')`),

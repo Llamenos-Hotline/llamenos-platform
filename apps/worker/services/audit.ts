@@ -10,7 +10,8 @@
  *
  * Chains are per hub (`hub_id`), plus one platform chain (`hub_id IS NULL`).
  * Append order is the `seq` column: `log()` assigns it as the locked tip's
- * seq + 1 inside the per-chain advisory-lock transaction, so the order is
+ * seq + 1 inside the per-chain advisory-lock transaction (see `nextSeq` for the
+ * one exception, a tip the previous release wrote), so the order is
  * total and structural (unique per chain) rather than an application-level
  * invariant. `created_at` records when the event happened and nothing else.
  */
@@ -220,6 +221,36 @@ function erasedEntryViolation(entry: Pick<AuditEntry, 'actorPubkey' | 'details'>
     return 'erasedAt set on an entry that still carries details'
   }
   return null
+}
+
+/**
+ * First value `audit_log_seq_default_seq` issues (the migration's START WITH).
+ * A seq at or above it was issued from that sequence: by the previous
+ * release's INSERT, which does not name seq, or by `nextSeq` below.
+ */
+const DEFAULT_SEQ_FLOOR = 2 ** 32
+
+/**
+ * The seq for the next append to a chain whose locked tip has seq `tipSeq`
+ * (undefined for an empty chain).
+ *
+ * Normally the tip's seq + 1. But once the tip is in the default sequence's
+ * issue space, tip + 1 is a value that sequence will hand to the previous
+ * release's next INSERT, which then collides on (hub_id, seq) and aborts the
+ * audited operation for as long as a rolling upgrade keeps both versions
+ * writing (#2634). So an append after such a tip draws from the same sequence.
+ * That cannot collide with the previous release either: nextval never repeats,
+ * and every value in this space was issued by it, so each is below the
+ * sequence's counter and the draw lands past the tip.
+ */
+async function nextSeq(
+  tx: Pick<Database, 'execute'>,
+  tipSeq: number | undefined,
+): Promise<number> {
+  if (tipSeq === undefined) return 1
+  if (tipSeq < DEFAULT_SEQ_FLOOR) return tipSeq + 1
+  const rows = await tx.execute<{ seq: string }>(sql`SELECT nextval('audit_log_seq_default_seq')::text AS seq`)
+  return Number(rows[0].seq)
 }
 
 /** Rows of one chain: a hub's, or the platform chain when `hubId` is undefined. */
@@ -443,7 +474,7 @@ export class AuditService {
         .limit(1)
 
       const previousEntryHash = latest?.entryHash ?? null
-      const seq = (latest?.seq ?? 0) + 1
+      const seq = await nextSeq(tx, latest?.seq)
 
       const createdAt = (at ?? new Date()).toISOString()
 

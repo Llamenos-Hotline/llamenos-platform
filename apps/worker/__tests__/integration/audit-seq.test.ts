@@ -10,6 +10,9 @@
  *  3. seq is per-chain: each hub's chain and the platform chain count from 1.
  *  4. Concurrent appends to one chain (the #1068 fork case) get distinct,
  *     consecutive seq values and a linear chain.
+ *  5. Mixed-version writers (#2634): the previous release's INSERT does not
+ *     name seq and takes the sequence default; the interleaving old, new, old
+ *     must never collide on the (hub_id, seq) unique index.
  *
  * Requires postgres at DATABASE_URL. Own database, dropped on teardown.
  */
@@ -19,6 +22,7 @@ import '../../db/pg-array-patch'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { desc, eq, sql } from 'drizzle-orm'
 import * as schema from '../../db/schema'
+import { computeEntryHash } from '../../services/audit'
 import { freshHubDb } from './hub-shred-helpers'
 
 const fresh = freshHubDb('audit_seq')
@@ -112,5 +116,59 @@ describe('audit_log seq (#1175)', () => {
     // what the next append would chain from.
     const chain = await storedChain(hub)
     expect(await fresh.audit.getLatestHash(hub)).toBe(chain[0].entryHash)
+  })
+
+  /**
+   * The previous release's AuditService.log, verbatim in what matters: it
+   * chains from the tip's hash and INSERTs without naming seq, so the column
+   * takes its DEFAULT nextval('audit_log_seq_default_seq').
+   */
+  async function previousReleaseAppend(hubId: string, n: number) {
+    const [tip] = await fresh.db
+      .select({ entryHash: schema.auditLog.entryHash })
+      .from(schema.auditLog)
+      .where(eq(schema.auditLog.hubId, hubId))
+      .orderBy(desc(schema.auditLog.seq))
+      .limit(1)
+    const id = crypto.randomUUID()
+    const createdAt = new Date().toISOString()
+    const previousEntryHash = tip?.entryHash ?? null
+    const entryHash = computeEntryHash({
+      id, action: 'shiftCreated', actorPubkey: 'system', createdAt, details: { n }, previousEntryHash,
+    })
+    const [row] = await fresh.db
+      .insert(schema.auditLog)
+      .values({
+        id, hubId, action: 'shiftCreated', actorPubkey: 'system', details: { n },
+        previousEntryHash, entryHash, createdAt: new Date(createdAt),
+      })
+      .returning({ seq: schema.auditLog.seq })
+    return row.seq
+  }
+
+  it('never collides with a previous-release append, whichever writer goes first (#2634)', async () => {
+    const hub = 'hub-seq-mixed-versions'
+
+    // 1. old writer: seq comes from the sequence default (>= 2^32).
+    const old1 = await previousReleaseAppend(hub, 1)
+    expect(old1).toBeGreaterThanOrEqual(2 ** 32)
+
+    // 2. new writer: the tip is in the default's issue space, so its seq must
+    //    come from that sequence too, not from tip + 1.
+    const mid = await fresh.audit.log('shiftUpdated', ACTOR, { n: 2 }, hub)
+    expect(mid.seq).toBeGreaterThan(old1)
+
+    // 3. old writer again: with tip + 1 in step 2 this took nextval() ==
+    //    mid.seq and aborted on the (hub_id, seq) unique index.
+    const old2 = await previousReleaseAppend(hub, 3)
+    expect(old2).toBeGreaterThan(mid.seq)
+
+    // The new writer keeps working on a chain whose tip the old one wrote.
+    const last = await fresh.audit.log('shiftUpdated', ACTOR, { n: 4 }, hub)
+    expect(last.seq).toBeGreaterThan(old2)
+
+    const verified = await fresh.audit.verifyChain(hub)
+    expect(verified.valid).toBe(true)
+    expect(verified.checkedEntries).toBe(4)
   })
 })
