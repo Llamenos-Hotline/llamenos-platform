@@ -970,6 +970,33 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     })
   },
 
+  // Mirrors apps/desktop/src/backup_file.rs: the real command shows a native
+  // save dialog and returns the path written, or null when the user dismisses
+  // it. Tests drive the dialog through window flags:
+  //   __TEST_CANCEL_BACKUP_SAVE__ — the user dismissed the dialog (returns null)
+  //   __TEST_FAIL_BACKUP_SAVE__   — the write failed (throws)
+  // and read what "reached disk" from window.__TEST_SAVED_BACKUPS.
+  save_backup_file: async (a) => {
+    const w = window as unknown as Record<string, unknown>
+    const contents = a.contents as string
+    // Same acceptance rule as validate_backup_contents in Rust.
+    let parsed: unknown
+    try { parsed = JSON.parse(contents) } catch { throw new Error('refusing to save: this is not an account backup (not JSON)') }
+    const obj = parsed as Record<string, unknown> | null
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)
+      || obj.v !== BACKUP_FORMAT_VERSION
+      || typeof obj.d !== 'object' || obj.d === null
+      || typeof obj.r !== 'object' || obj.r === null) {
+      throw new Error('refusing to save: this is not an account backup')
+    }
+    if (w.__TEST_CANCEL_BACKUP_SAVE__) return null
+    if (w.__TEST_FAIL_BACKUP_SAVE__) throw new Error('could not write /mock/backup.json: permission denied')
+    const path = `/mock/Documents/backup-${bytesToHex(randomBytes(4))}.json`
+    const saved = (w.__TEST_SAVED_BACKUPS ??= []) as Array<{ path: string; contents: string }>
+    saved.push({ path, contents })
+    return path
+  },
+
   backup_verify_credential: async (a) => {
     await openMockBackup(a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean)
   },

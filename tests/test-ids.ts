@@ -217,6 +217,7 @@ export const TestIds = {
   RECOVERY_PIN_INPUT: 'recovery-pin-input',
   DECRYPT_BACKUP_BTN: 'decrypt-backup-btn',
   BACKUP_ERROR: 'backup-error',
+  BACKUP_SAVED_PATH: 'backup-saved-path',
 
   // ============ Security ============
   PANIC_WIPE_OVERLAY: 'panic-wipe-overlay',

@@ -1,5 +1,5 @@
 /**
- * Key backup & recovery — file I/O only.
+ * Key backup & recovery — container types and the restore-side file reader.
  *
  * The backup format, both KDFs and the cipher are defined once, in Rust:
  * `packages/crypto/src/backup.rs` (container v4). That module's doc comment is
@@ -13,8 +13,11 @@
  * re-creates that divergence, and would put device key material back in the
  * webview, which the architecture forbids.
  *
- * Writing a backup:  `generateRecoveryKey()` + `generateBackupFromState()` from
- *                    `@/lib/platform`, then `downloadBackupFile()` here.
+ * Writing a backup:  `generateRecoveryKey()` + `generateBackupFromState()`, then
+ *                    `saveBackupFile()`, all from `@/lib/platform`. Rust shows the
+ *                    native save dialog and writes the file; an `<a download>`
+ *                    click is NOT an option — WebKitGTK writes it silently into
+ *                    the process's cwd, with no dialog and no path (#2111).
  * Reading a backup:  `readBackupFile()` here, then `verifyBackupCredential()` /
  *                    `restoreBackupAndLoad()` from `@/lib/platform`.
  *
@@ -51,23 +54,6 @@ export interface BackupFile {
   t: number // unix seconds, rounded to the nearest hour
   d: PinBlock // PIN-protected copy of the signing seed
   r: RecoveryBlock // recovery-key-protected copy of the signing seed
-}
-
-/**
- * Download a backup file to the user's device.
- * Compact JSON, random filename — nothing in the name identifies the app or user.
- */
-export function downloadBackupFile(backup: BackupFile): void {
-  const content = JSON.stringify(backup)
-  const blob = new Blob([content], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  const randomSuffix = Array.from(crypto.getRandomValues(new Uint8Array(4)))
-    .map(b => b.toString(16).padStart(2, '0')).join('')
-  a.download = `backup-${randomSuffix}.json`
-  a.click()
-  URL.revokeObjectURL(url)
 }
 
 function isHex(value: unknown): value is string {
