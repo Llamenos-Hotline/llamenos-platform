@@ -264,12 +264,16 @@ struct AccountRecoveryView: View {
 
             SecureField(NSLocalizedString("pin_enter_pin", comment: "Enter PIN"), text: $newPin)
                 .textFieldStyle(.roundedBorder)
-                .keyboardType(.numberPad)
+                .textContentType(.newPassword)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("recovery-new-pin-input")
 
             SecureField(NSLocalizedString("pin_confirm_title", comment: "Confirm PIN"), text: $confirmPin)
                 .textFieldStyle(.roundedBorder)
-                .keyboardType(.numberPad)
+                .textContentType(.newPassword)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("recovery-confirm-pin-input")
 
             if let error = errorMessage {
@@ -288,7 +292,7 @@ struct AccountRecoveryView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(newPin.count < 6 || newPin != confirmPin || isSubmitting)
+            .disabled(newPin.count < 8 || newPin != confirmPin || isSubmitting)
             .accessibilityIdentifier("recovery-save-pin-button")
         }
     }
@@ -300,7 +304,14 @@ struct AccountRecoveryView: View {
         errorMessage = nil
         do {
             let deviceId = UUID().uuidString
-            let tempPin = "000000"
+            // The keypair exists only to produce the pubkey the recovery session
+            // binds — this throwaway credential never protects anything at rest.
+            // It just has to satisfy the shared credential rule (8+ chars with a
+            // letter when not all digits): "000000" failed `is_valid_credential`
+            // and `generateDeviceKeys` threw `invalidPin` before recovery could
+            // even start (#2303). The literal prefix guarantees a letter whatever
+            // UUID returns.
+            let tempPin = "recovery-\(UUID().uuidString)"
             let encrypted = try cryptoService.generateDeviceKeys(deviceId: deviceId, pin: tempPin)
             let pubkey = encrypted.state.encryptionPubkeyHex
 
@@ -360,7 +371,7 @@ struct AccountRecoveryView: View {
     }
 
     private func completeRecoveryWithPin() async {
-        guard newPin == confirmPin, newPin.count >= 6 else {
+        guard newPin == confirmPin, newPin.count >= 8 else {
             errorMessage = NSLocalizedString("error_invalid_pin", comment: "")
             return
         }

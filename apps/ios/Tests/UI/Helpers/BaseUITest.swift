@@ -479,36 +479,28 @@ class BaseUITest: XCTestCase {
 
     // MARK: - PIN Helpers
 
-    /// Taps a PIN into the pad, one digit at a time.
+    /// Types a credential into the unlock screen's secure field and submits it.
     ///
-    /// Uses `app.buttons[...]` rather than this file's `find(...)`, and the
-    /// difference is the whole cost of the slowest test in the suite.
-    /// `find` is `app.descendants(matching: .any)[id]`, which walks EVERY
-    /// element type in the accessibility hierarchy. The digits are plain
-    /// SwiftUI `Button`s (`PINPadView.PINDigitButton` applies
-    /// `.accessibilityIdentifier("pin-\(digit)")`), so a typed query resolves
-    /// them without that walk — and the walk happened twice per digit, once
-    /// for the existence check and again inside `tap()`.
+    /// The unlock screen is a `SecureField` ("pin-input") plus a submit button
+    /// ("pin-submit") — the digit pad is gone (#2303), because a credential may be
+    /// any 8+ characters, letters included. Typing is one `typeText` after focus,
+    /// so the per-digit hierarchy walks the pad needed no longer apply.
     ///
-    /// `testPINWipeAfterTenFailedAttempts` calls this ten times with an
-    /// eight-digit PIN: 80 digits, 160 hierarchy walks, and essentially the
-    /// entire runtime of a test that has been taking 168-313s depending on
-    /// how fast a runner GitHub hands out.
-    ///
-    /// A missing button now fails loudly. The previous `if
-    /// button.waitForExistence { tap() }` silently skipped the digit, which
-    /// submits a DIFFERENT PIN than the test asked for — a lockout test that
-    /// quietly enters seven digits instead of eight is not testing what it
-    /// claims to.
+    /// A missing field or button fails loudly: silently skipping the submit would
+    /// leave a lockout test counting attempts the app never evaluated.
     func enterPIN(_ pin: String) {
-        for char in pin {
-            let button = app.buttons["pin-\(char)"]
-            guard button.waitForExistence(timeout: Self.eventBackstop) else {
-                XCTFail("PIN pad button `pin-\(char)` never appeared; the entered PIN would be incomplete")
-                return
-            }
-            button.tap()
+        let field = find("pin-input")
+        guard field.waitForExistence(timeout: Self.eventBackstop) else {
+            XCTFail("Unlock field `pin-input` never appeared; the credential cannot be entered")
+            return
         }
+        typeText(pin, into: field)
+        let submit = find("pin-submit")
+        guard submit.waitForExistence(timeout: Self.eventBackstop) else {
+            XCTFail("Unlock submit `pin-submit` never appeared; the credential was not submitted")
+            return
+        }
+        submit.tap()
     }
 
     /// Dismiss the keyboard by tapping a neutral area of the screen.

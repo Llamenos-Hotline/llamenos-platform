@@ -130,7 +130,6 @@ struct PINSetView: View {
         let vm = PINViewModel(
             mode: .set,
             authService: appState.authService,
-            maxLength: 128,
             onSuccess: {
                 Task { await appState.completeEnrollment() }
             }
