@@ -233,6 +233,114 @@ describe('rail: a release that ships no installable artifact must fail (#1229)',
   })
 })
 
+// ── Following the indirection through scripts/release/release-assets.sh ──────
+// The workflows no longer say `gh release …`: every create/upload/download/publish
+// is a call into the sourced helper. These read the helper's own function bodies
+// and call graph, so the rails below judge what a call DOES, not what it is named.
+
+const HELPER = join(process.cwd(), 'scripts', 'release', 'release-assets.sh')
+
+/** Shell without comments and echo lines (prose there is not behaviour). */
+const code = (run: string) =>
+  run
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l) && !/^\s*echo /.test(l))
+    .join('\n')
+
+/** name -> body for every top-level function in the helper, one-liners included. */
+function helperFunctions(): Map<string, string> {
+  const src = readFileSync(HELPER, 'utf8')
+  const fns = new Map<string, string>()
+  const oneLine = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{(.*)\}\s*(?:#.*)?$/
+  const opener = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/
+  const lines = src.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const one = oneLine.exec(lines[i]!)
+    if (one) {
+      fns.set(one[1]!, code(one[2]!))
+      continue
+    }
+    const open = opener.exec(lines[i]!)
+    if (!open) continue
+    const end = lines.findIndex((l, j) => j > i && l === '}')
+    if (end < 0) throw new Error(`helper function ${open[1]} has no closing brace`)
+    fns.set(open[1]!, code(lines.slice(i + 1, end).join('\n')))
+    i = end
+  }
+  const declared = src.match(/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/gm)?.length ?? 0
+  if (fns.size !== declared || fns.size < 10 || !fns.has('ra_publish') || !fns.has('ra_create_draft') || !fns.has('ra_download')) {
+    throw new Error(`parsed ${fns.size} of ${declared} helper functions — the parser must not pass vacuously`)
+  }
+  return fns
+}
+
+/** <fn> and every helper function it reaches. */
+function helperClosure(fn: string): string[] {
+  const fns = helperFunctions()
+  const seen = new Set<string>()
+  const walk = (f: string) => {
+    if (seen.has(f)) return
+    seen.add(f)
+    for (const other of fns.keys()) if (other !== f && new RegExp(`\\b${other}\\b`).test(fns.get(f)!)) walk(other)
+  }
+  walk(fn)
+  return [...seen].sort()
+}
+
+/** Anything that turns a release public: the REST field (jq or quoted JSON), gh's flag, or gh api's -F form. */
+const PUBLISH_WRITE = /\bdraft\\?"?\s*[:=]\s*false\b/
+
+/** Every helper function that can reach a publish write. */
+function publishFunctions(): string[] {
+  const fns = helperFunctions()
+  return [...fns.keys()].filter((f) => helperClosure(f).some((g) => PUBLISH_WRITE.test(fns.get(g)!))).sort()
+}
+
+const callsAny = (run: string, fns: string[]) => fns.some((f) => new RegExp(`\\b${f}\\b`).test(code(run)))
+
+function publishes(run: string): boolean {
+  return PUBLISH_WRITE.test(code(run)) || callsAny(run, publishFunctions())
+}
+
+function createsDraft(run: string): boolean {
+  const c = code(run)
+  return (/gh release create/.test(c) && /--draft/.test(c)) || callsAny(run, ['ra_create_draft'])
+}
+
+const PUBLISH_OR_CREATE_CALL = /\b(ra_publish|ra_create_draft)\b[^\n|;&]*/g
+
+/** Source the helper with its network-facing internals replaced, and run <script>. */
+function withHelper(script: string): string {
+  const r = spawnSync('bash', ['-c', `set -euo pipefail\nsource "$HELPER"\n${script}`], {
+    cwd: scratch,
+    encoding: 'utf8',
+    env: { ...process.env, HELPER, GH_TOKEN: 'x', GITHUB_REPOSITORY: 'o/r' },
+  })
+  if (r.status !== 0) throw new Error(`helper probe failed (${r.status}): ${r.stderr}`)
+  return r.stdout
+}
+
+/** The JSON ra_create_draft would POST. */
+function createPayload(): { draft?: unknown } {
+  writeFileSync(join(scratch, 'notes.md'), 'notes')
+  const out = withHelper(`
+    ra_published_url() { :; }
+    ra_retry() { shift; "$@"; }
+    _ra_create_once() { cat "$2"; }
+    ra_create_draft v9.9.9 "v9.9.9 API" notes.md "" false`)
+  return JSON.parse(out) as { draft?: unknown }
+}
+
+/** What ra_download's per-attempt worker finds in the target dir: '' = fresh. */
+function downloadSeesFreshDir(): string {
+  mkdirSync(join(scratch, 'view'), { recursive: true })
+  writeFileSync(join(scratch, 'view', 'llamenos-android.apk'), 'a LOCAL copy that must not be judged')
+  return withHelper(`
+    ra_retry() { shift; "$@"; }
+    _ra_download_once() { [ -d "$2" ] || { echo "no dir"; return 1; }; ls -A "$2"; }
+    ra_download v9.9.9 view`)
+}
+
 describe('rail: the release is only published after the installers are attached and the guard has passed', () => {
   const needsOf = (j: WorkflowJob) => (j.needs === undefined ? [] : Array.isArray(j.needs) ? j.needs : [j.needs])
 
@@ -254,17 +362,53 @@ describe('rail: the release is only published after the installers are attached 
   })
 
   it('the version tag is created as a DRAFT, and only the `release` job ever makes it public', () => {
+    // The helper's own semantics first: a call site is only evidence if the
+    // function it calls does what its name says.
+    expect(createPayload().draft, 'ra_create_draft must POST draft: true').toBe(true)
+    // Every helper route to `draft: false`, followed through the helper's own call
+    // graph. Exact, so a new publish route must be taught to this rail.
+    expect(publishFunctions()).toEqual(['_ra_publish_once', 'ra_publish'])
+    expect(helperClosure('ra_create_draft').some((f) => PUBLISH_WRITE.test(helperFunctions().get(f)!))).toBe(false)
+
     const doc = loadRelease()
     const drafts: string[] = []
     const publishers: string[] = []
     for (const [name, job] of Object.entries(doc.jobs)) {
       for (const step of job.steps ?? []) {
-        if (/gh release create/.test(step.run ?? '') && /--draft/.test(step.run ?? '')) drafts.push(name)
-        if (/--draft=false/.test(step.run ?? '')) publishers.push(name)
+        if (createsDraft(step.run ?? '')) drafts.push(name)
+        if (publishes(step.run ?? '')) publishers.push(name)
       }
     }
     expect(drafts).toEqual(['draft'])
     expect(publishers).toEqual(['release'])
+
+    // ... and they act on the version tag itself.
+    const createStep = doc.jobs['draft']!.steps!.find((s) => createsDraft(s.run ?? ''))!
+    expect(code(createStep.run!)).toMatch(/\bra_create_draft "v\$\{NEW_VERSION\}" /)
+    const publishSteps = releaseJob(doc).steps!.filter((s) => publishes(s.run ?? ''))
+    expect(publishSteps.map((s) => s.name)).toEqual(['Publish release'])
+    expect(code(publishSteps[0]!.run!)).toMatch(/\bra_publish "v\$\{NEW_VERSION\}" true\b/)
+  })
+
+  it('the called build workflows publish only their own per-platform tag, never the v<version> draft', () => {
+    // desktop/android run inside the release: if either could publish
+    // RELEASE_TAG, `v<version>` would go public before the guard ran.
+    for (const f of ['tauri-release.yml', 'mobile-release.yml']) {
+      const doc = parseYaml(readFileSync(join(WORKFLOWS, f), 'utf8')) as WorkflowDoc
+      const calls: string[] = []
+      for (const job of Object.values(doc.jobs)) {
+        for (const step of job.steps ?? []) {
+          const c = code(step.run ?? '')
+          for (const m of c.matchAll(PUBLISH_OR_CREATE_CALL)) calls.push(m[0])
+          expect(c, `${f} step "${step.name}" must not publish with a bare gh call`).not.toMatch(PUBLISH_WRITE)
+          for (const m of c.matchAll(/^\s*TAG=(.*)$/gm)) {
+            expect(m[1], `${f} step "${step.name}" assigns TAG`).toMatch(/^"v\$\{[A-Z_]+\}-(desktop|android|ios)"$/)
+          }
+        }
+      }
+      expect(calls.length, `${f} must still create and publish its own release`).toBeGreaterThan(0)
+      for (const c of calls) expect(c, `${f}: ${c}`).toMatch(/^(ra_publish|ra_create_draft) "\$TAG"/)
+    }
   })
 
   it('"Publish release" comes after the guard, and nothing between them can skip the guard', () => {
@@ -281,10 +425,33 @@ describe('rail: the release is only published after the installers are attached 
   })
 
   it('the guard judges the draft as it will land (a fresh download), not local copies', () => {
-    const step = releaseJob().steps!.find((s) => s.name === GUARD_STEP)
-    expect(step?.env?.['ASSET_DIR']).toBe('published-view')
-    const run = releaseJob().steps!.find((s) => s.name === 'Re-download the draft as it will be published')?.run ?? ''
-    expect(run).toContain('gh release download')
+    const steps = releaseJob().steps!
+    const guardIdx = steps.findIndex((s) => s.name === GUARD_STEP)
+    const view = steps[guardIdx]?.env?.['ASSET_DIR']
+    expect(view).toBe('published-view')
+
+    // The view is downloaded from the draft by the helper, into ASSET_DIR ...
+    const dl = steps.findIndex((s) => s.name === 'Re-download the draft as it will be published')
+    expect(dl).toBeGreaterThan(-1)
+    expect(code(steps[dl]!.run ?? '')).toMatch(new RegExp(`\\bra_download "v\\$\\{NEW_VERSION\\}" ${view}\\b`))
+    // ... and ra_download starts from an EMPTY directory, so nothing local survives into it.
+    expect(downloadSeesFreshDir()).toBe('')
+
+    // ... after the last thing attached to the draft, before the guard, and
+    // nothing in between writes to the view.
+    const lastUpload = steps.map((s) => /\bra_upload\b/.test(code(s.run ?? ''))).lastIndexOf(true)
+    expect(lastUpload).toBeGreaterThan(-1)
+    expect(dl).toBeGreaterThan(lastUpload)
+    expect(guardIdx).toBeGreaterThan(dl)
+    for (const s of steps.slice(dl + 1, guardIdx)) {
+      expect(s.run ?? '', `step "${s.name}" must not touch ${view}`).not.toContain(view!)
+    }
+    // The guard reads only the view: it neither downloads nor reads the local copies.
+    const guard = code(guardScript())
+    expect(guard).toContain('cd "$ASSET_DIR"')
+    expect(guard).not.toMatch(/release-assets|\bra_[a-z_]+\b|gh release/)
+    // And publish is still the step after it (see the ordering test above).
+    expect(steps.findIndex((s) => publishes(s.run ?? ''))).toBeGreaterThan(guardIdx)
   })
 
   it('CHECKSUMS.txt is computed from the release assets, not from the web bundle', () => {
