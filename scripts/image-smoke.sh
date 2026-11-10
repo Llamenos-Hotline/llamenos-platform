@@ -10,6 +10,9 @@
 #   1. passes scripts/verify-runtime.ts (Bun's simdutf text layer works),
 #   2. authenticates to stock postgres:17-alpine over SCRAM-SHA-256,
 #   3. applies every migration and reaches "Starting application...",
+#   4. actually BINDS and SERVES: GET /api/health/live and /api/health/ready
+#      over the container network both answer 200 (an image that migrates and
+#      then fails to bind still passed before this probe existed),
 # and PostgreSQL afterwards holds the migrated schema.
 #
 # Why --cpu exists: Bun >= 1.4 selects simdutf's no-op stub on a VM CPU model
@@ -39,8 +42,24 @@ IMAGE="${1:-}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SMOKE_TIMEOUT_SEC="${SMOKE_TIMEOUT_SEC:-240}"
-# Obviously-fake credential for a throwaway container; never a real secret.
+# Per-endpoint HTTP probe window, capped at the overall deadline. On the
+# 2-vCPU KVM guest the seeding between "Starting application" and the bind is
+# emulated and slow; 90s covers it with margin.
+PROBE_TIMEOUT_SEC="${PROBE_TIMEOUT_SEC:-90}"
+# Obviously-fake credentials for throwaway containers; never real secrets.
 PG_PASSWORD="smoke-test-not-a-secret"
+# validateConfig() requires three distinct 64-hex secrets plus storage keys
+# before the server binds at all — the smoke now asserts the bind, so it must
+# supply them. Fixed dummy values: they protect a container that lives for
+# seconds on a private network, and fixed keeps the log diff-able run to run.
+SMOKE_HMAC_SECRET="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SMOKE_SERVER_SECRET="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+SMOKE_SERVER_KEK="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+# The ban-list and messaging-thread hash keys are file-ONLY (validateConfig
+# refuses them as env vars), so the smoke mounts them at /run/secrets — the
+# same path the production deploys use. Same dummy-value rationale as above.
+SMOKE_BAN_HASH_KEY="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+SMOKE_MESSAGING_HASH_KEY="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 # The PostgreSQL image the product actually deploys — read from the compose
 # file rather than restated here, so the smoke can never drift from it.
@@ -54,10 +73,36 @@ log() { echo "[image-smoke] $*"; }
 # ─────────────────────────────────────────────────────────────────────────
 # Globals (not locals) because the EXIT trap runs after native_smoke returns.
 SMOKE_ID="smoke-$$-$RANDOM"
-net="$SMOKE_ID-net" pg="$SMOKE_ID-pg" app="$SMOKE_ID-app"
+net="$SMOKE_ID-net" pg="$SMOKE_ID-pg" app="$SMOKE_ID-app" storage="$SMOKE_ID-storage"
+secrets_dir=""
 cleanup_native() {
-  docker rm -f "$app" "$pg" >/dev/null 2>&1 || true
+  docker rm -f "$app" "$pg" "$storage" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
+  [ -z "$secrets_dir" ] || rm -rf "$secrets_dir"
+}
+
+# GET a path on the app container over the smoke network, from a throwaway
+# container started from the image under test (Bun is in it) — the same path
+# Caddy takes to the app in the compose deployment, so it proves the server
+# bound on the interface, not just loopback. Prints "HTTP <status>" then the
+# response body; exit 0 iff the status is 200. A connection failure prints
+# "HTTP 000" with the error text as the body.
+http_probe() {
+  docker run --rm --network "$net" \
+    --read-only --tmpfs /tmp:size=16M --security-opt no-new-privileges:true \
+    --entrypoint bun "$IMAGE" -e "
+      fetch('http://${app}:3000$1')
+        .then(async (r) => {
+          console.log('HTTP ' + r.status)
+          console.log(await r.text())
+          process.exit(r.status === 200 ? 0 : 1)
+        })
+        .catch((err) => {
+          console.log('HTTP 000')
+          console.log(String(err))
+          process.exit(1)
+        })
+    "
 }
 
 native_smoke() {
@@ -81,46 +126,58 @@ native_smoke() {
   enc="$(docker exec "$pg" psql -h 127.0.0.1 -U llamenos -d llamenos -tAc 'show password_encryption')"
   [ "$enc" = "scram-sha-256" ] || { log "FAIL: expected password_encryption=scram-sha-256, got '$enc'"; return 1; }
 
+  # Minimal storage stand-in for the readiness gate: /api/health/ready fails
+  # (503) unless the storage endpoint answers, and this network has no RustFS.
+  # The stub is the image under test itself (Bun is in it), so nothing extra is
+  # pulled and the KVM guest needs nothing beyond the tar it already loads.
+  # 403 is what an unauthenticated probe of a real RustFS gets, and what
+  # checkStorage (apps/worker/routes/health.ts) accepts as "reachable".
+  docker run -d --name "$storage" --network "$net" \
+    --read-only --tmpfs /tmp:size=16M --security-opt no-new-privileges:true \
+    --entrypoint bun "$IMAGE" -e \
+    "Bun.serve({ hostname: '0.0.0.0', port: 9000, fetch: () => new Response('image-smoke storage stub', { status: 403 }) })" >/dev/null
+
+  # A full (throwaway) config: the smoke now asserts the server binds and
+  # serves, and it cannot bind at all unless validateConfig() passes.
+  # ENVIRONMENT=staging keeps production's WEBHOOK_BASE_URL requirement and
+  # development's OpenAPI snapshot write (this rootfs is read-only) out of the
+  # way; the dev HTTP surface stays closed (DEV_ROUTES_ENABLED is unset).
+  # The two hash keys validateConfig accepts ONLY as files go through a
+  # read-only bind mount at /run/secrets, like the production deploys.
+  secrets_dir="$(mktemp -d "${TMPDIR:-/tmp}/image-smoke-secrets.XXXXXX")"
+  printf '%s' "$SMOKE_BAN_HASH_KEY" > "$secrets_dir/ban-hash-key"
+  printf '%s' "$SMOKE_MESSAGING_HASH_KEY" > "$secrets_dir/messaging-hash-key"
+  # The app runs as the non-root llamenos user: mktemp's 0700 dir would make
+  # the bind mount untraversable, and the container would boot-fail on
+  # "Required secret file ban-hash-key is missing" with the files right there.
+  chmod 755 "$secrets_dir"
+  chmod 444 "$secrets_dir/ban-hash-key" "$secrets_dir/messaging-hash-key"
   docker run -d --name "$app" --network "$net" \
     --read-only --tmpfs /tmp:size=64M --security-opt no-new-privileges:true --cpus 1 \
+    -v "$secrets_dir:/run/secrets:ro" \
     -e DATABASE_URL="postgresql://llamenos:${PG_PASSWORD}@${pg}:5432/llamenos" \
+    -e HMAC_SECRET="$SMOKE_HMAC_SECRET" \
+    -e SERVER_SECRET="$SMOKE_SERVER_SECRET" \
+    -e SERVER_KEK="$SMOKE_SERVER_KEK" \
+    -e HOTLINE_NAME="image-smoke" \
+    -e ENVIRONMENT=staging \
+    -e STORAGE_ACCESS_KEY="smoke-storage-access-key" \
+    -e STORAGE_SECRET_KEY="smoke-storage-secret-key" \
+    -e STORAGE_ENDPOINT="http://${storage}:9000" \
     "$IMAGE" >/dev/null
 
   local deadline=$(( $(date +%s) + SMOKE_TIMEOUT_SEC )) started=0 stopped=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
     if [ "$(docker inspect -f '{{.State.Running}}' "$app")" != "true" ]; then
-      # The container is EXPECTED to exit here: it is started with only
-      # DATABASE_URL, so validateConfig() throws on HMAC_SECRET milliseconds
-      # after the entrypoint prints "Starting application". That left a race —
-      # if it printed the line and died in the gap between the grep above and
-      # this check, the loop concluded "never started" while the very logs it
-      # then dumped contained the line. Observed on at least four unrelated
-      # branches. A stopped container still has logs, so re-read them before
-      # concluding; exiting is not by itself a failure.
-      # `.State.Running` flips false before the log driver has necessarily
-      # flushed the container's last lines — on the CPUID-masked guest (1 vCPU,
-      # emulated) that lag is visible, and reading immediately here saw an
-      # incomplete log while the post-loop dump showed the marker. Wait for the
-      # container to be fully reaped, then re-read with a bounded retry.
-      # The 5x1s window this replaces was still too short: on 2026-09-27
-      # (run 36356918832, PR #1252) the FAIL line was logged 3ms BEFORE the
-      # post-loop dump that contained the very marker it said was missing,
-      # and 9 of the last 30 Image Smoke runs failed exactly this way — a
-      # 30% false-failure rate on a check that gates every Dockerfile change.
-      # Flush lag is seconds, not minutes, so poll for up to 60s (and never
-      # past the job's own deadline). A genuine never-started container now
-      # costs that extra minute; a flushed-late one costs nothing, and the
-      # old window was turning the common case into a red check.
+      # With a full config the container is expected to STAY RUNNING, so an
+      # exit before the marker is a genuine failure — no longer the old
+      # expected-exit race (the smoke used to start the app with only
+      # DATABASE_URL, and validateConfig threw milliseconds after the marker).
+      # `.State.Running` can flip false before the log driver flushes the last
+      # lines, so re-read the logs after the container is fully reaped.
       docker wait "$app" >/dev/null 2>&1 || true
-      local flush_deadline=$(( $(date +%s) + 60 ))
-      # `if`, not `[ ... ] && ...`: under `set -euo pipefail` (line 23) a bare
-      # && list whose test is false returns 1 and aborts the whole script.
-      if [ "$flush_deadline" -gt "$deadline" ]; then flush_deadline="$deadline"; fi
-      while [ "$(date +%s)" -le "$flush_deadline" ]; do
-        if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; break; fi
-        sleep 1
-      done
+      if docker logs "$app" 2>&1 | grep -q '^\[entrypoint\] Starting application'; then started=1; fi
       stopped=1
       break
     fi
@@ -151,6 +208,35 @@ native_smoke() {
     "select count(*) from information_schema.tables where table_schema='public'")"
   [ "${tables:-0}" -gt 0 ] || { log "FAIL: no tables in the public schema after migrations"; return 1; }
 
+  # The HTTP assertion. The smoke used to end at the log marker above, so an
+  # image that migrated and then failed to bind still passed. Probe both
+  # Kubernetes health endpoints over the container network until each answers
+  # 200, within a bounded wait capped by the overall deadline. In --cpu mode
+  # this script IS the guest's script (kvm_smoke ships it in on the seed
+  # ISO), so the guest run asserts the same two endpoints.
+  local probe_deadline=$(( $(date +%s) + PROBE_TIMEOUT_SEC ))
+  # `if`, not a bare && list: under `set -euo pipefail` a false && aborts.
+  if [ "$probe_deadline" -gt "$deadline" ]; then probe_deadline="$deadline"; fi
+  local path probe_ok probe_out
+  for path in /api/health/live /api/health/ready; do
+    probe_ok=0 probe_out=""
+    while [ "$(date +%s)" -lt "$probe_deadline" ]; do
+      if probe_out="$(http_probe "$path" 2>&1)"; then probe_ok=1; break; fi
+      sleep 2
+    done
+    if [ "$probe_ok" = 1 ]; then
+      # Line 1 is "HTTP 200"; the rest is the response body (the readiness
+      # body names each dependency check, so it belongs in the log).
+      log "probe GET $path -> $(echo "$probe_out" | head -1)"
+      echo "$probe_out" | tail -n +2 | sed 's/^/[image-smoke]   probe: /'
+    else
+      log "FAIL: GET $path did not return 200 within ${PROBE_TIMEOUT_SEC}s of probing; last attempt:"
+      echo "$probe_out" | sed 's/^/[image-smoke]   probe: /'
+      docker logs "$app" 2>&1 | tail -20 | sed 's/^/[image-smoke]   app: /'
+      return 1
+    fi
+  done
+
   # The pre-deploy migration gate (deploy/ansible: the app role and
   # playbooks/update.yml run it from the image about to be deployed, before
   # that image migrates anything) must load from this image's production
@@ -167,7 +253,7 @@ native_smoke() {
   fi
   echo "$gate" | sed 's/^/[image-smoke]   gate: /'
   echo "$gate" | grep -q '^\[migration-safety\] OK' || { log "FAIL: the migration safety gate did not report OK"; return 1; }
-  log "PASS: SCRAM auth + migrations complete ($tables tables); migration safety gate runs in the image"
+  log "PASS: SCRAM auth + migrations ($tables tables); /api/health/live + /api/health/ready serve 200; migration safety gate runs in the image"
 }
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -232,7 +318,7 @@ write_files:
         DEBIAN_FRONTEND=noninteractive apt-get -qq update && DEBIAN_FRONTEND=noninteractive apt-get -qq install -y docker.io >/dev/null
         docker load -q -i /dev/vdb
         docker load -q -i /dev/vdc
-        if PG_IMAGE='$guest_pg' SMOKE_TIMEOUT_SEC='$SMOKE_TIMEOUT_SEC' bash /seed/scripts/image-smoke.sh '$IMAGE'; then
+        if PG_IMAGE='$guest_pg' SMOKE_TIMEOUT_SEC='$SMOKE_TIMEOUT_SEC' PROBE_TIMEOUT_SEC='$PROBE_TIMEOUT_SEC' bash /seed/scripts/image-smoke.sh '$IMAGE'; then
           echo "IMAGE-SMOKE-RESULT PASS"
         else
           echo "IMAGE-SMOKE-RESULT FAIL"
