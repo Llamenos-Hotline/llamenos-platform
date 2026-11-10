@@ -640,7 +640,9 @@ jobs:
                   credential("Google refused to issue a token for secrets.PLAY_SERVICE_ACCOUNT "
                              f"(key revoked, account disabled or deleted): {e.args[0] if e.args else type(e).__name__}")
               if resp.status_code in (401, 403):
-                  credential(f"the service account {info['client_email']} authenticated but Play answered "
+                  # Not naming client_email: Actions masks the whole secret, not
+                  # its fields, and this log is public.
+                  credential("the configured service account authenticated but Play answered "
                              f"HTTP {resp.status_code} for {pkg}: it has no Play Console access to this app")
               resp.raise_for_status()
               return resp
