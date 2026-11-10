@@ -95,17 +95,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        backgroundTimestamp?.let { timestamp ->
-            val elapsed = System.currentTimeMillis() - timestamp
-            if (elapsed > LOCK_TIMEOUT_MS) {
-                cryptoService.lock()
-            }
+        if (shouldAutoLock(backgroundTimestamp, System.currentTimeMillis())) {
+            // Dropping the keys is only half the lock: SessionLockEffect (composed by
+            // LlamenosNavigation) observes unlockedState, clears the authenticated
+            // state and moves the UI to the PIN unlock screen (#1535).
+            cryptoService.lock()
         }
         backgroundTimestamp = null
     }
 
     companion object {
-        private const val LOCK_TIMEOUT_MS = 5L * 60L * 1000L // 5 minutes
+        internal const val LOCK_TIMEOUT_MS = 5L * 60L * 1000L // 5 minutes
+
+        /**
+         * Whether returning to the foreground trips the auto-lock: the app was
+         * backgrounded at [backgroundedAtMs] and has been away longer than
+         * [LOCK_TIMEOUT_MS]. A null timestamp (never backgrounded, or already
+         * consumed by an earlier onStart) never locks.
+         */
+        internal fun shouldAutoLock(backgroundedAtMs: Long?, nowMs: Long): Boolean =
+            backgroundedAtMs != null && nowMs - backgroundedAtMs > LOCK_TIMEOUT_MS
 
         /**
          * Parse a `llamenos://` URI into a navigation destination.

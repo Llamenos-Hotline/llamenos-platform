@@ -256,6 +256,39 @@ class AuthViewModelTest {
         assertNull(locked.error)
     }
 
+    @Test
+    fun `onLocked clears authenticated state and re-reads stored keys`() {
+        // #1535: the background auto-lock reaches the ViewModel through
+        // onLocked (via SessionLockEffect). Unlike resetPinEntry it also
+        // re-reads key presence, so the next start destination is correct.
+        keyValueStore.store(KeystoreService.KEY_ENCRYPTED_KEYS, "{}")
+        val vm = createViewModel()
+        vm.skipEnrollment()
+        assertTrue(vm.uiState.value.isAuthenticated)
+
+        vm.onLocked()
+
+        val state = vm.uiState.value
+        assertFalse(state.isAuthenticated)
+        assertTrue(state.hasStoredKeys)
+        assertEquals("", state.pin)
+        assertEquals("", state.confirmPin)
+        assertFalse(state.isConfirmingPin)
+        assertNull(state.error)
+    }
+
+    @Test
+    fun `onLocked without stored keys reflects the wipe`() {
+        val vm = createViewModel()
+        vm.skipEnrollment()
+        assertTrue(vm.uiState.value.isAuthenticated)
+
+        vm.onLocked()
+
+        assertFalse(vm.uiState.value.isAuthenticated)
+        assertFalse(vm.uiState.value.hasStoredKeys)
+    }
+
     // ---- Update PIN clears error ----
 
     @Test

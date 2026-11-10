@@ -410,18 +410,6 @@ sealed interface LlamenosRoute {
 }
 
 /**
- * Routes that are shown while the device keys are locked (or before they exist). Every
- * other route shows unlocked content and is left as soon as the keys are dropped.
- */
-private val AUTH_ROUTES = setOf(
-    LlamenosRoute.Login.route,
-    LlamenosRoute.Onboarding.route,
-    LlamenosRoute.PINSet.route,
-    LlamenosRoute.PINUnlock.route,
-    LlamenosRoute.InviteRedeem.route,
-)
-
-/**
  * Root navigation composable for the llamenos app.
  *
  * Determines the start destination based on whether encrypted keys exist
@@ -505,22 +493,12 @@ fun LlamenosNavigation(
         LlamenosRoute.Login.route
     }
 
-    // Whatever dropped the device keys — the Lock button, Settings → Lock, the background
-    // auto-lock — the unlocked screens go with them (#1339). Logout navigates to Login
-    // itself and is already there by the time this runs.
-    LaunchedEffect(navController) {
-        cryptoService.unlockedState.collect { unlocked ->
-            val route = navController.currentDestination?.route ?: return@collect
-            if (unlocked || route in AUTH_ROUTES) return@collect
-            authViewModel.onLocked()
-            val target = if (keystoreService.contains(KeystoreService.KEY_ENCRYPTED_KEYS)) {
-                LlamenosRoute.PINUnlock.route
-            } else {
-                LlamenosRoute.Login.route
-            }
-            navController.navigate(target) { popUpTo(0) { inclusive = true } }
-        }
-    }
+    SessionLockEffect(
+        navController = navController,
+        cryptoService = cryptoService,
+        authViewModel = authViewModel,
+        keystoreService = keystoreService,
+    )
 
     // A validated invite continues to PIN set, where the device keys are created.
     LaunchedEffect(inviteState.stage) {
