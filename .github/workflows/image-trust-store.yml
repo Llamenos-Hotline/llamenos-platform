@@ -23,7 +23,6 @@ on:
   pull_request:
     paths:
       - 'deploy/docker/Dockerfile'
-      - 'deploy/docker/Dockerfile.nodejs'
       - 'deploy/docker/Dockerfile.asterisk'
       - 'signal-notifier/Dockerfile'
       - 'sip-bridge/Dockerfile'
@@ -61,7 +60,6 @@ jobs:
           - { name: static, dockerfile: deploy/docker/Dockerfile, context: ., target: static, store: os }
           - { name: signal-notifier, dockerfile: signal-notifier/Dockerfile, context: signal-notifier, target: '', store: bun }
           - { name: sip-bridge, dockerfile: sip-bridge/Dockerfile, context: sip-bridge, target: '', store: bun }
-          - { name: nodejs, dockerfile: deploy/docker/Dockerfile.nodejs, context: ., target: '', store: node }
           - { name: asterisk, dockerfile: deploy/docker/Dockerfile.asterisk, context: deploy/docker, target: '', store: os }
     steps:
       - name: Checkout

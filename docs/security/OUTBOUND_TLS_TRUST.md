@@ -19,7 +19,6 @@ and message plaintext, are exactly as safe as that store. The store is not alway
 | `deploy/docker/Dockerfile` (`app`) | Bun `fetch`/WebSocket | **Bun's compiled-in root store** |
 | `signal-notifier/Dockerfile` | Bun | **Bun's compiled-in root store** |
 | `sip-bridge/Dockerfile` | Bun | **Bun's compiled-in root store** |
-| `deploy/docker/Dockerfile.nodejs` | Node `fetch` | **Node's compiled-in root store** |
 | `deploy/docker/Dockerfile.asterisk` | OpenSSL | Debian `ca-certificates` bundle |
 | `deploy/docker/Dockerfile` (`static`, Caddy) | Go `crypto/x509` (ACME) | Alpine `ca-certificates` bundle |
 
