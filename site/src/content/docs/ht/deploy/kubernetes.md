@@ -37,7 +37,7 @@ Oswa kreye yon fichye `values-production.yaml` pou depoze repwodiksib:
 # values-production.yaml
 app:
   image:
-    repository: ghcr.io/rhonda-rodododo/llamenos-platform
+    repository: ghcr.io/llamenos-hotline/llamenos-platform
     tag: "1.0.0"
     pullPolicy: IfNotPresent
   replicas: 2
@@ -139,7 +139,7 @@ Ouvri `https://hotline.yourdomain.com` nan navigatè ou a. Konekte ak nsec admin
 
 | Paramèt | Deskripsyon | Default |
 |-----------|-------------|---------|
-| `app.image.repository` | Imaj konteyniè | `ghcr.io/rhonda-rodododo/llamenos-platform` |
+| `app.image.repository` | Imaj konteyniè | `ghcr.io/llamenos-hotline/llamenos-platform` |
 | `app.image.tag` | Tag imaj | appVersion chèt la |
 | `app.port` | Pò aplikasyon | `3000` |
 | `app.replicas` | Replik pod | `2` |

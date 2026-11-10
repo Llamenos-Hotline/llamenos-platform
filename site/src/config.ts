@@ -1,3 +1,10 @@
+// The repository's identity, once. Every github.com address below and the
+// container image address are derived from these two values, so none of them
+// can be renamed without the others.
+const GITHUB_ORG = 'Llamenos-Hotline';
+const GITHUB_REPO = 'llamenos-platform';
+const GITHUB_URL = `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}`;
+
 export const siteConfig = {
   name: 'Llámenos',
   url: 'https://llamenos-platform.com',
@@ -22,34 +29,31 @@ export const siteConfig = {
   // one day terminate is a supply-chain path aimed at exactly the people this
   // product protects.
   github: {
-    org: 'Llamenos-Hotline',
-    repo: 'llamenos-platform',
-    url: 'https://github.com/Llamenos-Hotline/llamenos-platform',
-    releasesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/releases',
-    issuesUrl: 'https://github.com/Llamenos-Hotline/llamenos-platform/issues',
+    org: GITHUB_ORG,
+    repo: GITHUB_REPO,
+    url: GITHUB_URL,
+    releasesUrl: `${GITHUB_URL}/releases`,
+    issuesUrl: `${GITHUB_URL}/issues`,
   },
 
-  // THE CONTAINER REGISTRY ADDRESSES BELOW — and nothing else in this file —
-  // are deliberately still `rhonda-rodododo`. This is not a missed rename
-  // (#1218), and it does NOT extend to the github.com URLs above, which are
-  // correctly migrated: the repository moved, so those move with it.
+  // Where self-hosters `docker pull` the app image from. It is derived the
+  // same way release.yml's `docker-stable` job derives the address it
+  // publishes to: `ghcr.io/${{ github.repository }}`, folded to lowercase
+  // because registries reject mixed-case paths and GitHub renders the
+  // owner in display casing. It is derived, not written out, because a
+  // second literal is exactly what went stale here: a repository transfer
+  // does not move its container packages. After the org move this file kept
+  // advertising `ghcr.io/rhonda-rodododo/llamenos-platform` (its last tag is
+  // 0.19.18) while every release from 0.19.19 on went to the org's own
+  // namespace, so anyone following the docs stayed on an old version.
   //
-  // What did not move is the GHCR package. A repository transfer does not
-  // carry its container packages, and this one demonstrably did not:
-  // `ghcr.io/rhonda-rodododo/llamenos-platform` returns 200 with live tags
-  // (`latest`, `0.19.15`, `0.19.14`), while
-  // `ghcr.io/llamenos-hotline/llamenos-platform` returns 403 and does not
-  // exist. Unlike a github.com path, ghcr.io serves no redirect, so this is
-  // the only address that currently works.
-  //
-  // These are what the download page and deploy docs tell self-hosters to
-  // `docker pull`. Moving them before the new package exists AND is public
-  // (GHCR defaults new packages to private on first push) would replace a
-  // working install command with a 404. Tracked in #1223, which moves them
-  // once that holds.
+  // tests/orchestrator/release-ghcr-publish.test.ts fails if this stops
+  // matching what `docker-stable` pushes, or if any deploy doc names another
+  // owner. verify-release-live.yml (surface 6) checks that the address can be
+  // pulled anonymously. GHCR creates packages private, so an operator has to
+  // make the package public once; until that is done, surface 6 stays red.
   registry: {
-    app: 'ghcr.io/rhonda-rodododo/llamenos-platform',
-    signalNotifier: 'ghcr.io/rhonda-rodododo/llamenos-signal-notifier',
+    app: `ghcr.io/${GITHUB_ORG.toLowerCase()}/${GITHUB_REPO}`,
   },
 
   license: 'AGPL-3.0',

@@ -605,16 +605,13 @@ jobs:
       # Hub push this replaces, #885/#902, which never had DOCKERHUB_USERNAME
       # / DOCKERHUB_TOKEN configured and so never produced an image).
       #
-      # This value USED to be required to match `registry.app` in
-      # `site/src/config.ts`. Since the org move it deliberately does not: a
-      # repository transfer does not carry its container packages, so the
-      # address the download page advertises
-      # (`ghcr.io/rhonda-rodododo/llamenos-platform`) is still the old one and
-      # is the only address that currently resolves, while the only address
-      # this job's GITHUB_TOKEN can write is this repository's own. Both ends
-      # are pinned in tests/orchestrator/release-ghcr-publish.test.ts, which
-      # fails if EITHER moves — #1223 collapses them back together once the
-      # new package exists and an operator has made it public.
+      # `registry.app` in site/src/config.ts — what operators are told to
+      # `docker pull` — is derived the same way, and
+      # tests/orchestrator/release-ghcr-publish.test.ts fails if it, or any
+      # deploy doc, names another address. Whether the package is publicly
+      # pullable is checked live by verify-release-live.yml's container-image
+      # surface: GHCR creates a package private, and this job's own token can
+      # always read it, so a green push here does not mean anyone else can.
       #
       # See the lowercase fold in "Compute stable tags": `github.repository`
       # renders the owner in display casing, which registries reject.
