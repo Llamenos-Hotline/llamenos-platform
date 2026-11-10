@@ -5913,14 +5913,23 @@ Reviews notes and reports from assigned volunteers or shifts.
 
 ```
 Permissions: [
-  "calls:answer", "calls:read-active",
-  "notes:create", "notes:read-own", "notes:update-own",
+  "calls:answer", "calls:read-active", "calls:hangup", "calls:report-spam",
+  "calls:identify-caller",
+  "notes:create", "notes:read-own", "notes:update-own", "notes:reply",
+  "contacts:search",
   "conversations:claim", "conversations:send", "conversations:read-assigned",
   "conversations:claim-sms", "conversations:claim-whatsapp",
   "conversations:claim-signal", "conversations:claim-rcs", "conversations:claim-web",
-  "shifts:read-own", "bans:report",
-  "reports:read-assigned", "reports:send-message",
-  "files:upload", "files:download-own"
+  "shifts:read-own", "shifts:set-availability", "shifts:request-join",
+  "bans:report",
+  "reports:read-assigned", "reports:read-types", "reports:send-message",
+  "settings:read",
+  "files:upload", "files:download-own",
+  "cases:create", "cases:read-own", "cases:update-own",
+  "events:read", "evidence:upload",
+  "hubs:read",
+  "erasure:request-self",
+  "teams:read", "tags:view"
 ]
 ```
 
