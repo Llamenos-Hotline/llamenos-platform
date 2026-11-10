@@ -76,7 +76,8 @@ import {
 import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { armStandardAutoMergeAtOpen } from './automerge.js'
-import { requestReviewAtOpen, defaultReviewRequestAtOpenDeps } from './review-request.js'
+import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
+import { grantScopeAtOpen, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -701,12 +702,59 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
   // NO-VERDICT:unreviewed with no way to self-clear. See review-request.ts's
   // module comment for the three rules this honours (event-count
   // confirmation, pending-is-success at open, never ask the author).
-  await requestReviewAtOpen(
-    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
-    defaultReviewRequestAtOpenDeps(log),
-  )
+  //
+  // A cross-lane diff needs its `scope:<lane>` grant(s) BEFORE that request is
+  // meaningful (#2643): `fleet/verify` reads the labels when it runs, and a
+  // PR whose first run lacked them stops at NO-VERDICT:scope with no reviewer
+  // run at all. `grantScopeAtOpen` applies exactly the grants the diff needs
+  // and re-fires the review itself (the labels alone do not trigger it), so
+  // the plain request below is only for a PR that needed no grant.
+  const scopeGrant = await grantScopeAtOpenFor(resolved.pr, branch, resolved.branchMismatch)
+  if (scopeGrant.kind !== 'granted') {
+    await requestReviewAtOpen(
+      { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
+      defaultReviewRequestAtOpenDeps(log),
+    )
+  }
 
   return resolved
+}
+
+async function grantScopeAtOpenFor(
+  pr: string | undefined,
+  headRefName: string,
+  branchMismatch: string | undefined,
+): Promise<ScopeGrantOutcome> {
+  const reviewDeps = defaultReviewRequestAtOpenDeps(log)
+  return grantScopeAtOpen(
+    { pr, headRefName, branchMismatch },
+    defaultScopeGrantDeps(
+      log,
+      () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      async (prNumber, branch) => {
+        const r = await refireReviewRequest({ pr: prNumber, headRefName: branch }, reviewDeps)
+        return r.kind === 'requested'
+      },
+    ),
+  )
+}
+
+/** `llamenos-fleet scope-grant <pr>` — the same step, by hand, for a PR that
+ *  is already open (one opened before the dispatcher applied grants itself,
+ *  or one a worker pushed more files to). */
+async function runScopeGrantCommand(pr: string | undefined): Promise<number> {
+  if (pr === undefined) {
+    process.stderr.write('usage: llamenos-fleet scope-grant <pr>\n')
+    return 2
+  }
+  const head = await ghJson<{ headRefName: string }>(['pr', 'view', pr, '--json', 'headRefName'])
+  if (head === undefined) {
+    process.stderr.write(`scope-grant: could not read PR ${pr}\n`)
+    return 1
+  }
+  const outcome = await grantScopeAtOpenFor(pr, head.headRefName, undefined)
+  process.stdout.write(`scope-grant: ${JSON.stringify(outcome)}\n`)
+  return outcome.kind === 'granted' || outcome.kind === 'not-needed' ? 0 : 1
 }
 
 async function prDiff(pr: string): Promise<string> {
@@ -2094,6 +2142,7 @@ const HANDLERS: Record<string, CommandHandler> = {
     return revert(runId, defaultRevertDeps())
   },
   digest: (rest) => runDigest(rest[0]),
+  'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
   'verify-ci': () => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
     lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),

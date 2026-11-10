@@ -100,7 +100,15 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
       body:
         `You own these paths and ONLY these paths:\n\n` +
         lane.scope.owned.map((p) => `- \`${p}\``).join('\n') +
-        `\n\nIf the fix genuinely requires touching something outside your scope, ` +
+        `\n\nA fix that crosses into files another LANE owns (a route plus the schema it declares and ` +
+        `the client that sends it; a catalog permission plus the migration that grants it) is still ONE ` +
+        `problem and ONE PR — take those files. At PR open the orchestrator reads your diff, applies the ` +
+        `\`scope:<lane>\` label(s) it needs, says so in a PR comment, and re-requests review, so do not ` +
+        `split the change and do not label the PR yourself. It will NOT do this for CI/deploy/supply-chain ` +
+        `paths (\`.github/workflows/\`, \`deploy/\`, \`Dockerfile*\`, \`Caddyfile*\`, \`knope.toml\`, ` +
+        `\`package.json\`, \`bun.lockb\`) owned by another lane, for secrets, or for a path no lane owns ` +
+        `— a diff holding one gets no grant at all and stops at \`NO-VERDICT:scope\`.\n\n` +
+        `If the fix genuinely requires touching one of THOSE (a grant-excluded or unowned path), ` +
         `do NOT touch it. You then have TWO options, and choosing between them is your ` +
         `judgement call:\n\n` +
         `1. If a smaller fix that fits inside your scope is genuinely an improvement, make ` +
