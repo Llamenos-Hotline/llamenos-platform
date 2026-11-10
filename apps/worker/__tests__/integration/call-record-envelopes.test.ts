@@ -102,83 +102,49 @@ function expectNoRawCallerDigits(row: Record<string, unknown>) {
 }
 
 describe('call record metadata encryption (PROTOCOL §2.5) — wired', () => {
-  describe('the scrub_caller_last4 migration keeps no last-four digit (#2262)', () => {
-    const insertLegacy = async () => {
-      await fresh.raw.unsafe(`INSERT INTO active_calls (call_id, hub_id, caller_last4) VALUES ('legacy-active', 'hub-1', '4567')`)
-      await fresh.raw.unsafe(
-        `INSERT INTO call_records (call_id, hub_id, caller_last4, started_at, status, encrypted_content)
-         VALUES ('legacy-record', 'hub-1', '4567', now(), 'completed', '')`,
-      )
-    }
-    const digitsStored = async () => {
-      const rows = await fresh.raw.unsafe(
-        `SELECT (SELECT count(*)::int FROM active_calls WHERE caller_last4 IS NOT NULL)
-              + (SELECT count(*)::int FROM call_records WHERE caller_last4 IS NOT NULL) AS n`,
-      )
-      return rows[0]!.n as number
-    }
-    const cleanup = async () => {
-      await fresh.raw.unsafe(`DELETE FROM active_calls WHERE call_id = 'legacy-active'`)
-      await fresh.raw.unsafe(`DELETE FROM call_records WHERE call_id = 'legacy-record'`)
+  describe('the caller_last4 contract migration dropped the columns, triggers and function (#2400)', () => {
+    // The forget migration (20261031214240_scrub_caller_last4, #2399) erased every
+    // stored digit and kept the columns NULL through the rollout window; the
+    // contract migration then dropped the columns, both triggers and
+    // discard_caller_last4(). These tests run against a database built by the
+    // real runner, so all of it has already applied.
+    const last4Objects = async () => {
+      const [columns, triggers, functions] = await Promise.all([
+        fresh.raw.unsafe(
+          `SELECT table_name AS t FROM information_schema.columns
+           WHERE table_schema = 'public' AND column_name = 'caller_last4' ORDER BY 1`,
+        ),
+        fresh.raw.unsafe(
+          `SELECT tgrelid::regclass::text AS t FROM pg_trigger
+           WHERE tgname LIKE '%_discard_caller_last4' ORDER BY 1`,
+        ),
+        fresh.raw.unsafe(`SELECT proname AS t FROM pg_proc WHERE proname = 'discard_caller_last4'`),
+      ])
+      return [...columns, ...triggers, ...functions].map((r) => r.t)
     }
 
     function migrationStatements(): string[] {
       const dir = join(import.meta.dirname, '../../../../drizzle/migrations')
       // By name: a timestamped migration's prefix is when it was generated (#2391).
-      const file = readdirSync(dir).find((f) => /^\d+_scrub_caller_last4\.sql$/.test(f))
-      expect(file, 'the scrub_caller_last4 migration is missing').toBeTruthy()
+      const file = readdirSync(dir).find((f) => /^\d+_caller_last4_contract\.sql$/.test(f))
+      expect(file, 'the caller_last4 contract migration is missing').toBeTruthy()
       return readFileSync(join(dir, file!), 'utf8')
         .split('--> statement-breakpoint')
         .map((st) => st.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n').trim())
         .filter(Boolean)
     }
 
-    it('erases every digit the previous release stored', async () => {
-      // Rows as the previous release left them: the trigger is off to plant what it had written.
-      await fresh.raw.unsafe(`ALTER TABLE active_calls DISABLE TRIGGER USER`)
-      await fresh.raw.unsafe(`ALTER TABLE call_records DISABLE TRIGGER USER`)
-      try {
-        await insertLegacy()
-        expect(await digitsStored()).toBe(2)
-        for (const statement of migrationStatements().filter((st) => st.startsWith('UPDATE'))) {
-          await fresh.raw.unsafe(statement)
-        }
-        expect(await digitsStored()).toBe(0)
-      } finally {
-        await fresh.raw.unsafe(`ALTER TABLE active_calls ENABLE TRIGGER USER`)
-        await fresh.raw.unsafe(`ALTER TABLE call_records ENABLE TRIGGER USER`)
-        await cleanup()
-      }
+    it('no caller_last4 column, trigger or function survives on either table', async () => {
+      expect(await last4Objects()).toEqual([])
     })
 
-    it('discards digits a previous-release pod writes during a rollout, without failing its INSERT', async () => {
-      try {
-        await insertLegacy() // would throw if the column rejected the write
-        expect(await digitsStored()).toBe(0)
-        await fresh.raw.unsafe(`UPDATE active_calls SET caller_last4 = '9999' WHERE call_id = 'legacy-active'`)
-        expect(await digitsStored()).toBe(0)
-      } finally {
-        await cleanup()
-      }
-    })
-
-    it('re-runs whole after a boot that died partway through, and still discards every digit', async () => {
+    it('re-runs whole after a boot that died partway through, and still drops everything', async () => {
       // The runner records a file only once every statement has succeeded, so a crash
-      // after the CREATEs runs the whole file again on the next boot. Here it already ran.
+      // after some DROPs runs the whole file again on the next boot. Here it already ran.
       for (const statement of migrationStatements()) {
         await fresh.raw.unsafe(statement)
       }
-      const triggers = await fresh.raw.unsafe(
-        `SELECT tgrelid::regclass::text AS tbl FROM pg_trigger
-         WHERE tgname LIKE '%_discard_caller_last4' ORDER BY 1`,
-      )
-      expect(triggers.map((t) => t.tbl)).toEqual(['active_calls', 'call_records'])
-      try {
-        await insertLegacy()
-        expect(await digitsStored()).toBe(0)
-      } finally {
-        await cleanup()
-      }
+      expect(await last4Objects()).toEqual([])
     })
 
     it('is no longer declared by the code: no column on either table definition', () => {
