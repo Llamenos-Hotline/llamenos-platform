@@ -102,6 +102,9 @@ function makeServices(rosters: Record<string, string[]>): Services {
       // Nobody is mid-call in these scenarios; ringing consults this to skip
       // volunteers already on a live call in any hub (#1018).
       getBusyPubkeys: vi.fn().mockResolvedValue(new Set<string>()),
+      recordRingSet: vi.fn().mockResolvedValue(undefined),
+      recordRingLegs: vi.fn().mockResolvedValue(undefined),
+      takeRingLegs: vi.fn().mockResolvedValue([]),
     },
   } as unknown as Services
 }

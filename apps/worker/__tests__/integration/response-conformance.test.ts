@@ -354,6 +354,8 @@ describe('Calls Routes — response conformance', () => {
       hasRecording: false,
       recordingSid: null,
       reportedBy: null,
+      ringLegSids: null,
+      ringSet: null,
       startedAt: new Date(),
       answeredAt: null,
       endedAt: null,

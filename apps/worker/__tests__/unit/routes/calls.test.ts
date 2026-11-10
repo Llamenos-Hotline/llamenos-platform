@@ -63,6 +63,8 @@ function activeRow(overrides: Partial<ActiveCallRow> = {}): ActiveCallRow {
     hasRecording: true,
     recordingSid: RECORDING_SID,
     reportedBy: REPORTER,
+    ringLegSids: null,
+    ringSet: null,
     startedAt: new Date('2026-09-30T10:00:00.000Z'),
     answeredAt: new Date('2026-09-30T10:00:05.000Z'),
     endedAt: null,

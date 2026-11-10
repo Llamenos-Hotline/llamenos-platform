@@ -31,7 +31,6 @@ import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { CallsService } from '../../services/calls'
-import { recordRingLegs } from '../../services/ringing'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 vi.mock('@worker/lib/service-factories')
@@ -60,6 +59,8 @@ const DDL = `
     has_recording BOOLEAN DEFAULT FALSE,
     recording_sid TEXT,
     reported_by TEXT,
+    ring_leg_sids TEXT[],
+    ring_set JSONB,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     answered_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,
@@ -319,7 +320,7 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     const adapter = makeAdapter()
     const app = await makeApp(adapter)
     const [t1, t2] = await seedRingingCall('CA-4b', [V1, V2])
-    recordRingLegs('CA-4b', ['LEG-1', 'LEG-2'])
+    await calls.recordRingLegs('CA-4b', ['LEG-1', 'LEG-2'])
 
     const answerLeg = (token: string, legSid: string) =>
       app.request(`/api/telephony/user-answer?callToken=${token}`, {
@@ -370,7 +371,7 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     const adapter = makeAdapter()
     const app = await makeApp(adapter)
     const [machineToken, humanToken] = await seedRingingCall('CA-8', [V1, V2])
-    recordRingLegs('CA-8', ['LEG-1', 'LEG-2'])
+    await calls.recordRingLegs('CA-8', ['LEG-1', 'LEG-2'])
     const answerLeg = (token: string, legSid: string, answeredBy: string) =>
       app.request(`/api/telephony/user-answer?callToken=${token}`, {
         method: 'POST',
@@ -387,5 +388,40 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     expect(await legOutcome(await answerLeg(humanToken, 'LEG-2', 'human'))).toBe('bridged')
     expect(await activeRow('CA-8')).toMatchObject({ status: 'in-progress', answered_by: V2 })
     expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], 'LEG-2')
+  })
+
+  /**
+   * #1176: the legs a winner cancels come from the call ROW, not from this
+   * process's memory — so cancellation survives a restart and works across
+   * replicas. This writes the leg SIDs through a SECOND database connection,
+   * which is what a dialling process that no longer exists (or another
+   * replica) leaves behind. Against the old process-local registry this test
+   * fails: the Map is empty here, so cancelRinging is never called.
+   */
+  it('cancels losing legs dialled by another process (restart / second replica)', async () => {
+    const adapter = makeAdapter()
+    const app = await makeApp(adapter)
+    const [t1] = await seedRingingCall('CA-9', [V1, V2])
+
+    // Another process dialled the legs: the row carries them, this process's
+    // memory does not. A separate connection, not the service under test.
+    const otherProcess = postgres(DATABASE_URL, { max: 1, connection: { search_path: TEST_SCHEMA } })
+    try {
+      await otherProcess`UPDATE active_calls SET ring_leg_sids = ARRAY['LEG-1', 'LEG-2'] WHERE call_id = 'CA-9'`
+    } finally {
+      await otherProcess.end()
+    }
+
+    const res = await app.request(`/api/telephony/user-answer?callToken=${t1}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'CallSid=LEG-1',
+    })
+    expect(await legOutcome(res)).toBe('bridged')
+    expect(adapter.cancelRinging).toHaveBeenCalledTimes(1)
+    expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], 'LEG-1')
+
+    // Taken exactly once: the row no longer holds the legs.
+    expect(await calls.takeRingLegs('CA-9')).toEqual([])
   })
 })

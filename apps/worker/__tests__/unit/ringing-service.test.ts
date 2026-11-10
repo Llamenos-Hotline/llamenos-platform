@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { startParallelRinging, cancelLosingLegs, recordRingLegs, canAnswerInApp } from '../../services/ringing'
+import { startParallelRinging, cancelLosingLegs, canAnswerInApp } from '../../services/ringing'
 import { openCallerNumber } from '../../lib/crypto'
 import type { Env } from '../../types'
 import type { Services } from '../../services'
@@ -146,6 +146,9 @@ function makeServices(overrides: {
       addCall: vi.fn().mockResolvedValue({ callId: 'CA-test', pushRef: 'push-ref-test' }),
       getBusyPubkeys: vi.fn().mockResolvedValue(new Set(busyPubkeys)),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
+      recordRingSet: vi.fn().mockResolvedValue(undefined),
+      recordRingLegs: vi.fn().mockResolvedValue(undefined),
+      takeRingLegs: vi.fn().mockResolvedValue([]),
     },
   } as unknown as Services
 }
@@ -863,7 +866,7 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
     vi.clearAllMocks()
   })
 
-  it('records the leg SIDs returned by ringVolunteers and cancels all but the winner', async () => {
+  it('persists the leg SIDs returned by ringVolunteers and the set that was rung (#1176)', async () => {
     mockAdapter.ringVolunteers.mockResolvedValueOnce(['LEG-1', 'LEG-2', 'LEG-3'])
     const services = makeServices({
       onShiftPubkeys: ['pk-1', 'pk-2', 'pk-3'],
@@ -871,21 +874,38 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
     })
     await startParallelRinging('CA-legs', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
+    expect(services.calls.recordRingLegs).toHaveBeenCalledWith('CA-legs', ['LEG-1', 'LEG-2', 'LEG-3'])
+    expect(services.calls.recordRingSet).toHaveBeenCalledWith('CA-legs', {
+      volunteers: ['pk-1', 'pk-2', 'pk-3'],
+      usedFallback: false,
+    })
+  })
+
+  it('cancels all but the winner, reading the legs from the call row (#1176)', async () => {
+    const services = makeServices({})
+    vi.mocked(services.calls.takeRingLegs).mockResolvedValue(['LEG-1', 'LEG-2', 'LEG-3'])
+
     await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-legs', 'LEG-2')
 
+    expect(services.calls.takeRingLegs).toHaveBeenCalledWith('CA-legs')
     expect(mockAdapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2', 'LEG-3'], 'LEG-2')
   })
 
   it('cancels every leg when the winner answered in-app (no winning phone leg)', async () => {
-    recordRingLegs('CA-inapp', ['LEG-A', 'LEG-B'])
-    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-inapp')
+    const services = makeServices({})
+    vi.mocked(services.calls.takeRingLegs).mockResolvedValue(['LEG-A', 'LEG-B'])
+    await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-inapp')
     expect(mockAdapter.cancelRinging).toHaveBeenCalledWith(['LEG-A', 'LEG-B'], undefined)
   })
 
   it('cancels a call\'s legs at most once', async () => {
-    recordRingLegs('CA-once', ['LEG-A'])
-    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-once', 'LEG-X')
-    await cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-once', 'LEG-X')
+    const services = makeServices({})
+    // The row is cleared as it is read, so the second take finds nothing.
+    vi.mocked(services.calls.takeRingLegs)
+      .mockResolvedValueOnce(['LEG-A'])
+      .mockResolvedValue([])
+    await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-once', 'LEG-X')
+    await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-once', 'LEG-X')
     expect(mockAdapter.cancelRinging).toHaveBeenCalledTimes(1)
   })
 
@@ -894,10 +914,18 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
     expect(mockAdapter.cancelRinging).not.toHaveBeenCalled()
   })
 
+  it('does not fail the answer when the leg read itself fails', async () => {
+    const services = makeServices({})
+    vi.mocked(services.calls.takeRingLegs).mockRejectedValue(new Error('db down'))
+    await expect(cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-dbdown', 'LEG-X')).resolves.toBeUndefined()
+    expect(mockAdapter.cancelRinging).not.toHaveBeenCalled()
+  })
+
   it('does not fail the answer when the provider cancel call throws', async () => {
-    recordRingLegs('CA-boom', ['LEG-A'])
+    const services = makeServices({})
+    vi.mocked(services.calls.takeRingLegs).mockResolvedValue(['LEG-A'])
     mockAdapter.cancelRinging.mockRejectedValueOnce(new Error('provider down'))
-    await expect(cancelLosingLegs(makeEnv(), makeServices({}), 'hub-1', 'CA-boom', 'LEG-X')).resolves.toBeUndefined()
+    await expect(cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-boom', 'LEG-X')).resolves.toBeUndefined()
   })
 })
 

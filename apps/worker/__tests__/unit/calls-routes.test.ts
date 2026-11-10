@@ -36,6 +36,8 @@ function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {})
     hasRecording: false,
     recordingSid: null,
     reportedBy: null,
+    ringLegSids: null,
+    ringSet: null,
     startedAt: new Date('2026-09-30T10:00:00.000Z'),
     answeredAt: null,
     endedAt: null,
