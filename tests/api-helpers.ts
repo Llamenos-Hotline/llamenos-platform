@@ -1212,8 +1212,11 @@ export async function updateCustomFieldsViaApi(
 
 export async function getSpamSettingsViaApi(
   request: APIRequestContext,
+  hubId?: string,
 ): Promise<{ voiceCaptchaEnabled: boolean; rateLimitEnabled: boolean; maxCallsPerMinute: number; blockDurationMinutes: number }> {
-  const { status, data } = await apiGet(request, '/settings/spam')
+  // Hub-owned since #1137: with a hubId this reads that hub's effective settings
+  // (its overrides over the platform values); without, the platform values.
+  const { status, data } = await apiGet(request, hubId ? `/hubs/${hubId}/settings/spam` : '/settings/spam')
   if (status !== 200) throw new Error(`Failed to get spam settings: ${status}`)
   return data as { voiceCaptchaEnabled: boolean; rateLimitEnabled: boolean; maxCallsPerMinute: number; blockDurationMinutes: number }
 }

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { ShieldAlert, Bot, Timer } from 'lucide-react'
 
 interface Props {
+  hubId: string
   settings: SpamSettings
   onChange: (settings: SpamSettings) => void
   onConfirmToggle: (key: string, newValue: boolean) => void
@@ -16,7 +17,7 @@ interface Props {
   statusSummary?: string
 }
 
-export function SpamSection({ settings, onChange, onConfirmToggle, expanded, onToggle, statusSummary }: Props) {
+export function SpamSection({ hubId, settings, onChange, onConfirmToggle, expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
 
@@ -70,7 +71,7 @@ export function SpamSection({ settings, onChange, onConfirmToggle, expanded, onT
               onChange={async (e) => {
                 try {
                   const val = parseInt(e.target.value) || 3
-                  const res = await updateSpamSettings({ maxCallsPerMinute: val })
+                  const res = await updateSpamSettings(hubId, { maxCallsPerMinute: val })
                   onChange(res)
                 } catch {
                   toast(t('common.error'), 'error')
@@ -89,7 +90,7 @@ export function SpamSection({ settings, onChange, onConfirmToggle, expanded, onT
               onChange={async (e) => {
                 try {
                   const val = parseInt(e.target.value) || 30
-                  const res = await updateSpamSettings({ blockDurationMinutes: val })
+                  const res = await updateSpamSettings(hubId, { blockDurationMinutes: val })
                   onChange(res)
                 } catch {
                   toast(t('common.error'), 'error')

@@ -1,5 +1,5 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
-import { request } from './client'
+import { request, hubPath } from './client'
 import type { CustomFieldDefinition } from '@shared/types'
 
 export type { CustomFieldDefinition } from '@shared/types'
@@ -8,13 +8,20 @@ export type { CustomFieldDefinition } from '@shared/types'
 export type SpamSettings = Required<import('@protocol/schemas').SpamSettings>
 
 // --- Spam Mitigation ---
+//
+// Spam and call settings are hub-owned on the wire (#1051/#1137): the hub-scoped
+// PATCH writes only that hub's overrides, while the unscoped /settings/spam|call
+// writes the PLATFORM values every hub without an override inherits. Nothing in
+// the desktop UI edits the platform values, so these take the hub being edited
+// and never fall back to the unscoped form — an admin looking at hub B must never
+// silently rewrite the default for every hub.
 
-export async function getSpamSettings() {
-  return request<SpamSettings>('/settings/spam')
+export async function getSpamSettings(hubId: string) {
+  return request<SpamSettings>(hubPath(hubId, '/settings/spam'))
 }
 
-export async function updateSpamSettings(data: Partial<SpamSettings>) {
-  return request<SpamSettings>('/settings/spam', {
+export async function updateSpamSettings(hubId: string, data: Partial<SpamSettings>) {
+  return request<SpamSettings>(hubPath(hubId, '/settings/spam'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })
@@ -25,12 +32,12 @@ export async function updateSpamSettings(data: Partial<SpamSettings>) {
 // CallSettings response has all fields required (schema uses optional for input)
 export type CallSettings = Required<import('@protocol/schemas').CallSettings>
 
-export async function getCallSettings() {
-  return request<CallSettings>('/settings/call')
+export async function getCallSettings(hubId: string) {
+  return request<CallSettings>(hubPath(hubId, '/settings/call'))
 }
 
-export async function updateCallSettings(data: Partial<CallSettings>) {
-  return request<CallSettings>('/settings/call', {
+export async function updateCallSettings(hubId: string, data: Partial<CallSettings>) {
+  return request<CallSettings>(hubPath(hubId, '/settings/call'), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })

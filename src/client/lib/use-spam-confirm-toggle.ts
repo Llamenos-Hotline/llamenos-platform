@@ -21,7 +21,7 @@ interface PendingSpamToggle {
  * used by both callers, is what stops the two surfaces from silently
  * diverging again (see issue #1130).
  */
-export function useSpamConfirmToggle(onUpdated: (settings: SpamSettings) => void) {
+export function useSpamConfirmToggle(hubId: string | null, onUpdated: (settings: SpamSettings) => void) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [pending, setPending] = useState<PendingSpamToggle | null>(null)
@@ -34,17 +34,17 @@ export function useSpamConfirmToggle(onUpdated: (settings: SpamSettings) => void
   const cancel = useCallback(() => setPending(null), [])
 
   const confirm = useCallback(async () => {
-    if (!pending) return
+    if (!pending || !hubId) return
     const { key, newValue } = pending
     try {
       const res = key === 'captcha'
-        ? await updateSpamSettings({ voiceCaptchaEnabled: newValue })
-        : await updateSpamSettings({ rateLimitEnabled: newValue })
+        ? await updateSpamSettings(hubId, { voiceCaptchaEnabled: newValue })
+        : await updateSpamSettings(hubId, { rateLimitEnabled: newValue })
       onUpdated(res)
     } catch {
       toast(t('common.error'), 'error')
     }
-  }, [pending, onUpdated, t, toast])
+  }, [pending, hubId, onUpdated, t, toast])
 
   const title = pending
     ? t(pending.key === 'captcha' ? 'confirm.captchaTitle' : 'confirm.rateLimitTitle')

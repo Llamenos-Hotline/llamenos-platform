@@ -31,7 +31,7 @@ async function mockAdminSettingsApi(page: Page) {
     })
   })
 
-  await page.route('**/api/settings/spam', async (route) => {
+  await page.route('**/api/hubs/*/settings/spam', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -39,7 +39,7 @@ async function mockAdminSettingsApi(page: Page) {
     })
   })
 
-  await page.route('**/api/settings/calls', async (route) => {
+  await page.route('**/api/hubs/*/settings/call', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
