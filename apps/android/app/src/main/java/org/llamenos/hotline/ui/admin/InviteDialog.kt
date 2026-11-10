@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
@@ -177,6 +178,7 @@ fun InvitesTab(
                                         snackbarHostState.showSnackbar(inviteCodeCopiedMsg)
                                     }
                                 },
+                                onRevoke = { viewModel.revokeInvite(invite.code) },
                             )
                         }
                     }
@@ -212,6 +214,7 @@ fun InvitesTab(
 private fun InviteCard(
     invite: Invite,
     onCopyCode: (String) -> Unit,
+    onRevoke: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isClaimed = invite.claimedBy != null
@@ -315,7 +318,7 @@ private fun InviteCard(
                 )
             }
 
-            // Copy button (only for unclaimed invites)
+            // Copy + revoke actions (only for unclaimed invites)
             if (!isClaimed) {
                 IconButton(
                     onClick = { onCopyCode(invite.code) },
@@ -324,6 +327,17 @@ private fun InviteCard(
                     Icon(
                         imageVector = Icons.Filled.ContentCopy,
                         contentDescription = stringResource(R.string.invite_share),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onRevoke,
+                    modifier = Modifier.testTag("revoke-invite-${invite.id}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = stringResource(R.string.users_revoke_invite),
+                        tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(20.dp),
                     )
                 }

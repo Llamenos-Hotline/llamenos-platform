@@ -52,6 +52,9 @@ class AdminViewModelInvitesTest {
     private val requests: MutableList<RecordedRequest> = Collections.synchronizedList(mutableListOf())
     private val bodies: MutableMap<String, String> = Collections.synchronizedMap(mutableMapOf())
 
+    private var deleteFails = false
+    private var invitesListBody = """{"invites":[]}"""
+
     private data class Route(val method: String, val path: String, val body: String = """{"ok":true}""") {
         private val regex = Regex(
             "^" + Regex.escape(path).replace("{id}", "\\E[^/]+\\Q") + "(\\?.*)?$",
@@ -86,6 +89,12 @@ class AdminViewModelInvitesTest {
                 requests += request
                 val body = request.body.readUtf8()
                 if (body.isNotEmpty()) bodies["${request.method} ${request.path}"] = body
+                if (deleteFails && request.method == "DELETE") {
+                    return MockResponse().setResponseCode(500).setBody("""{"error":"boom"}""")
+                }
+                if (request.method == "GET" && request.path.orEmpty().startsWith("/api/invites")) {
+                    return MockResponse().setBody(invitesListBody)
+                }
                 val route = routes.firstOrNull { it.matches(request) }
                     ?: return MockResponse().setResponseCode(404).setBody("""{"error":"Not Found"}""")
                 return MockResponse().setBody(route.body)
@@ -178,6 +187,48 @@ class AdminViewModelInvitesTest {
             val body = checkNotNull(bodies["POST /api/invites"]) { "no POST body recorded" }
             val json = Json.parseToJsonElement(body).jsonObject
             assertTrue("hubId must be omitted, not null, when no hub is active", "hubId" !in json)
+        }
+
+    @Test
+    fun `revoking an invite DELETEs the unscoped api-invites route and removes the card`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val code = "11111111-2222-3333-4444-555555555555"
+            invitesListBody = """{"invites":[{"code":"$code","name":"New Volunteer","phone":"+15551234567","roleIds":["role-volunteer"],"hubId":"hub-a","createdBy":"aa11","createdAt":"2026-10-10T00:00:00.000Z","expiresAt":"2026-10-17T00:00:00.000Z"}]}"""
+            val vm = newViewModel()
+            advanceUntilIdle()
+            vm.createInvite("New Volunteer", "+15551234567", listOf("role-volunteer"))
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.invites.any { it.code == code })
+            requests.clear()
+
+            vm.revokeInvite(code)
+            advanceUntilIdle()
+
+            assertTrue(
+                "expected DELETE /api/invites/$code, saw ${seen()}",
+                seen().contains("DELETE /api/invites/$code"),
+            )
+            assertTrue(vm.uiState.value.invites.none { it.code == code })
+            assertNull(vm.uiState.value.invitesError)
+        }
+
+    @Test
+    fun `a failed revoke restores the invite to the list`() =
+        runTest(UnconfinedTestDispatcher()) {
+            val code = "11111111-2222-3333-4444-555555555555"
+            invitesListBody = """{"invites":[{"code":"$code","name":"New Volunteer","phone":"+15551234567","roleIds":["role-volunteer"],"hubId":"hub-a","createdBy":"aa11","createdAt":"2026-10-10T00:00:00.000Z","expiresAt":"2026-10-17T00:00:00.000Z"}]}"""
+            val vm = newViewModel()
+            advanceUntilIdle()
+            vm.createInvite("New Volunteer", "+15551234567", listOf("role-volunteer"))
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.invites.any { it.code == code })
+
+            deleteFails = true
+            vm.revokeInvite(code)
+            advanceUntilIdle()
+
+            assertTrue(vm.uiState.value.invites.any { it.code == code })
+            assertTrue(vm.uiState.value.invitesError != null)
         }
 
     @Test
