@@ -1008,6 +1008,37 @@ session the instant the watchdog exited — six 0-byte repair logs measured
 breaking it: each check is fired against a stubbed measurement, and each
 negative control (quiet repo, draining queue, healthy disk) must stay `ok`.
 
+## Who owns the tmux server (#2655)
+
+There is one tmux server per user, started by whichever `tmux` call finds none
+running, and it lives in that caller's cgroup. Every worker — from any
+dispatcher — is a client of it, so its lifetime was the lifetime of whoever
+dispatched first. The tick is a oneshot that exits on purpose: a pass that ended
+cleanly (`status=0/SUCCESS`) took six workers with it, four of them not the
+fleet's. A terminal's scope is just as fragile, so `KillMode=process` on the tick
+alone was rejected — it fixes one owner and leaves the property.
+
+- **The fix is at dispatch time.** `engines.ts` (`launchWorker`) and the watchdog
+  run `dispatch-one.sh` through `orchestrator/bin/llamenos-isolate`, i.e.
+  `systemd-run --user --scope --unit=llamenos-tmux-<epoch>-<pid>`. A server it
+  starts is born in that scope, which outlives the dispatcher. Environment, session
+  names (`tmux attach -t <name>`) and the `~/tier-overnight-status/` protocol are
+  unchanged.
+- **The check.** `doctor` WARNs when the live server is not in a
+  `llamenos-tmux-*.scope`, naming the owner and what ends it. `dispatch()` REFUSES
+  only when the server shares the dispatcher's own cgroup (certain death); a
+  foreign fragile owner is recorded in the ledger note and launched anyway,
+  because refusing would halt the fleet over a hazard only a human can clear.
+  Test it with a scratch socket and **`env -u TMUX`** — inside a pane `$TMUX`
+  outranks `-L`/`TMUX_TMPDIR` and points at the live server.
+- **Not covered:** a supervisor that runs `dispatch-one.sh` directly (it lives in
+  the claude-skills repo) still starts an un-isolated server if none is running.
+  Prefix its `tmux new-session` call with `llamenos-isolate`; until then `doctor`
+  reports the result.
+- A server that is already running cannot be repaired (moving it between cgroups
+  needs delegation and risks the sessions attached). Drain it; the next dispatch
+  starts one in its own scope.
+
 ## First shadow pass — result
 
 Run by hand on 2026-09-12, all six lanes in `shadow` mode

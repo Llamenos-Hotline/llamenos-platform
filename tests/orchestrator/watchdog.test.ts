@@ -97,6 +97,15 @@ exit 0
   pgrep: '#!/usr/bin/env bash\nexit 0\n',
   tmux: '#!/usr/bin/env bash\nexit 1\n',
   journalctl: '#!/usr/bin/env bash\necho "stub tick journal"\n',
+  // #2655: the repair dispatch runs through bin/llamenos-isolate, which would
+  // otherwise open a REAL transient scope on whatever box runs this suite. This
+  // stub records that the scope was requested, then runs the command itself.
+  'systemd-run': `#!/usr/bin/env bash
+echo "scope-wrapped" >> "$STUB_LOG"
+while [[ "\${1:-}" != -- ]]; do shift; done
+shift
+exec "$@"
+`,
   dispatch: `#!/usr/bin/env bash
 echo "dispatch $*" >> "$STUB_LOG"
 exit 0
@@ -192,6 +201,8 @@ function expectUnhealthy(r: RunResult, pattern: RegExp) {
   // An UNHEALTHY verdict must reach the repair arm — detection that never
   // dispatches is the 0-byte-repair-log failure class.
   expect(r.stubLog).toContain('dispatch fleet-watchdog-')
+  // ...and through the scope wrapper, so the repair session's tmux server is never owned by this unit (#2655).
+  expect(r.stubLog).toMatch(/scope-wrapped\n(?:.*\n)*dispatch fleet-watchdog-/)
   expect(r.brief).not.toBeNull()
   expect(r.brief as string).toMatch(pattern)
 }

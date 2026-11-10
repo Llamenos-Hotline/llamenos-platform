@@ -14,6 +14,7 @@ import {
 } from './provenance.js'
 import { describeSyncOutcome, liveRunPids, readSyncRecord } from './runtime-sync.js'
 import { expectedUnits, systemctlProbe, unitProblems, type UnitProbe } from './systemd-units.js'
+import { classifyTmuxOwner, ownershipWarning, probeTmuxOwnership, type TmuxOwnership } from './tmux-isolation.js'
 import { checkFleetEnvFile } from './fleet-env.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
@@ -161,6 +162,9 @@ export interface DoctorDeps {
   /** Fleet state dir holding the run registry and the last sync record. */
   stateDir?: string
   probe?: UnitProbe
+  /** Seam for the tmux-ownership check (#2655): the host's real tmux server in
+   *  production, a fixture in tests. */
+  tmuxOwnership?: () => TmuxOwnership
 }
 
 export async function doctor(deps: DoctorDeps = {}): Promise<number> {
@@ -325,6 +329,19 @@ export async function doctor(deps: DoctorDeps = {}): Promise<number> {
   warnings += unitWarnings.length
   const syncRecord = readSyncRecord(deps.stateDir)
 
+  // #2655: every worker is a client of ONE tmux server and lives exactly as long
+  // as the cgroup that server was born in. A server owned by a oneshot unit or a
+  // terminal takes every worker with it when that owner exits — six lost, four of
+  // them not the fleet's. WARN, not FAIL: a live server cannot be moved (that
+  // needs delegation and would kill the sessions doing real work), so nothing
+  // doctor reports can be repaired by an agent — and the watchdog dispatches one
+  // for every doctor failure. Dispatch itself REFUSES the one case that is a
+  // certainty (the server in the dispatcher's own cgroup); see dispatchGuard.
+  const tmuxWarning = ownershipWarning(
+    (deps.tmuxOwnership ?? (() => classifyTmuxOwner(probeTmuxOwnership())))(),
+  )
+  if (tmuxWarning !== undefined) warnings++
+
   // The dispatch dependency lives outside this repo (a symlink into the
   // claude-skills git repo, see paths.ts) and cannot be pinned by a llamenos
   // commit, so doctor is the only place its state is ever surfaced.
@@ -369,6 +386,7 @@ export async function doctor(deps: DoctorDeps = {}): Promise<number> {
   // Already counted in `warnings` where they were computed.
   if (runtimeWaitingWarn !== undefined) process.stdout.write(` WARN  ${runtimeWaitingWarn}\n`)
   for (const w of unitWarnings) process.stdout.write(` WARN  ${w}\n`)
+  if (tmuxWarning !== undefined) process.stdout.write(` WARN  ${tmuxWarning}\n`)
   if (syncRecord === undefined) {
     warnings++
     process.stdout.write(' WARN  no runtime-sync record on this host — bin/llamenos-fleet has never run the step that keeps this checkout current (#2515); ' +

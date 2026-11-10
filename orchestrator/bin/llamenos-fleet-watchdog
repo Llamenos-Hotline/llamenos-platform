@@ -66,17 +66,18 @@ export PATH="${FLEET_WATCHDOG_PATH:-$HOME/.bun/bin:$HOME/.local/bin:/usr/local/b
 
 # Resolve the repo through this symlink (same pattern as bin/llamenos-fleet) so
 # the command works from any install location with no path written into units.
-if [[ -n ${FLEET_WATCHDOG_REPO:-} ]]; then
-  REPO="$FLEET_WATCHDOG_REPO"
-else
-  SELF="${BASH_SOURCE[0]}"
-  while [ -L "$SELF" ]; do
-    DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
-    SELF="$(readlink "$SELF")"
-    [[ $SELF != /* ]] && SELF="$DIR/$SELF"
-  done
-  REPO="$(cd -P "$(dirname "$SELF")/../.." && pwd)"
-fi
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  [[ $SELF != /* ]] && SELF="$DIR/$SELF"
+done
+BIN_DIR="$(cd -P "$(dirname "$SELF")" && pwd)"
+REPO="${FLEET_WATCHDOG_REPO:-$(cd -P "$BIN_DIR/../.." && pwd)}"
+# #2655: the repair agent's tmux session must not be owned by this unit. Resolved
+# from this script's own directory, not $REPO — a test points FLEET_WATCHDOG_REPO
+# at a fixture that has no bin/.
+ISOLATE="$BIN_DIR/llamenos-isolate"
 
 D="${FLEET_WATCHDOG_DIR:-$HOME/.llamenos-fleet/watchdog}"
 LOG="$D/watchdog.log"; STAMP="$D/last-launch"
@@ -245,5 +246,5 @@ BRIEF_TEMPLATE="$REPO/orchestrator/systemd/llamenos-fleet-watchdog-brief.md"
   printf '\n### last tick journal\n```\n%s\n```\n' "$(journalctl --user -u llamenos-fleet-tick --since -3h --no-pager | grep -v -E 'rejected before dispatch|exhausted 3' | tail -40)"
 } >"$brief"
 touch "$STAMP"
-if "$DISPATCH" "$name" "$brief" 5400 kimi >>"$LOG" 2>&1 9>&-; then log "dispatched $name"
+if "$ISOLATE" "$DISPATCH" "$name" "$brief" 5400 kimi >>"$LOG" 2>&1 9>&-; then log "dispatched $name"
 else log "DISPATCH FAILED for $name"; fi
