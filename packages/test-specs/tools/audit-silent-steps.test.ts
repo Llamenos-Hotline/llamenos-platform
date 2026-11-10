@@ -22,8 +22,20 @@ import {
   findSwallowingKotlinSteps,
   findSwallowingTsSteps,
   androidScenariosThroughSwallow,
+  auditAndroidSteps,
+  auditDesktopBackendSteps,
+  auditSwallowingSteps,
+  evaluateSilentGate,
+  loadAllScenarios,
+  loadSilentBaseline,
+  silentStepKey,
+  KOTLIN_THROWING_WAIT_HELPERS,
+  KOTLIN_SCREEN_ANCHOR_TAGS,
+  type SilentBaseline,
+  type SilentStepFinding,
   __testing,
 } from "./audit-silent-steps";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -373,5 +385,179 @@ describe("androidScenariosThroughSwallow", () => {
     expect(givenOnly).toHaveLength(0);
     const anyKeyword = androidScenariosThroughSwallow(scenarios, [swallow("Given", "the screen is open")], false, paths);
     expect(anyKeyword.map((h) => h.scenario.title)).toEqual(["Runs and swallows"]);
+  });
+});
+
+// ---- #2678: throwing waits, vacuous assertions, per-step baseline, the repo contract ----
+
+const REPO_ROOT = join(import.meta.dir, "../../..");
+const ANDROID_TEST_DIR = join(REPO_ROOT, "apps/android/app/src/androidTest/java");
+
+function kotlinFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const full = join(dir, name);
+    return statSync(full).isDirectory() ? kotlinFiles(full) : full.endsWith(".kt") ? [full] : [];
+  });
+}
+
+describe("throwing waits count as assertions", () => {
+  test("a Then that only awaits server state is not 'no-assertion-call'", () => {
+    const content =
+      `class S {\n  @Then("the server reflects it")\n  fun a() {\n` +
+      `    SimulationClient.awaitServerState(what = "x", fetch = { f() }) { it.ok }\n  }\n}\n`;
+    expect(findSilentKotlinSteps("/fake/S.kt", content)).toHaveLength(0);
+  });
+
+  test("an unqualified waitUntil is NOT an assertion; composeRule.waitUntil is", () => {
+    const bare = `class S {\n  @Then("t")\n  fun a() {\n    waitUntil(5) { true }\n  }\n}\n`;
+    const compose = `class S {\n  @Then("t")\n  fun a() {\n    composeRule.waitUntil(5) { ready() }\n  }\n}\n`;
+    expect(findSilentKotlinSteps("/fake/S.kt", bare).map((f) => f.reason)).toEqual(["no-assertion-call"]);
+    expect(findSilentKotlinSteps("/fake/S.kt", compose)).toHaveLength(0);
+  });
+
+  test("Playwright waitForURL is an assertion for a TS Then", () => {
+    const content = `Then('I am on login', async ({ page }) => {\n  await page.waitForURL(/login/)\n})\n`;
+    expect(findSilentTsSteps("/fake/s.ts", content)).toHaveLength(0);
+  });
+
+  // The helper names above are an allow-list of things we claim throw. Re-read each
+  // definition: if one is edited into a no-op, the claim is false and the audit would
+  // start passing steps that assert nothing.
+  test.each([...KOTLIN_THROWING_WAIT_HELPERS])("%s is defined, and its definition throws", (name) => {
+    const defRe = new RegExp(`\\bfun\\s+(?:<[^>]+>\\s+)?${name}\\s*\\(`);
+    const hits = kotlinFiles(ANDROID_TEST_DIR).filter((f) => defRe.test(readFileSync(f, "utf-8")));
+    expect(hits.length).toBe(1);
+    const src = readFileSync(hits[0], "utf-8");
+    const start = src.search(defRe);
+    const open = __testing.findBodyOpenBrace(src, src.indexOf(")", start));
+    const body = __testing.extractBracedBody(src, open) ?? "";
+    expect(body).toMatch(/\bthrow\s+(?:AssertionError|\w*Error|\w*Exception)\b|\bwaitUntil\s*\(/);
+    expect(body).not.toMatch(/catch\s*\([^)]*\)\s*\{\s*\}/);
+  });
+});
+
+describe("vacuous assertions", () => {
+  test("expect(true).toBeTruthy() as the only assertion is flagged", () => {
+    const content = `Then('it works', async () => {\n  expect(true).toBeTruthy()\n})\n`;
+    expect(findSilentTsSteps("/fake/s.ts", content).map((f) => f.reason)).toEqual(["vacuous-assertion"]);
+  });
+
+  test("a real assertion next to a vacuous one is fine", () => {
+    const content = `Then('it works', async () => {\n  expect(await f()).toBe(3)\n  expect(true).toBeTruthy()\n})\n`;
+    expect(findSilentTsSteps("/fake/s.ts", content)).toHaveLength(0);
+  });
+
+  test("assertAnyTagDisplayed with a screen anchor among the alternatives is flagged", () => {
+    for (const anchor of KOTLIN_SCREEN_ANCHOR_TAGS) {
+      const content =
+        `class S {\n  @Then("I see the thing")\n  fun a() {\n` +
+        `    assertAnyTagDisplayed("the-thing", "${anchor}")\n  }\n}\n`;
+      expect(findSilentKotlinSteps("/fake/S.kt", content).map((f) => f.reason)).toEqual(["vacuous-assertion"]);
+    }
+  });
+
+  test("a lone anchor, or alternatives with no anchor, are not flagged", () => {
+    const lone = `class S {\n  @Then("t")\n  fun a() {\n    assertAnyTagDisplayed("dashboard-title")\n  }\n}\n`;
+    const noAnchor = `class S {\n  @Then("t")\n  fun a() {\n    assertAnyTagDisplayed("list", "empty-state")\n  }\n}\n`;
+    expect(findSilentKotlinSteps("/fake/S.kt", lone)).toHaveLength(0);
+    expect(findSilentKotlinSteps("/fake/S.kt", noAnchor)).toHaveLength(0);
+  });
+
+  test("the shape of the deleted KeyImportSteps is flagged", () => {
+    const content =
+      `class KeyImportSteps {\n  @Then("the hub URL should be stored as {string}")\n` +
+      `  fun a(url: String) {\n    assertAnyTagDisplayed("dashboard-title", "pin-pad", "create-identity")\n  }\n}\n`;
+    expect(findSilentKotlinSteps("/fake/K.kt", content).map((f) => f.reason)).toEqual(["vacuous-assertion"]);
+  });
+
+  test("assertTrue(true) is flagged, assertTrue(result) is not", () => {
+    const vacuous = `class S {\n  @Then("t")\n  fun a() {\n    assertTrue(true)\n  }\n}\n`;
+    const real = `class S {\n  @Then("t")\n  fun a() {\n    assertTrue(result)\n  }\n}\n`;
+    expect(findSilentKotlinSteps("/fake/S.kt", vacuous)).toHaveLength(1);
+    expect(findSilentKotlinSteps("/fake/S.kt", real)).toHaveLength(0);
+  });
+});
+
+describe("evaluateSilentGate (per-step ratchet)", () => {
+  const finding = (pattern: string, over: Partial<SilentStepFinding> = {}): SilentStepFinding => ({
+    platform: "android",
+    file: "S.kt",
+    line: 1,
+    keyword: "Then",
+    pattern,
+    reason: "no-assertion-call",
+    ...over,
+  });
+  const baseline = (known: string[], exempt: SilentBaseline["exempt"] = []): SilentBaseline => ({
+    description: "",
+    known: Object.fromEntries(known.map((k) => [k, 1])),
+    exempt,
+  });
+
+  test("swapping a fixed step for a new one is caught - a bare count would let it through", () => {
+    const b = baseline([silentStepKey(finding("old one"))]);
+    // "old one" was fixed, "new one" was added: the COUNT is unchanged at 1.
+    const gate = evaluateSilentGate([finding("new one")], b);
+    expect(gate.unexpected.map((f) => f.pattern)).toEqual(["new one"]);
+    expect(gate.stale).toEqual([silentStepKey(finding("old one"))]);
+  });
+
+  test("a known step passes, a duplicate beyond the recorded count does not", () => {
+    const b = baseline([silentStepKey(finding("same"))]);
+    expect(evaluateSilentGate([finding("same")], b).unexpected).toHaveLength(0);
+    expect(evaluateSilentGate([finding("same"), finding("same", { line: 9 })], b).unexpected).toHaveLength(1);
+  });
+
+  test("fixing a step is progress, not failure", () => {
+    const gate = evaluateSilentGate([], baseline([silentStepKey(finding("gone"))]));
+    expect(gate.unexpected).toHaveLength(0);
+    expect(gate.stale).toHaveLength(1);
+  });
+
+  test("an exemption admits a deliberately empty step, and only that one", () => {
+    const empty = finding("noop", { keyword: "Given", reason: "empty-or-comment-only-body" });
+    const b = baseline([], [
+      { platform: "android", file: "S.kt", keyword: "Given", pattern: "noop", reason: "fixture does it" },
+    ]);
+    const gate = evaluateSilentGate([empty, finding("other")], b);
+    expect(gate.exempted).toHaveLength(1);
+    expect(gate.unexpected.map((f) => f.pattern)).toEqual(["other"]);
+  });
+
+  test("the line number is not part of the identity", () => {
+    const b = baseline([silentStepKey(finding("moved"))]);
+    expect(evaluateSilentGate([finding("moved", { line: 500 })], b).unexpected).toHaveLength(0);
+  });
+});
+
+// The repo contract. `ci.yml` is CODEOWNERS-held and does not invoke this script, but it
+// does run `bun run test:repo`, which runs this directory - so this test IS the CI wiring
+// (#2678). It failed on unmodified main before the baseline was made per-step.
+describe("repo contract: the guard passes on this tree", () => {
+  const baseline = loadSilentBaseline();
+  const findings = [...auditDesktopBackendSteps(), ...auditAndroidSteps()];
+
+  test("every silent-pass step in the repo is in silent-steps.baseline.json or exempt with a reason", () => {
+    const gate = evaluateSilentGate(findings, baseline);
+    expect(gate.unexpected.map((f) => `${f.file}:${f.line} @${f.keyword}("${f.pattern}") ${f.reason}`)).toEqual([]);
+  });
+
+  test("every exemption carries a reason and still names a real finding", () => {
+    for (const e of baseline.exempt) {
+      expect(e.reason.trim().length).toBeGreaterThan(20);
+      expect(findings.some((f) => f.platform === e.platform && f.file === e.file && f.pattern === e.pattern)).toBe(true);
+    }
+  });
+
+  test("swallowed-failure counts are at or below the ratchet", () => {
+    const swallowing = auditSwallowingSteps(["desktop-backend", "android"]);
+    for (const platform of ["desktop-backend", "android"] as const) {
+      expect(swallowing.filter((f) => f.platform === platform).length).toBeLessThanOrEqual(
+        __testing.SWALLOW_BASELINE.steps[platform]
+      );
+    }
+    expect(androidScenariosThroughSwallow(loadAllScenarios(), swallowing, true).length).toBeLessThanOrEqual(
+      __testing.SWALLOW_BASELINE.androidExecutedThroughThen
+    );
   });
 });
