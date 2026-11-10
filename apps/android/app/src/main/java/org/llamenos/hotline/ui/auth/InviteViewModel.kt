@@ -149,12 +149,21 @@ class InviteViewModel @Inject constructor(
         /**
          * Accept either a bare invite code or an invite link carrying it as `?code=`.
          * A link also names the hub it came from (its http(s) origin).
+         *
+         * This runs on every keystroke of the invite field (#2120), so it must never
+         * throw: a half-typed link (`http:`, `abc:`, `tel:123`) is an *opaque* URI, and
+         * [Uri.getQueryParameter] throws `UnsupportedOperationException` on one.
          */
         fun parseInvite(input: String): ParsedInvite? {
             val trimmed = input.trim()
             if (trimmed.isEmpty()) return null
             asInviteCode(trimmed)?.let { return ParsedInvite(it, hubUrl = null) }
-            val uri = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
+            return runCatching { parseInviteLink(trimmed) }.getOrNull()
+        }
+
+        private fun parseInviteLink(input: String): ParsedInvite? {
+            val uri = Uri.parse(input)
+            if (!uri.isHierarchical) return null
             val code = uri.getQueryParameter("code")?.let(::asInviteCode) ?: return null
             val hubUrl = if (uri.scheme == "https" || uri.scheme == "http") {
                 uri.authority?.let { "${uri.scheme}://$it" }
