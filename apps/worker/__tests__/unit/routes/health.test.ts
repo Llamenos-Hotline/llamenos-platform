@@ -20,6 +20,10 @@ function createTestApp(opts: {
       SERVER_SECRET: 'a'.repeat(64),
       SIP_BRIDGE_URL: 'http://sip-bridge:3000',
       SIGNAL_NOTIFIER_URL: 'http://signal-notifier:3100',
+      // The credential is what marks Signal as DEPLOYED (#1422) — the URL
+      // alone cannot, because compose defaults it whether or not the `signal`
+      // profile runs. Default env simulates a Signal deployment.
+      NOTIFIER_API_KEY: 'test-notifier-key',
       ...opts.env,
     }
     await next()
@@ -217,14 +221,60 @@ describe('health route', () => {
       expect(body.checks.signalNotifier.status).toBe('failing')
     })
 
-    it('reports signalNotifier FAILING, never absent, when SIGNAL_NOTIFIER_URL is not configured', async () => {
-      const app = createTestApp({ env: { SIGNAL_NOTIFIER_URL: undefined } })
+    it('reports signalNotifier FAILING, never absent, when a credential is set but no endpoint is', async () => {
+      // Credential present = Signal was deployed (#1422). A missing endpoint is
+      // then a misconfiguration and must be reported, not omitted — omission is
+      // only honest when nothing was deployed at all.
+      const app = createTestApp({ env: { SIGNAL_NOTIFIER_URL: undefined, NOTIFIER_URL: undefined } })
       const res = await app.request('/')
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.checks.signalNotifier).toBeDefined()
       expect(body.checks.signalNotifier.status).toBe('failing')
       expect(body.checks.signalNotifier.detail).toContain('SIGNAL_NOTIFIER_URL')
+    })
+
+    it('OMITS signalNotifier when no credential is set, even with the compose-defaulted URL present', async () => {
+      // The #1422 defect: compose defaults NOTIFIER_URL to the sidecar hostname
+      // whether or not the `signal` profile runs, so the URL cannot mark a
+      // deployment. With no NOTIFIER_API_KEY / SIGNAL_NOTIFIER_BEARER_TOKEN,
+      // Signal was never deployed and there is nothing to report — a permanent
+      // `failing` here was indistinguishable from a real outage.
+      const app = createTestApp({
+        env: {
+          NOTIFIER_API_KEY: undefined,
+          SIGNAL_NOTIFIER_BEARER_TOKEN: undefined,
+          SIGNAL_NOTIFIER_URL: undefined,
+          // Simulate the production compose default reaching the app.
+          NOTIFIER_URL: 'http://signal-notifier:3100',
+        },
+      })
+      const res = await app.request('/')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.status).toBe('ok')
+      expect('signalNotifier' in body.checks).toBe(false)
+      // Nothing probed the sidecar, either — an omitted check makes no network call.
+      expect(fetchSpy.mock.calls.some((call: unknown[]) => String(call[0]).includes('signal-notifier'))).toBe(false)
+    })
+
+    it('omits signalNotifier when the credential is an empty string (compose renders it as `-` empty)', async () => {
+      const app = createTestApp({
+        env: { NOTIFIER_API_KEY: '', SIGNAL_NOTIFIER_BEARER_TOKEN: undefined, SIGNAL_NOTIFIER_URL: undefined, NOTIFIER_URL: 'http://signal-notifier:3100' },
+      })
+      const res = await app.request('/')
+      const body = await res.json()
+      expect('signalNotifier' in body.checks).toBe(false)
+    })
+
+    it('accepts SIGNAL_NOTIFIER_BEARER_TOKEN as the canonical credential marker', async () => {
+      const app = createTestApp({
+        env: { NOTIFIER_API_KEY: undefined, SIGNAL_NOTIFIER_BEARER_TOKEN: 'canonical-token' },
+      })
+      const res = await app.request('/')
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.checks.signalNotifier.status).toBe('ok')
     })
 
     it('falls back to NOTIFIER_URL when SIGNAL_NOTIFIER_URL not set', async () => {
@@ -304,15 +354,20 @@ describe('health route', () => {
       expect(body.checks.relay.detail).toContain('SERVER_SECRET')
     })
 
-    // The invariant, pinned once rather than inferred from the four tests
-    // above: the SET of checks in the response does not depend on
-    // configuration. Without this, a future change that dropped one key again
-    // would only break whichever single test covered that key.
-    it('reports the same set of checks whether or not anything is configured', async () => {
-      const EXPECTED = ['postgres', 'storage', 'relay', 'sipBridge', 'signalNotifier']
+    // The invariant, pinned once rather than inferred from the tests above:
+    // the SET of checks reflects what was DEPLOYED, not what happens to be
+    // configured. Load-bearing checks (postgres, storage, relay) and the SIP
+    // bridge (#1636) are always present — for them an unset variable is a
+    // failing check, never an absent one. signalNotifier is present iff its
+    // non-defaulted credential is set (#1422): no credential, no deployment,
+    // no check. Without this pin, a future change that dropped a key — or
+    // re-added a permanently-failing one — would only break whichever single
+    // test covered that key.
+    it('reports exactly the checks for what was deployed — no more, no less', async () => {
+      const ALWAYS = ['postgres', 'storage', 'relay', 'sipBridge']
 
       const configured = await (await createTestApp().request('/')).json()
-      expect(Object.keys(configured.checks).sort()).toEqual([...EXPECTED].sort())
+      expect(Object.keys(configured.checks).sort()).toEqual([...ALWAYS, 'signalNotifier'].sort())
 
       fetchSpy.mockImplementation(async () => { throw new Error('Connection refused') })
       const bare = await (await createTestApp({
@@ -322,11 +377,14 @@ describe('health route', () => {
           SIP_BRIDGE_URL: undefined,
           SIGNAL_NOTIFIER_URL: undefined,
           NOTIFIER_URL: undefined,
+          NOTIFIER_API_KEY: undefined,
+          SIGNAL_NOTIFIER_BEARER_TOKEN: undefined,
         },
       }).request('/')).json()
-      expect(Object.keys(bare.checks).sort()).toEqual([...EXPECTED].sort())
-      // And not one of them claims to be ok.
-      for (const name of EXPECTED.filter(n => n !== 'postgres')) {
+      // Signal was never deployed: omitted, not failing.
+      expect(Object.keys(bare.checks).sort()).toEqual([...ALWAYS].sort())
+      // And not one of the always-present checks claims to be ok.
+      for (const name of ALWAYS.filter(n => n !== 'postgres')) {
         expect(bare.checks[name].status).toBe('failing')
       }
     })
