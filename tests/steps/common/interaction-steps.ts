@@ -55,7 +55,7 @@ const buttonTextToTestIdMap: Record<string, string> = {
   'Launch Hotline': TestIds.SETUP_COMPLETE_BTN,
   'Go to Dashboard': TestIds.SETUP_FINISH_BTN,
   'Generate Invite': TestIds.SETUP_GENERATE_INVITE_BTN,
-  'Update Profile': 'form-save-btn',
+  'Update Profile': TestIds.SETTINGS_UPDATE_PROFILE_BTN,
 }
 
 /**

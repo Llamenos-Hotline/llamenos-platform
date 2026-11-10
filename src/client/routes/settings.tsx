@@ -149,12 +149,22 @@ function SettingsPage() {
       setProfileError(t('profileSettings.invalidPhone'))
       return
     }
+    // Send only the fields this form actually changed. Re-sending every field as
+    // it was loaded is a lost update: saving a phone number here would silently
+    // put back a name that was changed on another device since this form mounted.
+    const loadedLanguages = spokenLanguages || ['en']
+    const languagesChanged =
+      selectedLanguages.length !== loadedLanguages.length ||
+      selectedLanguages.some(lang => !loadedLanguages.includes(lang))
+    const changes = {
+      ...(languagesChanged && { spokenLanguages: selectedLanguages }),
+      ...(profileName && profileName !== (authName || '') && { name: profileName }),
+      ...(profilePhone && { phone: profilePhone }),
+    }
     try {
-      await updateMyProfile({
-        spokenLanguages: selectedLanguages,
-        ...(profileName && { name: profileName }),
-        ...(profilePhone && { phone: profilePhone }),
-      })
+      if (Object.keys(changes).length > 0) {
+        await updateMyProfile(changes)
+      }
       await refreshProfile()
       toast(t('profileSettings.profileUpdated'), 'success')
     } catch {
@@ -248,7 +258,7 @@ function SettingsPage() {
           </div>
         </div>
 
-        <Button onClick={handleUpdateProfile}>
+        <Button data-testid="settings-update-profile-btn" onClick={handleUpdateProfile}>
           {t('profileSettings.updateProfile')}
         </Button>
       </SettingsSection>
