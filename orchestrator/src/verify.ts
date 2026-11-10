@@ -141,53 +141,32 @@ export function changedFilesFrom(diffNameOnly: string): string[] {
 }
 
 /**
- * Counts added lines in a unified diff. The `+++ b/file` header line starts
- * with `+` exactly like an added line does, so it must be excluded first —
- * counting it would inflate every file's added-line count by one and, on a
- * diff with many touched files, could tip a diff over LARGE_DIFF_LINES that
- * never actually earned it.
+ * The REVIEWABLE added-line count of a diff, from `git diff --numstat -z`
+ * (`<added>\t<deleted>\t<path>\0` per file; `-z` so a path is never quoted).
  *
- * Fix-round finding (V3): excluding EVERY line that starts with `+++`,
- * anywhere in the text, also swallows a genuinely added line whose content
- * happens to begin with `++` at column zero — plausible in this repo, which
- * commits `.diff` fixtures. The header is only ever the file's `+++ b/file`
- * line, which unified diff format always emits directly after that file's
- * `--- a/file` line — so the header is identified POSITIONALLY (the line
- * right after a `--- ` line), not by pattern-matching its content against
- * every line in the diff.
+ * It reads git's own per-file totals rather than re-parsing hunk text. The
+ * text parser this replaced told a file header from content POSITIONALLY (a
+ * `+++ ` line right after a `--- ` line), and a removed line `-- x` followed by
+ * an added line `++ y` renders as exactly that pair — so a hunk body could
+ * forge a header, and once a header decides which file's lines are left out of
+ * the count (#2641), forging one would hide a real file's lines from the
+ * threshold. A numstat entry names its path outside the hunk text altogether.
+ *
+ * Generated artifacts (`isGeneratedArtifactPath`) are left out: their size is a
+ * function of the schema, not of the change, and `migration-drift` guards them
+ * independently. A binary file reports `-` and counts as 0, as before.
  */
-export function addedLinesFrom(diffText: string): number {
+export function addedLinesFromNumstat(numstatZ: string): number {
   let n = 0
-  // The file whose hunks we are inside, so a generated artifact's lines can be
-  // left out of the REVIEWABLE count (#2641). Read from the same positional
-  // `--- `/`+++ ` header pair; a path that does not parse (quoted, unusual) is
-  // simply counted — the conservative direction.
-  let generated = false
-  const lines = diffText.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line === undefined) continue
-    const prev = lines[i - 1]
-    const isFileHeaderLine = prev !== undefined && prev.startsWith('--- ') && line.startsWith('+++ ')
-    if (isFileHeaderLine) {
-      generated = isGeneratedArtifactPath(headerPath(line, prev))
-      continue
-    }
-    if (generated) {
-      continue
-    }
-    if (line.startsWith('+')) n++
+  for (const entry of numstatZ.split('\0')) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(entry.replace(/^\n/, ''))
+    if (m === null) continue
+    const [, added, , path] = m
+    if (added === undefined || path === undefined || added === '-') continue
+    if (isGeneratedArtifactPath(path)) continue
+    n += Number(added)
   }
   return n
-}
-
-/** The path a `--- a/x` / `+++ b/x` header pair names; a deletion's `+++` is
- *  `/dev/null`, so it falls back to the `---` side. */
-function headerPath(plus: string, minus: string): string {
-  const strip = (header: string, prefix: string): string =>
-    header.slice(4).replace(/\t.*$/, '').replace(new RegExp(`^${prefix}/`), '')
-  const dst = plus.slice(4).replace(/\t.*$/, '')
-  return dst === '/dev/null' ? strip(minus, 'a') : strip(plus, 'b')
 }
 
 interface TestRoute {
@@ -874,7 +853,7 @@ export function judgeTargetRun(
  * a function of the two commits alone: no renames (a rename would hide the
  * OLD path from every check — renaming `cert_pin.rs` away, or a `.env` to an
  * innocent name), no external or textconv driver, no colour, and the default
- * `a/`/`b/` prefixes `addedLinesFrom` counts against.
+ * `a/`/`b/` prefixes.
  */
 const GATE_DIFF_FLAGS: readonly string[] = [
   '--no-renames', '--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/', '--dst-prefix=b/',
@@ -1079,9 +1058,9 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     }
   }
 
-  const fullDiff = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, range])
+  const numstat = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--numstat', '-z', range])
   const changedFiles = changedFilesFrom(nameOnly)
-  const addedLines = addedLinesFrom(fullDiff ?? '')
+  const addedLines = addedLinesFromNumstat(numstat ?? '')
   // The files the head still HAS — everything changed except deletions.
   // Their bytes are what the secret class reads; a deleted file has none.
   const presentRaw = await runGit(worktree, ['diff', ...GATE_DIFF_FLAGS, '--name-only', '--diff-filter=d', range])

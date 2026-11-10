@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  changedFilesFrom, addedLinesFrom, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
+  changedFilesFrom, addedLinesFromNumstat, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
   judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases, scopeStrayAdvice,
 } from '../../orchestrator/src/verify.js'
 import { classifyImpact } from '../../orchestrator/src/impact.js'
@@ -27,73 +27,43 @@ describe('changedFilesFrom', () => {
   })
 })
 
-describe('addedLinesFrom', () => {
-  it('counts added lines and ignores the +++ header', () => {
-    const diff = ['--- a/x.ts', '+++ b/x.ts', '@@', '+one', '+two', '-gone', ' same'].join('\n')
-    expect(addedLinesFrom(diff)).toBe(2)
-  })
-  it('does not count the --- header as a removed line miscounted as added', () => {
-    const diff = ['--- a/x.ts', '+++ b/x.ts'].join('\n')
-    expect(addedLinesFrom(diff)).toBe(0)
-  })
-  it('returns 0 for empty diff text', () => {
-    expect(addedLinesFrom('')).toBe(0)
-  })
-  // V3 (fix round 1): a line starting with `+++` is only the file header
-  // when it directly follows a `--- ` line — anywhere else it is real
-  // content (this repo commits `.diff` fixtures, so this is not academic).
-  it('counts an added line that itself begins with "+++" when it is not the file header', () => {
-    const diff = [
-      '--- a/x.ts',
-      '+++ b/x.ts',
-      '@@ -1,2 +1,3 @@',
-      ' context',
-      '+++not a real header, just content that happens to start with plus plus plus',
-      '+another add',
-    ].join('\n')
-    expect(addedLinesFrom(diff)).toBe(2)
-  })
-  it('still excludes the header when the diff touches multiple files', () => {
-    const diff = [
-      '--- a/one.ts', '+++ b/one.ts', '@@', '+a',
-      '--- a/two.ts', '+++ b/two.ts', '@@', '+b', '+c',
-    ].join('\n')
-    expect(addedLinesFrom(diff)).toBe(3)
-  })
-})
+/** `git diff --numstat -z` rows: `<added>\t<deleted>\t<path>\0`. */
+const numstat = (...rows: [added: number | '-', path: string][]): string =>
+  rows.map(([added, path]) => `${added}\t0\t${path}\0`).join('')
 
-describe('addedLinesFrom — generated artifacts (#2641)', () => {
+describe('addedLinesFromNumstat', () => {
   const SNAPSHOT = 'drizzle/migrations/meta/20261110050530_snapshot.json'
-  const fileDiff = (path: string, added: number, deleted = false): string[] => [
-    `diff --git a/${path} b/${path}`,
-    `--- a/${path}`,
-    deleted ? '+++ /dev/null' : `+++ b/${path}`,
-    '@@ -0,0 +1 @@',
-    ...Array.from({ length: added }, (_, i) => `+line ${i}`),
-  ]
 
+  it('sums the added lines across files', () => {
+    expect(addedLinesFromNumstat(numstat([2, 'a.ts'], [3, 'b.ts']))).toBe(5)
+  })
+  it('returns 0 for empty output', () => {
+    expect(addedLinesFromNumstat('')).toBe(0)
+  })
+  it('counts a binary file (reported as "-") as 0', () => {
+    expect(addedLinesFromNumstat(numstat(['-', 'a.png'], [4, 'b.ts']))).toBe(4)
+  })
+  it('reads a path containing spaces or unusual bytes unquoted (-z)', () => {
+    expect(addedLinesFromNumstat(numstat([7, 'dir with space/f\u00e9.ts']))).toBe(7)
+  })
+
+  // #2641: the generated Drizzle snapshot is a function of schema size.
   it('counts a migration-bearing diff by its human-authored lines, however big the snapshot', () => {
     // #2638 shape: 72 human lines beside a 10,748-line generated snapshot.
-    const diff = [
-      ...fileDiff('packages/shared/permissions.ts', 7),
-      ...fileDiff('drizzle/migrations/20261110050530_perm.sql', 37),
-      ...fileDiff(SNAPSHOT, 10_748),
-      ...fileDiff('docs/protocol/PROTOCOL.md', 19),
-      ...fileDiff('packages/test-specs/features/x.feature', 9),
-    ].join('\n')
-    expect(addedLinesFrom(diff)).toBe(72)
+    const out = numstat(
+      [7, 'packages/shared/permissions.ts'],
+      [37, 'drizzle/migrations/20261110050530_perm.sql'],
+      [10_748, SNAPSHOT],
+      [19, 'docs/protocol/PROTOCOL.md'],
+      [9, 'packages/test-specs/features/x.feature'],
+    )
+    expect(addedLinesFromNumstat(out)).toBe(72)
   })
 
   it('does not let the schema growing move the count', () => {
-    const base = fileDiff('apps/worker/x.ts', 5)
     for (const size of [10, 10_000, 250_000]) {
-      expect(addedLinesFrom([...base, ...fileDiff(SNAPSHOT, size)].join('\n'))).toBe(5)
+      expect(addedLinesFromNumstat(numstat([5, 'apps/worker/x.ts'], [size, SNAPSHOT]))).toBe(5)
     }
-  })
-
-  it('resumes counting after a snapshot section ends', () => {
-    const diff = [...fileDiff(SNAPSHOT, 100), ...fileDiff('apps/worker/after.ts', 3)].join('\n')
-    expect(addedLinesFrom(diff)).toBe(3)
   })
 
   it('still counts a lookalike path that is not the drizzle snapshot directory', () => {
@@ -104,15 +74,45 @@ describe('addedLinesFrom — generated artifacts (#2641)', () => {
       'drizzle/migrations/meta/1_snapshot.json.bak',
       'drizzle/migrations/meta/1_snapshot.ts',
     ]) {
-      expect(addedLinesFrom(fileDiff(p, 40).join('\n')), p).toBe(40)
+      expect(addedLinesFromNumstat(numstat([40, p])), p).toBe(40)
     }
   })
 
   it('classifies a migration-bearing 72-line change as low impact end to end', () => {
-    const diff = [...fileDiff('drizzle/migrations/1_x.sql', 72), ...fileDiff(SNAPSHOT, 10_748)].join('\n')
-    const { impact, reasons } = classifyImpact(['drizzle/migrations/1_x.sql', SNAPSHOT], addedLinesFrom(diff))
+    const files = ['drizzle/migrations/1_x.sql', SNAPSHOT]
+    const { impact, reasons } = classifyImpact(
+      files, addedLinesFromNumstat(numstat([72, 'drizzle/migrations/1_x.sql'], [10_748, SNAPSHOT])),
+    )
     expect(reasons.filter((r) => r.includes('review threshold'))).toEqual([])
     expect(impact).toBe('low')
+  })
+
+  // The text parser this replaced could be forged: a removed line `-- x` then
+  // an added line `++ y` render as a `--- `/`+++ ` pair. Real git, real hunk.
+  it('cannot be made to skip a file by forging a snapshot header inside a hunk', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'numstat-forge-'))
+    try {
+      const git = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' })
+      git('init', '-q')
+      git('config', 'user.email', 't@t')
+      git('config', 'user.name', 't')
+      writeFileSync(join(repo, 'f.txt'), '-- x\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'base')
+      const forged = [
+        '--- a/drizzle/migrations/meta/1_snapshot.json',
+        '+++ b/drizzle/migrations/meta/1_snapshot.json',
+      ]
+      // line 1 removed (`-- x` renders as `--- x`), then forged-looking adds.
+      writeFileSync(join(repo, 'f.txt'), ['++ b/drizzle/migrations/meta/1_snapshot.json', ...forged, 'real'].join('\n') + '\n')
+      writeFileSync(join(repo, 'g.txt'), 'a\nb\nc\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'head')
+      const out = git('diff', '--no-renames', '--numstat', '-z', 'HEAD~1', 'HEAD')
+      expect(addedLinesFromNumstat(out)).toBe(4 + 3)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 })
 
