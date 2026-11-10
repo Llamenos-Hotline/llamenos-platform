@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { PhoneForwarded } from 'lucide-react'
 
 interface Props {
+  hubId: string
   settings: CallSettings
   onChange: (settings: CallSettings) => void
   expanded: boolean
@@ -14,7 +15,7 @@ interface Props {
   statusSummary?: string
 }
 
-export function CallSettingsSection({ settings, onChange, expanded, onToggle, statusSummary }: Props) {
+export function CallSettingsSection({ hubId, settings, onChange, expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
 
@@ -40,7 +41,7 @@ export function CallSettingsSection({ settings, onChange, expanded, onToggle, st
             onChange={async (e) => {
               try {
                 const val = parseInt(e.target.value) || 90
-                const res = await updateCallSettings({ queueTimeoutSeconds: val })
+                const res = await updateCallSettings(hubId, { queueTimeoutSeconds: val })
                 onChange(res)
               } catch {
                 toast(t('common.error'), 'error')
@@ -60,7 +61,7 @@ export function CallSettingsSection({ settings, onChange, expanded, onToggle, st
             onChange={async (e) => {
               try {
                 const val = parseInt(e.target.value) || 120
-                const res = await updateCallSettings({ voicemailMaxSeconds: val })
+                const res = await updateCallSettings(hubId, { voicemailMaxSeconds: val })
                 onChange(res)
               } catch {
                 toast(t('common.error'), 'error')

@@ -18,8 +18,10 @@ export type AdminWorld = {
   lastHubName: string
   /** Display name set by 'I change my display name', checked after a reload. */
   lastDisplayName: string
-  /** Instance-wide voiceCaptchaEnabled before a scenario toggled it; `After` restores it. */
+  /** Hub's effective voiceCaptchaEnabled before a scenario toggled it; `After` restores it. */
   spamCaptchaBefore?: boolean
+  /** The hub the CAPTCHA toggle scenario acted in — its override is what `After` restores (#1137). */
+  spamCaptchaHubId?: string
 }
 
 export type RolesWorld = {

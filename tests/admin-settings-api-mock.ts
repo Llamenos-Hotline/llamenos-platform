@@ -60,8 +60,9 @@ export async function mockAdminSettingsApi(
     })
   })
 
-  // Spam settings
-  await page.route('**/api/settings/spam', async (route) => {
+  // Spam settings — hub-owned (#1137): the client requests them under the hub
+  // being edited, never the unscoped platform route.
+  await page.route('**/api/hubs/*/settings/spam', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -69,8 +70,8 @@ export async function mockAdminSettingsApi(
     })
   })
 
-  // Call settings
-  await page.route('**/api/settings/calls', async (route) => {
+  // Call settings — hub-owned (#1137), same scoping as spam.
+  await page.route('**/api/hubs/*/settings/call', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

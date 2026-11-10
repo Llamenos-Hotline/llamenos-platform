@@ -381,11 +381,17 @@ Then('I can cancel without applying the change', async ({ page }) => {
 // have caught that; only the server's state and a fresh load prove the write
 // landed.
 //
-// Spam settings are instance-wide (the client PATCHes the unscoped
-// /settings/spam), so the scenario records the value it started from and the
-// `After` hook below puts it back — no other scenario inherits a flipped CAPTCHA.
+// Spam settings are hub-owned (#1137): the client PATCHes the active hub's
+// /hubs/:hubId/settings/spam, writing only that hub's overrides — the platform
+// value the unscoped route reads does not move. So the scenario reads and
+// restores through the hub the UI is looking at (the active hub), and the
+// `After` hook below puts that hub's override back — no other scenario
+// inherits a flipped CAPTCHA.
 When('I toggle the CAPTCHA setting and confirm the change', async ({ page, backendRequest, adminWorld }) => {
-  const before = (await getSpamSettingsViaApi(backendRequest)).voiceCaptchaEnabled
+  const hubId = await page.evaluate(() => window.__TEST_GET_ACTIVE_HUB?.() ?? null)
+  if (!hubId) throw new Error('no active hub — the spam section edits the hub being browsed (#1137)')
+  adminWorld.spamCaptchaHubId = hubId
+  const before = (await getSpamSettingsViaApi(backendRequest, hubId)).voiceCaptchaEnabled
   adminWorld.spamCaptchaBefore = before
   const toggle = page.getByTestId(TestIds.SPAM_CAPTCHA_TOGGLE)
   // Settle on the server's value before clicking, so the click flips a loaded
@@ -405,12 +411,13 @@ When('I toggle the CAPTCHA setting and confirm the change', async ({ page, backe
 
 Then('the CAPTCHA setting change should persist after a reload', async ({ page, backendRequest, adminWorld }) => {
   const before = adminWorld.spamCaptchaBefore
-  if (before === undefined) throw new Error('the CAPTCHA toggle step must run first')
+  const hubId = adminWorld.spamCaptchaHubId
+  if (before === undefined || !hubId) throw new Error('the CAPTCHA toggle step must run first')
   const expected = !before
 
-  // Server truth: the PATCH landed.
+  // Server truth: the PATCH landed on the hub's overrides.
   await expect
-    .poll(async () => (await getSpamSettingsViaApi(backendRequest)).voiceCaptchaEnabled, { timeout: Timeouts.API })
+    .poll(async () => (await getSpamSettingsViaApi(backendRequest, hubId)).voiceCaptchaEnabled, { timeout: Timeouts.API })
     .toBe(expected)
 
   // A reload clears the in-memory device key, so the app opens on the PIN screen
@@ -431,9 +438,9 @@ Then('the CAPTCHA setting change should persist after a reload', async ({ page, 
 })
 
 After(async ({ backendRequest, adminWorld }) => {
-  if (adminWorld.spamCaptchaBefore === undefined) return
-  const { status } = await apiPatch(backendRequest, '/settings/spam', { voiceCaptchaEnabled: adminWorld.spamCaptchaBefore })
-  expect(status, 'restoring the instance-wide CAPTCHA setting must succeed').toBe(200)
+  if (adminWorld.spamCaptchaBefore === undefined || !adminWorld.spamCaptchaHubId) return
+  const { status } = await apiPatch(backendRequest, `/hubs/${adminWorld.spamCaptchaHubId}/settings/spam`, { voiceCaptchaEnabled: adminWorld.spamCaptchaBefore })
+  expect(status, "restoring the hub's CAPTCHA setting must succeed").toBe(200)
 })
 
 When('I press {string}', async ({ page }, keys: string) => {

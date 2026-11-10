@@ -27,6 +27,7 @@ import { usePersistedExpanded } from '@/components/settings-section'
 import { IVR_LANGUAGES } from '@shared/languages'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useSpamConfirmToggle } from '@/lib/use-spam-confirm-toggle'
+import { useActiveHubId } from '@/lib/hub-owned'
 import { useTranscriptionConfirmToggle } from '@/lib/use-transcription-confirm-toggle'
 import { PasskeyPolicySection } from '@/components/admin-settings/passkey-policy-section'
 import { TelephonyProviderSection } from '@/components/admin-settings/telephony-provider-section'
@@ -53,6 +54,10 @@ function AdminSettingsPage() {
   const { section } = useSearch({ from: '/admin/settings' })
   const { isAdmin } = useAuth()
   const { toast } = useToast()
+  // Spam and call settings belong to the hub being browsed (#1137): they load
+  // only for the active hub, and reload when it changes — never the platform
+  // default standing in for it.
+  const hubId = useActiveHubId()
   const [spam, setSpam] = useState<SpamSettings | null>(null)
   const [callSet, setCallSet] = useState<CallSettings | null>(null)
   const [globalTranscription, setGlobalTranscription] = useState(false)
@@ -76,9 +81,9 @@ function AdminSettingsPage() {
 
   useEffect(() => {
     if (!isAdmin) return
-    Promise.all([
-      getSpamSettings().then(setSpam),
-      getCallSettings().then(setCallSet),
+    setSpam(null)
+    setCallSet(null)
+    const tasks: Promise<unknown>[] = [
       getTranscriptionSettings().then(r => {
         setGlobalTranscription(r.globalEnabled)
         setAllowUserOptOut(r.allowUserOptOut)
@@ -91,10 +96,15 @@ function AdminSettingsPage() {
         if (config) { setProviderConfig(config); setProviderDraft(config) }
       }).catch(() => toast(t('common.error'), 'error')),
       getMessagingConfig().then(setMessagingConfig).catch(() => toast(t('common.error'), 'error')),
-    ])
+    ]
+    if (hubId) {
+      tasks.push(getSpamSettings(hubId).then(setSpam))
+      tasks.push(getCallSettings(hubId).then(setCallSet))
+    }
+    Promise.all(tasks)
       .catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
-  }, [isAdmin])
+  }, [isAdmin, hubId])
 
   useEffect(() => {
     if (!loading && section && !scrolledRef.current) {
@@ -105,7 +115,7 @@ function AdminSettingsPage() {
     }
   }, [loading, section])
 
-  const spamToggle = useSpamConfirmToggle(setSpam)
+  const spamToggle = useSpamConfirmToggle(hubId, setSpam)
   const transcriptionToggle = useTranscriptionConfirmToggle(setGlobalTranscription)
 
   // Compute status summaries for collapsed sections
@@ -197,8 +207,9 @@ function AdminSettingsPage() {
         statusSummary={ivrStatus}
       />
 
-      {callSet && (
+      {callSet && hubId && (
         <CallSettingsSection
+          hubId={hubId}
           settings={callSet}
           onChange={setCallSet}
           expanded={expanded.has('call-settings')}
@@ -230,8 +241,9 @@ function AdminSettingsPage() {
         statusSummary={t('reportTypes.title', { defaultValue: 'Report Types' })}
       />
 
-      {spam && (
+      {spam && hubId && (
         <SpamSection
+          hubId={hubId}
           settings={spam}
           onChange={setSpam}
           onConfirmToggle={spamToggle.requestToggle}
