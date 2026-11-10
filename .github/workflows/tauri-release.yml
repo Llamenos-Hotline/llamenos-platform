@@ -510,9 +510,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          source scripts/release/release-assets.sh
           TAG="v${VERSION}-desktop"
-          PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
+          # Retried; a lookup that keeps failing fails the job, never reads as "not published".
+          PUBLISHED=$(ra_published_url "$TAG")
           if [ -n "$PUBLISHED" ]; then
             echo "::error::${TAG} is already published (${PUBLISHED}) and GitHub releases are immutable — its assets cannot be replaced. Bump the version and cut a new release instead of re-running this one."
             exit 1
@@ -936,6 +938,7 @@ jobs:
           RUSTFS_BUCKET: ${{ secrets.RUSTFS_STAGING_BUCKET }}
         run: |
           set -euo pipefail
+          source scripts/release/release-assets.sh
           TAG="v${VERSION}-desktop"
 
           # ── Assemble the asset set ──
@@ -1026,45 +1029,23 @@ jobs:
           echo "Publishing ${#ASSETS[@]} assets to ${TAG}"
 
           # ── Draft -> upload -> verify -> publish ──
-          delete_draft() {
-            local id
-            id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
-            for i in $id; do gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${i}"; done
-          }
+          # scripts/release/release-assets.sh: every GitHub call is retried with
+          # visible logging (v0.21.4 was stranded by ONE upload 500 here) and fails
+          # the step once the attempts run out. The draft is created empty and the
+          # assets attached separately, so a retry re-sends only a file that did not
+          # land intact (verified against GitHub's sha256), not all of them.
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          if ! ra_create_draft "$TAG" "v${VERSION} Desktop" release-body.md "$SOURCE_SHA" "$PRERELEASE" \
+            || ! ra_upload "$TAG" "${ASSETS[@]}"; then
+            echo "::error::The draft GitHub Release ${TAG} could not be built; nothing was published. If the updater channel is configured and this job got that far, s3://${RUSTFS_BUCKET:-<unset>}/desktop/v${VERSION} may already hold binaries — re-run with the same version to converge."
+            exit 1
+          fi
 
-          PRERELEASE_FLAG=()
-          case "$VERSION" in *-*) PRERELEASE_FLAG=(--prerelease) ;; esac
-
-          MAX_ATTEMPTS=3
-          attempt=1
-          while true; do
-            delete_draft
-            echo "Creating draft release ${TAG} (attempt ${attempt}/${MAX_ATTEMPTS})..."
-            if gh release create "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --draft \
-              --latest=false \
-              --target "${SOURCE_SHA}" \
-              --title "v${VERSION} Desktop" \
-              --notes-file release-body.md \
-              "${PRERELEASE_FLAG[@]}" \
-              "${ASSETS[@]}"; then
-              break
-            fi
-            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-              delete_draft
-              echo "::error::Creating the GitHub Release ${TAG} failed after ${MAX_ATTEMPTS} attempts. Nothing was published to it (the draft was removed). If the updater channel is configured and this job got that far, s3://${RUSTFS_BUCKET:-<unset>}/desktop/v${VERSION} may already hold binaries — re-run with the same version to converge."
-              exit 1
-            fi
-            attempt=$((attempt + 1))
-            sleep $((attempt * 2))
-          done
-
-          # Exactly the intended files must be attached, byte-for-byte in size.
-          EXPECTED=$(for f in "${ASSETS[@]}"; do printf '%s %s\n' "$(basename "$f")" "$(stat -c %s "$f")"; done | sort)
-          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .assets[] | \"\\(.name) \\(.size)\"" | sort)
+          # Exactly the intended files must be attached: ra_upload proved each one
+          # by digest; this proves nothing else is.
+          EXPECTED=$(for f in "${ASSETS[@]}"; do basename "$f"; done | sort)
+          ACTUAL=$(ra_draft_asset_names "$TAG" | sort)
           if [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "::error::Draft release ${TAG} asset set does not match what was uploaded — not publishing."
             diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
@@ -1114,11 +1095,11 @@ jobs:
               echo "::error::No installer produced an alias — refusing to hand ${RELEASE_TAG} a release with no installable desktop artifact."
               exit 1
             fi
-            gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber alias-assets/*
+            ra_upload "${RELEASE_TAG}" alias-assets/*
             echo "Attached ${ALIAS_COUNT} aliases to the draft ${RELEASE_TAG}"
           fi
 
-          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest=false
+          ra_publish "$TAG" false
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
       # ── Fail loudly if the bucket has a version nothing describes ──────

@@ -238,17 +238,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_VERSION: ${{ needs.check.outputs.version }}
+        # scripts/release/release-assets.sh: every call below is retried with
+        # visible logging and verified by digest, and fails the step once the
+        # attempts run out. A draft left by a prior failed run is replaced; a
+        # PUBLISHED v<version> is refused (it is immutable).
         run: |
-          # Clean up any broken release from a prior failed run
-          if gh release view "v${NEW_VERSION}" >/dev/null 2>&1; then
-            echo "Deleting stale release v${NEW_VERSION} from previous attempt"
-            gh release delete "v${NEW_VERSION}" --yes
-          fi
-          gh release create "v${NEW_VERSION}" \
-            --draft \
-            --title "v${NEW_VERSION} API" \
-            --notes-file release-notes.md \
-            BUILD-MANIFEST.txt
+          set -euo pipefail
+          source scripts/release/release-assets.sh
+          ra_create_draft "v${NEW_VERSION}" "v${NEW_VERSION} API" release-notes.md "" false
+          ra_upload "v${NEW_VERSION}" BUILD-MANIFEST.txt
 
   # --- Installers: built, signed and attached to the draft ---
   # Called as reusable workflows, not dispatched, so `release` below can wait
@@ -365,11 +363,14 @@ jobs:
           echo "SBOM generated: $(jq '.components | length' sbom.cdx.json) components"
 
       # Everything the installer builds attached to the draft, exactly as it sits
-      # there now. `gh release download` resolves a draft by tag.
+      # there now, each file checked against GitHub's own sha256 of it. A stream
+      # cut mid-transfer is a failed attempt and is retried (v0.21.9 was stranded
+      # as a draft by one HTTP/2 PROTOCOL_ERROR here).
       - name: Download everything attached to the draft
         run: |
-          mkdir release-assets
-          gh release download "v${NEW_VERSION}" --dir release-assets
+          set -euo pipefail
+          source scripts/release/release-assets.sh
+          ra_download "v${NEW_VERSION}" release-assets
           echo "--- attached so far ---"
           find release-assets -type f | sort
 
@@ -468,6 +469,8 @@ jobs:
 
       - name: Attach checksums, SBOM, provenance and signatures to the draft
         run: |
+          set -euo pipefail
+          source scripts/release/release-assets.sh
           UPLOADS=()
           for f in \
             CHECKSUMS.txt \
@@ -481,7 +484,10 @@ jobs:
             sbom.cdx.json.att; do
             [ -f "$f" ] && UPLOADS+=("$f")
           done
-          gh release upload "v${NEW_VERSION}" --clobber "${UPLOADS[@]}"
+          # A file already attached with these exact bytes is skipped; one holding
+          # other bytes (a re-run's new CHECKSUMS.txt, a half-finished upload) is
+          # replaced.
+          ra_upload "v${NEW_VERSION}" "${UPLOADS[@]}"
 
       # The exact set that is about to become public, kept as a workflow
       # artifact so a mirror can be populated with files byte-identical to the
@@ -489,9 +495,9 @@ jobs:
       # here, in CI's keyless context — never on whatever host serves the bytes.
       - name: Re-download the draft as it will be published
         run: |
-          rm -rf published-view
-          mkdir published-view
-          gh release download "v${NEW_VERSION}" --dir published-view
+          set -euo pipefail
+          source scripts/release/release-assets.sh
+          ra_download "v${NEW_VERSION}" published-view
           find published-view -type f | sort
 
       - name: Upload the final release asset set
@@ -565,7 +571,10 @@ jobs:
           echo "Release v${NEW_VERSION:-?} is complete: $(find . -maxdepth 1 -type f | wc -l) assets, every one accounted for by CHECKSUMS.txt."
 
       - name: Publish release
-        run: gh release edit "v${NEW_VERSION}" --draft=false --latest
+        run: |
+          set -euo pipefail
+          source scripts/release/release-assets.sh
+          ra_publish "v${NEW_VERSION}" true
 
       # `releases/latest/download/<alias>` resolves through the release that GitHub
       # considers "latest". Prove that is the one just published and that it serves
@@ -573,15 +582,17 @@ jobs:
       - name: Confirm releases/latest serves the new release
         run: |
           set -euo pipefail
-          LATEST=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')
+          source scripts/release/release-assets.sh
+          LATEST_JSON=$(ra_get "repos/${GITHUB_REPOSITORY}/releases/latest")
+          LATEST=$(jq -r '.tag_name' <<<"$LATEST_JSON")
           if [ "$LATEST" != "v${NEW_VERSION}" ]; then
             echo "::error::releases/latest is ${LATEST}, not v${NEW_VERSION} — the stable download links do not serve this release."
             exit 1
           fi
-          # Captured first, then matched with a here-string: `gh api | grep -q` under
+          # Captured first, then matched with a here-string: `… | grep -q` under
           # pipefail turns a successful early match into a SIGPIPE failure (a false 404),
-          # and would let a failed `gh api` read as "alias absent" instead of aborting.
-          ASSETS=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.assets[].name')
+          # and would let a failed lookup read as "alias absent" instead of aborting.
+          ASSETS=$(jq -r '.assets[].name' <<<"$LATEST_JSON")
           for alias in llamenos-linux-x86_64.AppImage llamenos-windows-x64.msi llamenos-android.apk CHECKSUMS.txt; do
             grep -qxF -- "$alias" <<<"$ASSETS" \
               || { echo "::error::releases/latest/download/${alias} would 404."; exit 1; }

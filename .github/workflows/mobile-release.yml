@@ -136,9 +136,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESOLVED_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
+          source scripts/release/release-assets.sh
           TAG="v${RESOLVED_VERSION}-android"
-          PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
+          # Retried; a lookup that keeps failing fails the job, never reads as "not published".
+          PUBLISHED=$(ra_published_url "$TAG")
           if [ -n "$PUBLISHED" ]; then
             echo "::error::${TAG} is already published (${PUBLISHED}) and GitHub releases are immutable — its assets cannot be replaced. Bump the version and cut a new release instead of re-running this one."
             exit 1
@@ -344,6 +346,7 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
+          source scripts/release/release-assets.sh
           TAG="v${VERSION}-android"
 
           APK=$(find apps/android/app/build/outputs/apk/release -name "*.apk" | head -1)
@@ -397,50 +400,24 @@ jobs:
           fi
           echo "Publishing ${#ASSETS[@]} assets to ${TAG}"
 
-          # A leftover draft from a failed earlier attempt is deleted and rebuilt;
-          # a PUBLISHED release was already refused near the top of this job.
-          delete_draft() {
-            local id i
-            id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
-            for i in $id; do gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${i}"; done
-          }
+          # scripts/release/release-assets.sh: every GitHub call is retried with
+          # visible logging and fails the step once the attempts run out. A leftover
+          # draft from a failed earlier attempt is replaced; a PUBLISHED release was
+          # already refused near the top of this job. The draft is created empty and
+          # the assets attached separately, so a retry re-sends only a file that did
+          # not land intact (verified against GitHub's sha256).
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          if ! ra_create_draft "$TAG" "v${VERSION} Android" release-body.md "$(git rev-parse HEAD)" "$PRERELEASE" \
+            || ! ra_upload "$TAG" "${ASSETS[@]}"; then
+            echo "::error::The draft GitHub Release ${TAG} could not be built; nothing was published."
+            exit 1
+          fi
 
-          # Empty under `set -u` unless a prerelease; expand with the bash-3.2-safe
-          # `${arr[@]+"${arr[@]}"}` idiom (a bare "${arr[@]}" on an empty array is an
-          # "unbound variable" error in bash < 4.4).
-          PRERELEASE_FLAG=()
-          case "$VERSION" in *-*) PRERELEASE_FLAG=(--prerelease) ;; esac
-
-          MAX_ATTEMPTS=3
-          attempt=1
-          while true; do
-            delete_draft
-            echo "Creating draft release ${TAG} (attempt ${attempt}/${MAX_ATTEMPTS})..."
-            if gh release create "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --draft \
-              --latest=false \
-              --target "$(git rev-parse HEAD)" \
-              --title "v${VERSION} Android" \
-              --notes-file release-body.md \
-              ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
-              "${ASSETS[@]}"; then
-              break
-            fi
-            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-              delete_draft
-              echo "::error::Creating the GitHub Release ${TAG} failed after ${MAX_ATTEMPTS} attempts. Nothing was published to it (the draft was removed)."
-              exit 1
-            fi
-            attempt=$((attempt + 1))
-            sleep $((attempt * 2))
-          done
-
-          # Exactly the intended files must be attached, byte-for-byte in size.
-          EXPECTED=$(for f in "${ASSETS[@]}"; do printf '%s %s\n' "$(basename "$f")" "$(stat -c %s "$f")"; done | sort)
-          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .assets[] | \"\(.name) \(.size)\"" | sort)
+          # Exactly the intended files must be attached: ra_upload proved each one
+          # by digest; this proves nothing else is.
+          EXPECTED=$(for f in "${ASSETS[@]}"; do basename "$f"; done | sort)
+          ACTUAL=$(ra_draft_asset_names "$TAG" | sort)
           if [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "::error::Draft release ${TAG} asset set does not match what was uploaded — not publishing."
             diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
@@ -459,11 +436,11 @@ jobs:
           if [ -n "${RELEASE_TAG:-}" ]; then
             mkdir -p alias-assets
             cp "$APK" alias-assets/llamenos-android.apk
-            gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber alias-assets/llamenos-android.apk
+            ra_upload "${RELEASE_TAG}" alias-assets/llamenos-android.apk
             echo "Attached llamenos-android.apk to the draft ${RELEASE_TAG}"
           fi
 
-          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest=false
+          ra_publish "$TAG" false
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
   # ─── iOS Release ──────────────────────────────────────────────
@@ -508,9 +485,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RESOLVED_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
+          source scripts/release/release-assets.sh
           TAG="v${RESOLVED_VERSION}-ios"
-          PUBLISHED=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == false) | .html_url")
+          # Retried; a lookup that keeps failing fails the job, never reads as "not published".
+          PUBLISHED=$(ra_published_url "$TAG")
           if [ -n "$PUBLISHED" ]; then
             echo "::error::${TAG} is already published (${PUBLISHED}) and GitHub releases are immutable — its assets cannot be replaced. Bump the version and cut a new release instead of re-running this one."
             exit 1
@@ -712,6 +691,7 @@ jobs:
           RESOLVED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          source scripts/release/release-assets.sh
           VERSION="$RESOLVED_VERSION"
           TAG="v${VERSION}-ios"
 
@@ -753,58 +733,31 @@ jobs:
           fi
           echo "Publishing ${#ASSETS[@]} assets to ${TAG}"
 
-          # A leftover draft from a failed earlier attempt is deleted and rebuilt;
-          # a PUBLISHED release was already refused near the top of this job.
-          delete_draft() {
-            local id i
-            id=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
-            for i in $id; do gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${i}"; done
-          }
+          # scripts/release/release-assets.sh: every GitHub call is retried with
+          # visible logging and fails the step once the attempts run out. A leftover
+          # draft from a failed earlier attempt is replaced; a PUBLISHED release was
+          # already refused near the top of this job. The draft is created empty and
+          # the assets attached separately, so a retry re-sends only a file that did
+          # not land intact (verified against GitHub's sha256).
+          PRERELEASE=false
+          case "$VERSION" in *-*) PRERELEASE=true ;; esac
+          if ! ra_create_draft "$TAG" "v${VERSION} iOS" release-body.md "$(git rev-parse HEAD)" "$PRERELEASE" \
+            || ! ra_upload "$TAG" "${ASSETS[@]}"; then
+            echo "::error::The draft GitHub Release ${TAG} could not be built; nothing was published."
+            exit 1
+          fi
 
-          # Empty under `set -u` unless a prerelease; expand with the bash-3.2-safe
-          # `${arr[@]+"${arr[@]}"}` idiom (a bare "${arr[@]}" on an empty array is an
-          # "unbound variable" error in bash < 4.4).
-          PRERELEASE_FLAG=()
-          case "$VERSION" in *-*) PRERELEASE_FLAG=(--prerelease) ;; esac
-
-          MAX_ATTEMPTS=3
-          attempt=1
-          while true; do
-            delete_draft
-            echo "Creating draft release ${TAG} (attempt ${attempt}/${MAX_ATTEMPTS})..."
-            if gh release create "${TAG}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --draft \
-              --latest=false \
-              --target "$(git rev-parse HEAD)" \
-              --title "v${VERSION} iOS" \
-              --notes-file release-body.md \
-              ${PRERELEASE_FLAG[@]+"${PRERELEASE_FLAG[@]}"} \
-              "${ASSETS[@]}"; then
-              break
-            fi
-            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
-              delete_draft
-              echo "::error::Creating the GitHub Release ${TAG} failed after ${MAX_ATTEMPTS} attempts. Nothing was published to it (the draft was removed)."
-              exit 1
-            fi
-            attempt=$((attempt + 1))
-            sleep $((attempt * 2))
-          done
-
-          # Exactly the intended files must be attached, byte-for-byte in size
-          # (`wc -c`, not `stat`: the macOS runner has BSD stat).
-          EXPECTED=$(for f in "${ASSETS[@]}"; do printf '%s %s\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"; done | sort)
-          ACTUAL=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .assets[] | \"\(.name) \(.size)\"" | sort)
+          # Exactly the intended files must be attached: ra_upload proved each one
+          # by digest; this proves nothing else is.
+          EXPECTED=$(for f in "${ASSETS[@]}"; do basename "$f"; done | sort)
+          ACTUAL=$(ra_draft_asset_names "$TAG" | sort)
           if [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "::error::Draft release ${TAG} asset set does not match what was uploaded — not publishing."
             diff <(echo "$EXPECTED") <(echo "$ACTUAL") || true
             exit 1
           fi
 
-          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest=false
+          ra_publish "$TAG" false
           echo "Published https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
       - name: Cleanup keychain
