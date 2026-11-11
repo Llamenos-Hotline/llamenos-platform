@@ -710,11 +710,11 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
-      - name: Install Playwright deps (cached browsers)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
+      # Probes with ldd and touches apt only if a library is missing; bounded retries (#2736).
+      - name: Install Playwright OS deps
+        run: bash scripts/ci/playwright-deps.sh
 
       - name: Download build artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -904,11 +904,11 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
-      - name: Install Playwright deps (cached)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
+      # Probes with ldd and touches apt only if a library is missing; bounded retries (#2736).
+      - name: Install Playwright OS deps
+        run: bash scripts/ci/playwright-deps.sh
 
       # ── Start backend services ──────────────────────────────────
       - name: Bootstrap backend
@@ -1047,11 +1047,11 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
-      - name: Install Playwright deps (cached browsers)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
+      # Probes with ldd and touches apt only if a library is missing; bounded retries (#2736).
+      - name: Install Playwright OS deps
+        run: bash scripts/ci/playwright-deps.sh
 
       - name: Bootstrap backend
         uses: ./.github/actions/bootstrap-backend
@@ -1168,11 +1168,11 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
-      - name: Install Playwright deps (cached browsers)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: bunx playwright install-deps chromium
+      # Probes with ldd and touches apt only if a library is missing; bounded retries (#2736).
+      - name: Install Playwright OS deps
+        run: bash scripts/ci/playwright-deps.sh
 
       # Inlined rather than calling ./.github/actions/bootstrap-backend — see the
       # job header comment above. This is the same core-services bring-up that
@@ -1718,9 +1718,12 @@ jobs:
   #   scripts/api-schema-binding/bind-report.test.ts
   #                                         the CodeQL sanitization finding's rail
   #   scripts/ci/apt-install-bounded.test.ts
-  #                                         desktop-rust's bounded apt install
-  #                                         (#2545); desktop-rust itself only
-  #                                         exercises the happy path
+  #                                         desktop-rust's bounded, .deb-cached apt
+  #                                         install (#2545, #2736); desktop-rust
+  #                                         itself only exercises the happy path
+  #   scripts/ci/playwright-deps.test.ts    the Playwright jobs' OS-deps probe,
+  #                                         which must not touch apt on a cache hit
+  #                                         (#2736)
   #
   # Its sibling contract-guard.test.ts is NOT listed: api-contract.yml already
   # runs it, path-scoped to the files it guards.
@@ -1829,17 +1832,41 @@ jobs:
       # `::error::` that names the phase, mirror and rate. Same packages, same
       # install semantics as before. Worst case 525 s; healthy ~25 s. The step
       # `timeout-minutes` is only a backstop for the script itself misbehaving.
+      #
+      # Cached, too (#2736). Bounding a dead mirror still fails the job: on
+      # 2026-11-11 archive.ubuntu.com stopped resolving for ~30 minutes and this
+      # step failed in two consecutive merge groups, ejecting both PRs. The runner
+      # image does not ship these ~180 packages, so the only way to not need the
+      # mirror is to not download them again: the .debs are cached per runner-image
+      # version and package list, and the script `dpkg -i`s them with no network. A
+      # miss (first run, new image, changed list) is exactly the network path above.
+      - name: Resolve apt .deb cache key
+        id: apt-cache
+        env:
+          APT_PACKAGES: >-
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+            libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+        run: |
+          {
+            echo "packages=$APT_PACKAGES"
+            echo "key=apt-debs-${RUNNER_OS}-${ImageVersion:-unknown}-$(printf '%s' "$APT_PACKAGES" | sha256sum | cut -c1-16)"
+            echo "dir=${RUNNER_TEMP}/apt-debs"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache apt .debs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ steps.apt-cache.outputs.key }}
+
       - name: Install Linux deps
         timeout-minutes: 10
+        env:
+          APT_DEB_CACHE_DIR: ${{ steps.apt-cache.outputs.dir }}
+          APT_PACKAGES: ${{ steps.apt-cache.outputs.packages }}
         run: |
-          bash scripts/ci/apt-install-bounded.sh \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+          # shellcheck disable=SC2086  # APT_PACKAGES is a space-separated list on purpose
+          bash scripts/ci/apt-install-bounded.sh $APT_PACKAGES
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -2203,12 +2230,33 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Ansible and age
+      - name: Install Ansible
         run: |
           pip install --user ansible==14.1.0
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          sudo apt-get update
-          sudo apt-get install -y age
+
+      # `age` through the same bounded, .deb-cached installer as desktop-rust (#2736):
+      # a bare `apt-get update` here failed whenever the Ubuntu mirrors did.
+      - name: Resolve apt .deb cache key
+        id: apt-cache
+        run: |
+          {
+            echo "key=apt-debs-${RUNNER_OS}-${ImageVersion:-unknown}-age"
+            echo "dir=${RUNNER_TEMP}/apt-debs"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache apt .debs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ steps.apt-cache.outputs.key }}
+
+      - name: Install age
+        timeout-minutes: 10
+        env:
+          APT_STEP_NAME: Install age
+          APT_DEB_CACHE_DIR: ${{ steps.apt-cache.outputs.dir }}
+        run: bash scripts/ci/apt-install-bounded.sh age
 
       # Also hands restore.yml unrestorable backups and requires it to fail
       # without costing the live database or object store a byte.
