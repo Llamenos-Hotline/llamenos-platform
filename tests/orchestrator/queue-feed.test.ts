@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
   queueRunPr, latestQueueAttempts,
-  mergeQueueConfigFromRules, isEjectedOrNeverArmed, iosQueueBlock,
+  mergeQueueConfigFromRules, mergeQueueConfigFindings, isEjectedOrNeverArmed, iosQueueBlock,
   reviewCoverageFor, runQueueFeedWith, renderQueueFeed,
   type QueueFeedDeps, type QueueFeedPr, type MergeGroupRun,
 } from '../../orchestrator/src/queue-feed.js'
@@ -188,6 +188,34 @@ describe('attributeJob / ownDiffFailures — the not-a-retry guard', () => {
   })
 })
 
+describe('mergeQueueConfigFindings — dead merge-queue config is said out loud (#2656)', () => {
+  const live = { minEntriesToMerge: 5, maxEntriesToMerge: 5, groupingStrategy: 'ALLGREEN', maxEntriesToBuild: 1, minEntriesToMergeWaitMinutes: 5 }
+
+  it('the live ruleset (build 1, min 5, max 5) is reported dead, with the timer as the only release', () => {
+    const f = mergeQueueConfigFindings(live)
+    expect(f.some((x) => x.startsWith('DEAD CONFIG') && x.includes('min_entries_to_merge=5') && x.includes('max_entries_to_build=1') && x.includes('5 min wait timer'))).toBe(true)
+    expect(f.some((x) => x.includes('build concurrency is 1'))).toBe(true)
+  })
+
+  it('a minimum no larger than build concurrency is reachable — not dead', () => {
+    expect(mergeQueueConfigFindings({ ...live, maxEntriesToBuild: 5 })).toEqual([])
+    expect(mergeQueueConfigFindings({ ...live, minEntriesToMerge: 1, maxEntriesToBuild: 3 })).toEqual([])
+  })
+
+  it('build 1 with min 1 is serial but not dead config', () => {
+    const f = mergeQueueConfigFindings({ ...live, minEntriesToMerge: 1 })
+    expect(f.some((x) => x.startsWith('DEAD CONFIG'))).toBe(false)
+    expect(f.some((x) => x.includes('build concurrency is 1'))).toBe(true)
+  })
+
+  it('a rule that omits max_entries_to_build is unjudged, not assumed dead', () => {
+    const { maxEntriesToBuild: _omit, ...noBuild } = live
+    const f = mergeQueueConfigFindings(noBuild)
+    expect(f).toHaveLength(1)
+    expect(f[0]).toContain('cannot be judged')
+  })
+})
+
 describe('mergeQueueConfigFromRules — the ruleset read, reduced', () => {
   it('extracts the merge_queue rule', () => {
     const config = mergeQueueConfigFromRules([
@@ -195,6 +223,13 @@ describe('mergeQueueConfigFromRules — the ruleset read, reduced', () => {
       { type: 'merge_queue', parameters: { min_entries_to_merge: 5, max_entries_to_merge: 5, grouping_strategy: 'ALLGREEN' } },
     ])
     expect(config).toEqual({ minEntriesToMerge: 5, maxEntriesToMerge: 5, groupingStrategy: 'ALLGREEN' })
+  })
+
+  it('carries build concurrency and the wait timer when the rule has them (#2656)', () => {
+    const config = mergeQueueConfigFromRules([
+      { type: 'merge_queue', parameters: { min_entries_to_merge: 5, max_entries_to_merge: 5, grouping_strategy: 'ALLGREEN', max_entries_to_build: 1, min_entries_to_merge_wait_minutes: 5 } },
+    ])
+    expect(config).toEqual({ minEntriesToMerge: 5, maxEntriesToMerge: 5, groupingStrategy: 'ALLGREEN', maxEntriesToBuild: 1, minEntriesToMergeWaitMinutes: 5 })
   })
 
   it('a branch with no merge_queue rule has no queue to feed', () => {

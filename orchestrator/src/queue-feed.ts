@@ -228,6 +228,60 @@ export interface MergeQueueConfig {
   minEntriesToMerge: number
   maxEntriesToMerge: number
   groupingStrategy: string
+  /** `max_entries_to_build` — BUILD CONCURRENCY: how many queue entries have
+   *  a `merge_group` run in flight at once (#2656). Not a group size.
+   *  `undefined` when the rule omits it, which is not the same as 1. */
+  maxEntriesToBuild?: number
+  /** `min_entries_to_merge_wait_minutes`. */
+  minEntriesToMergeWaitMinutes?: number
+}
+
+/**
+ * What the live `merge_queue` rule makes of the queue's throughput, said out
+ * loud (#2656). Returns one sentence per finding; empty when the rule is
+ * coherent. It exists because a ruleset whose numbers read as batching
+ * (`min_entries_to_merge: 5`, `max_entries_to_merge: 5`) while the queue
+ * cannot batch is dead configuration that looks live — the queue was believed
+ * to batch until its entry states were counted (1 AWAITING_CHECKS, 19 QUEUED).
+ *
+ * The model, from GitHub's documented behaviour and the repo's own history:
+ *
+ *  - GitHub NEVER shares a CI run between PRs. Every entry gets its own
+ *    `merge_group` branch (`gh-readonly-queue/<base>/pr-<N>-<sha>`) stacked on
+ *    the previous entry's group head, and its own run. "Merge limits do not
+ *    combine `merge_group` builds."
+ *  - `max_entries_to_build` is how many of those runs are in flight at once.
+ *  - `min/max_entries_to_merge` only decide how many ALREADY-GREEN stacked
+ *    entries land on the base branch together. A green entry can only be
+ *    waiting for company if later entries are building or built, so the
+ *    minimum is reachable only when `max_entries_to_build >= min_entries_to_merge`.
+ *    Below that it never fires; every merge is released by the wait timer.
+ *  - Raising build concurrency is NOT free of CI cost: ci.yml diffs a
+ *    `merge_group` against the TARGET branch, not the previous entry
+ *    (#1594), so every entry stacked behind an iOS-gate PR also runs the
+ *    iOS leg until that PR has merged. That is why the Mac runners gate it.
+ */
+export function mergeQueueConfigFindings(config: MergeQueueConfig): string[] {
+  const out: string[] = []
+  const build = config.maxEntriesToBuild
+  if (build === undefined) {
+    out.push('max_entries_to_build is not in the merge_queue rule — build concurrency unknown, so whether min_entries_to_merge is reachable cannot be judged')
+    return out
+  }
+  if (build < config.minEntriesToMerge) {
+    const wait = config.minEntriesToMergeWaitMinutes !== undefined ? `${config.minEntriesToMergeWaitMinutes} min` : 'its'
+    out.push(
+      `DEAD CONFIG: min_entries_to_merge=${config.minEntriesToMerge} cannot be met — max_entries_to_build=${build} lets only ${build} entr(ies) build at a time, ` +
+      `so at most ${build} can be green and waiting. Every merge is released by the ${wait} wait timer, and max_entries_to_merge=${config.maxEntriesToMerge} is never reached`,
+    )
+  }
+  if (build === 1) {
+    out.push(
+      'build concurrency is 1: the queue drains one entry per merge_group run (the CI median is ~30 min, the iOS leg 40-93), so a queue N deep takes about N x median to drain, ' +
+      'and an ejection costs a whole extra cycle. Raising max_entries_to_build is the throughput lever; it is gated on Mac runner headroom because an entry stacked behind an iOS-gate PR also runs the iOS leg',
+    )
+  }
+  return out
 }
 
 /** One completed `merge_group` run, before attribution. */
@@ -411,13 +465,19 @@ export function mergeQueueConfigFromRules(rules: unknown): MergeQueueConfig | un
     if (typeof rule !== 'object' || rule === null) continue
     const r = rule as { type?: unknown; parameters?: unknown }
     if (r.type !== 'merge_queue' || typeof r.parameters !== 'object' || r.parameters === null) continue
-    const p = r.parameters as { min_entries_to_merge?: unknown; max_entries_to_merge?: unknown; grouping_strategy?: unknown }
+    const p = r.parameters as {
+      min_entries_to_merge?: unknown; max_entries_to_merge?: unknown; grouping_strategy?: unknown
+      max_entries_to_build?: unknown; min_entries_to_merge_wait_minutes?: unknown
+    }
     if (typeof p.min_entries_to_merge !== 'number' || typeof p.max_entries_to_merge !== 'number') continue
-    return {
+    const config: MergeQueueConfig = {
       minEntriesToMerge: p.min_entries_to_merge,
       maxEntriesToMerge: p.max_entries_to_merge,
       groupingStrategy: typeof p.grouping_strategy === 'string' ? p.grouping_strategy : 'unknown',
     }
+    if (typeof p.max_entries_to_build === 'number') config.maxEntriesToBuild = p.max_entries_to_build
+    if (typeof p.min_entries_to_merge_wait_minutes === 'number') config.minEntriesToMergeWaitMinutes = p.min_entries_to_merge_wait_minutes
+    return config
   }
   return undefined
 }
@@ -612,6 +672,10 @@ async function feedBranch(
 
   const result = emptyBranch(branch, 'satisfied', queued.size)
   result.config = config
+  // Said every pass, not once: a ruleset whose numbers read as batching while
+  // the queue cannot batch is the hazard (#2656), and a finding printed only
+  // at first sight is gone from the log the day someone looks.
+  for (const f of mergeQueueConfigFindings(config)) result.notes.push(f)
 
   // Two different actions share this pass and are bounded differently (#2619).
   //
@@ -906,7 +970,7 @@ export function renderQueueFeed(result: QueueFeedResult): string {
   for (const u of result.undecidable) lines.push(`queue-feed: CANNOT DECIDE — ${u}`)
   for (const b of result.branches) {
     const head = `queue-feed [${b.branch}]: ${b.outcome}` +
-      (b.config !== undefined ? ` (queue ${b.queuedBefore}, min ${b.config.minEntriesToMerge}, max ${b.config.maxEntriesToMerge}, ${b.config.groupingStrategy})` : '')
+      (b.config !== undefined ? ` (queue ${b.queuedBefore}, min ${b.config.minEntriesToMerge}, max ${b.config.maxEntriesToMerge}${b.config.maxEntriesToBuild !== undefined ? `, build ${b.config.maxEntriesToBuild}` : ''}, ${b.config.groupingStrategy})` : '')
     lines.push(head)
     for (const n of b.notes) lines.push(`  note: ${n}`)
     for (const pr of b.armed) lines.push(`  ${b.rearmed.includes(pr) ? 'RE-ARMED ' : 'ARMED    '} #${pr}`)
