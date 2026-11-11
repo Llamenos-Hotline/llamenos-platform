@@ -1404,6 +1404,7 @@ export function composeReviewSet(
       : r.partial !== undefined ? `${who} ran out of turns \u2014 PARTIAL ${r.partial.verdict}, not a full review`
       : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
       : r.failureKind === 'brief-too-large' ? `${who} brief too large`
+      : r.failureKind === 'brief-unread' ? `${who} did not read the whole brief`
       : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`
