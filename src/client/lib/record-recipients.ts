@@ -77,7 +77,7 @@ export function composeReaders(
   const tier = (name: RecordTier): string[] =>
     dedupe([
       authorPubkey,
-      ...(serverTiers?.[name] ?? []).filter(k => HEX64_RE.test(k.toLowerCase())),
+      ...(serverTiers?.[name] ?? []).map(k => k.toLowerCase()).filter(k => HEX64_RE.test(k)),
       admin,
     ])
   return { summary: tier('summary'), fields: tier('fields'), pii: tier('pii') }

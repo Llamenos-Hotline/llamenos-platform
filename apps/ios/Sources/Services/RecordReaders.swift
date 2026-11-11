@@ -67,7 +67,7 @@ enum RecordReaderSet {
         func tier(_ server: [String]?) -> [String] {
             var seen = Set<String>()
             var out: [String] = []
-            for key in [author] + (server ?? []).filter({ isHex64($0.lowercased()) }) + [admin] {
+            for key in [author] + (server ?? []).map({ $0.lowercased() }).filter(isHex64) + [admin] {
                 if seen.insert(key.lowercased()).inserted { out.append(key) }
             }
             return out
