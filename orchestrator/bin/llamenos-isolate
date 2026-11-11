@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# orchestrator/bin/llamenos-isolate — run a dispatch command in its OWN systemd
+# scope, so a tmux server it starts is never in the dispatcher's cgroup (#2655).
+#
+# Why this exists. There is one tmux server per user, started by whichever
+# `tmux` call finds none running, and it lives in THAT caller's cgroup. Every
+# later session — from any dispatcher — is a client of that server, so every
+# worker's lifetime became the lifetime of whoever happened to dispatch first.
+# `llamenos-fleet-tick.service` is a oneshot on a timer that exits on purpose:
+# when a pass completed cleanly (status=0/SUCCESS) systemd tore its cgroup down
+# and took the server, and six unrelated workers, with it. An interactive
+# terminal's scope is an owner just as fragile (closing the terminal kills every
+# worker); KillMode=process on the tick would have fixed one owner and left the
+# property intact.
+#
+# `systemd-run --user --scope` moves THIS process (and everything it starts,
+# the daemonised tmux server included) into a fresh transient scope under the
+# user manager. The scope outlives the dispatcher and ends when the last process
+# in it exits — i.e. when the last tmux session is gone. The environment is
+# inherited unchanged, so what a worker sees (GH_TOKEN, PATH…) is exactly what it
+# saw before; only the cgroup differs. Session names, `tmux attach -t <name>`
+# and the ~/tier-overnight-status protocol are untouched.
+#
+# The unit name MUST start `llamenos-tmux-`: `orchestrator/src/tmux-isolation.ts`
+# recognises an isolated server by that prefix, and `doctor` warns about any
+# server that is not in one.
+#
+# Usage: llamenos-isolate <command> [args...]
+set -euo pipefail
+
+if (($# == 0)); then
+  echo "usage: llamenos-isolate <command> [args...]" >&2
+  exit 2
+fi
+
+# No systemd-run means no systemd: a CI container or a macOS dev box. There is
+# no cgroup ownership to isolate from there, so run the command as-is. A host
+# that HAS systemd-run but cannot reach the user manager is different: it falls
+# through to the exec below, systemd-run fails, the command never runs, and the
+# dispatch fails loudly — never a silent un-isolated launch.
+if ! command -v systemd-run >/dev/null 2>&1; then
+  exec "$@"
+fi
+
+exec systemd-run --user --scope --quiet --collect \
+  --unit="llamenos-tmux-$(date +%s)-$$" \
+  --description="llamenos dispatch scope (owns any tmux server it starts)" \
+  -- "$@"

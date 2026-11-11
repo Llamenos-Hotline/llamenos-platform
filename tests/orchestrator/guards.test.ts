@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest'
 import {
   LANES, NEVER_WRITE_PATHS, SECRET_PATH_PATTERNS, TRUST_ANCHOR_APPROVERS, TRUST_ANCHOR_FILES, loadLanes, readLaneModes,
   assertLiveLanesHaveScope,
@@ -12,7 +12,7 @@ import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder 
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { checkRunsViolations, orchestratorSources, statusesViolations, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
@@ -4633,6 +4633,53 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
 describe('rail: an iOS ui shard is retried only when it executed zero tests (#2403)', () => {
   const STEP_NAME = 'Run XCUITests (shard ${{ matrix.shard }})'
 
+  // The Actions API, served from a directory, so the step's REAL sibling lookup
+  // (python urllib against GITHUB_API_URL) runs rather than a stub of it. A
+  // separate process: runStep blocks this one in spawnSync.
+  let api: ChildProcess | undefined
+  let apiRoot = ''
+  let apiUrl = ''
+  let runSeq = 0
+  beforeAll(async () => {
+    apiRoot = realpathSync(mkdtempSync(join(tmpdir(), 'ios-shard-api-')))
+    api = spawn('python3', ['-I', '-u', '-m', 'http.server', '0', '--bind', '127.0.0.1', '--directory', apiRoot], { stdio: ['ignore', 'pipe', 'ignore'] })
+    apiUrl = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the fake Actions API did not start')), 10_000)
+      api?.stdout?.on('data', (d: Buffer) => {
+        const m = /port (\d+)/.exec(d.toString())
+        if (m) { clearTimeout(timer); resolve(`http://127.0.0.1:${m[1]}`) }
+      })
+    })
+  })
+  afterAll(() => { api?.kill(); rmSync(apiRoot, { recursive: true, force: true }) })
+
+  /** `NAME: "value"` lines of the XCUITest step's `env:` block, so the harness runs with the workflow's own bounds. */
+  function stepEnv(): Record<string, string> {
+    const lines = readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8').split('\n')
+    const at = lines.findIndex((l) => l.trim() === `- name: ${STEP_NAME}`)
+    const end = lines.findIndex((l, i) => i > at && l.trim() === 'run: |')
+    const env: Record<string, string> = {}
+    for (const l of lines.slice(at, end)) {
+      const m = /^\s+([A-Z_]+): "?([^"#]*?)"?\s*(?:#.*)?$/.exec(l)
+      if (m?.[1] && m[2] !== undefined && !m[2].includes('${{')) env[m[1]] = m[2]
+    }
+    return env
+  }
+
+  /** What the other shards of the run concluded: [shard index, status, conclusion]. */
+  type Sibling = [number, 'completed' | 'in_progress', 'success' | 'failure' | 'skipped' | 'cancelled' | null]
+  const jobList = (siblings: Sibling[], own = true) => JSON.stringify({
+    jobs: [
+      { name: 'ios-e2e / build (mac)', status: 'completed', conclusion: 'success' },
+      { name: 'android-e2e (0)', status: 'completed', conclusion: 'success' },
+      ...(own ? [{ name: 'ios-e2e / ui (1)', status: 'in_progress', conclusion: null }] : []),
+      ...siblings.map(([n, status, conclusion]) => ({ name: `ios-e2e / ui (${n})`, status, conclusion })),
+    ],
+  })
+  /** Every sibling finished red: no evidence. The default, so a test that does not mention siblings sees today's behaviour. */
+  const ALL_RED: Sibling[] = [[0, 'completed', 'failure'], [2, 'completed', 'failure'], [3, 'completed', 'failure']]
+  const ONE_GREEN: Sibling[] = [[0, 'completed', 'success'], [2, 'completed', 'failure'], [3, 'in_progress', null]]
+
   /** The step's `run:` script, de-indented, with its few expressions filled in. */
   function stepScript(root: string): string {
     const lines = readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8').split('\n')
@@ -4653,11 +4700,27 @@ describe('rail: an iOS ui shard is retried only when it executed zero tests (#24
     return script
   }
 
-  type Outcome = 'zero' | 'fail' | 'pass' | 'assert' | 'infra' | 'snapshot' | 'mixed' | 'passA'
+  type Outcome = 'zero' | 'fail' | 'pass' | 'assert' | 'many' | 'infra' | 'snapshot' | 'mixed' | 'passA'
 
   /** Runs the step with a fake xcodebuild whose Nth call behaves as outcomes[N-1]. */
-  function runStep(outcomes: Outcome[], opts: { keepLog?: boolean } = {}) {
+  function runStep(outcomes: Outcome[], opts: {
+    keepLog?: boolean
+    /** The sibling shards' state when the step looks. */
+    siblings?: Sibling[]
+    /** Replace the job list wholesale (e.g. one without this shard's own job). */
+    rawJobs?: string
+    /** After the Nth `sleep`, the job list becomes this (a sibling finishing while the step waits). */
+    laterSiblings?: Array<[number, Sibling[]]>
+    noToken?: boolean
+    /** Overrides of the step's own env (its bounds). */
+    env?: Record<string, string>
+  } = {}) {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'ios-shard-retry-')))
+    const runId = String(++runSeq)
+    const jobsDir = join(apiRoot, 'repos', 'o', 'r', 'actions', 'runs', runId, 'attempts', '1')
+    mkdirSync(jobsDir, { recursive: true })
+    writeFileSync(join(jobsDir, 'jobs'), opts.rawJobs ?? jobList(opts.siblings ?? ALL_RED))
+    for (const [n, sib] of opts.laterSiblings ?? []) writeFileSync(join(jobsDir, `after-${n}`), jobList(sib))
     try {
       const bin = join(root, 'bin')
       mkdirSync(bin)
@@ -4670,7 +4733,8 @@ describe('rail: an iOS ui shard is retried only when it executed zero tests (#24
         chmodSync(join(bin, name), 0o755)
       }
       tool('curl', 'exit 0')
-      tool('sleep', `echo "$1" >> "${root}/sleeps"`)
+      tool('sleep', `echo "$1" >> "${root}/sleeps"; n=$(wc -l < "${root}/sleeps" | tr -d ' ')
+[ -f "${jobsDir}/after-$n" ] && cp "${jobsDir}/after-$n" "${jobsDir}/jobs"; exit 0`)
       tool('xcodebuild', `
 n=$(( $(cat "${root}/calls" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "${root}/calls"
@@ -4690,6 +4754,12 @@ case "$outcome" in
         echo "/src/SomeUITests.swift:42: error: -[LlamenosUITests.SomeUITests testA] : XCTAssertTrue failed - expected the banner"
         echo "Test Case '-[LlamenosUITests.SomeUITests testA]' failed (3.0 seconds)."
         printf 'Failing tests:\\n\\tSomeUITests.testA()\\n\\n** TEST EXECUTE FAILED **\\n'; exit 65 ;;
+  many) for t in testA testB testC testD; do
+          echo "Test Case '-[LlamenosUITests.SomeUITests $t]' started."
+          echo "/src/SomeUITests.swift:42: error: -[LlamenosUITests.SomeUITests $t] : XCTAssertTrue failed - expected the banner"
+          echo "Test Case '-[LlamenosUITests.SomeUITests $t]' failed (3.0 seconds)."
+        done
+        printf 'Failing tests:\\n\\tSomeUITests.testA()\\n\\tSomeUITests.testB()\\n\\tSomeUITests.testC()\\n\\tSomeUITests.testD()\\n\\n** TEST EXECUTE FAILED **\\n'; exit 65 ;;
   infra|snapshot|mixed)
         echo "Test Case '-[LlamenosUITests.SomeUITests testB]' started."
         echo "Test Case '-[LlamenosUITests.SomeUITests testB]' passed (1.0 seconds)."
@@ -4716,6 +4786,8 @@ exit 99`)
         env: {
           PATH: `${bin}:${process.env.PATH ?? ''}`, RUNNER_TEMP: root, NATIVE_BACKEND_PORT: '1', SHARD: '1',
           RUNNER_NAME: 'hosted-runner', GITHUB_STEP_SUMMARY: join(root, 'summary'), GITHUB_WORKSPACE: process.cwd(),
+          ...stepEnv(), GITHUB_API_URL: apiUrl, GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: runId, GITHUB_RUN_ATTEMPT: '1',
+          GITHUB_TOKEN: opts.noToken ? '' : 'token', no_proxy: '127.0.0.1', NO_PROXY: '127.0.0.1', ...opts.env,
         },
       })
       const read = (f: string) => (existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8') : '')
@@ -4848,6 +4920,120 @@ exit 99`)
     const r = runStep(['infra', 'assert'])
     expect([r.status, r.calls]).toEqual([65, 2])
   })
+
+  // ---- #2618: a GENUINE failure while a sibling shard of the same run passed ----
+  //
+  // Three merge-queue ejections in one night were real `XCTAssertTrue` failures on a
+  // hosted runner with the other shards green, on PRs touching no iOS code. No
+  // signature matches them, so the only evidence is the siblings -- and a regression
+  // confined to one shard's tests looks identical. Hence: ONE retry of the failed
+  // tests, and a second failure is genuine.
+
+  it('#2618 BREAK-IT: a lone failing shard with a green sibling is NOT classified genuine -- its failed test is re-run once, alone', () => {
+    const r = runStep(['assert', 'passA'], { siblings: ONE_GREEN })
+    expect([r.status, r.calls], r.out).toEqual([0, 2])
+    expect(r.argv2.filter((a) => a.startsWith('-only-testing:'))).toEqual(['-only-testing:LlamenosUITests/SomeUITests/testA'])
+    expect(r.out).toMatch(/::warning title=CROSS-SHARD RETRY::ios-e2e\/ui shard 1 attempt 1 FAILED/)
+    expect(r.out, 'the retried shard is never silent about passing on its second attempt').toContain('PASSED AFTER A CROSS-SHARD RETRY')
+    expect(r.out, 'it must not be passed off as an infrastructure signature').not.toContain('INFRASTRUCTURE RETRY')
+    expect(r.summary).toContain('cross-shard retry')
+    expect(r.infraAttempts, 'attempt 1 stays on disk as evidence').toContain('XCTAssertTrue failed - expected the banner')
+    expect(r.log, 'the log `report` parses says why attempt 1 was superseded').toContain('cross-shard retry')
+  })
+
+  it('#2618 BREAK-IT: a shard that fails TWICE is genuine -- one retry, never two, and the exit code is the test\'s', () => {
+    const r = runStep(['assert', 'assert', 'passA'], { siblings: ONE_GREEN })
+    expect([r.status, r.calls], r.out).toEqual([65, 2])
+    expect(r.out).toMatch(/::error::ios-e2e\/ui FAILED after a cross-shard retry/)
+    expect(r.out).toContain('reproduced, so it is genuine')
+    expect(r.out).not.toContain('PASSED AFTER')
+  })
+
+  it('#2618: the one retry is shared with the infrastructure retry -- infra then assertion is two runs, never three, even with a green sibling', () => {
+    const r = runStep(['infra', 'assert', 'passA'], { siblings: ONE_GREEN })
+    expect([r.status, r.calls]).toEqual([65, 2])
+    expect(r.out).not.toContain('CROSS-SHARD RETRY')
+  })
+
+  it('#2618: a failure whose siblings all finished red is not retried -- no evidence, today\'s behaviour', () => {
+    const r = runStep(['assert', 'passA'], { siblings: ALL_RED })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).toContain('Sibling shards: none')
+    expect(r.sleeps).toEqual([])
+  })
+
+  it('#2618: a sibling that was skipped or cancelled is not a pass', () => {
+    const r = runStep(['assert', 'passA'], { siblings: [[0, 'completed', 'skipped'], [2, 'completed', 'cancelled'], [3, 'completed', 'failure']] })
+    expect([r.status, r.calls]).toEqual([65, 1])
+  })
+
+  it('#2618: it WAITS for a sibling that has not finished, retries once one passes, and holds nothing else', () => {
+    const running: Sibling[] = [[0, 'in_progress', null], [2, 'in_progress', null], [3, 'completed', 'failure']]
+    const r = runStep(['assert', 'passA'], { siblings: running, laterSiblings: [[2, [[0, 'completed', 'success'], [2, 'in_progress', null], [3, 'completed', 'failure']]]] })
+    expect([r.status, r.calls], r.out).toEqual([0, 2])
+    const poll = stepEnv().SIBLING_POLL_SEC
+    expect(r.sleeps, 'two waits for the sibling, then the retry\'s own pause').toEqual([poll, poll, '20'])
+  })
+
+  it('#2618: the wait is BOUNDED -- no sibling ever passing ends in the original failure, after exactly the budgeted polls', () => {
+    const env = stepEnv()
+    const r = runStep(['assert', 'passA'], { siblings: [[0, 'in_progress', null], [2, 'completed', 'failure'], [3, 'completed', 'failure']] })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    const polls = Math.floor((Number(env.SIBLING_WAIT_MAX_MIN) * 60) / Number(env.SIBLING_POLL_SEC))
+    expect(r.sleeps).toHaveLength(polls)
+    expect(r.out).toContain('Sibling shards: pending')
+  })
+
+  it('#2618: it cannot wait the step into its own timeout -- the wait shrinks to the time the step has left', () => {
+    // 10 min of step, 8 reserved for the retry: 2 min to wait, i.e. 4 polls at 30s -- not the 30 an unconstrained wait takes.
+    const r = runStep(['assert', 'passA'], {
+      siblings: [[0, 'in_progress', null], [2, 'completed', 'failure'], [3, 'completed', 'failure']],
+      env: { STEP_TIMEOUT_MIN: '10', RETRY_RESERVE_MIN: '8' },
+    })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.sleeps.length).toBeGreaterThan(0)
+    expect(r.sleeps.length).toBeLessThanOrEqual(4)
+  })
+
+  it('#2618: a job list that does not contain this shard\'s own job is not trusted -- the failure stands, after a few reads', () => {
+    const r = runStep(['assert', 'passA'], { rawJobs: jobList(ONE_GREEN, false) })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).toContain('unreadable')
+    expect(r.sleeps, 'gives up after three unreadable answers').toHaveLength(2)
+  })
+
+  it('#2618: no token (so no read of the siblings) means no retry, and says unreadable', () => {
+    const r = runStep(['assert', 'passA'], { siblings: ONE_GREEN, noToken: true })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).toContain('unreadable')
+  })
+
+  it('#2618: more failed tests than a lone flake can account for are not retried, whatever the siblings did', () => {
+    const r = runStep(['many', 'passA'], { siblings: ONE_GREEN })
+    expect([r.status, r.calls]).toEqual([65, 1])
+    expect(r.out).toContain('4 tests failed, more than the 3')
+  })
+
+  it('#2618: the log `report` parses after a cross-shard retry holds the FINAL results -- no leftover failure', () => {
+    const r = runStep(['infra', 'passA'], { keepLog: true, siblings: ONE_GREEN })
+    expect(r.report?.stdout).toContain('2 test cases')
+    const x = runStep(['assert', 'passA'], { keepLog: true, siblings: ONE_GREEN })
+    expect(x.report?.status, `${x.report?.stdout}${x.report?.stderr}`).toBe(0)
+    expect(x.report?.stdout).not.toMatch(/failed: \*\*1/)
+  })
+
+  it('#2618: the step\'s bounds are consistent with its timeout, and the token it reads siblings with is granted', () => {
+    const yml = readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+    const at = yml.indexOf(`- name: ${STEP_NAME}`)
+    expect(yml.slice(at, at + 200)).toContain(`timeout-minutes: ${stepEnv().STEP_TIMEOUT_MIN}`)
+    // Without `actions: read` on the shard job AND on ci.yml's caller, the sibling read 403s, every failure stands as
+    // before, and nothing says the defence is switched off (#2618).
+    const ui = yml.slice(yml.indexOf('\n  ui:\n'), yml.indexOf('\n    strategy:', yml.indexOf('\n  ui:\n')))
+    expect(ui).toMatch(/permissions:\n\s+contents: read\n(?:\s+#.*\n)+\s+actions: read/)
+    const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+    const caller = ci.slice(ci.indexOf('\n  ios-e2e:\n'), ci.indexOf('uses: ./.github/workflows/ios-e2e.yml'))
+    expect(caller).toMatch(/permissions:\n\s+contents: read\n(?:\s+#.*\n)+\s+actions: read/)
+  })
 })
 
 /**
@@ -4912,6 +5098,91 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
     const v = ios([...body, ...trailer])
     expect(v.kind, v.detail).toBe('genuine')
     expect(v.retest).toBe('')
+  })
+
+  describe('iOS: failed= names the failed tests only when every one of them is accounted for (#2618)', () => {
+    const ASSERT = 'XCTAssertTrue failed - expected the banner'
+    it('an assertion failure is genuine AND names its failed test', () => {
+      const v = ios([...ok('testOk'), ...fail('testA', ASSERT), ...failing('testA')])
+      expect(v.kind).toBe('genuine')
+      expect(v.failed).toBe('LlamenosUITests/SomeUITests/testA')
+    })
+    it('a test killed by the execution allowance is still named -- the hardware-timing case', () => {
+      const v = ios([`${T('testA')} started.`, `${T('testA')} exceeded execution time allowance in test run`, `${T('testA')} failed (313.0 seconds).`, ...failing('testA')])
+      expect(v).toMatchObject({ kind: 'genuine', failed: 'LlamenosUITests/SomeUITests/testA' })
+    })
+    it.each([
+      ['a test that started and never finished', [`${T('testA')} started.`, ...fail('testB', ASSERT)], failing('testB')],
+      ['a Failing tests list naming a test we did not see fail', fail('testA', ASSERT), failing('testA', 'testGhost')],
+      ['a non-zero exit with no failed test', ok('testOk'), ['** TEST EXECUTE FAILED **']],
+    ])('BREAK-IT: %s names NOTHING, so there is nothing safe to re-run', (_n, body, trailer) => {
+      const v = ios([...body, ...trailer])
+      expect(v.kind).toBe('genuine')
+      expect(v.failed).toBe('')
+    })
+    it('an infrastructure verdict is unchanged: it names retest, not failed', () => {
+      const v = ios([...fail('testA', LAUNCH), ...failing('testA')])
+      expect(v).toMatchObject({ kind: 'infra-partial', failed: '' })
+    })
+  })
+
+  describe('siblings (#2618)', () => {
+    let server: ChildProcess | undefined
+    let dir = ''
+    let url = ''
+    beforeAll(async () => {
+      dir = realpathSync(mkdtempSync(join(tmpdir(), 'classify-sib-')))
+      mkdirSync(join(dir, 'repos', 'o', 'r', 'actions', 'runs', '9', 'attempts', '1'), { recursive: true })
+      server = spawn('python3', ['-I', '-u', '-m', 'http.server', '0', '--bind', '127.0.0.1', '--directory', dir], { stdio: ['ignore', 'pipe', 'ignore'] })
+      url = await new Promise<string>((resolve) => {
+        server?.stdout?.on('data', (d: Buffer) => { const m = /port (\d+)/.exec(d.toString()); if (m) resolve(`http://127.0.0.1:${m[1]}`) })
+      })
+    })
+    afterAll(() => { server?.kill(); rmSync(dir, { recursive: true, force: true }) })
+
+    const job = (n: number | string, status: string, conclusion: string | null, prefix = 'ios-e2e / ') => ({ name: `${prefix}ui (${n})`, status, conclusion })
+    function siblings(shard: string, jobs: unknown[]) {
+      writeFileSync(join(dir, 'repos', 'o', 'r', 'actions', 'runs', '9', 'attempts', '1', 'jobs'), JSON.stringify({ jobs }))
+      const r = spawnSync('python3', [SCRIPT, 'siblings', shard], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', GITHUB_API_URL: url, GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '9', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 't', no_proxy: '127.0.0.1' },
+      })
+      expect(r.status, r.stderr).toBe(0)
+      return Object.fromEntries(r.stdout.split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])) as Record<string, string>
+    }
+
+    it('passed: any one finished-success sibling, whatever the others did', () => {
+      expect(siblings('1', [job(0, 'completed', 'failure'), job(1, 'in_progress', null), job(2, 'completed', 'success'), job(3, 'in_progress', null)]))
+        .toMatchObject({ sibling_state: 'passed', siblings: '0:failure 2:success 3:in_progress' })
+    })
+    it('this shard\'s own conclusion is never evidence about itself', () => {
+      expect(siblings('1', [job(1, 'completed', 'success'), job(0, 'completed', 'failure')]).sibling_state).toBe('none')
+    })
+    it('the same name without the caller prefix (a direct dispatch or the nightly) is read too', () => {
+      expect(siblings('1', [job(1, 'in_progress', null, ''), job(0, 'completed', 'success', '')]).sibling_state).toBe('passed')
+    })
+    it('pending: nothing has passed but something is still running', () => {
+      expect(siblings('1', [job(1, 'in_progress', null), job(0, 'completed', 'failure'), job(2, 'queued', null)]).sibling_state).toBe('pending')
+    })
+    it.each([['skipped'], ['cancelled'], ['failure'], ['timed_out']])('none: a sibling that finished %s is not a pass', (c) => {
+      expect(siblings('1', [job(1, 'in_progress', null), job(0, 'completed', c)]).sibling_state).toBe('none')
+    })
+    it('none: a run with no other shard at all', () => {
+      expect(siblings('1', [job(1, 'in_progress', null)])).toMatchObject({ sibling_state: 'none', siblings: '(no siblings)' })
+    })
+    it('unreadable: a listing without this shard\'s own job is not trusted', () => {
+      expect(siblings('1', [job(0, 'completed', 'success')]).sibling_state).toBe('unreadable')
+    })
+    it('other jobs that merely look similar are not shards', () => {
+      expect(siblings('1', [job(1, 'in_progress', null), { name: 'android-e2e (0)', status: 'completed', conclusion: 'success' }, { name: 'ios-e2e / build (mac)', status: 'completed', conclusion: 'success' }]).sibling_state).toBe('none')
+    })
+    it('an unreachable API is unreadable, never passed', () => {
+      const r = spawnSync('python3', [SCRIPT, 'siblings', '1'], {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '', GITHUB_API_URL: 'http://127.0.0.1:9', GITHUB_REPOSITORY: 'o/r', GITHUB_RUN_ID: '9', GITHUB_RUN_ATTEMPT: '1', GITHUB_TOKEN: 't', no_proxy: '127.0.0.1' },
+      })
+      expect(r.stdout).toContain('sibling_state=unreadable')
+    })
   })
 
   describe('Android', () => {

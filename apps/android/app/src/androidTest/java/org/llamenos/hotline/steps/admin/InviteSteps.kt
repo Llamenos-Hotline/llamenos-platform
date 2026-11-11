@@ -2,7 +2,6 @@ package org.llamenos.hotline.steps.admin
 
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -27,7 +26,7 @@ import org.llamenos.hotline.steps.BaseSteps
  * invite-name-input, invite-phone-input, create-volunteer-invite, create-admin-invite,
  * created-invite-code, copy-created-invite, close-invite-dialog, invites-list,
  * invites-empty, invite-card-{id}, invite-name-{id}, invite-code-{id},
- * invite-role-{id}, invite-status-{id}, copy-invite-{id}.
+ * invite-role-{id}, invite-status-{id}, copy-invite-{id}, revoke-invite-{id}.
  */
 class InviteSteps : BaseSteps() {
 
@@ -35,6 +34,9 @@ class InviteSteps : BaseSteps() {
 
     /** The name typed into the create-invite dialog by this scenario. */
     private var createdInviteName: String? = null
+
+    /** The invite this scenario revoked — for the redemption and audit checks. */
+    private var revokedInviteCode: String? = null
 
     // ---- Invite creation ----
 
@@ -94,19 +96,55 @@ class InviteSteps : BaseSteps() {
 
     @When("I revoke the invite")
     fun iRevokeTheInvite() {
-        // Revoke UI not implemented — copy-invite buttons exist but no revoke action (#764)
-        try {
-            onAllNodes(hasTestTagPrefix("invite-card-")).onFirst().performClick()
-            composeRule.waitForIdle()
-        } catch (_: Throwable) {
-            // No invite cards — invite wasn't created
+        val invite = findCreatedInvite()
+        check(invite != null) {
+            "GET /api/invites has no invite named '$createdInviteName' to revoke"
         }
+        revokedInviteCode = invite.code
+        // The card carries the invite code in its tag (`Invite.id` == code), so
+        // the step drives the exact card for the invite this scenario created.
+        waitForNode("revoke-invite-${invite.code}", 10_000)
+        onNodeWithTag("revoke-invite-${invite.code}").performClick()
+        composeRule.waitForIdle()
     }
 
     @Then("the volunteer name should no longer appear in the list")
     fun theVolunteerNameShouldNoLongerAppearInTheList() {
-        composeRule.waitForIdle()
-        assertAnyTagDisplayed("invites-list", "invites-empty")
+        val name = checkNotNull(createdInviteName) { "No invite was created in this scenario" }
+        val code = checkNotNull(revokedInviteCode) { "No invite was revoked in this scenario" }
+
+        // UI: the card is gone from the pending list.
+        composeRule.waitUntil(10_000) {
+            runCatching {
+                onAllNodes(hasTestTagPrefix("invite-name-"))
+                    .fetchSemanticsNodes()
+                    .none { node ->
+                        runCatching { node.config[SemanticsProperties.Text] }
+                            .getOrNull()
+                            ?.any { it.text == name } == true
+                    }
+            }.getOrDefault(false)
+        }
+
+        // Server: the invite row is gone (revocation deletes it).
+        check(findCreatedInvite() == null) {
+            "GET /api/invites still lists invite '$name' after revoke"
+        }
+
+        // Server: the link is dead — redeeming the revoked code is rejected.
+        val status = SimulationClient.attemptRedeemInvite(code)
+        check(status !in 200..299) {
+            "POST /api/invites/redeem accepted a revoked invite (HTTP $status)"
+        }
+
+        // Server: the revocation was audited (every admin action is auditable).
+        // Invite lifecycle events land on the platform chain, not a hub's.
+        val audit = json.parseToJsonElement(SimulationClient.getPlatformAuditLog()).jsonObject
+        val audited = audit["entries"]!!.jsonArray.any {
+            it.jsonObject["action"]!!.jsonPrimitive.content == "inviteRevoked" &&
+                it.jsonObject["details"]!!.jsonObject["code"]!!.jsonPrimitive.content == code
+        }
+        check(audited) { "No inviteRevoked audit entry for code $code on the platform chain" }
     }
 
     // ---- Invite onboarding (web-specific flows — stubs for Android) ----
