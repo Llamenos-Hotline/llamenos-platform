@@ -3,6 +3,20 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { AuthProvider, useAuth } from './auth'
 import * as keyManager from './key-manager'
 
+const { getMyHubPermissionsMock, MockApiError, configState } = vi.hoisted(() => {
+  class MockApiError extends Error {
+    constructor(public status: number, public body: string) {
+      super(`API error ${status}: ${body}`)
+      this.name = 'ApiError'
+    }
+  }
+  return {
+    getMyHubPermissionsMock: vi.fn(),
+    MockApiError,
+    configState: { currentHubId: undefined as string | undefined },
+  }
+})
+
 vi.mock('./platform', () => ({
   deviceImportAndLoad: vi.fn(async () => ({
     state: {
@@ -39,11 +53,23 @@ vi.mock('./api', () => ({
     webauthnRequired: false,
     webauthnRegistered: false,
   })),
+  getMyHubPermissions: getMyHubPermissionsMock,
+  ApiError: MockApiError,
   login: vi.fn(),
   logout: vi.fn(),
   updateMyAvailability: vi.fn(),
   setOnAuthExpired: vi.fn(),
   setOnApiActivity: vi.fn(),
+}))
+
+// AuthProvider reads the active hub from ConfigContext; drive it directly.
+vi.mock('./config', () => ({
+  useConfig: () => ({
+    currentHubId: configState.currentHubId,
+    refreshMemberHubs: vi.fn(async () => {}),
+    clearMemberHubs: vi.fn(),
+  }),
+  forgetHubPreference: vi.fn(),
 }))
 
 vi.mock('./webauthn', () => ({
@@ -58,6 +84,8 @@ beforeEach(() => {
   keyManager.lock()
   sessionStorage.clear()
   localStorage.clear()
+  configState.currentHubId = undefined
+  getMyHubPermissionsMock.mockReset()
 })
 
 describe('useAuth initial state', () => {
@@ -249,5 +277,122 @@ describe('useAuth error handling', () => {
     await waitFor(() => {
       expect(result.current.error).toBeNull()
     })
+  })
+})
+
+describe('per-hub UI permissions (#1101)', () => {
+  const seed = 'a'.repeat(64)
+  // The account holds BOTH hubs' authority in /auth/me's union: notes:read, notes:write.
+  const perHub: Record<string, string[]> = {
+    'hub-A': ['notes:read', 'settings:manage'],
+    'hub-B': ['calls:answer'],
+  }
+  const answerPerHub = () =>
+    getMyHubPermissionsMock.mockImplementation(async (hubId: string) => ({ hubId, permissions: perHub[hubId] ?? [] }))
+
+  async function signedIn() {
+    const view = renderHook(() => useAuth(), { wrapper })
+    await act(async () => {
+      await view.result.current.signIn(seed, '12345678')
+    })
+    return view
+  }
+
+  it('two hubs give two different answers for the same account', async () => {
+    answerPerHub()
+    configState.currentHubId = 'hub-A'
+    const { result, rerender } = await signedIn()
+
+    await waitFor(() => expect(result.current.hasPermission('settings:manage')).toBe(true))
+    expect(result.current.isAdmin).toBe(true)
+    expect(result.current.hasPermission('calls:answer')).toBe(false)
+    expect(getMyHubPermissionsMock).toHaveBeenCalledWith('hub-A')
+
+    configState.currentHubId = 'hub-B'
+    rerender()
+    await waitFor(() => expect(result.current.hasPermission('calls:answer')).toBe(true))
+    expect(result.current.isAdmin).toBe(false)
+    expect(result.current.hasPermission('settings:manage')).toBe(false)
+    // notes:read is in the account-wide union but not granted in hub-B.
+    expect(result.current.hasPermission('notes:read')).toBe(false)
+  })
+
+  it('never leaks the account-wide union into a hub', async () => {
+    answerPerHub()
+    configState.currentHubId = 'hub-B'
+    const { result } = await signedIn()
+    await waitFor(() => expect(result.current.hasPermission('calls:answer')).toBe(true))
+
+    expect(result.current.permissions).toEqual(['calls:answer'])
+    expect(result.current.accountPermissions).toEqual(['notes:read', 'notes:write'])
+    // The account-wide gate (relay re-wrap and other all-hubs work) still sees the union.
+    expect(result.current.hasAccountPermission('notes:write')).toBe(true)
+    expect(result.current.hasPermission('notes:write')).toBe(false)
+  })
+
+  it('offers nothing in a hub until that hub has answered', async () => {
+    let answer: ((v: { hubId: string; permissions: string[] }) => void) | undefined
+    getMyHubPermissionsMock.mockImplementation(() => new Promise(res => { answer = res }))
+    configState.currentHubId = 'hub-A'
+    const { result } = await signedIn()
+
+    await waitFor(() => expect(getMyHubPermissionsMock).toHaveBeenCalled())
+    // Fail closed: the union would offer notes:read here before the hub said so.
+    expect(result.current.permissions).toEqual([])
+    expect(result.current.isAdmin).toBe(false)
+
+    await act(async () => { answer?.({ hubId: 'hub-A', permissions: ['notes:read'] }) })
+    await waitFor(() => expect(result.current.permissions).toEqual(['notes:read']))
+  })
+
+  it('treats a 403 as the hub granting nothing, not as "fall back to the union"', async () => {
+    getMyHubPermissionsMock.mockRejectedValue(new MockApiError(403, '{"error":"Access denied"}'))
+    configState.currentHubId = 'hub-A'
+    const { result } = await signedIn()
+
+    await waitFor(() => expect(getMyHubPermissionsMock).toHaveBeenCalled())
+    await act(async () => {})
+    expect(result.current.permissions).toEqual([])
+    expect(result.current.hasAccountPermission('notes:read')).toBe(true)
+  })
+
+  it('applies a hub\'s cached set on switching back, then revalidates', async () => {
+    answerPerHub()
+    configState.currentHubId = 'hub-A'
+    const { result, rerender } = await signedIn()
+    await waitFor(() => expect(result.current.permissions).toEqual(perHub['hub-A']))
+
+    configState.currentHubId = 'hub-B'
+    rerender()
+    await waitFor(() => expect(result.current.permissions).toEqual(perHub['hub-B']))
+
+    // Back to hub-A with its answer held back: the cached set applies at once...
+    let answer: ((v: { hubId: string; permissions: string[] }) => void) | undefined
+    getMyHubPermissionsMock.mockImplementation(() => new Promise(res => { answer = res }))
+    configState.currentHubId = 'hub-A'
+    rerender()
+    expect(result.current.permissions).toEqual(perHub['hub-A'])
+    // ...and a role revoked server-side lands when the revalidation answers.
+    await act(async () => { answer?.({ hubId: 'hub-A', permissions: ['notes:read'] }) })
+    await waitFor(() => expect(result.current.permissions).toEqual(['notes:read']))
+    expect(result.current.isAdmin).toBe(false)
+  })
+
+  it('uses the account-wide set when no hub is active', async () => {
+    const { result } = await signedIn()
+    await waitFor(() => expect(result.current.permissions).toEqual(['notes:read', 'notes:write']))
+    expect(getMyHubPermissionsMock).not.toHaveBeenCalled()
+  })
+
+  it('signOut drops every hub\'s answers', async () => {
+    answerPerHub()
+    configState.currentHubId = 'hub-A'
+    const { result } = await signedIn()
+    await waitFor(() => expect(result.current.isAdmin).toBe(true))
+
+    act(() => { result.current.signOut() })
+    await waitFor(() => expect(result.current.permissions).toEqual([]))
+    expect(result.current.isAdmin).toBe(false)
+    expect(result.current.accountPermissions).toEqual([])
   })
 })

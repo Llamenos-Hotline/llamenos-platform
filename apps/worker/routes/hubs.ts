@@ -7,7 +7,7 @@ import type { AppEnv, Env } from '../types'
 import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
-import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
+import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubResponseSchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubPermissionsResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
 import { assertMayManageHubEscrow } from '../lib/readers'
 import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { okResponseSchema } from '@protocol/schemas/common'
@@ -211,6 +211,35 @@ routes.get('/:hubId',
     const services = c.get('services')
     const { hub } = await services.settings.getHub(hubId)
     return c.json({ hub })
+  },
+)
+
+// The caller's own permissions in this hub (#1101). `/auth/me` is the account-wide
+// union and `/settings/users/:id/effective-permissions` needs a GLOBAL `users:read`,
+// which a member whose roles are all hub-scoped does not hold — so neither can tell
+// such a member what they may do HERE. This answers it with exactly the set
+// `hubContext` authorises the request with; nothing about anyone else.
+routes.get('/:hubId/permissions/me',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'Get the current user\'s permissions in one hub',
+    responses: {
+      200: {
+        description: 'Permissions the caller holds in this hub',
+        content: {
+          'application/json': {
+            schema: resolver(hubPermissionsResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  // hubContext: 404 for an unknown hub, 403 unless the caller holds a role in it.
+  hubContext,
+  async (c) => {
+    return c.json({ hubId: c.get('hubId'), permissions: c.get('hubPermissions') })
   },
 )
 
