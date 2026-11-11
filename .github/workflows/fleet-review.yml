@@ -519,11 +519,22 @@ jobs:
     # land on it, for an arm that needs none of that, buys exposure for
     # nothing.
     #
+    # The SECOND hosted arm (#2648) is `merge_group`. Its only work is the
+    # "Report the queued PR's own review verdict" step: three `gh api` reads
+    # with the job's own `github.token`, then a verdict republished. It never
+    # reaches the engine, never touches the operator's claude login and needs
+    # nothing `llamenos-review-box` has. Leaving it on that one box was a
+    # priority inversion with a multiplier: a group review is a required check
+    # on a group of up to 5 PRs with the whole queue behind it, yet it sat
+    # FIFO behind single-PR reviews (39 minutes queued on 2026-11-10, with 18
+    # entries waiting on it). It gets capacity of its own instead of a
+    # priority the Actions scheduler does not offer.
+    #
     # Decided from the event payload alone, so it resolves before the job
     # starts and can never disagree with the gate's own later decision.
     # Pinned by a rail in tests/orchestrator/guards.test.ts, which also
     # asserts `ubuntu-latest` appears here ONLY under that condition.
-    runs-on: ${{ github.event.action == 'synchronize' && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
+    runs-on: ${{ (github.event.action == 'synchronize' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
     # Read by the label-clearing job below. `outcome` and `clear_labels` are
     # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
     # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
