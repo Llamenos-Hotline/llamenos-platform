@@ -1,0 +1,10 @@
+name = "Check no result test reads a skipped task as a pass"
+run = "python3 deploy/ansible/scripts/check-succeeded-as-pass.py"
+why = """
+Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED task never
+ran, so it never failed, so it is `succeeded`. 27 checks across the smoke,
+preflight, security-update and kamailio paths recorded PASS for a probe that
+took no measurement at all (#1617). Neither --syntax-check nor ansible-lint
+evaluates what a Jinja expression MEANS, and this one is valid Jinja naming a
+real test.
+"""
