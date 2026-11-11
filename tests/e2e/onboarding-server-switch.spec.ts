@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import { type APIRequestContext, type Page } from '@playwright/test'
+import { test, expect } from '../console-guard'
 import { loginAsAdmin, TEST_PIN, Timeouts } from '../helpers'
 import { apiDelete, apiPost, uniqueName } from '../api-helpers'
 import { TestIds } from '../test-ids'
@@ -185,7 +186,12 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     expect(await page.evaluate(() => (window as unknown as TestWindow).__TEST_API_CONFIG.getApiBase())).toBe(origin)
   })
 
-  test('using a different server from the invite-code screen locks the key, drops the session token and clears the hub before reloading', async ({ page, request }) => {
+  test('using a different server from the invite-code screen locks the key, drops the session token and clears the hub before reloading', async ({ page, request, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
+      source: /\/api\/hubs\/[^/]+\/(shifts\/my-status|conversations\?)/,
+      reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
+    })
     const hubId = await useOwnHub(page, request)
     createdHubs.push(hubId)
     await loginAsAdmin(page)
@@ -202,7 +208,12 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     expect(await readStateAtUnload(page)).toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
   })
 
-  test('declining to forget the server leaves the user signed out of it — locked, no token, no hub — and nothing staged or reloaded', async ({ page, request }) => {
+  test('declining to forget the server leaves the user signed out of it — locked, no token, no hub — and nothing staged or reloaded', async ({ page, request, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
+      source: /\/api\/hubs\/[^/]+\/(shifts\/my-status|conversations\?)/,
+      reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
+    })
     const hubId = await useOwnHub(page, request)
     createdHubs.push(hubId)
     await loginAsAdmin(page)
@@ -229,7 +240,12 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     }))).toEqual({ apiBase: origin, staged: null, notReloaded: true })
   })
 
-  test('the first-run screen ends a session left beneath it by a way in that bypassed the server switch', async ({ page, request }) => {
+  test('the first-run screen ends a session left beneath it by a way in that bypassed the server switch', async ({ page, request, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 401 \(Unauthorized\)$/,
+      source: /\/api\/hubs\/[^/]+\/(shifts\/my-status|conversations\?)/,
+      reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
+    })
     const hubId = await useOwnHub(page, request)
     createdHubs.push(hubId)
     await loginAsAdmin(page)
@@ -257,7 +273,17 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       .toEqual({ cryptoUnlocked: false, activeHub: null, sessionToken: null })
   })
 
-  test('an invite code the server could not be reached to check is not reported as invalid', async ({ page }) => {
+  test('an invite code the server could not be reached to check is not reported as invalid', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: net::ERR_CONNECTION_REFUSED$/,
+      source: /\/api\/invites\/validate\//,
+      reason: 'the test refuses the invite check connection',
+    })
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 502 \(Bad Gateway\)$/,
+      source: /\/api\/invites\/validate\//,
+      reason: 'the test injects a 502 from the invite check',
+    })
     // A fresh install (no device key) on a packaged build with a server
     // configured. Configured directly rather than through the first-run form:
     // this test is about what the invite screen makes of a validation failure,

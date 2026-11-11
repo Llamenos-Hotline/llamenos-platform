@@ -21,6 +21,7 @@ import { listEvidence, getEvidenceMetadata } from './evidence'
 import { getCallHistory, getCallsTodayCount, getUserPresence } from './calls'
 import { listShifts, getMyShiftStatus, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
 import { listRingGroups, createRingGroup } from './ring-groups'
+import { getCustomFields } from './call-settings'
 
 let urls: string[]
 
@@ -76,6 +77,16 @@ const hubOwnedWrites: Array<[string, () => Promise<unknown>, string]> = [
   ['sendHeartbeat', () => sendHeartbeat(), '/shifts/heartbeat'],
   ['createRingGroup', () => createRingGroup({ id: 'rg-1', encryptedName: 'n' }), '/ring-groups'],
 ]
+
+describe('deployment vocabulary read by hub members (#1858)', () => {
+  // A hub-only member holds no global role, so the bare `/settings/custom-fields`
+  // is a 403 for them; the server serves the read under the hub mount.
+  it('getCustomFields is read through the active hub, not the bare path', async () => {
+    setActiveHub('hub-1')
+    await getCustomFields()
+    expect(urls).toEqual(['/api/hubs/hub-1/settings/custom-fields'])
+  })
+})
 
 describe('hub-owned resources (#2395)', () => {
   it.each(hubOwnedReads)('%s is scoped to the active hub', async (_name, call, path) => {

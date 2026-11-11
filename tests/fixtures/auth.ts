@@ -21,7 +21,8 @@
  *   test('volunteer sees limited nav', async ({ volunteerPage }) => { ... })
  */
 
-import { type BrowserContext, type Page, test as base } from '@playwright/test'
+import { type BrowserContext, type Page } from '@playwright/test'
+import { test as base, settleConsoleWatch, watchConsole, type ConsoleWatch } from '../console-guard'
 import { enterPin, TEST_PIN, Timeouts, completeProfileSetup } from '../helpers'
 import { TestIds } from '../test-ids'
 
@@ -46,10 +47,13 @@ export type RoleName = keyof typeof STORAGE_PATHS
 async function createAuthenticatedPage(
   browser: import('@playwright/test').Browser,
   role: RoleName
-): Promise<{ context: BrowserContext; page: Page }> {
+): Promise<{ context: BrowserContext; page: Page; watch: ConsoleWatch }> {
   const context = await browser.newContext({
     storageState: STORAGE_PATHS[role],
   })
+  // Watched from the first request: a context made here is not the default
+  // `context` fixture, so the guard in console-guard.ts would not see it.
+  const watch = watchConsole(context)
   const page = await context.newPage()
 
   await page.goto('/', { waitUntil: 'domcontentloaded' })
@@ -88,7 +92,7 @@ async function createAuthenticatedPage(
   // Wait for the sidebar to confirm full auth is complete
   await sidebar.waitFor({ state: 'visible', timeout: Timeouts.AUTH })
 
-  return { context, page }
+  return { context, page, watch }
 }
 
 /**
@@ -108,54 +112,94 @@ export const test = base.extend<{
   reporterContext: BrowserContext
 }>({
   adminPage: async ({ browser }, use) => {
-    const { context, page } = await createAuthenticatedPage(browser, 'admin')
-    await use(page)
-    await context.close()
+    const { context, page, watch } = await createAuthenticatedPage(browser, 'admin')
+    try {
+      await use(page)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   adminContext: async ({ browser }, use) => {
-    const { context } = await createAuthenticatedPage(browser, 'admin')
-    await use(context)
-    await context.close()
+    const { context, watch } = await createAuthenticatedPage(browser, 'admin')
+    try {
+      await use(context)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   hubAdminPage: async ({ browser }, use) => {
-    const { context, page } = await createAuthenticatedPage(browser, 'hub-admin')
-    await use(page)
-    await context.close()
+    const { context, page, watch } = await createAuthenticatedPage(browser, 'hub-admin')
+    try {
+      await use(page)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   hubAdminContext: async ({ browser }, use) => {
-    const { context } = await createAuthenticatedPage(browser, 'hub-admin')
-    await use(context)
-    await context.close()
+    const { context, watch } = await createAuthenticatedPage(browser, 'hub-admin')
+    try {
+      await use(context)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   volunteerPage: async ({ browser }, use) => {
-    const { context, page } = await createAuthenticatedPage(browser, 'volunteer')
-    await use(page)
-    await context.close()
+    const { context, page, watch } = await createAuthenticatedPage(browser, 'volunteer')
+    try {
+      await use(page)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   volunteerContext: async ({ browser }, use) => {
-    const { context } = await createAuthenticatedPage(browser, 'volunteer')
-    await use(context)
-    await context.close()
+    const { context, watch } = await createAuthenticatedPage(browser, 'volunteer')
+    try {
+      await use(context)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   reviewerPage: async ({ browser }, use) => {
-    const { context, page } = await createAuthenticatedPage(browser, 'reviewer')
-    await use(page)
-    await context.close()
+    const { context, page, watch } = await createAuthenticatedPage(browser, 'reviewer')
+    try {
+      await use(page)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   reviewerContext: async ({ browser }, use) => {
-    const { context } = await createAuthenticatedPage(browser, 'reviewer')
-    await use(context)
-    await context.close()
+    const { context, watch } = await createAuthenticatedPage(browser, 'reviewer')
+    try {
+      await use(context)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   reporterPage: async ({ browser }, use) => {
-    const { context, page } = await createAuthenticatedPage(browser, 'reporter')
-    await use(page)
-    await context.close()
+    const { context, page, watch } = await createAuthenticatedPage(browser, 'reporter')
+    try {
+      await use(page)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
   reporterContext: async ({ browser }, use) => {
-    const { context } = await createAuthenticatedPage(browser, 'reporter')
-    await use(context)
-    await context.close()
+    const { context, watch } = await createAuthenticatedPage(browser, 'reporter')
+    try {
+      await use(context)
+      await settleConsoleWatch(watch)
+    } finally {
+      await context.close()
+    }
   },
 })
 
