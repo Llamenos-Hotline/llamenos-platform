@@ -28,7 +28,7 @@ import { execFile } from 'node:child_process'
 import {
   stopSession, killWorktreeProcesses, salvageUncommittedWork, destroyWorktree, labelIssue, settle,
   classifyWorktreeChanges, parsePorcelainPaths, findWedgedWorktrees, resolveWedgeForDispatch,
-  salvageInventory, salvagedFleetBranch,
+  salvageInventory, salvagedFleetBranch, describeRunFailure, SALVAGE_PUSH_TIMEOUT_MS,
 } from '../../orchestrator/src/worktree.js'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
@@ -160,6 +160,81 @@ describe('salvageUncommittedWork', () => {
     expect(result.salvaged).toBe(true)
     const showOutput = execSync(`git show ${result.branch}:uncommitted.txt`, { cwd: f.bareOrigin }).toString()
     expect(showOutput).toBe('rescue me\n')
+  })
+})
+
+// Issue #2667: the salvage push keeps the repo's pre-push hooks (checks are
+// never bypassed), so a hook that fails must (a) keep the worktree, (b) put the
+// hook's own output — printed on stdout, not stderr — into the log, and
+// (c) tell a human instead of stranding the work silently.
+describe('salvage push under a failing pre-push hook (issue #2667)', () => {
+  function failingPrePush(f: Fixture): void {
+    writeFileSync(
+      join(f.mainRepo, '.git', 'hooks', 'pre-push'),
+      '#!/bin/sh\necho "check-codegen-drift: DRIFT DETECTED" \nexit 1\n',
+    )
+    execSync('chmod +x .git/hooks/pre-push', { cwd: f.mainRepo })
+    writeFileSync(join(f.worktree, 'uncommitted.txt'), 'rescue me\n')
+  }
+
+  it('keeps the worktree and logs the hook output, not just git\'s trailing "failed to push"', async () => {
+    const f = makeFixture()
+    failingPrePush(f)
+    const log = vi.fn()
+    await settle({ name: 'fleet-ios-1', itemId: '7', outcome: 'BLOCKED', worktree: f.worktree, branch: f.branch }, log)
+    expect(existsSync(f.worktree)).toBe(true)
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('DRIFT DETECTED'))
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('exit 1'))
+  })
+
+  it('reports the stranded salvage: an issue comment naming the worktree and needs-human', async () => {
+    const f = makeFixture()
+    failingPrePush(f)
+    await settle({ name: 'fleet-ios-1', itemId: '7', outcome: 'BLOCKED', worktree: f.worktree, branch: f.branch }, () => {})
+    const ghCalls = mockExecFile.mock.calls.filter((c) => c[0] === 'gh').map((c) => c[1] as string[])
+    const comment = ghCalls.find((a) => a.includes('comment'))
+    if (comment === undefined) throw new Error('no issue comment was posted for the stranded salvage')
+    const body = comment[comment.indexOf('--body') + 1]
+    expect(body).toContain(f.worktree)
+    expect(body).toContain('DRIFT DETECTED')
+    expect(ghCalls.some((a) => a.includes('--add-label') && a.includes('needs-human'))).toBe(true)
+  })
+
+  it('does not report anything when salvage succeeds', async () => {
+    const f = makeFixture()
+    writeFileSync(join(f.worktree, 'uncommitted.txt'), 'rescue me\n')
+    await settle({ name: 'fleet-ios-1', itemId: '7', outcome: 'BLOCKED', worktree: f.worktree, branch: f.branch }, () => {})
+    expect(mockExecFile.mock.calls.some((c) => c[0] === 'gh')).toBe(false)
+  })
+
+  it('gives the push a budget well above the 30 s default the hooks alone nearly consume', () => {
+    expect(SALVAGE_PUSH_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000)
+  })
+})
+
+describe('describeRunFailure (issue #2667: the reason must survive into the log)', () => {
+  it('keeps BOTH streams — stdout is where lefthook says which hook failed', () => {
+    const msg = describeRunFailure({ code: 1, stdout: 'hook X failed', stderr: 'error: failed to push' }, 30_000)
+    expect(msg).toContain('exit 1')
+    expect(msg).toContain('stderr: error: failed to push')
+    expect(msg).toContain('stdout: hook X failed')
+  })
+
+  it('names a timeout kill and the budget, instead of leaving a half-printed stderr', () => {
+    const msg = describeRunFailure({ killed: true, signal: 'SIGTERM', stderr: 'error: failed' }, 30_000)
+    expect(msg).toContain('SIGTERM')
+    expect(msg).toContain('30000 ms')
+    expect(msg).toContain('error: failed')
+  })
+
+  it('keeps the tail of an oversized stream, where the reason is printed', () => {
+    const msg = describeRunFailure({ code: 1, stderr: `${'x'.repeat(10_000)}THE-REASON` }, 30_000)
+    expect(msg).toContain('THE-REASON')
+    expect(msg.length).toBeLessThan(5_000)
+  })
+
+  it('falls back to the error itself when it carries no output', () => {
+    expect(describeRunFailure(new Error('spawn ENOENT'), 30_000)).toContain('spawn ENOENT')
   })
 })
 
