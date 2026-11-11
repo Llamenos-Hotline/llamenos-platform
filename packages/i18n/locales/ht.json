@@ -2663,7 +2663,7 @@
     "callId": "ID Apèl",
     "callIdBadge": "Call",
     "callIdPlaceholder": "ID apèl oswa referans",
-    "callIdRequired": "Enter the call ID or reference this note belongs to.",
+    "callIdRequired": "Antre ID apèl oswa referans ki gen rapò ak nòt sa a.",
     "callWith": "Apèl avèk {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

@@ -799,7 +799,7 @@
     "callId": "شناسه تماس",
     "callIdBadge": "تماس",
     "callIdPlaceholder": "شناسه یا مرجع تماس",
-    "callIdRequired": "Enter the call ID or reference this note belongs to.",
+    "callIdRequired": "شناسه یا مرجع تماسی را که این یادداشت به آن تعلق دارد وارد کنید.",
     "callWith": "تماس با {{number}}",
     "chatIdBadge": "گفتگو",
     "conversationBadge": "گفتگو",
