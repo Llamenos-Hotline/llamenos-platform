@@ -942,16 +942,19 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
   // `runs-on` would move the reviewer — and the operator's logged-in claude
   // session — onto a GitHub runner, which is what the original rail existed
   // to prevent, and that is what the second assertion here still catches.
-  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on the republish-only push arm', () => {
+  it('runs on the self-hosted fleet-review runner for every engine-capable event, and hosted ONLY on the republish-only push arm and the report-only merge_group arm (#2648)', () => {
     const block = fleetReviewJobText()
     const runsOn = block.match(/\n {4}runs-on:.*/)?.[0] ?? ''
     expect(runsOn.length, 'runs-on: not found in the fleet-review job').toBeGreaterThan(0)
     expect(runsOn, 'the self-hosted fleet-review labels must still be the default arm')
       .toMatch(/fromJSON\('\["self-hosted","fleet-review"\]'\)/)
     // `ubuntu-latest` may appear here, but ONLY as the value guarded by the
-    // synchronize condition — never as the fallback, and never alone.
-    expect(runsOn, 'a hosted runner is only ever the synchronize arm')
-      .toMatch(/github\.event\.action == 'synchronize' && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
+    // synchronize / merge_group conditions — never as the fallback, and never
+    // alone. `merge_group` is hosted because its sole step republishes the
+    // queued PR's verdict through `gh` and cannot reach the engine (#2648);
+    // `pull_request: review_requested` and `workflow_dispatch` must not match.
+    expect(runsOn, 'a hosted runner is only ever the synchronize or merge_group arm')
+      .toMatch(/\(github\.event\.action == 'synchronize' \|\| github\.event_name == 'merge_group'\) && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
     expect(block, 'runs-on must never be an unconditional GitHub-hosted runner')
       .not.toMatch(/\n {4}runs-on:\s*ubuntu-latest\s*$/m)
   })
