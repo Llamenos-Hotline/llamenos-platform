@@ -82,6 +82,24 @@ describe('tick: live dispatch pipeline (task 7)', () => {
     expect(order).toEqual(['verify', 'review', 'auto-merge'])
   })
 
+  // #2732. `dispatch` (realDispatch in production) arms nothing — a PR is born
+  // unarmed. The tick is the one place that arms it, once, after both gates.
+  it('arms a PR that was born unarmed exactly once, after dispatch returned, and never during it (#2732)', async () => {
+    let armedWhenDispatchReturned: number | undefined
+    const enableAutoMerge = vi.fn(async () => {})
+    const d = baseDeps({
+      enableAutoMerge,
+      dispatch: vi.fn(async (): Promise<DispatchOutcome> => {
+        armedWhenDispatchReturned = enableAutoMerge.mock.calls.length
+        return { outcome: 'SUCCESS', branch: 'fleet/ios/1', pr: '42', worktree: '/wt/ios-1' }
+      }),
+    })
+    await tick(d)
+    expect(armedWhenDispatchReturned).toBe(0)
+    expect(enableAutoMerge).toHaveBeenCalledTimes(1)
+    expect(enableAutoMerge).toHaveBeenCalledWith('42')
+  })
+
   it.each([
     ['a mechanical failure', { verifyMechanical: () => ({ ...passingVerify, passed: false, reasons: ['nope'] }) }],
     ['a failing review', { secondOpinion: () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL' }) }],

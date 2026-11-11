@@ -1,116 +1,68 @@
-import { describe, it, expect, vi } from 'vitest'
-import {
-  shouldStandardAutoMerge,
-  isFleetOwnedBranch,
-  armStandardAutoMergeAtOpen,
-  EXCLUDE_RELEASE_PR_FROM_STANDARD_AUTO_MERGE,
-} from '../../orchestrator/src/automerge.js'
+import { describe, it, expect } from 'vitest'
+import { join } from 'node:path'
+import { isFleetOwnedBranch } from '../../orchestrator/src/automerge.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
+import { orchestratorSources } from './forgery-rails.js'
 
-describe('EXCLUDE_RELEASE_PR_FROM_STANDARD_AUTO_MERGE — the switch itself', () => {
-  it('defaults to OFF: release PRs auto-merge today', () => {
-    expect(EXCLUDE_RELEASE_PR_FROM_STANDARD_AUTO_MERGE).toBe(false)
-  })
-})
-
-describe('isFleetOwnedBranch — scope fence, independent of the release switch', () => {
-  it('recognizes a fleet-dispatched branch', () => {
+describe('isFleetOwnedBranch — scope fence for fleet-initiated writes at PR open', () => {
+  it('admits a fleet-dispatched branch', () => {
     expect(isFleetOwnedBranch('fleet/backend/123')).toBe(true)
   })
-
-  it('recognizes the knope release branch', () => {
+  it('admits the knope release branch', () => {
     expect(isFleetOwnedBranch(KNOPE_RELEASE_BRANCH)).toBe(true)
   })
-
-  it('refuses a human or ad hoc branch this module has no business touching', () => {
+  it('refuses a human or ad hoc worker branch', () => {
     expect(isFleetOwnedBranch('my-personal-feature')).toBe(false)
     expect(isFleetOwnedBranch('ll-auto-merge-standard')).toBe(false)
   })
 })
 
-describe('shouldStandardAutoMerge — the rail (switch tested in BOTH positions)', () => {
-  it('switch OFF (today\'s default): the release PR gets standard auto-merge', () => {
-    expect(shouldStandardAutoMerge(KNOPE_RELEASE_BRANCH, false)).toBe(true)
+/**
+ * #2732. Arming at PR open was removed: it armed every fleet PR the instant it
+ * opened — before any verdict, and with no notion of merge-queue depth — while
+ * the two paths that remain (tick.ts after verify+review; queue-feed, bounded by
+ * depth) already reach every PR it did. These rails fail if it comes back, in
+ * any shape: the old function, or any arm reached from the dispatch step.
+ */
+describe('RAIL: nothing arms auto-merge at PR open (#2732)', () => {
+  const sources = orchestratorSources()
+  const cli = sources.find((s) => s.file.endsWith(join('orchestrator', 'src', 'cli.ts')))
+
+  /** The text of one top-level `async function <name>(` in cli.ts, up to its closing brace. */
+  function functionBody(text: string, name: string): string {
+    const start = text.indexOf(`async function ${name}(`)
+    expect(start, `async function ${name} not found in cli.ts`).toBeGreaterThan(-1)
+    const end = text.indexOf('\n}\n', start)
+    expect(end, `end of ${name} not found`).toBeGreaterThan(start)
+    return text.slice(start, end)
+  }
+
+  it('realDispatch — the step that discovers the PR — makes no arming call', () => {
+    expect(cli, 'cli.ts not found among orchestrator sources').toBeDefined()
+    const body = functionBody(cli!.text, 'realDispatch')
+    expect(body).not.toMatch(/AutoMerge/)
+    expect(body).not.toContain('--auto')
+    // The live PR-open writes it DOES make are still there: guards against the
+    // slice above silently being the wrong function.
+    expect(body).toContain('requestReviewAtOpen(')
+    expect(body).toContain('ensureIssueLinkWith(')
   })
 
-  it('switch OFF: an ordinary fleet branch also gets standard auto-merge', () => {
-    expect(shouldStandardAutoMerge('fleet/desktop/742', false)).toBe(true)
+  it('no orchestrator module defines or exports an at-open arming function', () => {
+    for (const { file, text } of sources) {
+      expect(text, `${file} names an at-open arming function`).not.toMatch(/AutoMergeAtOpen|armStandardAutoMerge|shouldStandardAutoMerge/)
+    }
   })
 
-  it('switch ON: the release PR does NOT get standard auto-merge', () => {
-    expect(shouldStandardAutoMerge(KNOPE_RELEASE_BRANCH, true)).toBe(false)
-  })
-
-  it('switch ON: an ordinary fleet branch still gets standard auto-merge', () => {
-    expect(shouldStandardAutoMerge('fleet/desktop/742', true)).toBe(true)
-  })
-
-  it('a branch outside fleet ownership never gets it, regardless of the switch', () => {
-    expect(shouldStandardAutoMerge('some-humans-branch', false)).toBe(false)
-    expect(shouldStandardAutoMerge('some-humans-branch', true)).toBe(false)
-  })
-
-  it('MUTATION GUARD: a switch that ignores its input fails at least one of the two positions above', () => {
-    // A mutant that hardcodes the exclusion check to `false` (i.e. always
-    // treats the switch as OFF) still passes every "switch OFF" test above,
-    // but must fail this one: with the switch forced ON, the release PR
-    // must be excluded.
-    const brokenAlwaysOff = (headRefName: string): boolean => shouldStandardAutoMerge(headRefName, false)
-    expect(brokenAlwaysOff(KNOPE_RELEASE_BRANCH)).toBe(true) // matches switch-OFF behavior
-    // The real function, called with the switch actually ON, must differ
-    // from the always-OFF mutant's behavior on the one input that matters:
-    expect(shouldStandardAutoMerge(KNOPE_RELEASE_BRANCH, true)).not.toBe(brokenAlwaysOff(KNOPE_RELEASE_BRANCH))
-
-    // Symmetric check: a mutant that hardcodes the switch to always-ON
-    // still passes every "switch ON" test above, but must fail this one:
-    // with the switch actually OFF, the release PR must be included.
-    const brokenAlwaysOn = (headRefName: string): boolean => shouldStandardAutoMerge(headRefName, true)
-    expect(brokenAlwaysOn(KNOPE_RELEASE_BRANCH)).toBe(false) // matches switch-ON behavior
-    expect(shouldStandardAutoMerge(KNOPE_RELEASE_BRANCH, false)).not.toBe(brokenAlwaysOn(KNOPE_RELEASE_BRANCH))
-  })
-})
-
-describe('armStandardAutoMergeAtOpen — the one production call site', () => {
-  it('requests auto-merge for a fresh fleet PR', async () => {
-    const enableAutoMerge = vi.fn(async () => {})
-    const log = vi.fn()
-    await armStandardAutoMergeAtOpen(
-      { pr: '123', headRefName: 'fleet/backend/45', branchMismatch: undefined },
-      { enableAutoMerge, log },
-    )
-    expect(enableAutoMerge).toHaveBeenCalledWith('123')
-    expect(log.mock.calls.some(([msg]) => /requested standard auto-merge/.test(msg))).toBe(true)
-  })
-
-  it('does nothing when there is no PR yet', async () => {
-    const enableAutoMerge = vi.fn(async () => {})
-    const log = vi.fn()
-    await armStandardAutoMergeAtOpen(
-      { pr: undefined, headRefName: 'fleet/backend/45', branchMismatch: undefined },
-      { enableAutoMerge, log },
-    )
-    expect(enableAutoMerge).not.toHaveBeenCalled()
-  })
-
-  it('never requests auto-merge on a branch-mismatched PR', async () => {
-    const enableAutoMerge = vi.fn(async () => {})
-    const log = vi.fn()
-    await armStandardAutoMergeAtOpen(
-      { pr: '123', headRefName: 'fleet/backend/45', branchMismatch: 'some-other-branch' },
-      { enableAutoMerge, log },
-    )
-    expect(enableAutoMerge).not.toHaveBeenCalled()
-  })
-
-  it('is best-effort: a throwing enableAutoMerge is caught and logged, never rethrown', async () => {
-    const enableAutoMerge = vi.fn(async () => { throw new Error('gh unreachable') })
-    const log = vi.fn()
-    await expect(
-      armStandardAutoMergeAtOpen(
-        { pr: '123', headRefName: 'fleet/backend/45', branchMismatch: undefined },
-        { enableAutoMerge, log },
-      ),
-    ).resolves.toBeUndefined()
-    expect(log.mock.calls.some(([msg]) => /could not request standard auto-merge/.test(msg))).toBe(true)
+  it('the arming function is handed to exactly the two bounded owners: the tick and queue-feed', () => {
+    expect(cli).toBeDefined()
+    // Every reference to `enableAutoMerge` in cli.ts that is not its definition.
+    const wired = [...cli!.text.matchAll(/^.*\benableAutoMerge\b.*$/gm)]
+      .map((m) => m[0].trim())
+      .filter((line) => !line.includes('async function enableAutoMerge') && !/^(\/\/|\*|\/\*)/.test(line))
+    expect(wired).toEqual([
+      'enableAutoMerge,',                                                      // tickDeps
+      'const result = await runQueueFeedWith(defaultQueueFeedDeps(REPO_ROOT, enableAutoMerge, log))',
+    ])
   })
 })

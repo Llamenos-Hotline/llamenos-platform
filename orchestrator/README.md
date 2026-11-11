@@ -740,8 +740,8 @@ signalled`) admits a queue entry for a fleet-dispatched PR — branch grammar
 one of two ways:
 
 1. **Auto-merge is armed on the PR** (`enableAutoMerge` in cli.ts —
-   requested at PR open and re-armed after the fleet's own verify+review
-   pass). GitHub then enqueues it itself once every required check is
+   requested by the tick after the fleet's own verify+review
+   pass, or by `queue-feed` once queue depth allows — never at PR open, #2732). GitHub then enqueues it itself once every required check is
    green; the PR's `auto_merge` is non-null.
 2. **The PR carries the `queue-cleared` label**, applied by
    `review-and-merge` immediately before its explicit merge (and removed

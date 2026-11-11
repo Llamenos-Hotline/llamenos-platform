@@ -75,7 +75,6 @@ import {
 } from './digest-issue.js'
 import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
-import { armStandardAutoMergeAtOpen } from './automerge.js'
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
 import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 
@@ -686,15 +685,9 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
     }
   }
 
-  // Standard auto-merge, requested in the same step the PR is discovered —
-  // see automerge.ts's module comment for why this is safe and why it is
-  // separate from tick.ts's own arm site (which re-requests it after this
-  // fleet's own verification and review pass, since a later push to the
-  // branch invalidates the per-SHA required checks GitHub already had).
-  await armStandardAutoMergeAtOpen(
-    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
-    { enableAutoMerge, log },
-  )
+  // Auto-merge is deliberately NOT requested here (#2732). A PR is armed
+  // later, by tick.ts after its verify and review pass or by queue-feed once
+  // queue depth allows — see automerge.ts for why arming at open was removed.
 
   // The review the `fleet/review` gate waits on, requested in the same step
   // the PR is discovered — #1760: before this, nothing in the PR-open path

@@ -510,6 +510,33 @@ describe('runQueueFeedWith — the pass', () => {
     expect(result.branches[0]?.armed).toEqual([])
   })
 
+  /**
+   * #2732. Nothing arms a fleet PR at open any more, so a PR is born with
+   * `autoMergeRequest: null`. The safety property is that it is not stranded:
+   * this feed holds it back while the queue is deep (the bound arm-at-open
+   * lacked) and arms it on the first pass that finds room.
+   */
+  it('a fleet PR born unarmed waits while the queue is deep, then is armed once there is room (#2732)', async () => {
+    const armed: string[] = []
+    let queue = [1, 2, 3, 4, 5]
+    const deps = mkDeps({
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
+      listQueueEntries: async () => ({ queue: true, prs: queue }),
+      readPr: async () => mkPr({ headRefName: 'fleet/backend/100', autoMergeRequest: null }),
+      readPrFiles: async (n) => [`apps/worker/routes/file-${n}.ts`],
+      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+      enableAutoMerge: async (p) => { armed.push(p) },
+    })
+
+    expect((await runQueueFeedWith(deps)).branches[0]?.outcome).toBe('satisfied')
+    expect(armed, 'armed while the queue was at depth — the unbounded behaviour').toEqual([])
+
+    queue = [1, 2]
+    const second = await runQueueFeedWith(deps)
+    expect(armed).toEqual(['100'])
+    expect(second.branches[0]?.armed).toEqual([100])
+  })
+
   it('a failed per-PR read is a skip with the reason named, not a stale-list substitute', async () => {
     const deps = mkDeps({
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],

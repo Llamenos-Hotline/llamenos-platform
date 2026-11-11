@@ -46,8 +46,7 @@ import { isFleetOwnedBranch } from './automerge.js'
  *    `llamenos-auto`.
  *
  * Scope: fleet-owned branches only (`isFleetOwnedBranch` — this fleet's
- * dispatched branches and the knope release branch), same fence
- * `armStandardAutoMergeAtOpen` already applies to its own at-open write.
+ * dispatched branches and the knope release branch).
  * Best-effort by design: a PR born without a requested review is exactly
  * the dead state `board`'s REQUEST_REVIEW row names, and a dispatch that
  * throws because GitHub was briefly unreachable is strictly worse. Nothing
@@ -198,7 +197,7 @@ export function reviewRequestCandidates(prAuthor: string | undefined, branch: st
 /**
  * The one entry point — called from `realDispatch` (cli.ts) the moment a
  * dispatched item's PR is known to exist on the branch it was dispatched
- * for, beside `ensureIssueLinkWith` and `armStandardAutoMergeAtOpen`.
+ * for, beside `ensureIssueLinkWith`.
  * Never throws: every dep call is wrapped, and the worst outcome is a
  * `failed` log line plus the dead state `board` already names.
  */
