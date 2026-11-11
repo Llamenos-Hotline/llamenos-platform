@@ -6,6 +6,31 @@ export const LARGE_DIFF_FILES = 40
 export const LARGE_DIFF_LINES = 1500
 
 /**
+ * Generated, checked-in artifacts whose size is a function of how big the
+ * SCHEMA is, not of what the change does (#2641). Drizzle writes a full
+ * snapshot of the entire schema on every `db:generate`, so a one-column
+ * migration carries ~10k added lines; counting them made every migration PR
+ * `impact=high` against `LARGE_DIFF_LINES`, a gate no migration could satisfy
+ * — and raising the threshold would not help, because the snapshot grows with
+ * the schema.
+ *
+ * These lines are not reviewable line-by-line, and they are guarded
+ * independently: `migration-drift` in CI proves the snapshot matches the
+ * schema. They are therefore left out of the REVIEWABLE-lines count only.
+ * They still appear in `changedFiles`, so every path-based class (high-impact
+ * paths, secrets, trust anchors, scope) still sees them.
+ *
+ * Deliberately narrow: exactly the Drizzle snapshot directory, anchored at the
+ * repo root. A new generated class is added here on purpose, never by a
+ * looser pattern.
+ */
+const GENERATED_ARTIFACT_PATH = /^drizzle\/migrations\/meta\/[^/]+_snapshot\.json$/
+
+export function isGeneratedArtifactPath(path: string): boolean {
+  return GENERATED_ARTIFACT_PATH.test(path)
+}
+
+/**
  * The paths where a quiet mistake is expensive in a way CI does not catch.
  * Crypto and protocol: a quiet error becomes an identity disclosure, which
  * is the whole threat model. Auth and sigchain: state a revert does not

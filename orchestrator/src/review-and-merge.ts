@@ -15,7 +15,7 @@ import {
   buildProfileReviewPrompt, resolveReviewerLabel, AGENT_REGISTRY_DIR,
   type ReviewerProfile, type ReviewerResolution,
 } from './specialist.js'
-import { classifyImpact } from './impact.js'
+import { classifyImpact, isGeneratedArtifactPath } from './impact.js'
 import type { VerifyReport } from './verify.js'
 import {
   buildReviewPrompt, exportReviewSnapshot, invokeVerifierEngine, reviewPrimaryEngine, toSecondOpinion,
@@ -239,7 +239,7 @@ async function readPrSnapshotFacts(pr: string): Promise<PrSnapshotFacts | undefi
     headSha: view.headRefOid,
     baseSha: view.baseRefOid,
     changedFiles: view.files.map((f) => f.path),
-    addedLines: view.files.reduce((n, f) => n + f.additions, 0),
+    addedLines: view.files.reduce((n, f) => (isGeneratedArtifactPath(f.path) ? n : n + f.additions), 0),
     authorLogin: view.author.login,
     authorIsBot: view.author.is_bot === true,
     headBranch: view.headRefName,
