@@ -1,3 +1,5 @@
+import { lstat, symlink } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { RunRecord } from './ledger.js'
 
 /**
@@ -104,4 +106,30 @@ export function buildVerificationFailedComment(input: {
 /** Posted when a re-verification of a moved head passes. */
 export function buildReentryPassedComment(sha: string, review: string): string {
   return `**Fleet: re-verified \`${short(sha)}\` after the head moved — mechanical verification now passes.** ${review}`
+}
+
+/**
+ * Makes the trusted dependency install available to an extracted head export —
+ * the step `fleet-verify.yml` performs on its own export ("Make base
+ * dependencies available to the head export") before `runVerifyCi` runs, and
+ * which `verifyOpenPrHead` must repeat, because `git archive` leaves out the
+ * gitignored `node_modules` and `prepareTestRoot` refuses any test root whose
+ * `node_modules` is not, by realpath, the trusted install. Without it every
+ * routed suite of every re-verification fails as an "untrusted test root",
+ * which reads as a red verdict on the PR's code.
+ *
+ * Refuses an export that already has a `node_modules` of any kind (directory,
+ * file or symlink): the commit under judgement may not supply the runner that
+ * judges it. `symlink` itself fails with EEXIST on an existing entry rather
+ * than nesting the link inside a directory, so the check and the link cannot
+ * disagree.
+ */
+export async function linkTrustedModules(headDir: string, trustedModules: string): Promise<void> {
+  const target = join(headDir, 'node_modules')
+  if (await lstat(target).then(() => true, () => false)) {
+    throw new Error(
+      'the commit under judgement contains node_modules — refusing to judge it with a runner it could supply',
+    )
+  }
+  await symlink(trustedModules, target)
 }

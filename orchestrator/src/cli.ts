@@ -55,6 +55,7 @@ import {
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
 import { tick, type TickDeps, type TickResult, type SettleInput, type DispatchOutcome } from './tick.js'
+import { linkTrustedModules } from './reverify.js'
 import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
@@ -858,7 +859,7 @@ function scrubbedTestEnv(tmp: string): NodeJS.ProcessEnv {
  * crashed at module load as a failing suite. Returns the report the gate's
  * last `verifyMechanical` call produced.
  */
-async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha: string; branch: string }): Promise<VerifyReport> {
+export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha: string; branch: string }): Promise<VerifyReport> {
   const n = input.pr.replace(/^.*\//, '')
   const git = async (...args: string[]): Promise<string> =>
     (await execFileAsync('git', ['-C', REPO_ROOT, ...args], { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 })).stdout.trim()
@@ -874,6 +875,9 @@ async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha: string
   try {
     await git('archive', '--format=tar', `--output=${join(tmp, 'head.tar')}`, input.headSha)
     await execFileAsync('tar', ['-xf', join(tmp, 'head.tar'), '-C', headDir], { timeout: 300_000 })
+    // What `fleet-verify.yml` does to its export before the gate runs: without
+    // the link the gate refuses the export as an untrusted test root.
+    await linkTrustedModules(headDir, join(REPO_ROOT, 'node_modules'))
     const ctx: CiContext = {
       branch: input.branch, repoDir: REPO_ROOT, headDir,
       baseSha, headSha: input.headSha, pr: n,

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { assessOpenPr, latestMechanicalRejection, MAX_CRASH_RETRIES_PER_HEAD } from '../../orchestrator/src/reverify.js'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  assessOpenPr, latestMechanicalRejection, linkTrustedModules, MAX_CRASH_RETRIES_PER_HEAD,
+} from '../../orchestrator/src/reverify.js'
 import { tick, type TickDeps } from '../../orchestrator/src/tick.js'
 import { buildGateTrace } from '../../orchestrator/src/trace.js'
 import { judgeTargetRun } from '../../orchestrator/src/verify.js'
@@ -184,5 +189,37 @@ describe('the original failure is visible on the PR itself (#2738)', () => {
     }))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringMatching(/no review was requested[\s\S]*runner-exit/))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringContaining('crashed before producing a result'))
+  })
+})
+
+describe('the head export gets the trusted install, and only the trusted install (#2738)', () => {
+  const scratch = (): { root: string; trusted: string; head: string } => {
+    const root = mkdtempSync(join(tmpdir(), 'reverify-link-'))
+    const trusted = join(root, 'trusted', 'node_modules')
+    const head = join(root, 'head')
+    mkdirSync(trusted, { recursive: true })
+    mkdirSync(head)
+    return { root, trusted, head }
+  }
+
+  it('links node_modules so it resolves, by realpath, to the trusted install — what prepareTestRoot demands', async () => {
+    const { root, trusted, head } = scratch()
+    try {
+      await linkTrustedModules(head, trusted)
+      expect(realpathSync(join(head, 'node_modules'))).toBe(realpathSync(trusted))
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it.each([
+    ['a committed directory', (h: string) => mkdirSync(join(h, 'node_modules'))],
+    ['a committed file', (h: string) => writeFileSync(join(h, 'node_modules'), 'x')],
+    ['a committed symlink elsewhere', (h: string) => symlinkSync('/tmp', join(h, 'node_modules'))],
+    ['a committed DANGLING symlink', (h: string) => symlinkSync('/nonexistent-reverify-target', join(h, 'node_modules'))],
+  ])('refuses an export that supplies its own node_modules: %s', async (_name, plant) => {
+    const { root, trusted, head } = scratch()
+    try {
+      plant(head)
+      await expect(linkTrustedModules(head, trusted)).rejects.toThrow(/contains node_modules/)
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })
