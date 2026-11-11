@@ -101,6 +101,7 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing`, `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
+| `llamenos-fleet scope-grant <pr>` | Applies the `scope:<lane>` label(s) a fleet PR's diff needs, posts a marked PR comment saying so, and re-fires the review request (#2643). The same step `tick` runs when it discovers a dispatched PR; by hand it covers a PR opened before that existed or one a worker pushed more files to. Refuses — applying nothing — when the diff holds a `GRANT_EXCLUDED_PATHS` path, a secret, or a path no lane owns. Exits 0 on `granted`/`not-needed`. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
 | `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Bounds only the ADDITION of never-admitted PRs by queue depth — an ejected or dequeued PR (last merge-queue timeline event a removal) is re-armed at any depth (#2619), and a fleet-dispatched one is given the `queue-cleared` label first, because the queue guard reads it inside the group. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
@@ -680,6 +681,40 @@ What a grant cannot do:
   `owned`/`notOwned` pair and its own longest-match rules. Flattening them
   would let one lane's grant cancel another's exclusion and make a path
   writable that neither lane can write by itself.
+
+### Applied at PR open, not by hand (#2643)
+
+The label used to be an operator's job. Four of seven overnight PRs (#2633,
+#2634, #2637, #2638) each fixed one problem across a lane boundary and each
+stopped at `NO-VERDICT:scope` with `review=not-run` — no reviewer ran at all —
+until an operator applied the labels, then DELETEd and POSTed the requested
+reviewer (`fleet-verify.yml` listens for `review_requested`, not `labeled`,
+and a rerun repeats the stale label lookup).
+
+`realDispatch` now does that step itself, in `src/scope-grant.ts`
+(`grantScopeAtOpen`), the moment it discovers a dispatched PR and **before**
+the at-open review request:
+
+1. `planScopeGrants` reads the PR's files and, for every file the PR's own
+   lane does not own, picks a real lane that does (smallest label set,
+   alphabetical on a tie).
+2. If any file is grant-excluded, a secret, or owned by no lane, **nothing is
+   granted** — a partial grant on a PR that cannot pass would only make the
+   label list read like an authorisation nobody gave. The refusal is logged
+   and the gate's `scope advice:` lines carry the remedy as before.
+3. Otherwise it adds the missing `scope:<lane>` labels, posts a comment
+   beginning `<!-- fleet:scope-grant -->` listing each label and the files
+   that needed it, and re-fires the review (`refireReviewRequest`: DELETE a
+   pending trigger reviewer, POST it back, confirm by `review_requested` event
+   count). The first gate run therefore already sees the grant.
+
+Visibility: a fleet-applied grant is the labels **plus** that marked comment;
+a grant an operator applied by hand has no such comment. The boundary is
+unchanged and still enforced where it always was — the gate re-judges every
+file against the labels (`checkScopeAcross`), `GRANT_EXCLUDED_PATHS` still
+refuses CI/deploy/supply-chain paths to any grant, and removing the label
+returns the PR to its own lane alone. This module can only apply a label the
+gate would honour from an operator.
 
 ### Known gap this does not close
 

@@ -336,6 +336,75 @@ export async function requestReviewAtOpen(
 }
 
 /**
+ * Re-fire the review gate on a PR that ALREADY has (or lacks) a pending
+ * trigger reviewer — used after a `scope:<lane>` grant is applied (#2643).
+ *
+ * `fleet-verify.yml` listens for `review_requested`, never `labeled`, and a
+ * rerun repeats the stale label lookup, so a grant applied after the first
+ * run only counts once the review is requested AGAIN. That is
+ * `requestReviewAtOpen` minus its rule 2 (a pending reviewer is success):
+ * here the pending request is precisely the one that ran without the labels,
+ * so a pending trigger reviewer is DELETEd first and POSTed back. The
+ * confirmation is still the event count (rule 1). A CODEOWNER stand-in whose
+ * request GitHub re-adds instantly cannot be cycled — that comes back
+ * `failed` and is logged, never silently reported as refired.
+ */
+export async function refireReviewRequest(
+  input: { pr: string; headRefName: string },
+  deps: ReviewRequestAtOpenDeps,
+): Promise<ReviewRequestOutcome> {
+  const pr = prApiNumber(input.pr)
+  if (pr === undefined) {
+    const reason = `PR ${input.pr} is neither a number nor a ${REPO} pull URL — cannot build the api path, not guessing`
+    deps.log(`review-request: refire pr ${input.pr} FAILED — ${reason}`)
+    return { kind: 'failed', reason }
+  }
+  const facts = await readPrSafe(pr, deps)
+  if (facts === undefined) {
+    const reason = `could not read PR ${pr}'s author/requested reviewers — not guessing whom to ask`
+    deps.log(`review-request: refire pr ${pr} FAILED — ${reason}`)
+    return { kind: 'failed', reason }
+  }
+  for (const candidate of reviewRequestCandidates(facts.author, input.headRefName)) {
+    const before = await countSafe(pr, deps)
+    if (before === undefined) {
+      const reason = 'the review_requested event count could not be read, so whether the request fired is unknown'
+      deps.log(`review-request: refire pr ${pr} ${candidate}: ${reason}`)
+      return { kind: 'unverified', reviewer: candidate, reason }
+    }
+    if (hasLogin(facts.requestedReviewers, candidate)) {
+      try { await deps.deleteRequestedReviewer(pr, candidate) } catch (e) {
+        deps.log(`review-request: refire pr ${pr} DELETE ${candidate} failed (${describeGhFailure(e)}) — continuing to the POST`)
+      }
+    }
+    try {
+      await deps.postRequestedReviewer(pr, candidate)
+    } catch (e) {
+      if (isAuthorCollision(e)) {
+        deps.log(`review-request: refire pr ${pr} GitHub refused ${candidate} — it authored the PR; trying the next candidate`)
+        continue
+      }
+      const reason = `POST requested_reviewers for ${candidate} failed: ${describeGhFailure(e)}`
+      deps.log(`review-request: refire pr ${pr} FAILED — ${reason}`)
+      return { kind: 'failed', reason }
+    }
+    const after = await countSafe(pr, deps)
+    if (after !== undefined && after > before) {
+      deps.log(`review-request: refire pr ${pr} re-requested a review from ${candidate} (events ${before} -> ${after})`)
+      return { kind: 'requested', reviewer: candidate, reRequested: true }
+    }
+    const reason =
+      `the re-request for ${candidate} did not fire (events ${before} -> ${after ?? 'unreadable'}) — ` +
+      'a CODEOWNER whose request GitHub re-adds instantly cannot be cycled (#1471); the review must be re-requested by hand'
+    deps.log(`review-request: refire pr ${pr} FAILED — ${reason}`)
+    return { kind: 'failed', reason }
+  }
+  const reason = 'no trigger login could be asked — every candidate collided with the PR\'s author'
+  deps.log(`review-request: refire pr ${pr} FAILED — ${reason}`)
+  return { kind: 'failed', reason }
+}
+
+/**
  * The live deps, wired the way every other orchestrator module wires them:
  * `gh` by argv (never a shell), the repo pinned by `REPO`, reads returning
  * `undefined` on failure and writes throwing.
