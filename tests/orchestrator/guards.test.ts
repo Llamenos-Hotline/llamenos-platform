@@ -5235,7 +5235,7 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
  * #2446: ci-status separates "a job said no" from "a job never said anything".
  * Both stay red; only the first is a verdict about the PR.
  */
-describe('rail: ci-status reports a cancelled job as infrastructure, never as a failure and never as green (#2446)', () => {
+describe('rail: ci-status reports a job with no verdict as infrastructure, never as a failure and never as green (#2446, #2666)', () => {
   function ciStatus(results: Record<string, string>) {
     const lines = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8').split('\n')
     const job = lines.findIndex((l) => l === '  ci-status:')
@@ -5277,11 +5277,37 @@ describe('rail: ci-status reports a cancelled job as infrastructure, never as a 
   it('a cancelled job keeps ci-status RED but says it is infrastructure, names the lost shard, and writes the run summary', () => {
     const r = ciStatus({ 'android-e2e': 'cancelled' })
     expect(r.status, 'a job that never reported must not read as passing').toBe(1)
-    expect(r.out).toContain('INFRASTRUCTURE (cancelled - not failed)')
-    expect(r.out).toContain('android-e2e CANCELLED')
+    expect(r.out).toContain('INFRASTRUCTURE (no verdict - not failed)')
+    expect(r.out).toContain('android-e2e(cancelled) produced NO VERDICT')
     expect(r.out).toContain('android-e2e (2): runner=GitHub Actions 7')
     expect(r.out).not.toContain('Failed jobs:')
-    expect(r.summary).toContain('cancelled, not failed')
+    expect(r.summary).toContain('no verdict, not failed')
+  })
+
+  // #2666: `failure` is the ONLY verdict against the PR. Every other result is an
+  // absence of one — blaming the PR for it ejects a merge entry over a fault in the
+  // environment. The unrecognised value is the point: an allow-list of "known
+  // infrastructure results" is what this replaced, and it misfiled `abandoned`.
+  it.each(['abandoned', 'timed_out', 'neutral', 'stale', 'some-result-github-adds-next-year', ''])(
+    'a job result of %j keeps ci-status RED, is NOT reported as a failure, and says re-queue unchanged',
+    (result) => {
+      const r = ciStatus({ 'ios-compile-check': result })
+      expect(r.status, 'an unrecognised result must never read as passing').toBe(1)
+      expect(r.out, 'an unrecognised result must not be scored as a genuine failure').not.toContain('Failed jobs:')
+      expect(r.out).toContain('INFRASTRUCTURE (no verdict - not failed)')
+      expect(r.out).toContain(`ios-compile-check(${result || 'no result'}) produced NO VERDICT`)
+      expect(r.out).toContain('re-queue unchanged')
+      expect(r.summary).toContain('no verdict, not failed')
+      expect(r.summary).not.toContain('genuine failures')
+    },
+  )
+
+  it('abandoned AND failed: the failure is still reported as genuine and the abandoned job is not', () => {
+    const r = ciStatus({ 'ios-compile-check': 'abandoned', lint: 'failure' })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain('Failed jobs: lint(failure)')
+    expect(r.out).not.toMatch(/Failed jobs:.*ios-compile-check/)
+    expect(r.summary).toContain('ios-compile-check(abandoned)')
   })
 
   it('cancelled AND failed: both are reported, the failure is flagged as genuine, and it is red', () => {

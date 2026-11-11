@@ -3851,18 +3851,28 @@ jobs:
           MIGRATION_DID_NOT_RUN: ${{ needs.migration-drift.outputs.did_not_run }}
         run: |
           FAILED=""
-          CANCELLED=""
-          # Three outcomes, not two (#2446). `failure` is a verdict: the job ran
-          # and said no. `cancelled` is the absence of one: the runner was lost,
-          # the job hit its timeout, or the run was cancelled — the job never
-          # said anything about the code. Both keep ci-status RED (an unverified
-          # job must never read as passing), but they are reported as different
-          # things so a lost runner is not mistaken for a broken PR.
+          NO_VERDICT=""
+          # Three outcomes, not two (#2446), and the DEFAULT is the safe one
+          # (#2666). Exactly one result is a verdict against the code:
+          #   failure                 the job ran and said no  -> FAILED
+          #   success | skipped       passed                   -> fine
+          #   anything else           the job never said anything about the code
+          #                           -> NO_VERDICT: `cancelled` (lost runner, job
+          #                           timeout, cancelled run), `abandoned` (the
+          #                           runner went away; observed on #2470),
+          #                           `timed_out`, `neutral`, `stale`, `""`, and any
+          #                           value GitHub adds later.
+          # Both buckets keep ci-status RED (an unverified job must never read as
+          # passing), but they are reported as different things: a NO_VERDICT job
+          # says "re-queue unchanged", a FAILED job says "the PR is broken" and in
+          # a merge group ejects the entry. Blaming the PR for a value this script
+          # does not recognise is the expensive direction to be wrong in, so an
+          # unrecognised result is never FAILED.
           check_job() {
             case "$2" in
               success|skipped) ;;
-              cancelled) CANCELLED="$CANCELLED $1" ;;
-              *) FAILED="$FAILED $1($2)" ;;
+              failure) FAILED="$FAILED $1($2)" ;;
+              *) NO_VERDICT="$NO_VERDICT $1(${2:-no result})" ;;
             esac
           }
           check_job "no-generated-files-in-git" "${{ needs.no-generated-files-in-git.result }}"
@@ -3896,19 +3906,19 @@ jobs:
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
           check_job "platform-suite-coverage" "${{ needs.platform-suite-coverage.result }}"
 
-          if [[ -n "$CANCELLED" ]]; then
-            # Which jobs inside the cancelled matrices were lost, and did they
+          if [[ -n "$NO_VERDICT" ]]; then
+            # Which jobs inside the affected matrices were lost, and did they
             # ever get a runner? A job with a runner_name was lost mid-flight;
             # one without never started (capacity). Names come from the Actions
             # API; if the call fails we say so rather than guess.
             detail=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" --paginate \
-              --jq '.jobs[] | select(.conclusion == "cancelled") | "  - \(.name): runner=\(.runner_name // "NONE (never assigned)"), cancelled step=\(([.steps[]? | select(.conclusion == "cancelled")] | first | .name) // "none")"' 2>/dev/null) \
+              --jq '.jobs[] | select(.conclusion != null and (.conclusion | IN("success","skipped","failure") | not)) | "  - \(.name): \(.conclusion), runner=\(.runner_name // "NONE (never assigned)"), stopped step=\(([.steps[]? | select(.conclusion != null and (.conclusion | IN("success","skipped") | not))] | first | .name) // "none")"' 2>/dev/null) \
               || detail="  (could not read the job list from the Actions API; open the run page)"
-            echo "::error title=ci-status INFRASTRUCTURE (cancelled - not failed)::${CANCELLED# } CANCELLED — not a test or build result. The job never produced a verdict (lost runner, job timeout, or a cancelled run). ci-status stays RED because nothing verified it, but this is NOT this PR's fault: re-queue unchanged. Lost jobs: ${detail//$'\n'/ ;}"
+            echo "::error title=ci-status INFRASTRUCTURE (no verdict - not failed)::${NO_VERDICT# } produced NO VERDICT — not a test or build result. The job never said anything about the code (cancelled, abandoned, timed out, or a result this script does not recognise). ci-status stays RED because nothing verified it, but this is NOT this PR's fault: re-queue unchanged. Affected jobs: ${detail//$'\n'/ ;}"
             {
-              echo "### ci-status: INFRASTRUCTURE — cancelled, not failed"
+              echo "### ci-status: INFRASTRUCTURE — no verdict, not failed"
               echo ""
-              echo "These jobs were **cancelled**, which is an environment fault and not a result:${CANCELLED}"
+              echo "These jobs reported no verdict (cancelled, abandoned, timed out or unrecognised), which is an environment fault and not a result:${NO_VERDICT}"
               echo ""
               echo "$detail"
               echo ""
@@ -3929,8 +3939,8 @@ jobs:
           if [[ -n "$FAILED" ]]; then
             echo "Failed jobs:$FAILED"
           fi
-          if [[ -n "$FAILED" || -n "$CANCELLED" ]]; then
-            [[ -z "$CANCELLED" ]] || echo "Cancelled jobs (infrastructure, not failures):$CANCELLED"
+          if [[ -n "$FAILED" || -n "$NO_VERDICT" ]]; then
+            [[ -z "$NO_VERDICT" ]] || echo "No-verdict jobs (infrastructure, not failures):$NO_VERDICT"
             exit 1
           fi
           echo "All checks passed!"
