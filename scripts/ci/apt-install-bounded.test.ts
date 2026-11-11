@@ -4,7 +4,7 @@
 // budget expiring, not a simulated exit code. Budgets are shrunk to 2 s through
 // the script's own env knobs; the stub apt-get sleeps far past them.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -40,6 +40,19 @@ case "$phase:$mode" in
 esac
 `
 
+// dpkg-query reports "installed" only when STUB_INSTALLED=all (or the package is
+// listed in it); dpkg -i succeeds unless STUB_DPKG=fail, and on success marks the
+// requested packages installed so the script's own re-check sees them.
+const STUB_DPKG_QUERY = `#!/usr/bin/env bash
+pkg="\${@: -1}"
+case " \${STUB_INSTALLED:-} " in *" all "*|*" $pkg "*) echo installed ;; *) [ -f "$STUB_DPKG_DONE" ] && echo installed || exit 1 ;; esac
+`
+const STUB_DPKG = `#!/usr/bin/env bash
+echo "dpkg $*" >> "$STUB_CALLS"
+[ "\${STUB_DPKG:-ok}" = fail ] && { echo "dpkg: error processing archive"; exit 1; }
+touch "$STUB_DPKG_DONE"
+`
+
 let dir: string
 let calls: string
 let summary: string
@@ -51,6 +64,10 @@ beforeEach(() => {
   writeFileSync(join(dir, 'apt-get'), STUB_APT)
   writeFileSync(join(dir, 'sudo'), '#!/usr/bin/env bash\nexec "$@"\n')
   writeFileSync(join(dir, 'keyring.gpg'), '')
+  writeFileSync(join(dir, 'dpkg-query'), STUB_DPKG_QUERY)
+  writeFileSync(join(dir, 'dpkg'), STUB_DPKG)
+  chmodSync(join(dir, 'dpkg-query'), 0o755)
+  chmodSync(join(dir, 'dpkg'), 0o755)
   chmodSync(join(dir, 'apt-get'), 0o755)
   chmodSync(join(dir, 'sudo'), 0o755)
 })
@@ -66,6 +83,7 @@ function run(stub: Record<string, string>, args: string[] = PACKAGES) {
       RUNNER_TEMP: dir,
       GITHUB_STEP_SUMMARY: summary,
       STUB_CALLS: calls,
+      STUB_DPKG_DONE: join(dir, 'dpkg-done'),
       APT_DOWNLOAD_BUDGET_SEC: '2',
       APT_INSTALL_BUDGET_SEC: '2',
       APT_FALLBACK_KEYRING: join(dir, 'keyring.gpg'),
@@ -158,6 +176,66 @@ describe('apt-install-bounded.sh', () => {
     expect(r.code).toBe(1)
     expect(r.seconds).toBeLessThan(10)
     expect(annotation(r.out, 'error').title).toBe('Install Linux deps — dpkg install exceeded its 2s budget (infrastructure, not a test or build result)')
+  })
+
+  // #2736: the mirrors being down must cost a cache miss, not a merge group.
+  describe('without the network (#2736)', () => {
+    const cacheDir = () => join(dir, 'deb-cache')
+    const seedCache = () => {
+      mkdirSync(cacheDir())
+      writeFileSync(join(cacheDir(), 'libgtk-3-dev_1_amd64.deb'), 'x')
+      writeFileSync(join(cacheDir(), 'patchelf_1_amd64.deb'), 'x')
+    }
+
+    test('every package already installed: exit 0 and apt is never invoked', () => {
+      const r = run({ STUB_INSTALLED: 'all', STUB_UPDATE_RUNNER: 'hang' })
+      expect(r.code).toBe(0)
+      expect(r.out).toContain('already installed')
+      expect(r.calls).toBe('')
+    })
+
+    test('a cache hit installs with dpkg and never calls apt, even when every mirror hangs', () => {
+      seedCache()
+      const r = run({ APT_DEB_CACHE_DIR: cacheDir(), STUB_UPDATE_RUNNER: 'hang', STUB_UPDATE_ARCHIVE: 'hang' })
+      expect(r.code).toBe(0)
+      expect(r.out).toContain('installed from the .deb cache; no network used')
+      expect(r.calls).toMatch(/^dpkg --force-unsafe-io -i .*libgtk-3-dev_1_amd64\.deb .*patchelf_1_amd64\.deb$/m)
+      expect(r.calls).not.toContain('apt-get')
+      expect(r.seconds).toBeLessThan(5)
+    })
+
+    test('a cache dpkg rejects falls through to the network phase instead of failing', () => {
+      seedCache()
+      const r = run({ APT_DEB_CACHE_DIR: cacheDir(), STUB_DPKG: 'fail' })
+      expect(r.code).toBe(0)
+      expect(r.out).toContain('the .deb cache did not satisfy the request')
+      expect(r.calls).toContain('install -y --no-download')
+    })
+
+    test('an empty cache dir is a plain miss: the network path runs', () => {
+      mkdirSync(cacheDir())
+      const r = run({ APT_DEB_CACHE_DIR: cacheDir() })
+      expect(r.code).toBe(0)
+      expect(r.calls).not.toContain('dpkg ')
+      expect(r.calls).toContain('install -y --no-download')
+    })
+
+    test('a miss that downloads saves the .debs for the next run', () => {
+      const archives = join(dir, 'archives')
+      mkdirSync(archives)
+      writeFileSync(join(archives, 'patchelf_1_amd64.deb'), 'x')
+      const r = run({ APT_DEB_CACHE_DIR: cacheDir(), APT_ARCHIVES_DIR: archives })
+      expect(r.code).toBe(0)
+      expect(r.out).toContain('saved 1 .deb(s)')
+      expect(existsSync(join(cacheDir(), 'patchelf_1_amd64.deb'))).toBe(true)
+    })
+
+    test('no cache dir configured: behaviour is unchanged', () => {
+      const r = run({})
+      expect(r.code).toBe(0)
+      expect(r.out).not.toContain('.deb')
+      expect(r.calls).not.toContain('dpkg ')
+    })
   })
 
   test('no packages is a usage error, not a silent success', () => {
