@@ -609,6 +609,37 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(createdInviteCode = null) }
     }
 
+    /**
+     * Revoke an invite code via `DELETE /api/invites/:code` (the same unscoped
+     * route the desktop client calls — the server permission-gates it with
+     * `invites:revoke` and audits `inviteRevoked`). Optimistic removal,
+     * mirroring `src/client/routes/users.tsx`: the card disappears immediately
+     * and is restored if the request fails.
+     */
+    fun revokeInvite(code: String) {
+        val removed = _uiState.value.invites.firstOrNull { it.code == code } ?: return
+        _uiState.update {
+            it.copy(
+                invites = it.invites.filter { invite -> invite.code != code },
+                invitesError = null,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                // Not hp(): invites live at the unscoped /api/invites mount,
+                // exactly like list/create above (#1047).
+                apiService.requestNoContent("DELETE", "/api/invites/$code")
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        invites = it.invites + removed,
+                        invitesError = e.message ?: "Failed to revoke invite",
+                    )
+                }
+            }
+        }
+    }
+
     // ---- User CRUD ----
 
     fun showAddVolunteerDialog() {

@@ -11,9 +11,15 @@
 # hardcoding a path. CI enforces that: see the "No monolithic compose
 # path outside the legacy demo role" step in .github/workflows/ci.yml.
 #
-# These live in inventory group_vars (not role defaults) so that every
-# playbook and every role sees the same value, and an operator can
-# override the layout in exactly one place.
+# These live in group_vars (not role defaults) so that every playbook and every
+# role sees the same value, and an operator can override the layout in exactly
+# one place.
+#
+# Ansible reads group_vars from the INVENTORY's directory and from the PLAYBOOK's
+# directory. This tree sits next to the playbooks, so every playbook under
+# playbooks/ -- and setup.yml, which imports them -- sees it whatever directory the
+# inventory is in. playbooks/check-group-vars-resolve.yml proves it in CI. (It used
+# to sit at deploy/ansible/, reachable only from an inventory kept beside it.)
 
 llamenos_services_dir: "{{ app_dir }}/services"
 

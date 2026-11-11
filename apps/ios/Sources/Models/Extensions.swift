@@ -155,6 +155,8 @@ struct DecryptedMessage: Identifiable, Sendable {
     let direction: String
     let createdAt: Date
     let isRead: Bool
+    /// The server could not hand this outbound message to the carrier (`status == "failed"`).
+    var deliveryFailed: Bool = false
 
     /// Whether this is an inbound message (from the contact).
     var isInbound: Bool { direction == "inbound" }

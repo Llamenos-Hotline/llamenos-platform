@@ -425,6 +425,54 @@ object SimulationClient {
         return json.decodeFromString<HubEnvelope>(responseText).hub
     }
 
+    // ─── Invite verification (#764) ───────────────────────────────
+
+    /**
+     * Attempt `POST /api/invites/redeem` for [code] as the test admin identity
+     * and return the HTTP status. Redemption by an already-registered identity
+     * is a grant merge, not an error — so a live invite answers 200, while a
+     * revoked (deleted) one is rejected with 400 before any user lookup. The
+     * status distinguishes "the link still works" from "the link is dead".
+     */
+    fun attemptRedeemInvite(code: String): Int {
+        val path = "/api/invites/redeem"
+        val token = mobileCreateAuthTokenFromSigningKey(
+            ADMIN_SEED_HEX,
+            System.currentTimeMillis().toULong(),
+            "POST",
+            path,
+        )
+        val body = buildString {
+            append("""{"code":"${escapeJson(code)}","pubkey":"${token.pubkey}",""")
+            append(""""timestamp":${token.timestamp},"token":"${escapeJson(token.token)}"""")
+            token.nonce?.let { append(""","nonce":"${escapeJson(it)}"""") }
+            append("}")
+        }
+        val conn = URL("$hubUrl$path").openConnection() as HttpURLConnection
+        return try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val status = conn.responseCode
+            (if (status in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.use { it.readText() }
+            status
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * The platform audit chain (`GET /api/admin/audit`), signed as the test
+     * admin. Invite lifecycle events are audited on the platform chain — the
+     * routes pass `hubId = null` and carry the hub inside `details` instead.
+     * Throws on non-2xx.
+     */
+    fun getPlatformAuditLog(): String = authorizedGet("/api/admin/audit")
+
     // ─── HTTP Helpers ───────────────────────────────────────────────
 
     /**

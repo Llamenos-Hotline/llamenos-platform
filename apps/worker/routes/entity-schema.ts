@@ -215,30 +215,92 @@ entitySchema.get('/entity-types',
   },
 )
 
-// POST, PATCH /:id, DELETE /:id via entity-router factory
+// GET /entity-types/:id stays hand-written, like the list above. `getEntityTypeById(id, hubId)`
+// takes the hub as its SECOND argument, while the factory dispatches by method *name* with a
+// fixed argument order (`hubScoped` puts the hub FIRST). Routing it through the factory erased
+// the signature: tsc could not see that a required `hubId` was never passed, so every lookup
+// became `WHERE hub_id = NULL` and returned 404 for every entity type (#2620 review). Calling
+// it directly keeps the call under the type checker.
+entitySchema.get('/entity-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Get an entity type definition',
+    responses: {
+      200: {
+        description: 'Entity type definition',
+        content: { 'application/json': { schema: resolver(entityTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('settings:read'),
+  async (c) => {
+    const services = c.get('services')
+    // Same scoping as the list: the path hub wins; on the unscoped mount another hub is
+    // honoured only for a caller who can read settings there. The platform's own entity
+    // types are stored under hub ''.
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const result = await services.settings.getEntityTypeById(c.req.param('id'), target.hubId ?? '')
+    return c.json(result)
+  },
+)
+
+// POST /entity-types stays hand-written too, for the same reason as GET /:id above: the
+// factory (`hubScoped: false`) hands the service `[body, ctx]` and `createEntityType` reads the
+// hub out of `body.hubId`, which defaults to '' — so a type created at
+// `/api/hubs/:hubId/settings/cms/entity-types` landed in the PLATFORM scope, not in that hub,
+// and a body-supplied `hubId` could name any hub. Neither is a type error. Since records now
+// look their entity type up in the path hub (#2605), a hub-created type that did not belong to
+// the hub made `POST /hubs/:hubId/records` answer 404 for it (#2620).
+entitySchema.post('/entity-types',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Create an entity type definition',
+    responses: {
+      201: {
+        description: 'Entity type created',
+        content: { 'application/json': { schema: resolver(entityTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', createEntityTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const body = c.req.valid('json')
+    // The path hub wins; on the unscoped mount a body `hubId` is honoured only for a caller who
+    // may manage types there; neither → the platform's own types, stored under hub ''.
+    const target = resolveTargetHub(c, body.hubId || undefined, 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.settings.createEntityType({ ...body, hubId })
+    await audit(services.audit, 'entityTypeCreated', c.get('pubkey'), {}, undefined, hubId || null)
+    return c.json(result, 201)
+  },
+)
+
+// PATCH /:id, DELETE /:id via entity-router factory
 const entityTypeRouter = createEntityRouter({
   tag: 'Case Management',
   domain: 'cases-entity-types',
   service: 'settings',
   listResponseSchema: entityTypeListResponseSchema,
   itemResponseSchema: entityTypeDefinitionSchema,
-  createBodySchema: createEntityTypeBodySchema,
   updateBodySchema: updateEntityTypeBodySchema,
   permissionOverrides: {
-    get: 'settings:read',
-    create: 'cases:manage-types',
     update: 'cases:manage-types',
     delete: 'cases:manage-types',
   },
   disableList: true,
+  disableGet: true,
   methods: {
-    get: 'getEntityTypeById',
-    create: 'createEntityType',
     update: 'updateEntityType',
     delete: 'deleteEntityType',
   },
   auditEvents: {
-    created: 'entityTypeCreated',
     updated: 'entityTypeUpdated',
     deleted: 'entityTypeDeleted',
   },

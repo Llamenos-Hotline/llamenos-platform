@@ -42,9 +42,9 @@ function getState_(world: Record<string, unknown>): EntityUnificationState {
   return getState<EntityUnificationState>(world, STATE_KEY)
 }
 
-Given('an entity type with category {string} exists for the hub', async ({ request, world }, category: string) => {
+Given('an entity type with category {string} exists for the hub', async ({ request, world, workerHub }, category: string) => {
   const state = getState_(world)
-  const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
+  const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/settings/cms/entity-types`, {
     name: uniqueName(`test_${category}_type`, '_'),
     label: `Test ${category} Type`,
     labelPlural: `Test ${category} Types`,
@@ -82,9 +82,9 @@ Given('the builtin template {string} has been applied', async ({ request, world 
 })
 
 Given('an event entity type exists with start_date field \\(indexType=date\\)',
-  async ({ request, world }) => {
+  async ({ request, world, workerHub }) => {
     const state = getState_(world)
-    const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
+    const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/settings/cms/entity-types`, {
       name: uniqueName('event_date_type', '_'),
       label: 'Event Date Type',
       labelPlural: 'Event Date Types',
@@ -139,7 +139,7 @@ Given('a user has permission {string} but not {string}',
 Given('{int} events exist without deprecated_at set', async ({ request, world, workerHub }, count: number) => {
   const state = getState_(world)
   if (!state.entityTypeId) {
-    const res = await apiPost<{ id: string }>(request, '/settings/cms/entity-types', {
+    const res = await apiPost<{ id: string }>(request, `/hubs/${workerHub}/settings/cms/entity-types`, {
       name: uniqueName('event_migration_type', '_'),
       label: 'Event Migration Type',
       labelPlural: 'Event Migration Types',
@@ -269,7 +269,7 @@ Then('the record entity type category should be {string}', async ({ request, wor
   const state = getState_(world)
   const res = await apiGet<{ entityTypeId: string }>(request, `/hubs/${workerHub}/records/${state.recordId}`)
   expect(res.status).toBe(200)
-  const etRes = await apiGet<{ category: string }>(request, `/settings/cms/entity-types/${res.data.entityTypeId}`)
+  const etRes = await apiGet<{ category: string }>(request, `/hubs/${workerHub}/settings/cms/entity-types/${res.data.entityTypeId}`)
   expect(etRes.data.category).toBe(category)
 })
 

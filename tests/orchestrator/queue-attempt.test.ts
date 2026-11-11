@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   isFailureClass, parseWorkflowJobs, jobNamePattern, loadJobLimits, limitFor,
-  killMomentSec, normalDuration, environmentalDeclaration, judgeCancelledJob, failureVerdict, ejectionCauses, classifyAttempt,
+  killMomentSec, normalDuration, environmentalDeclaration, isQueueAdmissionRefusal, judgeCancelledJob, failureVerdict, ejectionCauses, classifyAttempt,
   infraRequeueMarker, priorInfraRequeue, renderInfraRequeueComment, describeEvidence,
   TIMEOUT_EARLY_TOLERANCE_SEC, TIMEOUT_LATE_TOLERANCE_SEC, MIN_NORMAL_SAMPLES, MIN_LIMIT_TO_NORMAL_RATIO,
   type AttemptJob, type DeclaredEvidence, type AttemptReadDeps, type AttemptRun, type LimitLookup, type PlatformFlags, type RunJob,
@@ -405,6 +405,43 @@ describe('classifyAttempt — reason outranks shard (#2529)', () => {
   })
 })
 
+describe('admission refusal — the queue guard rejected the entry, not the diff (#2619)', () => {
+  const REFUSAL = 'queue-guard FAILED: queue-entry-unsignalled — fleet-dispatched PR #2629 (fleet/shared/1753) entered the merge queue with no armed auto-merge and no queue-cleared label.'
+
+  it('recognises the guard\'s refusal token and ONLY that token', () => {
+    expect(isQueueAdmissionRefusal([REFUSAL])).toBe(true)
+    expect(isQueueAdmissionRefusal(['queue-guard FAILED: queue-pr-lookup — could not read PR #1'])).toBe(false) // "could not ask" is no statement about the entry
+    expect(isQueueAdmissionRefusal([])).toBe(false)
+  })
+
+  it('failureVerdict: a refusal that accounts for EVERY failed job is not a defect', () => {
+    const guard = job('fleet/verify', 'failure', { endedAt: 12 })
+    expect(failureVerdict([guard, ...LIVE_2467], BACKEND, new Map(), new Set([guard]))).toEqual({ kind: 'admission-unsignalled', jobs: ['fleet/verify'] })
+  })
+
+  it('failureVerdict: a refusal beside a genuine failure excuses nothing', () => {
+    const guard = job('fleet/verify', 'failure', { endedAt: 12 })
+    const real = job('backend-unit', 'failure', { endedAt: 30 })
+    expect(failureVerdict([guard, real], BACKEND, new Map(), new Set([guard]))).toEqual({ kind: 'own-diff', jobs: ['fleet/verify', 'backend-unit'] })
+  })
+
+  it('failureVerdict: without the refusal a fleet/verify failure is an unknown job and attributes to every candidate', () => {
+    expect(failureVerdict([job('fleet/verify', 'failure', { endedAt: 12 })], BACKEND)).toEqual({ kind: 'own-diff', jobs: ['fleet/verify'] })
+  })
+
+  it('classifyAttempt reads the annotation and returns admission-unsignalled', async () => {
+    const guard = job('fleet/verify', 'failure', { endedAt: 12, id: 'CR_guard' })
+    const v = await classifyAttempt([RUN], BACKEND, { ...readDeps([guard, ...LIVE_2467]), readJobAnnotations: async () => [REFUSAL] })
+    expect(v).toEqual({ kind: 'admission-unsignalled', jobs: ['fleet/verify'] })
+  })
+
+  it('classifyAttempt: an unreadable annotation list never becomes an admission verdict', async () => {
+    const guard = job('fleet/verify', 'failure', { endedAt: 12, id: 'CR_guard' })
+    const v = await classifyAttempt([RUN], BACKEND, { ...readDeps([guard, ...LIVE_2467]), readJobAnnotations: async () => undefined })
+    expect(v.kind).toBe('unreadable')
+  })
+})
+
 describe('attemptPredatesHead — a verdict is about one head (#2529)', () => {
   const attempt = (...created: string[]): QueueAttempt => ({
     headBranch: groupRun.headBranch, headSha: GROUP_SHA, succeeded: false,
@@ -567,6 +604,9 @@ function harness(attemptJobs: RunJob[], opts: HarnessOpts = {}): Harness {
       if (opts.postFails === true) throw new Error('HTTP 502')
       posted.push(body)
     },
+    lastQueueEvent: async () => 'none',
+    addQueueClearedLabel: async () => {},
+    removeQueueClearedLabel: async () => {},
     enableAutoMerge: async (p) => { armed.push(p) },
     log: (m) => { logs.push(m) },
   }

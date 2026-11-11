@@ -30,6 +30,10 @@
     msg: "{{ initial_health_check.stdout_lines | default(['No output']) }}"
   when: initial_health_check is defined
 
+- name: Ensure cron is installed (the cron jobs below need crontab)
+  ansible.builtin.include_role:
+    name: cron
+
 - name: Configure daily backup health check cron
   ansible.builtin.cron:
     name: "Llamenos backup health check"

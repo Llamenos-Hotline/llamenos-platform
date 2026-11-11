@@ -53,9 +53,9 @@ final class ScreenshotAuditTests: BaseUITest {
     }
 
     /// PIN setup — shown after identity creation to set a lock PIN.
-    /// PINSetView.swift uses a free-text SecureField ("pin-input"), not the
-    /// digit PINPadView — that component is only used on the lock/unlock
-    /// screen (PINUnlockView.swift).
+    /// Both the set screen (PINSetView.swift) and the lock/unlock screen
+    /// (PINUnlockView.swift) use a free-text SecureField ("pin-input") — the
+    /// digit pad is gone (#2303).
     func testScreenshot_01c_PINSet() {
         launchClean()
         let createBtn = find("create-identity")
@@ -77,8 +77,8 @@ final class ScreenshotAuditTests: BaseUITest {
         if lockBtn.waitForExistence(timeout: 3) {
             lockBtn.tap()
         }
-        let pinPad = find("pin-pad")
-        _ = pinPad.waitForExistence(timeout: 5)
+        let pinInput = find("pin-input")
+        _ = pinInput.waitForExistence(timeout: 5)
         screenshot("01d-pin-unlock")
     }
 
@@ -377,7 +377,7 @@ final class ScreenshotAuditTests: BaseUITest {
         guard panicLink.exists && panicLink.isHittable else { return }
         panicLink.tap()
         // Sheet appears — capture it
-        _ = find("pin-pad").waitForExistence(timeout: 3)
+        _ = find("panic-wipe-confirmation-input").waitForExistence(timeout: 3)
         screenshot("14h-panic-wipe")
     }
 

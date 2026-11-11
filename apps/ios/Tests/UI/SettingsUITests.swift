@@ -106,11 +106,11 @@ final class SettingsUITests: BaseUITest {
     func testCopySigningPubkeyShowsConfirmation() {
         given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
-            guard accountLink.waitForExistence(timeout: 5) else {
+            guard accountLink.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("Account settings link should exist")
                 return
             }
-            accountLink.tap()
+            tapWhenSettled(accountLink)
         }
         when("I tap the copy button next to my signing pubkey") {
             let copyButton = find("copy-signing-pubkey")
@@ -131,11 +131,11 @@ final class SettingsUITests: BaseUITest {
     func testAccountSettingsShowsSigningPubkey() {
         given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
-            guard accountLink.waitForExistence(timeout: 5) else {
+            guard accountLink.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("Account settings link should exist")
                 return
             }
-            accountLink.tap()
+            tapWhenSettled(accountLink)
         }
         then("I should see my signing pubkey and its copy button") {
             XCTAssertTrue(
@@ -164,11 +164,11 @@ final class SettingsUITests: BaseUITest {
     func testAccountSettingsDoesNotOfferDeviceLinking() {
         given("I am on the account settings screen") {
             let accountLink = find("settings-account-link")
-            guard accountLink.waitForExistence(timeout: 5) else {
+            guard accountLink.waitForExistence(timeout: Self.eventBackstop) else {
                 XCTFail("Account settings link should exist")
                 return
             }
-            accountLink.tap()
+            tapWhenSettled(accountLink)
         }
         then("the whole list renders without a device link entry") {
             // Erasure is the last section — reaching it means every section has rendered.
@@ -188,11 +188,11 @@ final class SettingsUITests: BaseUITest {
     // `if toggle.exists` guard, so they were never found and never asserted.
 
     private func openPreferences() {
-        let link = scrollToFind("settings-preferences-link", maxSwipes: 10)
+        let link = scrollToVisible("settings-preferences-link", maxSwipes: 10)
         XCTAssertTrue(link.exists, "Settings should link to the Preferences screen")
-        link.tap()
+        tapWhenSettled(link)
         XCTAssertTrue(
-            find("settings-call-sounds").waitForExistence(timeout: 10),
+            find("settings-call-sounds").waitForExistence(timeout: Self.eventBackstop),
             "The Preferences screen should open"
         )
     }
@@ -201,12 +201,14 @@ final class SettingsUITests: BaseUITest {
         (element.value as? String) == "1"
     }
 
-    /// Flip a Form `Toggle` and wait for it to hold the opposite value (see `setToggle`).
+    /// Flip a Form `Toggle` and wait for it to hold the opposite value (see `setToggle`, which
+    /// also waits for the row to be settled before the one tap).
     private func flip(_ toggle: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         setToggle(toggle, to: !isOn(toggle), timeout: Self.eventBackstop, file: file, line: line)
     }
 
-    func testCallSoundsToggleExists() {
+    /// The toggle's existence is asserted by `openPreferences`; this asserts its behaviour.
+    func testCallSoundsToggleChangesValueWhenTapped() {
         given("I am on the preferences screen") {
             openPreferences()
         }
@@ -215,7 +217,8 @@ final class SettingsUITests: BaseUITest {
         }
     }
 
-    func testMessageAlertsToggleExists() {
+    /// The toggle's existence is asserted by `openPreferences`; this asserts its behaviour.
+    func testMessageAlertsToggleChangesValueWhenTapped() {
         given("I am on the preferences screen") {
             openPreferences()
         }
@@ -258,10 +261,10 @@ final class SettingsUITests: BaseUITest {
             lockButton.tap()
         }
         then("I should see the PIN unlock screen") {
-            let pinPad = find("pin-pad")
+            let pinInput = find("pin-input")
             XCTAssertTrue(
-                pinPad.waitForExistence(timeout: 5),
-                "PIN pad should appear after locking from settings"
+                pinInput.waitForExistence(timeout: 5),
+                "The unlock credential field should appear after locking from settings"
             )
         }
     }

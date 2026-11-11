@@ -10,6 +10,7 @@
  */
 
 import type { APIRequestContext } from '@playwright/test'
+import type { RecipientEnvelope } from '@shared/types'
 import { devSurfaceSecret } from './dev-surface-secret'
 
 // Resolved in ONE place for the whole harness — see tests/dev-surface-secret.ts
@@ -61,6 +62,12 @@ export interface SimulateIncomingMessageResult {
   messageId: string
 }
 
+export interface SimulateOutboundMessageResult {
+  ok: boolean
+  conversationId: string
+  messageId: string
+}
+
 export interface SimulateDeliveryStatusResult {
   ok: boolean
 }
@@ -90,6 +97,14 @@ export interface SimulateIncomingMessageOptions {
    * `?hub=` (#2395, #2459): there is no hubless conversation.
    */
   hubId: string
+}
+
+export interface SimulateOutboundMessageOptions {
+  /** A claimed (assigned) conversation. */
+  conversationId: string
+  /** The reply, sealed client-side for its readers. */
+  encryptedContent: string
+  readerEnvelopes: RecipientEnvelope[]
 }
 
 export interface SimulateDeliveryStatusOptions {
@@ -307,6 +322,29 @@ export async function simulateIncomingMessage(
       body: options.body,
       ...(options.channel ? { channel: options.channel } : {}),
       hubId: options.hubId,
+    },
+  )
+}
+
+/**
+ * Simulate a reply the messaging provider has accepted: stored `sent` with the
+ * provider's message id, the state delivery receipts advance from.
+ *
+ * A test instance has no SMS provider, so the real send route stores a `failed`
+ * record there — see `POST /test-simulate/outbound-message` for why this exists
+ * and what it deliberately does not cover.
+ */
+export async function simulateOutboundMessage(
+  request: APIRequestContext,
+  options: SimulateOutboundMessageOptions,
+): Promise<SimulateOutboundMessageResult> {
+  return postSimulation<SimulateOutboundMessageResult>(
+    request,
+    'outbound-message',
+    {
+      conversationId: options.conversationId,
+      encryptedContent: options.encryptedContent,
+      readerEnvelopes: options.readerEnvelopes,
     },
   )
 }

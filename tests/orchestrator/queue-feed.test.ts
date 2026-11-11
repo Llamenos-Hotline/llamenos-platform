@@ -76,6 +76,9 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     readHeadFirstSeen: async () => undefined,
     listPrComments: async () => [],
     postPrComment: async () => {},
+    lastQueueEvent: async () => 'none',
+    addQueueClearedLabel: async () => {},
+    removeQueueClearedLabel: async () => {},
     enableAutoMerge: async () => {},
     log: () => {},
     ...overrides,
@@ -830,6 +833,217 @@ describe('runQueueFeedWith — the pass', () => {
     })
     const result = await runQueueFeedWith(deps)
     expect(result.branches.map((b) => b.branch)).toEqual(['main', 'release-1.x'])
+  })
+})
+
+describe('a deep queue still restores EJECTED entries — add and re-arm are different actions (#2619)', () => {
+  /** A queue already at min = max = 5, so no NEW entry may be added. */
+  const QUEUED = [1, 2, 3, 4, 5]
+  const GUARD_JOB = (conclusion: string): RunJob => ({ ...mkJob('fleet/verify', conclusion, 12), nodeId: 'CR_guard' })
+
+  interface Scenario {
+    pr?: Partial<QueueFeedPr>
+    lastQueueEvent?: 'added' | 'removed' | 'none' | undefined
+    overrides?: Partial<QueueFeedDeps>
+  }
+  function deepQueue(sc: Scenario = {}) {
+    const armed: string[] = []
+    const labelled: number[] = []
+    const unlabelled: number[] = []
+    const order: string[] = []
+    const logs: string[] = []
+    const lastQueueEvent = vi.fn(async () => ('lastQueueEvent' in sc ? sc.lastQueueEvent : 'removed'))
+    const readPrFiles = vi.fn(async (n: number) => [`apps/worker/routes/file-${n}.ts`])
+    const deps = mkDeps({
+      listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
+      listQueueEntries: async () => ({ queue: true, prs: QUEUED }),
+      readPr: async () => mkPr(sc.pr),
+      readPrFiles,
+      verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+      lastQueueEvent,
+      addQueueClearedLabel: async (n) => { labelled.push(n); order.push('label') },
+      removeQueueClearedLabel: async (n) => { unlabelled.push(n) },
+      enableAutoMerge: async (p) => { armed.push(p); order.push('arm') },
+      log: (m) => { logs.push(m) },
+      ...sc.overrides,
+    })
+    return { deps, armed, labelled, unlabelled, order, logs, lastQueueEvent, readPrFiles }
+  }
+
+  it('RE-ARMS a green, mergeable PR the queue dropped, though the queue is already full', async () => {
+    const t = deepQueue()
+    const result = await runQueueFeedWith(t.deps)
+    expect(result.branches[0]?.outcome).toBe('satisfied') // no NEW entry may be added …
+    expect(t.armed).toEqual(['100']) // … and the ejected one is restored anyway
+    expect(result.branches[0]?.armed).toEqual([100])
+    expect(result.branches[0]?.rearmed).toEqual([100])
+    expect(renderQueueFeed(result)).toMatch(/RE-ARMED\s+#100/)
+  })
+
+  it('does NOT add a PR the queue never admitted — that is what the depth bound is for', async () => {
+    for (const lastQueueEvent of ['none', 'added', undefined] as const) {
+      const t = deepQueue({ lastQueueEvent })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed, `history ${String(lastQueueEvent)}`).toEqual([])
+      expect(result.branches[0]?.rearmed).toEqual([])
+      expect(result.branches[0]?.notes.join('\n')).toMatch(/never admitted to the queue were not added/)
+    }
+  })
+
+  it('an unreadable queue history is a new addition, never an ejection', async () => {
+    const t = deepQueue({ lastQueueEvent: undefined })
+    await runQueueFeedWith(t.deps)
+    expect(t.logs.join('\n')).toMatch(/merge-queue history could not be read/)
+    expect(t.armed).toEqual([])
+  })
+
+  it('arms nothing it cannot show green and mergeable: BLOCKED, DRAFT, already armed, or still queued are left alone', async () => {
+    const cases: [string, Partial<QueueFeedPr>][] = [
+      ['blocked', { mergeStateStatus: 'BLOCKED' }],
+      ['dirty', { mergeStateStatus: 'DIRTY' }],
+      ['draft', { isDraft: true, mergeStateStatus: 'DRAFT' }],
+      ['auto-merge armed', { autoMergeRequest: { enabledAt: '2026-11-10T00:00:00Z' } }],
+    ]
+    for (const [name, pr] of cases) {
+      const t = deepQueue({ pr })
+      await runQueueFeedWith(t.deps)
+      expect(t.armed, name).toEqual([])
+    }
+    const inQueue = deepQueue({ overrides: { listQueueEntries: async () => ({ queue: true, prs: [...QUEUED, 100] }) } })
+    await runQueueFeedWith(inQueue.deps)
+    expect(inQueue.armed).toEqual([])
+  })
+
+  it('still demands the review PASS, and still refuses an ejected PR that cannot merge onto the group', async () => {
+    const noReview = deepQueue({ overrides: { verdictArtifactState: async () => 'absent', platformFlags: async () => ({ ...NO_FLAGS, backend: true }) } })
+    const r1 = await runQueueFeedWith(noReview.deps)
+    expect(noReview.armed).toEqual([])
+    expect(r1.branches[0]?.skipped[0]?.reason).toMatch(/fleet\/review coverage/)
+
+    const conflicts = deepQueue({ overrides: { readPrFiles: async () => ['apps/worker/routes/shared.ts'], readBranchHead: async () => undefined } })
+    const r2 = await runQueueFeedWith(conflicts.deps)
+    expect(conflicts.armed).toEqual([])
+    expect(r2.branches[0]?.skipped[0]?.reason).toMatch(/does not merge|cannot be simulated/)
+  })
+
+  it('an ejected PR whose last attempt failed on its OWN diff is still a defect to fix, not a retry', async () => {
+    const sha = 'd'.repeat(40)
+    const t = deepQueue({
+      overrides: {
+        listMergeGroupRuns: async () => [mkRun(42, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}` })],
+        readRunJobs: async () => [mkJob('backend-bdd', 'failure', 300), mkJob('ci-status', 'failure', 7)],
+      },
+    })
+    const result = await runQueueFeedWith(t.deps)
+    expect(t.armed).toEqual([])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/defect to fix, not a retry/)
+  })
+
+  it('an iOS-gate-risk ejected PR is still never batched behind a queue that holds work', async () => {
+    const t = deepQueue({
+      pr: { headRefName: 'fleet/ios/100' },
+      overrides: {
+        platformFlags: async () => ({ ...NO_FLAGS, ios: true }),
+        readPrFiles: async (n) => (n === 100 ? ['apps/ios/Sources/App/X.swift'] : [`apps/worker/routes/file-${n}.ts`]),
+      },
+    })
+    const result = await runQueueFeedWith(t.deps)
+    expect(t.armed).toEqual([])
+    expect(result.branches[0]?.skipped.some((s) => s.reason.includes('never batched behind'))).toBe(true)
+  })
+
+  it('a deep queue with nothing ejected costs the per-PR reads and nothing more', async () => {
+    const t = deepQueue({ lastQueueEvent: 'none' })
+    await runQueueFeedWith(t.deps)
+    expect(t.readPrFiles).not.toHaveBeenCalled() // the group is never loaded for a PR that is not added
+  })
+
+  describe('the queue-cleared label — the guard reads it inside the group (#1894)', () => {
+    it('labels a fleet-dispatched PR BEFORE arming it, or it is ejected again', async () => {
+      const t = deepQueue({ pr: { headRefName: 'fleet/shared/1753' } })
+      await runQueueFeedWith(t.deps)
+      expect(t.labelled).toEqual([100])
+      expect(t.order).toEqual(['label', 'arm'])
+    })
+
+    it('does not label a PR on a plain branch (the guard does not gate it)', async () => {
+      const t = deepQueue({ pr: { headRefName: 'fix/2463-named-scope' } })
+      await runQueueFeedWith(t.deps)
+      expect(t.labelled).toEqual([])
+      expect(t.armed).toEqual(['100'])
+    })
+
+    it('does not re-apply a label the PR already carries', async () => {
+      const t = deepQueue({ pr: { headRefName: 'fleet/desktop/1726', labels: ['queue-cleared'] } })
+      await runQueueFeedWith(t.deps)
+      expect(t.labelled).toEqual([])
+      expect(t.armed).toEqual(['100'])
+    })
+
+    it('a label that cannot be applied means the PR is NOT armed (it would be ejected again)', async () => {
+      const t = deepQueue({
+        pr: { headRefName: 'fleet/shared/1753' },
+        overrides: { addQueueClearedLabel: async () => { throw new Error('HTTP 502') } },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/queue-cleared label the queue guard requires could not be applied/)
+    })
+
+    it('hands the clearance back when the arm itself fails', async () => {
+      const t = deepQueue({
+        pr: { headRefName: 'fleet/shared/1753' },
+        overrides: { enableAutoMerge: async () => { throw new Error('HTTP 502') } },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(result.branches[0]?.armFailed).toEqual([100])
+      expect(t.unlabelled).toEqual([100])
+    })
+
+    it('the shallow-queue add path labels a fleet PR too — it had the same hole', async () => {
+      const labelled: number[] = []
+      const deps = mkDeps({
+        listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
+        readPr: async () => mkPr({ headRefName: 'fleet/backend/100' }),
+        verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
+        addQueueClearedLabel: async (n) => { labelled.push(n) },
+      })
+      const result = await runQueueFeedWith(deps)
+      expect(result.branches[0]?.armed).toEqual([100])
+      expect(result.branches[0]?.rearmed).toEqual([]) // never queued: an addition, not a restoration
+      expect(labelled).toEqual([100])
+    })
+
+    it('recovers a PR the guard itself rejected: an unsignalled entry is not the diff\'s defect', async () => {
+      const sha = 'd'.repeat(40)
+      const t = deepQueue({
+        pr: { headRefName: 'fleet/shared/1753' },
+        overrides: {
+          listMergeGroupRuns: async () => [mkRun(77, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}`, path: '.github/workflows/fleet-verify.yml' })],
+          readRunJobs: async () => [GUARD_JOB('failure'), mkJob('ci-status', 'failure', 7)],
+          readJobAnnotations: async () => ['queue-guard FAILED: queue-entry-unsignalled — fleet-dispatched PR #100 (fleet/shared/1753) entered the merge queue with no armed auto-merge and no queue-cleared label.'],
+        },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.order).toEqual(['label', 'arm'])
+      expect(result.branches[0]?.rearmed).toEqual([100])
+      expect(result.branches[0]?.notes.join('\n')).toMatch(/rejected by the queue guard/)
+    })
+
+    it('a guard-job failure that is NOT the admission refusal stays a defect', async () => {
+      const sha = 'd'.repeat(40)
+      const t = deepQueue({
+        pr: { headRefName: 'fleet/shared/1753' },
+        overrides: {
+          listMergeGroupRuns: async () => [mkRun(77, 'failure', { headBranch: `gh-readonly-queue/main/pr-100-${sha}`, path: '.github/workflows/fleet-verify.yml' })],
+          readRunJobs: async () => [GUARD_JOB('failure'), mkJob('ci-status', 'failure', 7)],
+          readJobAnnotations: async () => ['queue-guard FAILED: queue-pr-lookup — could not read PR #100'],
+        },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/defect to fix, not a retry/)
+    })
   })
 })
 

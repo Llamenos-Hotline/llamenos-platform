@@ -46,9 +46,9 @@ reporter_run_step "cargo test" \
   cargo test --manifest-path packages/crypto/Cargo.toml --features mobile || overall_result="fail"
 reporter_record_step_results "cargo test" cargo
 
-# Step 3: cargo clippy
+# Step 3: cargo clippy (--all-targets so test code is linted too — #1686)
 if reporter_run_step "cargo clippy" \
-  cargo clippy --manifest-path packages/crypto/Cargo.toml -- -D warnings; then
+  cargo clippy --manifest-path packages/crypto/Cargo.toml --all-targets -- -D warnings; then
   reporter_record_suite "clippy" 1 0 0
 else
   overall_result="fail"

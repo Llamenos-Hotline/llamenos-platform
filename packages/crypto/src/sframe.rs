@@ -706,7 +706,7 @@ mod tests {
         let key = test_key();
         let frames: Vec<Vec<u8>> = (0..100)
             .map(|i| {
-                let data = format!("frame-{}", i);
+                let data = format!("frame-{i}");
                 data.into_bytes()
             })
             .collect();

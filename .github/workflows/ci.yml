@@ -600,8 +600,11 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path packages/crypto/Cargo.toml --features mobile
 
+      # `--all-targets` is deliberate (#1686): without it clippy lints only the
+      # library and never looks at the crate's test code — where #1484, #1658
+      # and the harness defects behind #1641 all lived.
       - name: Clippy
-        run: cargo clippy --manifest-path packages/crypto/Cargo.toml --features mobile -- -D warnings
+        run: cargo clippy --manifest-path packages/crypto/Cargo.toml --features mobile --all-targets -- -D warnings
 
       - name: Format check
         run: cargo fmt --manifest-path packages/crypto/Cargo.toml --check
@@ -2014,6 +2017,33 @@ jobs:
       - name: Check Jinja select/reject test names resolve
         run: python3 deploy/ansible/scripts/check-jinja-tests.py
 
+      # A minimal Debian image has no `cron` package, so the first
+      # ansible.builtin.cron task on a host built from one died with
+      # `Failed to find required executable "crontab"` and nothing installed it.
+      # Every file that declares a cron job now includes roles/cron first.
+      - name: Check every cron job's file installs cron first
+        run: python3 deploy/ansible/scripts/check-cron-installed.py
+
+      # The app image migrates its database on every start; the migration gate
+      # judges the migrations BEFORE that. A "pull" task that was really
+      # `compose up` started the app first, so on a fresh host the gate read a
+      # half-applied ledger and failed the first deploy, every time.
+      - name: Check nothing starts the app before the migration gate
+        run: python3 deploy/ansible/scripts/check-app-gate-ordering.py
+
+      # group_vars/ is found next to the inventory or next to the playbook. It sat
+      # at deploy/ansible/, so with the inventory kept anywhere else (the normal
+      # case for a private inventory) every playbook under playbooks/ lost it and
+      # died on "'llamenos_compose_glob' is undefined". It now lives next to the
+      # playbooks; this plays against an inventory in a different directory.
+      - name: Check group_vars resolve with the inventory outside deploy/ansible
+        run: |
+          set -euo pipefail
+          inv_dir="$(mktemp -d)"
+          printf 'all:\n  hosts:\n    localhost:\n      ansible_connection: local\n' > "$inv_dir/inventory.yml"
+          cd deploy/ansible
+          ansible-playbook -i "$inv_dir/inventory.yml" playbooks/check-group-vars-resolve.yml -e ansible_become=false
+
       # Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED
       # task never ran, so it never failed, so it is `succeeded`. 27 checks
       # across the smoke, preflight, security-update and kamailio paths
@@ -2103,7 +2133,7 @@ jobs:
                deploy/ansible \
                | grep -v '^deploy/ansible/roles/llamenos/' \
                | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
-               | grep -v '^deploy/ansible/group_vars/all/compose.yml' \
+               | grep -v '^deploy/ansible/playbooks/group_vars/all/compose.yml' \
                | grep -vE '^[^:]+:[0-9]+: *#' \
                `# update.yml and rollback.yml still assume the monolithic` \
                `# layout. Their blue/green and snapshot logic needs a` \
@@ -3091,6 +3121,9 @@ jobs:
     if: needs.changes.outputs.revalidate == 'true' && needs.changes.outputs.ios == 'true'
     permissions:
       contents: read
+      # A called workflow can hold no permission its caller does not grant. The
+      # `ui` shards read their siblings' conclusions with it (#2618).
+      actions: read
     uses: ./.github/workflows/ios-e2e.yml
     with:
       # full when the diff can rebuild the iOS binary (apps/ios/, crypto,

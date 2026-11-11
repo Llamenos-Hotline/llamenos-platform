@@ -79,8 +79,9 @@ describe('checkScope', () => {
         'src/server/',
         'tests/steps/backend/',
         'tests/steps/fixtures.ts',
-        'tests/api-helpers.ts',
-        'tests/simulation-helpers.ts',
+        'tests/*.ts',
+        'tests/helpers/',
+        'tests/fixtures/',
         '.github/ci/*-baseline.json',
         'eslint.config.js',
         'lefthook.yml',
@@ -96,6 +97,8 @@ describe('checkScope', () => {
       ])
       expect(backend.notOwned).toEqual([
         'tests/',
+        'tests/*.spec.ts',
+        'tests/*.test.ts',
         'tests/mocks/',
         'packages/test-specs/',
         'packages/i18n/languages.ts',

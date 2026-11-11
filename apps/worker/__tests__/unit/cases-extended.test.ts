@@ -363,7 +363,8 @@ describe('CasesService.linkContact', () => {
 
   it('inserts link and increments contactCount', async () => {
     const { db, service } = setup()
-    db.$setSelectResult([{ id: 'case-1' }])
+    // 1: the record (with its hub); 2: the contact, found inside that hub
+    db.$setSelectResults([[{ id: 'case-1', hubId: 'hub-1' }], [{ id: 'contact-1' }]])
     db.$setInsertResult([makeCaseContactRow()])
 
     const result = await service.linkContact('case-1', 'contact-1', 'subject', 'pk-admin')

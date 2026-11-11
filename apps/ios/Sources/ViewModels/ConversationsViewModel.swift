@@ -298,7 +298,8 @@ final class ConversationsViewModel {
 
             let request = SendMessageRequest(
                 encryptedContent: encrypted.encryptedContent,
-                readerEnvelopes: encrypted.envelopes
+                readerEnvelopes: encrypted.envelopes,
+                plaintextForSending: text
             )
 
             let _: ConversationMessage = try await apiService.request(
@@ -478,7 +479,8 @@ enum ThreadMessage: Identifiable, Sendable {
                 text: try decrypt(message),
                 direction: message.direction,
                 createdAt: createdAt,
-                isRead: message.isRead
+                isRead: message.isRead,
+                deliveryFailed: message.deliveryFailed
             ))
         } catch {
             self = .unreadable(UnreadableMessage(

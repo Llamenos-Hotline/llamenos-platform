@@ -80,7 +80,7 @@ export function requireEntityTypeAccess(action: 'read' | 'write') {
     const services = c.get('services')
     let entityType: EntityTypeDefinition
     try {
-      entityType = await services.settings.getEntityTypeById(entityTypeId)
+      entityType = await services.settings.getEntityTypeById(entityTypeId, c.get('hubId') ?? '')
     } catch (e) {
       logger.warn('getEntityTypeById failed', { entityTypeId, error: e })
       return c.json({ error: 'Entity type not found' }, 404)

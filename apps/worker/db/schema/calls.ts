@@ -18,6 +18,14 @@ import { jsonb } from '../bun-jsonb'
 // active_calls
 // ---------------------------------------------------------------------------
 
+/** Who a ringing call actually rang (#1176) — recorded so "who was rung for
+ * this call" survives the process that computed it. */
+export interface CallRingSet {
+  volunteers: string[]
+  usedFallback: boolean
+  recordedAt: string
+}
+
 export const activeCalls = pgTable(
   'active_calls',
   {
@@ -37,6 +45,14 @@ export const activeCalls = pgTable(
     callerNumberSealed: text('caller_number_sealed'),
     answeredBy: text('answered_by'),
     status: text('status').notNull().default('ringing'),
+    // #1176: the provider call SIDs of the ring legs dialled for this call, and
+    // the volunteers it rang. Persisted (not process-local) so a winner on ANY
+    // process cancels the losing legs — a restart or a second replica used to
+    // empty the in-memory registry and leave the losers ringing out. Both are
+    // transient: the row itself is deleted when the call ends. Nullable so the
+    // previous release, which writes neither, runs against this schema.
+    ringLegSids: text('ring_leg_sids').array(),
+    ringSet: jsonb('ring_set').$type<CallRingSet>(),
     hasTranscription: boolean('has_transcription').default(false),
     hasVoicemail: boolean('has_voicemail').default(false),
     hasRecording: boolean('has_recording').default(false),

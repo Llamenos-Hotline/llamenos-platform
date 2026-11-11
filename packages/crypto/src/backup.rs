@@ -770,9 +770,10 @@ mod tests {
         assert_eq!(backup.d.i, ARGON2_T_COST);
         assert_eq!(backup.d.p, ARGON2_P_COST);
         assert!(validate_pin_kdf_params(&backup.d).is_ok());
-        assert!(ARGON2_M_COST_KIB < MAX_BACKUP_ARGON2_M_COST_KIB);
-        assert!(ARGON2_T_COST < MAX_BACKUP_ARGON2_T_COST);
-        assert!(ARGON2_P_COST < MAX_BACKUP_ARGON2_P_COST);
+        // Compile-time: a runtime assert on constants would be optimized out.
+        const _: () = assert!(ARGON2_M_COST_KIB < MAX_BACKUP_ARGON2_M_COST_KIB);
+        const _: () = assert!(ARGON2_T_COST < MAX_BACKUP_ARGON2_T_COST);
+        const _: () = assert!(ARGON2_P_COST < MAX_BACKUP_ARGON2_P_COST);
         assert!(open_backup(&backup, BackupCredential::Pin(PIN)).is_ok());
     }
 

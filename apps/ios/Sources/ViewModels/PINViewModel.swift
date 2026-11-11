@@ -3,7 +3,8 @@ import LocalAuthentication
 
 // MARK: - PINMode
 
-/// The mode of the PIN pad: setting a new PIN or unlocking with an existing one.
+/// The mode of the credential entry screen: setting a new PIN/passphrase or
+/// unlocking with an existing one.
 enum PINMode: Equatable {
     /// User is creating a new PIN (enter + confirm).
     case set
@@ -70,9 +71,6 @@ final class PINViewModel {
 
     /// Current PIN digits entered by the user.
     var pin: String = ""
-
-    /// PIN length (6 or 8 digits).
-    private(set) var maxLength: Int
 
     /// For set mode: the phase within the set flow.
     var phase: PINPhase = .enter
@@ -160,13 +158,11 @@ final class PINViewModel {
         mode: PINMode,
         authService: AuthService,
         keychainService: KeychainService? = nil,
-        maxLength: Int = 8,
         onSuccess: @escaping () -> Void
     ) {
         self.mode = mode
         self.authService = authService
         self.keychainService = keychainService ?? authService.keychainService
-        self.maxLength = maxLength
         self.onSuccess = onSuccess
     }
 
@@ -177,14 +173,6 @@ final class PINViewModel {
     /// there is no in-memory copy left to reset separately.
     private func clearLockoutState() {
         keychainService.clearLockoutState()
-    }
-
-    // MARK: - PIN Length
-
-    /// Update the max PIN length. Only valid during set mode, enter phase.
-    func updateMaxLength(_ newLength: Int) {
-        guard mode == .set, phase == .enter else { return }
-        maxLength = newLength
     }
 
     // MARK: - PIN Completion

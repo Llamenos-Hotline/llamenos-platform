@@ -39,6 +39,8 @@ const DDL = `
     has_recording BOOLEAN DEFAULT FALSE,
     recording_sid TEXT,
     reported_by TEXT,
+    ring_leg_sids TEXT[],
+    ring_set JSONB,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     answered_at TIMESTAMPTZ,
     ended_at TIMESTAMPTZ,

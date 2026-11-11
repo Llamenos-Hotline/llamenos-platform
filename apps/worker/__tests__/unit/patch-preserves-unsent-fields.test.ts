@@ -115,7 +115,8 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
       select: vi.fn().mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ platformSettings: stored }]),
+            // The cross-hub flag's one stored home is a column, not the document.
+            limit: vi.fn().mockResolvedValue([{ platformSettings: stored, crossHubSharingEnabled: true }]),
           }),
         }),
       }),
@@ -155,7 +156,14 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
       caseManagementEnabled: true,
       crossHubSharingEnabled: true,
     })
-    expect(setValues).toHaveBeenCalledWith({ platformSettings: merged })
+    // The document is written WITHOUT the cross-hub flag: its one home is the
+    // column, so there is no stored copy to drift from what is enforced (#2605).
+    expect(setValues).toHaveBeenCalledWith({
+      platformSettings: {
+        ...merged,
+        featureFlags: { mlsEnabled: true, transcriptionEnabled: false, caseManagementEnabled: true },
+      },
+    })
   })
 
   it('changing one session-policy field does not reset the other to the 30-day default', async () => {
