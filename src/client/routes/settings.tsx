@@ -59,7 +59,7 @@ export const Route = createFileRoute('/settings')({
 function SettingsPage() {
   const { t } = useTranslation()
   const { section } = useSearch({ from: '/settings' })
-  const { transcriptionEnabled, name: authName, spokenLanguages, callPreference, refreshProfile, publicKey, signOut } = useAuth()
+  const { transcriptionEnabled, name: authName, spokenLanguages, callPreference, refreshProfile, publicKey, signOut, hasPermission } = useAuth()
   const navigate = useNavigate()
   const { toast } = useToast()
   const [myTranscription, setMyTranscription] = useState(transcriptionEnabled)
@@ -96,23 +96,30 @@ function SettingsPage() {
   // Get public key hex for display
   const pk = keyManager.getPublicKeyHex() || publicKey
 
+  const canReadTranscriptionSettings = hasPermission('settings:manage-transcription')
+
   useEffect(() => {
     const promises: Promise<void>[] = [
-      getTranscriptionSettings().then(r => {
-        setCanOptOut(r.allowUserOptOut)
-      }).catch(() => toast(t('common.error'), 'error')),
       getWebRtcStatus().then(r => {
         setWebrtcAvailable(r.available && supportsInAppAudio(r.provider))
         setInAppAudioUnsupported(r.provider !== null && !supportsInAppAudio(r.provider))
       }).catch(() => toast(t('common.error'), 'error')),
     ]
+    // The deployment transcription settings are readable only with
+    // `settings:manage-transcription`; requesting them as anyone else is a
+    // guaranteed 403 (#2115). Without the permission `canOptOut` keeps its default.
+    if (canReadTranscriptionSettings) {
+      promises.push(getTranscriptionSettings().then(r => {
+        setCanOptOut(r.allowUserOptOut)
+      }).catch(() => toast(t('common.error'), 'error')))
+    }
     // Load WebAuthn credentials for all users
     if (webauthnAvailable) {
       promises.push(listCredentials().then(setWebauthnCreds).catch(() => toast(t('common.error'), 'error')))
     }
     Promise.all(promises)
       .finally(() => setLoading(false))
-  }, [t, toast, webauthnAvailable])
+  }, [t, toast, webauthnAvailable, canReadTranscriptionSettings])
 
   // Scroll to deep-linked section after loading
   useEffect(() => {

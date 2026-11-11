@@ -10,6 +10,18 @@ interface ToastContextType {
   toast: (message: string, type?: Toast['type']) => void
 }
 
+/**
+ * After an explicit sign-out, requests that were already in flight are answered
+ * 401 (the session was just revoked) and their callers each raise an error
+ * toast on the login screen. Those failures are an artefact of signing out, not
+ * something the user can act on, so error toasts are dropped from sign-out until
+ * the next unlock. Module-level because `ToastProvider` sits above `AuthProvider`.
+ */
+let errorToastsSuppressed = false
+export function setErrorToastsSuppressed(suppressed: boolean): void {
+  errorToastsSuppressed = suppressed
+}
+
 const ToastContext = createContext<ToastContextType>({ toast: () => {} })
 
 export function useToast() {
@@ -20,6 +32,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
   const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
+    if (type === 'error' && errorToastsSuppressed) return
     const id = crypto.randomUUID()
     setToasts(prev => [...prev, { id, message, type }])
     setTimeout(() => {

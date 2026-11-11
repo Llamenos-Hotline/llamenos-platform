@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAuth } from '@/lib/auth'
 import { getRecoveryGroup, getActiveHub, ApiError } from '@/lib/api'
 import type { RecoveryGroupInfo } from '@protocol/schemas/recovery-group'
 import { SettingsSection, usePersistedExpanded } from '@/components/settings-section'
@@ -8,6 +9,10 @@ import { Shield, ShieldOff } from 'lucide-react'
 export function RecoveryStatusSection() {
   const { t } = useTranslation()
   const hubId = getActiveHub()
+  const { hasPermission } = useAuth()
+  // `GET /recovery-group/:hubId` requires `recovery:view`; anyone without it
+  // would only get a 403, so the request is never made (#2115).
+  const canView = hasPermission('recovery:view')
   const [group, setGroup] = useState<RecoveryGroupInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -16,7 +21,7 @@ export function RecoveryStatusSection() {
   const { expanded, toggleSection } = usePersistedExpanded('settings-expanded:/settings', [])
 
   useEffect(() => {
-    if (!hubId) {
+    if (!canView || !hubId) {
       setLoading(false)
       return
     }
@@ -31,9 +36,9 @@ export function RecoveryStatusSection() {
         else setLoadFailed(true)
       })
       .finally(() => setLoading(false))
-  }, [hubId])
+  }, [hubId, canView])
 
-  if (forbidden) return null
+  if (!canView || forbidden) return null
 
   const enrolled = group !== null
 
