@@ -2580,7 +2580,7 @@ export async function createCaseFromReportViaApi(
   const contentKey = generateContentKey()
   const encryptedNotes = encryptContent('test link', contentKey, LABEL_NOTE_KEY)
   const envelope = await realEnvelope(contentKey, seedHex)
-  const { status, data } = await apiPost<{ id?: string; reportId?: string; caseId?: string }>(
+  const { status } = await apiPost<{ ok: boolean }>(
     request,
     hubOwnedPath(`/reports/${reportId}/records`, hubId),
     {
@@ -2591,10 +2591,9 @@ export async function createCaseFromReportViaApi(
     seedHex,
   )
   if (status !== 201 && status !== 200) throw new Error(`Failed to link case to report: ${status}`)
-  // Response is ReportCaseRow with composite PK (reportId + caseId) — no separate id field.
-  // linkId is the caseId from the row, which equals recordId.
-  const linkData = data as { caseId?: string; reportId?: string }
-  return { recordId, linkId: linkData.caseId ?? recordId }
+  // The route answers `{ ok: true }` and names no link: the link's identity is its composite
+  // PK (reportId + caseId), so the id the caller needs to unlink it is the caseId it sent.
+  return { recordId, linkId: recordId }
 }
 
 /**
