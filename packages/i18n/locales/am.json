@@ -2145,7 +2145,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "ይህን ጉዳይ ማስቀመጥ አይቻልም፦ ምንም የአስተዳዳሪ መፍቻ ቁልፍ አልተዋቀረም፣ ስለዚህ ማንም አስተዳዳሪ ሊያነበው አይችልም። አስተዳዳሪ አንዱን እንዲያዋቅር ይጠይቁ።"
   },
   "admin": {
     "devices": {

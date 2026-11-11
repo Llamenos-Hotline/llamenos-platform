@@ -3258,7 +3258,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "ဤအမှုကို သိမ်း၍မရပါ- အက်ဒမင် ဝှက်စာဖြေခလုတ် မသတ်မှတ်ထားသဖြင့် မည်သည့်အက်ဒမင်မှ ဖတ်၍မရနိုင်ပါ။ အက်ဒမင်တစ်ဦးအား သတ်မှတ်ပေးရန် တောင်းဆိုပါ။"
   },
   "activeCalls": "လက်ရှိခေါ်ဆိုမှုများ",
   "erasure": {

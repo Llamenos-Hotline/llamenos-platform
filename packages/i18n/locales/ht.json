@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "Pa gen okenn kalite antite ki konfigire pou hub sa a."
+    "noEntityTypesDescription": "Pa gen okenn kalite antite ki konfigire pou hub sa a.",
+    "noAdminRecipient": "Pa ka anrejistre dosye sa a: pa gen okenn kle dechifreman administratè ki konfigire, kidonk pa gen administratè ki ta ka li l. Mande yon administratè pou konfigire youn."
   },
   "channels": {
     "a2p": {

@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "此枢纽尚未配置实体类型。"
+    "noEntityTypesDescription": "此枢纽尚未配置实体类型。",
+    "noAdminRecipient": "无法保存此案件：未配置管理员解密密钥，因此没有管理员能够读取它。请联系管理员配置密钥。"
   },
   "channels": {
     "a2p": {

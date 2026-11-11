@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "No hay tipos de entidad configurados para este hub."
+    "noEntityTypesDescription": "No hay tipos de entidad configurados para este hub.",
+    "noAdminRecipient": "No se puede guardar este caso: no hay una clave de descifrado de administrador configurada, por lo que ningún administrador podría leerlo. Pida a un administrador que configure una."
   },
   "channels": {
     "a2p": {

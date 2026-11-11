@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "Aucun type d'entité n'est configuré pour ce hub."
+    "noEntityTypesDescription": "Aucun type d'entité n'est configuré pour ce hub.",
+    "noAdminRecipient": "Impossible d'enregistrer ce dossier : aucune clé de déchiffrement administrateur n'est configurée, donc aucun administrateur ne pourrait le lire. Demandez à un administrateur d'en configurer une."
   },
   "channels": {
     "a2p": {

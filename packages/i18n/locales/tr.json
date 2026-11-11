@@ -2398,7 +2398,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "Bu merkez için yapılandırılmış varlık türü yok."
+    "noEntityTypesDescription": "Bu merkez için yapılandırılmış varlık türü yok.",
+    "noAdminRecipient": "Bu vaka kaydedilemiyor: yapılandırılmış bir yönetici şifre çözme anahtarı yok, bu nedenle hiçbir yönetici okuyamaz. Bir yöneticiden anahtar yapılandırmasını isteyin."
   },
   "channels": {
     "whatsapp": {

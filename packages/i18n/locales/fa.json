@@ -3761,7 +3761,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "هیچ نوع موجودیتی برای این هاب پیکربندی نشده است."
+    "noEntityTypesDescription": "هیچ نوع موجودیتی برای این هاب پیکربندی نشده است.",
+    "noAdminRecipient": "ذخیرهٔ این پرونده ممکن نیست: هیچ کلید رمزگشایی مدیر پیکربندی نشده است، بنابراین هیچ مدیری نمی‌تواند آن را بخواند. از یک مدیر بخواهید کلیدی پیکربندی کند."
   },
   "contactDirectory": {
     "create": "ایجاد مخاطب",

@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "이 허브에 구성된 엔티티 유형이 없습니다."
+    "noEntityTypesDescription": "이 허브에 구성된 엔티티 유형이 없습니다.",
+    "noAdminRecipient": "이 사건을 저장할 수 없습니다: 관리자 복호화 키가 설정되어 있지 않아 어떤 관리자도 읽을 수 없습니다. 관리자에게 키 설정을 요청하세요."
   },
   "channels": {
     "a2p": {
