@@ -1,5 +1,5 @@
 import { isKnopeReleasePr } from './roles/release.js'
-import { laneIdFromBranch } from './ci.js'
+import { laneIdFromBranch, QUEUE_CLEARED_LABEL } from './ci.js'
 
 /**
  * Where this fleet does NOT arm auto-merge, and why (#2732).
@@ -39,4 +39,48 @@ import { laneIdFromBranch } from './ci.js'
  */
 export function isFleetOwnedBranch(headRefName: string): boolean {
   return laneIdFromBranch(headRefName) !== undefined || isKnopeReleasePr({ headRefName })
+}
+
+export interface ArmAutoMergeDeps {
+  /** The PR's head branch and current labels, read fresh from GitHub. */
+  readPr(pr: string): Promise<{ headRefName: string; labels: readonly string[] }>
+  /** Applies the supervisor's `queue-cleared` admission label. THROWS on failure. */
+  addQueueClearedLabel(pr: string): Promise<void>
+  /** Hands the label back. Best-effort: must not throw. */
+  removeQueueClearedLabel(pr: string): Promise<void>
+  /** The one literal `gh pr merge <pr> --auto --squash` (guards.test.ts pins that there is exactly one). */
+  requestAutoMerge(pr: string): Promise<void>
+}
+
+/**
+ * THE single point where the fleet arms auto-merge — every arm site (tick.ts's
+ * post-review arm, queue-feed's arm/re-arm) reaches GitHub only through this,
+ * so no path can arm a `fleet/<lane>/<n>` PR without first clearing it for the
+ * queue (#2689).
+ *
+ * Why: the merge-queue guard (fleet-verify.yml, #1894) reads the PR INSIDE the
+ * merge group, after GitHub has consumed the auto-merge request, so the armed
+ * request is not visible there; `queue-cleared` is the only admission signal
+ * that survives. Arming without it is silent for 30-45 minutes and then the
+ * entry is ejected at the head of the queue (`queue-entry-unsignalled`).
+ * #2660 labelled only queue-feed's re-arm path and left the other arm paths
+ * (the tick's post-review arm, and the since-removed arm-at-open) unlabelled —
+ * which is why this wraps the arm itself rather than one caller.
+ *
+ * Fail-closed: if the label cannot be applied the PR is NOT armed (it would
+ * only be ejected later); the error propagates so each caller reports it the
+ * way it already reports a failed arm. If the arm fails after this call added
+ * the label, the label is handed back so a clearance never outlives the act it
+ * cleared. A label that was already there is never touched.
+ */
+export async function armAutoMergeWithQueueClearance(pr: string, deps: ArmAutoMergeDeps): Promise<void> {
+  const { headRefName, labels } = await deps.readPr(pr)
+  const needsLabel = laneIdFromBranch(headRefName) !== undefined && !labels.includes(QUEUE_CLEARED_LABEL)
+  if (needsLabel) await deps.addQueueClearedLabel(pr)
+  try {
+    await deps.requestAutoMerge(pr)
+  } catch (e) {
+    if (needsLabel) await deps.removeQueueClearedLabel(pr)
+    throw e
+  }
 }
