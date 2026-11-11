@@ -2,6 +2,7 @@ package org.llamenos.hotline
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,7 @@ import org.llamenos.hotline.api.InviteRepository
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.service.DeviceRegistrationManager
 import org.llamenos.hotline.service.PushRegistrationManager
 import org.llamenos.hotline.ui.auth.AuthUiState
@@ -591,6 +593,66 @@ class AuthViewModelTest {
         // The unlock path re-registers the keys too: a registration that failed
         // at enrolment (network, server down) heals on the next unlock.
         verify(exactly = 1) { deviceRegistrationManager.ensureRegistered() }
+    }
+
+    /** A mocked [KeystoreService] holding one stored key blob and no lockout, so the lockout path is live. */
+    private fun lockoutTrackingKeystore(): KeystoreService {
+        val ks = mockk<KeystoreService>(relaxed = true)
+        every { ks.retrieve(KeystoreService.KEY_ENCRYPTED_KEYS) } returns Json.encodeToString(
+            StoredKeyData(
+                salt = "c2FsdA==",
+                nonce = "bm9uY2U=",
+                ciphertext = "Y2lwaGVydGV4dA==",
+                signingPubkeyHex = "a".repeat(64),
+                encryptionPubkeyHex = "b".repeat(64),
+                deviceId = "device-1",
+            ),
+        )
+        every { ks.checkLockoutState() } returns PinLockoutState.Unlocked(attemptsRemaining = 10)
+        return ks
+    }
+
+    @Test
+    fun `PIN unlock without the native library reports the missing library, not an incorrect PIN`() = runTest {
+        // Real CryptoService: the JVM genuinely cannot load llamenos_core, so this drives the
+        // actual UnsatisfiedLinkError -> NativeCryptoLibraryMissingException path (#1278).
+        val ks = lockoutTrackingKeystore()
+        val vm = AuthViewModel(
+            cryptoService, ks, biometricKeyStore, inviteRepository,
+            deviceRegistrationManager, pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("123456")
+
+        val state = vm.uiState.value
+        assertFalse(state.isAuthenticated)
+        assertTrue(
+            "error must name the missing native library, was: ${state.error}",
+            state.error!!.contains("llamenos_core") && state.error!!.contains("build-mobile.sh"),
+        )
+        assertFalse("a missing library is not a wrong PIN", state.error!!.contains("Incorrect PIN"))
+        assertEquals(0, state.failedAttempts)
+        // Failed attempts accumulate toward lockout and a key wipe; a build fault must not feed them.
+        verify(exactly = 0) { ks.recordFailedAttempt() }
+    }
+
+    @Test
+    fun `a genuine unlock failure still counts as a failed PIN attempt`() = runTest {
+        // Control for the test above: only the missing-library case bypasses lockout accounting.
+        val ks = lockoutTrackingKeystore()
+        every { ks.recordFailedAttempt() } returns PinLockoutState.Unlocked(attemptsRemaining = 9)
+        val mockCrypto = mockk<CryptoService>()
+        coEvery { mockCrypto.unlockWithPin(any(), any()) } throws
+            org.llamenos.hotline.crypto.CryptoException("Decryption failed: incorrect PIN")
+        val vm = AuthViewModel(
+            mockCrypto, ks, biometricKeyStore, inviteRepository,
+            deviceRegistrationManager, pushRegistrationManager,
+        )
+
+        vm.unlockWithPin("000000")
+
+        assertEquals("Incorrect PIN", vm.uiState.value.error)
+        verify(exactly = 1) { ks.recordFailedAttempt() }
     }
 
     @Test

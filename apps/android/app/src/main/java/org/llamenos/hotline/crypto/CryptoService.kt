@@ -242,15 +242,9 @@ class CryptoService @Inject constructor() {
     /** Whether any device identity has been set (even if locked). */
     val hasIdentity: Boolean get() = signingPubkeyHex != null
 
-    internal var nativeLibLoaded = false
+    internal val nativeLibLoaded: Boolean get() = NativeCryptoLibrary.isLoaded
 
     init {
-        try {
-            System.loadLibrary("llamenos_core")
-            nativeLibLoaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            nativeLibLoaded = false
-        }
         if (nativeLibLoaded) {
             // Arm UniFFI's binding/library integrity check: contract version plus a
             // per-function checksum. Nothing else ever references the generated
@@ -271,7 +265,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun generateDeviceKeys(deviceId: String, pin: String): EncryptedDeviceKeys =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
 
             try {
                 val ffiResult = org.llamenos.core.mobileGenerateAndLoad(
@@ -309,7 +303,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun unlockWithPin(data: EncryptedDeviceKeys, pin: String): DeviceKeyState =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
 
             try {
                 val ffiData = org.llamenos.core.EncryptedDeviceKeys(
@@ -388,7 +382,7 @@ class CryptoService @Inject constructor() {
         }
 
     private fun createAuthTokenWithoutNonceInternal(method: String, path: String): AuthToken {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         val timestamp = System.currentTimeMillis()
@@ -410,7 +404,7 @@ class CryptoService @Inject constructor() {
     }
 
     private fun createAuthTokenInternal(method: String, path: String): AuthToken {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         val timestamp = System.currentTimeMillis()
@@ -444,7 +438,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun createInviteRedemptionToken(path: String): AuthToken =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             if (!isUnlocked) throw CryptoException("No key loaded")
             val pubkey = signingPubkeyHex ?: throw CryptoException("No device identity")
             val timestamp = System.currentTimeMillis()
@@ -576,7 +570,7 @@ class CryptoService @Inject constructor() {
         payload: String,
         recipientPubkeys: List<String>,
     ): EncryptedNote = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         try {
@@ -623,7 +617,7 @@ class CryptoService @Inject constructor() {
         ciphertextHex: String,
         envelope: HpkeEnvelope,
     ): NotePayload? = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) return@withContext null
 
         try {
@@ -661,7 +655,7 @@ class CryptoService @Inject constructor() {
         plaintext: String,
         readerPubkeys: List<String>,
     ): EncryptedMessage = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         val encPubkey = encryptionPubkeyHex ?: throw CryptoException("No key loaded")
 
         try {
@@ -695,7 +689,7 @@ class CryptoService @Inject constructor() {
         encryptedContent: String,
         envelopes: List<RecipientEnvelope>,
     ): String? = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) return@withContext null
 
         try {
@@ -724,7 +718,7 @@ class CryptoService @Inject constructor() {
         plaintext: String,
         readerPubkeys: List<String>,
     ): EncryptedCase = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             val sealed = org.llamenos.core.mobileSealCase(
@@ -757,7 +751,7 @@ class CryptoService @Inject constructor() {
         encryptedContent: String,
         envelopes: List<RecipientEnvelope>,
     ): String? = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         val ours = encryptionPubkeyHex ?: return@withContext null
         if (!isUnlocked || envelopes.none { it.pubkey.equals(ours, ignoreCase = true) }) {
             return@withContext null
@@ -780,7 +774,7 @@ class CryptoService @Inject constructor() {
 
     /** Create the initial Per-User Key (generation 1). */
     suspend fun createInitialPuk(): String = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             org.llamenos.core.mobilePukCreate()
@@ -802,7 +796,7 @@ class CryptoService @Inject constructor() {
         oldGen: UInt,
         remainingDevicesJson: String,
     ): org.llamenos.core.RotatePukResult = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             org.llamenos.core.mobilePukRotate(
@@ -825,7 +819,7 @@ class CryptoService @Inject constructor() {
         timestamp: String,
         payloadJson: String,
     ): org.llamenos.core.SigchainLink = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             org.llamenos.core.mobileSigchainCreateLink(
@@ -845,7 +839,7 @@ class CryptoService @Inject constructor() {
         linkJson: String,
         expectedSignerPubkey: String,
     ): Boolean = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         try {
             org.llamenos.core.mobileSigchainVerifyLink(linkJson, expectedSignerPubkey)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -857,7 +851,7 @@ class CryptoService @Inject constructor() {
     suspend fun verifySigchain(
         linksJson: String,
     ): org.llamenos.core.SigchainVerifiedState = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         try {
             org.llamenos.core.mobileSigchainVerify(linksJson)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -880,7 +874,7 @@ class CryptoService @Inject constructor() {
         oldGen: Int,
         remainingDevicesJson: String,
     ): org.llamenos.core.RotatePukResult = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             org.llamenos.core.mobilePukRotate(
@@ -898,7 +892,7 @@ class CryptoService @Inject constructor() {
         envelope: HpkeEnvelope,
         expectedLabel: String,
     ): String = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
         try {
             val ffiEnvelope = org.llamenos.core.HpkeEnvelope(
@@ -922,7 +916,7 @@ class CryptoService @Inject constructor() {
         seedHex: String,
         generation: Int,
     ): org.llamenos.core.PukState = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         try {
             org.llamenos.core.mobilePukDeriveState(
                 seedHex = seedHex,
@@ -972,7 +966,7 @@ class CryptoService @Inject constructor() {
      * @param previousHex Previous epoch key (empty string if none)
      */
     fun setServerEventKeys(currentHex: String, previousHex: String = "") {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         try {
             org.llamenos.core.mobileSetServerEventKeys(currentHex, previousHex)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -989,7 +983,7 @@ class CryptoService @Inject constructor() {
      * Returns only the public key. Use [ecdhComplete] to derive the shared secret.
      */
     fun generateEphemeralKey(): EphemeralKeyResult {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         return try {
             val publicKeyHex = org.llamenos.core.mobileGenerateEphemeralKey()
             EphemeralKeyResult(publicKeyHex)
@@ -1005,7 +999,7 @@ class CryptoService @Inject constructor() {
      * Returns the shared secret hex for SAS derivation and provisioning decryption.
      */
     fun ecdhComplete(theirPublicKeyHex: String): String {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         return try {
             org.llamenos.core.mobileEcdhComplete(theirPublicKeyHex)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -1031,7 +1025,7 @@ class CryptoService @Inject constructor() {
         ciphertextHex: String,
         sharedSecretHex: String,
     ): String = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         try {
             org.llamenos.core.decryptWithSharedKeyHex(ciphertextHex, sharedSecretHex)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -1043,7 +1037,7 @@ class CryptoService @Inject constructor() {
      * Derive a 6-digit SAS verification code from a shared secret.
      */
     fun deriveSASCode(sharedSecret: String): String {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         return try {
             org.llamenos.core.computeSasCode(sharedSecret)
         } catch (e: org.llamenos.core.CryptoException) {
@@ -1090,7 +1084,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun loadHubKey(hubId: String, envelope: HubKeyEnvelopeResponse): Unit =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             if (!isUnlocked) throw CryptoException("No key loaded")
 
             try {
@@ -1136,7 +1130,7 @@ class CryptoService @Inject constructor() {
 
     suspend fun shamirSplit(secretHex: String, total: Int, threshold: Int): List<ShamirShare> =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             try {
                 val ffiShares = org.llamenos.core.mobileShamirSplit(
                     secretHex = secretHex,
@@ -1151,7 +1145,7 @@ class CryptoService @Inject constructor() {
 
     suspend fun shamirCombine(shares: List<ShamirShare>, threshold: Int = shares.size): String =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             try {
                 org.llamenos.core.mobileShamirCombine(
                     shares = shares.map { it.toFfi() },
@@ -1164,7 +1158,7 @@ class CryptoService @Inject constructor() {
 
     suspend fun shamirCommit(share: ShamirShare): String =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             try {
                 org.llamenos.core.mobileShamirCommit(share = share.toFfi())
             } catch (e: Exception) {
@@ -1174,7 +1168,7 @@ class CryptoService @Inject constructor() {
 
     suspend fun shamirVerify(share: ShamirShare, commitment: String): Boolean =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             try {
                 org.llamenos.core.mobileShamirVerify(share = share.toFfi(), commitmentHex = commitment)
             } catch (e: Exception) {
@@ -1186,7 +1180,7 @@ class CryptoService @Inject constructor() {
 
     suspend fun recoveryGroupGenerateKeypair(): RecoveryGroupKeypair =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             try {
                 val ffiKeypair = org.llamenos.core.mobileRecoveryGroupGenerateKeypair()
                 RecoveryGroupKeypair(
@@ -1244,7 +1238,7 @@ class CryptoService @Inject constructor() {
         mimeType: String,
         recipientPubkeys: List<String>,
     ): EncryptedFile = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         try {
@@ -1319,7 +1313,7 @@ class CryptoService @Inject constructor() {
      * Decrypt a file key from an HPKE envelope with LABEL_FILE_KEY.
      */
     suspend fun decryptFileKey(envelope: HpkeEnvelope): String = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         val ffiEnvelope = org.llamenos.core.HpkeEnvelope(
@@ -1379,7 +1373,7 @@ class CryptoService @Inject constructor() {
         encryptedContentHex: String,
         fileKeyHex: String,
     ): ByteArray = withContext(computeDispatcher) {
-        check(nativeLibLoaded) { "Native crypto library not loaded." }
+        NativeCryptoLibrary.require()
         if (!isUnlocked) throw CryptoException("No key loaded")
 
         try {
@@ -1403,7 +1397,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun encryptDraft(plaintext: String, hubId: String): String =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             if (!isUnlocked) throw CryptoException("No key loaded")
             try {
                 org.llamenos.core.mobileEncryptDraft(plaintext = plaintext, hubId = hubId)
@@ -1418,7 +1412,7 @@ class CryptoService @Inject constructor() {
      */
     suspend fun decryptDraft(packedHex: String, hubId: String): String =
         withContext(computeDispatcher) {
-            check(nativeLibLoaded) { "Native crypto library not loaded." }
+            NativeCryptoLibrary.require()
             if (!isUnlocked) throw CryptoException("No key loaded")
             try {
                 org.llamenos.core.mobileDecryptDraft(packedHex = packedHex, hubId = hubId)
