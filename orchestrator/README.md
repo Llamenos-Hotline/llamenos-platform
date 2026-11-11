@@ -131,7 +131,12 @@ armed — the queue guard (`fleet-verify.yml`) reads the PR inside the merge
 group, after the auto-merge request is consumed, so without the label the entry
 is rejected again in seconds — and a PR whose last attempt failed *only*
 because the guard refused that unsignalled entry is eligible again (the failure
-is the entry's, not the diff's). A PR is queued only if **all** of:
+is the entry's, not the diff's). The label is applied at the single arming
+point (`armAutoMergeWithQueueClearance`, `automerge.ts`, behind cli.ts's
+`enableAutoMerge`), not per caller, so the arm-at-PR-open path and the tick's
+post-review arm are labelled too (#2689); a rail in
+`tests/orchestrator/automerge.test.ts` fails if any other arm path appears.
+A PR is queued only if **all** of:
 
 1. A **per-PR** `gh pr view` says `CLEAN` — the list form's
    `mergeStateStatus` is stale, so the list enumerates numbers and never

@@ -38,7 +38,7 @@ import {
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   reviewNotRequestedAdvice, reviewGateFailsClosed,
   ciContextFromEnv, ciDiff, ciChangedFiles, ciHeadTree,
-  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB, QUEUE_CLEARED_LABEL,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
@@ -75,7 +75,7 @@ import {
 } from './digest-issue.js'
 import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
-import { armStandardAutoMergeAtOpen } from './automerge.js'
+import { armStandardAutoMergeAtOpen, armAutoMergeWithQueueClearance } from './automerge.js'
 import { requestReviewAtOpen, defaultReviewRequestAtOpenDeps } from './review-request.js'
 
 const execFileAsync = promisify(execFile)
@@ -790,7 +790,27 @@ async function commentOnPr(pr: string, body: string): Promise<void> {
  * itself once the queue merges.
  */
 async function enableAutoMerge(pr: string): Promise<void> {
-  await gh(['pr', 'merge', pr, '--auto', '--squash'])
+  // Every arm goes through armAutoMergeWithQueueClearance, which applies the
+  // `queue-cleared` label to a fleet-dispatched PR first (#2689) — see there.
+  await armAutoMergeWithQueueClearance(pr, {
+    readPr: async (n) => {
+      const raw = JSON.parse(await gh(['pr', 'view', n, '--json', 'headRefName,labels'])) as
+        { headRefName?: unknown; labels?: { name?: unknown }[] }
+      if (typeof raw.headRefName !== 'string' || !Array.isArray(raw.labels)) {
+        throw new Error(`could not read PR ${n}'s head branch and labels`)
+      }
+      return { headRefName: raw.headRefName, labels: raw.labels.flatMap((l) => (typeof l.name === 'string' ? [l.name] : [])) }
+    },
+    addQueueClearedLabel: async (n) => { await gh(['pr', 'edit', n, '--add-label', QUEUE_CLEARED_LABEL]) },
+    removeQueueClearedLabel: async (n) => {
+      try {
+        await gh(['pr', 'edit', n, '--remove-label', QUEUE_CLEARED_LABEL])
+      } catch (e) {
+        log(`auto-merge: could not remove ${QUEUE_CLEARED_LABEL} from PR ${n}: ${errMsg(e)}`)
+      }
+    },
+    requestAutoMerge: async (n) => { await gh(['pr', 'merge', n, '--auto', '--squash']) },
+  })
 }
 
 /** Clears an auto-merge armed by an EARLIER attempt on the same PR before
