@@ -11,6 +11,7 @@ import type { VerifyInput, VerifyReport } from './verify.js'
 import { gh } from './gh.js'
 import { fleetRuntimeRoot } from './provenance.js'
 import { HIGH_IMPACT_PATHS } from './impact.js'
+import { briefReadCoverage, describeIncompleteRead } from './brief-coverage.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -500,12 +501,20 @@ const REVIEWER_MODEL = process.env['FLEET_REVIEW_MODEL'] || 'sonnet'
  *   - `'brief-too-large'`: a local sanity ceiling refused the brief before
  *     invocation. Retrying it through another engine would send the same
  *     oversized input and cannot recover the review.
+ *   - `'brief-unread'` (#2726): the engine ran and answered, but its own
+ *     transcript proves it was never shown the whole brief. kimi receives
+ *     the brief as a file and pages through it with `Read`; a model that does
+ *     not send the continuation offset gets page one again and again. Whatever
+ *     verdict it then wrote judged a fraction of the diff, so it is discarded.
+ *     The other engine takes the brief over stdin — no paging — so this DOES
+ *     cross to the fallback.
  */
 export type EngineFailureKind =
   | 'engine-misconfigured'
   | 'engine-unavailable'
   | 'budget-exhausted'
   | 'brief-too-large'
+  | 'brief-unread'
 
 /**
  * `claude`'s own, stable error text for a `--model` id its build does not
@@ -701,6 +710,11 @@ const FALLBACK_AUTH_RE =
 export function canFallbackAfterFailure(failureKind: EngineFailureKind, text: string): boolean {
   if (failureKind === 'budget-exhausted' || failureKind === 'brief-too-large') return false
   if (failureKind === 'engine-misconfigured') return true
+  // The other engine is handed the same brief by a different route (claude's
+  // stdin pipe has no pages), so an incomplete READ says nothing about it. The
+  // text is the transcript's own diagnostics — never matched against the auth
+  // pattern, which a model quoting a diff about 401s could otherwise trip.
+  if (failureKind === 'brief-unread') return true
   return !FALLBACK_AUTH_RE.test(text)
 }
 
@@ -2964,7 +2978,20 @@ async function runKimiOnce(input: {
     call.child?.stdin?.end()
     const { stdout, stderr } = await call
     await writeSessionTranscript('kimi', stdout, stderr ?? '')
-    return { reached: true, engine: 'kimi', ...decodeKimiOutput(stdout, stderr ?? '') }
+    const decoded = decodeKimiOutput(stdout, stderr ?? '')
+    // The model's word for what it read is not evidence. The transcript is.
+    // A verdict written after reading 62% of the diff reads exactly like one
+    // written after all of it, so it is discarded and the failure is named.
+    const coverage = briefReadCoverage(stdout, briefPath, input.prompt)
+    if (!coverage.complete) {
+      return {
+        reached: false, engine: 'kimi', assistantText: '',
+        failureKind: 'brief-unread',
+        diagnostics: [`kimi did not read the whole brief: ${describeIncompleteRead(coverage)}`, decoded.diagnostics]
+          .filter((x) => x.trim() !== '').join('\n'),
+      }
+    }
+    return { reached: true, engine: 'kimi', ...decoded }
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string }
     await writeSessionTranscript('kimi', err.stdout ?? '', err.stderr ?? '')

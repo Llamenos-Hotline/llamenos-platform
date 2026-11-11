@@ -776,12 +776,18 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, execFile: mockFn }
 })
 
+import { kimiTranscript } from './helpers/kimi-transcript.js'
 import { execFile } from 'node:child_process'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
 
 function mockExecFileResolves(stdout: string): void {
   mockExecFile.mockResolvedValue({ stdout, stderr: '' })
+}
+
+/** Every `kimi` call answers with a transcript that READ its brief, then `finalText`. */
+function mockKimiReviewer(finalText: string): void {
+  mockExecFile.mockImplementation(async (_file: string, argv: string[]) => ({ stdout: kimiTranscript(argv, finalText), stderr: '' }))
 }
 
 function mockExecFileRejects(err: unknown): void {
@@ -859,7 +865,7 @@ describe('secondOpinion', () => {
   // reviewer than a `claude`-authored one, or resurrect an `opencode` binary
   // call) fails this test either way. Default order: kimi primary.
   it.each(['claude', 'opencode'] as const)('runs the reviewer on the primary engine (kimi by default) regardless of the author engine (%s)', async (authorEngine) => {
-    mockExecFileResolves('VERDICT: PASS')
+    mockKimiReviewer('VERDICT: PASS')
     const { secondOpinion } = await import('../../orchestrator/src/review.js')
     const worktree = makeAuthorWorktree()
     const passedReport = {
@@ -1647,7 +1653,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
   const AUTH_ERR = Object.assign(new Error('Command failed'), {
     stdout: '', stderr: 'Error: not logged in. Please run /login to authenticate.',
   })
-  const KIMI_PASS_STREAM = JSON.stringify({ role: 'assistant', content: 'checked the diff\nVERDICT: PASS' })
+  const KIMI_PASS_TEXT = 'checked the diff\nVERDICT: PASS'
   const CLAUDE_PASS = 'checked the diff\nVERDICT: PASS'
 
   beforeEach(() => {
@@ -1690,7 +1696,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     mockExecFile.mockImplementationOnce(async (_binary: string, argv: string[]) => {
       briefRef = argv[argv.indexOf('-p') + 1] as string
       briefContent = readFileSync(briefRef.slice(1), 'utf8')
-      return { stdout: KIMI_PASS_STREAM, stderr: '' }
+      return { stdout: kimiTranscript(argv, KIMI_PASS_TEXT), stderr: '' }
     })
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
@@ -1769,7 +1775,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
   })
 
   it('a substantive kimi FAIL is never retried through claude', async () => {
-    mockExecFileResolves(JSON.stringify({ role: 'assistant', content: 'VERDICT: FAIL — writes the hub key to the log' }))
+    mockKimiReviewer('VERDICT: FAIL — writes the hub key to the log')
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('FAIL')
     expect(result.engine).toBe('kimi')
@@ -1859,7 +1865,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
   it('claude-first order: a claude cannot-run retries through kimi, labelled "reviewed by kimi (claude unavailable)"', async () => {
     process.env[ENV_PRIMARY] = 'claude'
     mockExecFile.mockRejectedValueOnce(QUOTA_ERR)
-    mockExecFile.mockResolvedValueOnce({ stdout: KIMI_PASS_STREAM, stderr: '' })
+    mockExecFile.mockImplementationOnce(async (_file: string, argv: string[]) => ({ stdout: kimiTranscript(argv, KIMI_PASS_TEXT), stderr: '' }))
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('kimi')
