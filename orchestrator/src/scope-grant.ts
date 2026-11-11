@@ -5,7 +5,7 @@ import { checkScope } from './scope.js'
 import { isFleetOwnedBranch } from './automerge.js'
 import { secretFinding } from './write-gate.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
-import { prApiNumber } from './review-request.js'
+import { prApiNumber, type ReviewRequestOutcome } from './review-request.js'
 
 /**
  * Cross-lane fleet PRs carry their own `scope:<lane>` grant at open (#2643).
@@ -209,6 +209,30 @@ export async function grantScopeAtOpen(
     deps.log(`scope-grant: pr ${prRaw} FAILED — ${reason}`)
     return { kind: 'failed', reason }
   }
+}
+
+/**
+ * The at-open sequence: grant, then make sure a reviewer is requested.
+ *
+ * The plain at-open request is skipped ONLY when the grant's own re-fire is
+ * CONFIRMED (`granted` + `refired: true`). `refired: false` means the re-fire
+ * was unconfirmed — its POST threw, the `review_requested` count never
+ * advanced, or the count could not be read — and in the worst of those the
+ * re-fire's DELETE already removed the stale pending reviewer, leaving a PR
+ * with `scope:` labels and NO requested reviewer: born BLOCKED at
+ * `NO-VERDICT:unreviewed` with nothing able to clear it (#1760). Falling
+ * through is safe in every sub-case: `requestReviewAtOpen` reads the live
+ * reviewers first and returns `already-pending` without any POST when the
+ * re-fire did land (rule 2 of review-request.ts), so the extra call is a
+ * no-op rather than a second `review_requested` on the single review runner.
+ */
+export async function grantScopeThenRequestReview(deps: {
+  grant(): Promise<ScopeGrantOutcome>
+  requestReview(): Promise<ReviewRequestOutcome>
+}): Promise<{ grant: ScopeGrantOutcome; review: ReviewRequestOutcome | undefined }> {
+  const grant = await deps.grant()
+  if (grant.kind === 'granted' && grant.refired) return { grant, review: undefined }
+  return { grant, review: await deps.requestReview() }
 }
 
 /** The live reads and writes, wired like every other orchestrator module:

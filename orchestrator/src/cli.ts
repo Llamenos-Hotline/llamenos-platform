@@ -77,7 +77,7 @@ import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { armStandardAutoMergeAtOpen } from './automerge.js'
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
-import { grantScopeAtOpen, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
+import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -708,14 +708,16 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
   // PR whose first run lacked them stops at NO-VERDICT:scope with no reviewer
   // run at all. `grantScopeAtOpen` applies exactly the grants the diff needs
   // and re-fires the review itself (the labels alone do not trigger it), so
-  // the plain request below is only for a PR that needed no grant.
-  const scopeGrant = await grantScopeAtOpenFor(resolved.pr, branch, resolved.branchMismatch)
-  if (scopeGrant.kind !== 'granted') {
-    await requestReviewAtOpen(
+  // the plain request below runs for every PR whose grant did not CONFIRM that
+  // re-fire (none needed, or an unconfirmed one that may have left no pending
+  // reviewer) — see grantScopeThenRequestReview.
+  await grantScopeThenRequestReview({
+    grant: () => grantScopeAtOpenFor(resolved.pr, branch, resolved.branchMismatch),
+    requestReview: () => requestReviewAtOpen(
       { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
       defaultReviewRequestAtOpenDeps(log),
-    )
-  }
+    ),
+  })
 
   return resolved
 }

@@ -3,9 +3,9 @@ import { loadLanes, GRANT_EXCLUDED_PATHS, type Lane } from '../../orchestrator/s
 import { checkScopeAcross } from '../../orchestrator/src/scope.js'
 import { NEVER_WRITE_PATHS } from '../../orchestrator/src/config.js'
 import {
-  planScopeGrants, grantScopeAtOpen, scopeGrantComment, SCOPE_GRANT_COMMENT_MARKER, type ScopeGrantDeps,
+  planScopeGrants, grantScopeAtOpen, grantScopeThenRequestReview, scopeGrantComment, SCOPE_GRANT_COMMENT_MARKER, type ScopeGrantDeps,
 } from '../../orchestrator/src/scope-grant.js'
-import { refireReviewRequest, type ReviewRequestAtOpenDeps } from '../../orchestrator/src/review-request.js'
+import { refireReviewRequest, requestReviewAtOpen, type ReviewRequestAtOpenDeps } from '../../orchestrator/src/review-request.js'
 import { SCOPE_GRANT_PREFIX } from '../../orchestrator/src/ci.js'
 
 // The REAL lane fragments, not hand-written scopes: the fleet's measured
@@ -229,5 +229,108 @@ describe('refireReviewRequest — a label does not trigger the gate, a fresh req
     const { deps, calls } = fakeReview({ pending: [], counts: [0, 1] })
     expect((await refireReviewRequest({ pr: 'https://example.com/x/pull/1', headRefName: 'fleet/backend/1' }, deps)).kind).toBe('failed')
     expect(calls).toEqual([])
+  })
+})
+
+// The defect the review of #2686 found by READING: cli.ts skipped the plain
+// at-open request whenever the grant came back `granted`, including with
+// `refired: false`. The re-fire DELETEs the stale pending reviewer first, so an
+// unconfirmed re-fire can leave labels and NO reviewer — born BLOCKED at
+// NO-VERDICT:unreviewed with nothing able to clear it (#1760). These drive the
+// REAL grant, refire and request code over one stateful fake of GitHub's
+// reviewer list and `review_requested` event stream, so what is asserted is the
+// end state a PR is left in, not which functions were called.
+describe('grantScopeThenRequestReview — a granted PR always ends with a reviewer', () => {
+  const REVIEWER = 'llamenos-auto'
+  function fakeGitHub(o: {
+    /** Reviewers pending when the PR was opened (the run that predates the labels). */
+    pending: string[]
+    /** Which POSTs throw, by 1-based call number. */
+    postThrowsOn?: number[]
+    /** The event stream never advances — the CODEOWNER-re-adds-instantly shape. */
+    eventsNeverAdvance?: boolean
+    /** Event reads fail AFTER the first write landed — the write succeeded, the confirmation could not look. */
+    countUnreadableAfterWrite?: boolean
+  }) {
+    const reviewers = new Set(o.pending)
+    let events = 1
+    let posts = 0
+    const calls: string[] = []
+    const reviewDeps: ReviewRequestAtOpenDeps = {
+      readPr: async () => ({ author: 'a-human', requestedReviewers: [...reviewers] }),
+      countReviewRequestedEvents: async () => (o.countUnreadableAfterWrite && posts > 0 ? undefined : events),
+      postRequestedReviewer: async (_p, l) => {
+        posts += 1
+        calls.push(`post:${l}`)
+        if (o.postThrowsOn?.includes(posts)) throw new Error('HTTP 502')
+        // GitHub: re-posting an already-pending reviewer succeeds and emits nothing.
+        if (!reviewers.has(l) && !o.eventsNeverAdvance) events += 1
+        reviewers.add(l)
+      },
+      deleteRequestedReviewer: async (_p, l) => { calls.push(`delete:${l}`); reviewers.delete(l) },
+      log: () => {},
+    }
+    const grantDeps = (): ScopeGrantDeps => ({
+      readChangedFiles: async () => ['apps/worker/a.ts', 'packages/protocol/schemas/calls.ts'],
+      readLabels: async () => [],
+      lanes: async () => lanes,
+      addLabels: async () => {},
+      comment: async () => {},
+      refireReview: async (pr, branch) =>
+        (await refireReviewRequest({ pr, headRefName: branch }, reviewDeps)).kind === 'requested',
+      log: () => {},
+    })
+    return { reviewers, calls, grantDeps, reviewDeps, eventCount: () => events }
+  }
+  const run = (gh: ReturnType<typeof fakeGitHub>) =>
+    grantScopeThenRequestReview({
+      grant: () => grantScopeAtOpen(open, gh.grantDeps()),
+      requestReview: () => requestReviewAtOpen(open, gh.reviewDeps),
+    })
+
+  it('re-fire POST throws after its DELETE: the plain request still leaves a reviewer pending', async () => {
+    // Call 1 is the re-fire's POST (throws, reviewer already deleted); call 2 is the fall-through.
+    const gh = fakeGitHub({ pending: [REVIEWER], postThrowsOn: [1] })
+    const out = await run(gh)
+    expect(out.grant).toEqual({ kind: 'granted', grants: ['shared'], refired: false })
+    expect(out.review?.kind).toBe('requested')
+    expect([...gh.reviewers]).toEqual([REVIEWER])
+  })
+
+  it('confirmed re-fire: exactly one new review_requested event, no second request', async () => {
+    const gh = fakeGitHub({ pending: [REVIEWER] })
+    const out = await run(gh)
+    expect(out.grant).toEqual({ kind: 'granted', grants: ['shared'], refired: true })
+    expect(out.review).toBeUndefined()
+    expect(gh.eventCount()).toBe(2)
+    expect(gh.calls).toEqual([`delete:${REVIEWER}`, `post:${REVIEWER}`])
+  })
+
+  it('re-fire landed but its confirmation could not be read: the fall-through is a no-op, not a second event', async () => {
+    const gh = fakeGitHub({ pending: [REVIEWER], countUnreadableAfterWrite: true })
+    const out = await run(gh)
+    expect(out.grant).toMatchObject({ kind: 'granted', refired: false })
+    expect(out.review).toEqual({ kind: 'already-pending', reviewer: REVIEWER })
+    expect(gh.eventCount()).toBe(2)
+    expect(gh.calls).toEqual([`delete:${REVIEWER}`, `post:${REVIEWER}`])
+  })
+
+  it('event count never advances (CODEOWNER re-add): reviewer is pending, so the fall-through does not re-cycle it', async () => {
+    const gh = fakeGitHub({ pending: [REVIEWER], eventsNeverAdvance: true })
+    const out = await run(gh)
+    expect(out.grant).toMatchObject({ kind: 'granted', refired: false })
+    expect(out.review).toEqual({ kind: 'already-pending', reviewer: REVIEWER })
+    expect([...gh.reviewers]).toEqual([REVIEWER])
+  })
+
+  it('a PR that needed no grant still gets its plain request', async () => {
+    const gh = fakeGitHub({ pending: [] })
+    const out = await grantScopeThenRequestReview({
+      grant: () => grantScopeAtOpen(open, { ...gh.grantDeps(), readChangedFiles: async () => ['apps/worker/a.ts'] }),
+      requestReview: () => requestReviewAtOpen(open, gh.reviewDeps),
+    })
+    expect(out.grant).toEqual({ kind: 'not-needed' })
+    expect(out.review?.kind).toBe('requested')
+    expect([...gh.reviewers]).toEqual([REVIEWER])
   })
 })
