@@ -1,0 +1,14 @@
+name: 'Playwright OS deps'
+description: >-
+  Ensure the OS libraries headless chromium needs are present, using the network
+  only if a library is actually missing. Replaces a bare
+  `playwright install-deps chromium`, which ran apt on every job even when the
+  browser cache hit, and so turned a minutes-long Ubuntu-mirror DNS failure into
+  merge-queue ejections (#2736). See scripts/ci/playwright-deps.sh.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Playwright OS deps (skipped when already satisfied)
+      shell: bash
+      run: bash scripts/ci/playwright-deps.sh
