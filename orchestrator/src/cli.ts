@@ -826,11 +826,16 @@ async function prHead(pr: string): Promise<{ sha: string; branch: string } | und
 
 /**
  * The environment the judged commit's test code runs in: what a test runner
- * needs and nothing the tick holds. The tick's own environment carries the
- * fleet's GitHub and reviewer credentials; the code under test is whatever
- * was pushed to the branch, so it must not inherit them. `HOME` and the temp
- * dir are inside the throwaway export directory, so `gh`/git config under the
- * real home is out of reach too.
+ * needs and none of the credentials in the tick's own environment (GitHub and
+ * reviewer tokens). This is credential hygiene, NOT a sandbox: the child still
+ * runs as the operator's OS user, so it can read files that user can read
+ * (including `gh`'s stored token under the real home) and reach the network.
+ * What bounds the exposure is who can trigger it: only a commit pushed to the
+ * item's own same-repo fleet branch, which needs write access to this
+ * repository, the same population whose code the tick already runs in
+ * `verifyMechanical` against a worker's worktree. Real isolation (a container
+ * or an unprivileged service account) is separate work; until then do not
+ * widen who can reach this path.
  */
 function scrubbedTestEnv(tmp: string): NodeJS.ProcessEnv {
   return {
