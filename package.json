@@ -100,7 +100,7 @@
     "dev:server:stop": "bash scripts/dev-bun.sh stop",
     "dev:server:logs": "bash scripts/dev-bun.sh logs",
     "dev:node": "bash scripts/dev-bun.sh",
-    "db:migrate": "bun scripts/run-migrations.ts",
+    "db:migrate": "bash scripts/db-migrate.sh",
     "db:generate": "bun scripts/db-generate.ts",
     "tauri:manifest": "bun run scripts/generate-update-manifest.ts",
     "load:calls": "tests/load/run.sh calls",
