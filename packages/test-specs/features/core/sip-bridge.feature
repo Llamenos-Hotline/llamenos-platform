@@ -57,3 +57,36 @@ Feature: SIP Bridge HTTP Surface
     Given a running sip-bridge with PBX_TYPE "asterisk"
     When I GET /status without a signature
     Then the response status should be 403
+
+  # ── Server-side reachability (#1698; see #1697 and #1636) ──────────────────
+  # The three scenarios above observe the bridge from the TEST RUNNER. Against
+  # a deployed target that observation is noise: SIP_BRIDGE_URL in the
+  # runner's environment (or its http://localhost:3001 default) names the
+  # runner's own machine, not the deployment's internal network — which is why
+  # the deployed suite's failures there read as a port mismatch and could
+  # never have led to #1697's actual cause (the service declared in compose
+  # with an image nothing builds, routing zero calls).
+  #
+  # The two scenarios below observe the bridge THROUGH THE SERVER, via the
+  # sipBridge check /api/health/ready always carries — #1636 made that check
+  # un-omittable, and the first scenario holds it to that. The second is the
+  # reachability probe: the check must report ok, so a declared-but-absent
+  # container fails the suite — and so does a bridge the app was never told
+  # about (SIP_BRIDGE_URL unset), because this feature is @telephony and the
+  # sidecar is required; an environment that omits it excludes the tag. The
+  # probe cannot gate itself away: the declaration it reads is the same variable
+  # the app would use to route a call, so there is no second flag to disagree
+  # with it — the exact defect class of #1697's llamenos_asterisk_enabled-gated
+  # smoke probe.
+  #
+  # The same question for a real deployment is the Ansible smoke check's
+  # (deploy/ansible/playbooks/smoke-check.yml, "App readiness reports the SIP
+  # bridge dependency ok"), which records its result unconditionally.
+
+  Scenario: Readiness never omits the sip-bridge dependency check
+    When I fetch the worker readiness report
+    Then the readiness report carries a sip-bridge check with a definite status
+
+  Scenario: The sip-bridge the server is told about is reachable from the server
+    When I fetch the worker readiness report
+    Then the server reports its declared sip-bridge as reachable
