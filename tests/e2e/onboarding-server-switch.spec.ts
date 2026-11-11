@@ -155,7 +155,11 @@ async function openInviteScreenWithLiveSession(page: Page, hubId: string): Promi
 test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
   const createdHubs: string[] = []
 
-  test.afterEach(async ({ request }) => {
+  test.afterEach(async ({ page, request }) => {
+    // The page outlives this hook (fixtures are torn down after afterEach) and its
+    // hub polls keep running; deleting the hub beneath it makes every poll a 404
+    // that the console guard then rightly reports. Stop the app first.
+    await page.goto('about:blank')
     for (const hubId of createdHubs.splice(0)) await apiDelete(request, `/hubs/${hubId}`)
   })
 
