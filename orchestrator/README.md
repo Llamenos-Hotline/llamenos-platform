@@ -477,7 +477,8 @@ push.
 **The orchestrator makes that request itself when a worker's PR appears
 (#1760).** `realDispatch` calls `requestReviewAtOpen`
 (`orchestrator/src/review-request.ts`) in the same step it links the issue
-and arms standard auto-merge, so a fleet PR is never born with an empty
+and applies any `scope:<lane>` grant (it deliberately does not arm
+auto-merge, #2732), so a fleet PR is never born with an empty
 `requested_reviewers` list — before this, every one was, and `fleet/review`
 could only ever republish `NO-VERDICT:unreviewed` on it: permanently
 BLOCKED, since a push never starts a review. The request is confirmed by
