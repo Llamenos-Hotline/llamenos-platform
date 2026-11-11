@@ -24,6 +24,7 @@
  * creates and destroys around it.
  */
 import { expect, type APIRequestContext } from '@playwright/test'
+import type { JSONValue } from 'postgres'
 import { Given, When, Then, After, getState, setState } from './fixtures'
 import { TestDB } from '../../db-helpers'
 import { getSharedState, setLastResponse } from './shared-state'
@@ -37,7 +38,7 @@ import {
 
 interface SetupCompletionState {
   /** The setup_state row as found, to put back after a scenario that reset it. */
-  originalSetupState?: unknown
+  originalSetupState?: JSONValue
   volunteerSeed?: string
   defaultHubSlug?: string
   defaultHubCountBefore?: number
@@ -88,8 +89,8 @@ async function publicSetupCompleted(request: APIRequestContext): Promise<unknown
 Given('the deployment is in its first-run state', async ({ request, world }) => {
   const row = await TestDB.getRow('system_settings', SETTINGS_ROW_ID)
   expect(row, 'system_settings singleton row is missing — is the suite pointed at the right database?').not.toBeNull()
-  setS(world, { ...getS(world), originalSetupState: row!.setup_state })
-  await TestDB.updateColumn('system_settings', SETTINGS_ROW_ID, 'setup_state', {})
+  setS(world, { ...getS(world), originalSetupState: row!.setup_state as JSONValue })
+  await TestDB.updateJsonbColumn('system_settings', SETTINGS_ROW_ID, 'setup_state', {})
   // Proved at the public surface, not assumed from the write: if the reset did
   // not take, every flag assertion below would be measuring the wrong thing.
   expect(
@@ -216,5 +217,5 @@ Then('completing setup again founded no additional default hub', async ({ reques
 After({ tags: '@global-setting and @setup-completion' }, async ({ world }) => {
   const original = getS(world).originalSetupState
   if (original === undefined) return
-  await TestDB.updateColumn('system_settings', SETTINGS_ROW_ID, 'setup_state', original as never)
+  await TestDB.updateJsonbColumn('system_settings', SETTINGS_ROW_ID, 'setup_state', original)
 })

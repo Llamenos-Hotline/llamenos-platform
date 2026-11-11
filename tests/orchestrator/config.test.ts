@@ -234,8 +234,14 @@ describe('config', () => {
     const certs = trackedFiles().filter((f) => isPublicCertificateFile(readSafely(f)))
     const lookup = (f: string) => readSafely(f)
     expect(checkScope(certs, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS], lookup).forbidden).toEqual([])
-    // Without the content lookup the gate is exactly as it was before #1610.
-    expect(checkScope(certs, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual(certs)
+    // Without the content lookup the gate is exactly as it was before #1610: a
+    // certificate is refused unread exactly when its PATH matches a secret
+    // pattern (a `.pem`). A `.crt` fixture matches none, was never unwritable,
+    // and needs no carve-out — requiring every certificate to be refused made
+    // each new `.crt` fixture break this test for no security reason.
+    const refusedUnread = certs.filter((c) => SECRET_PATH_PATTERNS.some((p) => matchesPath(c, p)))
+    expect(refusedUnread.length, 'no tracked certificate sits under a secret pattern — the unread refusal would assert nothing').toBeGreaterThan(0)
+    expect(checkScope(certs, { owned: [], notOwned: [] }, [...NEVER_WRITE_PATHS]).forbidden).toEqual(refusedUnread)
   })
 
   it('justifies every carved-out pattern with at least one tracked template — no dead exemption', () => {

@@ -360,6 +360,26 @@ export class TestDB {
   }
 
   /**
+   * Set a jsonb column to a JSON value. {@link updateColumn} cannot: its parameter is
+   * `postgres.Serializable`, which has no JSON-object member, so a jsonb write through it
+   * either fails to type-check or needs a cast that hides exactly that mismatch.
+   *
+   * The value goes through `sql.json`, never as pre-stringified text: postgres.js serializes
+   * whatever it binds to a jsonb parameter, so a JSON string would be stored as a jsonb
+   * STRING (`"{\"a\":1}"`), not the object — and a server that spreads that value then
+   * reads it back as an array of characters.
+   */
+  static async updateJsonbColumn(table: string, id: string, column: string, value: postgres.JSONValue): Promise<void> {
+    validateIdentifier(table)
+    validateIdentifier(column)
+    const db = await sql()
+    await db.unsafe(
+      `UPDATE ${table} SET ${column} = $1 WHERE id = $2`,
+      [db.json(value), id],
+    )
+  }
+
+  /**
    * Link a contact to a case record WITHOUT the API's hub check. The API refuses a contact of
    * another hub (#2605), so the one shape that check makes unreachable through it — a record
    * linked to a contact of a different hub — can only be put in place here. It is how a scenario
