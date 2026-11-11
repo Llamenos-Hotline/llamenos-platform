@@ -23,6 +23,7 @@ import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
+import { devSurfacesEnabled } from '../lib/dev-surfaces'
 import { ServiceError } from '../services/settings'
 import { toConversationResponse, toMessageResponse } from '../services/conversations'
 
@@ -445,6 +446,7 @@ conversations.post('/:id/messages',
                 suppression: services.messagingSuppression,
                 notifierUrl: c.env.NOTIFIER_URL,
                 notifierApiKey: c.env.NOTIFIER_API_KEY,
+                env: c.env,
               },
               {
                 channelType: conv.channelType as 'sms' | 'whatsapp' | 'signal',
@@ -479,29 +481,26 @@ conversations.post('/:id/messages',
           externalId = result.externalId
           status = 'sent'
         } else if (!result.success) {
-          // Bridge unreachable (network error) → store as sent, not failed
-          const isBridgeUnavailable = result.error && (
-            result.error.includes('request failed') ||
-            result.error.includes('ECONNREFUSED') ||
-            result.error.includes('ECONNRESET') ||
-            result.error.includes('ETIMEDOUT') ||
-            result.error.includes('fetch failed')
-          )
-          if (isBridgeUnavailable) {
-            logger.warn(`${conv.channelType} bridge unavailable — message stored as sent`, { conversationId: id, error: result.error })
-            status = 'sent'
-          } else {
-            status = 'failed'
-            failureReason = result.error
-          }
+          // `sent` means a provider accepted the message (#2551). A send the
+          // provider never accepted — bridge unreachable, handset off, carrier
+          // rejection — is `failed` with the reason, visible to the volunteer,
+          // never a quiet "stored as sent": the caller receives nothing either
+          // way, and only the honest state lets the volunteer know to retry.
+          status = 'failed'
+          failureReason = result.error
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Unknown error'
         const isNotConfigured = errMsg.includes('not configured') || errMsg.includes('not enabled')
             || err instanceof CircuitOpenError
         if (isNotConfigured) {
-          logger.warn(`${conv.channelType} adapter not configured — message stored as sent`, { conversationId: id })
-          status = 'sent'
+          // Same invariant as above: no provider accepted this message. On a
+          // dev-surface host the delivery router substitutes the simulated
+          // provider and this branch is never reached; anywhere else an
+          // unconfigured channel or an open circuit is an honest failure.
+          logger.error(`${conv.channelType} send failed — ${errMsg}`, { conversationId: id })
+          status = 'failed'
+          failureReason = errMsg
         } else {
           logger.error(`Failed to send outbound message via ${conv.channelType}`, err)
           status = 'failed'
@@ -512,9 +511,11 @@ conversations.post('/:id/messages',
       status = 'delivered'
     }
 
-    // Fall back to client-provided externalId (used by simulation/test flows
-    // when the messaging adapter is not configured)
-    if (!externalId && body.externalId) {
+    // Simulation/test flows may pin the provider id the message is stored with
+    // (the delivery-receipt simulations match on it). On a dev-surface host the
+    // pin wins even over the simulated provider's minted id; elsewhere it is
+    // only ever a fallback for a send that produced no provider id at all.
+    if (body.externalId && (devSurfacesEnabled(c.env) || !externalId)) {
       externalId = body.externalId
     }
 

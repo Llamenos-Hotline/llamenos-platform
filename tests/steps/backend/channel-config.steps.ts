@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test'
 import { Given, When, Then, getState, setState } from './fixtures'
 import { apiGet, apiPost, apiPatch, ADMIN_SEED, createUserViaApi, uniqueName } from '../../api-helpers'
+import { configureGlobalSignalBridge } from './global-messaging-config'
 import { getActorSeed, setActorSeed, setLastResponse, resolvePathParams } from './shared-state'
 
 interface ChannelConfigState {
@@ -129,12 +130,12 @@ Then('the response has a {string} boolean field', ({ world }, field: string) => 
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-Given('the {string} channel is configured', async ({ request }, channel: string) => {
-  const config: Record<string, unknown> = {}
-  if (channel === 'signal') {
-    config.signal = { bridgeUrl: 'http://localhost:8080', bridgeApiKey: 'test', webhookSecret: 'test', registeredNumber: '+1234' }
+Given('the {string} channel is configured', async ({ request, world, $tags }, channel: string) => {
+  if (channel !== 'signal') {
+    throw new Error(`No configured-channel fixture for channel ${channel}`)
   }
-  await apiPatch(request, '/settings/messaging', config)
+  // Nothing listens here: the scenario only needs a configured channel to probe.
+  await configureGlobalSignalBridge(request, world, $tags, 'http://localhost:8080')
 })
 
 function getNestedField(obj: unknown, path: string): unknown {

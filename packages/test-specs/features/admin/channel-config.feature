@@ -64,6 +64,9 @@ Feature: Channel Configuration
       | rcs.fallbackToSms      | false                       |
     Then the channel config response status is 400
 
+  # Writes the instance-wide Signal bridge, which every concurrent Signal reply scenario would
+  # read — so it runs in the serial @global-setting project (global-messaging-config.ts).
+  @global-setting
   Scenario: Test messaging channel connection
     Given the "signal" channel is configured
     When I POST "/settings/messaging/test" with:

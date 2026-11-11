@@ -383,6 +383,29 @@ export class TestDB {
     await (await sql()).unsafe('DELETE FROM provider_configs WHERE hub_id IS NULL')
   }
 
+  /**
+   * The instance-wide messaging config (the `system_settings` singleton's
+   * `messaging_config`) as the jsonb text Postgres stores, or `'{}'` while the
+   * singleton row does not exist yet. Opaque on purpose: it is only ever handed
+   * back to {@link restoreGlobalMessagingConfig}, so whatever shape the column
+   * holds round-trips unchanged.
+   */
+  static async snapshotGlobalMessagingConfig(): Promise<string> {
+    const rows = await (await sql()).unsafe(`SELECT messaging_config::text AS cfg FROM system_settings WHERE id = 1`)
+    return (rows[0]?.cfg as string | undefined) ?? '{}'
+  }
+
+  /**
+   * Put the instance-wide messaging config back to a {@link snapshotGlobalMessagingConfig}.
+   * The API has no unset, so the @global-setting scenarios that write one undo
+   * exactly what they wrote here: a leaked channel config would change which
+   * provider every other messaging scenario reaches. Restoring the snapshot
+   * rather than clearing the column leaves anything a scenario did not write alone.
+   */
+  static async restoreGlobalMessagingConfig(snapshot: string): Promise<void> {
+    await (await sql()).unsafe(`UPDATE system_settings SET messaging_config = $1::jsonb WHERE id = 1`, [snapshot])
+  }
+
   /** Close the database connection pool. */
   static async close(): Promise<void> {
     // Deliberately does NOT go through sql(): closing a connection that was

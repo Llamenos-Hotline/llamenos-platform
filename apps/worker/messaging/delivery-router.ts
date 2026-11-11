@@ -1,10 +1,13 @@
-import type { SendMessageParams, SendResult } from './adapter'
+import type { SendMessageParams, SendResult, MessagingAdapter } from './adapter'
 import type { MessagingChannelType } from '@shared/types'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
 import type { SettingsService } from '../services/settings'
 import { createLogger } from '../lib/logger'
 import type { OutboundSuppression } from './suppression-guard'
 import { safeFetch } from '../lib/safe-fetch'
+import { devSurfacesEnabled, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import { SimulatedMessagingAdapter } from './simulated-adapter'
+import { guardOutbound } from './suppression-guard'
 
 const logger = createLogger('delivery-router')
 
@@ -16,6 +19,40 @@ export interface DeliveryRouterDeps {
   suppression: OutboundSuppression
   notifierUrl?: string
   notifierApiKey?: string
+  /**
+   * Process environment, read by the simulated-provider fallback: when the
+   * channel is not configured AND this host may serve the dev surface, the
+   * send goes to a SimulatedMessagingAdapter that genuinely accepts and
+   * records it. Absent (or refused by the gate), an unconfigured channel
+   * throws and the caller stores the message as `failed` — `sent` means a
+   * provider accepted it (#2551).
+   */
+  env?: DevSurfacesEnv
+}
+
+/**
+ * The errors `createMessagingAdapter` throws when a channel has no working
+ * configuration behind it — never a transient provider failure, which must
+ * not fall back to the simulator.
+ */
+function isUnconfiguredChannelError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes('not configured') || msg.includes('not enabled')
+}
+
+async function resolveChannelAdapter(
+  deps: DeliveryRouterDeps,
+  channel: MessagingChannelType,
+): Promise<MessagingAdapter> {
+  try {
+    return await getMessagingAdapterFromService(channel, deps.settingsService, deps.suppression)
+  } catch (err) {
+    if (deps.env && isUnconfiguredChannelError(err) && devSurfacesEnabled(deps.env)) {
+      logger.warn(`${channel} not configured — simulated provider accepting the send (dev-surface host)`)
+      return guardOutbound(new SimulatedMessagingAdapter(channel, deps.env), deps.suppression)
+    }
+    throw err
+  }
 }
 
 async function checkSignalAvailability(
@@ -110,11 +147,7 @@ export async function routeOutboundMessage(
     }
   }
 
-  const adapter = await getMessagingAdapterFromService(
-    params.channelType,
-    deps.settingsService,
-    deps.suppression,
-  )
+  const adapter = await resolveChannelAdapter(deps, params.channelType)
 
   let body = params.body
   if (params.channelType === 'sms') {

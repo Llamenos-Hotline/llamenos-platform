@@ -18,7 +18,11 @@ Feature: Sample dataset
   # there is no demo product, and the same effect is POST /api/test-reset followed by
   # POST /api/test-seed-sample, both already covered on the dev surface.
 
+  # The conversations the seed builds follow the instance's configured channels, so the
+  # scenario configures one itself. It used to pass only because another suite's scenario
+  # left a Signal bridge configured behind it (#2654).
   Scenario: Seeding builds the fixed fictional dataset in one hub
+    Given the "signal" channel is configured
     When the sample dataset is seeded
     Then the sample hub has 12 calls in its history
     And the sample hub has 3 shifts covering all 7 days
