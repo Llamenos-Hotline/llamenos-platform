@@ -48,6 +48,9 @@ class IncidentsViewModel @Inject constructor(
     /** The authenticated shell appeared: a new session's incidents. */
     fun beginSession() = repository.beginSession()
 
+    /** The authenticated shell went away (logout, lock): forget the incidents. */
+    fun endSession() = repository.endSession()
+
     /** The incident view opened (from the banner or the push): read every hub afresh. */
     fun refresh() {
         viewModelScope.launch { repository.refreshAll() }

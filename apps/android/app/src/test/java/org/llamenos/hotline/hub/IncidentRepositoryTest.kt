@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -214,5 +215,74 @@ class IncidentRepositoryTest {
         repository.refresh("hub-A")
 
         assertTrue(repository.state.value.byHub["hub-A"].orEmpty().none { it.id == "inc-A" })
+    }
+    // ── Signed out (#2743) ──────────────────────────────────────────────────
+    // Logout clears the hub URL. The repository outlives the session (it is a singleton on
+    // the application scope), so a relay reconnect or doorbell that lands afterwards reaches
+    // ApiService.getBaseUrl(), which throws IllegalStateException("Hub URL not configured").
+    // Uncaught on the application scope that is a process crash, on the logout path.
+
+    private fun hubUrlGone() = IllegalStateException("Hub URL not configured")
+
+    @Test
+    fun `a relay reconnect after logout does not crash and does not stop the repository listening`() = runTest(dispatcher) {
+        serverIncidents["hub-A"] = listOf(incident("inc-A", "hub-A"))
+        repository.beginSession()
+        assertEquals(1, repository.state.value.incidents.size)
+
+        // Logout: the hub URL is gone, so every call throws before it can reach the network.
+        coEvery { apiService.getHubs() } throws hubUrlGone()
+        coEvery { apiService.getOpenIncidents(any()) } throws hubUrlGone()
+        connection.value = WebSocketService.ConnectionState.DISCONNECTED
+        connection.value = WebSocketService.ConnectionState.CONNECTED
+
+        assertTrue("the application scope must survive the failed read", appScope.isActive)
+
+        // The next sign-in on the same process still gets the doorbell.
+        coEvery { apiService.getHubs() } returns HubsListResponse(hubs = listOf(hub("hub-A", "Northside line")))
+        coEvery { apiService.getOpenIncidents(any()) } answers {
+            HubIncidentListResponse(incidents = serverIncidents[firstArg<String>()] ?: emptyList())
+        }
+        repository.beginSession()
+        serverIncidents["hub-A"] = listOf(incident("inc-A2", "hub-A"))
+        events.emit(AttributedHubEvent("hub-A", LlamenosEvent.HubIncidentChanged("inc-A2", "opened")))
+        assertEquals(listOf("inc-A2"), repository.state.value.incidents.map { it.id })
+    }
+
+    @Test
+    fun `a doorbell after logout does not crash`() = runTest(dispatcher) {
+        repository.beginSession()
+        coEvery { apiService.getOpenIncidents(any()) } throws hubUrlGone()
+
+        events.emit(AttributedHubEvent("hub-A", LlamenosEvent.HubIncidentChanged("inc-A", "opened")))
+
+        assertTrue("the application scope must survive the failed read", appScope.isActive)
+    }
+
+    @Test
+    fun `beginning a session with no hub URL does not crash`() = runTest(dispatcher) {
+        coEvery { apiService.getHubs() } throws hubUrlGone()
+
+        repository.beginSession()
+
+        assertTrue("the application scope must survive the failed read", appScope.isActive)
+        assertTrue(repository.state.value.incidents.isEmpty())
+    }
+
+    @Test
+    fun `ending the session forgets the incidents and discards a fetch still in flight`() = runTest(dispatcher) {
+        serverIncidents["hub-A"] = listOf(incident("inc-A", "hub-A"))
+        repository.beginSession()
+        assertEquals(1, repository.state.value.incidents.size)
+
+        repository.endSession()
+        assertTrue("a signed-out client must not keep the last user's incidents", repository.state.value.incidents.isEmpty())
+
+        coEvery { apiService.getOpenIncidents("hub-A") } answers {
+            repository.endSession()
+            HubIncidentListResponse(incidents = listOf(incident("inc-A", "hub-A")))
+        }
+        repository.refresh("hub-A")
+        assertTrue(repository.state.value.incidents.isEmpty())
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -137,6 +138,9 @@ fun MainScreen(
     val incidentsViewModel: IncidentsViewModel = hiltViewModel()
     val incidentRows by incidentsViewModel.rows.collectAsState()
     LaunchedEffect(incidentsViewModel) { incidentsViewModel.beginSession() }
+    // The shell leaves composition on logout and on lock: neither keeps the last session's
+    // incidents, nor lets a late read answer into the next one.
+    DisposableEffect(incidentsViewModel) { onDispose { incidentsViewModel.endSession() } }
 
     Scaffold(
         bottomBar = {
