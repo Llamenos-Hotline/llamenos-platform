@@ -67,6 +67,14 @@ services:
       # Wire up sidecar services so integration tests can reach them
       - NOTIFIER_URL=http://signal-notifier:3100
       - NOTIFIER_API_KEY=${NOTIFIER_API_KEY:-ci-test-notifier-key}
+      # Tell the app where the sip-bridge sidecar is (in-network name and
+      # container port; the 3001 host mapping below is for the test runner
+      # only). /api/health/ready's sipBridge check (apps/worker/routes/health.ts)
+      # reports `failing` with "SIP_BRIDGE_URL is not set" when this is absent,
+      # so without it the app can never be observed reaching the bridge. The
+      # check is non-gating: if the `asterisk` profile is not started the report
+      # is `failing` (unreachable) and the app still serves (#1418).
+      - SIP_BRIDGE_URL=http://sip-bridge:3000
       # Must equal the signal-notifier sidecar's value below; the app no longer
       # derives it from HMAC_SECRET.
       - NOTIFIER_TOKEN_SECRET=${NOTIFIER_TOKEN_SECRET:-ci-test-token-secret}
