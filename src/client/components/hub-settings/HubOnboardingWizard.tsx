@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ArrowRight, Loader2 } from 'lucide-react'
 import { HUB_CHANNEL_TYPES } from '@protocol/schemas/provider-setup'
@@ -102,10 +102,15 @@ export function HubOnboardingWizard({ hubId, hubName, onComplete }: HubOnboardin
       .finally(() => setLoading(false))
   }, [toast, t])
 
-  useEffect(() => {
-    const timer = setTimeout(() => headingRef.current?.focus(), 50)
-    return () => clearTimeout(timer)
-  }, [step])
+  // Move focus to the step heading in the same commit that mounts it (a layout
+  // effect runs before the browser can deliver any input), never on a timer: a
+  // delayed focus() lands after a keyboard user has already focused or toggled a
+  // control in the new step and steals focus from it (#2523). While `loading`
+  // the heading is unmounted, so re-run once it is back.
+  useLayoutEffect(() => {
+    if (loading) return
+    headingRef.current?.focus()
+  }, [step, loading])
 
   const currentStepIndex = WIZARD_STEPS.indexOf(step)
 
