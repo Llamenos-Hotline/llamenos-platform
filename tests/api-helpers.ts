@@ -2635,7 +2635,6 @@ export interface SeedSpec {
   }>
   shifts?: Array<{
     pubkey: string
-    allDay?: boolean
   }>
   members?: Array<{
     pubkey: string

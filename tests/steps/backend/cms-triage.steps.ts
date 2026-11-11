@@ -21,7 +21,7 @@ import {
   encryptForTest,
   ADMIN_SEED,
 } from '../../api-helpers'
-import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
 
 // ── Local State ──────────────────────────────────────────────────
 
