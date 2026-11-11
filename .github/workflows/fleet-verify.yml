@@ -224,8 +224,10 @@ jobs:
       #   2. `review-and-merge` applied the supervisor's `queue-cleared`
       #      label immediately before its own explicit merge.
       # A fleet PR in the queue with NEITHER is a worker that ran
-      # `gh pr merge` itself, and the entry is rejected HERE — seconds on an
-      # ubuntu runner — instead of after a full macOS ios-e2e cycle, whose
+      # `gh pr merge` itself — or the supervisor arming without the label,
+      # which this guard cannot tell apart from it (#2651: the message names
+      # BOTH causes and the remedy instead of asserting the worker one). The
+      # entry is rejected HERE — seconds on an ubuntu runner — instead of after a full macOS ios-e2e cycle, whose
       # ejection record reads as the PR's fault when it was not.
       #
       # Human branches (and `release`, dependabot, salvage branches) are not
@@ -299,8 +301,10 @@ jobs:
             exit 0
           fi
           echo "::error::queue-guard FAILED: queue-entry-unsignalled — fleet-dispatched PR #$PR ($BRANCH) entered the merge queue with no armed auto-merge and no queue-cleared label."
-          echo "::error::Only the supervisor queues a fleet PR (#1894) — a worker that ran 'gh pr merge' itself caused this entry, and its brief forbids exactly that."
-          echo "::error::Rejecting the entry now so it is ejected in seconds, not after a full ios-e2e cycle."
+          echo "::error::An armed auto-merge is already consumed by the time this guard runs inside the merge group, so the queue-cleared label is the only admission signal readable here. Two things produce this observation, and this guard cannot tell them apart:"
+          echo "::error::  - the entry was armed without the label (a bare 'gh pr merge --auto' on a fleet branch is never sufficient)  ->  gh pr edit $PR --add-label queue-cleared, then queue it again."
+          echo "::error::  - a worker queued its own PR, which its brief forbids (#1894; the PR timeline names the actor on its enqueued / auto_merge_enabled event)."
+          echo "::error::Either way the entry is rejected now, in seconds, rather than after a full ios-e2e cycle."
           exit 1
 
       # The BASE commit, not the head. Everything the gate decides is computed

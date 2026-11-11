@@ -336,6 +336,20 @@ describe('rail: the guard admits what the supervisor signalled, and only that', 
     expect(output).toContain('#1894')
   })
 
+  it('names BOTH causes and the remedy — never asserts the worker one it cannot verify (#2651)', () => {
+    const { output } = runGuard({
+      branch: 'fleet/infra/1182',
+      pr: { auto_merge: null, labels: [{ name: 'bug' }] },
+    })
+    // The remedy for the case that actually happened: the supervisor armed without the label.
+    expect(output).toContain('gh pr edit 1182 --add-label queue-cleared')
+    expect(output).toMatch(/armed without the label/)
+    // The other cause is still named, but as a possibility.
+    expect(output).toMatch(/a worker queued its own PR/)
+    // The unverifiable assertion is gone.
+    expect(output).not.toMatch(/a worker that ran 'gh pr merge' itself caused this entry/)
+  })
+
   it('REJECTS a fleet PR with no labels at all', () => {
     const { status, output } = runGuard({ branch: 'fleet/desktop/1' })
     expect(status).toBe(1)
