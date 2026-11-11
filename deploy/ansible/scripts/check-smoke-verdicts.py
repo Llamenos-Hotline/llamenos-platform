@@ -26,7 +26,7 @@ How the probes are made deterministic
 -------------------------------------
 Nothing here touches a server, and nothing needs root.
 
-* Host checks (ufw, fail2ban, docker, sshd, sysctl, df, container health) run
+* Host checks (ufw, fail2ban, cron, docker, sshd, sysctl, df, container health) run
   against STUB executables placed first on PATH. Each reads a FIXTURE_* env
   var, so "healthy", "broken" and "absent" are all reachable on a workstation
   that has none of those services configured. The playbook's own shell
@@ -90,6 +90,7 @@ SMOKE_PLAYBOOK = "playbooks/smoke-check.yml"
 # Check names as the playbook records them, shortened to stable substrings.
 UFW = "UFW active"
 FAIL2BAN = "fail2ban running"
+CRON = "cron daemon running"
 DOCKER = "Docker running"
 USERNS = "userns-remap"
 SSHD = "SSH password auth disabled"
@@ -149,6 +150,7 @@ fi
 unit="$2"
 case "$unit" in
   fail2ban) state="${FIXTURE_FAIL2BAN:-active}" ;;
+  cron)     state="${FIXTURE_CRON:-active}" ;;
   docker)   state="${FIXTURE_DOCKER:-active}" ;;
   *)        state="unknown" ;;
 esac
@@ -500,7 +502,7 @@ class Case:
 
 def cases() -> list[Case]:
     healthy_pass = {
-        UFW: "PASS", FAIL2BAN: "PASS", DOCKER: "PASS", USERNS: "PASS", SSHD: "PASS",
+        UFW: "PASS", FAIL2BAN: "PASS", CRON: "PASS", DOCKER: "PASS", USERNS: "PASS", SSHD: "PASS",
         SYNCOOKIES: "PASS", CONTAINERS: "PASS", APP_LIVE: "PASS", APP_READY: "PASS",
         APP_HEALTH: "PASS", POSTGRES: "PASS", RUSTFS: "PASS", SIGNAL: "PASS",
         SIP: "PASS", DISK: "PASS",
@@ -610,6 +612,10 @@ def cases() -> list[Case]:
              note="ufw not installed at all — rc 127, not a skip"),
         Case("broken_fail2ban", fixture_env={"FIXTURE_FAIL2BAN": "inactive"},
              expect={FAIL2BAN: "FAIL"}, expect_result="FAILED"),
+        Case("broken_cron", fixture_env={"FIXTURE_CRON": "inactive"},
+             expect={CRON: "FAIL"}, expect_result="FAILED",
+             note="issue #2646: package present, daemon stopped - every cron "
+                  "job is written and none fires"),
         Case("broken_docker", fixture_env={"FIXTURE_DOCKER": "inactive"},
              expect={DOCKER: "FAIL"}, expect_result="FAILED"),
         Case("broken_userns", fixture_env={"FIXTURE_USERNS": "off"},

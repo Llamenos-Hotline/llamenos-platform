@@ -44,7 +44,7 @@
 #
 # THE RULING, per check, in this file:
 #
-#   FATAL     ufw · fail2ban · docker · docker userns-remap · sshd hardening ·
+#   FATAL     ufw · fail2ban · cron daemon · docker · docker userns-remap · sshd hardening ·
 #             tcp_syncookies · no unhealthy containers · app live/ready/health ·
 #             PostgreSQL · RustFS · ntfy (local + public vhost) ·
 #             Caddy HTTPS · HSTS · X-Frame-Options · disk space ·
@@ -171,6 +171,30 @@
         # measurement.
         smoke_check_pass: "{{ (fail2ban_check.stdout | default('') | trim) == 'active' }}"
         smoke_check_detail: "systemctl is-active fail2ban reported: {{ fail2ban_check.stdout | default('(nothing)') | trim }}"
+      tags: always
+
+    - name: Assert cron daemon is active
+      ansible.builtin.command: systemctl is-active cron
+      changed_when: false
+      register: cron_check
+      ignore_errors: true
+      tags: always
+
+    - name: Record cron result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: fatal
+        smoke_check_name: cron daemon running
+        smoke_check_probe: "{{ cron_check | default({}) }}"
+        # Fatal: every ansible.builtin.cron job (the backups, the backup
+        # monitor, maintenance, alerting) is written to the crontab by a deploy
+        # that reports green, and none of them fires if the daemon is not
+        # running (issue #2646). The state string is the measurement.
+        smoke_check_pass: "{{ (cron_check.stdout | default('') | trim) == 'active' }}"
+        smoke_check_detail: "systemctl is-active cron reported: {{ cron_check.stdout | default('(nothing)') | trim }} - scheduled backups will not run"
       tags: always
 
     - name: Assert docker is active

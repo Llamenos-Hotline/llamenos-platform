@@ -13,8 +13,20 @@
 # once from `common`: backup.yml, observability.yml and deploy.yml are run on
 # their own, and not every host has been through harden.yml.
 #
-# Checked before reaching for apt so it is a no-op on a host that already has
-# cron, and so it needs no privileges there.
+# Installing is gated on `crontab` being absent, so the apt step is skipped on a
+# host that already has the package. Making sure the DAEMON is enabled and
+# running is NOT gated: the package being present says nothing about the service
+# (a trimmed image, an image where cron ships disabled, a host where someone
+# stopped it once). Gating it on the install check reported success while every
+# cron job was written to the crontab and none ever fired - including the
+# backups and the monitor that exists to notice them (issue #2646). The start
+# is idempotent, so it is a no-op on a healthy host. It does need privilege:
+# every includer already runs `become: true`.
+#
+# `masked: false` because `state: started` alone fails on a masked unit
+# ("Unit cron.service is masked") - loud, but only after the operator has to
+# work out why. A masked cron is somebody's decision to stop it; this role's
+# job is to make it run, so it unmasks (reported as `changed`).
 
 - name: Check whether crontab is already installed
   ansible.builtin.command: sh -c 'command -v crontab'
@@ -31,8 +43,8 @@
   when: cron_crontab_present.rc != 0
 
 - name: Ensure the cron daemon is enabled and running
-  ansible.builtin.service:
+  ansible.builtin.systemd:
     name: cron
     state: started
     enabled: true
-  when: cron_crontab_present.rc != 0
+    masked: false
