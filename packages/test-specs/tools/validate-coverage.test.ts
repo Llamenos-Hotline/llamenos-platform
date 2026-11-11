@@ -18,7 +18,15 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { __testing, findUntrackedSkipTags, parseFeatureFile, scenariosForPlatform } from "./validate-coverage";
+import {
+  __testing,
+  evaluateWideningGate,
+  findFiles,
+  findUntrackedSkipTags,
+  findWidenedPlatformClaims,
+  parseFeatureFile,
+  scenariosForPlatform,
+} from "./validate-coverage";
 
 const {
   extractRawScenarioSteps,
@@ -632,5 +640,91 @@ describe("findMobileSharedScenarios", () => {
 
   test("no shared scenarios means no note", () => {
     expect(findMobileSharedScenarios([sc("platform/mobile/cases/a.feature", ["android"])])).toEqual([]);
+  });
+});
+
+// #2675: Gherkin tags are additive. "@desktop" on a scenario does not keep it out of the
+// iOS/Android suites when the file is headed "@ios @android".
+describe("findWidenedPlatformClaims / evaluateWideningGate", () => {
+  const FEATURE =
+    "@ios @android\n" +
+    "Feature: Login\n" +
+    "  @desktop @regression\n" +
+    "  Scenario: Error clears when typing in device key field\n" +
+    "    Given I am on the login screen\n" +
+    "\n" +
+    "  @ios @android\n" +
+    "  Scenario: States its own claim exactly\n" +
+    "    Given I am on the login screen\n" +
+    "\n" +
+    "  Scenario: Names no platform of its own\n" +
+    "    Given I am on the login screen\n";
+
+  function scenarios(content: string) {
+    let out: ReturnType<typeof parseFeatureFile> = [];
+    withTempFeatureFile(content, (path) => {
+      out = parseFeatureFile(path);
+    });
+    return out;
+  }
+
+  test("a @desktop scenario under an @ios @android file is still selected by both mobile suites", () => {
+    const [desktopOnly] = scenarios(FEATURE);
+    expect(desktopOnly.scenarioTags).toContain("desktop");
+    expect(desktopOnly.allTags).toEqual(expect.arrayContaining(["desktop", "ios", "android"]));
+  });
+
+  test("lists a scenario that names its own platform but inherits a wider file-level claim", () => {
+    const widened = findWidenedPlatformClaims(scenarios(FEATURE));
+    expect(widened).toHaveLength(1);
+    expect(widened[0].scenario.title).toBe("Error clears when typing in device key field");
+    expect(widened[0].own).toEqual(["desktop"]);
+    expect(widened[0].inherited).toEqual(["ios", "android"]);
+  });
+
+  test("does not list a scenario that restates the file's claim or names no platform", () => {
+    const titles = findWidenedPlatformClaims(scenarios(FEATURE)).map((w) => w.scenario.title);
+    expect(titles).not.toContain("States its own claim exactly");
+    expect(titles).not.toContain("Names no platform of its own");
+  });
+
+  test("the gate FAILS when a file gains a widened scenario beyond its baseline, and names it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "widening-gate-"));
+    try {
+      const widened = findWidenedPlatformClaims(scenarios(FEATURE));
+      const file = widened[0].scenario.featureFile;
+      const baseline = join(dir, "baseline.json");
+
+      writeFileSync(baseline, JSON.stringify({ widenedScenariosByFeature: { [file]: 1 } }));
+      expect(evaluateWideningGate(widened, baseline).failures).toHaveLength(0);
+
+      writeFileSync(baseline, JSON.stringify({ widenedScenariosByFeature: {} }));
+      const { failures } = evaluateWideningGate(widened, baseline);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toContain("Error clears when typing in device key field");
+      expect(failures[0]).toContain("inherited @ios @android");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the gate reports a baseline that is higher than reality as stale, without failing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "widening-gate-"));
+    try {
+      const baseline = join(dir, "baseline.json");
+      writeFileSync(baseline, JSON.stringify({ widenedScenariosByFeature: { "gone.feature": 3 } }));
+      const result = evaluateWideningGate([], baseline);
+      expect(result.failures).toHaveLength(0);
+      expect(result.stale).toEqual(["gone.feature: 3 → 0"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the committed baseline equals the real feature tree", () => {
+    const real = findFiles(join(import.meta.dir, "../features"), ".feature").flatMap((f) => parseFeatureFile(f));
+    const result = evaluateWideningGate(findWidenedPlatformClaims(real), __testing.DEFAULT_WIDENING_BASELINE);
+    expect(result.failures).toEqual([]);
+    expect(result.stale).toEqual([]);
   });
 });

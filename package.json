@@ -74,6 +74,7 @@
     "migration:claims": "bun scripts/check-migration-claims.ts",
     "migration:order": "bun scripts/check-migration-order.ts",
     "test-specs:validate": "bun packages/test-specs/tools/validate-coverage.ts",
+    "test-specs:audit-silent-steps": "bun packages/test-specs/tools/audit-silent-steps.ts",
     "mac:run": "bash scripts/mac-run.sh",
     "ios:status": "bash scripts/ios-build.sh status",
     "ios:setup": "bash scripts/ios-build.sh setup",

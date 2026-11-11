@@ -109,3 +109,13 @@ bun packages/test-specs/tools/audit-silent-steps.ts
 bun packages/test-specs/tools/audit-silent-steps.ts --platform desktop-backend
 bun packages/test-specs/tools/audit-silent-steps.ts --platform android
 ```
+
+The same script reports step definitions that catch and discard a failure
+(a `try`/`catch` with no rethrow turns any assertion inside it into a no-op),
+and lists the scenarios that run on a device through such a `Then` (#2675).
+
+Platform tags are additive: a scenario also carries every tag on its file's
+`Feature:` line, so a `@desktop` scenario under a file headed `@ios @android`
+still counts as iOS and Android. `validate-coverage.ts` ratchets those
+(`tools/platform-tag-widening.baseline.json`); put a scenario in a file whose
+header says what it means.
