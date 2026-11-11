@@ -2663,6 +2663,7 @@
     "callId": "通话ID",
     "callIdBadge": "Call",
     "callIdPlaceholder": "通话ID或参考号",
+    "callIdRequired": "请输入此笔记所属通话的 ID 或参考编号。",
     "callWith": "与 {{number}} 的通话",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

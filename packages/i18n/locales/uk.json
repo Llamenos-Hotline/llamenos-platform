@@ -799,6 +799,7 @@
     "callId": "ID дзвінка",
     "callIdBadge": "Дзвінок",
     "callIdPlaceholder": "ID дзвінка або посилання",
+    "callIdRequired": "Вкажіть ID або номер дзвінка, до якого належить ця нотатка.",
     "callWith": "Дзвінок з {{number}}",
     "chatIdBadge": "Чат",
     "conversationBadge": "Чат",

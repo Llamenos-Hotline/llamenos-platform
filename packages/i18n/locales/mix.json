@@ -799,6 +799,7 @@
     "callId": "ID de Llamada",
     "callIdBadge": "Llamada",
     "callIdPlaceholder": "ID de llamada xi referencia",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Llamada ji {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

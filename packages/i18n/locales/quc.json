@@ -799,6 +799,7 @@
     "callId": "Retal Oyonik",
     "callIdBadge": "Oyonik",
     "callIdPlaceholder": "Retal oyonik",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Oyonik rik'in {{number}}",
     "chatIdBadge": "Tzijoxik",
     "conversationBadge": "Tzijoxik",

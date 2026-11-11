@@ -799,6 +799,7 @@
     "callId": "Arama Kimliği",
     "callIdBadge": "Arama",
     "callIdPlaceholder": "Arama kimliği veya referans",
+    "callIdRequired": "Bu notun ait olduğu görüşmenin kimliğini veya referansını girin.",
     "callWith": "{{number}} ile arama",
     "chatIdBadge": "Sohbet",
     "conversationBadge": "Sohbet",

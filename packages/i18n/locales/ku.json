@@ -799,6 +799,7 @@
     "callId": "Nasnameya Bangê",
     "callIdBadge": "Bang",
     "callIdPlaceholder": "Nasnameya bangê an referans",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Bang bi {{number}}",
     "chatIdBadge": "Sohbet",
     "conversationBadge": "Sohbet",

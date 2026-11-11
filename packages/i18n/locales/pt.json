@@ -2663,6 +2663,7 @@
     "callId": "ID da Chamada",
     "callIdBadge": "Call",
     "callIdPlaceholder": "ID da chamada ou referência",
+    "callIdRequired": "Informe o ID ou a referência da chamada à qual esta nota pertence.",
     "callWith": "Chamada com {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

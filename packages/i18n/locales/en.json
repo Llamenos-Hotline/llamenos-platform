@@ -2590,6 +2590,7 @@
     "callId": "Call ID",
     "callIdBadge": "Call",
     "callIdPlaceholder": "Call ID or reference",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Call with {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

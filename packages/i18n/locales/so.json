@@ -799,6 +799,7 @@
     "callId": "Aqoonsiga Wicitaanka",
     "callIdBadge": "Wicitaan",
     "callIdPlaceholder": "Aqoonsiga wicitaanka ama tixraaca",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Wicitaan la {{number}}",
     "chatIdBadge": "Sheeko",
     "conversationBadge": "Sheeko",

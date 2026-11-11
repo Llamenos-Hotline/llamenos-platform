@@ -2663,6 +2663,7 @@
     "callId": "कॉल ID",
     "callIdBadge": "Call",
     "callIdPlaceholder": "कॉल ID या संदर्भ",
+    "callIdRequired": "उस कॉल की आईडी या संदर्भ दर्ज करें जिससे यह नोट जुड़ा है।",
     "callWith": "{{number}} के साथ कॉल",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",
