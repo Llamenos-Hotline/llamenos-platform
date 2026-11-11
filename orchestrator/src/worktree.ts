@@ -7,19 +7,61 @@ import { NEEDS_HUMAN_LABEL } from './roles/planner.js'
 
 const execFileAsync = promisify(execFile)
 
+/** Longest tail of each captured stream kept in a failure message. Hooks and
+ *  `git push` print their reason LAST, so the tail is what is worth keeping. */
+const FAILURE_STREAM_TAIL = 4000
+
+function tail(text: string): string {
+  const t = text.trim()
+  return t.length > FAILURE_STREAM_TAIL ? `…${t.slice(-FAILURE_STREAM_TAIL)}` : t
+}
+
+/**
+ * Renders a failed `execFile` as ONE message that says why. Issue #2667: this
+ * used to be `err.stderr ?? err.stdout`, which (a) dropped stdout whenever
+ * stderr was merely present — lefthook prints which hook failed on stdout, so a
+ * failed pre-push logged only git's trailing `error: failed to push some
+ * refs` — and (b) said nothing at all about a timeout, the likeliest cause of a
+ * hook-laden push, which kills the child and leaves whatever it had printed so
+ * far. Exit code, signal and the timeout are now named explicitly.
+ */
+export function describeRunFailure(e: unknown, timeoutMs: number): string {
+  const err = e as { stdout?: string; stderr?: string; code?: unknown; signal?: string | null; killed?: boolean }
+  const parts: string[] = []
+  if (err.killed === true) {
+    parts.push(`killed by ${err.signal ?? 'a signal'} (timeout is ${timeoutMs} ms — a timeout shows as this)`)
+  } else if (err.code !== undefined) {
+    parts.push(`exit ${String(err.code)}`)
+  }
+  const stderr = tail(err.stderr ?? '')
+  const stdout = tail(err.stdout ?? '')
+  if (stderr.length > 0) parts.push(`stderr: ${stderr}`)
+  if (stdout.length > 0) parts.push(`stdout: ${stdout}`)
+  return parts.length > 0 ? parts.join('\n') : String(e)
+}
+
 async function run(cmd: string, args: string[], opts: { cwd?: string; timeout?: number } = {}): Promise<string> {
+  const timeout = opts.timeout ?? 30_000
   try {
     const { stdout } = await execFileAsync(cmd, args, {
-      timeout: opts.timeout ?? 30_000,
+      timeout,
       cwd: opts.cwd,
       maxBuffer: 8 * 1024 * 1024,
     })
     return stdout
   } catch (e) {
-    const err = e as { stdout?: string; stderr?: string }
-    throw new Error(`${cmd} ${args.join(' ')} failed: ${err.stderr ?? err.stdout ?? String(e)}`)
+    throw new Error(`${cmd} ${args.join(' ')} failed: ${describeRunFailure(e, timeout)}`)
   }
 }
+
+/**
+ * Budget for the salvage push. Its own constant because the default 30 s is
+ * wrong for it (issue #2667): the push runs the repo's lefthook pre-push hooks
+ * — measured at ~19 s IDLE, `check-codegen-drift` alone 17 s — and salvage runs
+ * exactly when the box is busiest (a tick pass, a just-killed worker). A push
+ * killed at 30 s strands a dead worker's output on one machine.
+ */
+export const SALVAGE_PUSH_TIMEOUT_MS = 600_000
 
 /**
  * Stops the tmux session `dispatch-one.sh` started for this worker, by name.
@@ -201,7 +243,13 @@ export async function salvageUncommittedWork(worktree: string, branchHint: strin
   // (system node predates `util.styleText`), every salvage commit failed,
   // and the lane stayed wedged on real work, pass after pass.
   await run('git', ['-C', worktree, 'commit', '--no-verify', '-m', `salvage: uncommitted work from ${branchHint}`])
-  await run('git', ['-C', worktree, 'push', '-u', 'origin', salvageBranch])
+  // Deliberately NO `--no-verify` here, unlike the commit above: the repo's
+  // standing rule is that checks are fixed or reported, never bypassed, and
+  // skipping pre-push hooks is the operator's call, not this function's. A
+  // failed push is safe — settle() keeps the worktree and the local salvage
+  // commit, and reports it (see `reportStrandedSalvage`). The cost of keeping
+  // the hooks is paid in time, hence the dedicated timeout.
+  await run('git', ['-C', worktree, 'push', '-u', 'origin', salvageBranch], { timeout: SALVAGE_PUSH_TIMEOUT_MS })
   return { salvaged: true, branch: salvageBranch }
 }
 
@@ -342,6 +390,7 @@ export async function settle(target: SettleTarget, log: (msg: string) => void): 
     } catch (e) {
       safeToDestroy = false
       log(`salvage failed for issue ${target.itemId} — refusing to destroy the worktree: ${errMsg(e)}`)
+      await reportStrandedSalvage(target, e, log)
     }
 
     if (safeToDestroy) {
@@ -359,6 +408,41 @@ export async function settle(target: SettleTarget, log: (msg: string) => void): 
     } catch (e) {
       log(`labelling issue ${target.itemId} with ${NEEDS_HUMAN_LABEL} failed: ${errMsg(e)}`)
     }
+  }
+}
+
+/**
+ * Issue #2667: a failed salvage used to be one log line and nothing else, so a
+ * dead worker's output sat on one machine until somebody happened to read the
+ * log. The work is still safe (the worktree is kept), but nobody was told.
+ * This makes it visible where the fleet already looks: `needs-human` (which
+ * also stops the item being re-claimed onto a worktree that is still standing)
+ * plus an issue comment naming the worktree, the local branch and the reason.
+ * Best-effort — each write logs its own failure and never throws.
+ */
+async function reportStrandedSalvage(target: SettleTarget, cause: unknown, log: (msg: string) => void): Promise<void> {
+  const worktree = target.worktree ?? '(unknown)'
+  const localBranch = target.worktree !== undefined ? await currentBranch(target.worktree) : undefined
+  const body = [
+    `**Salvage failed — this worker's output is stranded on the dispatch host.**`,
+    '',
+    `- worktree (kept, not destroyed): \`${worktree}\``,
+    `- local branch: \`${localBranch ?? 'unknown'}\``,
+    '- push it by hand from that worktree: `git push -u origin HEAD`',
+    '',
+    '```',
+    errMsg(cause).slice(-3000),
+    '```',
+  ].join('\n')
+  try {
+    await gh(['issue', 'comment', target.itemId, '--body', body])
+  } catch (e) {
+    log(`commenting the failed salvage on issue ${target.itemId} failed: ${errMsg(e)}`)
+  }
+  try {
+    await labelIssue(target.itemId, NEEDS_HUMAN_LABEL)
+  } catch (e) {
+    log(`labelling issue ${target.itemId} with ${NEEDS_HUMAN_LABEL} after a failed salvage failed: ${errMsg(e)}`)
   }
 }
 
