@@ -1979,126 +1979,17 @@ jobs:
           done
           exit "$failed"
 
-      # Parses the required-env-var list straight out of
-      # apps/worker/lib/config.ts and asserts every Ansible template that
-      # renders the worker's .env carries all of them — the two role
-      # templates drifting out of sync (or a future third copy rotting
-      # unnoticed) is exactly the bug class issue #798 fixed.
-      - name: Check required env vars across templates
-        run: python3 deploy/ansible/scripts/check-required-env.py
-
-      # The other half of the same question (#1624). check-required-env.py
-      # covers vars config.ts ASSERTS — miss one and the container will not
-      # boot, so the failure is loud. This covers every var the worker merely
-      # READS: unset, each one silently takes a fallback branch, and four
-      # controls were inert on every deployed host that way
-      # (CORS_ALLOWED_ORIGINS, SIP_BRIDGE_URL, METRICS_SCRAPE_TOKEN,
-      # *_WEBHOOK_IPS). Derives the consumed set from apps/worker/ rather
-      # than a hand list, so a new var fails here until it is rendered or
-      # justified.
-      - name: Check consumed env vars are rendered
-        run: python3 scripts/check-consumed-env.py
-
-      # GF_SECURITY_ADMIN_PASSWORD="" is "unset", and an unset Grafana keeps its
-      # built-in admin/admin login. The production vars template never listed the
-      # key, preflight never asserted it and the role defaulted it to "", so a
-      # deploy shipped a default credential. Judges the shared assertion against a
-      # table of good and bad values and checks preflight and the role still call it.
-      # Sits with the env/config guards it belongs with; appending every new guard
-      # at the tail of this list makes each one conflict with the next.
-      - name: Check an empty or weak Grafana admin password cannot be deployed
-        run: python3 deploy/ansible/scripts/check-grafana-password-guard.py
-
-      # Neither `--syntax-check` nor `ansible-lint` evaluates Jinja, so a
-      # filter naming a test that does not exist — `selectattr('status',
-      # 'startswith', 'FAIL')` — is green here and raises on the target.
-      # Issue #1602 found four of them, three inside the deploy's own
-      # pass/fail gate, which therefore could never fire.
-      - name: Check Jinja select/reject test names resolve
-        run: python3 deploy/ansible/scripts/check-jinja-tests.py
-
-      # A minimal Debian image has no `cron` package, so the first
-      # ansible.builtin.cron task on a host built from one died with
-      # `Failed to find required executable "crontab"` and nothing installed it.
-      # Every file that declares a cron job now includes roles/cron first.
-      - name: Check every cron job's file installs cron first
-        run: python3 deploy/ansible/scripts/check-cron-installed.py
-
-      # The app image migrates its database on every start; the migration gate
-      # judges the migrations BEFORE that. A "pull" task that was really
-      # `compose up` started the app first, so on a fresh host the gate read a
-      # half-applied ledger and failed the first deploy, every time.
-      - name: Check nothing starts the app before the migration gate
-        run: python3 deploy/ansible/scripts/check-app-gate-ordering.py
-
-      # group_vars/ is found next to the inventory or next to the playbook. It sat
-      # at deploy/ansible/, so with the inventory kept anywhere else (the normal
-      # case for a private inventory) every playbook under playbooks/ lost it and
-      # died on "'llamenos_compose_glob' is undefined". It now lives next to the
-      # playbooks; this plays against an inventory in a different directory.
-      - name: Check group_vars resolve with the inventory outside deploy/ansible
-        run: |
-          set -euo pipefail
-          inv_dir="$(mktemp -d)"
-          printf 'all:\n  hosts:\n    localhost:\n      ansible_connection: local\n' > "$inv_dir/inventory.yml"
-          cd deploy/ansible
-          ansible-playbook -i "$inv_dir/inventory.yml" playbooks/check-group-vars-resolve.yml -e ansible_become=false
-
-      # Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED
-      # task never ran, so it never failed, so it is `succeeded`. 27 checks
-      # across the smoke, preflight, security-update and kamailio paths
-      # recorded PASS for a probe that took no measurement at all (#1617).
-      # Neither --syntax-check nor ansible-lint evaluates what a Jinja
-      # expression MEANS, and this one is valid Jinja naming a real test.
-      - name: Check no result test reads a skipped task as a pass
-        run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
-
-      # dr-test.yml was a "recovery drill" that ran on the control node, looked for
-      # backup files that no longer exist, started an image that does not exist and
-      # printed PASS from ignore_errors checks -- so it could never fail, and a
-      # test that cannot fail reads as coverage. CI cannot run the drill (it needs
-      # the deployed app image and real backups); this keeps its shape honest.
-      - name: Check the DR drill can fail
-        run: python3 deploy/ansible/scripts/check-dr-test-can-fail.py
-
-      # Issue #1636: before it, the suite had three behaviours and named one.
-      # A FAIL stopped the deploy except where it quietly did not (the Kamailio
-      # probe reported NOT READY and the deploy succeeded), so "Smoke check
-      # FAILED" did not tell an operator whether anything had stopped. Every
-      # check now declares fatal or advisory. The recorder defaults an
-      # undeclared severity to fatal, so a forgotten one is too strict rather
-      # than silently advisory — this keeps the ruling readable in the playbook
-      # instead of living in that default.
-      - name: Check every smoke check declares a severity
-        run: python3 deploy/ansible/scripts/check-smoke-severity.py --list
-
-      # The rail above rejects the pattern; this proves the replacement
-      # actually records SKIPPED for a probe that did not run, PASS only when
-      # the measurement holds, and FAIL when a probe reports itself fine while
-      # measuring the wrong thing. Runs the real shared recorder against
-      # synthesized probe results in ~1s, no services needed.
-      #
-      # The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the
-      # whole smoke suite against stub binaries and real sockets — including a
-      # real TLS listener, and a bare TCP acceptor for the false green a
-      # reachability probe reports as healthy — in a private network
-      # namespace. Like
-      # scripts/check-disk-tier-guards.py it is run by hand rather than in CI;
-      # `--compare-old <ref>` replays identical fixtures against an older
-      # playbook and prints the verdicts side by side.
-      - name: Check the smoke recorder's three states
-        run: |
-          cd deploy/ansible
-          ansible-playbook playbooks/check-record-smoke-result.yml \
-            -i localhost, -c local -e ansible_become=false
-
-      # Renders the alert-rules template, then runs `promtool check rules` and
-      # the rule unit tests with the prom/prometheus image the role deploys.
-      # The WorkerStalled tests include a gauge that is never published: a
-      # rule that only fires on staleness passes everything else and misses the
-      # outage it exists for (#2323).
-      - name: Prometheus alert rules check and unit tests
-        run: deploy/ansible/roles/llamenos-prometheus/tests/check-alert-rules.sh
+      # Every ansible guard is a file in deploy/ansible/ci-guards/ (#2645), run
+      # by one step. Adding a guard is adding a file there -- NOT appending a
+      # step here: N authors appending at one anchor in this list meant N-1
+      # merge conflicts (three deploy PRs went DIRTY on the same hunk and one
+      # sat UNMERGEABLE at queue position 1 for six hours). Each guard still
+      # runs in its own log group named after it, a failure emits an
+      # `::error title=...::` annotation naming it, and every guard runs even
+      # after one fails, so a single push shows all of them. The `why` in each
+      # file carries the incident the guard exists for.
+      - name: Run ansible guards (deploy/ansible/ci-guards/)
+        run: python3 deploy/ansible/scripts/run-ci-guards.py
 
       # The justfile is every operator entry point — `just backup`,
       # `just restore`, `just deploy`. It sat un-parseable on main with
@@ -2113,67 +2004,6 @@ jobs:
 
       - name: Operator justfile parses
         run: cd deploy/ansible && just --list
-
-      # The multi-host refactor moved every service to its own Compose
-      # project under {{ app_dir }}/services/<svc>/. Day-2 operations kept
-      # pointing at a monolithic {{ app_dir }}/docker-compose.yml that the
-      # production deploy never creates, so backup, restore, update,
-      # rollback, security-update and the alert cron were all dead — and
-      # invisibly so, because none of them runs on day one (#1121).
-      # Compose paths belong in group_vars/all/compose.yml.
-      - name: No monolithic compose path outside the legacy demo role
-        run: |
-          set -euo pipefail
-          # roles/llamenos + playbooks/migrate-to-multi-host.yml are the
-          # legacy single-compose layout (deploy-demo.yml only) and the
-          # migration off it; both legitimately reference the old path.
-          if grep -rn --include='*.yml' --include='*.j2' \
-               -e '{{ app_dir }}/docker-compose.yml' \
-               -e '{{app_dir}}/docker-compose.yml' \
-               deploy/ansible \
-               | grep -v '^deploy/ansible/roles/llamenos/' \
-               | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
-               | grep -v '^deploy/ansible/playbooks/group_vars/all/compose.yml' \
-               | grep -vE '^[^:]+:[0-9]+: *#' \
-               `# update.yml and rollback.yml still assume the monolithic` \
-               `# layout. Their blue/green and snapshot logic needs a` \
-               `# redesign, not a path swap -- tracked separately. They` \
-               `# are allowlisted so this guard protects the backup and` \
-               `# restore paths that ARE fixed, instead of being deleted.` \
-               | grep -v '^deploy/ansible/playbooks/update.yml' \
-               | grep -v '^deploy/ansible/playbooks/rollback.yml' ; then
-            echo "::error::Day-2 operations must resolve Compose files through"
-            echo "::error::group_vars/all/compose.yml, not {{ app_dir }}/docker-compose.yml"
-            echo "::error::which the production deploy never creates. See #1121."
-            exit 1
-          fi
-          echo "OK: no monolithic compose references outside the legacy demo role"
-
-      # kv_store is a Durable-Objects-era table that no migration has
-      # created for a long time. restore.yml validated against it with no
-      # ignore_errors, so the restore died before restarting the app
-      # (#1125). A validation query must reference something that exists.
-      - name: Restore paths do not reference dropped tables
-        run: |
-          set -euo pipefail
-          # Comments explaining why the old reference was wrong are fine;
-          # a live reference is not.
-          if grep -rn 'kv_store' \
-               deploy/ansible/playbooks deploy/ansible/roles deploy/ansible/templates \
-               2>/dev/null | grep -vE '^[^:]+:[0-9]+: *#'; then
-            echo "::error::A deployment playbook references kv_store, which does not exist. See #1125."
-            exit 1
-          fi
-          echo "OK: no kv_store references"
-
-      # harden.yml turns on Docker userns-remap, under which a container's root
-      # cannot read a 0700 host directory. restore.yml and test-restore.yml
-      # bind-mounted a decrypted temp directory into a container and failed
-      # there -- after restore.yml had already emptied the RustFS volume. The
-      # round trip below runs without userns-remap so cannot see the first, and
-      # proves the second behaviourally; this keeps the first from coming back.
-      - name: Check restores stream data instead of bind-mounting it
-        run: python3 deploy/ansible/scripts/check-restore-no-bind-mounts.py
 
   # ─── Backup/Restore Round Trip ────────────────────────────
   #

@@ -1,0 +1,8 @@
+name = "Check nothing starts the app before the migration gate"
+run = "python3 deploy/ansible/scripts/check-app-gate-ordering.py"
+why = """
+The app image migrates its database on every start; the migration gate judges
+the migrations BEFORE that. A "pull" task that was really `compose up` started
+the app first, so on a fresh host the gate read a half-applied ledger and failed
+the first deploy, every time.
+"""
