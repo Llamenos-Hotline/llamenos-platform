@@ -2935,8 +2935,9 @@ jobs:
       - name: Delete this job's simulator
         if: always()
         run: |
-          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
-          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          # Shutdown + delete + the /private/var/tmp runtime dir that `simctl delete`
+          # leaves behind (#2644). Never fails the step.
+          bash scripts/ci/mac-runner-disk-guard.sh delete-sim "${{ steps.sim.outputs.udid }}"
 
       - name: Remove this job's DerivedData
         if: always()
