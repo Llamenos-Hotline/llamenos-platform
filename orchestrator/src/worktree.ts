@@ -576,9 +576,10 @@ export type WedgeResolution =
  *   that must keep dispatching.
  * - Any real work anywhere in the wedge → `blocked`, naming the worktree and
  *   the salvage branch, so the caller can skip the item (and audit it as a
- *   WEDGED row) instead of burning a dispatch, with no label written (#2735). This is the break-it case that must keep
- *   refusing: seven salvage branches hold genuinely completed work, and the
- *   whole value of the guard is that it preserved them.
+ *   WEDGED row) instead of burning a dispatch, with no label written (#2735).
+ *   This is the break-it case that must keep refusing: seven salvage branches
+ *   hold genuinely completed work, and the whole value of the guard is that it
+ *   preserved them.
  */
 export async function resolveWedgeForDispatch(repoRoot: string, fleetBranch: string): Promise<WedgeResolution> {
   const wedges = await findWedgedWorktrees(repoRoot, fleetBranch)

@@ -47,8 +47,9 @@ const HOUR = 3_600_000
  */
 // WEDGED (issue #1755) is excluded the same way QUOTA and UNVERIFIED are:
 // a pre-dispatch skip — the lane's worktree wedged on a salvage branch
-// holding real work — is ONE stuck condition per item, not N failures. Three identical refusals tripping this breaker is exactly how
-// one stray staged test artifact halted the whole fleet for 25 hours.
+// holding real work — is ONE stuck condition per item, not N failures. Three
+// identical refusals tripping this breaker is exactly how one stray staged
+// test artifact halted the whole fleet for 25 hours.
 const STREAK_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT'])
 // SHADOW is excluded from both sets, like QUOTA — a shadow lane writes a
 // SHADOW row on every pass it runs, so in the mixed ramp the spec prescribes
