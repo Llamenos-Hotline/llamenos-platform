@@ -7,6 +7,10 @@ import { judge, selectForLane, type Rejection } from './select.js'
 import type { ListResult, WorkItem } from './source.js'
 import { buildGateTrace } from './trace.js'
 import { fleetBranchFor } from './ci.js'
+import {
+  assessOpenPr, buildReentryPassedComment, buildVerificationFailedComment, latestMechanicalRejection,
+  REENTRY_NOTE_PREFIX,
+} from './reverify.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 
 export interface DispatchOutcome {
@@ -139,6 +143,25 @@ export interface TickDeps {
    * whatever else misclassified the prior attempts.
    */
   findOpenPr(lane: Lane, item: WorkItem): Promise<string | undefined>
+  /**
+   * #2738 — the three deps below let a PR whose mechanical verification
+   * failed be looked at again once its head moves, instead of reading as
+   * `pr-already-open` for the rest of its life. All three are needed for a
+   * re-entry; when any is absent nothing re-enters (the failure is still
+   * commented on the PR).
+   *
+   * The PR's live head commit and branch; `undefined` when unreadable —
+   * never read as "unchanged" and never as "moved".
+   */
+  prHead?(pr: string): Promise<{ sha: string; branch: string } | undefined>
+  /** Mechanical verification of ONE commit of an already-open PR, from a
+   *  clean export of exactly that commit — not from a worker's worktree,
+   *  which settle() has destroyed by now. */
+  verifyOpenPrHead?(input: { lane: Lane; pr: string; headSha: string; branch: string }): Promise<VerifyReport>
+  /** Re-requests the `fleet/review` gate on a head that now passes (a push
+   *  never starts a review on its own). Resolves to a one-line description of
+   *  what happened, for the PR comment; throws if nothing could be asked. */
+  requestReviewOnNewHead?(pr: string, branch: string): Promise<string>
   dispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome>
   /** Mechanical gates: scope, never-write, diff-targeted tests. Injected so
    *  `tick` stays testable without a real worktree or a real `bunx vitest`. */
@@ -251,6 +274,88 @@ export function claimAcrossLanes(lanes: Lane[], itemsByLane: Map<string, WorkIte
 }
 
 type BaseRecord = Pick<RunRecord, 'ts' | 'runId' | 'lane' | 'itemId' | 'itemName' | 'engine' | 'provider'>
+
+const MAX_REASON_CHARS = 600
+
+/** Best-effort: a comment that cannot be posted must not change the outcome
+ *  already decided, or the recorded ledger row. */
+async function commentVerificationFailedOnPr(
+  deps: TickDeps, pr: string, report: VerifyReport | undefined, reentry: boolean,
+): Promise<void> {
+  try {
+    await deps.commentOnPr(pr, buildVerificationFailedComment({
+      sha: report?.verifiedCommit,
+      reasons: (report?.reasons ?? ['verification produced no report']).map((r) =>
+        r.length > MAX_REASON_CHARS ? `${r.slice(0, MAX_REASON_CHARS)}…` : r),
+      runnerCrashed: report?.testsRunnerCrashed === true,
+      reentry,
+    }))
+  } catch (e) {
+    deps.log(`verify: could not comment the failed verification on pr ${pr}: ${errorMessage(e)}`)
+  }
+}
+
+/**
+ * #2738: a PR whose mechanical verification failed is owed another look when
+ * its head moves (or once, when the runner crashed without a verdict). Runs
+ * BEFORE the attempt-budget and `pr-already-open` checks because it spends no
+ * worker attempt: it is bounded by pushes, not by dispatches, and a budget
+ * exhausted by earlier red rounds must not freeze the one thing that can
+ * recover the PR.
+ *
+ * Never throws. A failure here is logged and the item is reconsidered on the
+ * next pass; it does not abort the pass or touch the ledger.
+ */
+async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, rows: RunRecord[], base: BaseRecord): Promise<void> {
+  if (deps.prHead === undefined || deps.verifyOpenPrHead === undefined) return
+  if (latestMechanicalRejection(rows, item.id) === undefined) return
+  try {
+    const pr = await deps.findOpenPr(lane, item)
+    if (pr === undefined) return
+    const head = await deps.prHead(pr)
+    const a = assessOpenPr(rows, item.id, head?.sha)
+    if (a.kind === 'none' || a.kind === 'abandoned' || head === undefined) return
+
+    const sha = a.kind === 'head-moved' ? a.headSha : a.failedSha
+    deps.log(
+      a.kind === 'head-moved'
+        ? `reverify: item ${item.id} pr ${pr} head moved ${a.failedSha.slice(0, 12)} -> ${sha.slice(0, 12)} after a failed verification — re-verifying`
+        : `reverify: item ${item.id} pr ${pr} runner crashed without a verdict on ${sha.slice(0, 12)} — one more run`,
+    )
+    const report = await deps.verifyOpenPrHead({ lane, pr, headSha: sha, branch: head.branch })
+    const trace = buildGateTrace({ report })
+
+    if (!report.passed) {
+      deps.record({ ...base, outcome: 'REJECTED', branch: head.branch, pr, note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`) })
+      await commentVerificationFailedOnPr(deps, pr, report, true)
+      return
+    }
+
+    let review: string
+    if (deps.requestReviewOnNewHead === undefined) {
+      review = 'No review was requested from here.'
+    } else {
+      try {
+        review = await deps.requestReviewOnNewHead(pr, head.branch)
+      } catch (e) {
+        review = `The review could not be requested (${errorMessage(e)}); it must be requested by hand.`
+        deps.log(`reverify: pr ${pr} passes but the review request failed: ${errorMessage(e)}`)
+      }
+    }
+    // UNVERIFIED, not SUCCESS: the fleet's own non-author review loop did not
+    // run on this head (the `fleet/review` gate will), so the ledger must not
+    // claim "verified, reviewed, armed". It is also not REJECTED, so it ends
+    // the re-entry for this head and feeds no failure breaker.
+    deps.record({ ...base, outcome: 'UNVERIFIED', branch: head.branch, pr, note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`) })
+    try {
+      await deps.commentOnPr(pr, buildReentryPassedComment(sha, review))
+    } catch (e) {
+      deps.log(`reverify: could not comment on pr ${pr}: ${errorMessage(e)}`)
+    }
+  } catch (e) {
+    deps.log(`reverify: item ${item.id} could not be re-verified this pass: ${errorMessage(e)}`)
+  }
+}
 
 /**
  * The live-dispatch pipeline for exactly one item. Order is the safety
@@ -371,6 +476,10 @@ async function runLiveDispatch(
           item.id,
           `Mechanical verification failed after ${loop.rounds} round(s):\n- ${reasons.join('\n- ')}`,
         )
+        // #2738: the PR itself says so. The issue comment above is where the
+        // fleet reports to the ITEM; a person looking at the PR saw an
+        // ordinary open PR awaiting review.
+        await commentVerificationFailedOnPr(deps, pr, verifyReport, false)
         final = {
           ...base, outcome: 'REJECTED', branch, pr,
           note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({ report: verifyReport })}`),
@@ -674,6 +783,14 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
       for (const item of itemsByLane.get(lane.id) ?? []) {
         if (owned.get(item.id) !== lane.id) continue
         if (taken >= lane.cap) break
+
+        if (lane.mode === 'live' && !cooling) {
+          const reentryBase: BaseRecord = {
+            ts: deps.now(), runId: runId(deps.now()), lane: lane.id, itemId: item.id, itemName: item.title,
+            engine: lane.engine, provider,
+          }
+          await reenterFailedOpenPr(deps, lane, item, rows, reentryBase)
+        }
 
         if (failedAttemptsIn(rows, item.id) >= MAX_ATTEMPTS_PER_ITEM) {
           deps.log(`item ${item.id} has exhausted ${MAX_ATTEMPTS_PER_ITEM} attempts — leaving for a human`)

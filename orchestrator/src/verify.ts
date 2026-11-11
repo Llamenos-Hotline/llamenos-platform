@@ -114,6 +114,15 @@ export interface VerifyReport {
   impactReasons: string[]
   testsRun?: string[]
   testsPassed?: boolean
+  /**
+   * True when at least one test target failed WITHOUT reaching a verdict — the
+   * runner crashed, wrote no result file or an unreadable one — as opposed to
+   * a result that was read and held failing tests. Always accompanies
+   * `testsPassed: false`. The gate trace renders it `tests=<suite>:crash`, so
+   * "the head's tests are red" and "the runner never ran them" stop sharing a
+   * word (#2738). It changes no verdict: both still fail the gate.
+   */
+  testsRunnerCrashed?: boolean
   /** One line per target whose result file was read and was green — the
    *  positive evidence behind `testsPassed: true`, printed in the job log. */
   testResults?: string[]
@@ -789,7 +798,17 @@ function describeExit(run: TestRunResult): string {
   return `exited ${run.exitCode}`
 }
 
-export type TargetOutcome = { passed: true; evidence: string } | { passed: false; reason: string }
+/**
+ * `noVerdict: true` marks a failure that is NOT a statement about the head's
+ * tests: the runner died, wrote nothing, or wrote something that is not a
+ * vitest report. Only a result file that was read and held failures is a
+ * verdict on the code (#2738: a runner that crashed at module load on the
+ * author's worktree was recorded as `tests=orchestrator:fail`, and the PR was
+ * then treated as having failed its tests for good).
+ */
+export type TargetOutcome =
+  | { passed: true; evidence: string }
+  | { passed: false; reason: string; noVerdict?: true }
 
 /**
  * Judges ONE target. The only way to `passed: true` is a result file that
@@ -808,11 +827,13 @@ export function judgeTargetRun(
       return {
         passed: false,
         reason: `${target}: runner-exit — the test runner ${describeExit(run)} and wrote no result file${outputTail(run.output)}`,
+        noVerdict: true,
       }
     }
     return {
       passed: false,
       reason: `${target}: missing result — the test runner exited 0 but wrote no result file${outputTail(run.output)}`,
+      noVerdict: true,
     }
   }
   const counts = parseVitestJson(resultText)
@@ -820,6 +841,7 @@ export function judgeTargetRun(
     return {
       passed: false,
       reason: `${target}: unparseable result — the result file is not a vitest JSON report (runner ${describeExit(run)})`,
+      noVerdict: true,
     }
   }
   const notRun = counts.numPendingTests + counts.numTodoTests
@@ -1167,6 +1189,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
   const testsRun = routes.map((r) => r.suite)
   let testsPassed: boolean | undefined
+  let testsRunnerCrashed = false
   const testResults: string[] = []
 
   if (routes.length > 0) {
@@ -1188,6 +1211,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
           testResults.push(outcome.evidence)
         } else {
           allPassed = false
+          if (outcome.noVerdict === true) testsRunnerCrashed = true
           reasons.push(outcome.reason)
         }
       }
@@ -1208,6 +1232,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     impactReasons,
     testsRun,
     testsPassed,
+    ...(testsRunnerCrashed ? { testsRunnerCrashed } : {}),
     testResults,
     verifiedCommit,
     trustAnchors,
