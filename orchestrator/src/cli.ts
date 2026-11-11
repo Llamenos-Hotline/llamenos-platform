@@ -876,7 +876,11 @@ export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha:
     await git('archive', '--format=tar', `--output=${join(tmp, 'head.tar')}`, input.headSha)
     await execFileAsync('tar', ['-xf', join(tmp, 'head.tar'), '-C', headDir], { timeout: 300_000 })
     // What `fleet-verify.yml` does to its export before the gate runs: without
-    // the link the gate refuses the export as an untrusted test root.
+    // the link the gate refuses the export as an untrusted test root. This
+    // grants the test child nothing it did not already have: it runs as the
+    // tick's own OS user, which can write the trusted install with or without
+    // the link (see `scrubbedTestEnv` — hygiene, not a sandbox). Real
+    // isolation is separate work; do not widen who can reach this path.
     await linkTrustedModules(headDir, join(REPO_ROOT, 'node_modules'))
     const ctx: CiContext = {
       branch: input.branch, repoDir: REPO_ROOT, headDir,
