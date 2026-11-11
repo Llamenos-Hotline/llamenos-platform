@@ -114,6 +114,41 @@ export function buildIvrLanguageMenu<Voice>(
   if (options.length === 1) return { kind: 'single', language: options[0].language }
   if (options.length > 1) return { kind: 'menu', options }
 
-  const fallback = catalog.speaks(DEFAULT_LANGUAGE) ? DEFAULT_LANGUAGE : catalog.languages[0]
-  return { kind: 'single', language: fallback }
+  return { kind: 'single', language: defaultSpeakableLanguage(catalog) }
+}
+
+/**
+ * The language a call proceeds in when nothing the hub or caller asked for is
+ * speakable: {@link DEFAULT_LANGUAGE} when the provider speaks it, otherwise
+ * the first language in the provider's declared order. One definition, shared
+ * by the menu's empty-intersection rule and {@link resolveCallerLanguage}.
+ */
+function defaultSpeakableLanguage(catalog: IvrVoiceCatalog<unknown>): string {
+  return catalog.speaks(DEFAULT_LANGUAGE) ? DEFAULT_LANGUAGE : catalog.languages[0]
+}
+
+/**
+ * Resolve the language a caller's call proceeds in against the active
+ * provider's voice catalog (#679). Every source of a caller language — the
+ * forced language, the phone-prefix guess, the digit the caller pressed —
+ * must come through here, because a language the provider has no voice for
+ * would be handed to that provider as a code it cannot speak: a caller in
+ * distress reaching an IVR that cannot talk to them.
+ *
+ * `candidates` are tried in priority order and the first the provider can
+ * speak wins (`undefined` entries are skipped). When none is speakable the
+ * call falls back to the hub's first speakable language, and, if the hub
+ * lists none, to the same default the menu forces
+ * (see {@link buildIvrLanguageMenu}, rule 3). Exact-code matching only: no
+ * `pt` ↔ `pt-BR` negotiation, no "closest" substitute.
+ */
+export function resolveCallerLanguage(
+  candidates: ReadonlyArray<string | undefined>,
+  hubLanguages: readonly string[],
+  catalog: IvrVoiceCatalog<unknown>,
+): string {
+  for (const candidate of candidates) {
+    if (candidate !== undefined && catalog.speaks(candidate)) return candidate
+  }
+  return hubLanguages.find((language) => catalog.speaks(language)) ?? defaultSpeakableLanguage(catalog)
 }
