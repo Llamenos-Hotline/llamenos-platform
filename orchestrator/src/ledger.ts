@@ -103,6 +103,17 @@ export interface RunRecord {
    */
   quotaResetHint?: string
   quotaResetAt?: number
+  /**
+   * Issue #2738: present only on a row that ended at a FAILED mechanical
+   * verification, i.e. before any review was requested. A structured field
+   * rather than text parsed back out of `note`: the note is capped at 300
+   * characters and carries free text (scope reasons name file paths), so a
+   * `sha=` read from it can be cut off or forged — and a lost sha silently
+   * un-tracks the PR it belongs to, which is the abandonment this field exists
+   * to end. `failedSha` is the 40-hex commit the verification judged;
+   * `runnerCrashed` is true when the test runner reached no verdict at all.
+   */
+  verification?: { failedSha: string; runnerCrashed: boolean }
 }
 
 /** JSONL, not SQLite: a truncated final line costs one record; a locked

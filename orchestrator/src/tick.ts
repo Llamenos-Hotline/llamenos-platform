@@ -6,7 +6,7 @@ import { runReviewLoop, type SecondOpinionInput, type SecondOpinionResult } from
 import { judge, selectForLane, type Rejection } from './select.js'
 import type { ListResult, WorkItem } from './source.js'
 import { buildGateTrace } from './trace.js'
-import { fleetBranchFor } from './ci.js'
+import { fleetBranchFor, legacyFleetBranchFor } from './ci.js'
 import {
   assessOpenPr, buildReentryPassedComment, buildVerificationFailedComment, latestMechanicalRejection,
   REENTRY_NOTE_PREFIX,
@@ -277,6 +277,15 @@ type BaseRecord = Pick<RunRecord, 'ts' | 'runId' | 'lane' | 'itemId' | 'itemName
 
 const MAX_REASON_CHARS = 600
 
+/** The structured half of a failed-verification row (`RunRecord.verification`).
+ *  Empty when the report names no full commit — such a row cannot be tracked
+ *  per-sha, and saying nothing is better than recording a guess. */
+function verificationFieldFor(report: VerifyReport | undefined): Pick<RunRecord, 'verification'> {
+  const sha = report?.verifiedCommit
+  if (sha === undefined || !/^[0-9a-f]{40}$/.test(sha)) return {}
+  return { verification: { failedSha: sha, runnerCrashed: report?.testsRunnerCrashed === true } }
+}
+
 /** Best-effort: a comment that cannot be posted must not change the outcome
  *  already decided, or the recorded ledger row. */
 async function commentVerificationFailedOnPr(
@@ -313,8 +322,17 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
     const pr = await deps.findOpenPr(lane, item)
     if (pr === undefined) return
     const head = await deps.prHead(pr)
-    const a = assessOpenPr(rows, item.id, head?.sha)
-    if (a.kind === 'none' || a.kind === 'abandoned' || head === undefined) return
+    // Bind the re-entry to THIS item's own PR: the one the failed row was
+    // recorded against, on this item's fleet branch. `findOpenPr` matches by
+    // head branch NAME, which a fork PR can reuse; `prHead` already refuses
+    // those, and this refuses a same-repo PR that is not the one judged.
+    const failed = latestMechanicalRejection(rows, item.id)
+    const ownBranch = head !== undefined &&
+      (head.branch === fleetBranchFor(lane.id, item.id) || head.branch === legacyFleetBranchFor(lane.id, item.id))
+    const sameP = (x: string | undefined): string | undefined => x?.replace(/^.*\//, '')
+    if (head === undefined || !ownBranch || (failed?.row.pr !== undefined && sameP(failed.row.pr) !== sameP(pr))) return
+    const a = assessOpenPr(rows, item.id, head.sha)
+    if (a.kind === 'none' || a.kind === 'abandoned') return
 
     const sha = a.kind === 'head-moved' ? a.headSha : a.failedSha
     deps.log(
@@ -326,7 +344,10 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
     const trace = buildGateTrace({ report })
 
     if (!report.passed) {
-      deps.record({ ...base, outcome: 'REJECTED', branch: head.branch, pr, note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`) })
+      deps.record({
+        ...base, outcome: 'REJECTED', branch: head.branch, pr, note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`),
+        ...verificationFieldFor(report),
+      })
       await commentVerificationFailedOnPr(deps, pr, report, true)
       return
     }
@@ -483,6 +504,7 @@ async function runLiveDispatch(
         final = {
           ...base, outcome: 'REJECTED', branch, pr,
           note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({ report: verifyReport })}`),
+          ...verificationFieldFor(verifyReport),
         }
       } else {
         deps.log(`review: item ${item.id} pr ${pr} verdict=${loop.finalVerdict} rounds=${loop.rounds}`)

@@ -15,7 +15,10 @@ const row = (over: Partial<RunRecord>): RunRecord => ({
   ts: 1, runId: 'r', lane: 'infra', itemId: '7', itemName: 't', engine: 'claude', outcome: 'REJECTED', ...over,
 })
 const rejected = (sha: string, tests = 'fail', ts = 1): RunRecord =>
-  row({ ts, note: `rounds=1 scope=pass impact=low tests=orchestrator:${tests} review=not-run sha=${sha}` })
+  row({
+    ts, note: `rounds=1 scope=pass impact=low tests=orchestrator:${tests} review=not-run sha=${sha}`,
+    verification: { failedSha: sha, runnerCrashed: tests === 'crash' },
+  })
 
 describe('assessOpenPr (#2738)', () => {
   it('a failed verification on an older commit is owed a re-verification once the head moves', () => {
@@ -39,8 +42,12 @@ describe('assessOpenPr (#2738)', () => {
 
   it('nothing is owed when the newest terminal row is not a mechanical rejection', () => {
     const later = row({ ts: 5, outcome: 'UNVERIFIED', note: `review=not-run sha=${OLD}` })
+    const noField = row({ ts: 9, note: `tests=orchestrator:fail review=not-run sha=${OLD}` })
+    expect(assessOpenPr([rejected(OLD), noField], '7', NEW).kind).toBe('none')
     expect(assessOpenPr([rejected(OLD), later], '7', NEW).kind).toBe('none')
     const reviewerFail = row({ note: `tests=orchestrator:pass review=FAIL sha=${OLD}` })
+    const forged = row({ note: 'sha=zzz', verification: { failedSha: 'not-a-sha', runnerCrashed: false } })
+    expect(latestMechanicalRejection([forged], '7')).toBeUndefined()
     expect(latestMechanicalRejection([reviewerFail], '7')).toBeUndefined()
     expect(assessOpenPr([rejected(OLD)], 'other-item', NEW).kind).toBe('none')
   })
@@ -117,8 +124,24 @@ describe('tick re-enters a PR whose verification failed when its head moves (#27
     const d = deps({ verifyOpenPrHead: vi.fn(async () => failing) })
     await tick(d)
     expect(d.requestReviewOnNewHead).not.toHaveBeenCalled()
-    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED', note: expect.stringContaining(`sha=${NEW}`) }))
+    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'REJECTED', note: expect.stringContaining(`sha=${NEW}`), verification: { failedSha: NEW, runnerCrashed: false },
+    }))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringContaining('no review was requested'))
+  })
+
+  it('refuses a PR that is not this item\'s own: wrong branch, or not the PR the failure was recorded against', async () => {
+    const wrongBranch = deps({ prHead: vi.fn(async () => ({ sha: NEW, branch: 'someone/else' })) })
+    await tick(wrongBranch)
+    expect(wrongBranch.verifyOpenPrHead).not.toHaveBeenCalled()
+
+    const otherPr = deps({ readLedger: () => [{ ...rejected(OLD), pr: '12' }] })
+    await tick(otherPr)
+    expect(otherPr.verifyOpenPrHead).not.toHaveBeenCalled()
+
+    const samePr = deps({ readLedger: () => [{ ...rejected(OLD), pr: 'https://github.com/o/r/pull/55' }] })
+    await tick(samePr)
+    expect(samePr.verifyOpenPrHead).toHaveBeenCalledTimes(1)
   })
 
   it('does nothing while the head has not moved past a real red result', async () => {
@@ -156,6 +179,9 @@ describe('the original failure is visible on the PR itself (#2738)', () => {
     })
     await tick(d)
     expect(d.commentOnIssue).toHaveBeenCalled()
+    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'REJECTED', verification: { failedSha: NEW, runnerCrashed: true },
+    }))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringMatching(/no review was requested[\s\S]*runner-exit/))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringContaining('crashed before producing a result'))
   })

@@ -1,5 +1,4 @@
 import type { RunRecord } from './ledger.js'
-import { extractVerifiedSha } from './status.js'
 
 /**
  * A failed mechanical verification is a fact about ONE commit, not about the
@@ -40,24 +39,18 @@ export type OpenPrAssessment =
   | { kind: 'runner-crash'; failedSha: string }
   | { kind: 'abandoned'; failedSha: string; headSha: string | undefined }
 
-/** `review=not-run` is what a round that ended at mechanical verification
- *  renders; a REJECTED row with a review verdict is the reviewer's, not this. */
-function isMechanicalRejection(r: RunRecord): boolean {
-  return r.outcome === 'REJECTED' && /(?:^|\s)review=not-run(?:\s|$)/.test(r.note ?? '')
-}
+const FULL_SHA = /^[0-9a-f]{40}$/
 
-function isRunnerCrash(r: RunRecord): boolean {
-  return /(?:^|\s)tests=\S*:crash(?:\s|$)/.test(r.note ?? '')
-}
-
-/** The newest terminal ledger row for the item, if it is a mechanical rejection. */
-export function latestMechanicalRejection(rows: RunRecord[], itemId: string): { row: RunRecord; sha: string } | undefined {
+/** The newest terminal ledger row for the item, if it ended at a failed
+ *  mechanical verification (structured `verification`, never parsed text). */
+export function latestMechanicalRejection(rows: RunRecord[], itemId: string): { row: RunRecord; sha: string; runnerCrashed: boolean } | undefined {
   const latest = rows
     .filter((r) => r.itemId === itemId && r.outcome !== 'DISPATCHED')
     .sort((a, b) => b.ts - a.ts)[0]
-  if (latest === undefined || !isMechanicalRejection(latest)) return undefined
-  const sha = extractVerifiedSha(latest.note)
-  return sha === undefined ? undefined : { row: latest, sha }
+  if (latest === undefined || latest.outcome !== 'REJECTED' || latest.verification === undefined) return undefined
+  const { failedSha, runnerCrashed } = latest.verification
+  if (!FULL_SHA.test(failedSha)) return undefined
+  return { row: latest, sha: failedSha, runnerCrashed: runnerCrashed === true }
 }
 
 /**
@@ -71,9 +64,10 @@ export function assessOpenPr(rows: RunRecord[], itemId: string, headSha: string 
   if (headSha === undefined) return { kind: 'abandoned', failedSha: failure.sha, headSha }
   if (headSha !== failure.sha) return { kind: 'head-moved', failedSha: failure.sha, headSha }
 
-  if (isRunnerCrash(failure.row)) {
+  if (failure.runnerCrashed) {
     const crashesOnThisHead = rows.filter((r) =>
-      r.itemId === itemId && r.outcome === 'REJECTED' && isRunnerCrash(r) && extractVerifiedSha(r.note) === failure.sha,
+      r.itemId === itemId && r.outcome === 'REJECTED' && r.verification?.runnerCrashed === true &&
+      r.verification.failedSha === failure.sha,
     ).length
     // The first crash is the original round; retries are the extra rows.
     if (crashesOnThisHead <= MAX_CRASH_RETRIES_PER_HEAD) return { kind: 'runner-crash', failedSha: failure.sha }

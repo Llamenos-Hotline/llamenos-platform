@@ -90,6 +90,14 @@ export interface VerifyInput {
    */
   testDir?: string
   /**
+   * The environment the vitest child runs in. Absent means the caller's own
+   * (the fleet's worker worktree on the operator's box, where that is the
+   * point); a caller that runs a commit it did not dispatch itself (#2738's
+   * re-verification of an open PR's head) passes a scrubbed one so the code
+   * under test never inherits the fleet's credentials.
+   */
+  testEnv?: NodeJS.ProcessEnv
+  /**
    * The human sign-off a TRUST-ANCHOR change needs (#2556): the logins whose
    * sign-off names the exact commit under judgement, or `undefined`
    * when the PR's reviews or comments could not be read. The caller resolves "the exact
@@ -550,7 +558,7 @@ async function prepareTestRoot(
 }
 
 async function runVitestTarget(
-  worktree: string, testRoot: string, route: TestRoute, config: string, outputFile: string,
+  worktree: string, testRoot: string, route: TestRoute, config: string, outputFile: string, env?: NodeJS.ProcessEnv,
 ): Promise<TestRunResult> {
   if (!isSafeTestPath(route.suite, testRoot)) {
     // Should be unreachable — every suite label above comes from the fixed
@@ -564,6 +572,7 @@ async function runVitestTarget(
   try {
     const { stdout, stderr } = await execFileAsync(trustedVitestBin(worktree), vitestArgv(config, testRoot, outputFile), {
       cwd: testRoot, timeout: 10 * 60_000, maxBuffer: 32 * 1024 * 1024,
+      ...(env === undefined ? {} : { env }),
     })
     return { exitCode: 0, signal: undefined, output: `${stdout}${stderr}` }
   } catch (e) {
@@ -1204,7 +1213,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
           continue
         }
         const outputFile = join(resultDir, `${route.suite.replaceAll('/', '_')}.json`)
-        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile)
+        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile, input.testEnv)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
         const outcome = judgeTargetRun(route.suite, run, resultText, testRoot)
         if (outcome.passed) {

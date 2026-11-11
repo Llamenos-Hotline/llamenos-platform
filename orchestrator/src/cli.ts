@@ -814,9 +814,32 @@ async function commentOnPr(pr: string, body: string): Promise<void> {
 
 /** #2738: the PR's live head commit and branch, for re-entry after a failed verification. */
 async function prHead(pr: string): Promise<{ sha: string; branch: string } | undefined> {
-  const view = await ghJson<{ headRefOid?: string; headRefName?: string }>(['pr', 'view', pr, '--json', 'headRefOid,headRefName'])
+  const view = await ghJson<{ headRefOid?: string; headRefName?: string; isCrossRepository?: boolean }>(
+    ['pr', 'view', pr, '--json', 'headRefOid,headRefName,isCrossRepository'],
+  )
   if (view?.headRefOid === undefined || view.headRefName === undefined) return undefined
+  // A fork PR can reuse a fleet branch NAME; its head is not code this fleet
+  // dispatched, and it must never be fetched and run here.
+  if (view.isCrossRepository !== false) return undefined
   return { sha: view.headRefOid, branch: view.headRefName }
+}
+
+/**
+ * The environment the judged commit's test code runs in: what a test runner
+ * needs and nothing the tick holds. The tick's own environment carries the
+ * fleet's GitHub and reviewer credentials; the code under test is whatever
+ * was pushed to the branch, so it must not inherit them. `HOME` and the temp
+ * dir are inside the throwaway export directory, so `gh`/git config under the
+ * real home is out of reach too.
+ */
+function scrubbedTestEnv(tmp: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: tmp,
+    TMPDIR: tmp,
+    LANG: process.env['LANG'] ?? 'C.UTF-8',
+    CI: 'true',
+  }
 }
 
 /**
@@ -854,7 +877,7 @@ async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha: string
     const verdict = await runVerifyCi({
       ctx,
       lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
-      verify: async (v) => { last = await verifyMechanical(v); return last },
+      verify: async (v) => { last = await verifyMechanical({ ...v, testEnv: scrubbedTestEnv(tmp) }); return last },
       pathExists: existsSync,
       log,
       prLabels: async () => (await readPrFacts(n))?.labels,
