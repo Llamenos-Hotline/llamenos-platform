@@ -26,7 +26,9 @@ describe('isFleetOwnedBranch — scope fence for fleet-initiated writes at PR op
  */
 describe('RAIL: nothing arms auto-merge at PR open (#2732)', () => {
   const sources = orchestratorSources()
-  const cli = sources.find((s) => s.file.endsWith(join('orchestrator', 'src', 'cli.ts')))
+  const cliSource = sources.find((s) => s.file.endsWith(join('orchestrator', 'src', 'cli.ts')))
+  if (cliSource === undefined) throw new Error('cli.ts not found among orchestrator sources')
+  const cli = cliSource
 
   /** The text of one top-level `async function <name>(` in cli.ts, up to its closing brace. */
   function functionBody(text: string, name: string): string {
@@ -38,8 +40,7 @@ describe('RAIL: nothing arms auto-merge at PR open (#2732)', () => {
   }
 
   it('realDispatch — the step that discovers the PR — makes no arming call', () => {
-    expect(cli, 'cli.ts not found among orchestrator sources').toBeDefined()
-    const body = functionBody(cli!.text, 'realDispatch')
+    const body = functionBody(cli.text, 'realDispatch')
     expect(body).not.toMatch(/AutoMerge/)
     expect(body).not.toContain('--auto')
     // The live PR-open writes it DOES make are still there: guards against the
@@ -55,9 +56,8 @@ describe('RAIL: nothing arms auto-merge at PR open (#2732)', () => {
   })
 
   it('the arming function is handed to exactly the two bounded owners: the tick and queue-feed', () => {
-    expect(cli).toBeDefined()
     // Every reference to `enableAutoMerge` in cli.ts that is not its definition.
-    const wired = [...cli!.text.matchAll(/^.*\benableAutoMerge\b.*$/gm)]
+    const wired = [...cli.text.matchAll(/^.*\benableAutoMerge\b.*$/gm)]
       .map((m) => m[0].trim())
       .filter((line) => !line.includes('async function enableAutoMerge') && !/^(\/\/|\*|\/\*)/.test(line))
     expect(wired).toEqual([
