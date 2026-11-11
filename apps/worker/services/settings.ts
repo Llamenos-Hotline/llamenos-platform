@@ -143,7 +143,7 @@ const log = createLogger('services.settings')
  * (constraint applies), or a provider configured whose catalog we do not hold
  * (speakability unknown — must be refused, never silently permitted).
  */
-type IvrCatalogResolution =
+export type IvrCatalogResolution =
   | { state: 'unconfigured' }
   | { state: 'resolved'; catalog: IvrVoiceCatalog<unknown> }
   | { state: 'unsupported'; providerType: string }
@@ -647,7 +647,7 @@ export class SettingsService {
    * constraint. There is deliberately no try/catch here: a failed read is a
    * real failure and must surface, not be downgraded into "unconstrained".
    */
-  private async resolveIvrVoiceCatalog(hubId?: string): Promise<IvrCatalogResolution> {
+  async resolveIvrVoiceCatalog(hubId?: string): Promise<IvrCatalogResolution> {
     const hubConfig = hubId ? await this.getHubTelephonyProvider(hubId) : null
     const config = hubConfig ?? (await this.getTelephonyProvider())
     const providerType = config?.type

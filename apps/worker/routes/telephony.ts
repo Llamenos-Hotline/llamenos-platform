@@ -8,6 +8,7 @@ import type { Services } from '../services'
 import type { Env } from '../types'
 import { buildAudioUrlMap, telephonyResponse } from '../lib/helpers'
 import { holdMusicEntry } from '../telephony/hold-music'
+import { resolveCallerLanguage } from '../telephony/ivr-menu'
 import { banHashes, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
@@ -522,15 +523,23 @@ telephony.post('/language-selected',
   // Get hub's ordered language list for digit-to-language mapping
   const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
 
-  let callerLanguage: string
+  // Every source of the caller's language — forced, phone-prefix, digit —
+  // resolves against what the provider answering this hub can actually speak
+  // (#679). An unconfigured/unsupported provider has no catalog to check; the
+  // sources are then taken in priority order as before.
   const forceLang = url.searchParams.get('forceLang')
-  if (forceLang) {
-    callerLanguage = forceLang
-  } else if (isAuto) {
-    callerLanguage = detectLanguageFromPhone(callerNumber)
-  } else {
-    callerLanguage = languageFromDigit(digits, hubLanguages) ?? detectLanguageFromPhone(callerNumber)
+  const digitLanguage = forceLang || isAuto ? undefined : languageFromDigit(digits, hubLanguages)
+  const detectedLanguage = detectLanguageFromPhone(callerNumber)
+  const candidates = forceLang ? [forceLang] : [digitLanguage, detectedLanguage]
+  const catalogResolution = await services.settings.resolveIvrVoiceCatalog(hubId)
+  if (catalogResolution.state === 'unsupported') {
+    logger.warn('No IVR voice catalog for the configured telephony provider — caller language is not checked against what it can speak (#679)', {
+      providerType: catalogResolution.providerType,
+    })
   }
+  const callerLanguage = catalogResolution.state === 'resolved'
+    ? resolveCallerLanguage(candidates, hubLanguages, catalogResolution.catalog)
+    : forceLang || (digitLanguage ?? detectedLanguage)
 
   // Spam settings and the per-caller rate-limit window are per hub: a caller
   // dialling hub A must not consume hub B's budget, and each hub's toggles
