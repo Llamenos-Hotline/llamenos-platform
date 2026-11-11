@@ -175,6 +175,60 @@ test); a failed shard the diff could never schedule is the ejection this
 feed exists to recover from; a shard the map does not know attributes to
 every candidate — the closed direction.
 
+### How the merge queue's throughput is actually set (#2656)
+
+The ruleset's numbers read as if the queue batched: `max_entries_to_merge: 5`,
+`min_entries_to_merge: 5`, `min_entries_to_merge_wait_minutes: 5`. It does not,
+and the reason is not a missing setting. Measured 2026-11-10, queue 20 deep:
+one `AWAITING_CHECKS`, nineteen `QUEUED`; every `merge_group` run's branch
+(`gh-readonly-queue/main/pr-<N>-<base sha>`) names one PR and its head commit
+is a single squash on the previous group's head. `merge_group` CI: median 30
+min, 22 runs, 2-93 min.
+
+What GitHub does (docs: "managing a merge queue"; rules API):
+
+- **A CI run is never shared between PRs.** Each entry gets its own
+  `merge_group` branch, stacked on the previous entry's group head, and its own
+  run. The docs say it outright: "Merge limits do not combine `merge_group`
+  builds." So "several PRs in one group, one CI run" does not exist to be
+  enabled — "one PR per group is inherent", and the name `max_entries_to_merge`
+  describes landing, not building.
+- **`max_entries_to_build` is BUILD CONCURRENCY** (the docs' "Build
+  concurrency": the maximum number of `merge_group` webhooks to dispatch; the
+  rules API: "queued pull requests requesting checks and workflow runs at the
+  same time"). It is not a group size and it is not "groups at once" as
+  distinct from entries — an entry is a group.
+- **`min/max_entries_to_merge` only decide how many already-green stacked
+  entries land together**, and "only affect merges … once one or more
+  `merge_group` has satisfied build checks". A green entry can wait for company
+  only if later entries are building or built, so `min_entries_to_merge: 5` is
+  reachable only with `max_entries_to_build >= 5`. At `max_entries_to_build: 1`
+  it is dead configuration: every merge is released by the wait timer and the
+  maximum of 5 is never approached.
+
+So batching and concurrency cannot be separated: the only way to get more than
+one entry landing per cycle is more than one entry building. And concurrency
+is not free of CI cost, which is why the Mac runners gate it: `ci.yml` diffs a
+`merge_group` against the TARGET branch, not the previous entry (#1594), so an
+entry stacked behind an iOS-gate PR runs the iOS leg too until that PR has
+merged. At build concurrency 1 each entry is built on a `main` that already
+holds its predecessor, so a backend-only PR never pays for the iOS PR ahead of
+it; at 2+, it can. The prerequisites for raising it are Mac disk headroom
+(#2533, #2401, #2644) and the queue's order, below.
+
+Order: the queue is strictly FIFO by enqueue time, and nothing in the API
+reorders it. The only lever the fleet owns is *admission* — which PR is armed
+when. That is why `queue-feed` queues an iOS-gate-risk PR only alone (rule d
+above): a 2-minute backend PR enqueued behind a 90-minute iOS PR costs 90
+minutes of wall clock for both.
+
+`queue-feed` now reads `max_entries_to_build` and
+`min_entries_to_merge_wait_minutes` with the rest of the rule and prints, on
+every pass, a `DEAD CONFIG:` note when `min_entries_to_merge` exceeds the build
+concurrency, and a note stating the serial drain rate when it is 1
+(`mergeQueueConfigFindings`). The ruleset itself is the operator's: this
+command reports it, it never edits it.
+
 ### Infrastructure ejections: re-queued once, never a failure (#2458)
 
 A job killed by its own `timeout-minutes` cannot retry itself, and an
