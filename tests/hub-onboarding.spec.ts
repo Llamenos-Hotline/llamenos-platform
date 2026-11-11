@@ -451,3 +451,44 @@ test.describe('Hub Onboarding - API error handling', () => {
     await expect(scratchCard).toBeVisible()
   })
 })
+
+test.describe('Hub Onboarding - focus is never stolen from the user (#2523)', () => {
+  test('a card focused right after the step mounts keeps focus once timers run', async ({ page }) => {
+    await mockConfigWithHub(page)
+    await loginAsAdmin(page)
+    await mockOnboardingApis(page, { onboardingComplete: false })
+
+    // Freeze every timer so any deferred focus() the wizard schedules on mount stays
+    // pending while the "user" acts, then release them all. This drives the race
+    // directly instead of hoping to land inside a 50 ms window.
+    await page.clock.install()
+    await page.clock.pauseAt(new Date(Date.now() + 60_000))
+    await navigateViaSpa(page, '/admin/hub-communications')
+
+    const scratchCard = page.getByTestId('template-card-scratch')
+    await expect(scratchCard).toBeVisible({ timeout: Timeouts.ELEMENT })
+    await scratchCard.focus()
+    await page.keyboard.press('Space')
+    await expect(scratchCard).toHaveAttribute('aria-checked', 'true')
+
+    // Run every timer that was pending at mount (the old code scheduled a 50 ms one).
+    await page.clock.runFor(10_000)
+
+    await expect(scratchCard).toBeFocused()
+    await expect(scratchCard).toHaveAttribute('aria-checked', 'true')
+  })
+
+  test('the step heading takes focus on mount, before any timer fires', async ({ page }) => {
+    await mockConfigWithHub(page)
+    await loginAsAdmin(page)
+    await mockOnboardingApis(page, { onboardingComplete: false })
+
+    await page.clock.install()
+    await page.clock.pauseAt(new Date(Date.now() + 60_000))
+    await navigateViaSpa(page, '/admin/hub-communications')
+
+    await expect(page.getByTestId('template-card-scratch')).toBeVisible({ timeout: Timeouts.ELEMENT })
+    const stepHeading = page.getByTestId('hub-onboarding-step').getByRole('heading', { level: 2 })
+    await expect(stepHeading).toBeFocused()
+  })
+})
