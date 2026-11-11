@@ -31,13 +31,43 @@ const INTEGRATION_DIR = join(REPO_ROOT, 'apps/worker/__tests__/integration')
 const REPORT = join(REPO_ROOT, 'test-results/worker-integration.json')
 
 /**
- * The database the suite runs against. Must match the fallback every test file
- * uses for `process.env.DATABASE_URL`, because that is the database they will
- * connect to if this process does not set one either.
+ * The database the suite runs against, resolved by the same resolver the dev
+ * server uses (scripts/lib/worktree-db.sh), never defaulted here.
+ *
+ * It used to fall back to the shared `llamenos` database, and this wrapper then
+ * MIGRATES whatever it resolved — so an unset DATABASE_URL in a worker's shell
+ * quietly migrated the shared dev database under every other worktree (#2659).
+ * Now: an explicit DATABASE_URL is honoured (CI sets one per job) unless it
+ * names the shared dev database and this worktree may not use that; with none
+ * set, the worktree gets its own database. The test files read the same
+ * DATABASE_URL, so the value is exported into the environment below.
  */
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+function resolveDatabaseUrl(): string {
+  const script =
+    'set -euo pipefail; source scripts/lib/worktree-db.sh; worktree_db_export --ensure >&2; printf %s "$DATABASE_URL"'
+  const inGit = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: REPO_ROOT, stdio: 'ignore' }).status === 0
+  if (!inGit) {
+    const url = process.env.DATABASE_URL
+    if (!url) {
+      console.error('FATAL: DATABASE_URL is not set and this is not a git checkout, so no worktree database can be resolved.')
+      process.exit(1)
+    }
+    return url
+  }
+  const r = spawnSync('bash', ['-c', script], {
+    cwd: REPO_ROOT,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  })
+  const url = r.stdout?.toString() ?? ''
+  if (r.status !== 0 || url === '') {
+    console.error('FATAL: could not resolve a database for the integration suite (see the reason above).')
+    process.exit(1)
+  }
+  return url
+}
+
+const DATABASE_URL = resolveDatabaseUrl()
 
 /**
  * Lower bound on executed tests. Twenty-seven files contribute 204 on
@@ -112,7 +142,7 @@ const run = spawnSync(
     '--reporter=json',
     `--outputFile.json=${REPORT}`,
   ],
-  { cwd: REPO_ROOT, stdio: 'inherit' },
+  { cwd: REPO_ROOT, stdio: 'inherit', env: { ...process.env, DATABASE_URL } },
 )
 
 // Read the report even on failure: the floor below reports WHICH files ran,
