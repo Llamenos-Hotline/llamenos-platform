@@ -14,7 +14,6 @@ import org.llamenos.protocol.SharedNote
 import org.llamenos.protocol.SharedStatus
 import org.llamenos.protocol.SharedHubDetailResponseStatus
 import org.llamenos.protocol.SharedProviderType
-import org.llamenos.protocol.SharedActiveCallResponseStatus
 import org.llamenos.protocol.SharedCustomFieldDefinitionType
 import org.llamenos.protocol.SharedAdminEnvelope
 import org.llamenos.protocol.SharedAuthorEnvelope
@@ -29,9 +28,6 @@ import org.llamenos.protocol.SharedType
 // Call types — ActiveCallsResponse.calls[] and CallHistoryResponse.calls[] both deduplicated to SharedCall
 typealias ActiveCallsResponseCall = SharedCall
 typealias CallHistoryResponseCall = SharedCall
-
-// Status enums — ActiveCallResponse.status now has its own stable name
-typealias ActiveCallResponseStatus = SharedActiveCallResponseStatus
 
 // Envelope types — all admin/author/reader envelopes with same shape deduplicated
 typealias HubKeyEnvelopeResponseEnvelope = SharedAdminEnvelope

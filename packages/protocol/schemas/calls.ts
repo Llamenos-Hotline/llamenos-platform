@@ -3,7 +3,7 @@ import { paginationSchema, paginatedMeta, recipientEnvelopeSchema } from './comm
 
 // --- Response schemas ---
 
-export const callStatusSchema = z.enum(['ringing', 'in-progress', 'completed', 'unanswered'])
+export const callRecordStatusSchema = z.enum(['ringing', 'in-progress', 'completed', 'unanswered'])
 
 /**
  * A call as the server sends it — active (`/calls/active`) or finished (`/calls/history`).
@@ -26,7 +26,7 @@ export const callRecordResponseSchema = z.object({
   startedAt: z.string(),
   endedAt: z.string().optional(),
   duration: z.number().optional(),
-  status: callStatusSchema.optional(),
+  status: callRecordStatusSchema.optional(),
   hasTranscription: z.boolean().optional(),
   hasVoicemail: z.boolean().optional(),
   hasRecording: z.boolean().optional(),

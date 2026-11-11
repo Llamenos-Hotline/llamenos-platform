@@ -13,7 +13,7 @@ import { currentRingDecision } from '../services/routing-readiness'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
-import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema, callRecordResponseSchema, callStatusSchema, type CallRecord } from '@protocol/schemas/calls'
+import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema, callRecordResponseSchema, callRecordStatusSchema, type CallRecord } from '@protocol/schemas/calls'
 import { okResponseSchema } from '@protocol/schemas/common'
 import type { activeCalls, callRecords } from '../db/schema'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -45,7 +45,7 @@ function toActiveCallResponse(row: ActiveCallRow): CallRecord {
     hubId: row.hubId ?? undefined,
     answeredBy: row.answeredBy,
     startedAt: row.startedAt.toISOString(),
-    status: callStatusSchema.parse(row.status),
+    status: callRecordStatusSchema.parse(row.status),
     hasTranscription: row.hasTranscription ?? false,
     hasVoicemail: row.hasVoicemail ?? false,
     hasRecording: row.hasRecording ?? false,
@@ -60,7 +60,7 @@ function toCallRecordResponse(row: CallRecordRow): CallRecord {
     startedAt: row.startedAt.toISOString(),
     endedAt: row.endedAt?.toISOString(),
     duration: row.duration ?? undefined,
-    status: callStatusSchema.parse(row.status),
+    status: callRecordStatusSchema.parse(row.status),
     hasTranscription: row.hasTranscription ?? false,
     hasVoicemail: row.hasVoicemail ?? false,
     hasRecording: row.hasRecording ?? false,
