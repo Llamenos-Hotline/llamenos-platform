@@ -627,24 +627,28 @@ async function findOpenPr(lane: Lane, item: WorkItem): Promise<string | undefine
   return findOpenPrFor(lane, item, defaultOpenPrLookupDeps())
 }
 
-async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome> {
+/**
+ * Issue #1755 / #2735: resolves a salvage wedge for this exact branch — a
+ * leftover worktree checked out on `salvage/<branch>-*`. An artifact-only
+ * wedge (a staged/committed `.test-encrypted-seed.sqlite` and nothing else)
+ * is cleared here and the lane dispatches fresh; a wedge holding real work
+ * is returned as a description so tick.ts skips the item WITHOUT launching
+ * a worker. The salvage branch is always kept. Evaluated every pass and
+ * never persisted as a label: the wedge ends when the worktree does.
+ */
+async function findWedge(lane: Lane, item: WorkItem): Promise<string | undefined> {
   const branch = fleetBranchFor(lane.id, item.id)
-
-  // Issue #1755: before spending a worker, resolve a salvage wedge for this
-  // exact branch — a leftover worktree checked out on `salvage/<branch>-*`.
-  // An artifact-only wedge (a staged/committed `.test-encrypted-seed.sqlite`
-  // and nothing else) is cleared here and the lane dispatches fresh; a wedge
-  // holding real work refuses WITHOUT launching a worker and is recorded as
-  // the distinct WEDGED outcome (tick.ts) — one stuck condition, never three
-  // breaker-consuming failures, and the salvage branch is always kept.
   const wedge = await resolveWedgeForDispatch(REPO_ROOT, branch)
   if (wedge.kind === 'cleared') {
     log(`dispatch: cleared artifact-only salvage wedge for ${branch} (worktree ${wedge.worktree}, branch ${wedge.salvageBranch} kept)`)
   } else if (wedge.kind === 'blocked') {
-    const note = `wedged: worktree ${wedge.worktree} is on salvage branch ${wedge.salvageBranch} — ${wedge.reason}`
-    log(`dispatch: item ${item.id} REFUSED — ${note}`)
-    return { outcome: 'WEDGED', worktree: wedge.worktree, branch: wedge.salvageBranch, note }
+    return `worktree ${wedge.worktree} is on salvage branch ${wedge.salvageBranch} — ${wedge.reason}`
   }
+  return undefined
+}
+
+async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome> {
+  const branch = fleetBranchFor(lane.id, item.id)
 
   const baseBrief = buildBrief(item, lane, branch)
   // Prior-attempt history and governing contracts are memory.ts's sole
@@ -965,6 +969,7 @@ async function runTick(): Promise<number> {
     listItems: (lane) => new GitHubSource(lane.requireLabel, lane.milestone).list(),
     readLabels: (id) => new GitHubSource('').labels(id),
     findOpenPr,
+    findWedge,
     dispatch: realDispatch,
     verifyMechanical,
     prDiff,

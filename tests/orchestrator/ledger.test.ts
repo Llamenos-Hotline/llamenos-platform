@@ -76,18 +76,17 @@ describe('ledger', () => {
     expect(failedAttemptsIn(rows, '7')).toBe(1)
   })
 
-  // Issue #1755: WEDGED is excused from the FLEET-WIDE breaker (one stuck
-  // condition is not three failures) but NOT from the item's own attempt
-  // budget — a wedge is the item's lane state, so three wedges with the
-  // `needs-human` label cleared must still exhaust the item rather than
-  // retry the same refusal forever.
-  it('counts WEDGED as a failed attempt — the per-item bound still closes over it', () => {
+  // Issue #2735: WEDGED is an audit row, not a failed attempt. A wedge is a
+  // live fact about the worktree that tick.ts re-derives each pass; counting
+  // it here let three rows exhaust the item permanently, long after the
+  // worktree was gone (the four issues #1698/#1008/#1101/#1858 each carry 1+).
+  it('does not count WEDGED as a failed attempt — a cleared wedge must leave the item dispatchable', () => {
     const rows = [
       rec({ itemId: '7', outcome: 'WEDGED', ts: 1 }),
       rec({ itemId: '7', outcome: 'WEDGED', ts: 2 }),
       rec({ itemId: '7', outcome: 'WEDGED', ts: 3 }),
     ]
-    expect(failedAttemptsIn(rows, '7')).toBe(3)
+    expect(failedAttemptsIn(rows, '7')).toBe(0)
   })
 
   it('selects rows inside a window relative to an injected now', () => {

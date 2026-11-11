@@ -34,6 +34,7 @@ function baseDeps(over: Partial<TickDeps> = {}): TickDeps {
     listItems: async () => ({ ok: true as const, items: [item()] }),
     readLabels: async () => ['agent-dispatchable', 'lane:ios'],
     findOpenPr: async () => undefined,
+    findWedge: async () => undefined,
     dispatch: vi.fn(async (): Promise<DispatchOutcome> =>
       ({ outcome: 'SUCCESS', branch: 'fleet/ios/1', pr: '42', worktree: '/wt/ios-1' })),
     verifyMechanical: vi.fn(async () => passingVerify),
@@ -406,40 +407,67 @@ describe('tick: branch mismatch (issue #812)', () => {
   })
 })
 
-// Issue #1755: a dispatch refused BEFORE any worker launched (the lane's
-// worktree is wedged on a salvage branch holding real work) is recorded as
-// the distinct WEDGED outcome — handed to a human, never verified or armed,
-// and never fed to the consecutive-failure breaker as if a worker had run
-// and failed three times.
-describe('tick: salvage-wedge refusal (issue #1755)', () => {
-  const wedged = (): TickDeps['dispatch'] =>
-    vi.fn(async (): Promise<DispatchOutcome> => ({
-      outcome: 'WEDGED',
-      worktree: '/wt/llamenos-fleet-ios-1',
-      branch: 'salvage/fleet/ios/1-1790000000000',
-      note: 'wedged: worktree /wt/llamenos-fleet-ios-1 is on salvage branch salvage/fleet/ios/1-1790000000000 — salvage branch holds real work (2 file(s): a.ts)',
-    }))
+// Issues #1755 / #2735: a lane whose worktree is wedged on a salvage branch
+// holding real work is SKIPPED before any worker launches. The wedge is a live
+// fact re-derived every pass, so it is never written to a label — a
+// `needs-human` left behind outlived the worktree and parked four issues
+// forever — and never spends an attempt or a lane slot.
+describe('tick: salvage-wedge skip (issues #1755, #2735)', () => {
+  const WEDGE = 'worktree /wt/llamenos-fleet-ios-1 is on salvage branch salvage/fleet/ios/1-1790000000000 — salvage branch holds real work (2 file(s): a.ts)'
 
-  it('records WEDGED, hands the item to a human, and never runs the verify/review/arm pipeline', async () => {
-    const d = baseDeps({ dispatch: wedged() })
+  it('skips the item without dispatching, verifying, arming or labelling it', async () => {
+    const d = baseDeps({ findWedge: async () => WEDGE })
     const r = await tick(d)
-    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
-      outcome: 'WEDGED', branch: 'salvage/fleet/ios/1-1790000000000',
-    }))
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'WEDGED', needsHuman: true }))
+    expect(d.dispatch).not.toHaveBeenCalled()
+    expect(d.settle).not.toHaveBeenCalled() // settle() is the only needs-human writer
     expect(d.verifyMechanical).not.toHaveBeenCalled()
-    expect(d.secondOpinion).not.toHaveBeenCalled()
     expect(d.enableAutoMerge).not.toHaveBeenCalled()
-    // The refusal was detected, not thrown — it must not count in `failed`.
-    expect(r.attempted).toBe(1)
+    expect(r.attempted).toBe(0)
     expect(r.failed).toBe(0)
+    expect(r.rejections).toEqual([{ id: '1', reason: 'wedged' }])
   })
 
-  it('comments on the issue naming the worktree and salvage branch a human must reconcile', async () => {
-    const d = baseDeps({ dispatch: wedged() })
+  it('records one WEDGED audit row and comments naming the worktree and salvage branch', async () => {
+    const d = baseDeps({ findWedge: async () => WEDGE })
     await tick(d)
+    expect(d.record).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'WEDGED', itemId: '1' }))
     expect(d.commentOnIssue).toHaveBeenCalledWith('1', expect.stringContaining('salvage/fleet/ios/1-1790000000000'))
     expect(d.commentOnIssue).toHaveBeenCalledWith('1', expect.stringContaining('/wt/llamenos-fleet-ios-1'))
+  })
+
+  it('does not repeat the row or the comment while the same wedge persists', async () => {
+    const note = `wedged: ${WEDGE}`
+    const prior: RunRecord = { ts: 1, runId: 'a', lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'WEDGED', note }
+    const d = baseDeps({ findWedge: async () => WEDGE, readLedger: () => [prior] })
+    const r = await tick(d)
+    expect(d.record).not.toHaveBeenCalled()
+    expect(d.commentOnIssue).not.toHaveBeenCalled()
+    expect(r.rejections).toEqual([{ id: '1', reason: 'wedged' }]) // still skipped
+  })
+
+  it('SELF-HEALS: once the wedge clears, the same item dispatches with no label touched', async () => {
+    // Three prior WEDGED rows (what the four parked issues carry) and no
+    // needs-human label — the item must be dispatchable the moment the
+    // worktree is gone, i.e. WEDGED rows must not spend the attempt budget.
+    const rows: RunRecord[] = [1, 2, 3].map((ts) => ({
+      ts, runId: String(ts), lane: 'ios', itemId: '1', itemName: 't1', engine: 'claude', outcome: 'WEDGED' as const, note: `wedged: ${WEDGE}`,
+    }))
+    const d = baseDeps({ findWedge: async () => undefined, readLedger: () => rows })
+    const r = await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+    expect(r.attempted).toBe(1)
+  })
+
+  it('a wedged item does not consume its lane slot — the next item still dispatches', async () => {
+    const d = baseDeps({
+      lanes: [lane()],
+      listItems: async () => ({ ok: true as const, items: [item('1'), item('2')] }),
+      findWedge: async (_l, i) => (i.id === '1' ? WEDGE : undefined),
+    })
+    const r = await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+    expect(d.dispatch).toHaveBeenCalledWith(expect.objectContaining({ id: '2' }), expect.anything())
+    expect(r.attempted).toBe(1)
   })
 
   it('three consecutive WEDGED rows do not trip the consecutive-failure breaker', async () => {
