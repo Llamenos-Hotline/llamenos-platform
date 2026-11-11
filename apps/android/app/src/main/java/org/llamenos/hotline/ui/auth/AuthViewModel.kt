@@ -20,6 +20,7 @@ import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.NativeCryptoLibraryMissingException
 import org.llamenos.hotline.crypto.PinLockoutState
 import org.llamenos.hotline.model.InviteCodeParser
 import org.llamenos.hotline.service.DeviceRegistrationManager
@@ -464,6 +465,16 @@ class AuthViewModel @Inject constructor(
                 }
                 onIdentityKnownToServer()
                 onAuthenticated()
+            } catch (e: NativeCryptoLibraryMissingException) {
+                // A build fault, not a wrong PIN: say so, and do NOT count it as a failed
+                // attempt — those accumulate toward a lockout and ultimately a key wipe.
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message,
+                        pin = "",
+                    )
+                }
             } catch (e: Exception) {
                 // Record failed attempt for lockout tracking
                 val lockoutState = ks?.recordFailedAttempt()

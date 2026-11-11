@@ -71,7 +71,12 @@ cp -r dist/android/jniLibs-debug/* ../../apps/android/app/src/debug/jniLibs/
 cp -r dist/android/jniLibs-release/* ../../apps/android/app/src/release/jniLibs/
 ```
 
-A placeholder mock crypto is active until the native libraries are linked (enables builds without a full Rust toolchain).
+There is no mock crypto fallback. Without these `.so` files, `NativeCryptoLibrary` logs an
+ERROR (tag `NativeCryptoLibrary`) naming the missing `llamenos_core` library, and every crypto
+operation hard-fails with a `NativeCryptoLibraryMissingException` that carries the original
+`UnsatisfiedLinkError` and these build instructions. The PIN screen shows that message instead
+of "Incorrect PIN" and does not count it as a failed attempt. JVM unit tests run without the
+native library by design.
 
 ## Version Management
 

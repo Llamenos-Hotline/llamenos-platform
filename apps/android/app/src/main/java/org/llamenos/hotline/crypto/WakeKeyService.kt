@@ -54,16 +54,7 @@ class WakeKeyService @Inject constructor(
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private var nativeLibLoaded = false
-
-    init {
-        try {
-            System.loadLibrary("llamenos_core")
-            nativeLibLoaded = true
-        } catch (_: UnsatisfiedLinkError) {
-            nativeLibLoaded = false
-        }
-    }
+    private val nativeLibLoaded: Boolean get() = NativeCryptoLibrary.isLoaded
 
     /**
      * Get the wake public key, generating a new keypair if none exists.
@@ -84,11 +75,7 @@ class WakeKeyService @Inject constructor(
             return existing
         }
 
-        check(nativeLibLoaded) {
-            "WakeKeyService: native crypto library not loaded. " +
-            "Cannot derive X25519 wake keypair without native FFI. " +
-            "Ensure jniLibs are present for this ABI."
-        }
+        NativeCryptoLibrary.require()
 
         // Generate keypair entirely in Rust — secret never enters JVM
         val publicKeyHex = org.llamenos.core.mobileGenerateWakeKey()
