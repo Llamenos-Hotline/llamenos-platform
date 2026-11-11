@@ -1,0 +1,19 @@
+name = "Restore paths do not reference dropped tables"
+run = '''
+set -euo pipefail
+# Comments explaining why the old reference was wrong are fine;
+# a live reference is not.
+if grep -rn 'kv_store' \
+     deploy/ansible/playbooks deploy/ansible/roles deploy/ansible/templates \
+     2>/dev/null | grep -vE '^[^:]+:[0-9]+: *#'; then
+  echo "::error::A deployment playbook references kv_store, which does not exist. See #1125."
+  exit 1
+fi
+echo "OK: no kv_store references"
+'''
+why = """
+kv_store is a Durable-Objects-era table that no migration has created for a long
+time. restore.yml validated against it with no ignore_errors, so the restore
+died before restarting the app (#1125). A validation query must reference
+something that exists.
+"""

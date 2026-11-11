@@ -1,0 +1,8 @@
+name = "Check Jinja select/reject test names resolve"
+run = "python3 deploy/ansible/scripts/check-jinja-tests.py"
+why = """
+Neither `--syntax-check` nor `ansible-lint` evaluates Jinja, so a filter naming
+a test that does not exist -- `selectattr('status', 'startswith', 'FAIL')` -- is
+green here and raises on the target. Issue #1602 found four of them, three
+inside the deploy's own pass/fail gate, which therefore could never fire.
+"""
