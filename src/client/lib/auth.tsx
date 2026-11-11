@@ -13,6 +13,7 @@ import { getMe, login, logout as apiLogout, updateMyAvailability, setOnAuthExpir
 import { permissionGranted } from '@shared/permissions'
 import { loginWithPasskey as webauthnLogin } from './webauthn'
 import { useConfig, forgetHubPreference } from './config'
+import { setErrorToastsSuppressed } from './toast'
 
 /** Hub membership changes rarely; a slow refresh avoids needing a relaunch. */
 const HUB_MEMBERSHIP_REFRESH_MS = 5 * 60_000
@@ -146,6 +147,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
     return () => setOnAuthExpired(null)
   }, [])
+
+  // A fresh unlock starts a new session: error toasts matter again.
+  useEffect(() => {
+    if (state.isKeyUnlocked) setErrorToastsSuppressed(false)
+  }, [state.isKeyUnlocked])
 
   // Register API activity callback
   useEffect(() => {
@@ -565,6 +571,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state.onBreak])
 
   const signOut = useCallback(() => {
+    // Polls still in flight are answered 401 once the session is revoked; their
+    // error toasts would pile up on the login screen (#2115).
+    setErrorToastsSuppressed(true)
     // Revoke server-side session token before clearing local state
     apiLogout()
     keyManager.lock()
