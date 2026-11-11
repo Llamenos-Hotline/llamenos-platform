@@ -5,6 +5,7 @@
  */
 import { expect } from '@playwright/test'
 import { Given, When } from '../fixtures'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 import {
   loginAsAdmin,
   loginAsVolunteer,
@@ -160,9 +161,7 @@ Given('I am logged in as a volunteer on shift', async ({ page, backendRequest: r
   const vol = await createUserViaApi(request, { hubId: workerHub })
   await createShiftViaApi(request, {
     name: `Shift-${Date.now()}`,
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol.pubkey],
     hubId: workerHub,
   })

@@ -26,7 +26,7 @@ import {
   setFallbackGroupViaApi,
   uniqueName,
 } from '../../api-helpers'
-import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 
 interface SimulatedCallResponse {
   ok?: boolean

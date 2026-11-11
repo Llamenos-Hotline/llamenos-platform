@@ -30,7 +30,7 @@ import {
   simulateIncomingMessage,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
-import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 import type { CallRecord } from '@protocol/schemas/calls'
 
 // ── State ───────────────────────────────────────────────────────────

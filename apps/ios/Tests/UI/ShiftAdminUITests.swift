@@ -309,8 +309,10 @@ final class ShiftAdminUITests: BaseUITest {
                 [
                     "id": UUID().uuidString,
                     "encryptedName": "Coverage Gap",
+                    // start == end is the app's 24-hour shift; "23:59" is off shift
+                    // for the last minute of every UTC day (#2693).
                     "startTime": "00:00",
-                    "endTime": "23:59",
+                    "endTime": "00:00",
                     "days": [0, 1, 2, 3, 4, 5, 6],
                     "userPubkeys": [],
                 ],
