@@ -218,8 +218,8 @@ jobs:
       # enters the merge queue:
       #   1. The supervisor armed standard auto-merge on it
       #      (`enableAutoMerge` in cli.ts — `gh pr merge --auto --squash`,
-      #      requested at PR open and re-armed after the fleet's own
-      #      verify+review pass). GitHub then enqueues it itself once every
+      #      requested by the tick after the fleet's own verify+review
+      #      pass, or by queue-feed once queue depth allows). GitHub then enqueues it itself once every
       #      required check is green; `auto_merge` on the PR is non-null.
       #   2. `review-and-merge` applied the supervisor's `queue-cleared`
       #      label immediately before its own explicit merge.

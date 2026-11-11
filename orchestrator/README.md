@@ -477,7 +477,8 @@ push.
 **The orchestrator makes that request itself when a worker's PR appears
 (#1760).** `realDispatch` calls `requestReviewAtOpen`
 (`orchestrator/src/review-request.ts`) in the same step it links the issue
-and arms standard auto-merge, so a fleet PR is never born with an empty
+and applies any `scope:<lane>` grant (it deliberately does not arm
+auto-merge, #2732), so a fleet PR is never born with an empty
 `requested_reviewers` list — before this, every one was, and `fleet/review`
 could only ever republish `NO-VERDICT:unreviewed` on it: permanently
 BLOCKED, since a push never starts a review. The request is confirmed by
@@ -740,8 +741,8 @@ signalled`) admits a queue entry for a fleet-dispatched PR — branch grammar
 one of two ways:
 
 1. **Auto-merge is armed on the PR** (`enableAutoMerge` in cli.ts —
-   requested at PR open and re-armed after the fleet's own verify+review
-   pass). GitHub then enqueues it itself once every required check is
+   requested by the tick after the fleet's own verify+review
+   pass, or by `queue-feed` once queue depth allows — never at PR open, #2732). GitHub then enqueues it itself once every required check is
    green; the PR's `auto_merge` is non-null.
 2. **The PR carries the `queue-cleared` label**, applied by
    `review-and-merge` immediately before its explicit merge (and removed
