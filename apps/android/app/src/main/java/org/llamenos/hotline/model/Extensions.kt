@@ -147,7 +147,7 @@ val CallHistoryResponseCall.hasRecordingFlag: Boolean
 
 // ── ActiveCallsResponseCall (typealias ActiveCall) ─────────────────────────
 
-/** Status as a String (generated type uses `ActiveCallResponseStatus?` enum). */
+/** Status as a String (generated type uses `CallRecordStatus?` enum). */
 val ActiveCallsResponseCall.statusString: String
     get() = status?.value ?: "unknown"
 

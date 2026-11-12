@@ -186,6 +186,12 @@ const REFERENCED_BY_NAME = new Set([
   // that held it to `SharedConversationListResponseMetadata`.
   'FileOwner',
   'EncryptedMetadataEntry',
+  // #2682 — the call status enum sits inline on `activeCallsResponse`, `callHistoryResponse`
+  // and `callActionResponse` rows. Deduplicated, it took its name from whichever parent sorted
+  // first (`SharedActiveCallResponseStatus`, then `SharedActiveCallsResponseStatus`), so removing
+  // or adding a schema renamed it out from under the Android/iOS call screens. It is named
+  // `CallRecordStatus` — its own schema's name — whatever holds it.
+  'CallRecordStatus',
 ])
 
 /**

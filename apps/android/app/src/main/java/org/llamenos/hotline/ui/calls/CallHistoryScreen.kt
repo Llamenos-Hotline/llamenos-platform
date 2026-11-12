@@ -63,7 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.ActiveCallResponseStatus
+import org.llamenos.protocol.CallRecordStatus
 import org.llamenos.hotline.model.durationSeconds
 import org.llamenos.hotline.model.hasRecordingFlag
 import org.llamenos.hotline.ui.admin.RecordingPlayer
@@ -273,7 +273,7 @@ private fun CallHistoryRecordCard(
     modifier: Modifier = Modifier,
 ) {
     val call = decryptedCall.record
-    val isUnanswered = call.status == ActiveCallResponseStatus.Unanswered
+    val isUnanswered = call.status == CallRecordStatus.Unanswered
     var showRecording by remember(call.id) { mutableStateOf(false) }
 
     Card(

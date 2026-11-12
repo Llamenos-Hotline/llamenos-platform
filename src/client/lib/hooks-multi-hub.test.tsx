@@ -38,8 +38,8 @@ vi.mock('./api/client', async (importActual) => ({
     // user's, so nothing may subscribe to or poll it.
     if (path === '/hubs') return { hubs: [{ id: 'hub-A' }, { id: 'hub-B' }] }
     if (path === '/hubs/hub-B/calls/active') {
-      // Wire shape: the server sends the raw active_calls row, keyed callId (not id)
-      return { calls: [{ callId: 'CA-on-hub-B', hubId: 'hub-B', callerNumber: '[redacted]', startedAt: '2026-01-01T00:00:00Z', status: 'ringing' }] }
+      // Wire shape: toActiveCallResponse projects the row onto callRecordResponseSchema (keyed `id`)
+      return { calls: [{ id: 'CA-on-hub-B', hubId: 'hub-B', startedAt: '2026-01-01T00:00:00Z', status: 'ringing' }] }
     }
     if (path.endsWith('/calls/active')) return { calls: [] }
     if (path === '/hubs/hub-B/conversations?') return { conversations: [{ id: 'conv-on-hub-B', status: 'waiting', channelType: 'sms', messageCount: 1 }] }

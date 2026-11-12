@@ -59,13 +59,13 @@ struct AttributedHubEvent: Sendable {
     /// The call a call event is about (`callId` in the decrypted content), when it names one.
     let callId: String?
     /// The status a `call:update` carries (`status` in the decrypted content).
-    let callStatus: SharedActiveCallResponseStatus?
+    let callStatus: CallRecordStatus?
 
     init(
         hubId: String,
         event: HubEventType,
         callId: String? = nil,
-        callStatus: SharedActiveCallResponseStatus? = nil
+        callStatus: CallRecordStatus? = nil
     ) {
         self.hubId = hubId
         self.event = event
@@ -698,7 +698,7 @@ final class WebSocketService {
             hubId: hubId,
             event: HubEventType(rawValue: type) ?? .unknown,
             callId: obj["callId"] as? String,
-            callStatus: (obj["status"] as? String).flatMap(SharedActiveCallResponseStatus.init(rawValue:))
+            callStatus: (obj["status"] as? String).flatMap(CallRecordStatus.init(rawValue:))
         )
     }
 

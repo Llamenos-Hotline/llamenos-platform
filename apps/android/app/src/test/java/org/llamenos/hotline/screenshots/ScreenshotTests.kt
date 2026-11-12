@@ -72,7 +72,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import org.llamenos.hotline.model.ActiveCallResponseStatus
+import org.llamenos.protocol.CallRecordStatus
 import org.llamenos.hotline.model.CallHistoryResponseCall
 import org.llamenos.protocol.Record
 import org.llamenos.protocol.Shift
@@ -146,28 +146,28 @@ class ScreenshotTests {
         CallHistoryResponseCall(
             id = "call-001",
             startedAt = sampleTimestamp,
-            status = ActiveCallResponseStatus.Completed,
+            status = CallRecordStatus.Completed,
             answeredBy = samplePubkey,
             duration = 185.0,
         ),
         CallHistoryResponseCall(
             id = "call-002",
             startedAt = sampleTimestamp2,
-            status = ActiveCallResponseStatus.Completed,
+            status = CallRecordStatus.Completed,
             answeredBy = samplePubkey2,
             duration = 423.0,
         ),
         CallHistoryResponseCall(
             id = "call-003",
             startedAt = "2026-04-28T22:10:00Z",
-            status = ActiveCallResponseStatus.Unanswered,
+            status = CallRecordStatus.Unanswered,
             answeredBy = null,
             duration = null,
         ),
         CallHistoryResponseCall(
             id = "call-004",
             startedAt = "2026-04-28T18:45:00Z",
-            status = ActiveCallResponseStatus.Completed,
+            status = CallRecordStatus.Completed,
             answeredBy = samplePubkey,
             duration = 612.0,
         ),
