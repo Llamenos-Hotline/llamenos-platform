@@ -43,6 +43,20 @@
 #   * runner agent `_diag` logs older than MAC_DIAG_MAX_AGE_DAYS,
 #   * CoreSimulator caches and machine-generated CoreSimulator logs,
 #   * simulator devices the installed Xcode reports as unavailable,
+#   * `com.apple.CoreSimulator.SimDevice.<UDID>` runtime directories in
+#     /private/var/tmp that no simulator owns (#2644). `simctl delete`
+#     removes the device but not this ~3 MB launchd_sim directory, so every
+#     boot-and-delete leaked one: 2,040 of them held 6 GiB and put the host
+#     150 MB under the floor for seven hours. Ownership is "the UDID is in no
+#     `simctl list devices` line" + the runner account's own + older than
+#     MAC_SIM_TMP_MAX_AGE_MIN (default: the simulator age floor). A live or
+#     Shutdown device keeps its directory; an unanswered `simctl list`
+#     removes nothing. Job teardown now removes the directory itself
+#     (`delete-sim`), so the sweep is the backstop, not the mechanism. Also
+#     `XCTestTesting.*.spindump*` captures older than a day. Nothing else in
+#     /private/var/tmp is touched (rm_ci_path enforces the two name shapes);
+#     the thousands of `com.apple.launchd.*` entries there are tiny, belong
+#     to no CI step, and are reported only.
 #   * ANY simulator device that has been Shutdown and untouched for longer
 #     than MAC_SIM_STALE_MAX_AGE_HOURS (default 24), whatever its name
 #     (#1861). A device idle for a day on a dedicated CI host is a leftover,
@@ -145,6 +159,7 @@
 #   mac-runner-disk-guard.sh report    # measure and print; never fails
 #   mac-runner-disk-guard.sh reclaim   # prune CI-owned space; never fails
 #   mac-runner-disk-guard.sh guard     # check write paths, report, reclaim, re-measure, then gate
+#   mac-runner-disk-guard.sh delete-sim <udid> # job teardown: shutdown + delete + its /private/var/tmp dir; never fails
 #   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
@@ -193,6 +208,22 @@ DIAG_MAX_AGE_DAYS="${MAC_DIAG_MAX_AGE_DAYS:-5}"
 SIM_LOG_MAX_AGE_DAYS="${MAC_SIM_LOG_MAX_AGE_DAYS:-7}"
 
 SIM_DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
+# Where CoreSimulator keeps each booted device's launchd_sim runtime directory
+# (`com.apple.CoreSimulator.SimDevice.<UDID>`: launchd.log, disabled.plist, a
+# socket; ~3 MB each) and where XCTest drops its spindumps. `simctl delete`
+# removes the device under $SIM_DEVICES but NOT this directory, so every
+# simulator a job boots and deletes leaves one behind (#2644: 2,040 of them,
+# 6 GiB, took the host under the 12 GiB floor and stalled every merge group
+# for seven hours). Overridable so the selftest can point it at a sandbox.
+SIM_TMP_ROOT="${MAC_SIM_TMP_ROOT:-/private/var/tmp}"
+# Age floor for a SimDevice directory that no simulator owns any more. The
+# ownership proof is "no device in `simctl list devices` carries this UDID";
+# the age is the second lock, so a directory created between that listing and
+# the delete is never a candidate.
+SIM_TMP_MAX_AGE_MIN="${MAC_SIM_TMP_MAX_AGE_MIN:-$SIM_MAX_AGE_MIN}"
+# XCTest's `XCTestTesting.<ts>.spindump*` captures are forensic leftovers from
+# a hung test run; a day is longer than any triage that wants them.
+SIM_TMP_SPINDUMP_MAX_AGE_HOURS="${MAC_SIM_TMP_SPINDUMP_MAX_AGE_HOURS:-24}"
 DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
 # A DerivedData root inside a runner's own install tree (#2530). Nobody but the
 # CI jobs of that runner writes under `_work`, so an entry here is CI's because
@@ -227,6 +258,9 @@ ALLOW_PARENTS=(
   "$HOME/Library/Developer/CoreSimulator/Caches"
   "$HOME/Library/Logs/CoreSimulator"
   "$DERIVED_DATA"
+  # NAME-restricted by rm_ci_path: the system temp dir is shared with every
+  # other process on the host, so being under it proves nothing.
+  "$SIM_TMP_ROOT"
 )
 
 log() { printf '%s\n' "$*"; }
@@ -282,6 +316,15 @@ free_gib() {
   awk -v k="$(free_kib)" 'BEGIN { printf "%.1f", k / 1048576 }'
 }
 
+# The only names this script may remove from $SIM_TMP_ROOT.
+sim_tmp_name_ok() {
+  case "$1" in
+    com.apple.CoreSimulator.SimDevice.????????-????-????-????-????????????) return 0 ;;
+    XCTestTesting.*.spindump|XCTestTesting.*.spindump.txt) return 0 ;;
+  esac
+  return 1
+}
+
 # Deletes one path, but only after proving it is a CI-owned leaf under an
 # allowed parent. Fails closed and loudly: a refusal here means this script
 # was asked to delete something it has no business deleting, which is a defect
@@ -333,6 +376,13 @@ rm_ci_path() {
     return 1
   fi
 
+  # A parent that is merely shared (the system temp dir) is allowed only for
+  # the two shapes this script is entitled to remove from it.
+  if [ "$parent" = "$SIM_TMP_ROOT" ] && ! sim_tmp_name_ok "$(basename "$target")"; then
+    log "::error::mac-runner-disk-guard REFUSED to delete '$target': '$parent' is shared with every process on the host, and this name is not a CoreSimulator SimDevice directory or an XCTest spindump. This is a bug in this script, not a disk problem."
+    return 1
+  fi
+
   [ -e "$target" ] || [ -L "$target" ] || return 2
   local err rc=0
   err="$(rm -rf "$target" 2>&1)" || rc=$?
@@ -353,6 +403,9 @@ rm_ci_path() {
 # paths named) when it does not.
 DELETE_FAILURES=0
 DELETE_FAILED_LIST=""
+# What the last reclaim pass measurably returned (KiB, df delta, floored at 0),
+# carried to the gate's verdict so a refusal says whether reclaiming helped.
+RECLAIM_FREED_KIB=0
 
 # note_delete_failed <path> <what> [apparent-gib]
 # Deliberately does not `du` the survivor: on the volume that produced #2566,
@@ -547,6 +600,10 @@ report() {
   fi
   log ""
 
+  log "── simulator runtime dirs in ${SIM_TMP_ROOT} (simctl delete leaves these behind, #2644) ──"
+  report_sim_tmp "$(xcrun simctl list devices 2>/dev/null || true)"
+  log ""
+
   log "── runner agent _diag (the directory whose write crashed the agent) ──"
   du -sh "$HOME"/actions-runner-*/_diag 2>/dev/null || true
   log ""
@@ -559,6 +616,29 @@ report() {
     report_derived_data "$root" "$owner"
   done < <(derived_data_roots)
   log ""
+}
+
+# How many SimDevice runtime directories exist, how many no simulator owns
+# (the ones reclaim removes once past the age floor), and what they hold.
+report_sim_tmp() {
+  local listing="$1" dir udid total=0 orphans=0 kib orphan_kib=0 spindumps
+  if [ -d "$SIM_TMP_ROOT" ]; then
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      total=$((total + 1))
+      case "$listing" in *"${dir##*.SimDevice.}"*) continue ;; esac
+      orphans=$((orphans + 1))
+      kib="$(du -sk "$dir" 2>/dev/null | awk '{print $1}')"
+      orphan_kib=$((orphan_kib + ${kib:-0}))
+    done < <(find "$SIM_TMP_ROOT" -maxdepth 1 -type d -name 'com.apple.CoreSimulator.SimDevice.*' -print 2>/dev/null || true)
+    spindumps="$(find "$SIM_TMP_ROOT" -maxdepth 1 -name 'XCTestTesting.*.spindump*' 2>/dev/null | wc -l | tr -d ' ')"
+  fi
+  if [ -z "$listing" ]; then
+    log "  simctl returned no device listing; ${total} SimDevice dir(s) present, orphans cannot be told from live devices"
+  else
+    awk -v t="$total" -v o="$orphans" -v k="$orphan_kib" -v s="${spindumps:-0}" \
+      'BEGIN { printf "  %d SimDevice dir(s), %d orphaned (no simulator owns them; %.2f GiB apparent), %d XCTest spindump(s)\n", t, o, k/1048576, s }'
+  fi
 }
 
 # Lists one root's entries with the verdict reclaim will reach.
@@ -584,6 +664,84 @@ derived_data_roots() {
   while IFS= read -r root; do
     printf 'runner|%s\n' "$root"
   done < <(runner_dd_roots)
+  return 0
+}
+
+# ── simulator runtime directories (#2644) ───────────────────────────────────
+
+# reclaim_sim_tmp <device-listing> — remove from $SIM_TMP_ROOT:
+#   * `com.apple.CoreSimulator.SimDevice.<UDID>` directories that NO simulator
+#     owns: the UDID is absent from <device-listing> (the output of
+#     `xcrun simctl list devices`, which includes booted and Shutdown devices),
+#     the directory is the runner account's own, and it is older than
+#     SIM_TMP_MAX_AGE_MIN. A device that still exists keeps its directory, so
+#     a booted simulator can never lose it. An EMPTY listing means simctl
+#     could not answer, and then nothing is removed: without it an orphan and a
+#     live device look identical.
+#   * `XCTestTesting.*.spindump*` captures older than
+#     SIM_TMP_SPINDUMP_MAX_AGE_HOURS.
+# Every removal goes through rm_ci_path, which re-checks the name.
+reclaim_sim_tmp() {
+  local listing="$1" dir udid owner p
+  [ -d "$SIM_TMP_ROOT" ] || return 0
+  owner="$(id -un)"
+
+  if [ -z "$listing" ]; then
+    log "  skipped orphaned SimDevice directories: simctl returned no device listing, so an orphan cannot be told from a live device's directory"
+  else
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      # Not the shape CoreSimulator writes: not ours to judge, and handing it
+      # to prune would be refused as a defect and abort the whole reclaim.
+      sim_tmp_name_ok "$(basename "$dir")" || continue
+      udid="${dir##*.SimDevice.}"
+      case "$listing" in
+        *"$udid"*) continue ;;
+      esac
+      prune "$dir" "removed orphaned simulator runtime dir: $udid"
+    done < <(find "$SIM_TMP_ROOT" -maxdepth 1 -type d -user "$owner" \
+               -name 'com.apple.CoreSimulator.SimDevice.*' \
+               -mmin "+${SIM_TMP_MAX_AGE_MIN}" -print 2>/dev/null || true)
+  fi
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    sim_tmp_name_ok "$(basename "$p")" || continue
+    prune "$p" "removed stale XCTest spindump: $(basename "$p")"
+  done < <(find "$SIM_TMP_ROOT" -maxdepth 1 -user "$owner" \
+             -name 'XCTestTesting.*.spindump*' \
+             -mmin "+$(( SIM_TMP_SPINDUMP_MAX_AGE_HOURS * 60 ))" -print 2>/dev/null || true)
+}
+
+# delete_sim <udid> — the job-teardown form: shut a simulator down, delete it,
+# and remove the runtime directory `simctl delete` leaves behind. Never fails
+# the step that calls it (an unconditional teardown must not turn a green job
+# red), but says out loud when it could not finish.
+delete_sim() {
+  local udid="${1:-}" listing
+  if [ -z "$udid" ]; then
+    log "delete-sim: no simulator was created by this job; nothing to delete"
+    return 0
+  fi
+  case "$udid" in
+    ????????-????-????-????-????????????) ;;
+    *) log "::warning::delete-sim: '$udid' is not a simulator UDID; refusing to act on it"; return 0 ;;
+  esac
+  xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+  xcrun simctl delete "$udid" >/dev/null 2>&1 || true
+  # Only forget the runtime directory once CoreSimulator no longer knows the
+  # device. An empty listing is "could not ask", never "it is gone".
+  if ! listing="$(xcrun simctl list devices 2>/dev/null)" || [ -z "$listing" ]; then
+    log "::warning::delete-sim: could not list simulators, so '$udid' was not confirmed deleted; leaving its runtime directory for the next reclaim"
+    return 0
+  fi
+  case "$listing" in
+    *"$udid"*)
+      log "::warning::delete-sim: simulator $udid is still registered after shutdown+delete; leaving its runtime directory for the next reclaim"
+      return 0
+      ;;
+  esac
+  prune "$SIM_TMP_ROOT/com.apple.CoreSimulator.SimDevice.$udid" "deleted simulator $udid and its runtime directory"
   return 0
 }
 
@@ -685,6 +843,12 @@ reclaim() {
   done < <(find "$HOME/Library/Logs/CoreSimulator" -maxdepth 1 -mindepth 1 \
              -mtime "+${SIM_LOG_MAX_AGE_DAYS}" -print 2>/dev/null || true)
 
+  # 3b. The runtime directory `simctl delete` leaves in /private/var/tmp for
+  #     every simulator a job boots (#2644). Listed AFTER the passes above so a
+  #     device they just deleted already counts as gone; its directory is
+  #     still younger than the age floor, so the next pass takes it.
+  reclaim_sim_tmp "$(xcrun simctl list devices 2>/dev/null || true)"
+
   # 4. DerivedData CI left behind. Ownership by location inside a runner's own
   #    tree, by plist (or a logs-only shape) in the shared per-user root; see
   #    "DerivedData ownership" above. rm_ci_path applies both the denylist and
@@ -721,6 +885,7 @@ reclaim() {
 
   after="$(free_kib)"
   freed=$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')
+  RECLAIM_FREED_KIB=$(( after > before ? after - before : 0 ))
   if [ "$DELETE_FAILURES" -gt 0 ]; then
     log "::warning::mac-runner-disk-guard: ${DELETE_FAILURES} delete(s) FAILED and freed nothing; still on disk:"
     printf '%s' "$DELETE_FAILED_LIST"
@@ -855,7 +1020,14 @@ gate() {
   local free; free="$(free_gib)"
 
   if awk -v f="$free" -v m="$MIN_FREE_GIB" 'BEGIN { exit !(f < m) }'; then
-    log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${VOLUME} of the ${MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Two concurrent iOS shards consume ~10 GiB of simulator data, build products and swap on this host; below ${MIN_FREE_GIB} GiB the runner AGENT runs out of space writing its own _diag log and dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on the runner host — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
+    # Free, required and the gap, in MiB, in one machine-readable line the
+    # workflow reads. A host 150 MB short and a host 8 GiB short are different
+    # faults and used to read the same (#2644).
+    local free_kib_now short_mib
+    free_kib_now="$(free_kib)"
+    short_mib="$(awk -v k="$free_kib_now" -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", (m * 1048576 - k) / 1024 + 0.999 }')"
+    log "disk-guard-verdict: refused free_mib=$(( free_kib_now / 1024 )) need_mib=$(( MIN_FREE_GIB * 1024 )) short_mib=${short_mib} reclaimed_mib=$(( RECLAIM_FREED_KIB / 1024 ))"
+    log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${VOLUME} of the ${MIN_FREE_GIB} GiB this job needs (short by ${short_mib} MiB; this reclaim pass freed $(( RECLAIM_FREED_KIB / 1024 )) MiB). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Two concurrent iOS shards consume ~10 GiB of simulator data, build products and swap on this host; below ${MIN_FREE_GIB} GiB the runner AGENT runs out of space writing its own _diag log and dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on the runner host — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
     cat <<EOF
 
 The reclaim above already removed everything this script can prove is CI's.
@@ -1093,6 +1265,8 @@ EOF
   fails=$((fails + SELFTEST_OWNERSHIP_FAILS))
   selftest_failed_delete "$sandbox"
   fails=$((fails + SELFTEST_FAILED_DELETE_FAILS))
+  selftest_sim_tmp "$sandbox"
+  fails=$((fails + SELFTEST_SIM_TMP_FAILS))
 
   log ""
   if [ "$fails" -ne 0 ]; then
@@ -1301,6 +1475,121 @@ selftest_failed_delete() {
   SELFTEST_FAILED_DELETE_FAILS="$fails"
 }
 
+# The /private/var/tmp sweep (#2644). Break-it in both directions: an orphaned
+# SimDevice directory and a stale spindump go; a live device's directory, a
+# young orphan, an unrelated file and every other name in the shared temp dir
+# stay, and an unanswered `simctl list` removes nothing at all.
+selftest_sim_tmp() {
+  local sandbox="$1" fails=0 out rc root orig_root="$SIM_TMP_ROOT"
+  local -a orig_allow=("${ALLOW_PARENTS[@]}") filtered=() p
+  local live="AAAAAAAA-1111-4111-8111-AAAAAAAAAAAA" orphan="BBBBBBBB-2222-4222-8222-BBBBBBBBBBBB"
+  local young="CCCCCCCC-3333-4333-8333-CCCCCCCCCCCC" gone="DDDDDDDD-4444-4444-8444-DDDDDDDDDDDD"
+  local still="EEEEEEEE-5555-4555-8555-EEEEEEEEEEEE"
+  local pre="com.apple.CoreSimulator.SimDevice."
+  root="$sandbox/vartmp"
+  mkdir -p "$root"
+
+  # The sandbox stands in for /private/var/tmp: swap it into the policy and
+  # drop the real one, so a path under the real /private/var/tmp is judged by
+  # the same rules and not waved through by a stale allowlist entry.
+  for p in "${orig_allow[@]}"; do
+    [ "$p" = "$orig_root" ] || filtered+=("$p")
+  done
+  SIM_TMP_ROOT="$root"
+  ALLOW_PARENTS=("${filtered[@]}" "$root")
+
+  expect() {
+    local label="$1"; shift
+    if "$@"; then log "  ok    $label"; else log "  FAIL  $label"; fails=$((fails + 1)); fi
+  }
+  # shellcheck disable=SC2053  # the glob is the point
+  matches() { [[ "$1" == $2 ]]; }
+
+  log "── selftest: /private/var/tmp is shared; only two name shapes may go (#2644) ──"
+  : > "$root/notes.txt"
+  mkdir -p "$root/com.apple.launchd.AbCdEf1234" "$root/${pre}not-a-uuid" "$root/CallKit"
+  for p in notes.txt com.apple.launchd.AbCdEf1234 "${pre}not-a-uuid" CallKit; do
+    rc=0; rm_ci_path "$root/$p" >/dev/null 2>&1 || rc=$?
+    expect "rm_ci_path refuses '$p' in the shared temp dir (rc=$rc)" [ "$rc" = "1" ]
+  done
+  rc=0; rm_ci_path "/private/var/tmp/${pre}${orphan}" >/dev/null 2>&1 || rc=$?
+  expect "the real /private/var/tmp is not an allowed parent while the sandbox stands in" [ "$rc" = "1" ]
+  expect "every refused name is still on disk" [ -e "$root/notes.txt" ] && [ -d "$root/CallKit" ] && [ -d "$root/com.apple.launchd.AbCdEf1234" ]
+
+  mkdir -p "$root/${pre}${live}" "$root/${pre}${orphan}" "$root/${pre}${young}" "$root/${pre}${still}"
+  : > "$root/${pre}${orphan}/launchd.log"
+  : > "$root/XCTestTesting.2020-01-01-00:00:00.spindump.txt"
+  mkdir -p "$root/XCTestTesting.2020-01-01-00:00:01.spindump" "$root/XCTestTesting.fresh.spindump.txt"
+  rmdir "$root/XCTestTesting.fresh.spindump.txt"; : > "$root/XCTestTesting.fresh.spindump.txt"
+  find "$root" -mindepth 1 -maxdepth 1 -exec touch -t 202001010000 {} +
+  find "$root"/"${pre}${orphan}" -exec touch -t 202001010000 {} +
+  touch "$root/${pre}${young}" "$root/XCTestTesting.fresh.spindump.txt"
+  local listing="    ios-e2e-1-shard0 ($live) (Booted)
+    iPhone CI fixture ($still) (Shutdown)"
+
+  rc=0
+  out="$(SIM_TMP_MAX_AGE_MIN=120; reclaim_sim_tmp "")" || rc=$?
+  expect "no device listing: reclaim does not abort (rc=$rc)" [ "$rc" = "0" ]
+  expect "no device listing: the orphan is NOT removed (cannot tell it from a live device)" [ -d "$root/${pre}${orphan}" ]
+  expect "no device listing: the skip is announced" matches "$out" "*simctl returned no device listing*"
+  expect "no device listing: the stale spindump is still removed (needs no listing)" [ ! -e "$root/XCTestTesting.2020-01-01-00:00:00.spindump.txt" ]
+
+  rc=0
+  out="$(SIM_TMP_MAX_AGE_MIN=120; reclaim_sim_tmp "$listing")" || rc=$?
+  log "$out"
+  expect "reclaim_sim_tmp succeeds (rc=$rc)" [ "$rc" = "0" ]
+  expect "the orphaned SimDevice directory is removed" [ ! -e "$root/${pre}${orphan}" ]
+  expect "a BOOTED device's directory survives" [ -d "$root/${pre}${live}" ]
+  expect "a Shutdown device's directory survives" [ -d "$root/${pre}${still}" ]
+  expect "a young orphan survives the age floor" [ -d "$root/${pre}${young}" ]
+  expect "the stale spindump directory is removed" [ ! -e "$root/XCTestTesting.2020-01-01-00:00:01.spindump" ]
+  expect "a fresh spindump survives" [ -e "$root/XCTestTesting.fresh.spindump.txt" ]
+  expect "an unrelated file survives the sweep" [ -e "$root/notes.txt" ]
+  expect "an unrelated launchd dir survives the sweep" [ -d "$root/com.apple.launchd.AbCdEf1234" ]
+  expect "the removal is announced" matches "$out" "*removed orphaned simulator runtime dir: $orphan*"
+
+  log "── selftest: job teardown removes the directory simctl delete leaves (#2644) ──"
+  mkdir -p "$root/${pre}${gone}" "$root/${pre}${still}"
+  (
+    # xcrun shim: `delete` removes the device from the listing unless it is
+    # the stubborn one, which models a simulator CoreSimulator will not delete.
+    SIM_LISTING="$listing
+    ci ($gone) (Shutdown)"
+    xcrun() {
+      case "$2" in
+        delete) [ "$3" = "$still" ] || SIM_LISTING="$(printf '%s\n' "$SIM_LISTING" | grep -vF "$3")" ;;
+        list) printf '%s\n' "$SIM_LISTING" ;;
+      esac
+      return 0
+    }
+    delete_sim "$gone"
+    delete_sim "$still"
+    delete_sim ""
+    delete_sim "not-a-udid"
+  ) > "$sandbox/delete-sim.out" 2>&1
+  rc=$?
+  out="$(cat "$sandbox/delete-sim.out")"
+  log "$out"
+  expect "delete-sim never fails the teardown step (rc=$rc)" [ "$rc" = "0" ]
+  expect "delete-sim removes the runtime directory of the device it deleted" [ ! -e "$root/${pre}${gone}" ]
+  expect "delete-sim keeps the directory of a device that is still registered" [ -d "$root/${pre}${still}" ]
+  expect "delete-sim says so when a device is still registered" matches "$out" "*still registered*"
+  expect "delete-sim with no udid is a no-op" matches "$out" "*nothing to delete*"
+  expect "delete-sim refuses a non-UDID" matches "$out" "*is not a simulator UDID*"
+
+  log "── selftest: a refusal says how short the disk is, in numbers (#2644) ──"
+  rc=0
+  out="$( VOLUME="$sandbox"; MIN_FREE_GIB=999999; DELETE_FAILURES=0; RECLAIM_FREED_KIB=2048; gate 2>&1 )" || rc=$?
+  expect "a refusal exits 1" [ "$rc" = "1" ]
+  expect "a refusal carries free/need/short/reclaimed as one parseable line" \
+    matches "$out" "*disk-guard-verdict: refused free_mib=*need_mib=*short_mib=*reclaimed_mib=2*"
+  expect "a refusal still names the shortfall in prose" matches "$out" "*only * GiB free on*short by * MiB*"
+
+  SIM_TMP_ROOT="$orig_root"
+  ALLOW_PARENTS=("${orig_allow[@]}")
+  SELFTEST_SIM_TMP_FAILS="$fails"
+}
+
 install_timer() {
   local launch_agents="$HOME/Library/LaunchAgents"
   local plist="$launch_agents/org.llamenos.mac-reclaim.plist"
@@ -1371,6 +1660,7 @@ case "$MODE" in
   report)   report ;;
   reclaim)  reclaim ;;
   install-timer) install_timer ;;
+  delete-sim)    delete_sim "${2:-}" ;;
   guard)
     # First, and before anything that walks a directory: if a write path is on
     # an unreadable volume, report/reclaim would wedge on it (2026-10-21).
@@ -1392,7 +1682,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    log "usage: $(basename "$0") <report|reclaim|guard|install-timer|selftest>"
+    log "usage: $(basename "$0") <report|reclaim|guard|delete-sim <udid>|install-timer|selftest>"
     exit 2
     ;;
 esac
