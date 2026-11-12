@@ -16,6 +16,10 @@ import {
   type ReviewerProfile, type ReviewerResolution,
 } from './specialist.js'
 import { classifyImpact, isGeneratedArtifactPath } from './impact.js'
+import {
+  acquireInFlight, nestedInVerification, recordAttempt,
+  type AttemptClaim, type InFlightClaim,
+} from './review-and-merge-guards.js'
 import type { VerifyReport } from './verify.js'
 import {
   buildReviewPrompt, exportReviewSnapshot, invokeVerifierEngine, reviewPrimaryEngine, toSecondOpinion,
@@ -27,9 +31,23 @@ import {
 const execFileAsync = promisify(execFile)
 
 /**
- * `llamenos-fleet review-and-merge <pr>` — a coding-agent session reviews a
- * pull request AS the `fleet/review` check-run and, only once every required
- * check (including that one) is green on an unmoved head, merges it.
+ * `llamenos-fleet review-and-merge <pr> [--merge]` — a coding-agent session
+ * reviews a pull request AS the `fleet/review` check-run and records the
+ * verdict. It stops there unless the caller opted in to merging (#2742); with
+ * `--merge`, only once every required check (including that one) is green on
+ * an unmoved head, it merges.
+ *
+ * **View-only by default (#2742).** Merging is one boolean, `merge`, default
+ * `false`. A forgotten flag must never merge anything, every call site that
+ * can merge is visible as an explicit `merge: true`, and a new call site
+ * cannot inherit merge authority by accident. A view-only run says so, out
+ * loud, in its outcome (`view-only`) — never by silence.
+ *
+ * Three more guards sit around it, each a separate failure mode of the
+ * 2026-11-11 fork bomb (44,158 processes, ~4,900 of them `review-and-merge`)
+ * and each in `review-and-merge-guards.ts`: it refuses to run from inside a
+ * verification, refuses to process one head SHA more than a fixed number of
+ * times, and refuses a second concurrent run on a PR already being processed.
  *
  * This supersedes running `fleet/review` as a GitHub Actions job
  * (`.github/workflows/fleet-review.yml`) as the PRIMARY way that check gets
@@ -580,6 +598,15 @@ export type ReviewAndMergeOutcome =
    *  posted: a narrower verdict wearing the `fleet/review` name is the one
    *  shape this command must never produce, so it refuses instead. */
   | { kind: 'review-set-unrunnable'; pr: string; reason: string }
+  /** #2742 — the review passed (or an earlier passing one was reused) and the
+   *  caller did not ask to merge. The DEFAULT end of a successful run. */
+  | { kind: 'view-only'; pr: string; headSha: string; reused: boolean }
+  /** #2742 — a runaway guard refused before any review or merge was
+   *  attempted. `guard` names which of the three, because they are separate
+   *  failure modes and an operator needs to know which one tripped. */
+  | { kind: 'guard-refused'; pr: string; guard: RunawayGuard; reason: string }
+
+export type RunawayGuard = 'nested' | 'attempt-ceiling' | 'in-flight'
 
 export function describeOutcome(o: ReviewAndMergeOutcome): string {
   switch (o.kind) {
@@ -597,6 +624,13 @@ export function describeOutcome(o: ReviewAndMergeOutcome): string {
     case 'review-set-unrunnable':
       return `review-and-merge: PR ${o.pr} NOT reviewed and NOT merged — ${o.reason}. Nothing was posted: ` +
         `this command will not post a ${REVIEW_JOB} for a narrower review set than the PR requires`
+    case 'view-only':
+      return `review-and-merge: PR ${o.pr} head ${o.headSha} passed review` +
+        `${o.reused ? ' (an earlier passing ' + REVIEW_JOB + ' on this head was reused)' : ' and the verdict was recorded'}` +
+        ' — NOT merged: this run was view-only because merging was not requested. ' +
+        'Rerun with --merge to merge once every required check is green'
+    case 'guard-refused':
+      return `review-and-merge: PR ${o.pr} NOT reviewed and NOT merged — refused by the ${o.guard} guard (#2742): ${o.reason}`
     case 'review-unrecorded':
       return `review-and-merge: PR ${o.pr} — a non-author review RAN on head ${o.headSha} and reached ` +
         `${o.verdict}, but it could NOT be recorded as the ${REVIEW_JOB} check run: ${o.reason}. ` +
@@ -651,7 +685,22 @@ export interface ReviewAndMergeDeps {
    *  cleared. Never throws. */
   unclearForQueue(pr: string): Promise<void>
   merge(pr: string): Promise<void>
+  /** #2742 — the reason this process is inside a verification (and so must
+   *  not run at all), or `undefined`. Local-only; read from the environment. */
+  nestedIn(): string | undefined
+  /** #2742 — claim the right to process this PR; refuses if another run holds
+   *  it. The returned claim is always released, success or not. */
+  acquireInFlight(pr: string): InFlightClaim
+  /** #2742 — count one processing attempt of this head SHA; refuses past the
+   *  ceiling. */
+  recordAttempt(sha: string): AttemptClaim
   log(msg: string): void
+}
+
+export interface ReviewAndMergeOptions {
+  /** The opt-in. `false` (the default) reviews, records the verdict and
+   *  STOPS; only an explicit `true` may merge. */
+  merge?: boolean
 }
 
 /**
@@ -668,7 +717,30 @@ export interface ReviewAndMergeDeps {
  * extra `gh` read on the second call — never a second review and never a
  * second merge attempt.
  */
-export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): Promise<ReviewAndMergeOutcome> {
+export async function runReviewAndMerge(
+  pr: string,
+  deps: ReviewAndMergeDeps,
+  opts: ReviewAndMergeOptions = {},
+): Promise<ReviewAndMergeOutcome> {
+  // Guard 1 — nesting. FIRST, before a single `gh` call or lock: a run that
+  // starts inside a verification is the recursion edge itself, and refusing
+  // it here is what bounds the process tree. View-only does not exempt it:
+  // a view-only run that still starts a review inside a verification recurses
+  // just the same.
+  const nested = deps.nestedIn()
+  if (nested !== undefined) return { kind: 'guard-refused', pr, guard: 'nested', reason: nested }
+
+  // Guard 3 — one run per PR at a time.
+  const claim = deps.acquireInFlight(pr)
+  if (!claim.ok) return { kind: 'guard-refused', pr, guard: 'in-flight', reason: claim.reason }
+  try {
+    return await processPr(pr, deps, opts.merge === true)
+  } finally {
+    claim.release()
+  }
+}
+
+async function processPr(pr: string, deps: ReviewAndMergeDeps, merge: boolean): Promise<ReviewAndMergeOutcome> {
   const state = await deps.prState(pr)
   if (state === 'MERGED') {
     deps.log(`review-and-merge: PR ${pr} is already merged — nothing to do`)
@@ -679,6 +751,12 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
 
   const facts = await deps.readPr(pr)
   if (facts === undefined) return { kind: 'not-mergeable', pr, reason: `could not read PR ${pr}` }
+
+  // Guard 2 — per-head-SHA attempt ceiling. Counted here, once the head is
+  // known and the PR is open, before any reviewer or merge is considered.
+  const attempt = deps.recordAttempt(facts.headSha)
+  if (!attempt.ok) return { kind: 'guard-refused', pr, guard: 'attempt-ceiling', reason: attempt.reason }
+  deps.log(`review-and-merge: PR ${pr} head ${facts.headSha} — attempt ${attempt.attempt} of ${attempt.ceiling}`)
 
   // This command is an INDEPENDENT producer of the required `fleet/review`
   // check: it runs the reviewers itself and posts the verdict itself. Under
@@ -748,11 +826,13 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
   // and the version of this command that did NOT refused every
   // profile-bearing PR outright rather than posting one.
   const cachedCheckRuns = await deps.fetchReviewCheckRuns(facts.headSha)
+  let reused = false
   if (hasSuccessfulReview(cachedCheckRuns)) {
     deps.log(
       `review-and-merge: PR ${pr} head ${facts.headSha} already carries a successful ${REVIEW_JOB} ` +
       'check-run — reusing it, no new review',
     )
+    reused = true
   } else {
     // #1483 — refuse BEFORE the review, not after. The Checks API will not
     // accept the operator's PAT, so without working App credentials this
@@ -813,6 +893,13 @@ export async function runReviewAndMerge(pr: string, deps: ReviewAndMergeDeps): P
           `see the ${REVIEW_JOB} check`,
       }
     }
+  }
+
+  // The opt-in gate. Everything above is review-and-record; nothing below
+  // this line runs unless the caller asked to merge (#2742).
+  if (!merge) {
+    deps.log(`review-and-merge: PR ${pr} head ${facts.headSha} reviewed — not merging (view-only; merging was not requested)`)
+    return { kind: 'view-only', pr, headSha: facts.headSha, reused }
   }
 
   const currentHead = await deps.currentHeadSha(pr)
@@ -902,9 +989,10 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     // The one merge call in this file — a REAL squash merge, not the
     // fleet's own `enableAutoMerge` (cli.ts), which only ever ARMS
     // auto-merge for GitHub to complete later. This command is the
-    // operator's own explicit act, run by hand against one named PR, gated
-    // by everything above — never the autonomous tick loop, which still
-    // never merges anything itself.
+    // operator's own explicit act, run by hand against one named PR with
+    // `--merge` (#2742: view-only otherwise), gated by everything above —
+    // never the autonomous tick loop, which still never merges anything
+    // itself.
     // No `--delete-branch` here either — see enableAutoMerge in cli.ts (#1804).
     merge: async (pr) => { await gh(['pr', 'merge', pr, '--squash']) },
     // #1894 — see the deps interface. `--add-label` fails when the label
@@ -918,6 +1006,9 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
         log(`review-and-merge: could not remove ${QUEUE_CLEARED_LABEL} from PR ${pr}: ${e instanceof Error ? e.message : String(e)}`)
       }
     },
+    nestedIn: () => nestedInVerification(),
+    acquireInFlight: (pr) => acquireInFlight(pr),
+    recordAttempt: (sha) => recordAttempt(sha),
     log,
   }
 }

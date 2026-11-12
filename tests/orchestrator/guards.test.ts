@@ -13,6 +13,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import ts from 'typescript'
 import { checkRunsViolations, orchestratorSources, statusesViolations, MISSING_CHECKS_FILE, REVIEW_AND_MERGE_FILE } from './forgery-rails.js'
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
@@ -5315,5 +5316,106 @@ describe('rail: ci-status reports a job with no verdict as infrastructure, never
     expect(r.status).toBe(1)
     expect(r.out).toContain('Failed jobs: lint(failure)')
     expect(r.summary).toContain('genuine failures')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2742 — `review-and-merge` is view-only by default and bounded.
+//
+// On 2026-11-11, twice, `review-and-merge` → verification → `review-and-merge`
+// reached 44,158 bun processes. These rails pin the SHAPE that keeps the five
+// guards in place; the behaviour behind each is exercised in
+// review-and-merge.test.ts and review-and-merge-guards.test.ts, and every one
+// of these was confirmed to FAIL with its guard removed.
+// ---------------------------------------------------------------------------
+describe('rail: review-and-merge is view-only by default and cannot recurse (#2742)', () => {
+  const src = (name: string): string => readFileSync(join(process.cwd(), 'orchestrator', 'src', name), 'utf8')
+  const withoutComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  /** Every call of `runReviewAndMerge(` in orchestrator/src, parsed (so a
+   *  mention in a comment or string is not a call). */
+  function callSites(): { file: string; args: ts.NodeArray<ts.Expression> }[] {
+    const out: { file: string; args: ts.NodeArray<ts.Expression> }[] = []
+    for (const { file, text } of orchestratorSources()) {
+      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+      const visit = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'runReviewAndMerge') {
+          out.push({ file, args: n.arguments })
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(sf)
+    }
+    return out
+  }
+
+  it('has exactly one production call site, and it passes the operator\'s flag — never a literal true', () => {
+    const sites = callSites()
+    expect(sites.map((s) => s.file.split('/').pop()), 'runReviewAndMerge is called from somewhere other than the CLI').toEqual(['cli.ts'])
+    const opts = sites[0]?.args[2]
+    expect(opts, 'the call site passes no options object').toBeDefined()
+    expect(opts?.getText()).toBe('{ merge: args.merge }')
+  })
+
+  it('no source file spells the opt-in `merge: true` — a call site cannot inherit merge authority', () => {
+    const offenders: string[] = []
+    for (const { file, text } of orchestratorSources()) {
+      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+      const visit = (n: ts.Node): void => {
+        if (ts.isPropertyAssignment(n) && n.name.getText() === 'merge' && n.initializer.kind === ts.SyntaxKind.TrueKeyword) {
+          offenders.push(file)
+        }
+        ts.forEachChild(n, visit)
+      }
+      visit(sf)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the merge gate is a strict `=== true` on the option, and the merge step sits after it', () => {
+    const text = withoutComments(src('review-and-merge.ts'))
+    expect(text).toContain('opts.merge === true')
+    const gate = text.indexOf('if (!merge) {')
+    expect(gate, 'the view-only stop is missing').toBeGreaterThan(-1)
+    // Everything that readies or performs a merge comes after the stop.
+    for (const afterGate of ['deps.currentHeadSha(pr)', 'deps.requiredChecks(pr)', 'deps.clearForQueue(pr)', 'deps.merge(pr)']) {
+      expect(text.indexOf(afterGate), `${afterGate} must come after the view-only stop`).toBeGreaterThan(gate)
+    }
+  })
+
+  it('the nesting guard is the FIRST thing runReviewAndMerge does, ahead of any gh read or lock', () => {
+    const text = withoutComments(src('review-and-merge.ts'))
+    const body = text.slice(text.indexOf('export async function runReviewAndMerge('))
+    const nested = body.indexOf('deps.nestedIn()')
+    expect(nested).toBeGreaterThan(-1)
+    for (const later of ['deps.acquireInFlight(', 'deps.prState(', 'processPr(']) {
+      expect(body.indexOf(later), `${later} precedes the nesting guard`).toBeGreaterThan(nested)
+    }
+  })
+
+  it('the in-flight lock is released in a finally, and the attempt ceiling is counted once the head is known', () => {
+    const text = withoutComments(src('review-and-merge.ts'))
+    expect(text).toMatch(/try \{\s*return await processPr\([^)]*\)\s*\} finally \{\s*claim\.release\(\)\s*\}/)
+    expect(text.indexOf('deps.recordAttempt(facts.headSha)')).toBeGreaterThan(text.indexOf('deps.readPr(pr)'))
+    expect(text.indexOf('deps.recordAttempt(facts.headSha)')).toBeLessThan(text.indexOf('deps.reviewSet(pr'))
+  })
+
+  it('the real wiring uses the real guards, not no-ops', async () => {
+    const { defaultReviewAndMergeDeps } = await import('../../orchestrator/src/review-and-merge.js')
+    const deps = defaultReviewAndMergeDeps(process.cwd(), () => {})
+    vi.stubEnv('FLEET_IN_VERIFICATION', '1')
+    try { expect(deps.nestedIn()).toBeDefined() } finally { vi.unstubAllEnvs() }
+    vi.stubEnv('FLEET_IN_VERIFICATION', '')
+    try { expect(deps.nestedIn()).toBeUndefined() } finally { vi.unstubAllEnvs() }
+  })
+
+  // The marker only works if every route into a verification carries it.
+  it('every process a verification starts carries the nesting marker', () => {
+    expect(withoutComments(src('verify.ts')), 'the test runner does not mark its child').toMatch(/env:\s*withVerificationMarker\(\)/)
+    expect(withoutComments(src('review.ts')), 'the reviewer engine env does not carry the marker').toContain("env[IN_VERIFICATION_ENV] = '1'")
+    const cli = withoutComments(src('cli.ts'))
+    for (const cmd of ['verify-ci', 'review-ci', 'review-gate']) {
+      expect(cli, `${cmd} is not wrapped as a verification`).toMatch(new RegExp(`'${cmd}':\\s*asVerification\\(`))
+    }
   })
 })

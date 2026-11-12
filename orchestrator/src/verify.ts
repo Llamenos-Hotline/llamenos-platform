@@ -13,6 +13,7 @@ import {
   type WriteFinding,
 } from './write-gate.js'
 import { scrubSecrets } from './github-app.js'
+import { withVerificationMarker } from './review-and-merge-guards.js'
 import type { Lane } from './config.js'
 
 const execFileAsync = promisify(execFile)
@@ -555,6 +556,9 @@ async function runVitestTarget(
   try {
     const { stdout, stderr } = await execFileAsync(trustedVitestBin(worktree), vitestArgv(config, testRoot, outputFile), {
       cwd: testRoot, timeout: 10 * 60_000, maxBuffer: 32 * 1024 * 1024,
+      // #2742: a test run is a verification, and a test that shells out to
+      // `review-and-merge` (the 2026-11-11 recursion) must be refused by it.
+      env: withVerificationMarker(),
     })
     return { exitCode: 0, signal: undefined, output: `${stdout}${stderr}` }
   } catch (e) {

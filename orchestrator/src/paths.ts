@@ -69,6 +69,14 @@ export const DIGEST_ISSUE_FILE = join(FLEET_DIR, 'digest-issue')
 export const LAST_DIGEST_AT_FILE = join(FLEET_DIR, 'last-digest-at')
 
 /**
+ * #2742: the state `review-and-merge`'s runaway guards keep between
+ * invocations — a per-PR in-flight lock and a per-head-SHA attempt ledger.
+ * Each invocation is a separate process, so neither can live in memory. See
+ * `review-and-merge-guards.ts`.
+ */
+export const REVIEW_AND_MERGE_DIR = join(FLEET_DIR, 'review-and-merge')
+
+/**
  * `dispatch-one.sh` is NOT vendored into this repo. It lives at
  * `~/.claude/skills/supervising-dispatched-sessions/`, which is a symlink into
  * the `claude-skills` git repository — a real, separately-committed repo, not

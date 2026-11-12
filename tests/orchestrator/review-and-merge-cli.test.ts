@@ -53,7 +53,7 @@ exit 1
 
 interface Run { status: number; stdout: string; stderr: string; ghCalls: string }
 
-function runCli(env: Record<string, string | undefined>): Run {
+function runCli(env: Record<string, string | undefined>, args: string[] = ['9']): Run {
   const sandbox = mkdtempSync(join(tmpdir(), 'llamenos-ram-cli-'))
   const bin = join(sandbox, 'bin')
   mkdirSync(bin)
@@ -75,6 +75,12 @@ function runCli(env: Record<string, string | undefined>): Run {
     FLEET_REVIEW_APP_ID: undefined,
     FLEET_REVIEW_APP_KEY_PATH: undefined,
     FLEET_REVIEW_APP_INSTALLATION_ID: undefined,
+    // #2742: this suite usually runs INSIDE a verification, whose children
+    // carry the nesting marker `review-and-merge` refuses under. The cases
+    // that exercise the credential preflight need the command to get that far
+    // (every `gh` here is a stub, so nothing real can recurse); the nesting
+    // cases below set the marker back explicitly.
+    FLEET_IN_VERIFICATION: undefined,
     ...env,
   })) {
     if (v !== undefined) full[k] = v
@@ -85,7 +91,7 @@ function runCli(env: Record<string, string | undefined>): Run {
   let stdout = ''
   let stderr = ''
   try {
-    stdout = execFileSync('bun', [CLI, 'review-and-merge', '9'], {
+    stdout = execFileSync('bun', [CLI, 'review-and-merge', ...args], {
       env: full, encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch (e) {
@@ -163,4 +169,36 @@ describe('llamenos-fleet review-and-merge refuses, out loud, with no App credent
     assertRefusedCleanly(r)
     expect(r.stdout).toContain('chmod 600')
   })
+})
+
+// #2742 — through the REAL process: a nested invocation refuses before it
+// touches anything, and a malformed argv is a usage error. Bounded by
+// construction: `gh` is a stub that logs its calls, the refusal happens before
+// the first one, and the child never spawns another review-and-merge.
+describe('llamenos-fleet review-and-merge refuses to run nested, and rejects a bad argv (#2742)', () => {
+  it('inside a verification: exits non-zero, names the guard, and makes NO gh call at all', () => {
+    const r = runCli({ FLEET_IN_VERIFICATION: '1' })
+    const all = `${r.stdout}\n${r.stderr}`
+    expect(r.status, all).toBe(1)
+    expect(r.stdout).toContain('nested guard')
+    expect(r.stdout).toContain('NOT reviewed and NOT merged')
+    expect(r.ghCalls, 'a nested run read from GitHub before refusing').toBe('')
+  })
+
+  it('--merge does not exempt a nested run', () => {
+    const r = runCli({ FLEET_IN_VERIFICATION: '1' }, ['9', '--merge'])
+    expect(r.status).toBe(1)
+    expect(r.stdout).toContain('nested guard')
+    expect(r.ghCalls).toBe('')
+  })
+
+  it.each([[[]], [['--merge']], [['9', '--mrege']], [['https://github.com/o/r/pull/9']]])(
+    'argv %j is a usage error (exit 2) with no gh call',
+    (args) => {
+      const r = runCli({}, args)
+      expect(r.status).toBe(2)
+      expect(r.stderr).toContain('usage: llamenos-fleet review-and-merge <pr-number> [--merge]')
+      expect(r.ghCalls).toBe('')
+    },
+  )
 })

@@ -5,8 +5,8 @@ description: Use when a PR is ready for its non-author review and merge — the 
 
 # review-and-merge
 
-`orchestrator/src/review-and-merge.ts`, invoked as `llamenos-fleet review-and-merge <pr>`,
-is now **the merge path** — the one command that turns a green PR into a merged one. It
+`orchestrator/src/review-and-merge.ts`, invoked as `llamenos-fleet review-and-merge <pr> [--merge]`,
+is now **the merge path** (view-only unless `--merge` is passed — #2742) — the one command that turns a green PR into a merged one. It
 replaces a human typing `gh pr review` then `gh pr merge` by hand, and it replaces the
 `fleet/review` GitHub Actions job as the primary way that check-run gets produced (the
 Actions workflow stays as the fallback reviewer — see its own file header — so the repo is
@@ -67,10 +67,20 @@ And two that are specific to this command rather than to merging in general:
 ## Running it
 
 ```bash
-llamenos-fleet review-and-merge <pr-number>
+llamenos-fleet review-and-merge <pr-number>            # review + record the verdict, then STOP
+llamenos-fleet review-and-merge <pr-number> --merge    # ...and merge, if everything is green
 ```
 
-- Exit **0** only for `merged` or `already-merged`.
+**View-only by default, and bounded (#2742).** Without `--merge` the command
+reviews, records the verdict, prints that it did **not** merge and why, and exits 0
+(`view-only`). `--merge` is the one opt-in; only the operator's own terminal use should
+pass it — never automation and never anything running inside a verification. It also
+refuses (exit 1, `guard-refused`, before any review or merge) when: it is started inside
+a verification (`FLEET_IN_VERIFICATION` is set — the recursion that reached 44,158
+processes on 2026-11-11); the same head SHA has already been processed 5 times; or another
+run is already processing that PR. The PR must be a bare number.
+
+- Exit **0** only for `merged`, `already-merged` or `view-only` (reviewed, deliberately not merged).
 - Exit **1** for `cannot-record` — the `llamenos-fleet-review` GitHub App credentials
   (`FLEET_REVIEW_APP_ID` + `~/.llamenos-fleet/review-app.pem`, mode 600) are absent or
   unusable, so the command refused **before** spending a review and posted nothing. The
