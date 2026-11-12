@@ -476,6 +476,43 @@ export async function redeemInvite(
 }
 
 /**
+ * A hub member as the operator reads them from inside that hub:
+ * `GET /api/hubs/:hubId/users/:pubkey`.
+ *
+ * This is where the roles a redeemed invite granted LEGITIMATELY live.
+ * `POST /api/invites/redeem` is a public route and answers `{ ok: true }` — it
+ * does not hand the redeemer's user record (or their hub roles) back to
+ * whoever holds an invite code (#2573) — so a test that wants to know what
+ * redemption granted must ask the authenticated surface that owns the answer.
+ *
+ * `roles` is what carries authority IN THIS HUB (the hub assignment, plus a
+ * super-admin's global roles). A user who is not a member of the hub — which
+ * is what a redemption that granted no hub role leaves behind — is a 404, not
+ * an empty list, so "granted nothing" cannot pass as "granted a role we did not
+ * look for". Throws on anything but 200 for the same reason.
+ */
+export async function hubMember(
+  request: APIRequestContext,
+  hubId: string,
+  pubkey: string,
+  adminSeed: string,
+): Promise<{ pubkey: string; name: string; roles: string[] }> {
+  const { status, data } = await apiGet<{ pubkey?: string; name?: string; roles?: string[] }>(
+    request, `/hubs/${hubId}/users/${pubkey}`, adminSeed,
+  )
+  if (status !== 200) {
+    throw new Error(
+      `GET /api/hubs/${hubId}/users/${pubkey} answered ${status}: ${pubkey} is not a member of hub ${hubId}`,
+    )
+  }
+  return {
+    pubkey: present(data.pubkey, 'the hub member\'s pubkey'),
+    name: present(data.name, 'the hub member\'s name'),
+    roles: present(data.roles, 'the hub member\'s roles'),
+  }
+}
+
+/**
  * Take a volunteer this suite created out of service.
  *
  * Not tidying up: `resolveRingableVolunteers`

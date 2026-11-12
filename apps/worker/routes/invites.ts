@@ -5,7 +5,7 @@ import { checkRateLimit } from '../lib/helpers'
 import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { verifyAuthToken, consumeAuthToken } from '../lib/auth'
 import { auth as authMiddleware } from '../middleware/auth'
-import { redeemInviteBodySchema, createInviteBodySchema, inviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
+import { redeemInviteBodySchema, createInviteBodySchema, createInviteResponseSchema, inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
@@ -125,7 +125,7 @@ invites.post('/redeem',
     const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
-    const { volunteer, admission } = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
+    const { admission } = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
     // A volunteer joining a hub is audited like any other addition — and this
     // entry is the volunteer's own act, signed with a key only their device
     // holds, so "volunteer X joined" is attributable to X alone (#1231).
@@ -135,7 +135,7 @@ invites.post('/redeem',
       via: 'invite',
       invitedBy: admission.invitedBy,
     }, undefined, admission.hubId)
-    return c.json({ volunteer })
+    return c.json({ ok: true })
   },
 )
 
@@ -181,7 +181,7 @@ invites.post('/',
         description: 'Invite created',
         content: {
           'application/json': {
-            schema: resolver(inviteResponseSchema),
+            schema: resolver(createInviteResponseSchema),
           },
         },
       },

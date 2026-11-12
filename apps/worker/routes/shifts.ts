@@ -570,7 +570,6 @@ const shiftCrudRouter = createEntityRouter({
   itemResponseSchema: shiftResponseSchema,
   createBodySchema: createShiftBodySchema,
   updateBodySchema: updateShiftBodySchema,
-  deleteResponseSchema: okResponseSchema,
   hubScoped: true,
   disableList: true,
   disableGet: true,

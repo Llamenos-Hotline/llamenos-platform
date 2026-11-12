@@ -83,7 +83,8 @@ describe('HubShredService.execute', () => {
       after[0]!.encryptedContent,
       'the row and its ciphertext must survive — this is a shred, not a purge',
     ).toBe(before[0]!.encryptedContent)
-    expect(after[0]!.authorEnvelope).toEqual([])
+    // NULL is "no author envelope" (the column is nullable): nothing left to open.
+    expect(after[0]!.authorEnvelope).toBeNull()
     expect(after[0]!.adminEnvelopes).toEqual([])
     // No envelope survives anywhere, so there is nothing left to open.
     expect(await fresh.shred.verifyShredded(hubId)).toEqual({ complete: true })

@@ -35,6 +35,7 @@ import {
   liveMarker,
   freshIdentity,
   redeemInvite,
+  hubMember,
   validateInvite,
   retireLiveIdentity,
   pacedStrict,
@@ -175,10 +176,15 @@ test.describe('R1 — inviting a volunteer and putting them on shift', () => {
 
     const { status, body } = await redeemInvite(request, inviteCode, volunteer.seedHex)
     expect(status, `POST /api/invites/redeem: ${JSON.stringify(body)}`).toBe(200)
-    const redeemed = body as { volunteer?: User }
-    expect(redeemed.volunteer?.pubkey, 'redemption returned a different identity').toBe(volunteer.pubkey)
-    expect(redeemed.volunteer?.roles, 'the redeemed user did not get the invited role').toContain(VOLUNTEER_ROLE)
-    expect(redeemed.volunteer?.name, 'the redeemed user did not take the invite name').toBe(marker)
+    expect(body, 'POST /api/invites/redeem answers the declared { ok: true }').toEqual({ ok: true })
+
+    // What redemption created is read from the hub, not from the public
+    // redeem answer (which names no user): the identity, the invited role and
+    // the invite's name.
+    const redeemed = await hubMember(request, hubId, volunteer.pubkey, seed)
+    expect(redeemed.pubkey, 'redemption created a different identity').toBe(volunteer.pubkey)
+    expect(redeemed.roles, 'the redeemed user did not get the invited role').toContain(VOLUNTEER_ROLE)
+    expect(redeemed.name, 'the redeemed user did not take the invite name').toBe(marker)
 
     // The invite is spent. Asserted through `validate`, which is what the
     // volunteer's invite screen calls, rather than through the pending list —

@@ -289,13 +289,14 @@ routes.post('/:hubId/members',
 
     const pubkey = c.get('pubkey')
     try {
-      const result = await services.identity.setHubRole({
+      await services.identity.setHubRole({
         pubkey: body.pubkey,
         hubId,
         roleIds: body.roleIds,
       })
       await audit(services.audit, 'userAdded', pubkey, { target: body.pubkey, roles: body.roleIds }, undefined, hubId)
-      return c.json(result)
+      // The member's whole user record is not this route's answer: it declares `{ ok }`.
+      return c.json({ ok: true as const })
     } catch (err) {
       // A refusal is the caller's answer, not a server fault: the target
       // pubkey is not a registered user (404 — previously served as an

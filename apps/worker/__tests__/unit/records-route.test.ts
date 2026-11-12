@@ -69,7 +69,14 @@ function makeApp(opts: {
     delete: vi.fn().mockResolvedValue(undefined),
     assign: vi.fn().mockResolvedValue(record),
     unassign: vi.fn().mockResolvedValue(record),
-    linkContact: vi.fn().mockResolvedValue({ id: 'link-1' }),
+    // A real case_contacts row: the route serialises it through toRecordContact.
+    linkContact: vi.fn().mockResolvedValue({
+      caseId: 'rec-1',
+      contactId: '550e8400-e29b-41d4-a716-446655440000',
+      role: 'caller',
+      addedAt: new Date('2026-01-01T00:00:00.000Z'),
+      addedBy: 'a'.repeat(64),
+    }),
     unlinkContact: vi.fn().mockResolvedValue(undefined),
     listContacts: vi.fn().mockResolvedValue([]),
     listByContact: vi.fn().mockResolvedValue({ records: [] }),

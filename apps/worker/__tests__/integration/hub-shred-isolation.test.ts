@@ -163,7 +163,7 @@ describe('hub isolation', () => {
       .select()
       .from(schema.notes)
       .where(eq(schema.notes.id, noteA.note.id))
-    expect(gone!.authorEnvelope).toEqual([])
+    expect(gone!.authorEnvelope).toBeNull()
     expect(
       await fresh.db.select().from(schema.hubKeys).where(eq(schema.hubKeys.hubId, hubA)),
     ).toEqual([])

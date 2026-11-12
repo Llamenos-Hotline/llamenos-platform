@@ -737,9 +737,10 @@ export class SettingsService {
 
   async setFallbackGroup(data: {
     userPubkeys: string[]
-  }, hubId: string): Promise<{ ok: true }> {
+  }, hubId: string): Promise<{ userPubkeys: string[] }> {
     await this.updateHubSettings(hubId, { fallbackGroup: data.userPubkeys })
-    return { ok: true }
+    // The group as stored — what `PUT /shifts/fallback` declares it answers.
+    return this.getFallbackGroup(hubId)
   }
 
   // =========================================================================
@@ -1078,7 +1079,9 @@ export class SettingsService {
       }
     })
 
-    return { fields: normalized as CustomFieldDefinition[] }
+    // The definitions as stored — ids minted, defaults applied, createdAt set —
+    // not the request echoed back.
+    return this.getCustomFields('admin')
   }
 
   // =========================================================================

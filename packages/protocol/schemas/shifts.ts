@@ -72,3 +72,5 @@ export const updateShiftBodySchema = z.object({
 export const fallbackGroupSchema = z.object({
   userPubkeys: z.array(pubkeySchema),
 })
+
+export type FallbackGroup = z.infer<typeof fallbackGroupSchema>

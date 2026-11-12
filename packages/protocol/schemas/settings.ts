@@ -338,17 +338,21 @@ export const successResponseSchema = z.object({
   success: z.boolean(),
 })
 
+/**
+ * `GET /settings/permissions` — `PERMISSION_CATALOG` and `getPermissionsByDomain()`
+ * (packages/shared/permissions.ts) as they are: `permissions` maps each
+ * permission to its label; `byDomain` groups the same entries under the
+ * permission's domain prefix.
+ */
 export const permissionsCatalogResponseSchema = z.object({
-  permissions: z.array(z.object({
-    id: z.string(),
-    label: z.string(),
-    domain: z.string(),
-  })),
+  permissions: z.record(z.string(), z.string()),
   byDomain: z.record(z.string(), z.array(z.object({
-    id: z.string(),
+    key: z.string(),
     label: z.string(),
   }))),
 })
+
+export type PermissionsCatalogResponse = z.infer<typeof permissionsCatalogResponseSchema>
 
 export const migrationNamespaceSchema = z.object({
   name: z.string(),

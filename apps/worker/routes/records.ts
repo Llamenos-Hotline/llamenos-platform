@@ -13,6 +13,7 @@ import {
   assignBodySchema,
   unassignBodySchema,
   recordSchema,
+  recordAssigneesResponseSchema,
   recordListResponseSchema,
   recordContactSchema,
   recordContactListResponseSchema,
@@ -31,6 +32,7 @@ import { notifyContactsResponseSchema } from '@protocol/schemas/notifications'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { toRecordContact } from '../services/cases'
 import { mergeRecordsBodySchema, mergeRecordsResponseSchema } from '@protocol/schemas/entity-merge'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED, KIND_RECORD_ASSIGNED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
@@ -763,7 +765,7 @@ records.post('/:id/contacts',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    const result = await services.cases.linkContact(id, body.contactId, body.role, pubkey)
+    const link = await services.cases.linkContact(id, body.contactId, body.role, pubkey)
 
     await audit(services.audit, 'recordContactLinked', pubkey, {
       recordId: id,
@@ -771,7 +773,7 @@ records.post('/:id/contacts',
       role: body.role,
     }, undefined, pathHubId(c))
 
-    return c.json(result, 201)
+    return c.json(toRecordContact(link), 201)
   },
 )
 
@@ -843,7 +845,7 @@ records.get('/:id/contacts',
 
     const services = c.get('services')
     const contacts = await services.cases.listContacts(id)
-    return c.json({ contacts })
+    return c.json({ contacts: contacts.map(toRecordContact) })
   },
 )
 
@@ -923,7 +925,7 @@ records.post('/:id/assign',
         description: 'Volunteers assigned',
         content: {
           'application/json': {
-            schema: resolver(recordSchema),
+            schema: resolver(recordAssigneesResponseSchema),
           },
         },
       },
@@ -970,7 +972,7 @@ records.post('/:id/unassign',
         description: 'Volunteer unassigned',
         content: {
           'application/json': {
-            schema: resolver(recordSchema),
+            schema: resolver(recordAssigneesResponseSchema),
           },
         },
       },

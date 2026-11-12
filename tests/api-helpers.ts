@@ -1418,8 +1418,8 @@ export async function generateCaseNumberViaApi(
   prefix: string,
   hubId: string,
   seedHex = ADMIN_SEED,
-): Promise<{ number: string; sequence: number }> {
-  const { status, data } = await apiPost<{ number: string; sequence: number }>(
+): Promise<{ number: string; prefix: string }> {
+  const { status, data } = await apiPost<{ number: string; prefix: string }>(
     request,
     '/settings/cms/case-number',
     { prefix, hubId },
@@ -2477,8 +2477,8 @@ export async function addGroupMemberViaApi(
   role: string | undefined,
   seedHex = ADMIN_SEED,
   hubId: string,
-): Promise<{ added: boolean; memberCount: number }> {
-  const { status, data } = await apiPost<{ added: boolean; memberCount: number }>(
+): Promise<GroupMemberResult> {
+  const { status, data } = await apiPost<GroupMemberResult>(
     request,
     hubOwnedPath(`/directory/groups/${groupId}/members`, hubId),
     { contactId, role, isPrimary: false },
@@ -2583,7 +2583,7 @@ export async function createCaseFromReportViaApi(
   const contentKey = generateContentKey()
   const encryptedNotes = encryptContent('test link', contentKey, LABEL_NOTE_KEY)
   const envelope = await realEnvelope(contentKey, seedHex)
-  const { status, data } = await apiPost<{ id?: string; reportId?: string; caseId?: string }>(
+  const { status } = await apiPost<{ ok: boolean }>(
     request,
     hubOwnedPath(`/reports/${reportId}/records`, hubId),
     {
@@ -2594,10 +2594,9 @@ export async function createCaseFromReportViaApi(
     seedHex,
   )
   if (status !== 201 && status !== 200) throw new Error(`Failed to link case to report: ${status}`)
-  // Response is ReportCaseRow with composite PK (reportId + caseId) — no separate id field.
-  // linkId is the caseId from the row, which equals recordId.
-  const linkData = data as { caseId?: string; reportId?: string }
-  return { recordId, linkId: linkData.caseId ?? recordId }
+  // The route answers `{ ok: true }` and names no link: the link's identity is its composite
+  // PK (reportId + caseId), so the id the caller needs to unlink it is the caseId it sent.
+  return { recordId, linkId: recordId }
 }
 
 /**
@@ -2638,7 +2637,6 @@ export interface SeedSpec {
   }>
   shifts?: Array<{
     pubkey: string
-    allDay?: boolean
   }>
   members?: Array<{
     pubkey: string

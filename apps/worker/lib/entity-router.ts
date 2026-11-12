@@ -46,8 +46,6 @@ export interface EntityRouterConfig<
   updateBodySchema?: TUpdate
   /** Zod schema for list query parameters (GET /) */
   listQuerySchema?: TListQuery
-  /** Zod schema for delete response — defaults to { ok: true } shape */
-  deleteResponseSchema?: ZodTypeAny
   /** URL param name for the resource ID (default: 'id') */
   idParam?: string
   /** Whether the service methods take hubId as their first argument (default: false) */
@@ -106,7 +104,6 @@ export function createEntityRouter<
     createBodySchema,
     updateBodySchema,
     listQuerySchema,
-    deleteResponseSchema,
     idParam = 'id',
     hubScoped = false,
     auditEvents = {},
@@ -296,7 +293,6 @@ export function createEntityRouter<
   // ---------------------------------------------------------------------------
 
   if (!disableDelete) {
-    const deleteSchema = deleteResponseSchema ?? okResponseSchema
     router.delete(`/:${idParam}`,
       describeRoute({
         tags: [tag],
@@ -304,7 +300,7 @@ export function createEntityRouter<
         responses: {
           200: {
             description: `${tag} deleted`,
-            content: { 'application/json': { schema: resolver(deleteSchema) } },
+            content: { 'application/json': { schema: resolver(okResponseSchema) } },
           },
           ...authErrors,
           ...notFoundError,
@@ -321,12 +317,14 @@ export function createEntityRouter<
         if (hubScoped) args.push(getHubId(c))
         args.push(id)
         args.push({ callerPubkey: pubkey, permissions })
-        const result = await (svc[deleteMethod] as ServiceMethod)(...args)
+        await (svc[deleteMethod] as ServiceMethod)(...args)
         if (auditEvents.deleted) {
           const auditHubId = hubScoped ? getHubId(c) || null : null
           await audit(services.audit, auditEvents.deleted, pubkey, { [`${domain}Id`]: id }, undefined, auditHubId)
         }
-        return c.json(result as Record<string, unknown>)
+        // The factory declares every delete as `{ ok }`, so it owns the body: a
+        // service's own return (`{ deleted: true }`, a row) is not the contract.
+        return c.json({ ok: true })
       },
     )
   }

@@ -18,6 +18,7 @@ import {
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { toCaseEvent } from '../services/cases'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
 import { hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
@@ -321,7 +322,7 @@ events.post('/:id/records',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    const result = await services.cases.linkEvent(
+    const link = await services.cases.linkEvent(
       body.recordId,
       id,
       pubkey,
@@ -333,7 +334,7 @@ events.post('/:id/records',
       recordId: body.recordId,
     }, undefined, pathHubId(c))
 
-    return c.json(result, 201)
+    return c.json(toCaseEvent(link), 201)
   },
 )
 
@@ -396,7 +397,7 @@ events.get('/:id/records',
     const id = c.req.param('id')
     const services = c.get('services')
     const eventRecords = await services.cases.listEventRecords(id, pathHubId(c))
-    return c.json({ links: eventRecords })
+    return c.json({ links: eventRecords.map(toCaseEvent) })
   },
 )
 

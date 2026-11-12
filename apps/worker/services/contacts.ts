@@ -31,6 +31,7 @@ import type {
   CreateAffinityGroupBody,
   UpdateAffinityGroupBody,
   AddGroupMemberBody,
+  GroupMember,
 } from '@protocol/schemas/contact-relationships'
 
 // ---------------------------------------------------------------------------
@@ -538,7 +539,7 @@ export class ContactsService {
   async addMember(
     groupId: string,
     input: AddGroupMemberBody,
-  ): Promise<{ added: true; memberCount: number }> {
+  ): Promise<{ member: GroupMember; memberCount: number }> {
     const group = await this.db
       .select()
       .from(affinityGroups)
@@ -570,11 +571,16 @@ export class ContactsService {
       throw new ServiceError(409, 'Contact is already a member of this group')
     }
 
+    const member: GroupMember = {
+      contactId: input.contactId,
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      isPrimary: input.isPrimary ?? false,
+    }
     await this.db.insert(groupMembers).values({
       groupId,
-      contactId: input.contactId,
-      role: input.role ?? null,
-      isPrimary: input.isPrimary ?? false,
+      contactId: member.contactId,
+      role: member.role ?? null,
+      isPrimary: member.isPrimary,
     })
 
     const [updated] = await this.db
@@ -586,13 +592,13 @@ export class ContactsService {
       .where(eq(affinityGroups.id, groupId))
       .returning()
 
-    return { added: true, memberCount: updated.memberCount }
+    return { member, memberCount: updated.memberCount }
   }
 
   async removeMember(
     groupId: string,
     contactId: string,
-  ): Promise<{ removed: true; memberCount: number }> {
+  ): Promise<{ memberCount: number }> {
     const group = await this.db
       .select()
       .from(affinityGroups)
@@ -632,7 +638,7 @@ export class ContactsService {
       .where(eq(affinityGroups.id, groupId))
       .returning()
 
-    return { removed: true, memberCount: updated.memberCount }
+    return { memberCount: updated.memberCount }
   }
 
   async listMembers(

@@ -340,13 +340,13 @@ contactsV2.post('/groups/:groupId/members',
     const services = c.get('services')
     const body = c.req.valid('json')
 
-    const result = await services.contacts.addMember(groupId, body)
+    const { member } = await services.contacts.addMember(groupId, body)
 
     await audit(services.audit, 'groupMemberAdded', c.get('pubkey'), {
       groupId,
       contactId: body.contactId,
     }, undefined, c.get('hubId') ?? null)
-    return c.json(result, 201)
+    return c.json(member, 201)
   },
 )
 
@@ -370,10 +370,10 @@ contactsV2.delete('/groups/:groupId/members/:contactId',
     const contactId = c.req.param('contactId')
     const services = c.get('services')
 
-    const result = await services.contacts.removeMember(groupId, contactId)
+    await services.contacts.removeMember(groupId, contactId)
 
     await audit(services.audit, 'groupMemberRemoved', c.get('pubkey'), { groupId, contactId }, undefined, c.get('hubId') ?? null)
-    return c.json(result)
+    return c.json({ ok: true })
   },
 )
 

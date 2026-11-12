@@ -386,12 +386,12 @@ entitySchema.post('/case-number',
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')
-    const result = await services.settings.generateCaseNumber({
+    const { number } = await services.settings.generateCaseNumber({
       prefix: body.prefix,
       year: body.year,
       hubId: body.hubId || c.get('hubId') || '',
     })
-    return c.json(result)
+    return c.json({ number, prefix: body.prefix })
   },
 )
 
@@ -568,7 +568,8 @@ entitySchema.post('/templates/apply',
       entityTypes: result.entityTypes.length,
       relationshipTypes: result.relationshipTypes.length,
       reportTypes: result.reportTypes.length,
-      suggestedRoles: template.suggestedRoles,
+      // By slug: the roles themselves are the template detail's to describe.
+      suggestedRoles: template.suggestedRoles.map(r => r.slug),
     }, 201)
   },
 )

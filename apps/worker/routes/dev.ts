@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType, RecipientEnvelope } from '@shared/types'
 import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
+import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
 import { banHashes, sealCallerNumber } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
@@ -416,16 +417,9 @@ dev.post('/test-create-shift', async (c) => {
   const services = c.get('services')
   const hubId = body.hubId
   try {
-    const now = new Date()
-    const currentDay = now.getUTCDay()
-    const hour = now.getUTCHours()
-    const startTime = `${String(Math.max(0, hour - 1)).padStart(2, '0')}:00`
-    const endTime = `${String(Math.min(23, hour + 1)).padStart(2, '0')}:59`
     await services.shifts.create(hubId, {
       encryptedName: btoa('BDD Test Shift'),
-      startTime,
-      endTime,
-      days: [currentDay],
+      ...ALWAYS_ON_SHIFT,
       userPubkeys: [body.pubkey],
     })
     return c.json({ ok: true })
@@ -452,7 +446,6 @@ const seedReportTypeSchema = z.object({
 
 const seedShiftSchema = z.object({
   pubkey: z.string().min(64).max(64),
-  allDay: z.boolean().optional().default(true),
 })
 
 const seedMemberSchema = z.object({
@@ -701,25 +694,9 @@ dev.post('/test-seed', async (c) => {
 
   for (const shiftSpec of spec.shifts) {
     try {
-      const now = new Date()
-      const currentDay = now.getUTCDay()
-      let startTime: string
-      let endTime: string
-
-      if (shiftSpec.allDay) {
-        startTime = '00:00'
-        endTime = '23:59'
-      } else {
-        const hour = now.getUTCHours()
-        startTime = `${String(Math.max(0, hour - 1)).padStart(2, '0')}:00`
-        endTime = `${String(Math.min(23, hour + 1)).padStart(2, '0')}:59`
-      }
-
       const shift = await services.shifts.create(hubId, {
         encryptedName: btoa('Seeded Shift'),
-        startTime,
-        endTime,
-        days: [currentDay],
+        ...ALWAYS_ON_SHIFT,
         userPubkeys: [shiftSpec.pubkey],
       })
       shiftIds.push({ id: shift.id })

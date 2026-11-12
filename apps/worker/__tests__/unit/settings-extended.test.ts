@@ -563,9 +563,10 @@ describe('SettingsService.setFallbackGroup', () => {
   it("writes the hub's fallback group", async () => {
     const { service } = setup()
     const write = vi.spyOn(service, 'updateHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.updateHubSettings>>)
+    vi.spyOn(service, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.getHubSettings>>)
 
     const result = await service.setFallbackGroup({ userPubkeys: ['pk1', 'pk2'] }, 'hub-1')
-    expect(result).toEqual({ ok: true })
+    expect(result).toEqual({ userPubkeys: ['pk1', 'pk2'] })
     expect(write).toHaveBeenCalledWith('hub-1', { fallbackGroup: ['pk1', 'pk2'] })
   })
 })
@@ -702,10 +703,17 @@ describe('SettingsService.updateCustomFields', () => {
       }),
     }
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
+    // The answer is the stored definitions read back, not the request echoed.
+    db.$setSelectResult([{
+      id: 'field-1', name: 'severity', label: 'Severity', fieldType: 'select', required: false,
+      options: ['low', 'medium', 'high'], validation: null, visibleToUsers: true, editableByUsers: true,
+      context: 'all', maxFileSize: null, allowedMimeTypes: null, maxFiles: 1, sortOrder: 0, createdAt: new Date(),
+    }])
 
     const result = await service.updateCustomFields({ fields: [validField] })
     expect((db as any).transaction).toHaveBeenCalled()
     expect(result.fields).toHaveLength(1)
+    expect(result.fields[0]).toMatchObject({ id: 'field-1', name: 'severity', createdAt: expect.any(String) })
     // Concurrency itself is covered against real PostgreSQL in
     // __tests__/integration/custom-fields-concurrency.test.ts (#686).
     expect(tx.execute).toHaveBeenCalledTimes(1)
@@ -716,17 +724,18 @@ describe('SettingsService.updateCustomFields', () => {
 
   it('normalizes "both" context to "all"', async () => {
     const { db, service } = setup()
+    const values = vi.fn().mockResolvedValue([])
     const tx = {
       execute: vi.fn().mockResolvedValue([]),
       delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-      insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue([]) }),
+      insert: vi.fn().mockReturnValue({ values }),
     }
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    const result = await service.updateCustomFields({
+    await service.updateCustomFields({
       fields: [{ ...validField, context: 'both' as any }],
     })
-    expect(result.fields[0].context).toBe('all')
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ context: 'all' }))
   })
 })
 

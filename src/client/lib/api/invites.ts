@@ -1,7 +1,7 @@
 import { request, getActiveHub, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { CreateInviteBody, InviteCode, User } from '@protocol/schemas'
+import type { CreateInviteBody, CreateInviteResponse, InviteCode } from '@protocol/schemas'
 
 export type { InviteCode }
 
@@ -19,7 +19,7 @@ export async function listInvites() {
  */
 export async function createInvite(data: CreateInviteBody) {
   const hubId = data.hubId ?? getActiveHub() ?? undefined
-  return request<{ invite: InviteCode }>('/invites', {
+  return request<CreateInviteResponse>('/invites', {
     method: 'POST',
     body: JSON.stringify({ ...data, ...(hubId ? { hubId } : {}) }),
   })
@@ -103,7 +103,7 @@ export async function redeemInvite(
       const body = await res.text()
       throw new ApiError(res.status, body)
     }
-    return res.json() as Promise<{ user: User }>
+    return res.json() as Promise<{ ok: boolean }>
   } catch (err) {
     if (err instanceof ApiError) throw err
     const e = err instanceof Error ? err : new Error(String(err))

@@ -170,7 +170,8 @@ describe('invites routes', () => {
       }, defaultEnv)
 
       expect(res.status).toBe(200)
-      expect(await res.json()).toEqual({ volunteer: { pubkey: 'new-user' } })
+      // The declared answer — not the redeemer's user record, on a public route.
+      expect(await res.json()).toEqual({ ok: true })
     })
 
     it('audits the join as the volunteer\'s own act, in the invite\'s hub (#1231)', async () => {

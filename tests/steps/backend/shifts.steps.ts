@@ -12,7 +12,7 @@
  * rather than create a second, conflicting definition of the same step text.
  */
 import { expect, type APIRequestContext } from '@playwright/test'
-import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import {
   getSharedState,
