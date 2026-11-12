@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 
 /**
  * Regression specs for #1712: validateInvite used to ignore the HTTP status,
@@ -22,7 +22,12 @@ function fulfillJson(route: import('@playwright/test').Route, status: number, bo
 }
 
 test.describe('onboarding invite validation (#1712)', () => {
-  test('429 rate limit shows a retryable message with the wait hint, never "Invalid invite code", and Try again recovers', async ({ page }) => {
+  test('429 rate limit shows a retryable message with the wait hint, never "Invalid invite code", and Try again recovers', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 429 \(Too Many Requests\)$/,
+      source: /\/api\/invites\/validate\//,
+      reason: 'the test injects a 429 from the invite check to exercise the retryable message',
+    })
     let calls = 0
     await page.route('**/api/invites/validate/*', async (route) => {
       calls += 1
@@ -61,7 +66,12 @@ test.describe('onboarding invite validation (#1712)', () => {
     await expect(page.getByTestId('onboarding-go-to-login')).toBeVisible()
   })
 
-  test('a network failure shows the connection message and offers retry', async ({ page }) => {
+  test('a network failure shows the connection message and offers retry', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: net::ERR_CONNECTION_FAILED$/,
+      source: /\/api\/invites\/validate\//,
+      reason: 'the test aborts the invite check to exercise the connection-failure message',
+    })
     let calls = 0
     await page.route('**/api/invites/validate/*', async (route) => {
       calls += 1
@@ -83,7 +93,12 @@ test.describe('onboarding invite validation (#1712)', () => {
     await expect(page.getByTestId('onboarding-welcome-title')).toBeVisible()
   })
 
-  test('a non-JSON proxy error page (502) is retryable, not a verdict', async ({ page }) => {
+  test('a non-JSON proxy error page (502) is retryable, not a verdict', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 502 \(Bad Gateway\)$/,
+      source: /\/api\/invites\/validate\//,
+      reason: 'the test injects a 502 proxy page from the invite check',
+    })
     await page.route('**/api/invites/validate/*', (route) =>
       route.fulfill({ status: 502, contentType: 'text/html', body: '<html><body>Bad Gateway</body></html>' }),
     )

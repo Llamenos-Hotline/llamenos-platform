@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { devSurfaceSecret } from './dev-surface-secret'
 import { ADMIN_SEED, enterPin, resetTestState, TEST_PIN, Timeouts, completeProfileSetup } from './helpers'
 import { TestIds } from './test-ids'

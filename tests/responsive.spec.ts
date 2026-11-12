@@ -1,4 +1,5 @@
-import { test, expect, devices } from '@playwright/test'
+import { devices } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin } from './helpers'
 
 test.use(devices['Pixel 7'])

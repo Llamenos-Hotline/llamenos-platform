@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, reenterPinAfterReload, Timeouts } from './helpers'
 import type { MockUpdateConfig } from './mocks/tauri-updater'
 

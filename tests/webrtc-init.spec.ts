@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, loginAsVolunteer, inviteVolunteerAndJoin, uniquePhone, Timeouts } from './helpers'
 import { apiGet, createHubViaApi, deleteHubViaApi } from './api-helpers'
 

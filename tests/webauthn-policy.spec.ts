@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test'
+import { type Page } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, Timeouts } from './helpers'
 
 /**
@@ -104,7 +105,7 @@ async function mockAdminSettingsApi(page: Page) {
     })
   })
 
-  await page.route('**/api/settings/custom-fields', async (route) => {
+  await page.route(/\/api\/(hubs\/[^/]+\/)?settings\/custom-fields$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -143,7 +144,12 @@ test.describe('Passkey Policy errors', () => {
     await page.getByTestId('page-title').waitFor({ state: 'visible', timeout: Timeouts.ELEMENT })
   })
 
-  test('shows the specific error when enabling admin passkey requirement without a passkey (#677)', async ({ page }) => {
+  test('shows the specific error when enabling admin passkey requirement without a passkey (#677)', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+      source: /\/api\/settings\/webauthn$/,
+      reason: 'the mocked PATCH answers 409 WEBAUTHN_CREDENTIAL_REQUIRED, the real contract being exercised (#677)',
+    })
     await page.getByTestId('webauthn-require-for-admins-toggle').click()
     await expect(page.getByTestId('toast-error')).toContainText(
       'Register a passkey before requiring passkeys for admins.',
@@ -151,7 +157,12 @@ test.describe('Passkey Policy errors', () => {
     )
   })
 
-  test('falls back to the generic error toast for unrelated webauthn failures', async ({ page }) => {
+  test('falls back to the generic error toast for unrelated webauthn failures', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 500 \(Internal Server Error\)$/,
+      source: /\/api\/settings\/webauthn$/,
+      reason: 'the test injects an unrelated 500 from the PATCH to exercise the generic error toast',
+    })
     // requireForUsers doesn't hit the credential-required branch server-side —
     // simulate an unrelated server failure to confirm the generic path still works.
     await page.route('**/api/settings/webauthn', async (route) => {

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, mockConfigWithHub, navigateViaSpa, Timeouts } from './helpers'
 
 /**
@@ -377,9 +377,10 @@ test.describe('Hub Onboarding Wizard', () => {
   })
 
   test('step 1: empty templates list still shows scratch option', async ({ page }) => {
-    // Re-mock with empty templates
-    await page.unrouteAll()
-    await mockConfigWithHub(page)
+    // Re-mock with empty templates, layered over the beforeEach mocks: the most
+    // recently registered route wins. (unrouteAll() left a window in which the
+    // dashboard's own polls reached the real API for a hub it has never heard
+    // of — #1858.)
     await mockOnboardingApis(page, { onboardingComplete: false, templates: [] })
     // Re-navigate via SPA to trigger refetch (page.reload() would drop auth state)
     await navigateViaSpa(page, '/')
@@ -391,7 +392,17 @@ test.describe('Hub Onboarding Wizard', () => {
 })
 
 test.describe('Hub Onboarding - API error handling', () => {
-  test('shows error state when template loading fails', async ({ page }) => {
+  test('shows error state when template loading fails', async ({ page, consoleWatch }) => {
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 500 \(Internal Server Error\)$/,
+      source: /\/api\/provider-templates$/,
+      reason: 'the test makes the template list fail to exercise the error state',
+    })
+    consoleWatch.expect({
+      message: /^Failed to load provider templates: ApiError: API error 500/,
+      source: /\/assets\/hub-communications-/,
+      reason: 'the app logs the handled template-load failure the test provokes',
+    })
     await mockConfigWithHub(page)
     await loginAsAdmin(page)
     await page.route('**/api/provider-templates', async (route) => {

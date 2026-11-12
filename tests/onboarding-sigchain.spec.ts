@@ -21,7 +21,8 @@
  * The GET response carries each link's timestamp, so the second client
  * verifies the whole chain (hashes + signatures) from the read-back alone.
  */
-import { test, expect, type APIRequestContext } from '@playwright/test'
+import { type APIRequestContext } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { apiGet, apiPost, ADMIN_SEED, createHubViaApi, seedHexToPubkey } from './api-helpers'
 import { enterPin, TEST_PIN } from './helpers'
 import { expectInitialisedIdentity, toMockSigchainLink } from './identity-helpers'

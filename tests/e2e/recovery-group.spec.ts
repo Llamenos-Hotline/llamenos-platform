@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type ConsoleWatch } from '../console-guard'
 import { loginAsAdmin, mockConfigWithHub, navigateViaSpa } from '../helpers'
 
 async function goToAdminSection(page: import('@playwright/test').Page, section: string) {
@@ -6,8 +6,16 @@ async function goToAdminSection(page: import('@playwright/test').Page, section: 
   await page.waitForSelector('[data-testid]', { timeout: 10_000 })
 }
 
-async function mockRecoveryGroupApis(page: import('@playwright/test').Page) {
-  await page.route('**/api/hubs/*/recovery-group', async (route) => {
+async function mockRecoveryGroupApis(page: import('@playwright/test').Page, consoleWatch: ConsoleWatch) {
+  // The client asks `GET /api/recovery-group/<hubId>` (src/client/lib/api/recovery.ts);
+  // a hub with no recovery group answers 404, which the client maps to `null`.
+  // Chromium logs every 404 as a console error whoever produced it.
+  consoleWatch.expect({
+    message: /^Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+    source: /\/api\/recovery-group\/test-hub-1$/,
+    reason: 'a hub with no recovery group is a 404 by contract; getRecoveryGroup() maps it to null',
+  })
+  await page.route(/\/api\/recovery-group\/test-hub-1$/, async (route) => {
     await route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -69,10 +77,10 @@ async function createGroup(page: import('@playwright/test').Page): Promise<{ me:
 }
 
 test.describe('Recovery Group - Admin Configuration', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, consoleWatch }) => {
     await mockConfigWithHub(page)
     await loginAsAdmin(page)
-    await mockRecoveryGroupApis(page)
+    await mockRecoveryGroupApis(page, consoleWatch)
   })
 
   test('should display recovery team configuration section', async ({ page }) => {
@@ -104,10 +112,10 @@ test.describe('Recovery Group - Admin Configuration', () => {
 })
 
 test.describe('Recovery Group - Recovery Requests Dashboard', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, consoleWatch }) => {
     await mockConfigWithHub(page)
     await loginAsAdmin(page)
-    await mockRecoveryGroupApis(page)
+    await mockRecoveryGroupApis(page, consoleWatch)
   })
 
   test('should display recovery requests section', async ({ page }) => {

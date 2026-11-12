@@ -11,6 +11,7 @@
  */
 import { test, expect } from './fixtures/auth'
 import { TestIds } from './test-ids'
+import { settleConsoleWatch, watchConsole } from './console-guard'
 
 test.describe('Session reuse via cached storageState', () => {
   test('a test body that never calls enterPin() still runs fully authenticated', async ({ adminPage }) => {
@@ -36,6 +37,7 @@ test.describe('Session reuse via cached storageState', () => {
     // Assert that directly, independent of the enterPin() UI flow.
     const { STORAGE_PATHS } = await import('./fixtures/auth')
     const context = await browser.newContext({ storageState: STORAGE_PATHS.admin })
+    const watch = watchConsole(context)
     try {
       const page = await context.newPage()
       await page.goto('/login', { waitUntil: 'domcontentloaded' })
@@ -51,6 +53,7 @@ test.describe('Session reuse via cached storageState', () => {
         localStorage.getItem('llamenos:llamenos-encrypted-key') !== null
       )
       expect(hasEncryptedKey).toBe(true)
+      await settleConsoleWatch(watch)
     } finally {
       await context.close()
     }

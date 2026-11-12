@@ -1,5 +1,5 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
-import { request, hubPath } from './client'
+import { request, hp, hubPath } from './client'
 import type { CustomFieldDefinition } from '@shared/types'
 
 export type { CustomFieldDefinition } from '@shared/types'
@@ -96,8 +96,15 @@ export async function updateMyAvailability(onBreak: boolean) {
 
 // --- Custom Fields ---
 
+/**
+ * The custom-field vocabulary notes and reports are written in. A deployment-wide
+ * value, but every hub's MEMBERS must read it, and a hub-only member holds no
+ * global role: the server serves this read under the hub mount for them
+ * (`deploymentReads` in apps/worker/routes/settings.ts) and refuses the bare
+ * path with a 403. Writes stay unscoped — they are admin-only deployment settings.
+ */
 export async function getCustomFields() {
-  return request<{ fields: CustomFieldDefinition[] }>('/settings/custom-fields')
+  return request<{ fields: CustomFieldDefinition[] }>(hp('/settings/custom-fields'))
 }
 
 /**

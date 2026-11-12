@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { Timeouts, TestIds } from './helpers'
 
 test.describe('Smoke tests', () => {

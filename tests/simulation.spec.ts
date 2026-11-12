@@ -11,7 +11,7 @@
  *   - DEV_RESET_SECRET set (defaults to 'test-reset-secret')
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import {
   useScenarioHub,
   TestIds,
