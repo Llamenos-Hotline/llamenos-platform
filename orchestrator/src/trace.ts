@@ -46,7 +46,8 @@ function testsSummary(report: VerifyReport): string {
   if (report.testsRun === undefined || report.testsRun.length === 0) return 'none'
   const targets = report.testsRun.join(',')
   if (report.testsPassed === true) return `${targets}:pass`
-  if (report.testsPassed === false) return `${targets}:fail`
+  // A runner that never produced a verdict is not a failing test suite (#2738).
+  if (report.testsPassed === false) return `${targets}:${report.testsRunnerCrashed === true ? 'crash' : 'fail'}`
   return `${targets}:unproven`
 }
 

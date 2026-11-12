@@ -76,6 +76,11 @@ export const LAST_DIGEST_AT_FILE = join(FLEET_DIR, 'last-digest-at')
  */
 export const REVIEW_AND_MERGE_DIR = join(FLEET_DIR, 'review-and-merge')
 
+/** #2738: the in-flight lock and per-head attempt ledger of a re-verification
+ *  pass (`claimReentry`, reverify.ts). Its own directory, not shared with
+ *  `review-and-merge`: the two keep separate allowances for the same head. */
+export const REVERIFY_DIR = join(FLEET_DIR, 'reverify')
+
 /**
  * `dispatch-one.sh` is NOT vendored into this repo. It lives at
  * `~/.claude/skills/supervising-dispatched-sessions/`, which is a symlink into

@@ -5460,7 +5460,7 @@ describe('rail: review-and-merge is view-only by default and cannot recurse (#27
 
   // The marker only works if every route into a verification carries it.
   it('every process a verification starts carries the nesting marker', () => {
-    expect(withoutComments(src('verify.ts')), 'the test runner does not mark its child').toMatch(/env:\s*withVerificationMarker\(\)/)
+    expect(withoutComments(src('verify.ts')), 'the test runner does not mark its child').toMatch(/env:\s*withVerificationMarker\((?:env)?\)/)
     expect(withoutComments(src('review.ts')), 'the reviewer engine env does not carry the marker').toContain("env[IN_VERIFICATION_ENV] = '1'")
     const cli = withoutComments(src('cli.ts'))
     for (const cmd of ['verify-ci', 'review-ci', 'review-gate']) {

@@ -22,7 +22,7 @@ import {
   dispatch as dispatchWorker, doctorRegistryIdForOpencodeModel, modelResolutionProblem, providerOf,
   DEFAULT_OPENCODE_MODEL, type EffortLevel,
 } from './engines.js'
-import { verifyMechanical } from './verify.js'
+import { verifyMechanical, type VerifyReport } from './verify.js'
 import { signOffComments, trustAnchorApprovers } from './write-gate.js'
 import {
   secondOpinion, postReview, invokeVerifierEngine, toSecondOpinion, stripReviewerControlFiles,
@@ -56,6 +56,7 @@ import {
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
 import { tick, type TickDeps, type TickResult, type SettleInput, type DispatchOutcome } from './tick.js'
+import { claimReentry, linkTrustedModules } from './reverify.js'
 import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
@@ -817,6 +818,106 @@ async function commentOnPr(pr: string, body: string): Promise<void> {
   await gh(['pr', 'comment', pr, '--body', body])
 }
 
+/** #2738: the PR's live head commit and branch, for re-entry after a failed verification. */
+async function prHead(pr: string): Promise<{ sha: string; branch: string } | undefined> {
+  const view = await ghJson<{ headRefOid?: string; headRefName?: string; isCrossRepository?: boolean }>(
+    ['pr', 'view', pr, '--json', 'headRefOid,headRefName,isCrossRepository'],
+  )
+  if (view?.headRefOid === undefined || view.headRefName === undefined) return undefined
+  // A fork PR can reuse a fleet branch NAME; its head is not code this fleet
+  // dispatched, and it must never be fetched and run here.
+  if (view.isCrossRepository !== false) return undefined
+  return { sha: view.headRefOid, branch: view.headRefName }
+}
+
+/**
+ * The environment the judged commit's test code runs in: what a test runner
+ * needs and none of the credentials in the tick's own environment (GitHub and
+ * reviewer tokens). This is credential hygiene, NOT a sandbox: the child still
+ * runs as the operator's OS user, so it can read files that user can read
+ * (including `gh`'s stored token under the real home) and reach the network.
+ * What bounds the exposure is who can trigger it: only a commit pushed to the
+ * item's own same-repo fleet branch, which needs write access to this
+ * repository, the same population whose code the tick already runs in
+ * `verifyMechanical` against a worker's worktree. Real isolation (a container
+ * or an unprivileged service account) is separate work; until then do not
+ * widen who can reach this path.
+ */
+function scrubbedTestEnv(tmp: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env['PATH'] ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: tmp,
+    TMPDIR: tmp,
+    LANG: process.env['LANG'] ?? 'C.UTF-8',
+    CI: 'true',
+  }
+}
+
+/**
+ * #2738: mechanical verification of one commit of an open PR, by running the
+ * `fleet/verify` gate itself (`runVerifyCi`) — the same code, the same
+ * `vitest run --config <suite config>` per routed suite, the same scope-grant
+ * and trust-anchor reads — against a `git archive` export of exactly that
+ * commit, with git decisions made in this trusted checkout. Not against a
+ * worker's worktree: settle() destroyed it, and a verdict about "whatever was
+ * in a working directory" is how round 1 on #2737 reported a runner that
+ * crashed at module load as a failing suite. Returns the report the gate's
+ * last `verifyMechanical` call produced.
+ */
+export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha: string; branch: string }): Promise<VerifyReport> {
+  const n = input.pr.replace(/^.*\//, '')
+  const git = async (...args: string[]): Promise<string> =>
+    (await execFileAsync('git', ['-C', REPO_ROOT, ...args], { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 })).stdout.trim()
+  await git('fetch', '--quiet', 'origin', 'main', `+refs/pull/${n}/head:refs/fleet-reverify/${n}`)
+  const fetched = await git('rev-parse', `refs/fleet-reverify/${n}`)
+  if (fetched !== input.headSha) {
+    throw new Error(`PR ${n}'s head moved while it was being fetched (${input.headSha.slice(0, 12)} -> ${fetched.slice(0, 12)}); retrying next pass`)
+  }
+  const baseSha = await git('rev-parse', 'origin/main')
+  const tmp = mkdtempSync(join(tmpdir(), 'llamenos-fleet-reverify-'))
+  const headDir = join(tmp, 'head')
+  mkdirSync(headDir)
+  try {
+    await git('archive', '--format=tar', `--output=${join(tmp, 'head.tar')}`, input.headSha)
+    await execFileAsync('tar', ['-xf', join(tmp, 'head.tar'), '-C', headDir], { timeout: 300_000 })
+    // What `fleet-verify.yml` does to its export before the gate runs: without
+    // the link the gate refuses the export as an untrusted test root. This
+    // grants the test child nothing it did not already have: it runs as the
+    // tick's own OS user, which can write the trusted install with or without
+    // the link (see `scrubbedTestEnv` — hygiene, not a sandbox). Real
+    // isolation is separate work; do not widen who can reach this path.
+    await linkTrustedModules(headDir, join(REPO_ROOT, 'node_modules'))
+    const ctx: CiContext = {
+      branch: input.branch, repoDir: REPO_ROOT, headDir,
+      baseSha, headSha: input.headSha, pr: n,
+    }
+    let last: VerifyReport | undefined
+    const verdict = await runVerifyCi({
+      ctx,
+      lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      verify: async (v) => { last = await verifyMechanical({ ...v, testEnv: scrubbedTestEnv(tmp) }); return last },
+      pathExists: existsSync,
+      log,
+      prLabels: async () => (await readPrFacts(n))?.labels,
+      trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
+    })
+    if (last === undefined) throw new Error(`the verify gate produced no report: ${verdict.summary}`)
+    return last
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+/** #2738: re-fire `fleet/review` on a head that now passes. A push never
+ *  starts a review, and the previous request is still pending, so it is
+ *  cycled (DELETE then POST) and confirmed by the event count. */
+async function requestReviewOnNewHead(pr: string, branch: string): Promise<string> {
+  const r = await refireReviewRequest({ pr, headRefName: branch }, defaultReviewRequestAtOpenDeps(log))
+  if (r.kind === 'requested') return `Review re-requested from ${r.reviewer}.`
+  if (r.kind === 'unverified') return `Review re-requested from ${r.reviewer}, but whether it fired could not be confirmed (${r.reason}).`
+  throw new Error(r.kind === 'failed' ? r.reason : `review request not made (${r.kind})`)
+}
+
 /**
  * The fleet's ONE arming call, and it merges nothing itself: it asks GitHub
  * to merge later, on GitHub's terms — every required check green on that
@@ -970,6 +1071,10 @@ async function runTick(): Promise<number> {
     listItems: (lane) => new GitHubSource(lane.requireLabel, lane.milestone).list(),
     readLabels: (id) => new GitHubSource('').labels(id),
     findOpenPr,
+    prHead,
+    verifyOpenPrHead,
+    requestReviewOnNewHead,
+    claimReentry: (pr, sha) => claimReentry(pr, sha),
     findWedge,
     dispatch: realDispatch,
     verifyMechanical,

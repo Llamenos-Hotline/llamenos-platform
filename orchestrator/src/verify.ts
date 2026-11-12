@@ -91,6 +91,14 @@ export interface VerifyInput {
    */
   testDir?: string
   /**
+   * The environment the vitest child runs in. Absent means the caller's own
+   * (the fleet's worker worktree on the operator's box, where that is the
+   * point); a caller that runs a commit it did not dispatch itself (#2738's
+   * re-verification of an open PR's head) passes a scrubbed one so the code
+   * under test never inherits the fleet's credentials.
+   */
+  testEnv?: NodeJS.ProcessEnv
+  /**
    * The human sign-off a TRUST-ANCHOR change needs (#2556): the logins whose
    * sign-off names the exact commit under judgement, or `undefined`
    * when the PR's reviews or comments could not be read. The caller resolves "the exact
@@ -115,6 +123,15 @@ export interface VerifyReport {
   impactReasons: string[]
   testsRun?: string[]
   testsPassed?: boolean
+  /**
+   * True when at least one test target failed WITHOUT reaching a verdict — the
+   * runner crashed, wrote no result file or an unreadable one — as opposed to
+   * a result that was read and held failing tests. Always accompanies
+   * `testsPassed: false`. The gate trace renders it `tests=<suite>:crash`, so
+   * "the head's tests are red" and "the runner never ran them" stop sharing a
+   * word (#2738). It changes no verdict: both still fail the gate.
+   */
+  testsRunnerCrashed?: boolean
   /** One line per target whose result file was read and was green — the
    *  positive evidence behind `testsPassed: true`, printed in the job log. */
   testResults?: string[]
@@ -542,7 +559,7 @@ async function prepareTestRoot(
 }
 
 async function runVitestTarget(
-  worktree: string, testRoot: string, route: TestRoute, config: string, outputFile: string,
+  worktree: string, testRoot: string, route: TestRoute, config: string, outputFile: string, env?: NodeJS.ProcessEnv,
 ): Promise<TestRunResult> {
   if (!isSafeTestPath(route.suite, testRoot)) {
     // Should be unreachable — every suite label above comes from the fixed
@@ -558,7 +575,9 @@ async function runVitestTarget(
       cwd: testRoot, timeout: 10 * 60_000, maxBuffer: 32 * 1024 * 1024,
       // #2742: a test run is a verification, and a test that shells out to
       // `review-and-merge` (the 2026-11-11 recursion) must be refused by it.
-      env: withVerificationMarker(),
+      // #2738: the env is the caller's scrubbed one when it ran a commit it did
+      // not dispatch itself; the marker is added to either.
+      env: withVerificationMarker(env),
     })
     return { exitCode: 0, signal: undefined, output: `${stdout}${stderr}` }
   } catch (e) {
@@ -793,7 +812,17 @@ function describeExit(run: TestRunResult): string {
   return `exited ${run.exitCode}`
 }
 
-export type TargetOutcome = { passed: true; evidence: string } | { passed: false; reason: string }
+/**
+ * `noVerdict: true` marks a failure that is NOT a statement about the head's
+ * tests: the runner died, wrote nothing, or wrote something that is not a
+ * vitest report. Only a result file that was read and held failures is a
+ * verdict on the code (#2738: a runner that crashed at module load on the
+ * author's worktree was recorded as `tests=orchestrator:fail`, and the PR was
+ * then treated as having failed its tests for good).
+ */
+export type TargetOutcome =
+  | { passed: true; evidence: string }
+  | { passed: false; reason: string; noVerdict?: true }
 
 /**
  * Judges ONE target. The only way to `passed: true` is a result file that
@@ -812,11 +841,13 @@ export function judgeTargetRun(
       return {
         passed: false,
         reason: `${target}: runner-exit — the test runner ${describeExit(run)} and wrote no result file${outputTail(run.output)}`,
+        noVerdict: true,
       }
     }
     return {
       passed: false,
       reason: `${target}: missing result — the test runner exited 0 but wrote no result file${outputTail(run.output)}`,
+      noVerdict: true,
     }
   }
   const counts = parseVitestJson(resultText)
@@ -824,6 +855,7 @@ export function judgeTargetRun(
     return {
       passed: false,
       reason: `${target}: unparseable result — the result file is not a vitest JSON report (runner ${describeExit(run)})`,
+      noVerdict: true,
     }
   }
   const notRun = counts.numPendingTests + counts.numTodoTests
@@ -1171,6 +1203,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
   const testsRun = routes.map((r) => r.suite)
   let testsPassed: boolean | undefined
+  let testsRunnerCrashed = false
   const testResults: string[] = []
 
   if (routes.length > 0) {
@@ -1185,13 +1218,14 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
           continue
         }
         const outputFile = join(resultDir, `${route.suite.replaceAll('/', '_')}.json`)
-        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile)
+        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile, input.testEnv)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
         const outcome = judgeTargetRun(route.suite, run, resultText, testRoot)
         if (outcome.passed) {
           testResults.push(outcome.evidence)
         } else {
           allPassed = false
+          if (outcome.noVerdict === true) testsRunnerCrashed = true
           reasons.push(outcome.reason)
         }
       }
@@ -1212,6 +1246,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     impactReasons,
     testsRun,
     testsPassed,
+    ...(testsRunnerCrashed ? { testsRunnerCrashed } : {}),
     testResults,
     verifiedCommit,
     trustAnchors,
