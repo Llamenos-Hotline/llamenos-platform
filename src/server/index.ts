@@ -194,7 +194,6 @@ const env: Record<string, unknown> = {
   // starts — which it does on a first boot.
   SIP_TLS_CA_FILE: process.env.SIP_TLS_CA_FILE || undefined,
   SIP_TLS_CA_PEM: process.env.SIP_TLS_CA_PEM || undefined,
-  CERT_PIN_HASHES: process.env.CERT_PIN_HASHES || undefined,
   FIREHOSE_AGENT_SEAL_KEY: firehoseSealKey,
   // --- Push delivery ---
   // This object IS the request env: anything absent here is permanently

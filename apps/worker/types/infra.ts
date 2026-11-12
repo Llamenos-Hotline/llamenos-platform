@@ -137,10 +137,6 @@ export interface Env {
   // GlitchTip/Sentry DSN for client-side crash reporting (Epic 293)
   GLITCHTIP_DSN?: string
 
-  // Certificate pinning — comma-separated base64 SHA-256 SPKI hashes for pin override.
-  // Defaults to Let's Encrypt ISRG Root X1 + X2 if not set.
-  CERT_PIN_HASHES?: string
-
   // Push notifications (Epic 86) — APNs (iOS)
   APNS_KEY_P8?: string       // Apple Push Notification auth key (PEM format)
   APNS_KEY_ID?: string       // Key ID from Apple Developer Portal
