@@ -128,3 +128,11 @@ Feature: A call routed by the provider's own signed webhooks
     And someone without the hub's secret posts a pickup for volunteer 1's leg
     Then the forged webhook is refused with status 403
     And the call is still ringing with nobody on it
+
+  # A hub's provider account vouches for calls to that hub's numbers and to no other's.
+  @security
+  Scenario: One hub's provider account cannot deliver a call into another hub
+    Given another hub owns a number of its own
+    When a call to the other hub's number arrives signed by this hub's provider account
+    Then the call is rejected at the first webhook
+    And neither hub recorded the call

@@ -90,6 +90,8 @@ interface SignedCallState {
   queueExit?: ProviderResponse
   pickups: LegPickup[]
   forged?: ProviderResponse
+  /** A second hub, with a number of its own, for cross-hub refusals. */
+  otherHub?: { id: string; number: string }
 }
 
 const STATE_KEY = 'signedCallRouting'
@@ -103,6 +105,7 @@ function signed(world: Record<string, unknown>): SignedCallState {
 After({ tags: '@simulated-telephony' }, async ({ request, world }) => {
   const s = getState<SignedCallState | undefined>(world, STATE_KEY)
   if (s) await deleteHubViaApiIfPresent(request, s.hubId)
+  if (s?.otherHub) await deleteHubViaApiIfPresent(request, s.otherHub.id)
 })
 
 /** A fictional 555 number no other hub in this database owns. */
@@ -257,6 +260,38 @@ async function chooseLanguage(request: APIRequestContext, world: Record<string, 
 When('a caller dials the hotline and chooses a language', async ({ request, world }) => {
   await dial(request, world, uniqueCallerNumber())
   await chooseLanguage(request, world)
+})
+
+Given('another hub owns a number of its own', async ({ request, world }) => {
+  const s = signed(world)
+  const id = await createHubViaApi(request, uniqueName('signed-calls-other'))
+  const number = fictionalNumber()
+  s.otherHub = { id, number }
+  const patched = await apiPatch(request, `/hubs/${id}`, { phoneNumber: number })
+  expect(patched.status, `set the other hub's number: ${JSON.stringify(patched.data)}`).toBe(200)
+})
+
+When("a call to the other hub's number arrives signed by this hub's provider account", async ({ request, world }) => {
+  const s = signed(world)
+  expect(s.otherHub, 'no other hub').toBeDefined()
+  s.callSid = `mock-call-${crypto.randomUUID()}`
+  s.callerNumber = uniqueCallerNumber()
+  // Correctly signed with THIS hub's secret and naming this hub — but placed to a
+  // number this hub does not own.
+  s.incoming = await deliver(request, s.secret, `/api/telephony/incoming?hub=${s.hubId}`, {
+    callSid: s.callSid,
+    callerNumber: s.callerNumber,
+    calledNumber: s.otherHub!.number,
+  })
+})
+
+Then('neither hub recorded the call', async ({ request, world }) => {
+  const s = signed(world)
+  for (const hubId of [s.hubId, s.otherHub!.id]) {
+    const { status } = await apiGet(request, `/hubs/${hubId}/calls/${encodeURIComponent(s.callSid!)}`)
+    expect(status, `hub ${hubId} has the call`).toBe(404)
+  }
+  expect(await TestDB.getActiveCallRouting(s.callSid!)).toBeNull()
 })
 
 When('{string} dials the hotline', async ({ request, world }, callerNumber: string) => {
