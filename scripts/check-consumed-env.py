@@ -125,6 +125,7 @@ UNRENDERED_BY_DESIGN: dict[str, str] = {
     "MIN_LOG_LEVEL": "log level floor; default info",
     "NODE_ENV": "set by the Bun runtime, not by deployment config",
     "PG_IDLE_TIMEOUT": "Postgres pool idle timeout; default is the pool's own",
+    "PG_POOL_ACQUIRE_TIMEOUT_MS": "how long a query waits for a pooled connection before failing loudly (#1208); default 10s is the gate's own",
     "STORAGE_SSE_ENABLED": "RustFS server-side encryption toggle; disk-level FDE covers it",
     "TOKEN_MAX_AGE_MS": "session token lifetime; default is the hardened value in lib/auth.ts",
 }

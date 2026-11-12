@@ -20,7 +20,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { eq, inArray, sql } from 'drizzle-orm'
 import '../../db/pg-array-patch'
-import { createDatabase } from '../../db'
+import { createDatabase, outsideTransaction } from '../../db'
 import { hubs, users, roles, notes, erasureRequests, reEncryptionJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
 import { SettingsService, ServiceError } from '../../services/settings'
@@ -513,6 +513,10 @@ describe('a role-definition guard decides from one view of the users', () => {
    * two of the guard's reads: READ COMMITTED lets that commit show up in the
    * guard's NEXT read. Whatever the guard does with the first result it must not
    * depend on a second read agreeing with it.
+   *
+   * The hook is that other request, so it runs `outsideTransaction`: the pool
+   * guard refuses root-pool work from inside an open transaction (#1208), and
+   * a concurrent request never runs inside this one's.
    */
   function afterFirstUsersRead(tx: Tx, hook: () => Promise<void>): { tx: Tx; fired: () => boolean } {
     let usersReads = 0
@@ -526,7 +530,7 @@ describe('a role-definition guard decides from one view of the users', () => {
               value.call(obj, async (rows: unknown) => {
                 if (++usersReads === 1) {
                   fired = true
-                  await hook()
+                  await outsideTransaction(hook)
                 }
                 return rows
               }).then(resolve, reject)
