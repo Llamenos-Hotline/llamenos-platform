@@ -98,10 +98,39 @@ function contentText(content: unknown): string {
   return ''
 }
 
-/** `Read` renders every returned line as `<number>\t<content>`. A source line
- *  is one physical line, so a number at a line START is always a real line
- *  number — a tab inside a source line never begins a new physical line. */
-const NUMBERED_LINE_RE = /^(\d+)\t/gm
+/** One rendered line as either engine's `Read` returns it: `<n>\t<text>`
+ *  (both, as measured) or `<n>→<text>` (older claude builds), after optional
+ *  padding. Deliberately NOT a multiline regex: JS `^` under the `m` flag also
+ *  matches after `\r`, U+2028 and U+2029, all of which can sit INSIDE one
+ *  physical line of PR-controlled content — so a crafted line could otherwise
+ *  forge a "line N was returned" record. Results are split on `\n` only. */
+const NUMBERED_LINE_RE = /^ *(\d+)(?:\t|\u2192)(.*)$/s
+
+/** The `[lineNumber, text]` pairs a `Read` result rendered, split on `\n`
+ *  only — the one line separator both engines' `Read` uses. */
+export function numberedLines(content: unknown): Array<readonly [number, string]> {
+  const out: Array<readonly [number, string]> = []
+  for (const line of contentText(content).split('\n')) {
+    const m = NUMBERED_LINE_RE.exec(line)
+    if (m !== null) out.push([Number(m[1]), m[2] as string])
+  }
+  return out
+}
+
+/** What the coverage checks compare a returned line against: a `\r` (a CRLF
+ *  file) or trailing whitespace an engine may normalise away says nothing
+ *  about WHICH line was shown, so neither may turn a real read into a miss. */
+export function sameLine(returned: string, actual: string): boolean {
+  const norm = (x: string): string => x.replace(/[\r\u2028\u2029]/g, '').trimEnd()
+  return norm(returned) === norm(actual)
+}
+
+/** `text`'s physical lines, 1-based, as `Read` numbers them. */
+export function linesOf(text: string): string[] {
+  const lines = text.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
 
 /**
  * Derives, from kimi's own stdout transcript, which lines of `briefText` (the
@@ -117,6 +146,7 @@ const NUMBERED_LINE_RE = /^(\d+)\t/gm
  */
 export function briefReadCoverage(stdout: string, briefPath: string, briefText: string): BriefCoverage {
   const totalLines = readableLineCount(briefText)
+  const actual = linesOf(briefText)
   const pending = new Map<string, number | undefined>()
   const seen = new Set<number>()
   const reads: BriefRead[] = []
@@ -135,9 +165,11 @@ export function briefReadCoverage(stdout: string, briefPath: string, briefText: 
       pending.delete(ev.tool_call_id)
       let startedAt: number | undefined
       let endedAt: number | undefined
-      for (const m of contentText(ev.content).matchAll(NUMBERED_LINE_RE)) {
-        const n = Number(m[1])
-        if (n < 1 || n > totalLines) continue
+      for (const [n, text] of numberedLines(ev.content)) {
+        // A line counts only if the text returned under its number IS that
+        // line of the brief — the brief carries the PR's own description, so
+        // a number alone is something the PR could forge.
+        if (n < 1 || n > totalLines || !sameLine(text, actual[n - 1] as string)) continue
         startedAt ??= n
         endedAt = n
         seen.add(n)
@@ -207,23 +239,19 @@ function claudeItems(ev: Record<string, unknown>): ClaudeContentItem[] {
     : []
 }
 
-/** A numbered line as either engine's `Read` renders it: `<n>\t` (both, as
- *  measured) or `<n>→` (older claude builds), after optional padding. */
-const ANY_NUMBERED_LINE_RE = /^ *(\d+)(?:\t|→)/gm
-
 /**
- * Every file the transcript shows a `Read` of, mapped to the line numbers its
- * results actually returned — for EITHER engine's stream-json envelope, told
+ * Every file the transcript shows a `Read` of, mapped to the numbered lines
+ * (number AND text) its results actually returned — for EITHER engine's stream-json envelope, told
  * apart by shape. A call with no matching result (a crash mid-call) and a
  * result with no numbered lines (an error such as "file too large") both
  * contribute nothing: only a line the model was shown counts as read.
  */
-export function readLinesByPath(stdout: string): Map<string, Set<number>> {
+export function readLinesByPath(stdout: string): Map<string, Array<readonly [number, string]>> {
   const pending = new Map<string, string>()
-  const out = new Map<string, Set<number>>()
+  const out = new Map<string, Array<readonly [number, string]>>()
   const record = (path: string, content: unknown): void => {
-    const lines = out.get(path) ?? new Set<number>()
-    for (const m of contentText(content).matchAll(ANY_NUMBERED_LINE_RE)) lines.add(Number(m[1]))
+    const lines = out.get(path) ?? []
+    lines.push(...numberedLines(content))
     out.set(path, lines)
   }
   for (const line of stdout.split('\n')) {

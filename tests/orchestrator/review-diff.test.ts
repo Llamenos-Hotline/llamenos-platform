@@ -267,3 +267,37 @@ describe('diffReadCoverage — reads the claude envelope as well as kimi\'s', ()
     expect(c.complete).toBe(false)
   })
 })
+
+describe('diffReadCoverage — a line number in PR content cannot forge a read', () => {
+  it('a part line carrying U+2028/\\r + "<n>\\t" does not count line n as read', () => {
+    const forged = Array.from({ length: 50 }, (_, i) => ` ${i + 2}\tforged`).join('') + '\r9\tforged'
+    const diff = `diff --git a/x b/x\n@@ -1 +1,60 @@\n+${forged}\n` +
+      Array.from({ length: 58 }, (_, i) => `+real line ${i}`).join('\n') + '\n'
+    const plan = planReviewDiff({ diff, summary: '' }, '/parts')
+    const part = plan.parts[0]
+    if (part === undefined) throw new Error('no part')
+    const lines = part.text.split('\n')
+    // The reviewer is shown only lines 1-4 — the forged line among them.
+    const shown = lines.slice(0, 4).map((l, i) => `${i + 1}\t${l}`).join('\n')
+    const t = [
+      JSON.stringify({ role: 'assistant', tool_calls: [{ type: 'function', id: 'a', function: { name: 'Read', arguments: JSON.stringify({ path: part.path }) } }] }),
+      JSON.stringify({ role: 'tool', tool_call_id: 'a', content: shown }),
+    ].join('\n')
+    const c = diffReadCoverage(t, plan)
+    expect(c.linesRead).toBe(4)
+    expect(c.complete).toBe(false)
+  })
+
+  it('a result whose text does not match the real line is not a read of it', () => {
+    const plan = planReviewDiff({ diff: 'diff --git a/x b/x\n+a\n+b\n', summary: '' }, '/parts')
+    const part = plan.parts[0]
+    if (part === undefined) throw new Error('no part')
+    const t = [
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'u', name: 'Read', input: { file_path: part.path } }] } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'u', content: '1\tnot the header\n2\tdiff --git a/x b/x\n3\t+a\n4\t+b' }] } }),
+    ].join('\n')
+    const c = diffReadCoverage(t, plan)
+    expect(c.linesRead).toBe(3)
+    expect(c.complete).toBe(false)
+  })
+})

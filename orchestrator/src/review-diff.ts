@@ -36,7 +36,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
-import { readableLineCount, readLinesByPath } from './brief-coverage.js'
+import { linesOf, readableLineCount, readLinesByPath, sameLine } from './brief-coverage.js'
 
 // ---------------------------------------------------------------------------
 // The page every part must fit inside — measured, not chosen.
@@ -338,16 +338,19 @@ function gaps(seen: ReadonlySet<number>, total: number): Array<readonly [number,
  * returned to the model — kimi's and claude's stream-json envelopes both.
  */
 export function diffReadCoverage(stdout: string, plan: ReviewDiffPlan): DiffCoverage {
-  const read = readLinesByPath(stdout)
-  const byPath = new Map<string, Set<number>>()
-  for (const [p, lines] of read) {
+  const byPath = new Map<string, Array<readonly [number, string]>>()
+  for (const [p, lines] of readLinesByPath(stdout)) {
     const key = normalize(p)
-    const into = byPath.get(key) ?? new Set<number>()
-    for (const n of lines) into.add(n)
-    byPath.set(key, into)
+    byPath.set(key, [...(byPath.get(key) ?? []), ...lines])
   }
   const parts = plan.parts.map((part): PartCoverage => {
-    const seen = new Set([...(byPath.get(normalize(part.path)) ?? [])].filter((n) => n >= 1 && n <= part.lineCount))
+    // A line is read only when the text returned under its number IS that
+    // line of the part. The parts are PR content, so a bare number in a
+    // result is something the PR itself could forge.
+    const actual = linesOf(part.text)
+    const seen = new Set((byPath.get(normalize(part.path)) ?? [])
+      .filter(([n, text]) => n >= 1 && n <= part.lineCount && sameLine(text, actual[n - 1] as string))
+      .map(([n]) => n))
     return { name: part.name, totalLines: part.lineCount, linesRead: seen.size, missing: gaps(seen, part.lineCount) }
   })
   const totalLines = parts.reduce((n, p) => n + p.totalLines, 0)
