@@ -2,11 +2,11 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
-import { generateKeypairAndLoad, generateBackupFromState, generateRecoveryKey, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
+import { generateKeypairAndLoad, generateRecoveryKey, createAuthToken, type GenerateAndLoadResult } from '@/lib/platform'
 import { isValidPin, markUnlocked } from '@/lib/key-manager'
 import { initializeUserIdentity } from '@/lib/user-identity'
 import { bootstrapAdmin } from '@/lib/api'
-import { downloadBackupFile, type BackupFile } from '@/lib/backup'
+import { useBackupSave } from '@/lib/use-backup-save'
 import { setLanguage } from '@/lib/i18n'
 import { LANGUAGES } from '@shared/languages'
 import { PinInput } from '@/components/pin-input'
@@ -53,8 +53,7 @@ export function AdminBootstrap({ onComplete }: AdminBootstrapProps) {
   // Recovery key & backup
   const [recoveryKeyStr, setRecoveryKeyStr] = useState('')
   const [backupAcknowledged, setBackupAcknowledged] = useState(false)
-  const [backupDownloaded, setBackupDownloaded] = useState(false)
-  const [backupError, setBackupError] = useState('')
+  const { savedPath: backupSavedPath, error: backupError, save: saveBackup } = useBackupSave()
 
   const stepHeadingRef = useRef<HTMLHeadingElement>(null)
   const langGroupRef = useRef<HTMLDivElement>(null)
@@ -159,21 +158,7 @@ export function AdminBootstrap({ onComplete }: AdminBootstrapProps) {
 
   async function downloadBackup() {
     if (!genResult) return
-    // Backup created entirely in Rust — device key never enters JS.
-    // `Continue to Setup` is gated on this succeeding, so a failure here would
-    // otherwise leave a fresh self-hosted install unable to finish its setup
-    // wizard with nothing on screen to explain why (#1709).
-    setBackupError('')
-    try {
-      const backupJson = await generateBackupFromState(confirmedPin, recoveryKeyStr)
-      downloadBackupFile(JSON.parse(backupJson) as BackupFile)
-      setBackupDownloaded(true)
-      toast(t('onboarding.backupDownloaded'), 'success')
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
-      setBackupError(t('onboarding.backupFailed', { reason }))
-      toast(t('onboarding.backupFailed', { reason }), 'error')
-    }
+    await saveBackup(confirmedPin, recoveryKeyStr)
   }
 
   async function handleComplete() {
@@ -364,10 +349,21 @@ export function AdminBootstrap({ onComplete }: AdminBootstrapProps) {
           </div>
 
           {/* Download backup */}
-          <Button variant="outline" onClick={downloadBackup} className="w-full">
+          <Button data-testid="bootstrap-download-backup" variant="outline" onClick={downloadBackup} className="w-full">
             <Download className="h-4 w-4" />
             {t('onboarding.downloadBackup')}
           </Button>
+
+          {backupSavedPath && (
+            <div
+              data-testid="backup-saved-path"
+              role="status"
+              className="flex items-start gap-2 rounded-lg border border-green-600/40 bg-green-50 p-3 text-xs text-green-800 dark:bg-green-950/20 dark:text-green-300"
+            >
+              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="break-all">{t('onboarding.backupSavedTo', { path: backupSavedPath })}</span>
+            </div>
+          )}
 
           {backupError && (
             <div
@@ -395,7 +391,7 @@ export function AdminBootstrap({ onComplete }: AdminBootstrapProps) {
             onClick={handleComplete}
             className="w-full"
             size="lg"
-            disabled={!backupDownloaded || !backupAcknowledged}
+            disabled={!backupSavedPath || !backupAcknowledged}
           >
             {t('setup.bootstrap.continueSetup', { defaultValue: 'Continue to Setup' })}
             <ArrowRight className="h-4 w-4" />

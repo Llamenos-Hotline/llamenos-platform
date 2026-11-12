@@ -55,6 +55,21 @@ Feature: Invite a volunteer and redeem the invite on a fresh desktop install
     And the server should report the invite as already used
     And the invited volunteer should now be a member of the invite's hub
 
+  Scenario: The encrypted backup is only counted once it has been saved, and its location is shown
+    Given an admin has created an invite for a new volunteer
+    And the desktop app is simulating a packaged build with no server configured
+    When I load the app
+    And I replace the server address with this app's backend and connect
+    And the volunteer clicks the invite deep link
+    Then I should see the welcome screen for the invited volunteer
+    When I create my PIN
+    And I dismiss the save dialog for my encrypted backup
+    Then no encrypted backup is saved and I cannot continue
+    When the write of my encrypted backup fails
+    Then no encrypted backup is saved and I cannot continue
+    When I choose a location for my encrypted backup
+    Then my encrypted backup is saved and its location is shown
+
   Scenario: An invite link for a different server is refused without sending the code
     Given an admin has created an invite for a new volunteer
     And the desktop app is simulating a packaged build with no server configured

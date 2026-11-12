@@ -1,11 +1,18 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import {
   loginAsAdmin,
   Timeouts,
 } from './helpers'
 
 test.describe('Offline Resilience', () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, consoleWatch }) => {
+    // These tests take the browser offline on purpose; a poll in flight when it
+    // goes offline fails with this and Chromium logs it.
+    consoleWatch.expect({
+      message: /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED$/,
+      source: /\/api\//,
+      reason: 'the test takes the browser offline; an API request in flight fails',
+    })
     await loginAsAdmin(page)
   })
 

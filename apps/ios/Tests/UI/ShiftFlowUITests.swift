@@ -106,8 +106,10 @@ final class ShiftFlowUITests: BaseUITest {
             [
                 "id": shiftId,
                 "encryptedName": "Schedule \(shiftId.prefix(8))",
+                // start == end is the app's 24-hour shift. "23:59" would leave the
+                // last minute of every UTC day off shift (#2693).
                 "startTime": "00:00",
-                "endTime": "23:59",
+                "endTime": "00:00",
                 "days": [0, 1, 2, 3, 4, 5, 6],
                 "userPubkeys": [],
             ],

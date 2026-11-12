@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, mockConfigWithHub, navigateViaSpa, Timeouts } from './helpers'
 
 /**

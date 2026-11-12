@@ -1,7 +1,12 @@
 #!/bin/bash
 export PLATFORM=bun
 export PORT=3000
-export DATABASE_URL="postgresql://llamenos:dev@localhost:5432/llamenos"
+# The database scripts/lib/worktree-db.sh resolves — the same one `bun run dev:server` and the
+# BDD runner use: an explicit DATABASE_URL (environment or .env) wins, otherwise this
+# worktree's own database if it has one. This launcher used to pin the shared `llamenos`
+# database for every worktree regardless (#2659). Run it from the repository root.
+source "$(dirname "$0")/scripts/lib/worktree-db.sh"
+worktree_db_export --ensure || exit 1
 export PG_POOL_SIZE=5
 export ADMIN_PUBKEY="79215a4c04f08fcd817c6f820c87169beb8cddf96dfa590a1315556b78af9183"
 # The X25519 HPKE recipient derived from the same test seed (tests/api-helpers.ts

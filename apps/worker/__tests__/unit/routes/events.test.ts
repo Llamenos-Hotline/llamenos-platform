@@ -379,8 +379,9 @@ describe('POST /events/:id/records', () => {
   it('links record and returns 201', async () => {
     const { app, mockCases, auditLog } = makeApp({ permissions: ['events:link'] })
     const recordId = '550e8400-e29b-41d4-a716-446655440001'
-    const linked = { id: 'link-1', eventId: 'ev-1', recordId }
-    mockCases.linkEvent.mockResolvedValue(linked)
+    const linkedAt = new Date('2026-11-01T12:00:00.000Z')
+    // A `case_events` row: the record is keyed `caseId` there.
+    mockCases.linkEvent.mockResolvedValue({ caseId: recordId, eventId: 'ev-1', linkedAt, linkedBy: 'a'.repeat(64) })
 
     const res = await app.request('/ev-1/records', {
       method: 'POST',
@@ -389,6 +390,8 @@ describe('POST /events/:id/records', () => {
     })
 
     expect(res.status).toBe(201)
+    // …and `recordId` on the wire, as `caseEventSchema` declares.
+    expect(await res.json()).toEqual({ recordId, eventId: 'ev-1', linkedAt: linkedAt.toISOString(), linkedBy: 'a'.repeat(64) })
     expect(mockCases.linkEvent).toHaveBeenCalledWith(recordId, 'ev-1', 'a'.repeat(64), 'hub-1')
     expect(auditLog).toHaveBeenCalledOnce()
   })
@@ -436,12 +439,13 @@ describe('DELETE /events/:id/records/:recordId', () => {
 describe('GET /events/:id/records', () => {
   it('returns linked records', async () => {
     const { app, mockCases } = makeApp({ permissions: ['events:read'] })
-    mockCases.listEventRecords.mockResolvedValue([{ id: 'link-1' }])
+    const linkedAt = new Date('2026-11-01T12:00:00.000Z')
+    mockCases.listEventRecords.mockResolvedValue([{ caseId: 'rec-1', eventId: 'ev-1', linkedAt, linkedBy: 'pk-1' }])
 
     const res = await app.request('/ev-1/records')
     expect(res.status).toBe(200)
     const json = await res.json() as Record<string, unknown>
-    expect((json.links as unknown[]).length).toBe(1)
+    expect(json.links).toEqual([{ recordId: 'rec-1', eventId: 'ev-1', linkedAt: linkedAt.toISOString(), linkedBy: 'pk-1' }])
     expect(mockCases.listEventRecords).toHaveBeenCalledWith('ev-1', 'hub-1')
   })
 

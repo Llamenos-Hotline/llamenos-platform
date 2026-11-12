@@ -349,7 +349,7 @@ describe('ContactsService', () => {
       db.$setUpdateResult([{ id: 'group-1', memberCount: 2 }])
 
       const result = await service.addMember('group-1', { contactId: 'contact-1', isPrimary: false })
-      expect(result.added).toBe(true)
+      expect(result.member).toEqual({ contactId: 'contact-1', isPrimary: false })
       expect(result.memberCount).toBe(2)
     })
 
@@ -376,7 +376,7 @@ describe('ContactsService', () => {
       db.$setUpdateResult([{ id: 'group-1', memberCount: 0 }])
 
       const result = await service.removeMember('group-1', 'contact-1')
-      expect(result.removed).toBe(true)
+      expect(result.memberCount).toBe(0)
     })
   })
 

@@ -73,7 +73,8 @@ planned follow-up, once this command is proven on real PRs.
    This is the one call that cannot use the operator's `gh` credentials: the Checks API
    refuses a PAT, so it authenticates as the `llamenos-fleet-review` GitHub App (#1483) —
    see "Credentials" below.
-6. **Merges, if ready.** Re-reads the PR's required checks (`gh pr checks <pr> --required`)
+6. **Merges, if ready — only with `--merge` (#2742).** Without it the command stops after step 5
+   and says so (`view-only`). With it, re-reads the PR's required checks (`gh pr checks <pr> --required`)
    and merges (`--squash --delete-branch`) only if: the head has not moved since the review,
    `fleet/review` itself is passing, and every OTHER required check is green. A bot-authored
    PR (the fleet's own workers) always stops here with a message instead of merging — a
@@ -125,10 +126,19 @@ for it, a required reviewer that cannot be run at all.
 ## Usage
 
 ```bash
-bun orchestrator/src/cli.ts review-and-merge <pr-number>
+bun orchestrator/src/cli.ts review-and-merge <pr-number> [--merge]
 # or, once linked:
-llamenos-fleet review-and-merge <pr-number>
+llamenos-fleet review-and-merge <pr-number> [--merge]
 ```
 
-Exit code 0 only for an actual merge (or a PR already merged); non-zero for every refusal,
-so it is safe to script around.
+**View-only by default, and bounded (#2742).** Without `--merge` the command
+reviews, records the verdict, prints that it did **not** merge and why, and exits 0
+(`view-only`). `--merge` is the one opt-in; only the operator's own terminal use should
+pass it — never automation and never anything running inside a verification. It also
+refuses (exit 1, `guard-refused`, before any review or merge) when: it is started inside
+a verification (`FLEET_IN_VERIFICATION` is set — the recursion that reached 44,158
+processes on 2026-11-11); the same head SHA has already been processed 5 times; or another
+run is already processing that PR. The PR must be a bare number.
+
+Exit code 0 for an actual merge, a PR already merged, or a `view-only` run; non-zero for every
+refusal, so it is safe to script around.

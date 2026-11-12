@@ -2,6 +2,15 @@ import { type Page, type APIRequestContext, expect } from '@playwright/test'
 import { devSurfaceSecret } from './dev-surface-secret'
 import { TestIds } from './test-ids'
 import { generateTestKeypair, redeemInviteViaApi } from './api-helpers'
+import type { z } from 'zod'
+import type {
+  activeCallsResponseSchema,
+  callPresenceResponseSchema,
+} from '@protocol/schemas/calls'
+import type { ConversationListResponse } from '@protocol/schemas/conversations'
+import type { HubIncidentListResponse } from '@protocol/schemas/incidents'
+import type { ShiftStatus, shiftListResponseSchema } from '@protocol/schemas/shifts'
+import type { UserListResponse } from '@protocol/schemas/users'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
 /** @deprecated Use ADMIN_SEED */
@@ -553,6 +562,63 @@ export async function resetTestState(request: APIRequestContext) {
 }
 
 /**
+ * The hub-scoped reads the app makes on its own, on a timer, from every page —
+ * whatever the spec is about: the dashboard's live-call poll and presence list,
+ * the shift status and schedule, the volunteer roster, open incidents and the
+ * active conversation list.
+ *
+ * A spec that pins a SYNTHETIC hub (`mockConfigWithHub`) names a hub the real
+ * backend has never heard of, so these reads 404 on every poll for the whole
+ * test and each failure is logged by the app as a `console.error`. That was
+ * ~544 console errors per desktop run (#1858) — an all-noise floor that hid any
+ * genuine page error. Each body is typed against the protocol schema the real
+ * route answers with, so a drift in the wire shape is a type error here rather
+ * than a silently wrong mock.
+ */
+type BackgroundHubReads = {
+  readonly 'calls/active': z.infer<typeof activeCallsResponseSchema>
+  readonly 'calls/presence': z.infer<typeof callPresenceResponseSchema>
+  readonly shifts: z.infer<typeof shiftListResponseSchema>
+  readonly 'shifts/my-status': ShiftStatus
+  readonly users: UserListResponse
+  readonly incidents: HubIncidentListResponse
+  readonly conversations: ConversationListResponse
+}
+
+const BACKGROUND_HUB_READS: BackgroundHubReads = {
+  'calls/active': { calls: [] },
+  'calls/presence': { users: [] },
+  shifts: { shifts: [] },
+  'shifts/my-status': { onShift: false, clockedIn: false, clockedInAt: null, currentShift: null, nextShift: null },
+  users: { users: [] },
+  incidents: { incidents: [] },
+  conversations: { conversations: [], total: 0, page: 1, limit: 200 },
+}
+
+/**
+ * Answer the app's background reads for ONE synthetic hub with an empty, valid
+ * response. Scoped to `hubId` so a spec that also talks to a real hub is
+ * untouched. Registered before any feature-specific route, so a spec that
+ * exercises one of these endpoints overrides it (Playwright runs the
+ * most-recently-registered matching route first).
+ */
+async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> {
+  for (const [path, body] of Object.entries(BACKGROUND_HUB_READS)) {
+    await page.route(new RegExp(`/api/hubs/${hubId}/${path}(\\?.*)?$`), async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback()
+        return
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(body),
+      })
+    })
+  }
+}
+
+/**
  * Pin the app to one known hub.
  *
  * The active hub comes from the AUTHENTICATED `GET /api/hubs` — the user's own
@@ -564,6 +630,7 @@ export async function resetTestState(request: APIRequestContext) {
  * Tests that depend on hub-scoped routes (hub-communications, etc.) need this.
  */
 export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promise<void> {
+  await mockBackgroundHubReads(page, hubId)
   const hub = {
     id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active',
     createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',

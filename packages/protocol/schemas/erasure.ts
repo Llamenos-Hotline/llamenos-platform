@@ -106,6 +106,13 @@ export const erasureRequestResponseSchema = z.object({
   request: erasureRequestSchema,
 })
 
+/** `GET /erasure/me`: the caller's own request, or `null` when they have none. */
+export const myErasureRequestResponseSchema = z.object({
+  request: erasureRequestSchema.nullable(),
+})
+
+export type MyErasureRequestResponse = z.infer<typeof myErasureRequestResponseSchema>
+
 export const erasureRequestListResponseSchema = z.object({
   requests: z.array(erasureRequestSchema),
   total: z.number(),

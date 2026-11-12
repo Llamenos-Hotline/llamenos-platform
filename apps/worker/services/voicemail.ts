@@ -109,7 +109,6 @@ async function transcribeVoicemail(params: {
     callId: callSid,
     authorPubkey: 'system:voicemail',
     encryptedContent,
-    authorEnvelope: {},
     adminEnvelopes: readerEnvelopes,
   })
 

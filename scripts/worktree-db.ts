@@ -29,11 +29,35 @@
  *   bun scripts/worktree-db.ts status
  *   bun scripts/worktree-db.ts ensure [--opt-in]   create/migrate this worktree's DB
  *   bun scripts/worktree-db.ts use-isolated        opt in, then ensure
- *   bun scripts/worktree-db.ts use-shared          opt out (keeps the DB, uses `llamenos`)
+ *   bun scripts/worktree-db.ts use-shared          opt out (keeps the DB, uses `llamenos`) — refused
+ *                                                  for fleet worktrees, and for any linked worktree
+ *                                                  unless LLAMENOS_ALLOW_SHARED_DB=1
  *   bun scripts/worktree-db.ts reset --yes         drop + recreate this worktree's DB
  *   bun scripts/worktree-db.ts teardown --yes      drop this worktree's DB, forget the opt-in
  *   bun scripts/worktree-db.ts sweep [--drop] [--quiet] [--grace-hours N] [name...]
  *   bun scripts/worktree-db.ts resolve             machine-readable; used by the bash lib
+ *   DATABASE_URL=... bun scripts/worktree-db.ts check-url   refuse a URL this worktree may not use
+ *
+ * WHO MAY USE THE SHARED DATABASE (#2659). Two fleet workers reset the shared
+ * `llamenos` database in one night, both told not to: a prohibition in a brief
+ * is a request, and the database was unprotected. So the default is inverted —
+ * the shared database is for the operator's primary checkout, and everything
+ * else gets its own:
+ *
+ *   primary checkout      unchanged: its marker, else the shared database with a warning
+ *   linked worktree       its own database by default (provisioned on first use). It may
+ *                         still choose the shared one, but only with
+ *                         LLAMENOS_ALLOW_SHARED_DB=1 in the environment — a deliberate act
+ *   fleet worktree        (branch `fleet/...` or directory `llamenos-fleet-...`) its own
+ *                         database ALWAYS. No marker, flag or environment variable lifts
+ *                         that: the shared database is not reachable through any path this
+ *                         repo provides, and `check-url` refuses an explicit URL naming it
+ *
+ * This cannot stop a process that types the shared connection string into `psql`
+ * itself — Postgres sees one role and one password. It makes every sanctioned
+ * path (dev server, BDD runner, migrations, the integration wrapper) land on the
+ * worker's own database, so reaching the shared one takes a deliberate bypass
+ * rather than an unset variable.
  */
 import { SQL } from 'bun'
 import { createHash } from 'node:crypto'
@@ -350,9 +374,114 @@ function makeRegistrationProbe(): SweepProbes['registration'] {
   }
 }
 
-// ── This worktree ────────────────────────────────────────────────────────────
+// ── Who may use the shared database ──────────────────────────────────────────
 
-type Mode = 'isolated' | 'shared'
+/** Set to `1` in the environment to let a NON-fleet linked worktree use the shared database. */
+export const ALLOW_SHARED_ENV = 'LLAMENOS_ALLOW_SHARED_DB'
+
+/** The dev Postgres (deploy/docker/docker-compose.dev.yml) listens here. */
+const SHARED_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+const SHARED_PORT = 5432
+
+export interface WorktreeFacts {
+  /** True for any worktree made by `git worktree add`; false for the primary checkout. */
+  linked: boolean
+  /** Short branch name, or null on a detached HEAD. */
+  branch: string | null
+  /** Final path segment of the worktree root. */
+  dirName: string
+}
+
+export interface WorktreePolicy {
+  linked: boolean
+  /** A dispatched fleet worker's worktree: never allowed the shared database. */
+  fleet: boolean
+}
+
+export function worktreePolicy(facts: WorktreeFacts): WorktreePolicy {
+  const fleet =
+    facts.linked && ((facts.branch ?? '').startsWith('fleet/') || facts.dirName.startsWith('llamenos-fleet-'))
+  return { linked: facts.linked, fleet }
+}
+
+export type Mode = 'isolated' | 'shared'
+export type ModeSource = 'marker' | 'default' | 'policy' | 'none'
+
+export interface ModeDecision {
+  /** `unset` only for a primary checkout that has not chosen. */
+  mode: Mode | 'unset'
+  /** Where it came from. `default`/`policy` mean no marker says so: the caller provisions and records it. */
+  source: ModeSource
+}
+
+/**
+ * The one decision about which database a worktree uses, from its marker and
+ * its policy. Pure, so every row of the table above is a test.
+ */
+export function decideMode(marker: Mode | null, policy: WorktreePolicy): ModeDecision {
+  if (policy.fleet) return { mode: 'isolated', source: marker === 'isolated' ? 'marker' : 'policy' }
+  if (marker !== null) return { mode: marker, source: 'marker' }
+  if (policy.linked) return { mode: 'isolated', source: 'default' }
+  return { mode: 'unset', source: 'none' }
+}
+
+/**
+ * True when `url` points at a database no worktree owns: the shared dev
+ * database, or any other name this tool protects (`postgres`, the templates),
+ * on the dev Postgres. A deployed target reached through a tunnel is on another
+ * port and is not this.
+ */
+export function isSharedDatabaseUrl(url: string): boolean {
+  let u: URL
+  try {
+    u = new URL(url)
+  } catch {
+    return false
+  }
+  if (u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') return false
+  if (!SHARED_HOSTS.has(u.hostname.toLowerCase())) return false
+  if ((u.port === '' ? SHARED_PORT : Number(u.port)) !== SHARED_PORT) return false
+  let name: string
+  try {
+    name = decodeURIComponent(u.pathname.replace(/^\//, ''))
+  } catch {
+    return false
+  }
+  return isProtected(name)
+}
+
+export type SharedAccess = { ok: true } | { ok: false; reason: string }
+
+/**
+ * May a process in this worktree use `url`? Anything that is not the shared
+ * dev database is fine. The message never contains the URL (it has a password).
+ */
+export function checkSharedAccess(
+  url: string,
+  policy: WorktreePolicy,
+  allowShared: string | undefined,
+): SharedAccess {
+  if (!isSharedDatabaseUrl(url) || !policy.linked) return { ok: true }
+  if (policy.fleet) {
+    return {
+      ok: false,
+      reason:
+        'this is a fleet worker worktree and the database is the SHARED dev database. Fleet workers never use it: ' +
+        'a peer worker may be mid-run on it. Use your own: unset DATABASE_URL (the dev server and test runners ' +
+        'provision llamenos_wt_* for you) or run `bun scripts/worktree-db.ts ensure`.',
+    }
+  }
+  if (allowShared === '1') return { ok: true }
+  return {
+    ok: false,
+    reason:
+      'this is a linked worktree and the database is the SHARED dev database, which every other worktree and the ' +
+      `operator also use. Unset DATABASE_URL to get this worktree's own database, or set ${ALLOW_SHARED_ENV}=1 to ` +
+      'use the shared one on purpose.',
+  }
+}
+
+// ── This worktree ────────────────────────────────────────────────────────────
 
 interface Worktree {
   root: string
@@ -361,6 +490,7 @@ interface Worktree {
    *  is never tracked and disappears with `git worktree remove`. */
   markerPath: string
   dbName: string
+  policy: WorktreePolicy
 }
 
 function git(root: string, args: string[]): string {
@@ -373,7 +503,16 @@ function currentWorktree(): Worktree {
   const root = realpathSync(join(import.meta.dir, '..'))
   const commonDir = realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
   const markerPath = git(root, ['rev-parse', '--path-format=absolute', '--git-path', 'llamenos-worktree-db'])
-  return { root, commonDir, markerPath, dbName: deriveDatabaseName(root) }
+  const gitDir = realpathSync(git(root, ['rev-parse', '--path-format=absolute', '--git-dir']))
+  const branchResult = Bun.spawnSync(['git', '-C', root, 'symbolic-ref', '--short', '-q', 'HEAD'])
+  const branch = branchResult.exitCode === 0 ? branchResult.stdout.toString().trim() || null : null
+  const policy = worktreePolicy({ linked: gitDir !== commonDir, branch, dirName: basename(root) })
+  return { root, commonDir, markerPath, dbName: deriveDatabaseName(root), policy }
+}
+
+/** This worktree's database choice: its marker, overridden by its policy. */
+function decide(wt: Worktree): ModeDecision {
+  return decideMode(readMode(wt), wt.policy)
 }
 
 function readMode(wt: Worktree): Mode | null {
@@ -401,6 +540,8 @@ export const PG_PORT = 5432
 
 /** Exit code for "the dev Postgres is not reachable": setup warns and carries on. */
 const EXIT_UNREACHABLE = 3
+/** A request for the shared database that this worktree's policy forbids (#2659). */
+const EXIT_REFUSED = 4
 
 class Unreachable extends Error {}
 
@@ -717,8 +858,16 @@ async function ensureTemplate(sql: SQL, root: string, hash: string): Promise<str
  */
 async function ensure(optIn: boolean): Promise<void> {
   const wt = currentWorktree()
-  let mode = readMode(wt)
-  if (mode === null && optIn) {
+  const decision = decide(wt)
+  let mode = decision.mode
+  // A worktree that has not chosen is switched only when it asked (--opt-in) or its
+  // policy chooses for it (#2659): linked worktrees are isolated by default, fleet
+  // worktrees by rule. A primary checkout mid-task is never switched silently.
+  if (decision.source !== 'marker' && decision.mode === 'isolated') {
+    writeMode(wt, 'isolated')
+    log(`this worktree uses its own database, ${wt.dbName}.`)
+    log(`the shared "${SHARED_DB}" database is untouched; a server already running keeps its database until restarted.`)
+  } else if (mode === 'unset' && optIn) {
     writeMode(wt, 'isolated')
     mode = 'isolated'
     log(`this worktree now uses its own database, ${wt.dbName}.`)
@@ -802,32 +951,63 @@ async function ensure(optIn: boolean): Promise<void> {
   }
 }
 
-/** Machine-readable for scripts/lib/worktree-db.sh: `<mode> <database> <user> <host> <port>`. */
+/**
+ * Machine-readable for scripts/lib/worktree-db.sh:
+ * `<mode> <database> <user> <host> <port> <source>`. `source` is `marker`, `default`,
+ * `policy` or `none`; anything but `marker` on an isolated worktree means the database
+ * has not been provisioned for it yet, and the caller must run `ensure`.
+ */
 function resolve(): void {
   let mode: Mode | 'unset' = 'unset'
+  let source: ModeSource = 'none'
   let database = SHARED_DB
   try {
     const wt = currentWorktree()
-    const m = readMode(wt)
-    if (m === 'isolated') {
-      mode = 'isolated'
-      database = wt.dbName
-    } else if (m === 'shared') {
-      mode = 'shared'
-    }
+    const d = decide(wt)
+    mode = d.mode
+    source = d.source
+    if (mode === 'isolated') database = wt.dbName
   } catch (err) {
     // Not inside a git worktree (e.g. an exported tarball): there is no marker to read.
     log(`cannot determine the worktree (${errorMessage(err)}) — treating it as not opted in`)
   }
-  console.log(`${mode} ${database} ${PG_USER} ${PG_HOST} ${PG_PORT}`)
+  console.log(`${mode} ${database} ${PG_USER} ${PG_HOST} ${PG_PORT} ${source}`)
+}
+
+/**
+ * Exit 0 if this worktree may use the database at $DATABASE_URL (or the variable
+ * named by `--env`), EXIT_REFUSED with the reason otherwise. The URL travels in the
+ * environment, never argv: it carries a password.
+ */
+function checkUrl(envName: string): void {
+  const url = process.env[envName]
+  if (!url) {
+    log(`ERROR: ${envName} is not set`)
+    process.exit(2)
+  }
+  let policy: WorktreePolicy
+  try {
+    policy = currentWorktree().policy
+  } catch {
+    // No git (an exported tree, a CI image): there is no worktree to protect.
+    return
+  }
+  const verdict = checkSharedAccess(url, policy, process.env[ALLOW_SHARED_ENV])
+  if (!verdict.ok) {
+    log(`REFUSED: ${verdict.reason}`)
+    process.exit(EXIT_REFUSED)
+  }
 }
 
 async function status(): Promise<void> {
   const wt = currentWorktree()
-  const mode = readMode(wt)
+  const { mode, source } = decide(wt)
   const hash = schemaHash(wt.root)
-  console.log(`worktree  ${wt.root}`)
-  console.log(`mode      ${mode ?? 'not chosen — using the SHARED database'}  (marker: ${wt.markerPath})`)
+  const kind = wt.policy.fleet ? 'fleet worktree' : wt.policy.linked ? 'linked worktree' : 'primary checkout'
+  console.log(`worktree  ${wt.root}  (${kind})`)
+  console.log(
+    `mode      ${mode === 'unset' ? 'not chosen — using the SHARED database' : mode}${source === 'policy' || source === 'default' ? `  (${source}: not yet provisioned — ensure creates it)` : ''}  (marker: ${wt.markerPath})`,
+  )
   console.log(`database  ${mode === 'isolated' ? wt.dbName : SHARED_DB}${mode !== 'isolated' ? `  (own database would be ${wt.dbName})` : ''}`)
   console.log(`schema    ${hash}  (drizzle/migrations + scripts/run-migrations.ts)`)
   let sql: SQL
@@ -854,6 +1034,13 @@ async function status(): Promise<void> {
 
 async function setMode(mode: Mode): Promise<void> {
   const wt = currentWorktree()
+  if (mode === 'shared') {
+    const refusal = checkSharedAccess(`postgres://${PG_HOST}:${PG_PORT}/${SHARED_DB}`, wt.policy, process.env[ALLOW_SHARED_ENV])
+    if (!refusal.ok) {
+      log(`REFUSED use-shared: ${refusal.reason}`)
+      process.exit(EXIT_REFUSED)
+    }
+  }
   writeMode(wt, mode)
   if (mode === 'isolated') {
     log(`opted in: this worktree uses ${wt.dbName}. Restart any running dev server to pick it up.`)
@@ -885,7 +1072,7 @@ async function dropOwn(wt: Worktree, sql: SQL): Promise<boolean> {
 
 async function reset(): Promise<void> {
   const wt = currentWorktree()
-  if (readMode(wt) !== 'isolated') throw new Error('this worktree is not using its own database — nothing to reset')
+  if (decide(wt).mode !== 'isolated') throw new Error('this worktree is not using its own database — nothing to reset')
   const sql = await connect(wt.root, 'postgres')
   try {
     await withInstanceLock(sql, () => dropOwn(wt, sql))
@@ -905,7 +1092,11 @@ async function teardown(): Promise<void> {
     await sql.close()
   }
   rmSync(wt.markerPath, { force: true })
-  log('opt-in forgotten: this worktree is back on the shared database (with a warning) until it opts in again')
+  log(
+    wt.policy.linked
+      ? 'opt-in forgotten: the next use of this worktree provisions a fresh database of its own'
+      : 'opt-in forgotten: this worktree is back on the shared database (with a warning) until it opts in again',
+  )
 }
 
 async function sweep(opts: { drop: boolean; quiet: boolean; graceMs: number; names: string[] }): Promise<void> {
@@ -998,6 +1189,7 @@ function usage(): never {
       `  sweep [--drop] [--quiet] [--grace-hours N] [db...]`,
       `                                         drop databases of removed worktrees (default: dry run, ${DEFAULT_GRACE_HOURS}h grace)`,
       '  resolve                                machine-readable, for scripts/lib/worktree-db.sh',
+      '  check-url [--env VAR]                  exit 4 if this worktree may not use the database in $VAR (default DATABASE_URL)',
     ].join('\n'),
   )
   process.exit(2)
@@ -1015,6 +1207,10 @@ async function main(argv: string[]): Promise<void> {
   switch (command) {
     case 'resolve':
       return resolve()
+    case 'check-url': {
+      const i = rest.indexOf('--env')
+      return checkUrl((i >= 0 ? rest[i + 1] : undefined) || 'DATABASE_URL')
+    }
     case 'status':
       return status()
     case 'ensure':

@@ -10,7 +10,7 @@ import {
   uniqueCallerNumber,
 } from '../../simulation-helpers'
 import { apiGet, apiPatch } from '../../api-helpers'
-import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 
 // ── Message Simulation ────────────────────────────────────────────
 

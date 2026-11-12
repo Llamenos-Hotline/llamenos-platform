@@ -2,22 +2,6 @@ import Foundation
 
 // MARK: - Client Wire Models
 
-// Client-only: the generated `PermissionsCatalogResponse` describes
-// `permissions` as an array of {id, label, domain} and `byDomain` entries as
-// {id, label}, but the route (`GET /api/settings/permissions`) actually answers
-// `Record<String, String>` and {key, label} — the schema in
-// packages/protocol/schemas/settings.ts does not match the handler, and the
-// desktop client decodes the handler's shape. These models match the handler.
-struct PermissionsCatalogWire: Codable, Sendable {
-    let permissions: [String: String]
-    let byDomain: [String: [PermissionCatalogEntryWire]]
-}
-
-struct PermissionCatalogEntryWire: Codable, Sendable {
-    let key: String
-    let label: String
-}
-
 // Client-only: `GET /api/settings/users/:id/effective-permissions` declares its
 // response inline in the route (no named schema), so nothing is generated.
 struct EffectivePermissionsWire: Codable, Sendable {
@@ -29,7 +13,7 @@ struct EffectivePermissionsWire: Codable, Sendable {
 
 protocol RolesAPIServiceProtocol {
     func listRoles() async throws -> RoleListResponse
-    func getPermissionsCatalog() async throws -> PermissionsCatalogWire
+    func getPermissionsCatalog() async throws -> PermissionsCatalogResponse
     func getEffectivePermissions(userId: String, hubId: String?) async throws -> EffectivePermissionsWire
 }
 
@@ -47,7 +31,7 @@ final class RolesAPIService: RolesAPIServiceProtocol, @unchecked Sendable {
         try await apiService.request(method: "GET", path: "/api/settings/roles")
     }
 
-    func getPermissionsCatalog() async throws -> PermissionsCatalogWire {
+    func getPermissionsCatalog() async throws -> PermissionsCatalogResponse {
         try await apiService.request(method: "GET", path: "/api/settings/permissions")
     }
 

@@ -34,7 +34,7 @@ struct CallReference: Identifiable, Hashable, Sendable {
 
 extension CallStatus {
     /// The history list's reading of a call's wire status.
-    init(wire status: SharedActiveCallResponseStatus?) {
+    init(wire status: CallRecordStatus?) {
         switch status {
         case .some(.completed), .some(.inProgress): self = .answered
         default: self = .missed

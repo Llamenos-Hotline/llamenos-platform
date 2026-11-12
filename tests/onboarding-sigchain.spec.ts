@@ -21,7 +21,8 @@
  * The GET response carries each link's timestamp, so the second client
  * verifies the whole chain (hashes + signatures) from the read-back alone.
  */
-import { test, expect, type APIRequestContext } from '@playwright/test'
+import { type APIRequestContext } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { apiGet, apiPost, ADMIN_SEED, createHubViaApi, seedHexToPubkey } from './api-helpers'
 import { enterPin, TEST_PIN } from './helpers'
 import { expectInitialisedIdentity, toMockSigchainLink } from './identity-helpers'
@@ -72,9 +73,8 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
 
     // Keypair generation + redeem happen before the backup step renders.
     await page.getByTestId('onboarding-download-backup').waitFor({ state: 'visible' })
-    const downloadPromise = page.waitForEvent('download')
     await page.getByTestId('onboarding-download-backup').click()
-    await downloadPromise
+    await expect(page.getByTestId('backup-saved-path')).toBeVisible()
     await page.getByTestId('onboarding-backup-acknowledge').check()
     // Identity initialisation runs on Continue, before the session is committed.
     await page.getByTestId('onboarding-continue').click()

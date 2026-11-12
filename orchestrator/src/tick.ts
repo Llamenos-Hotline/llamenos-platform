@@ -162,6 +162,25 @@ export interface TickDeps {
    *  never starts a review on its own). Resolves to a one-line description of
    *  what happened, for the PR comment; throws if nothing could be asked. */
   requestReviewOnNewHead?(pr: string, branch: string): Promise<string>
+  /**
+   * The bound on a re-entry (`claimReentry`, reverify.ts): refuses inside a
+   * verification, while another re-entry of the same PR is in flight, and past
+   * a per-head attempt ceiling. REQUIRED for a re-entry — a tick without it
+   * never re-enters, so a caller cannot forget the bound and get the
+   * unbounded behaviour (the 44,158-process runaway of 2026-11-11).
+   */
+  claimReentry?(pr: string, sha: string): { ok: true; release(): void } | { ok: false; reason: string }
+  /**
+   * Issue #2735: asks, at selection time and on every pass, whether the
+   * lane's worktree for this item is wedged on a salvage branch holding real
+   * work. Returns a human-readable description of the wedge while it holds and
+   * `undefined` once it does not (including after an artifact-only wedge was
+   * cleared as a side effect). "Is this item wedged?" is a live fact about the
+   * working tree, so it is re-derived here each tick and NEVER written to a
+   * label: the `needs-human` this check used to leave behind outlived the
+   * worktree that justified it and parked four issues forever.
+   */
+  findWedge(lane: Lane, item: WorkItem): Promise<string | undefined>
   dispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome>
   /** Mechanical gates: scope, never-write, diff-targeted tests. Injected so
    *  `tick` stays testable without a real worktree or a real `bunx vitest`. */
@@ -316,7 +335,7 @@ async function commentVerificationFailedOnPr(
  * next pass; it does not abort the pass or touch the ledger.
  */
 async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, rows: RunRecord[], base: BaseRecord): Promise<void> {
-  if (deps.prHead === undefined || deps.verifyOpenPrHead === undefined) return
+  if (deps.prHead === undefined || deps.verifyOpenPrHead === undefined || deps.claimReentry === undefined) return
   if (latestMechanicalRejection(rows, item.id) === undefined) return
   try {
     const pr = await deps.findOpenPr(lane, item)
@@ -340,7 +359,17 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
         ? `reverify: item ${item.id} pr ${pr} head moved ${a.failedSha.slice(0, 12)} -> ${sha.slice(0, 12)} after a failed verification — re-verifying`
         : `reverify: item ${item.id} pr ${pr} runner crashed without a verdict on ${sha.slice(0, 12)} — one more run`,
     )
-    const report = await deps.verifyOpenPrHead({ lane, pr, headSha: sha, branch: head.branch })
+    const claim = deps.claimReentry(pr, sha)
+    if (!claim.ok) {
+      deps.log(`reverify: item ${item.id} pr ${pr} NOT re-verified on ${sha.slice(0, 12)}: ${claim.reason}`)
+      return
+    }
+    let report: VerifyReport
+    try {
+      report = await deps.verifyOpenPrHead({ lane, pr, headSha: sha, branch: head.branch })
+    } finally {
+      claim.release()
+    }
     const trace = buildGateTrace({ report })
 
     if (!report.passed) {
@@ -628,24 +657,6 @@ async function runLiveDispatch(
       }
       final = { ...base, outcome: 'SUCCESS', branch, pr, note: truncateNote(`${result.note ?? ''} | ${trace}`.trim()) }
       needsHuman = true
-    } else if (result.outcome === 'WEDGED') {
-      // Issue #1755: the dispatch was refused BEFORE any worker launched —
-      // the lane's worktree sits on a salvage branch holding real work
-      // (cli.ts's `resolveWedgeForDispatch`). No verify/review pipeline runs
-      // (there is no new diff to judge), `needs-human` stops the item being
-      // re-claimed into the same refusal every pass, and the issue is told
-      // exactly which worktree and salvage branch a human must reconcile.
-      // The outcome never feeds circuit.ts's consecutive-failure breaker:
-      // three identical refusals are one stuck condition, not three failures.
-      needsHuman = true
-      deps.log(`dispatch: item ${item.id} WEDGED — ${result.note ?? 'no detail'}`)
-      await deps.commentOnIssue(
-        item.id,
-        `Dispatch refused: ${result.note ?? 'the lane\'s worktree is wedged on a salvage branch'}. ` +
-        'No worker was launched. A human must reconcile the salvage branch ' +
-        '(rebase and PR it, or discard it) — the fleet will not retry on its own.',
-      )
-      final = { ...base, ...result }
     } else {
       // The worker itself did not reach a mergeable state (BLOCKED, FAILED,
       // TIMEOUT, QUOTA), recorded as-is.
@@ -853,6 +864,22 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
           continue
         }
 
+        // Issue #2735: a wedged worktree is a TRANSIENT condition, so it is
+        // re-derived every pass and answered by SKIPPING, never by a label.
+        // The refusal takes no lane slot and spends no attempt (WEDGED is not
+        // a failed attempt, ledger.ts), so a wedged head-of-line item cannot
+        // starve its lane, and the moment the worktree is reconciled the next
+        // pass dispatches the item with no human touching a label. The audit
+        // trail (one ledger row + one issue comment) is written once per
+        // distinct wedge, not once per pass.
+        const wedge = await deps.findWedge(lane, item)
+        if (wedge !== undefined) {
+          deps.log(`item ${item.id} skipped: wedged — ${wedge}`)
+          allRejections.push({ id: item.id, reason: 'wedged' })
+          await reportWedge(deps, rows, base, item, wedge)
+          continue
+        }
+
         // Issue #639: labels are read fresh here, immediately before
         // dispatch — never from the selection-time cache above, which can
         // already be minutes stale by the time a lane's cap allows this item
@@ -899,5 +926,38 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     // an unwritable $HOME, a full disk, a read-only remount surfacing as a
     // non-EEXIST errno) — guard against releasing a lock we never held.
     if (lock?.held) lock.release()
+  }
+}
+
+/**
+ * Issue #2735: the once-per-wedge audit trail for a dispatch skipped because
+ * the lane's worktree sits on a salvage branch holding real work. The newest
+ * ledger row for the item is the dedupe key — a WEDGED row with the same
+ * description means this exact wedge was already reported, so nothing is
+ * written. A different wedge (another salvage branch), or the same one after
+ * an intervening dispatch row, reports again. Writes `needs-human` NEVER:
+ * that label is the operator's own "a decision is needed" signal and
+ * outlives the wedge it was meant to describe.
+ */
+async function reportWedge(
+  deps: TickDeps,
+  rows: RunRecord[],
+  base: BaseRecord,
+  item: WorkItem,
+  wedge: string,
+): Promise<void> {
+  const note = truncateNote(`wedged: ${wedge}`)
+  const latest = rows.filter((r) => r.itemId === item.id).sort((a, b) => b.ts - a.ts)[0]
+  if (latest?.outcome === 'WEDGED' && latest.note === note) return
+  deps.record({ ...base, outcome: 'WEDGED', note })
+  try {
+    await deps.commentOnIssue(
+      item.id,
+      `Dispatch skipped: ${wedge}. No worker was launched. The fleet re-checks this every pass and ` +
+      'resumes on its own once the worktree is reconciled (rebase and PR the salvage branch, or discard ' +
+      'it) — no label has been added and none needs removing.',
+    )
+  } catch (e) {
+    deps.log(`wedge: could not comment on item ${item.id}: ${errorMessage(e)}`)
   }
 }

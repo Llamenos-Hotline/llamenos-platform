@@ -19,6 +19,13 @@ export type Rejection =
    * reason an item did not get dispatched.
    */
   | 'pr-already-open'
+  /**
+   * Issue #2735: like `pr-already-open`, a live I/O-backed fact applied by
+   * `tick.ts` just before dispatch — the lane's worktree is wedged on a
+   * salvage branch holding real work. It is deliberately a per-pass skip and
+   * not a label (`needs-human` would outlive the worktree that justified it).
+   */
+  | 'wedged'
 
 export type Verdict = { ok: true } | { ok: false; reason: Rejection }
 

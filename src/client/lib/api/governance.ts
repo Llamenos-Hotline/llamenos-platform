@@ -2,6 +2,7 @@ import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, hp } from './client'
 import type {
   ErasureRequest,
+  MyErasureRequestResponse,
   ErasureConfig,
   ReEncryptionJob,
   RetentionSetting,
@@ -15,7 +16,7 @@ import type {
 // --- Erasure ---
 
 export async function getMyErasureRequest() {
-  return request<{ request: ErasureRequest | null }>(hp('/erasure/me'))
+  return request<MyErasureRequestResponse>(hp('/erasure/me'))
 }
 
 export async function createMyErasureRequest() {

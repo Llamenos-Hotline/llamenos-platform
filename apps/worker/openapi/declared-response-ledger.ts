@@ -22,45 +22,18 @@ export interface KnownViolation {
   issue: number
 }
 
-/** Owns every entry below until each is split out or fixed. */
+/** Owns what has not been split out to an issue of its own — today, the validator 400 below. */
 const TRACKING_ISSUE = 2521
 
 export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
-  { method: 'POST', route: '/api/bans', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/erasure/me', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/bans', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/blasts', status: 201, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/blasts/:id/send', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/directory/groups/:groupId/members', status: 201, issue: TRACKING_ISSUE },
-  { method: 'DELETE', route: '/api/hubs/:hubId/directory/groups/:groupId/members/:contactId', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/hubs/:hubId/events/:id/records', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/events/:id/records', status: 201, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/members', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/hubs/:hubId/notes', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/notes', status: 201, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/records/:id/assign', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/hubs/:hubId/records/:id/contacts', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/records/:id/contacts', status: 201, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/reports/:id/records', status: 201, issue: TRACKING_ISSUE },
-  { method: 'DELETE', route: '/api/hubs/:hubId/settings/cms/entity-types/:id', status: 200, issue: TRACKING_ISSUE },
-  { method: 'DELETE', route: '/api/hubs/:hubId/settings/cms/report-types/:id', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/hubs/:hubId/settings/cms/templates/apply', status: 201, issue: TRACKING_ISSUE },
-  { method: 'PUT', route: '/api/hubs/:hubId/shifts/fallback', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/invites', status: 201, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/invites/redeem', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/provider-setup/signal/register', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/provider-setup/signal/status', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/settings/cms/case-number', status: 200, issue: TRACKING_ISSUE },
-  { method: 'POST', route: '/api/settings/cms/templates/apply', status: 201, issue: TRACKING_ISSUE },
-  { method: 'PUT', route: '/api/settings/custom-fields', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/settings/permissions', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/settings/telephony-provider', status: 200, issue: TRACKING_ISSUE },
-  { method: 'GET', route: '/api/settings/ttl', status: 200, issue: TRACKING_ISSUE },
-  { method: 'PATCH', route: '/api/settings/ttl', status: 200, issue: TRACKING_ISSUE },
+  { method: 'POST', route: '/api/hubs/:hubId/blasts', status: 201, issue: 2572 },
+  { method: 'POST', route: '/api/hubs/:hubId/blasts/:id/send', status: 200, issue: 2572 },
+  { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: 2300 },
+  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/provider-setup/signal/register', status: 200, issue: 2571 },
+  { method: 'GET', route: '/api/provider-setup/signal/status', status: 200, issue: 2571 },
+  { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: 2571 },
 ]
 
 /**

@@ -116,7 +116,7 @@ export async function mockAdminSettingsApi(
   })
 
   // Custom fields
-  await page.route('**/api/settings/custom-fields', async (route) => {
+  await page.route(/\/api\/(hubs\/[^/]+\/)?settings\/custom-fields$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

@@ -36,7 +36,8 @@ export const notes = pgTable(
     conversationId: text('conversation_id'),
     contactHash: text('contact_hash'),
     encryptedContent: text('encrypted_content').notNull(),
-    authorEnvelope: jsonb('author_envelope').notNull(),
+    // NULL when the client sent none: the protocol says absent, never `{}`.
+    authorEnvelope: jsonb('author_envelope'),
     adminEnvelopes: jsonb('admin_envelopes').notNull().default([]),
     encryptedFields: text('encrypted_fields'),
     fieldEnvelopes: jsonb('field_envelopes'),

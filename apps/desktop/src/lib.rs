@@ -1,4 +1,5 @@
 mod api_config;
+mod backup_file;
 mod cert_pin;
 mod crypto;
 mod deep_link;
@@ -45,9 +46,9 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        // Native confirmation dialogs (#788) — used only from Rust
-        // (`api_config::api_config_request_clear`), never exposed to the
-        // webview as its own IPC command.
+        // Native dialogs — used only from Rust (`api_config::api_config_request_clear`
+        // #788, `backup_file::save_backup_file` #2111), never exposed to the
+        // webview as their own IPC commands.
         .plugin(tauri_plugin_dialog::init());
 
     // Updater disabled for Flatpak builds (Flatpak has its own update mechanism)
@@ -256,6 +257,8 @@ pub fn run() {
             crypto::provision_create_session,
             crypto::provision_compute_sas,
             crypto::provision_decrypt_and_import,
+            // Encrypted backup -> disk behind a native save dialog (#2111)
+            backup_file::save_backup_file,
             // Configured backend address (#738) — persisted and validated in Rust;
             // the webview holds no store-plugin permission for it.
             api_config::api_config_get,

@@ -1,7 +1,7 @@
 import { request, hp } from './client'
 import type { DirectoryContactType, IdentifierType, ContactIdentifier, ContactCaseLink } from '@protocol/schemas'
 import type { Contact as RawContactBase, CreateContactBody as CreateRawContactBody } from '@protocol/schemas/contacts-v2'
-import type { ContactRelationshipResponse, ContactGroupResponse, CreateRelationshipBody, AffinityGroup, CreateAffinityGroupBody, UpdateAffinityGroupBody } from '@protocol/schemas/contact-relationships'
+import type { ContactRelationshipResponse, ContactGroupResponse, CreateRelationshipBody, AffinityGroup, CreateAffinityGroupBody, UpdateAffinityGroupBody, GroupMember } from '@protocol/schemas/contact-relationships'
 import type { MergeContactsBody, MergeContactsResponse } from '@protocol/schemas/contact-merge'
 import type { BulkContactAction, BulkContactActionResponse, BulkCreateContactBody, BulkCreateContactResponse } from '@protocol/schemas/contact-bulk'
 
@@ -127,14 +127,14 @@ export async function deleteAffinityGroup(groupId: string) {
 }
 
 export async function addGroupMember(groupId: string, contactId: string, role?: string) {
-  return request<{ added: boolean }>(hp(`/directory/groups/${groupId}/members`), {
+  return request<GroupMember>(hp(`/directory/groups/${groupId}/members`), {
     method: 'POST',
     body: JSON.stringify({ contactId, role, isPrimary: false }),
   })
 }
 
 export async function removeGroupMember(groupId: string, contactId: string) {
-  return request<{ removed: boolean }>(hp(`/directory/groups/${groupId}/members/${contactId}`), {
+  return request<{ ok: boolean }>(hp(`/directory/groups/${groupId}/members/${contactId}`), {
     method: 'DELETE',
   })
 }

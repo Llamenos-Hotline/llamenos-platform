@@ -52,7 +52,6 @@ class TestApiClient(
     @Serializable
     data class SeedShift(
         val pubkey: String,
-        val allDay: Boolean = true,
     )
 
     @Serializable

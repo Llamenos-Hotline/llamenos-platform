@@ -48,6 +48,17 @@ const EXCLUDED_SCHEMAS = new Set([
   // Overly generic response schemas
   'okResponseSchema',
 
+  // Mutation envelopes declared for the server's response check (#2521). Each
+  // wraps a resource whose list-item type mobile code imports by its current
+  // generated name (`BanListResponseBan`, `Invite`, `SharedBlastListResponseStatus`);
+  // registering the envelope makes the dedup pass extract a second copy and
+  // rename those types out from under iOS and Android. Mobile decodes these
+  // envelopes with its own existing models until that rename is done as one
+  // deliberate bulk change (see the PR that added this).
+  'createBanResponseSchema',
+  'createInviteResponseSchema',
+  'blastEnvelopeResponseSchema',
+
   // Analytics sub-component schemas (inlined in parent response schemas)
   'callPeriodMetricsSchema',
   'channelMetricsSchema',

@@ -7,7 +7,8 @@
  * - Contact view (admin-only, unified timeline)
  * - Custom field context filtering (call-notes, conversation-notes, reports)
  */
-import { test, expect, type Page } from '@playwright/test'
+import { type Page } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { simulateCallForNote } from './simulation-helpers'
 import { loginAsAdmin, loginAsVolunteer, inviteVolunteerAndJoin, navigateAfterLogin, TestIds, Navigation, uniquePhone, Timeouts, fillCallId } from './helpers'
 

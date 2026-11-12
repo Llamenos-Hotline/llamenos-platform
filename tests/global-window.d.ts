@@ -36,6 +36,12 @@ declare global {
     __TEST_SET_ACTIVE_HUB?: (id: string | null) => void
     __TEST_PLATFORM?: typeof import('../src/client/lib/platform')
     __TEST_LAST_DEVICE_SEED_HEX?: string
+    /** Backups the mocked `save_backup_file` "wrote to disk" (path + file contents). */
+    __TEST_SAVED_BACKUPS?: Array<{ path: string; contents: string }>
+    /** Mock native save dialog: the user dismisses it (the command resolves null). */
+    __TEST_CANCEL_BACKUP_SAVE__?: boolean
+    /** Mock native save dialog: the write fails (the command rejects). */
+    __TEST_FAIL_BACKUP_SAVE__?: boolean
     __TAURI_INTERNALS__?: TauriInternals
   }
 }

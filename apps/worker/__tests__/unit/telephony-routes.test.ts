@@ -5,6 +5,7 @@ import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import type { Services } from '@worker/services'
 import { ServiceError } from '@worker/services/settings'
+import { getIvrVoiceCatalogForProvider } from '@worker/telephony/ivr-voice-catalogs'
 // Ensure the crypto FFI mock is loaded before any code that imports @llamenos/crypto/ffi.
 // The real ffi.ts uses bun:ffi to load a native .so — unavailable in the Vitest environment.
 import '@worker/__tests__/mocks/llamenos-crypto-ffi'
@@ -70,6 +71,7 @@ function makeServices(): Services {
       getHubByPhone: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
+      resolveIvrVoiceCatalog: vi.fn().mockResolvedValue({ state: 'unconfigured' }),
       getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false, rateLimitEnabled: false, maxCallsPerMinute: 5, blockDurationMinutes: 30, overLimitAction: 'message' }),
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
       storeCaptcha: vi.fn().mockResolvedValue(undefined),
@@ -688,6 +690,60 @@ describe('Telephony routes', () => {
       expect(adapter.handleIncomingCall).toHaveBeenCalledWith(
         expect.objectContaining({ callerLanguage: 'es' }),
       )
+    })
+
+    // #679: a caller's language is whatever the provider answering the hub can
+    // speak. +63 (Philippines) detects as 'tl', which Twilio speaks and Telnyx
+    // has no voice for.
+    describe('caller language is constrained to what the provider can speak (#679)', () => {
+      const FILIPINO_CALLER = '%2B639171234567'
+      const callerLanguageFor = async (
+        provider: 'twilio' | 'telnyx',
+        query: string,
+        digits = '',
+        hubLanguages = ['en', 'es'],
+      ) => {
+        services.settings.getIvrLanguages = vi.fn().mockResolvedValue({ enabledLanguages: hubLanguages })
+        services.settings.resolveIvrVoiceCatalog = vi.fn().mockResolvedValue({
+          state: 'resolved',
+          catalog: getIvrVoiceCatalogForProvider(provider),
+        })
+        adapter.parseLanguageWebhook = vi.fn().mockResolvedValue({
+          callSid: 'CA-lang', callerNumber: decodeURIComponent(FILIPINO_CALLER), digits,
+        })
+        const app = await createTestApp(adapter, services)
+        await app.request(`/api/telephony/language-selected?hub=hub-1${query}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `CallSid=CA-lang&From=${FILIPINO_CALLER}&Digits=${digits}`,
+        })
+        return (adapter.handleIncomingCall as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0].callerLanguage
+      }
+
+      it('keeps an auto-detected language the provider speaks (Twilio)', async () => {
+        expect(await callerLanguageFor('twilio', '&auto=1')).toBe('tl')
+      })
+
+      it('replaces an auto-detected language the provider cannot speak with the hub\'s first speakable one (Telnyx)', async () => {
+        expect(await callerLanguageFor('telnyx', '&auto=1')).toBe('en')
+        expect(await callerLanguageFor('telnyx', '&auto=1', '', ['ht', 'es', 'en'])).toBe('es')
+      })
+
+      it('replaces a forced language the provider cannot speak', async () => {
+        expect(await callerLanguageFor('twilio', '&forceLang=tl')).toBe('tl')
+        expect(await callerLanguageFor('telnyx', '&forceLang=tl')).toBe('en')
+        expect(await callerLanguageFor('telnyx', '&forceLang=not-a-locale')).toBe('en')
+      })
+
+      it('falls past a pressed digit whose language the provider cannot speak', async () => {
+        // Digit 2 is 'tl' on this hub; Telnyx never announced it, so it is not honoured.
+        expect(await callerLanguageFor('twilio', '', '2', ['en', 'tl'])).toBe('tl')
+        expect(await callerLanguageFor('telnyx', '', '2', ['en', 'tl'])).toBe('en')
+      })
+
+      it('keeps a pressed digit the provider speaks, over the phone-prefix guess', async () => {
+        expect(await callerLanguageFor('telnyx', '', '2', ['en', 'es'])).toBe('es')
+      })
     })
 
     // #2179 / operator ruling Q4: one setting, one code path, three outcomes —

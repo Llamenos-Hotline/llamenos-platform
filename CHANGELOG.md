@@ -210,6 +210,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.12 (2026-11-11)
+
+### Fixes
+
+- scope spam and call settings to the hub being edited (#1137) (#2670)
+- parseInvite never throws on opaque URIs typed per keystroke (#2120) (#2672)
+- clear login validation error when typing in device key field (#2674)
+- Update Profile sends only changed fields (fixes #1315 race) (#2679)
+- clear login error when hub URL or invite input changes (#2683)
+- a reply no provider accepted is stored as failed, never as sent (#2551) (#2654)
+- HubOnboardingWizard no longer steals focus 50ms after mount (#2695)
+- roles/cron always enables+starts the daemon; smoke-check asserts it (#2646) (#2700)
+- a missing JNI lib reads as a missing lib, not broken onboarding (#2701)
+
 ## 0.21.11 (2026-11-10)
 
 ### Features

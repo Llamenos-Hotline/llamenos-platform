@@ -55,6 +55,8 @@ const REJECTION_SPECIFICITY: Record<Rejection, number> = {
   // length — so it outranks every reason above when both apply to the same
   // item.
   'pr-already-open': 5,
+  // Also a live fact (a salvage worktree exists right now), same tier as an open PR.
+  'wedged': 5,
 }
 
 function specificityRank(reason: Rejection): number {

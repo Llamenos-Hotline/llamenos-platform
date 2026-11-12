@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import { type APIRequestContext, type Page } from '@playwright/test'
+import { test, expect } from './console-guard'
 import {
   createHubViaApi,
   createUserViaApi,
@@ -9,6 +10,7 @@ import {
 import { loginAsVolunteer, navigateAfterLogin, Timeouts } from './helpers'
 import { TestIds } from './test-ids'
 import { simulateCallForNote } from './simulation-helpers'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 
 /**
  * The active hub comes from the signed-in user's own memberships (#1708).
@@ -79,9 +81,7 @@ test.describe('Active hub resolution on a multi-hub server', () => {
       // On shift, all day, every day, in the hub they are actually in.
       await createShiftViaApi(request, {
         name: `ActiveHubShift-${Date.now()}`,
-        startTime: '00:00',
-        endTime: '23:59',
-        days: [0, 1, 2, 3, 4, 5, 6],
+        ...ALWAYS_ON_SHIFT,
         userPubkeys: [volunteer.pubkey],
         hubId: volunteerHubId,
       })

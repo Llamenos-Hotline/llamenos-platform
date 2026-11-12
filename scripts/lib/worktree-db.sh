@@ -10,10 +10,18 @@
 #   1. DATABASE_URL already set — in the environment or in the checkout's .env —
 #      is used as-is. An explicit choice always wins (CI sets one per job).
 #   2. Otherwise the worktree's choice, from `bun scripts/worktree-db.ts resolve`:
-#        isolated  its own database, llamenos_wt_<dir>_<hash> (scripts/worktree-db.ts)
-#        shared    the shared `llamenos` database — the worktree opted out
-#        unset     the shared `llamenos` database, with a warning every time: a
-#                  worktree mid-task is never switched without asking
+#        isolated  its own database, llamenos_wt_<dir>_<hash> (scripts/worktree-db.ts).
+#                  Every linked worktree is isolated by default and provisioned on
+#                  first use; a fleet worker's worktree is isolated always (#2659)
+#        shared    the shared `llamenos` database — a linked worktree that opted out
+#                  with LLAMENOS_ALLOW_SHARED_DB=1 in its environment
+#        unset     the primary checkout only: the shared `llamenos` database, with a
+#                  warning every time — a checkout mid-task is never switched silently
+#
+# Whatever the URL came from — environment, .env, --shared, the resolver — it passes
+# `worktree-db.ts check-url` before it is exported: a linked worktree that names the
+# shared dev database is refused (a fleet worker's, unconditionally). A refusal is
+# non-zero and exports nothing; there is no fallback to anything else.
 #
 # In a manual shell (e.g. running `bunx playwright test` directly), inside the worktree:
 #   source scripts/lib/worktree-db.sh && worktree_db_export
@@ -76,6 +84,7 @@ worktree_db_export() {
     if [[ -n "$from_dotenv" ]]; then DATABASE_URL="$from_dotenv"; fi
   fi
   if [[ -n "${DATABASE_URL:-}" ]]; then
+    DATABASE_URL="$DATABASE_URL" worktree_db_check_allowed DATABASE_URL || return 1
     export DATABASE_URL
     _worktree_db_log "DATABASE_URL set explicitly — using it as-is: $(worktree_db_redact "$DATABASE_URL")"
     return 0
@@ -94,8 +103,12 @@ worktree_db_export() {
   fi
 
   line="$(bun "$root/scripts/worktree-db.ts" resolve)" || return 1
-  read -r mode db user host port <<<"$line"
-  if [[ "$flag" == "--ensure" && "$mode" == "isolated" ]]; then
+  local how
+  read -r mode db user host port how <<<"$line"
+  # Provision when asked to, and whenever the database exists only because the
+  # worktree's policy chose it (no marker yet): first use of a fresh worktree must
+  # land on a working database of its own, not on the shared one.
+  if [[ "$flag" != "--shared" && "$mode" == "isolated" && ( "$flag" == "--ensure" || "${how:-marker}" != "marker" ) ]]; then
     bun "$root/scripts/worktree-db.ts" ensure || return 1
   fi
   if [[ "$flag" == "--shared" ]]; then
@@ -118,5 +131,18 @@ worktree_db_export() {
 
   password="${PG_PASSWORD:-$(_worktree_db_dotenv PG_PASSWORD "$root/.env")}"
   password="$(_worktree_db_urlencode "${password:-dev}")"
-  export DATABASE_URL="postgresql://${user}:${password}@${host}:${port}/${db}"
+  local resolved="postgresql://${user}:${password}@${host}:${port}/${db}"
+  DATABASE_URL="$resolved" worktree_db_check_allowed DATABASE_URL || return 1
+  export DATABASE_URL="$resolved"
+}
+
+# worktree_db_check_allowed [VAR]
+#   Refuse (non-zero, with the reason) when the URL in $VAR (default DATABASE_URL) names
+#   the shared dev database and this worktree may not use it. The URL goes to the checker
+#   in the environment, never argv: it carries the password.
+worktree_db_check_allowed() {
+  local var="${1:-DATABASE_URL}" root rc=0
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0   # no git: nothing to protect
+  bun "$root/scripts/worktree-db.ts" check-url --env "$var" || rc=$?
+  return "$rc"
 }

@@ -73,6 +73,15 @@ class IncidentRepository @Inject constructor(
         scope.launch { refreshAll() }
     }
 
+    /**
+     * End the session's view: the user signed out (or the app locked). Forgets the incidents
+     * and invalidates every fetch still on the wire, so a late answer lands nowhere.
+     */
+    fun endSession() {
+        session++
+        _state.value = State()
+    }
+
     @Synchronized
     private fun startListening() {
         if (listening) return
@@ -103,6 +112,9 @@ class IncidentRepository @Inject constructor(
         } catch (e: IOException) {
             Log.w(TAG, "hub list unavailable (${e.message}); incidents unchanged")
             return
+        } catch (e: IllegalStateException) {
+            signedOut(started, e)
+            return
         }
         val fetched = coroutineScope {
             hubs.map { hub -> async { hub.id to fetch(hub.id) } }.awaitAll()
@@ -128,17 +140,35 @@ class IncidentRepository @Inject constructor(
         _state.update { it.copy(byHub = it.byHub + (hubId to list)) }
     }
 
-    private suspend fun fetch(hubId: String): List<Incident>? = try {
-        apiService.getOpenIncidents(hubId).incidents
-    } catch (e: ApiException) {
-        Log.w(TAG, "incidents for $hubId unavailable (HTTP ${e.code})")
-        null
-    } catch (e: IOException) {
-        Log.w(TAG, "incidents for $hubId unavailable (${e.message})")
-        null
-    } catch (e: SerializationException) {
-        Log.w(TAG, "incidents for $hubId unreadable: ${e.message}")
-        null
+    private suspend fun fetch(hubId: String): List<Incident>? {
+        val started = session
+        return try {
+            apiService.getOpenIncidents(hubId).incidents
+        } catch (e: ApiException) {
+            Log.w(TAG, "incidents for $hubId unavailable (HTTP ${e.code})")
+            null
+        } catch (e: IOException) {
+            Log.w(TAG, "incidents for $hubId unavailable (${e.message})")
+            null
+        } catch (e: SerializationException) {
+            Log.w(TAG, "incidents for $hubId unreadable: ${e.message}")
+            null
+        } catch (e: IllegalStateException) {
+            signedOut(started, e)
+            null
+        }
+    }
+
+    /**
+     * A read reached [ApiService] with no hub URL configured: the device was signed out
+     * while a relay reconnect, a doorbell or the session's first read was in flight (#2743).
+     * There is nothing to read and nobody to show it to, so forget what the last user saw
+     * and stop. This runs on the application scope, which has no exception handler: letting
+     * it escape would take the process down on the logout path.
+     */
+    private fun signedOut(startedIn: Int, cause: IllegalStateException) {
+        Log.i(TAG, "incident read skipped, no hub configured (${cause.message})")
+        if (startedIn == session) endSession()
     }
 
     private companion object {

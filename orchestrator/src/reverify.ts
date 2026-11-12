@@ -1,6 +1,8 @@
 import { lstat, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { RunRecord } from './ledger.js'
+import { REVERIFY_DIR } from './paths.js'
+import { acquireInFlight, nestedInVerification, recordAttempt } from './review-and-merge-guards.js'
 
 /**
  * A failed mechanical verification is a fact about ONE commit, not about the
@@ -132,4 +134,52 @@ export async function linkTrustedModules(headDir: string, trustedModules: string
     )
   }
   await symlink(trustedModules, target)
+}
+
+/**
+ * How many times ONE head may be re-verified. Re-entry normally verifies a
+ * head once (the verdict is recorded and the next pass sees head == failed
+ * head), plus the single runner-crash retry — so 2 is the working maximum.
+ * The third is slack for a pass that verified but could not record, and the
+ * ceiling is what bounds the case the ledger cannot: a verification that
+ * keeps starting without ever finishing recording.
+ */
+export const MAX_REENTRIES_PER_SHA = 3
+
+export type ReentryClaim = { ok: true; release(): void } | { ok: false; reason: string }
+
+/**
+ * The bound on re-verification (#2738), reusing the three guards #2742 put
+ * round `review-and-merge` after the 2026-11-11 runaway — a worker verifying
+ * the first version of this path reached 44,158 processes:
+ *
+ *   1. **Never from inside a verification.** A re-entry started by a process
+ *      that is itself running under a verification (`FLEET_IN_VERIFICATION`,
+ *      which every test run the gate starts carries) is the recursion edge.
+ *   2. **Never two at once for one PR** (a pidfile per PR, reaped only when its
+ *      holder is dead).
+ *   3. **Never more than `MAX_REENTRIES_PER_SHA` for one head.** A new commit is
+ *      a new head with a fresh allowance; the same bytes are not retried
+ *      forever.
+ *
+ * Fails CLOSED like the guards it composes: a lock or ledger that cannot be
+ * used refuses the re-entry, which costs one pass's delay and nothing else.
+ * The caller `release()`s the claim when the re-entry ends, however it ends.
+ */
+export function claimReentry(
+  pr: string,
+  sha: string,
+  opts: { dir?: string; env?: NodeJS.ProcessEnv; ceiling?: number; pid?: number } = {},
+): ReentryClaim {
+  const nested = nestedInVerification(opts.env ?? process.env)
+  if (nested !== undefined) return { ok: false, reason: nested }
+  const dir = opts.dir ?? REVERIFY_DIR
+  const lock = acquireInFlight(pr.replace(/^.*\//, ''), { dir, ...(opts.pid === undefined ? {} : { pid: opts.pid }) })
+  if (!lock.ok) return { ok: false, reason: lock.reason }
+  const attempt = recordAttempt(sha, { dir, ceiling: opts.ceiling ?? MAX_REENTRIES_PER_SHA })
+  if (!attempt.ok) {
+    lock.release()
+    return { ok: false, reason: attempt.reason }
+  }
+  return { ok: true, release: lock.release }
 }

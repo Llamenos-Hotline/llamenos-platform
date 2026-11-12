@@ -4,8 +4,8 @@ import Testing
 
 final class MockRolesAPIService: RolesAPIServiceProtocol {
     var listRolesResult: Result<RoleListResponse, Error> = .success(RoleListResponse(roles: []))
-    var catalogResult: Result<PermissionsCatalogWire, Error> = .success(
-        PermissionsCatalogWire(permissions: [:], byDomain: [:])
+    var catalogResult: Result<PermissionsCatalogResponse, Error> = .success(
+        PermissionsCatalogResponse(byDomain: [:], permissions: [:])
     )
     var effectivePermissionsResult: Result<EffectivePermissionsWire, Error> = .success(
         EffectivePermissionsWire(userId: "", permissions: [])
@@ -18,7 +18,7 @@ final class MockRolesAPIService: RolesAPIServiceProtocol {
         }
     }
 
-    func getPermissionsCatalog() async throws -> PermissionsCatalogWire {
+    func getPermissionsCatalog() async throws -> PermissionsCatalogResponse {
         switch catalogResult {
         case .success(let catalog): return catalog
         case .failure(let error): throw error

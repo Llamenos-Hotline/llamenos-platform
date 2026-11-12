@@ -1,4 +1,5 @@
-import { test, expect, type Page } from '@playwright/test'
+import { type Page } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, TestIds } from './helpers'
 import { createCmsReportTypeViaApi, createReportViaApi } from './api-helpers'
 

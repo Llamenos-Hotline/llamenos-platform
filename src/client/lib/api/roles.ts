@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { RoleDefinition } from '@protocol/schemas'
+import type { PermissionsCatalogResponse, RoleDefinition } from '@protocol/schemas'
 
 export type { RoleDefinition }
 
@@ -42,8 +42,5 @@ export async function addRoleEnvelopes(roleId: string, envelopes: Array<{ adminP
 }
 
 export async function getPermissionsCatalog() {
-  return request<{
-    permissions: Record<string, string>
-    byDomain: Record<string, { key: string; label: string }[]>
-  }>('/settings/permissions')
+  return request<PermissionsCatalogResponse>('/settings/permissions')
 }

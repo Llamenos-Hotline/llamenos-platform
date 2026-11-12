@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TelnyxAdapter, TELNYX_VOICES } from '@worker/telephony/telnyx'
 import { AllDialsFailedError } from '@worker/telephony/adapter'
 import { holdMusicEntry } from '@worker/telephony/hold-music'
+import { IVR_PROMPTS, resolveIvrPrompt } from '@shared/voice-prompts'
 import { makeTelnyxSigner, publicKeyResponse, type TelnyxSigner } from '../helpers/telnyx-signing'
 
 const HOLD_ORIGIN = 'https://hotline.example.org'
@@ -39,6 +40,10 @@ const formRequest = (fields: Record<string, string>) => new Request('https://hot
   body: form(fields),
 })
 
+/** Inverse of the adapter's XML escaping, to read spoken text back out of a document */
+const xmlUnescape = (s: string) =>
+  s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+
 describe('TelnyxAdapter (TeXML)', () => {
   let adapter: TelnyxAdapter
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -66,6 +71,19 @@ describe('TelnyxAdapter (TeXML)', () => {
       // No input at all falls through to an automatic choice on the same route.
       expect(res.body).toContain(`<Redirect method="POST">${BASE}/api/telephony/language-selected?auto=1&amp;hub=hub-1&amp;sig=`)
       expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('speaks each option in that option\'s own voice and locale, never one voice for the whole menu (#679)', async () => {
+      const hub = ['en', 'es', 'zh', 'ar', 'ru']
+      const res = await adapter.handleLanguageMenu({ callSid: 'v3:call-1', callerNumber: '+15559876543', hotlineName: 'H', enabledLanguages: hub, hubId: 'hub-1' })
+      const says = [...res.body.matchAll(/<Say voice="([^"]+)" language="([^"]+)">([^<]*)<\/Say>/g)]
+        .map(([, voice, language, text]) => ({ voice, language, text: xmlUnescape(text) }))
+      const expected = hub.map((code, index) => {
+        const { voice, language } = TELNYX_VOICES.voiceFor(code)!
+        return { voice, language, text: resolveIvrPrompt(IVR_PROMPTS[code], String(index + 1)) }
+      })
+      expect(says).toEqual(expected)
+      expect(new Set(says.map(s => s.voice)).size).toBe(hub.length)
     })
 
     it('skips the menu for a single language and redirects with that language forced', async () => {

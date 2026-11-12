@@ -2,7 +2,7 @@
  * #657 — buildIvrLanguageMenu / IvrVoiceCatalog: determinism guards.
  */
 import { describe, it, expect } from 'vitest'
-import { IvrVoiceCatalog, buildIvrLanguageMenu } from '@worker/telephony/ivr-menu'
+import { IvrVoiceCatalog, buildIvrLanguageMenu, resolveCallerLanguage } from '@worker/telephony/ivr-menu'
 import { TWILIO_VOICES } from '@worker/telephony/twilio'
 import { VONAGE_VOICES } from '@worker/telephony/vonage'
 import { PLIVO_VOICES } from '@worker/telephony/plivo'
@@ -163,5 +163,38 @@ describe('provider IVR voice coverage', () => {
 
   it('every provider speaks the default language', () => {
     for (const languages of Object.values(coverage)) expect(languages).toContain('en')
+  })
+})
+
+describe('resolveCallerLanguage (#679)', () => {
+  // 'tl' and 'vi' are Twilio voices that Telnyx does not have.
+  it.each([
+    ['twilio', 'tl', 'tl', TWILIO_VOICES],
+    ['twilio', 'vi', 'vi', TWILIO_VOICES],
+    ['telnyx', 'tl', 'en', TELNYX_VOICES],
+    ['telnyx', 'vi', 'en', TELNYX_VOICES],
+    ['telnyx', 'es', 'es', TELNYX_VOICES],
+  ])('%s: detected %s resolves to %s', (_provider, detected, expected, cat) => {
+    expect(resolveCallerLanguage([detected], ['en', 'es'], cat)).toBe(expected)
+  })
+
+  it('falls back to the hub\'s first speakable language, not merely the default', () => {
+    expect(resolveCallerLanguage(['tl'], ['tl', 'ht', 'fr', 'en'], TELNYX_VOICES)).toBe('fr')
+  })
+
+  it('takes candidates in priority order and skips undefined and unspeakable ones', () => {
+    expect(resolveCallerLanguage([undefined, 'tl', 'de'], ['en'], TELNYX_VOICES)).toBe('de')
+    expect(resolveCallerLanguage(['es', 'de'], ['en'], TELNYX_VOICES)).toBe('es')
+  })
+
+  it('uses the same default as the menu when the hub lists nothing speakable', () => {
+    expect(resolveCallerLanguage(['tl'], ['ht', 'ku'], TELNYX_VOICES)).toBe('en')
+    const noEnglish = new IvrVoiceCatalog<string>('no-en', [['fr', 'v-fr'], ['de', 'v-de']])
+    expect(resolveCallerLanguage(['tl'], ['ht'], noEnglish)).toBe('fr')
+    expect(buildIvrLanguageMenu(['ht'], noEnglish)).toEqual({ kind: 'single', language: 'fr' })
+  })
+
+  it('does no tag negotiation', () => {
+    expect(resolveCallerLanguage(['pt-BR'], ['en'], TWILIO_VOICES)).toBe('en')
   })
 })

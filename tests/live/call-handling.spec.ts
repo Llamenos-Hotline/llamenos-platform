@@ -43,6 +43,7 @@ import {
   pacedStrict,
   freshIdentity,
   redeemInvite,
+  hubMember,
   retireLiveIdentity,
   readTelephonyProvider,
   inboundDriveRefusal,
@@ -1206,10 +1207,11 @@ test.describe('R1 — a rung volunteer answers an inbound call', () => {
     const redeemed = await redeemInvite(request, code, identity.seedHex)
     expect(redeemed.status, 'POST /api/invites/redeem').toBe(200)
 
-    const hubRoles = (redeemed.body as { volunteer?: { hubRoles?: Array<{ hubId: string; roleIds: string[] }> } })
-      ?.volunteer?.hubRoles ?? []
+    // Redemption answers `{ ok: true }` and nothing about the redeemer, so the
+    // role is read from the hub's own view of the new member.
+    const member = await hubMember(request, hubId, identity.pubkey, seed)
     expect(
-      hubRoles.find(r => r.hubId === hubId)?.roleIds ?? [],
+      member.roles,
       `the redeemed volunteer holds no role in hub ${hubId}, so every hub-scoped route answers `
       + '403 "Access denied" before reaching any call logic — the race below would be measuring '
       + 'a permission refusal',

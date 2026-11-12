@@ -29,7 +29,7 @@ import {
   simulateIncomingMessage,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
-import { ALWAYS_ON_SHIFT } from './always-on-shift'
+import { ALWAYS_ON_SHIFT, shiftWindowAroundHour } from '@shared/shifts'
 
 // ── Local State ──────────────────────────────────────────────────
 
@@ -230,18 +230,15 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
  *
  * This computes the INPUT (a schedule), not the expected outcome: the server decides
  * whether the shift is live, and the scenario asserts only whether the call rang.
- * It never wraps midnight (overnight shifts are #1053): near the end of the day the
- * window is clamped to 23:59, which leaves one minute a day (23:59 local) outside it.
+ * Near midnight the window wraps past it (`shiftWindowAroundHour`) rather than
+ * clamping to 23:59, which would leave one minute a day outside it (#2693).
  */
 function windowAroundNow(timeZone: string): { startTime: string; endTime: string } {
   const hour = Number(
     new Intl.DateTimeFormat('en-US', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(new Date()),
   )
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return {
-    startTime: `${pad(Math.max(0, hour - 1))}:00`,
-    endTime: hour + 2 > 23 ? '23:59' : `${pad(hour + 2)}:00`,
-  }
+  const { startTime, endTime } = shiftWindowAroundHour(hour)
+  return { startTime, endTime }
 }
 
 Given('a hub in the {string} time zone', async ({ request, world }, timeZone: string) => {

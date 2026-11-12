@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { Services } from '@worker/services'
-import { TelnyxAdapter } from '@worker/telephony/telnyx'
+import { TelnyxAdapter, TELNYX_VOICES } from '@worker/telephony/telnyx'
 import '@worker/__tests__/mocks/llamenos-crypto-ffi'
 import { makeTelnyxSigner, publicKeyResponse, type TelnyxSigner } from '../helpers/telnyx-signing'
 
@@ -43,6 +43,7 @@ function makeServices() {
       getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
+      resolveIvrVoiceCatalog: vi.fn().mockResolvedValue({ state: 'resolved', catalog: TELNYX_VOICES }),
       getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: true, rateLimitEnabled: false, maxCallsPerMinute: 5, overLimitAction: 'message' }),
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
       storeCaptcha: vi.fn().mockResolvedValue(undefined),

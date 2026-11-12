@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, Timeouts, TestIds } from './helpers'
 
 // Blast delivery tests need longer timeout for auth PBKDF2 + API round trips

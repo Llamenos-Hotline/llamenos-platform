@@ -56,17 +56,15 @@ import { LEDGER_FILE } from './paths.js'
  * item still have?" — and an infrastructure gap that was never the worker's
  * fault must not have spent any of them, exactly as a QUOTA row never does.
  *
- * WEDGED (issue #1755) names a dispatch refused BEFORE any worker launched:
- * the lane's worktree is checked out on a `salvage/<branch>-*` branch holding
- * real work, so dispatching would either destroy that work or redo it
- * blindly. Three identical refusals for the same lane+item are ONE stuck
- * condition, not three failures — WEDGED is deliberately absent from
- * `circuit.ts`'s STREAK_FAILURES, so an unresolvable refusal never consumes
- * fleet-wide breaker budget. It IS in `TERMINAL_FAILURES` below,
- * deliberately unlike UNVERIFIED: a wedge is a property of the ITEM's own
- * lane state, not a transient fleet plumbing gap, so the per-item attempt
- * bound is the right backstop for the case where the `needs-human` label is
- * removed without the wedge being cleared.
+ * WEDGED (issue #1755, reworked in #2735) names a dispatch skipped BEFORE any
+ * worker launched: the lane's worktree is checked out on a
+ * `salvage/<branch>-*` branch holding real work, so dispatching would either
+ * destroy that work or redo it blindly. It is an audit row, written once per
+ * distinct wedge, and nothing more: it is absent from `circuit.ts`'s
+ * STREAK_FAILURES AND from `TERMINAL_FAILURES` below, and no `needs-human`
+ * label accompanies it. The wedge is re-derived from the worktree on every
+ * pass, so it ends the moment the worktree does — a row or label that
+ * outlived it would be a stale cache of a live fact.
  */
 export type Outcome =
   | 'DISPATCHED' | 'SUCCESS' | 'FAILED' | 'BLOCKED'
@@ -173,7 +171,14 @@ export function since(windowMs: number, now = Date.now()): RunRecord[] {
 // scope-gated passes, so the grant, once made, found the item already
 // exhausted. What stops the item being re-claimed meanwhile is the
 // `needs-human` label tick.ts attaches to a BLOCKED outcome, not this budget.
-const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'REJECTED', 'WEDGED'])
+//
+// WEDGED is excluded too (#2735). It was counted here (#1755) so the budget
+// would close over a wedge whose `needs-human` label had been removed, but
+// that made the wedge permanent twice over: three rows exhausted the item
+// for good, long after the worktree was gone. A wedge is a live fact tick.ts
+// re-derives and skips on every pass without recording an attempt, so there
+// is nothing for the budget to bound.
+const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'REJECTED'])
 
 /** Counts backward from the newest record for this item and stops at a SUCCESS. */
 export function failedAttemptsIn(rows: RunRecord[], itemId: string): number {

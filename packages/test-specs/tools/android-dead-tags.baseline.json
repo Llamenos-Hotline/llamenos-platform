@@ -7,7 +7,7 @@
     "admin/custom-fields.feature": 4,
     "admin/settings.feature": 58,
     "admin/shift-management.feature": 20,
-    "core/auth-login.feature": 56,
+    "core/auth-login.feature": 55,
     "core/call-actions.feature": 3,
     "core/call-routing.feature": 47,
     "core/contacts.feature": 12,

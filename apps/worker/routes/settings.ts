@@ -466,10 +466,11 @@ scoped.get('/telephony-provider',
     summary: 'Get telephony provider settings',
     responses: {
       200: {
-        description: 'Telephony provider settings',
+        // `null` until a provider is configured — every client decodes it as optional.
+        description: 'Telephony provider settings, or null when none is configured',
         content: {
           'application/json': {
-            schema: resolver(telephonyProviderSchema),
+            schema: resolver(telephonyProviderSchema.nullable()),
           },
         },
       },
@@ -1362,8 +1363,9 @@ deployment.get('/ttl',
   requirePermission('settings:manage-ttl'),
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getTTLOverrides()
-    return c.json(result)
+    const { overrides } = await services.settings.getTTLOverrides()
+    // Bare, like the PATCH body: the declared shape is the key → seconds record itself.
+    return c.json(overrides)
   },
 )
 
@@ -1389,9 +1391,9 @@ deployment.patch('/ttl',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
-    const result = await services.settings.updateTTLOverrides(body as Record<string, unknown>)
+    const { overrides } = await services.settings.updateTTLOverrides(body as Record<string, unknown>)
     await audit(services.audit, 'ttlOverridesUpdated', pubkey, body as Record<string, unknown>, undefined, null)
-    return c.json(result)
+    return c.json(overrides)
   },
 )
 

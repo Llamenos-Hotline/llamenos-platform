@@ -136,6 +136,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     'generate_backup_from_state',
     'generate_recovery_key',
     'backup_verify_credential',
+    // Encrypted backup to disk via a native save dialog (#2111) — returns the path written
+    'save_backup_file',
     'restore_backup_and_load',
     // Path plugin commands (store/stronghold resolve the app data directory)
     'plugin:path|resolve_directory',

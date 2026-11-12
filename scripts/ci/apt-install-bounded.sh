@@ -44,6 +44,19 @@
 # misbehaves. The package set and install semantics (recommends included) are
 # exactly what the step installed before; only the bounding changed.
 #
+# 0. Before any of that (#2736): if every requested package is already installed,
+#    exit 0 without touching apt. And if APT_DEB_CACHE_DIR holds the .debs a
+#    previous run downloaded, `dpkg -i` them and exit 0 without touching the
+#    network: on 2026-11-11 the Ubuntu mirrors stopped resolving for ~30 minutes
+#    and this step — which needs ~180 packages the runner image does not ship —
+#    failed in desktop-rust of two consecutive merge groups, ejecting both PRs.
+#    A mirror outage should cost a cache miss, not a merge group. The cache is
+#    keyed by the workflow on the runner image version, because the .debs are
+#    the dependency CLOSURE for that image; if dpkg rejects them (image moved
+#    on) the script falls through to the network phase unchanged. After a
+#    successful network phase it copies the downloaded .debs into the cache dir
+#    so actions/cache can save them.
+#
 # Every failure ends with a `::error title=...::` annotation that says which
 # phase, which mirror, how much of the download had arrived and at what rate,
 # and whether it is infrastructure (re-run) or a real defect in the step.
@@ -98,6 +111,8 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 PACKAGES=("$@")
+DEB_CACHE="${APT_DEB_CACHE_DIR:-}"
+APT_ARCHIVES="${APT_ARCHIVES_DIR:-/var/cache/apt/archives}"
 
 SUDO=()
 [ "$(id -u)" -eq 0 ] || SUDO=(sudo)
@@ -264,6 +279,35 @@ download_attempt() {
   return 1
 }
 
+# ── no-network paths (#2736) ───────────────────────────────────────────────────
+all_installed() {
+  local p st
+  for p in "${PACKAGES[@]}"; do
+    st="$(dpkg-query -W -f='${db:Status-Status}' "$p" 2>/dev/null || true)"
+    [ "$st" = installed ] || return 1
+  done
+}
+
+if all_installed; then
+  echo "${STEP}: all ${#PACKAGES[@]} requested package(s) are already installed — nothing to install, no network used."
+  exit 0
+fi
+
+if [ -n "$DEB_CACHE" ] && compgen -G "$DEB_CACHE/*.deb" >/dev/null; then
+  cached=("$DEB_CACHE"/*.deb)
+  echo "::group::${STEP} — installing ${#cached[@]} cached .deb(s) from ${DEB_CACHE} (no network)"
+  log="$WORK/cache-install.log"
+  : >"$log"
+  rc=0
+  bounded "$INSTALL_BUDGET" "$log" env DEBIAN_FRONTEND=noninteractive dpkg --force-unsafe-io -i "${cached[@]}" || rc=$?
+  echo "::endgroup::"
+  if [ "$rc" -eq 0 ] && all_installed; then
+    echo "${STEP}: installed from the .deb cache; no network used."
+    exit 0
+  fi
+  echo "${STEP}: the .deb cache did not satisfy the request (dpkg exit ${rc}); falling through to the network phase."
+fi
+
 # ── network phase ──────────────────────────────────────────────────────────────
 ok=""
 use_runner_sources
@@ -289,6 +333,17 @@ if [ -z "$ok" ]; then
     } >>"$GITHUB_STEP_SUMMARY"
   fi
   exit 1
+fi
+
+if [ -n "$DEB_CACHE" ]; then
+  # Save what the network phase just fetched so the next run (and an outage)
+  # needs no network. A failure here must never fail the install itself.
+  if mkdir -p "$DEB_CACHE" && cp -f "$APT_ARCHIVES"/*.deb "$DEB_CACHE"/ 2>/dev/null; then
+    saved=("$DEB_CACHE"/*.deb)
+    echo "${STEP}: saved ${#saved[@]} .deb(s) to ${DEB_CACHE} for the cache."
+  else
+    echo "${STEP}: could not save .debs to ${DEB_CACHE}; the next run will use the network."
+  fi
 fi
 
 # ── install phase (local only) ─────────────────────────────────────────────────

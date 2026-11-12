@@ -1,5 +1,5 @@
 import { request, hp, activeHubPath } from './client'
-import type { CaseRecord, RecordContact, CreateRecordBody, UpdateRecordBody } from '@protocol/schemas/records'
+import type { CaseRecord, RecordAssigneesResponse, RecordContact, CreateRecordBody, UpdateRecordBody } from '@protocol/schemas/records'
 import type { MergeRecordsBody, MergeRecordsResponse } from '@protocol/schemas/entity-merge'
 import type { AssignmentSuggestion } from '@protocol/schemas'
 
@@ -98,14 +98,14 @@ export async function unlinkContactFromRecord(id: string, contactId: string) {
 }
 
 export async function assignRecord(id: string, pubkeys: string[]) {
-  return request<CaseRecord>(activeHubPath(`/records/${id}/assign`), {
+  return request<RecordAssigneesResponse>(activeHubPath(`/records/${id}/assign`), {
     method: 'POST',
     body: JSON.stringify({ pubkeys }),
   })
 }
 
 export async function unassignRecord(id: string, pubkey: string) {
-  return request<CaseRecord>(activeHubPath(`/records/${id}/unassign`), {
+  return request<RecordAssigneesResponse>(activeHubPath(`/records/${id}/unassign`), {
     method: 'POST',
     body: JSON.stringify({ pubkey }),
   })

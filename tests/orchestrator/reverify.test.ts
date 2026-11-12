@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  assessOpenPr, latestMechanicalRejection, linkTrustedModules, MAX_CRASH_RETRIES_PER_HEAD,
+  assessOpenPr, claimReentry, latestMechanicalRejection, linkTrustedModules, MAX_CRASH_RETRIES_PER_HEAD,
+  MAX_REENTRIES_PER_SHA,
 } from '../../orchestrator/src/reverify.js'
 import { tick, type TickDeps } from '../../orchestrator/src/tick.js'
 import { buildGateTrace } from '../../orchestrator/src/trace.js'
@@ -100,10 +101,11 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     readLedger: () => [rejected(OLD)], resumedAt: () => 0,
     listItems: async () => ({ ok: true as const, items: [item] }),
     readLabels: async () => ['agent-dispatchable', 'lane:infra'],
-    findOpenPr: async () => '55',
+    findOpenPr: async () => '55', findWedge: async () => undefined,
     prHead: vi.fn(async () => ({ sha: NEW, branch: 'fleet/infra/7' })),
     verifyOpenPrHead: vi.fn(async () => passing),
     requestReviewOnNewHead: vi.fn(async () => 'Review re-requested from llamenos-auto.'),
+    claimReentry: vi.fn(() => ({ ok: true as const, release: () => {} })),
     dispatch: vi.fn(async () => ({ outcome: 'SUCCESS' as const })),
     verifyMechanical: vi.fn(), prDiff: vi.fn(), secondOpinion: vi.fn(), postReview: vi.fn(), reviseWithWorker: vi.fn(),
     haltFleet: vi.fn(), enableAutoMerge: vi.fn(async () => {}), disableAutoMerge: vi.fn(async () => {}),
@@ -221,5 +223,107 @@ describe('the head export gets the trusted install, and only the trusted install
       plant(head)
       await expect(linkTrustedModules(head, trusted)).rejects.toThrow(/contains node_modules/)
     } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+// The bound the first attempt at this fix lacked: verifying its real path
+// reached 44,158 processes on 2026-11-11. Every test below asserts a CEILING on
+// how many verifications start, never merely that the happy path terminates.
+describe('re-verification is bounded (#2738, #2742)', () => {
+  const scratch = (): string => mkdtempSync(join(tmpdir(), 'llamenos-reverify-bound-'))
+
+  it('claimReentry refuses inside a verification — the recursion edge', () => {
+    const dir = scratch()
+    try {
+      const c = claimReentry('55', NEW, { dir, env: { FLEET_IN_VERIFICATION: '1' } })
+      expect(c.ok).toBe(false)
+      if (!c.ok) expect(c.reason).toContain('inside a verification')
+      // Any non-empty value counts, not only "1".
+      expect(claimReentry('55', NEW, { dir, env: { FLEET_IN_VERIFICATION: 'true' } }).ok).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('claimReentry refuses a second re-entry of the same PR while the first is in flight, then allows it after release', () => {
+    const dir = scratch()
+    try {
+      const first = claimReentry('55', NEW, { dir, env: {} })
+      expect(first.ok).toBe(true)
+      const second = claimReentry('https://github.com/o/r/pull/55', 'c'.repeat(40), { dir, env: {} })
+      expect(second.ok).toBe(false)
+      if (first.ok) first.release()
+      expect(claimReentry('55', 'c'.repeat(40), { dir, env: {} }).ok).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('claimReentry allows one head exactly MAX_REENTRIES_PER_SHA times, and a new head gets a fresh allowance', () => {
+    const dir = scratch()
+    try {
+      let granted = 0
+      for (let i = 0; i < MAX_REENTRIES_PER_SHA + 5; i++) {
+        const c = claimReentry('55', NEW, { dir, env: {} })
+        if (c.ok) { granted++; c.release() }
+      }
+      expect(granted).toBe(MAX_REENTRIES_PER_SHA)
+      const fresh = claimReentry('55', 'c'.repeat(40), { dir, env: {} })
+      expect(fresh.ok).toBe(true)
+      if (fresh.ok) fresh.release()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a refused attempt does not leave its in-flight lock behind', () => {
+    const dir = scratch()
+    try {
+      for (let i = 0; i < MAX_REENTRIES_PER_SHA; i++) {
+        const c = claimReentry('55', NEW, { dir, env: {} })
+        if (c.ok) c.release()
+      }
+      expect(claimReentry('55', NEW, { dir, env: {} }).ok).toBe(false)
+      // The refusal came from the ceiling; had it leaked the lock, a NEW head would now be refused too.
+      expect(claimReentry('55', 'c'.repeat(40), { dir, env: {} }).ok).toBe(true)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('MUTATION GUARD: a head whose verification never records a verdict is verified at most MAX_REENTRIES_PER_SHA times across many passes', async () => {
+    const dir = scratch()
+    try {
+      const verify = vi.fn(async (): Promise<VerifyReport> => { throw new Error('gh down') })
+      // Same ledger every pass: nothing was recorded, so the head still looks owed.
+      const d = deps({ verifyOpenPrHead: verify, claimReentry: (pr, sha) => claimReentry(pr, sha, { dir, env: {} }) })
+      for (let pass = 0; pass < 25; pass++) await tick(d)
+      expect(verify).toHaveBeenCalledTimes(MAX_REENTRIES_PER_SHA)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a tick running inside a verification starts no re-verification at all', async () => {
+    const dir = scratch()
+    try {
+      const d = deps({ claimReentry: (pr, sha) => claimReentry(pr, sha, { dir, env: { FLEET_IN_VERIFICATION: '1' } }) })
+      for (let pass = 0; pass < 5; pass++) await tick(d)
+      expect(d.verifyOpenPrHead).not.toHaveBeenCalled()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('a tick wired without claimReentry never re-enters — the bound is not optional', async () => {
+    const d = deps({ claimReentry: undefined })
+    await tick(d)
+    expect(d.verifyOpenPrHead).not.toHaveBeenCalled()
+  })
+
+  it('releases the claim when the verification throws', async () => {
+    const release = vi.fn()
+    const d = deps({
+      verifyOpenPrHead: vi.fn(async () => { throw new Error('boom') }),
+      claimReentry: () => ({ ok: true as const, release }),
+    })
+    await tick(d)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('rail: the live tick is wired with the bound (#2738)', () => {
+  it('cli.ts hands tick a claimReentry, so the re-entry path cannot run unbounded in production', async () => {
+    const { readFileSync } = await import('node:fs')
+    const cli = readFileSync(join(__dirname, '../../orchestrator/src/cli.ts'), 'utf8')
+    expect(cli).toMatch(/claimReentry:\s*\(pr,\s*sha\)\s*=>\s*claimReentry\(pr,\s*sha\)/)
   })
 })

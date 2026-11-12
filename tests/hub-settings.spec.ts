@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect } from './console-guard'
 import { loginAsAdmin, mockConfigWithHub, navigateViaSpa, Timeouts } from './helpers'
 
 /**
@@ -133,8 +133,9 @@ test.describe('Hub Provider Settings Panel', () => {
   })
 
   test('provider settings card shows disconnected status', async ({ page }) => {
-    await page.unrouteAll()
-    await mockConfigWithHub(page)
+    // Layered over the beforeEach mocks: the most recently registered route wins.
+    // (unrouteAll() here left a window in which the dashboard's own polls reached
+    // the real API for a hub it has never heard of — #1858.)
     await mockConfiguredHub(page, { providerConnected: false })
     // Re-navigate via SPA to trigger refetch (page.reload() would drop auth state)
     await navigateViaSpa(page, '/')
@@ -176,8 +177,9 @@ test.describe('Hub Provider Settings Panel', () => {
   })
 
   test('provider settings card hides A2P section when status is null', async ({ page }) => {
-    await page.unrouteAll()
-    await mockConfigWithHub(page)
+    // Layered over the beforeEach mocks: the most recently registered route wins.
+    // (unrouteAll() here left a window in which the dashboard's own polls reached
+    // the real API for a hub it has never heard of — #1858.)
     await mockConfiguredHub(page, { a2pStatus: null })
     await navigateViaSpa(page, '/')
     await navigateViaSpa(page, '/admin/hub-communications')
@@ -201,8 +203,9 @@ test.describe('Hub Provider Settings Panel', () => {
   })
 
   test('usage card shows zero values correctly', async ({ page }) => {
-    await page.unrouteAll()
-    await mockConfigWithHub(page)
+    // Layered over the beforeEach mocks: the most recently registered route wins.
+    // (unrouteAll() here left a window in which the dashboard's own polls reached
+    // the real API for a hub it has never heard of — #1858.)
     await mockConfiguredHub(page, {
       usage: {
         callsReceived: 0,

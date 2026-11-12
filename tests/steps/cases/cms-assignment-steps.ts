@@ -5,6 +5,7 @@
  */
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
 import { Given, When, Then } from '../fixtures'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 import { Timeouts, navigateAfterLogin } from '../../helpers'
 import {
   ADMIN_NSEC,
@@ -41,9 +42,7 @@ async function seedOnShiftVolunteers(request: APIRequestContext, hubId: string) 
   const vol2 = await createUserViaApi(request, { name: uniqueName('AssignVol2') })
   await createShiftViaApi(request, {
     name: uniqueName('AssignShift'),
-    startTime: '00:00',
-    endTime: '23:59',
-    days: [0, 1, 2, 3, 4, 5, 6],
+    ...ALWAYS_ON_SHIFT,
     userPubkeys: [vol1.pubkey, vol2.pubkey],
     hubId,
   })

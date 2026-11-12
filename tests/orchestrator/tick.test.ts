@@ -27,6 +27,7 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     // No open PR by default, so the new pre-dispatch precondition never
     // interferes with a test that isn't about it.
     findOpenPr: async () => undefined,
+    findWedge: async () => undefined,
     // Default dispatch resolves SUCCESS but WITHOUT pr/branch/worktree, so it
     // never falls into the verify/review pipeline unless a test opts
     // in explicitly by overriding dispatch (or the pipeline deps below).

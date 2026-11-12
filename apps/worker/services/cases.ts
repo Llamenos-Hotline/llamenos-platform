@@ -36,9 +36,9 @@ import { conversations } from '../db/schema/conversations'
 import type { ConvertFromReportResponse } from '@protocol/schemas/records'
 import { ServiceError, isCrossHubSharingEnabled } from './settings'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
-import type { CreateRecordBody } from '@protocol/schemas/records'
+import type { CreateRecordBody, RecordContact } from '@protocol/schemas/records'
 import type { MergeRecordsResponse } from '@protocol/schemas/entity-merge'
-import type { CreateEventBody } from '@protocol/schemas/events'
+import type { CaseEvent, CreateEventBody } from '@protocol/schemas/events'
 import type { CreateInteractionBody } from '@protocol/schemas/interactions'
 
 
@@ -55,6 +55,28 @@ type ReportCaseRow = typeof reportCases.$inferSelect
 type InteractionRow = typeof caseInteractions.$inferSelect
 type EvidenceRow = typeof evidence.$inferSelect
 type CustodyEntryRow = typeof custodyEntries.$inferSelect
+
+// The join tables key the record as `case_id`; the protocol names it `recordId`.
+// A link row is never a response on its own — these are its wire shapes.
+
+export function toRecordContact(row: CaseContactRow): RecordContact {
+  return {
+    recordId: row.caseId,
+    contactId: row.contactId,
+    role: row.role ?? '',
+    addedAt: row.addedAt.toISOString(),
+    addedBy: row.addedBy,
+  }
+}
+
+export function toCaseEvent(row: CaseEventRow): CaseEvent {
+  return {
+    recordId: row.caseId,
+    eventId: row.eventId,
+    linkedAt: row.linkedAt.toISOString(),
+    linkedBy: row.linkedBy,
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Input types

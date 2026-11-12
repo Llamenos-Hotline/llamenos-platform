@@ -106,7 +106,7 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   {
     kind: 'clear-envelopes', table: 'notes', scope: BY_HUB,
     columns: {
-      author_envelope: "'[]'::jsonb",
+      author_envelope: 'NULL',
       admin_envelopes: "'[]'::jsonb",
       field_envelopes: 'NULL',
     },

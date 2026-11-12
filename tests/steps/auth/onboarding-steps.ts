@@ -247,12 +247,56 @@ When('I save my recovery key', async ({ page }) => {
 })
 
 async function saveRecoveryKey(page: Page): Promise<void> {
-  const download = page.waitForEvent('download', { timeout: Timeouts.API })
   await page.getByTestId(Ids.ONBOARDING_DOWNLOAD_BACKUP_BTN).click()
-  await download
+  // The save is only real once the app shows where the file went (#2111).
+  await expect(page.getByTestId(TestIds.BACKUP_SAVED_PATH)).toBeVisible({ timeout: Timeouts.API })
   await page.getByTestId(Ids.ONBOARDING_BACKUP_ACK).check()
   await page.getByTestId(Ids.ONBOARDING_CONTINUE_BTN).click()
 }
+
+When('I dismiss the save dialog for my encrypted backup', async ({ page }) => {
+  await page.evaluate(() => { window.__TEST_CANCEL_BACKUP_SAVE__ = true })
+  await page.getByTestId(Ids.ONBOARDING_DOWNLOAD_BACKUP_BTN).click()
+})
+
+When('the write of my encrypted backup fails', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__TEST_CANCEL_BACKUP_SAVE__ = false
+    window.__TEST_FAIL_BACKUP_SAVE__ = true
+  })
+  await page.getByTestId(Ids.ONBOARDING_DOWNLOAD_BACKUP_BTN).click()
+})
+
+When('I choose a location for my encrypted backup', async ({ page }) => {
+  await page.evaluate(() => {
+    window.__TEST_CANCEL_BACKUP_SAVE__ = false
+    window.__TEST_FAIL_BACKUP_SAVE__ = false
+  })
+  await page.getByTestId(Ids.ONBOARDING_DOWNLOAD_BACKUP_BTN).click()
+})
+
+Then('no encrypted backup is saved and I cannot continue', async ({ page }) => {
+  await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toBeVisible({ timeout: Timeouts.API })
+  await expect(page.getByTestId(TestIds.BACKUP_SAVED_PATH)).toHaveCount(0)
+  expect(await page.evaluate(() => window.__TEST_SAVED_BACKUPS ?? [])).toEqual([])
+  // Acknowledging cannot substitute for the file: Continue needs both.
+  await page.getByTestId(Ids.ONBOARDING_BACKUP_ACK).check()
+  await expect(page.getByTestId(Ids.ONBOARDING_CONTINUE_BTN)).toBeDisabled()
+})
+
+Then('my encrypted backup is saved and its location is shown', async ({ page }) => {
+  // The location appears only after the save resolved; read the "disk" after it.
+  await expect(page.getByTestId(TestIds.BACKUP_SAVED_PATH)).toBeVisible({ timeout: Timeouts.API })
+  const saved = await page.evaluate(() => window.__TEST_SAVED_BACKUPS ?? [])
+  expect(saved, 'exactly one backup should have reached disk').toHaveLength(1)
+  await expect(page.getByTestId(TestIds.BACKUP_SAVED_PATH)).toContainText(saved[0].path)
+  // The saved file is the v4 container that login's restore path reads.
+  const container = JSON.parse(saved[0].contents) as Record<string, unknown>
+  expect(container.v).toBe(4)
+  await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toHaveCount(0)
+  await page.getByTestId(Ids.ONBOARDING_BACKUP_ACK).check()
+  await expect(page.getByTestId(Ids.ONBOARDING_CONTINUE_BTN)).toBeEnabled()
+})
 
 When('I create my PIN and save my recovery key', async ({ page }) => {
   await createPin(page)

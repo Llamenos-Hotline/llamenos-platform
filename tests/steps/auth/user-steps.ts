@@ -167,7 +167,8 @@ When('the volunteer completes the onboarding flow', async ({ page }) => {
   await enterPin(page, '12345678')
   // The backup step only renders once the keypair exists and the invite was redeemed.
   await expect(page.getByTestId('recovery-key')).toBeVisible({ timeout: Timeouts.AUTH })
-  await page.getByRole('button', { name: 'Download Encrypted Backup' }).click()
+  await page.getByTestId('onboarding-download-backup').click()
+  await expect(page.getByTestId('backup-saved-path')).toBeVisible({ timeout: Timeouts.ELEMENT })
   await page.getByRole('checkbox').check()
   const continueBtn = page.getByRole('button', { name: 'Continue' })
   await expect(continueBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })

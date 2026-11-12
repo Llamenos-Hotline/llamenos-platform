@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
-import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, subscriberStatsResponseSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
+import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
 import type { BlastContent, MultiBlastContent } from '@shared/types'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
@@ -274,7 +274,7 @@ blasts.post('/',
         description: 'Blast created',
         content: {
           'application/json': {
-            schema: resolver(blastResponseSchema),
+            schema: resolver(blastEnvelopeResponseSchema),
           },
         },
       },
@@ -338,7 +338,7 @@ blasts.patch('/:id',
         description: 'Blast updated',
         content: {
           'application/json': {
-            schema: resolver(blastResponseSchema),
+            schema: resolver(blastEnvelopeResponseSchema),
           },
         },
       },
@@ -395,7 +395,7 @@ blasts.post('/:id/send',
         description: 'Blast sent',
         content: {
           'application/json': {
-            schema: resolver(blastResponseSchema),
+            schema: resolver(blastEnvelopeResponseSchema),
           },
         },
       },
@@ -429,7 +429,7 @@ blasts.post('/:id/schedule',
         description: 'Blast scheduled',
         content: {
           'application/json': {
-            schema: resolver(blastResponseSchema),
+            schema: resolver(blastEnvelopeResponseSchema),
           },
         },
       },
@@ -456,7 +456,7 @@ blasts.post('/:id/cancel',
         description: 'Blast cancelled',
         content: {
           'application/json': {
-            schema: resolver(blastResponseSchema),
+            schema: resolver(blastEnvelopeResponseSchema),
           },
         },
       },
