@@ -105,6 +105,7 @@ import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
 import type { SealedRecordingEraser } from './call-recordings'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
+import { encryptCredentials } from './provider-setup/crypto'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import {
@@ -326,6 +327,18 @@ async function lockReplaceAll(tx: Pick<Database, 'execute'>, table: string): Pro
 }
 
 /** The one place a `hubs` row becomes the wire `Hub` — every read of a hub goes through it. */
+/**
+ * The stored credentials of a hub's mock provider. Its webhook signing secret
+ * (kept in `authToken`, the role Twilio's auth token plays) is encrypted at rest
+ * like any provider credential; a mock with no secret accepts no webhooks.
+ */
+function mockCredentials(phoneNumber: string, options: { webhookSecret?: string; serverKek?: string }): string {
+  const creds = { type: MOCK_PROVIDER_TYPE, phoneNumber }
+  if (!options.webhookSecret) return JSON.stringify(creds)
+  if (!options.serverKek) throw new ServiceError(500, 'A mock webhook secret cannot be stored without SERVER_KEK')
+  return encryptCredentials({ ...creds, authToken: options.webhookSecret }, options.serverKek)
+}
+
 function hubFromRow(row: typeof hubsTable.$inferSelect): Hub {
   return {
     id: row.id,
@@ -2815,7 +2828,11 @@ export class SettingsService {
    * Callers MUST have already checked `assertMockTelephonyAllowed` — this only
    * persists the selection. Refuses to overwrite a real provider's credentials.
    */
-  async enableHubMockTelephony(hubId: string, phoneNumber: string): Promise<{ ok: true }> {
+  async enableHubMockTelephony(
+    hubId: string,
+    phoneNumber: string,
+    options: { webhookSecret?: string; serverKek?: string } = {},
+  ): Promise<{ ok: true }> {
     const [existing] = await this.db
       .select()
       .from(providerConfigs)
@@ -2830,7 +2847,7 @@ export class SettingsService {
     const id = existing?.id ?? crypto.randomUUID()
     const values = {
       providerType: MOCK_PROVIDER_TYPE,
-      credentials: JSON.stringify({ type: MOCK_PROVIDER_TYPE, phoneNumber }),
+      credentials: mockCredentials(phoneNumber, options),
       status: 'connected',
       phoneNumbers: [phoneNumber],
       updatedAt: new Date(),

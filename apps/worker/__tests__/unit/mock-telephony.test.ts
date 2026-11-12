@@ -6,6 +6,9 @@ import {
   mockTelephonyRefusalReason,
   assertMockTelephonyAllowed,
   recoverMockRecording,
+  mockCallTrace,
+  mockWebhookSignature,
+  MOCK_SIGNATURE_HEADER,
 } from '@worker/telephony/mock'
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
 import type { Env } from '@worker/types'
@@ -72,8 +75,69 @@ describe('mock telephony environment guard', () => {
 describe('MockTelephonyAdapter', () => {
   const adapter = new MockTelephonyAdapter(ALLOWED, '+15555550100')
 
-  it('never validates an inbound webhook', async () => {
-    expect(await adapter.validateWebhook(new Request('http://x/api/telephony/incoming', { method: 'POST' }))).toBe(false)
+  it('never validates an inbound webhook when no signing secret was configured', async () => {
+    const url = 'http://x/api/telephony/incoming'
+    const body = '{"callSid":"c1"}'
+    expect(await adapter.validateWebhook(new Request(url, { method: 'POST', body }))).toBe(false)
+    // Not even one "signed" with an empty secret.
+    const headers = { [MOCK_SIGNATURE_HEADER]: mockWebhookSignature('', url, body) }
+    expect(await adapter.validateWebhook(new Request(url, { method: 'POST', body, headers }))).toBe(false)
+  })
+
+  describe('with a webhook signing secret (#1052)', () => {
+    const secret = 's'.repeat(32)
+    const signed = new MockTelephonyAdapter(ALLOWED, '+15555550100', secret)
+    const url = 'http://x/api/telephony/language-selected?hub=h1'
+    const body = '{"callSid":"c1","digits":"1"}'
+    const post = (sig: string | undefined, u = url, b = body) =>
+      new Request(u, { method: 'POST', body: b, headers: sig ? { [MOCK_SIGNATURE_HEADER]: sig } : {} })
+
+    it('accepts a webhook signed over its URL and body', async () => {
+      expect(await signed.validateWebhook(post(mockWebhookSignature(secret, url, body)))).toBe(true)
+    })
+
+    it('refuses an unsigned webhook, a wrong secret, and a signature moved to another URL or body', async () => {
+      expect(await signed.validateWebhook(post(undefined))).toBe(false)
+      expect(await signed.validateWebhook(post(mockWebhookSignature('t'.repeat(32), url, body)))).toBe(false)
+      const sig = mockWebhookSignature(secret, url, body)
+      expect(await signed.validateWebhook(post(sig, 'http://x/api/telephony/language-selected?hub=h2'))).toBe(false)
+      expect(await signed.validateWebhook(post(sig, url, '{"callSid":"c1","digits":"2"}'))).toBe(false)
+    })
+
+    it('verifies over WEBHOOK_BASE_URL, as the real providers do', async () => {
+      const behindProxy = new MockTelephonyAdapter(ALLOWED, '+15555550100', secret, 'https://public.example')
+      const publicUrl = 'https://public.example/api/telephony/language-selected?hub=h1'
+      expect(await behindProxy.validateWebhook(post(mockWebhookSignature(secret, publicUrl, body)))).toBe(true)
+      expect(await behindProxy.validateWebhook(post(mockWebhookSignature(secret, url, body)))).toBe(false)
+    })
+
+    it('keys replay on exactly what is signed', async () => {
+      const a = await signed.webhookReplayKey(post(undefined))
+      expect(await signed.webhookReplayKey(post(undefined))).toBe(a)
+      expect(await signed.webhookReplayKey(post(undefined, url.replace('h1', 'h2')))).not.toBe(a)
+    })
+  })
+
+  it('traces what it was asked to dial, cancel and hang up, per call', async () => {
+    const callSid = `mock-call-trace-${crypto.randomUUID()}`
+    const legs = await adapter.ringVolunteers({
+      callSid,
+      callerNumber: '+15550001111',
+      volunteers: [{ phone: '+15550002222', callToken: 'tok/1' }, { phone: '+15550003333', callToken: 'tok2' }],
+      callbackUrl: 'http://x',
+      hubId: 'hub-1',
+    })
+    const trace = mockCallTrace(callSid)!
+    expect(trace).toMatchObject({ hubId: 'hub-1', callSid, cancelledLegSids: [], hungUp: false })
+    expect(trace.legs.map(l => l.legSid)).toEqual(legs)
+    expect(trace.legs[0]).toMatchObject({
+      to: '+15550002222',
+      answerUrl: 'http://x/api/telephony/user-answer?callToken=tok%2F1',
+      statusUrl: 'http://x/api/telephony/call-status?callToken=tok%2F1',
+    })
+    await adapter.cancelRinging(legs, legs[1])
+    await adapter.hangupCall(callSid)
+    expect(mockCallTrace(callSid)).toMatchObject({ cancelledLegSids: [legs[0]], hungUp: true })
   })
 
   it('rings volunteers without any network call and records the action', async () => {

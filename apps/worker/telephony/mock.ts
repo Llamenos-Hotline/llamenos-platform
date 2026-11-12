@@ -28,11 +28,28 @@
  * `settings:manage-telephony` on the caller. What `devSurfacesEnabled` decides
  * is only whether the mock provider is selectable here at all.
  *
- * The mock never accepts inbound webhooks (`validateWebhook` is always false):
- * simulated calls are injected server-side by the admin-only simulated-telephony
- * routes, so there is no unauthenticated surface that can conjure a call.
+ * Inbound webhooks are accepted only when the admin who selected the mock also
+ * gave it a webhook signing secret (`authToken`, the role Twilio's auth token
+ * plays): each one must carry `X-Mock-Signature`, an HMAC-SHA256 of the signed
+ * URL and the raw body under that secret. That is what lets a test act as the
+ * provider and drive the REAL webhook chain — /incoming → /language-selected →
+ * /user-answer → /call-status → /queue-exit — through the same signature
+ * middleware and handlers a real provider's webhooks take (#1052). Without a
+ * secret `validateWebhook` is false, as it always was: calls are then injected
+ * only by the admin-only simulated-telephony routes, and no unauthenticated
+ * request can conjure one either way.
+ *
+ * What the mock "provider" was asked to do — which legs it dialled, the callback
+ * URLs it would have fetched for each, which legs it was told to cancel and which
+ * calls to hang up — is kept in a bounded process-wide trace (`mockCallTrace`),
+ * because the adapter itself is rebuilt on every resolve. A test reads it through
+ * the admin-only `/simulated-telephony/calls/:callId/provider-trace` route: it is
+ * the provider-side half of first-pickup-wins, which no server table records.
  */
+import { createHmac } from 'node:crypto'
 import { devSurfacesRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
+import { timingSafeCompare } from '../lib/timing-safe'
+import { buildWebhookUrl } from '../lib/webhook-url'
 import type {
   TelephonyAdapter,
   TelephonyResponse,
@@ -121,6 +138,66 @@ export function assertMockTelephonyAllowed(env: MockTelephonyEnv): void {
   if (reason) throw new MockTelephonyRefusedError(reason)
 }
 
+/** Header carrying a mock-provider webhook's signature (hex HMAC-SHA256). */
+export const MOCK_SIGNATURE_HEADER = 'X-Mock-Signature'
+
+/**
+ * The string a mock-provider webhook signs: the signed URL (query included),
+ * a newline, then the raw body. Exported so the signer and the verifier are one
+ * definition.
+ */
+export function mockSigningInput(url: string, body: string): string {
+  return `${url}\n${body}`
+}
+
+/** Hex HMAC-SHA256 of `mockSigningInput(url, body)` under the hub's mock webhook secret. */
+export function mockWebhookSignature(secret: string, url: string, body: string): string {
+  return createHmac('sha256', secret).update(mockSigningInput(url, body)).digest('hex')
+}
+
+/** One leg the mock "dialled" for a call — what a real provider would hold for it. */
+export interface MockDialledLeg {
+  legSid: string
+  /** The volunteer number the leg was placed to. */
+  to: string
+  /** The URL the provider fetches when the leg is answered (carries the leg's call token). */
+  answerUrl: string
+  /** The URL the provider posts the leg's status events to. */
+  statusUrl: string
+}
+
+/** Everything the mock provider was asked to do for one parent call. */
+export interface MockCallTrace {
+  hubId: string
+  callSid: string
+  legs: MockDialledLeg[]
+  /** Leg SIDs the server told the provider to stop ringing, in order. */
+  cancelledLegSids: string[]
+  /** Whether the server told the provider to hang the parent call up. */
+  hungUp: boolean
+}
+
+const MAX_TRACED_CALLS = 200
+const callTraces = new Map<string, MockCallTrace>()
+
+function traceFor(callSid: string, hubId: string): MockCallTrace {
+  let trace = callTraces.get(callSid)
+  if (!trace) {
+    trace = { hubId, callSid, legs: [], cancelledLegSids: [], hungUp: false }
+    callTraces.set(callSid, trace)
+    if (callTraces.size > MAX_TRACED_CALLS) {
+      const oldest = callTraces.keys().next().value
+      if (oldest !== undefined) callTraces.delete(oldest)
+    }
+  }
+  return trace
+}
+
+/** What the mock provider was asked to do for this call, if it was asked anything. */
+export function mockCallTrace(callSid: string): MockCallTrace | undefined {
+  return callTraces.get(callSid)
+}
+
 /** Every provider-facing action the mock performed (bounded; for inspection in tests). */
 export type MockTelephonyAction =
   | { type: 'ring'; callSid: string; legs: number }
@@ -153,9 +230,21 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
   /**
    * @param env   Environment gate — construction throws MockTelephonyRefusedError when the mock is not allowed.
    * @param phoneNumber The (fictional) hotline number this mock answers for.
+   * @param webhookSecret The secret inbound webhooks are signed with; none means none are accepted.
+   * @param webhookBaseUrl The public origin webhooks are signed over (WEBHOOK_BASE_URL), as for real providers.
    */
-  constructor(env: MockTelephonyEnv, readonly phoneNumber: string) {
+  constructor(
+    env: MockTelephonyEnv,
+    readonly phoneNumber: string,
+    private readonly webhookSecret = '',
+    private readonly webhookBaseUrl = '',
+  ) {
     assertMockTelephonyAllowed(env)
+  }
+
+  /** The signed URL and raw body of an inbound webhook. */
+  private async signedParts(request: Request): Promise<{ url: string; body: string }> {
+    return { url: buildWebhookUrl(request, this.webhookBaseUrl).toString(), body: await request.clone().text() }
   }
 
   private record(action: MockTelephonyAction): void {
@@ -202,24 +291,52 @@ export class MockTelephonyAdapter implements TelephonyAdapter {
 
   async hangupCall(callSid: string): Promise<void> {
     this.record({ type: 'hangup', callSid })
+    const trace = callTraces.get(callSid)
+    if (trace) trace.hungUp = true
   }
 
   async ringVolunteers(params: RingVolunteersParams): Promise<string[]> {
     this.record({ type: 'ring', callSid: params.callSid, legs: params.volunteers.length })
-    return params.volunteers.map((_, i) => `mock-leg-${params.callSid}-${i}`)
+    const trace = traceFor(params.callSid, params.hubId ?? '')
+    // Built exactly as a cloud provider's dial request names them (see TwilioAdapter.ringVolunteers):
+    // the opaque per-leg token is the only thing that ties a leg back to its volunteer.
+    const legs = params.volunteers.map((vol, i): MockDialledLeg => {
+      const token = encodeURIComponent(vol.callToken)
+      return {
+        legSid: `mock-leg-${params.callSid}-${i}`,
+        to: vol.phone,
+        answerUrl: `${params.callbackUrl}/api/telephony/user-answer?callToken=${token}`,
+        statusUrl: `${params.callbackUrl}/api/telephony/call-status?callToken=${token}`,
+      }
+    })
+    trace.legs.push(...legs)
+    return legs.map(leg => leg.legSid)
   }
 
   async cancelRinging(callSids: string[], exceptSid?: string): Promise<void> {
     this.record({ type: 'cancel-ringing', callSids, exceptSid })
+    const cancelled = callSids.filter(sid => sid !== exceptSid)
+    for (const trace of callTraces.values()) {
+      if (trace.legs.some(leg => cancelled.includes(leg.legSid))) trace.cancelledLegSids.push(...cancelled)
+    }
   }
 
-  /** The mock accepts no inbound webhooks — calls are injected by the authenticated simulated-telephony routes only. */
-  async validateWebhook(_request: Request): Promise<boolean> {
-    return false
+  /**
+   * Accepts a webhook only when the hub configured a signing secret and the
+   * request carries its HMAC over the signed URL and body — never otherwise.
+   */
+  async validateWebhook(request: Request): Promise<boolean> {
+    if (!this.webhookSecret) return false
+    const signature = request.headers.get(MOCK_SIGNATURE_HEADER)
+    if (!signature) return false
+    const { url, body } = await this.signedParts(request)
+    return timingSafeCompare(signature, mockWebhookSignature(this.webhookSecret, url, body))
   }
 
+  /** Keyed on exactly what the signature authenticates: the signed URL and the body. */
   async webhookReplayKey(request: Request): Promise<string> {
-    return request.clone().text()
+    const { url, body } = await this.signedParts(request)
+    return mockSigningInput(url, body)
   }
 
   async getCallRecording(_callSid: string): Promise<ArrayBuffer | null> {

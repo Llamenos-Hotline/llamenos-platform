@@ -21,7 +21,7 @@ import { requirePermission } from '../middleware/permission-guard'
 import { audit } from '../services/audit'
 import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
-import { isMockTelephonyAllowed, recoverMockRecording } from '../telephony/mock'
+import { isMockTelephonyAllowed, recoverMockRecording, mockCallTrace } from '../telephony/mock'
 import { simulateIncomingCall, simulateCallerHangup, simulateVoicemail, randomFictionalCallerNumber } from '../services/call-simulation'
 import { ServiceError } from '../services/settings'
 
@@ -35,6 +35,12 @@ const statusResponseSchema = z.object({
 const toggleBodySchema = z.object({
   enabled: z.boolean(),
   phoneNumber: z.string().regex(/^\+\d{7,15}$/).optional(),
+  /**
+   * Accept inbound webhooks signed with this secret (X-Mock-Signature, HMAC-SHA256
+   * over the signed URL and body), so a tester can act as the provider and drive the
+   * real webhook chain. Omitted: the mock accepts no webhooks at all.
+   */
+  webhookSecret: z.string().min(32).max(256).optional(),
 })
 const simulateCallBodySchema = z.object({
   callerNumber: z.string().regex(/^\+\d{7,15}$/).optional(),
@@ -65,6 +71,21 @@ const simulateVoicemailResponseSchema = z.object({
   /** Whether the provider confirmed deleting its copy (#2297). */
   recordingDeletion: z.enum(['deleted', 'failed']),
   error: z.string().optional(),
+})
+
+const providerTraceResponseSchema = z.object({
+  callId: z.string(),
+  /** The legs the provider was asked to dial, with the callback URLs it would fetch for each. */
+  legs: z.array(z.object({
+    legSid: z.string(),
+    to: z.string(),
+    answerUrl: z.string(),
+    statusUrl: z.string(),
+  })),
+  /** Leg SIDs the server told the provider to stop ringing. */
+  cancelledLegSids: z.array(z.string()),
+  /** Whether the server told the provider to hang the call up. */
+  hungUp: z.boolean(),
 })
 
 const simulatedTelephony = new Hono<AppEnv>()
@@ -112,12 +133,15 @@ simulatedTelephony.put('/mock',
   }),
   validator('json', toggleBodySchema),
   async (c) => {
-    const { enabled, phoneNumber } = c.req.valid('json')
+    const { enabled, phoneNumber, webhookSecret } = c.req.valid('json')
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
     try {
       if (enabled) {
-        await services.settings.enableHubMockTelephony(hubId, phoneNumber ?? DEFAULT_MOCK_HOTLINE_NUMBER)
+        await services.settings.enableHubMockTelephony(hubId, phoneNumber ?? DEFAULT_MOCK_HOTLINE_NUMBER, {
+          webhookSecret,
+          serverKek: c.env.SERVER_KEK,
+        })
       } else {
         await services.settings.disableHubMockTelephony(hubId)
       }
@@ -215,6 +239,31 @@ simulatedTelephony.post('/simulate/voicemail',
     if (!result.ok) return c.json({ error: result.code }, result.status)
     await audit(services.audit, 'voicemailReceived', c.get('pubkey'), { callSid: callId }, undefined, hubId)
     return c.json(result)
+  },
+)
+
+simulatedTelephony.get('/calls/:callId/provider-trace',
+  describeRoute({
+    tags: ['Simulated Telephony'],
+    summary: 'What the mock provider was asked to do for a call',
+    description: 'The legs the ringing service dialled through the mock (with the answer and status URLs a real provider would fetch for each), the legs it was told to cancel, and whether it was told to hang up. The provider-side half of first-pickup-wins, which no server table records.',
+    responses: {
+      200: { description: 'Provider trace', content: { 'application/json': { schema: resolver(providerTraceResponseSchema) } } },
+      ...authErrors,
+      404: { description: 'The mock provider was asked nothing for this call in this hub' },
+    },
+  }),
+  async (c) => {
+    const hubId = c.get('hubId') ?? ''
+    const callId = c.req.param('callId') ?? ''
+    const trace = mockCallTrace(callId)
+    if (!trace || trace.hubId !== hubId) return c.json({ error: 'call-not-found' }, 404)
+    return c.json({
+      callId,
+      legs: trace.legs,
+      cancelledLegSids: trace.cancelledLegSids,
+      hungUp: trace.hungUp,
+    })
   },
 )
 
