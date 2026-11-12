@@ -182,3 +182,90 @@ export function describeIncompleteRead(c: BriefCoverage): string {
     ignored.map((r) => r.startedAt ?? 'none').join(', ')} — the offset was not honoured`
   return `${head}.${mechanism}${anomaly}`
 }
+
+/** claude `--output-format stream-json` shapes this reads (verified against
+ *  the installed binary): an `assistant` event whose `message.content` holds
+ *  `{type:"tool_use", id, name:"Read", input:{file_path, offset?, limit?}}`,
+ *  then a `user` event whose `message.content` holds
+ *  `{type:"tool_result", tool_use_id, content}` — the content rendered as
+ *  `<n>\t<line>`, the same numbering kimi's `Read` uses. */
+interface ClaudeContentItem {
+  type?: unknown
+  id?: unknown
+  name?: unknown
+  input?: unknown
+  tool_use_id?: unknown
+  content?: unknown
+}
+
+function claudeItems(ev: Record<string, unknown>): ClaudeContentItem[] {
+  const msg = ev['message']
+  if (msg === null || typeof msg !== 'object') return []
+  const content = (msg as { content?: unknown }).content
+  return Array.isArray(content)
+    ? content.filter((c): c is ClaudeContentItem => c !== null && typeof c === 'object')
+    : []
+}
+
+/** A numbered line as either engine's `Read` renders it: `<n>\t` (both, as
+ *  measured) or `<n>→` (older claude builds), after optional padding. */
+const ANY_NUMBERED_LINE_RE = /^ *(\d+)(?:\t|→)/gm
+
+/**
+ * Every file the transcript shows a `Read` of, mapped to the line numbers its
+ * results actually returned — for EITHER engine's stream-json envelope, told
+ * apart by shape. A call with no matching result (a crash mid-call) and a
+ * result with no numbered lines (an error such as "file too large") both
+ * contribute nothing: only a line the model was shown counts as read.
+ */
+export function readLinesByPath(stdout: string): Map<string, Set<number>> {
+  const pending = new Map<string, string>()
+  const out = new Map<string, Set<number>>()
+  const record = (path: string, content: unknown): void => {
+    const lines = out.get(path) ?? new Set<number>()
+    for (const m of contentText(content).matchAll(ANY_NUMBERED_LINE_RE)) lines.add(Number(m[1]))
+    out.set(path, lines)
+  }
+  for (const line of stdout.split('\n')) {
+    const t = line.trim()
+    if (t === '') continue
+    let ev: Record<string, unknown>
+    try {
+      const v: unknown = JSON.parse(t)
+      if (v === null || typeof v !== 'object') continue
+      ev = v as Record<string, unknown>
+    } catch { continue }
+
+    // kimi: tool_calls on an assistant message, then a role:"tool" result.
+    if (ev['role'] === 'assistant' && Array.isArray(ev['tool_calls'])) {
+      for (const call of ev['tool_calls'] as Array<{ id?: unknown; function?: { name?: unknown; arguments?: unknown } }>) {
+        if (call.function?.name !== 'Read' || typeof call.id !== 'string') continue
+        let args: { path?: unknown }
+        try { args = JSON.parse(String(call.function.arguments)) as typeof args } catch { continue }
+        if (typeof args.path === 'string') pending.set(call.id, args.path)
+      }
+      continue
+    }
+    if (ev['role'] === 'tool' && typeof ev['tool_call_id'] === 'string') {
+      const path = pending.get(ev['tool_call_id'])
+      if (path !== undefined) { pending.delete(ev['tool_call_id']); record(path, ev['content']) }
+      continue
+    }
+
+    // claude: tool_use items in an assistant message, tool_result items in a user one.
+    if (ev['type'] === 'assistant') {
+      for (const item of claudeItems(ev)) {
+        if (item.type !== 'tool_use' || item.name !== 'Read' || typeof item.id !== 'string') continue
+        const input = item.input as { file_path?: unknown } | undefined
+        if (typeof input?.file_path === 'string') pending.set(item.id, input.file_path)
+      }
+    } else if (ev['type'] === 'user') {
+      for (const item of claudeItems(ev)) {
+        if (item.type !== 'tool_result' || typeof item.tool_use_id !== 'string') continue
+        const path = pending.get(item.tool_use_id)
+        if (path !== undefined) { pending.delete(item.tool_use_id); record(path, item.content) }
+      }
+    }
+  }
+  return out
+}

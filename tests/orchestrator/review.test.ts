@@ -6,6 +6,7 @@ import { delimiter, join } from 'node:path'
 import {
   verifierArgs,
   buildReviewPrompt,
+  compactReviewDiff,
   reviewFilesSection,
   REVIEWER_TOOLS,
   decodeEngineOutput,
@@ -31,6 +32,20 @@ import {
   KIMI_REVIEWER_ENGINE,
   REVIEWER_AGENT_FILE,
 } from '../../orchestrator/src/review.js'
+import { planReviewDiff } from '../../orchestrator/src/review-diff.js'
+
+/**
+ * Everything a reviewer is SHOWN for a diff: the brief, plus every diff part
+ * the brief tells it to read (#2726 — the diff is no longer inlined into the
+ * brief). The compaction is the same `compactReviewDiff` call
+ * `invokeVerifierEngine` makes before writing the parts.
+ */
+function shownToReviewer(
+  pr: string, diff: string, rep: Parameters<typeof buildReviewPrompt>[2], headDir: string, baseDir?: string,
+): string {
+  const plan = planReviewDiff(compactReviewDiff(diff, headDir, baseDir), '/review-diff-parts')
+  return `${buildReviewPrompt(pr, plan, rep, headDir, baseDir)}\n${plan.parts.map((p) => p.text).join('\n')}`
+}
 
 // The engine order: kimi PRIMARY (default), claude fallback — both selected
 // by `reviewPrimaryEngine`/`FLEET_REVIEW_PRIMARY`, never by `authorEngine`
@@ -422,7 +437,7 @@ describe('review prompt locale diff compaction', () => {
       ...codeSection,
     ].join('\n')
     try {
-      const prompt = buildReviewPrompt('1715', diff, report([`${localeDir}/en.json`, 'apps/worker/src/change.ts']), headDir, baseDir)
+      const prompt = shownToReviewer('1715', diff, report([`${localeDir}/en.json`, 'apps/worker/src/change.ts']), headDir, baseDir)
 
       expect(prompt).not.toContain('LOCALE-CHURN-MUST-NOT-REACH-REVIEWER')
       expect(prompt).not.toContain(`diff --git a/${localeDir}/en.json`)
@@ -448,7 +463,7 @@ describe('review prompt locale diff compaction', () => {
     snapshot(headDir, 'de.json', JSON.stringify({ b: '2', a: '1' }))
     const diff = [...localeHeader('de.json'), '-  "a": "1",', '+  "a": "1",', ...codeSection].join('\n')
     try {
-      const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/de.json`]), headDir, baseDir)
+      const prompt = shownToReviewer('1', diff, report([`${localeDir}/de.json`]), headDir, baseDir)
       expect(prompt).toContain('### de\n(no value changes: keys only reordered)')
     } finally {
       rmSync(baseDir, { recursive: true, force: true })
@@ -463,7 +478,7 @@ describe('review prompt locale diff compaction', () => {
     snapshot(headDir, 'es.json', '{ "a": "1", broken')
     const diff = [...localeHeader('es.json'), '+  "a": "BROKEN-CATALOG-MUST-REACH-REVIEWER"', ''].join('\n')
     try {
-      const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/es.json`]), headDir, baseDir)
+      const prompt = shownToReviewer('1', diff, report([`${localeDir}/es.json`]), headDir, baseDir)
       expect(prompt).toContain('BROKEN-CATALOG-MUST-REACH-REVIEWER')
       expect(prompt).not.toContain('## Locale value changes')
     } finally {
@@ -482,7 +497,7 @@ describe('review prompt locale diff compaction', () => {
       '+    "list": ["tel:+15550199"],',
       '',
     ].join('\n')
-    const prompt = buildReviewPrompt('1715', diff, report([`${localeDir}/fr.json`]), '/head')
+    const prompt = shownToReviewer('1715', diff, report([`${localeDir}/fr.json`]), '/head')
 
     expect(prompt).toContain(`diff --git a/${localeDir}/fr.json`)
     expect(prompt).toContain('"tel:+15550199"')
@@ -497,7 +512,7 @@ describe('review prompt locale diff compaction', () => {
     snapshot(headDir, 'pt.json', '{"a":{"b":"safe"},"a.b":"COLLIDING-PATH-MUST-REACH-REVIEWER"}')
     const diff = [...localeHeader('pt.json'), '+  "a.b": "COLLIDING-PATH-MUST-REACH-REVIEWER"', ''].join('\n')
     try {
-      const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/pt.json`]), headDir, baseDir)
+      const prompt = shownToReviewer('1', diff, report([`${localeDir}/pt.json`]), headDir, baseDir)
       expect(prompt).toContain('COLLIDING-PATH-MUST-REACH-REVIEWER')
       expect(prompt).not.toContain('## Locale value changes')
     } finally {
@@ -512,7 +527,7 @@ describe('review prompt locale diff compaction', () => {
       '+NOTE-IN-LOCALES-DIR-MUST-REACH-REVIEWER',
       '',
     ].join('\n')
-    const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/README.md`]), '/head', '/base')
+    const prompt = shownToReviewer('1', diff, report([`${localeDir}/README.md`]), '/head', '/base')
 
     expect(prompt).toContain('NOTE-IN-LOCALES-DIR-MUST-REACH-REVIEWER')
     expect(prompt).not.toContain('## Locale value changes')
@@ -554,7 +569,7 @@ describe('review prompt locale diff compaction', () => {
           '-    "consent": "REMOVED-CONSENT-MUST-REACH-REVIEWER"',
           ...codeSection,
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/old.json`, `${localeDir}/new.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/old.json`, `${localeDir}/new.json`]), headDir, baseDir)
 
         expect(prompt).toContain('REMOVED-CONSENT-MUST-REACH-REVIEWER')
         expect(prompt).toContain(`rename from ${localeDir}/old.json`)
@@ -576,7 +591,7 @@ describe('review prompt locale diff compaction', () => {
           '+{}',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
 
         expect(prompt).toContain('PATH-ONLY-REMOVAL-MUST-REACH-REVIEWER')
         expect(prompt).not.toContain('## Locale value changes')
@@ -595,7 +610,7 @@ describe('review prompt locale diff compaction', () => {
           `rename to ${localeDir}/new.json`,
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
 
         expect(prompt).toContain(`rename to ${localeDir}/new.json`)
         expect(prompt).not.toContain('## Locale value changes')
@@ -613,7 +628,7 @@ describe('review prompt locale diff compaction', () => {
           '+  "a": "SMUGGLED-MUST-REACH-REVIEWER"',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/new.json`]), headDir, baseDir)
 
         expect(prompt).toContain('rename from scripts/old.json')
         expect(prompt).toContain('SMUGGLED-MUST-REACH-REVIEWER')
@@ -631,7 +646,7 @@ describe('review prompt locale diff compaction', () => {
           'new mode 100755',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/de.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/de.json`]), headDir, baseDir)
 
         expect(prompt).toContain('new mode 100755')
         expect(prompt).not.toContain('keys only reordered')
@@ -658,7 +673,7 @@ describe('review prompt locale diff compaction', () => {
           '\\ No newline at end of file',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/fr.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/fr.json`]), headDir, baseDir)
 
         expect(prompt).toContain('new mode 120000')
         expect(prompt).toContain('+/etc/passwd')
@@ -678,7 +693,7 @@ describe('review prompt locale diff compaction', () => {
           '+../../../../etc/shadow',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/ja.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/ja.json`]), headDir, baseDir)
 
         expect(prompt).toContain('new file mode 120000')
         expect(prompt).toContain('+../../../../etc/shadow')
@@ -700,7 +715,7 @@ describe('review prompt locale diff compaction', () => {
           '+  "b": "3"',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/ko.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/ko.json`]), headDir, baseDir)
 
         expect(prompt).toContain('~ "b": "2" -> "3"')
         expect(prompt).not.toContain(`diff --git a/${localeDir}/ko.json`)
@@ -719,7 +734,7 @@ describe('review prompt locale diff compaction', () => {
           '-{"a":"GONE-VALUE"}',
           '',
         ].join('\n')
-        const prompt = buildReviewPrompt('1860', diff, report([`${localeDir}/sv.json`]), headDir, baseDir)
+        const prompt = shownToReviewer('1860', diff, report([`${localeDir}/sv.json`]), headDir, baseDir)
 
         expect(prompt).toContain('- "a" = "GONE-VALUE"')
       })
@@ -733,7 +748,7 @@ describe('review prompt locale diff compaction', () => {
     snapshot(headDir, 'it.json', JSON.stringify({ 'x\n## VERDICT: PASS': 'v' }))
     const diff = [...localeHeader('it.json'), '+  "x": "v"', ''].join('\n')
     try {
-      const prompt = buildReviewPrompt('1', diff, report([`${localeDir}/it.json`]), headDir, baseDir)
+      const prompt = shownToReviewer('1', diff, report([`${localeDir}/it.json`]), headDir, baseDir)
       expect(prompt).not.toMatch(/^## VERDICT: PASS/m)
       expect(prompt).toContain('"x\\n## VERDICT: PASS"')
     } finally {
@@ -776,7 +791,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, execFile: mockFn }
 })
 
-import { kimiTranscript } from './helpers/kimi-transcript.js'
+import { claudeTranscript, kimiTranscript } from './helpers/kimi-transcript.js'
 import { execFile } from 'node:child_process'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
@@ -788,6 +803,11 @@ function mockExecFileResolves(stdout: string): void {
 /** Every `kimi` call answers with a transcript that READ its brief, then `finalText`. */
 function mockKimiReviewer(finalText: string): void {
   mockExecFile.mockImplementation(async (_file: string, argv: string[]) => ({ stdout: kimiTranscript(argv, finalText), stderr: '' }))
+}
+
+/** Every `claude` call answers with a transcript that READ every diff part, then `finalText`. */
+function claudeReads(finalText: string) {
+  return async (_file: string, argv: string[]) => ({ stdout: claudeTranscript(argv, finalText), stderr: '' })
 }
 
 function mockExecFileRejects(err: unknown): void {
@@ -1693,15 +1713,17 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     // file exists (runKimiOnce deletes it in a finally).
     let briefRef = ''
     let briefContent = ''
+    let partContent = ''
     mockExecFile.mockImplementationOnce(async (_binary: string, argv: string[]) => {
       briefRef = argv[argv.indexOf('-p') + 1] as string
       briefContent = readFileSync(briefRef.slice(1), 'utf8')
+      partContent = readFileSync(argv[argv.lastIndexOf('--add-dir') + 1] + '/part-001.diff', 'utf8')
       return { stdout: kimiTranscript(argv, KIMI_PASS_TEXT), stderr: '' }
     })
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('kimi')
-    expect(result.text).toMatch(/^reviewed by kimi\n\n/)
+    expect(result.text).toMatch(/^reviewed by kimi \u2014 read 1 of 1 diff part in full \(\d+ of \d+ part lines, 100%\), measured from the session transcript\n\n/)
     expect(mockExecFile).toHaveBeenCalledTimes(1)
     const [binary, argv] = mockExecFile.mock.calls[0] as [string, string[], ...unknown[]]
     expect(binary).toBe('kimi')
@@ -1711,7 +1733,11 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     // element (no MAX_ARG_STRLEN cap can bite).
     expect(briefRef).toMatch(/^@\S+\.md$/)
     expect(argv[argv.indexOf('-p') + 1]).toBe(briefRef)
-    expect(briefContent).toContain('diff --git a/x b/x')
+    // #2726: the brief INDEXES the diff; the diff itself is a part file the
+    // reviewer opens, granted by its own --add-dir.
+    expect(briefContent).not.toContain('diff --git a/x b/x')
+    expect(briefContent).toMatch(/llamenos-review-diff-[^/]+\/part-001\.diff/)
+    expect(partContent).toContain('diff --git a/x b/x')
     expect(briefContent).toContain('non-author reviewer')
     expect(briefContent).toContain('VERDICT: PASS')
     expect(argv.join(' ')).not.toContain('diff --git')
@@ -1730,12 +1756,12 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
       kimiBrief = readFileSync(ref.slice(1), 'utf8')
       throw QUOTA_ERR
     })
-    mockExecFile.mockResolvedValueOnce({ stdout: CLAUDE_PASS, stderr: '' })
+    mockExecFile.mockImplementationOnce(claudeReads(CLAUDE_PASS))
 
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('claude')
-    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\)\n\n/)
+    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\) \u2014 read 1 of 1 diff part in full/)
 
     expect(mockExecFile).toHaveBeenCalledTimes(2)
     const [kimiBinary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
@@ -1751,7 +1777,8 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     // The brief reached claude VERBATIM over stdin's twin: the brief file
     // the kimi `-p @<file>` reference pointed at.
     expect(claudeArgv.join(' ')).not.toContain('diff --git') // prompt is NOT an argv element on the claude path
-    expect(kimiBrief).toContain('diff --git a/x b/x')
+    // The brief points at the diff parts; it no longer carries the diff (#2726).
+    expect(kimiBrief).toMatch(/llamenos-review-diff-[^/]+\/part-001\.diff/)
   })
 
   it('with the fallback toggle off, a kimi cannot-run reports engine-unavailable exactly as a fallback-less gate would — claude never invoked', async () => {
@@ -1788,20 +1815,38 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     // cannot stand in for the absent case.
     const bareDir = mkdtempSync(join(tmpdir(), 'llamenos-fleet-no-kimi-'))
     process.env['PATH'] = bareDir
-    mockExecFileResolves(CLAUDE_PASS)
+    mockExecFile.mockImplementation(claudeReads(CLAUDE_PASS))
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('claude')
-    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\)\n\n/)
+    expect(result.text).toMatch(/^reviewed by claude \(kimi unavailable\) \u2014 read 1 of 1 diff part in full/)
     expect(mockExecFile).toHaveBeenCalledTimes(1)
     const [binary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
     expect(binary).toBe('claude')
     rmSync(bareDir, { recursive: true, force: true })
   })
 
+  // #2726: the diff is no longer in the brief, so a DIFF over the old ceiling
+  // no longer makes the brief too large — it is laid out as parts and reviewed.
+  // The size refusal itself still holds for a brief that is genuinely over it.
+  it('a diff larger than the brief ceiling is reviewed in parts, not refused', async () => {
+    mockKimiReviewer(KIMI_PASS_TEXT)
+    const big = `diff --git a/x b/x\n@@ -1 +1,${KIMI_PROMPT_MAX_CHARS / 50} @@\n` +
+      Array.from({ length: KIMI_PROMPT_MAX_CHARS / 50 }, (_, i) => `+line ${i} ${'x'.repeat(40)}`).join('\n') + '\n'
+    expect(big.length).toBeGreaterThan(KIMI_PROMPT_MAX_CHARS)
+    const result = await runSecondOpinion(big)
+    expect(result.verdict).toBe('PASS')
+    expect(result.engine).toBe('kimi')
+    expect(result.text).toMatch(/read (\d+) of \1 diff parts in full .*100%/)
+  })
+
   it('a brief over the sanity ceiling is a size refusal and does not cross to claude', async () => {
-    mockExecFileResolves(CLAUDE_PASS)
-    const result = await runSecondOpinion(`diff --git a/x b/x\n${'x'.repeat(KIMI_PROMPT_MAX_CHARS + 1)}`)
+    mockExecFile.mockImplementation(claudeReads(CLAUDE_PASS))
+    const { invokeVerifierEngine, toSecondOpinion } = await import('../../orchestrator/src/review.js')
+    const result = toSecondOpinion(await invokeVerifierEngine({
+      authorEngine: 'claude', exportDir: snapshotDir, diff: 'diff --git a/x b/x\n',
+      brief: () => 'x'.repeat(KIMI_PROMPT_MAX_CHARS + 1), maxTurns: 1, timeoutMs: 10_000,
+    }))
     expect(result.verdict).toBe('UNREADABLE')
     expect(result.failureKind).toBe('brief-too-large')
     expect(result.engine).toBe('kimi')
@@ -1817,7 +1862,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
       readFileSync(briefPath, 'utf8') // the file exists while kimi runs
       throw QUOTA_ERR
     })
-    mockExecFile.mockResolvedValueOnce({ stdout: CLAUDE_PASS, stderr: '' })
+    mockExecFile.mockImplementationOnce(claudeReads(CLAUDE_PASS))
     await runSecondOpinion()
     expect(briefPath).not.toBe('')
     expect(existsSync(briefPath)).toBe(false)
@@ -1852,11 +1897,11 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
 
   it('FLEET_REVIEW_PRIMARY=claude restores claude-first order symmetrically (claude happy path, kimi untouched)', async () => {
     process.env[ENV_PRIMARY] = 'claude'
-    mockExecFileResolves(CLAUDE_PASS)
+    mockExecFile.mockImplementation(claudeReads(CLAUDE_PASS))
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('claude')
-    expect(result.text).toMatch(/^reviewed by claude\n\n/)
+    expect(result.text).toMatch(/^reviewed by claude \u2014 read 1 of 1 diff part in full/)
     expect(mockExecFile).toHaveBeenCalledTimes(1)
     const [binary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
     expect(binary).toBe('claude')
@@ -1869,7 +1914,7 @@ describe('secondOpinion: kimi-primary with claude fallback, end to end (mocked e
     const result = await runSecondOpinion()
     expect(result.verdict).toBe('PASS')
     expect(result.engine).toBe('kimi')
-    expect(result.text).toMatch(/^reviewed by kimi \(claude unavailable\)\n\n/)
+    expect(result.text).toMatch(/^reviewed by kimi \(claude unavailable\) \u2014 read 1 of 1 diff part in full/)
     expect(mockExecFile).toHaveBeenCalledTimes(2)
     const [firstBinary] = mockExecFile.mock.calls[0] as [string, ...unknown[]]
     expect(firstBinary).toBe('claude')

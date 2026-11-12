@@ -1,3 +1,4 @@
+import { planFor, partsText } from './helpers/review-diff-plan.js'
 import { describe, it, expect } from 'vitest'
 import {
   buildReviewPrompt, prClaimSection, VERIFIER_BRIEF,
@@ -43,6 +44,8 @@ const DIFF = [
   '+export type SharedAdminEnvelope = { x: number }',
 ].join('\n')
 
+const PLAN = planFor(DIFF)
+
 const claim: PrClaim = {
   title: 'refactor(protocol): rename CaseEnvelope to SharedAdminEnvelope',
   body: 'A pure type rename. No behaviour changes; every call site is updated mechanically.',
@@ -53,10 +56,12 @@ const claim: PrClaim = {
  *  would fix the half of #1696 that was not broken (the reviewer that
  *  rejected #1653 was a profile). */
 const builders: readonly [string, (c?: PrClaim) => string][] = [
-  ['buildReviewPrompt', (c) => buildReviewPrompt('1653', DIFF, report, '/export', undefined, c)],
+  // Each is what the reviewer is SHOWN: the brief plus the diff parts it is
+  // told to read (#2726 — the diff is a set of files now, not inlined).
+  ['buildReviewPrompt', (c) => buildReviewPrompt('1653', PLAN, report, '/export', undefined, c) + partsText(PLAN)],
   ['buildProfileReviewPrompt', (c) => buildProfileReviewPrompt(
-    { agent: 'crypto-security-reviewer', instructions: 'EXPERTISE' }, '1653', DIFF, report.changedFiles, '/export', c,
-  )],
+    { agent: 'crypto-security-reviewer', instructions: 'EXPERTISE' }, '1653', PLAN, report.changedFiles, '/export', c,
+  ) + partsText(PLAN)],
 ]
 
 describe('every reviewer prompt carries the PR\'s stated claim (#1696)', () => {
@@ -172,7 +177,7 @@ describe('every reviewer prompt carries the PR\'s stated claim (#1696)', () => {
         // Truncation is ANNOUNCED — a claim that stops mid-sentence must not
         // read as the whole claim.
         expect(p).toContain('TRUNCATED')
-        expect(p).toContain('The diff below is COMPLETE and is never truncated')
+        expect(p).toContain('The diff (its parts, listed below) is COMPLETE and is never truncated')
       })
 
       it('a prompt-injection attempt in the body is still inside the fence, and is named as suspicious', () => {

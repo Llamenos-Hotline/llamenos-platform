@@ -20,6 +20,7 @@
  * PASS — see `DIFF_SCOPE_CONTRACT`'s doc comment — and the last test here
  * pins that absence: a FAIL with out-of-scope findings beside it still fails.
  */
+import { planFor } from './helpers/review-diff-plan.js'
 import { describe, it, expect, vi } from 'vitest'
 import {
   DIFF_SCOPE_CONTRACT, OUT_OF_SCOPE_HEADING, VERIFIER_BRIEF, outOfScopeFindings,
@@ -87,7 +88,7 @@ describe('the diff-scope contract reaches every reviewer', () => {
   it('is in every profile prompt, one shared copy', () => {
     const prompt = buildProfileReviewPrompt(
       { agent: 'crypto-security-reviewer', instructions: 'be a crypto reviewer' },
-      '#1653 rename', 'diff --git a/x b/x', ['apps/ios/x.swift'], '/tmp/export',
+      '#1653 rename', planFor('diff --git a/x b/x'), ['apps/ios/x.swift'], '/tmp/export',
     )
     expect(prompt).toContain(DIFF_SCOPE_CONTRACT)
   })

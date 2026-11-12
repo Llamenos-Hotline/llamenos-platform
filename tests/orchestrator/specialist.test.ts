@@ -1,3 +1,4 @@
+import { planFor, partsText } from './helpers/review-diff-plan.js'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -130,13 +131,16 @@ describe('resolveReviewerLabel against a hostile registry', () => {
 
 describe('buildProfileReviewPrompt', () => {
   it('puts the profile\'s own instructions first, then the shared contracts', () => {
-    const p = buildProfileReviewPrompt({ agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', 'DIFF', ['a.ts'], '/e')
+    const plan = planFor('DIFF')
+    const p = buildProfileReviewPrompt({ agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', plan, ['a.ts'], '/e')
     expect(p.startsWith('EXPERTISE')).toBe(true)
     expect(p).toContain('`x-reviewer`')
     expect(p).toContain(READ_ONLY_CONTRACT)
     expect(p).toContain(VERDICT_CONTRACT)
     expect(p).toContain('/e')
-    expect(p).toContain('DIFF')
+    // The diff is a part the prompt POINTS at, never inlined (#2726).
+    expect(p).toContain(plan.parts[0]!.path)
+    expect(partsText(plan)).toContain('DIFF')
   })
 
   it('omits locale patches and shows the base-to-head value changes for profile reviewers', () => {
@@ -156,9 +160,10 @@ describe('buildProfileReviewPrompt', () => {
       '',
     ].join('\n')
     try {
+      const plan = planFor(diff, headDir, baseDir)
       const prompt = buildProfileReviewPrompt(
-        { agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', diff, [localePath], headDir, undefined, baseDir,
-      )
+        { agent: 'x-reviewer', instructions: 'EXPERTISE' }, '7', plan, [localePath], headDir, undefined, baseDir,
+      ) + partsText(plan)
       expect(prompt).not.toContain('LOCALE-CHURN')
       expect(prompt).toContain('~ "onboarding.tryAgain": "old" -> "new"')
     } finally {

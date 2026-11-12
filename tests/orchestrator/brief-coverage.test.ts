@@ -255,7 +255,7 @@ afterEach(() => {
 function review(mode: 'diligent' | 'forgetful') {
   writeFileSync(join(binDir, 'mode'), mode)
   return invokeVerifierEngine({
-    authorEngine: 'claude', exportDir, prompt: longBrief(), maxTurns: 1, timeoutMs: 60_000,
+    authorEngine: 'claude', exportDir, diff: '', brief: () => longBrief(), maxTurns: 1, timeoutMs: 60_000,
   })
 }
 
