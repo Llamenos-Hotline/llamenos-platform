@@ -25,7 +25,7 @@ Feature: A call routed by the provider's own signed webhooks
   Scenario: Every on-shift volunteer is rung at once
     Given 3 volunteers are on shift
     When a caller dials the hotline and chooses a language
-    Then the caller is queued for a volunteer
+    Then the caller hears the greeting and waits in the queue
     And the ringing service rang exactly volunteers "1, 2 and 3" from the shift
     And the provider was asked to dial one leg to each of volunteers "1, 2 and 3"
     And the call is still ringing with nobody on it
@@ -79,25 +79,25 @@ Feature: A call routed by the provider's own signed webhooks
   Scenario: With nobody on shift the hub's fallback group is rung
     Given a volunteer who is not on shift is in the hub fallback group
     When a caller dials the hotline and chooses a language
-    Then the caller is queued for a volunteer
+    Then the caller hears the greeting and waits in the queue
     And the ringing service rang exactly volunteer "1" from the fallback group
     And the provider was asked to dial one leg to each of volunteer "1"
 
-  Scenario: With nobody on shift and no fallback group nothing rings, and the caller is offered voicemail
+  Scenario: With nobody on shift and no fallback group nothing rings, and the provider is told to take a voicemail
     Given no shift is active and no fallback is configured
     When a caller dials the hotline and chooses a language
-    Then the caller is queued for a volunteer
+    Then the caller hears the greeting and waits in the queue
     And the ringing service rang nobody
     And the provider was asked to dial nothing
     When the caller's queue wait ends without an answer
-    Then the caller is offered voicemail
+    Then the provider is told to take a voicemail
 
   Scenario: A caller who leaves the queue for voicemail stops every leg still ringing
     Given 2 volunteers are on shift
     When a caller dials the hotline and chooses a language
     And the provider was asked to dial one leg to each of volunteers "1 and 2"
     And the caller's queue wait ends without an answer
-    Then the caller is offered voicemail
+    Then the provider is told to take a voicemail
     And the provider was told to stop every leg it dialled
 
   Scenario: A caller who hangs up in the queue is a missed call, and nobody can pick it up after

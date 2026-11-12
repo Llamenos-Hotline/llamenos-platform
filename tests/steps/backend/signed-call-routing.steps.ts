@@ -323,12 +323,12 @@ When("someone without the hub's secret posts a pickup for volunteer {int}'s leg"
 
 // ── Assertions: what the caller was told ──────────────────────────
 
-Then('the caller is queued for a volunteer', async ({ world }) => {
+Then('the caller hears the greeting and waits in the queue', async ({ world }) => {
   // handleIncomingCall: the greeting and hold music, i.e. the caller is in the queue.
   expectAction(signed(world).languageSelected, 'incoming-call', '/language-selected')
 })
 
-Then('the caller is offered voicemail', async ({ world }) => {
+Then('the provider is told to take a voicemail', async ({ world }) => {
   expectAction(signed(world).queueExit, 'voicemail', '/queue-exit')
 })
 
