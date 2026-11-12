@@ -108,7 +108,7 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
     }
     await platform.lockCrypto()
   })
-  await page.getByRole('button', { name: /download.*backup/i }).click()
+  await page.getByTestId('bootstrap-download-backup').click()
   await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toBeVisible({ timeout: 20000 })
   await expect(page.getByRole('button', { name: /continue to setup/i })).toBeDisabled()
   console.log('[SETUP] Backup failure surfaced and Continue stayed disabled')
@@ -120,10 +120,10 @@ async function bootstrapAdmin(page: import('@playwright/test').Page) {
   }, TEST_PIN)
 
   // Download backup (required before continuing)
-  const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: /download.*backup/i }).click()
-  const download = await downloadPromise
-  console.log(`[SETUP] Backup downloaded: ${download.suggestedFilename()}`)
+  await page.getByTestId('bootstrap-download-backup').click()
+  const savedPath = page.getByTestId(TestIds.BACKUP_SAVED_PATH)
+  await expect(savedPath).toBeVisible()
+  console.log(`[SETUP] Backup saved: ${await savedPath.textContent()}`)
 
   // Acknowledge backup saved
   await page.getByText(/saved my recovery key/i).click()
@@ -311,9 +311,8 @@ async function createRoleAccount(
     await expect(recoveryKey).toBeVisible({ timeout: 90000 })
 
     // Download backup
-    const userDownload = userPage.waitForEvent('download', { timeout: 15000 })
-    await userPage.getByRole('button', { name: /download.*backup/i }).click()
-    await userDownload
+    await userPage.getByTestId('onboarding-download-backup').click()
+    await expect(userPage.getByTestId(TestIds.BACKUP_SAVED_PATH)).toBeVisible({ timeout: 15000 })
 
     // Acknowledge backup
     await userPage.getByText(/saved my recovery key/i).click()

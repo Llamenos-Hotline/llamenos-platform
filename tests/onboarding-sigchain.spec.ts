@@ -73,9 +73,8 @@ test.describe('onboarding provisions sigchain genesis + PUK (#1050)', () => {
 
     // Keypair generation + redeem happen before the backup step renders.
     await page.getByTestId('onboarding-download-backup').waitFor({ state: 'visible' })
-    const downloadPromise = page.waitForEvent('download')
     await page.getByTestId('onboarding-download-backup').click()
-    await downloadPromise
+    await expect(page.getByTestId('backup-saved-path')).toBeVisible()
     await page.getByTestId('onboarding-backup-acknowledge').check()
     // Identity initialisation runs on Continue, before the session is committed.
     await page.getByTestId('onboarding-continue').click()

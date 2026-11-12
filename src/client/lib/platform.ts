@@ -84,6 +84,7 @@ export type TauriIpcCommand =
   | 'device_import_and_load'
   | 'generate_backup_from_state'
   | 'generate_recovery_key'
+  | 'save_backup_file'
   | 'backup_verify_credential'
   | 'restore_backup_and_load'
   | 'wipe_keys'
@@ -1405,6 +1406,22 @@ export async function generateBackupFromState(
     return tauriInvoke<string>('generate_backup_from_state', { pin, recoveryKey })
   }
   throw new Error('WASM backup generation not yet implemented')
+}
+
+/**
+ * Save an encrypted backup (the JSON `generateBackupFromState` returned) to disk.
+ *
+ * Rust shows a native save dialog, so the user chooses where it goes, and writes
+ * the file itself — the webview has no filesystem grant. Resolves to the absolute
+ * path written, or `null` if the user dismissed the dialog (nothing was written).
+ * Only a non-null result means the backup exists; callers must not treat a
+ * dismissed dialog as saved (#2111).
+ */
+export async function saveBackupFile(backupJson: string): Promise<string | null> {
+  if (useTauri) {
+    return tauriInvoke<string | null>('save_backup_file', { contents: backupJson })
+  }
+  throw new Error('WASM backup saving not yet implemented')
 }
 
 /**
