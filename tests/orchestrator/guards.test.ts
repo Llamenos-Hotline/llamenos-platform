@@ -4014,6 +4014,55 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
     })
   })
 
+  /**
+   * ios-e2e must not depend on the GitHub-hosted macOS pool (merge group
+   * 43208716793). `ui (1)` and `ui (2)` were routed to `macos-15`, never got a
+   * runner (runner_name="", steps=0) and were abandoned after ~15 minutes, while
+   * `ui (0)` and `ui (3)` — queued for the self-hosted Macs at the same second —
+   * waited 28 minutes and passed. `ci-status` read "ios-e2e(abandoned) produced
+   * NO VERDICT" and ejected four innocent PRs. A job queued for our own runners
+   * waits; a job queued for the repo-wide-capped hosted pool is abandoned, so the
+   * only schedulable capacity is the two Macs and every job must queue for them.
+   */
+  describe('ios-e2e depends only on the self-hosted Macs, which queue rather than abandon', () => {
+    const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
+    const MAC_LABELS = '[self-hosted, macOS, ARM64, ios-e2e]'
+
+    /** Every `host` the build and ui matrices can produce, in both tiers. */
+    function matrixHosts(): string[] {
+      const text = iosYaml()
+      const hosts: string[] = []
+      for (const m of text.matchAll(/^\s+host: (\[.*\]|\S+)\s*$/gm)) hosts.push(m[1] as string)
+      const include = text.match(/include: \$\{\{ fromJSON\(inputs\.tier == 'smoke'\s*\n\s*&& '(.+?)'\s*\n\s*\|\| '(.+?)'\) \}\}/s)
+      if (include === null) throw new Error('could not find the ui matrix include expression')
+      for (const raw of [include[1], include[2]]) {
+        for (const e of JSON.parse(raw as string) as Array<{ host: string }>) hosts.push(e.host)
+      }
+      return hosts
+    }
+
+    it('names no hosted host in either matrix, in either tier', () => {
+      const hosts = matrixHosts().join(' ')
+      expect(hosts, 'a shard routed to a hosted runner is abandoned whenever the repo-wide macOS cap is spent').not.toMatch(/hosted/)
+      expect(matrixHosts().length, 'the host scan found nothing, so this rail proves nothing').toBeGreaterThanOrEqual(4)
+    })
+
+    it('every job runs on the self-hosted Mac label set, with no hosted image anywhere in runs-on', () => {
+      const text = iosYaml()
+      const runsOn = [...text.matchAll(/^\s+runs-on: (.+)$/gm)].map((m) => (m[1] as string).trim())
+      expect(runsOn.length, 'expected the build and ui jobs').toBeGreaterThanOrEqual(2)
+      for (const r of runsOn) expect(r, `runs-on must be the Mac labels, got ${r}`).toBe(MAC_LABELS)
+      expect(text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n'), 'no hosted macOS image outside a comment').not.toMatch(/macos-(\d+|latest)/)
+    })
+
+    it('runs the full tier on more shards than there are runners, all of them Mac shards', () => {
+      const full = (iosYaml().match(/\|\| '(\[\{"shard".+?\])'\) \}\}/s)?.[1]) as string
+      const entries = JSON.parse(full) as Array<{ shard: number; host: string }>
+      expect(entries.map((e) => e.shard).sort()).toEqual([0, 1, 2, 3])
+      expect(entries.every((e) => e.host === 'mac')).toBe(true)
+    })
+  })
+
   it('evalJobIf still refuses to guess at a condition outside its grammar', () => {
       expect(() => evalJobIf("github.ref == 'refs/heads/main'", {})).toThrow(/must not guess/)
       expect(() => evalJobIf("!cancelled() && needs.changes.outputs.ios == 'true'", {})).toThrow(/must not guess/)
