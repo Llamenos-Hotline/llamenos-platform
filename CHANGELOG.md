@@ -210,6 +210,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.13 (2026-11-12)
+
+### Fixes
+
+- 27 more routes answer the schema they declare — ledger 35 → 8 (#2521 tranche 2) (#2573)
+- save the encrypted backup through a native dialog and show where it went (#2685)
+- seal case records to the readers the server names, not author + admin (#1682) (#2740)
+
 ## 0.21.12 (2026-11-11)
 
 ### Fixes
