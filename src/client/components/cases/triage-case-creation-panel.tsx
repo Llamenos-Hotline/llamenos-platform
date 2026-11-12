@@ -10,6 +10,7 @@ import {
   type CreateRecordBody,
 } from '@/lib/api'
 import { sealCase } from '@/lib/platform'
+import { NoAdminReaderError, resolveCreationReaders } from '@/lib/record-recipients'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -66,17 +67,20 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
 
     setSubmitting(true)
     try {
-      const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      const assignedTo = [publicKey]
+      const readers = await resolveCreationReaders({
+        entityTypeId: selectedType.id,
+        assignedTo,
+        authorPubkey: publicKey,
+        adminDecryptionPubkey,
+      })
 
       const summary = JSON.stringify({
         title: title.trim(),
         description: '',
         status: selectedType.statuses.find(s => s.value === selectedType.defaultStatus)?.label ?? selectedType.defaultStatus,
       })
-      const encryptedSummary = await sealCase('summary', summary, readerPubkeys)
+      const encryptedSummary = await sealCase('summary', summary, readers.summary)
 
       const nonEmptyFields = Object.entries(fieldValues).filter(
         ([, v]) => v !== '' && v !== undefined && v !== false,
@@ -84,7 +88,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
       let encryptedFields: Awaited<ReturnType<typeof sealCase>> | undefined
       if (nonEmptyFields.length > 0) {
         const fieldsPayload = JSON.stringify(Object.fromEntries(nonEmptyFields))
-        encryptedFields = await sealCase('fields', fieldsPayload, readerPubkeys)
+        encryptedFields = await sealCase('fields', fieldsPayload, readers.fields)
       }
 
       const body: CreateRecordBody = {
@@ -97,7 +101,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
           encryptedFields: encryptedFields.encryptedContent,
           fieldEnvelopes: encryptedFields.readerEnvelopes,
         }),
-        assignedTo: [publicKey],
+        assignedTo,
       }
 
       const record = await createCaseFromReport(reportId, body)
@@ -105,8 +109,13 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
       setTitle('')
       setFieldValues({})
       onCaseCreated(record.id)
-    } catch {
-      toast(t('triage.createError', { defaultValue: 'Failed to create case from report' }), 'error')
+    } catch (err) {
+      toast(
+        err instanceof NoAdminReaderError
+          ? t('cases.noAdminRecipient')
+          : t('triage.createError', { defaultValue: 'Failed to create case from report' }),
+        'error',
+      )
     } finally {
       setSubmitting(false)
     }

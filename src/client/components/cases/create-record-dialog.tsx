@@ -9,6 +9,7 @@ import {
   type CreateRecordBody,
 } from '@/lib/api'
 import { sealCase } from '@/lib/platform'
+import { NoAdminReaderError, resolveCreationReaders } from '@/lib/record-recipients'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -107,11 +108,16 @@ export function CreateRecordDialog({
     setSubmitting(true)
 
     try {
-      // Build reader pubkeys for E2EE envelopes
-      const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // The creator is the record's first assignee. Each payload is sealed to
+      // its own tier (see record-recipients.ts), so the volunteers and
+      // editRoles holders the server names can open what they work on.
+      const assignedTo = [publicKey]
+      const readers = await resolveCreationReaders({
+        entityTypeId: selectedType.id,
+        assignedTo,
+        authorPubkey: publicKey,
+        adminDecryptionPubkey,
+      })
 
       // Encrypt summary (title + description + status + severity)
       const summary = JSON.stringify({
@@ -122,7 +128,7 @@ export function CreateRecordDialog({
           ? selectedType.severities?.find(s => s.value === selectedType.defaultSeverity)?.label ?? selectedType.defaultSeverity
           : undefined,
       })
-      const encryptedSummary = await sealCase('summary', summary, readerPubkeys)
+      const encryptedSummary = await sealCase('summary', summary, readers.summary)
 
       // Encrypt field values if any are set
       const nonEmptyFields = Object.entries(fieldValues).filter(
@@ -131,7 +137,7 @@ export function CreateRecordDialog({
       let encryptedFields: Awaited<ReturnType<typeof sealCase>> | undefined
       if (nonEmptyFields.length > 0) {
         const fieldsPayload = JSON.stringify(Object.fromEntries(nonEmptyFields))
-        encryptedFields = await sealCase('fields', fieldsPayload, readerPubkeys)
+        encryptedFields = await sealCase('fields', fieldsPayload, readers.fields)
       }
 
       // Build the blind index status hash (use the default status value as a simple hash for now)
@@ -148,7 +154,7 @@ export function CreateRecordDialog({
           encryptedFields: encryptedFields.encryptedContent,
           fieldEnvelopes: encryptedFields.readerEnvelopes,
         }),
-        assignedTo: [publicKey],
+        assignedTo,
       }
 
       const record = await createRecord(body)
@@ -159,8 +165,13 @@ export function CreateRecordDialog({
       // Delay onCreated to let the Sheet close animation complete before
       // triggering a list refresh (prevents overlay from blocking clicks)
       setTimeout(() => onCreated(record.id), 350)
-    } catch {
-      toast(t('cases.createError', { defaultValue: 'Failed to create case' }), 'error')
+    } catch (err) {
+      toast(
+        err instanceof NoAdminReaderError
+          ? t('cases.noAdminRecipient')
+          : t('cases.createError', { defaultValue: 'Failed to create case' }),
+        'error',
+      )
     } finally {
       setSubmitting(false)
     }

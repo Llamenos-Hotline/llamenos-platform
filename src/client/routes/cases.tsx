@@ -38,7 +38,7 @@ import {
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/ui/help-tooltip'
 import { openCase, sealCase } from '@/lib/platform'
-import { useRecordFieldRecipients } from '@/lib/record-recipients'
+import { NoAdminReaderError, resolveRecordReaders, useRecordFieldRecipients } from '@/lib/record-recipients'
 import * as keyManager from '@/lib/key-manager'
 import { EntityMergeDialog } from '@/components/entity-merge-dialog'
 import { EntityCalendarView } from '@/components/entity-calendar-view'
@@ -1056,21 +1056,30 @@ function DetailsTab({
     saveTimeoutRef.current = setTimeout(async () => {
       setSaveStatus('saving')
       try {
-        const readerPubkeys = [publicKey]
-        if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-          readerPubkeys.push(adminDecryptionPubkey)
-        }
+        // Asked now, not read from the timeline's cached hook value: a save
+        // REPLACES the envelope set, so one sealed before that fetch resolved
+        // would drop every co-assignee the record already had.
+        const readers = await resolveRecordReaders({
+          recordId: record.id,
+          authorPubkey: publicKey,
+          adminDecryptionPubkey,
+        })
 
-        const encrypted = await sealCase('fields', JSON.stringify(newValues), readerPubkeys)
+        const encrypted = await sealCase('fields', JSON.stringify(newValues), readers.fields)
         await updateRecord(record.id, {
           encryptedFields: encrypted.encryptedContent,
           fieldEnvelopes: encrypted.readerEnvelopes,
         })
         setSaveStatus('saved')
         setTimeout(() => setSaveStatus(prev => prev === 'saved' ? 'idle' : prev), 2000)
-      } catch {
+      } catch (err) {
         setSaveStatus('error')
-        toast(t('cases.saveError', { defaultValue: 'Failed to save field changes' }), 'error')
+        toast(
+          err instanceof NoAdminReaderError
+            ? t('cases.noAdminRecipient')
+            : t('cases.saveError', { defaultValue: 'Failed to save field changes' }),
+          'error',
+        )
       }
     }, 800)
   }, [publicKey, hasDeviceKey, adminDecryptionPubkey, canEdit, record.id, toast, t])

@@ -1208,7 +1208,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "Cannot save this case: no admin decryption key is configured, so no admin could read it. Ask an administrator to configure one."
   },
   "channels": {
     "a2p": {

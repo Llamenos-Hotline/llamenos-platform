@@ -3421,7 +3421,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "Xaruntan looma habeeyn wax nooc hay'ad ah."
+    "noEntityTypesDescription": "Xaruntan looma habeeyn wax nooc hay'ad ah.",
+    "noAdminRecipient": "Kiiskan lama keydin karo: ma jiro furaha furfurista maamulaha oo la habeeyay, sidaas darteed maamule toona ma akhrin karo. Weydiiso maamule inuu mid habeeyo."
   },
   "help": {
     "securityReports": "Warbixinno",

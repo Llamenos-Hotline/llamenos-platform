@@ -677,10 +677,21 @@ private struct CreateCaseSheet: View {
                 return
             }
 
-            // Build reader pubkeys: self + admin
-            var readerPubkeys = [encPubkey]
-            if let adminPubkey = appState.adminDecryptionPubkey, adminPubkey != encPubkey {
-                readerPubkeys.append(adminPubkey)
+            // The summary is sealed to the `summary` tier the server names for
+            // this entity type and the intended assignee (the creator): every
+            // member who may see the case exists, plus this device and an
+            // admin. A failed lookup falls back to just this device + admin,
+            // and a missing admin key refuses the write (RecordReaders.swift).
+            let apiService = appState.apiService
+            let readers = try await RecordReaderSet.creationReaders(
+                author: encPubkey,
+                adminDecryptionPubkey: appState.adminDecryptionPubkey
+            ) {
+                try await RecordReaderSet.lookupCreationTiers(
+                    apiService: apiService,
+                    entityTypeId: entityType.id,
+                    assignedTo: cryptoService.signingPubkeyHex.map { [$0] } ?? []
+                )
             }
 
             // Build summary JSON
@@ -697,7 +708,7 @@ private struct CreateCaseSheet: View {
             let encrypted = try cryptoService.sealCase(
                 purpose: .summary,
                 plaintext: summaryJSON,
-                readerPubkeys: readerPubkeys
+                readerPubkeys: readers.summary
             )
 
             // Build envelopes in the format the API expects

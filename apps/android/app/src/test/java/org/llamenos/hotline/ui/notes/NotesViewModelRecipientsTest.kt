@@ -92,6 +92,7 @@ class NotesViewModelRecipientsTest {
     private fun makeSessionState(): SessionState {
         val sessionState = mockk<SessionState>(relaxed = true)
         every { sessionState.adminPubkeys } returns listOf(adminPub)
+        every { sessionState.adminDecryptionPubkey } returns adminPub
         return sessionState
     }
 
@@ -159,10 +160,12 @@ class NotesViewModelRecipientsTest {
      * A case comment is sealed as a case comment, not a note (#2499): it used to go
      * through [CryptoService.encryptNote] and be opened as a message, so Android
      * could not read its own comments. The crate adds this device as a reader
-     * itself (`case_record::seal_as_device`), so the ViewModel passes the admins.
+     * itself (`case_record::seal_as_device`). The readers are the record's `fields`
+     * tier from the server (#1682); with no hub configured here that lookup fails,
+     * which must leave exactly the author and the admin — and no other key.
      */
     @Test
-    fun `case addComment seals a case comment for the admins and never as a note`() = runTest {
+    fun `case addComment seals a case comment for the author and the admin and never as a note`() = runTest {
         val cryptoService = makeCryptoService()
         coEvery { cryptoService.sealCase(any(), any(), any()) } answers {
             EncryptedCase(
@@ -185,7 +188,7 @@ class NotesViewModelRecipientsTest {
 
         val readersSlot = slot<List<String>>()
         coVerify(exactly = 1) { cryptoService.sealCase(CasePurpose.COMMENT, "case comment", capture(readersSlot)) }
-        assertEquals(listOf(adminPub), readersSlot.captured)
+        assertEquals(listOf(authorPub, adminPub), readersSlot.captured)
         coVerify(exactly = 0) { cryptoService.encryptNote(any(), any()) }
     }
 }

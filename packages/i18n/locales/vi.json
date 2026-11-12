@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "Chưa có loại thực thể nào được cấu hình cho hub này."
+    "noEntityTypesDescription": "Chưa có loại thực thể nào được cấu hình cho hub này.",
+    "noAdminRecipient": "Không thể lưu hồ sơ này: chưa cấu hình khóa giải mã của quản trị viên nên không quản trị viên nào đọc được. Hãy nhờ một quản trị viên cấu hình khóa."
   },
   "channels": {
     "a2p": {

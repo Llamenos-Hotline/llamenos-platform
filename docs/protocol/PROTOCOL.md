@@ -1464,8 +1464,13 @@ that a server cannot move a comment into a record's summary column (or swap
 summary and fields) and have it open: a ciphertext opens as no purpose but its own.
 
 **Readers.** The sealing device is always a reader. The other readers are X25519
-keys chosen by the caller (today: the hub's admin decryption key; assignee and
-edit-role readers are tracked separately in #1682/#1683). Readers are
+keys chosen by the caller: the tier the server names for the payload
+(`GET /api/records/envelope-recipients?entityTypeId=&assignedTo=` before the
+record exists, `GET /api/records/:id/envelope-recipients` after — a `summary`
+payload takes the `summary` tier, custom field values and timeline comments the
+`fields` tier, contact PII the `pii` tier), plus the hub's admin decryption key.
+A failed lookup falls back to the sealing device plus the admin key and never to
+another key; a write with no admin key is refused (#1682). Readers are
 de-duplicated; an empty reader set is refused. A device's Ed25519 account key is
 never an envelope address and is never sealed to.
 

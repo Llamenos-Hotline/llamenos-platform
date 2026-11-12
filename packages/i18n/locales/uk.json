@@ -2822,7 +2822,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "Для цього хабу не налаштовано типів сутностей."
+    "noEntityTypesDescription": "Для цього хабу не налаштовано типів сутностей.",
+    "noAdminRecipient": "Не вдається зберегти цю справу: ключ розшифрування адміністратора не налаштовано, тож жоден адміністратор не зміг би її прочитати. Попросіть адміністратора налаштувати ключ."
   },
   "connectionSuccess": "Зʼєднання успішне",
   "provider": {

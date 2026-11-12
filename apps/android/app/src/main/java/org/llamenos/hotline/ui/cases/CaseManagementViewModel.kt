@@ -20,6 +20,7 @@ import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.crypto.RecordReaderSet
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.AssignRecordRequest
 import org.llamenos.hotline.model.AssignResponse
@@ -33,6 +34,7 @@ import org.llamenos.hotline.model.UpdateRecordRequest
 import org.llamenos.protocol.CreateInteractionBody
 import org.llamenos.hotline.model.CreateInteractionBodyContentEnvelope
 import org.llamenos.hotline.model.EntityTypeDefinition
+import org.llamenos.protocol.EnvelopeRecipientsResponse
 import org.llamenos.protocol.Evidence
 import org.llamenos.protocol.Interaction
 import org.llamenos.hotline.model.InteractionType
@@ -454,12 +456,26 @@ class CaseManagementViewModel @Inject constructor(
             _uiState.update { it.copy(isAddingComment = true, actionError = null) }
             try {
                 sessionState.ensureAdminPubkeyLoaded(apiService)
+                // A comment is working content: it goes to the `fields` tier the
+                // server names for this record (its assignees, admins and
+                // `editRoles` holders), asked now and not cached. A failed
+                // lookup falls back to this device + the admin, and no admin key
+                // refuses the write (RecordReaders.kt, #1682).
+                val readers = RecordReaderSet.forRecord(
+                    author = cryptoService.encryptionPubkeyHex,
+                    adminDecryptionPubkey = sessionState.adminDecryptionPubkey,
+                ) {
+                    apiService.request<EnvelopeRecipientsResponse>(
+                        "GET",
+                        apiService.activeHubPath("/api/records/$recordId/envelope-recipients"),
+                    )
+                }
                 // Sealed as a case comment, not a note: the crate supplies the label
                 // and AAD, and this device is always a reader (#2499).
                 val encrypted = cryptoService.sealCase(
                     CasePurpose.COMMENT,
                     comment,
-                    sessionState.adminPubkeys,
+                    readers.fields,
                 )
                 val envelopes = encrypted.envelopes.map { env ->
                     CreateInteractionBodyContentEnvelope(

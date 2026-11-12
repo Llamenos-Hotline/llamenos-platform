@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "لا توجد أنواع كيانات مُعدّة لهذا المركز."
+    "noEntityTypesDescription": "لا توجد أنواع كيانات مُعدّة لهذا المركز.",
+    "noAdminRecipient": "تعذّر حفظ هذه القضية: لم يُضبط أي مفتاح لفك تشفير المشرف، لذا لن يتمكن أي مشرف من قراءتها. اطلب من أحد المشرفين ضبط مفتاح."
   },
   "channels": {
     "a2p": {

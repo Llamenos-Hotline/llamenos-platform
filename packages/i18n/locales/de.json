@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "Dieser Fall kann nicht gespeichert werden: Es ist kein Admin-Entschlüsselungsschlüssel konfiguriert, daher könnte kein Admin ihn lesen. Bitten Sie einen Administrator, einen einzurichten."
   },
   "channels": {
     "a2p": {

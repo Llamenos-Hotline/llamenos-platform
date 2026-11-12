@@ -2191,7 +2191,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "No se puede guardar este caso: no hay una clave de descifrado de administrador configurada, por lo que ningún administrador podría leerlo. Pida a un administrador que configure una."
   },
   "contactDirectory": {
     "noKeyPair": "Llave de cifrado ñá íyo",

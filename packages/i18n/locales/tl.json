@@ -1220,7 +1220,8 @@
     "error": {
       "noKey": "Encryption key not available"
     },
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "Hindi ma-save ang kasong ito: walang naka-configure na admin decryption key, kaya walang admin na makakabasa nito. Humiling sa isang administrator na mag-configure ng isa."
   },
   "channels": {
     "a2p": {

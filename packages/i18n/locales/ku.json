@@ -2748,7 +2748,8 @@
     "unassignError": "Failed to unassign",
     "unassigned": "Unassigned",
     "updated": "Updated",
-    "noEntityTypesDescription": "No entity types are configured for this hub."
+    "noEntityTypesDescription": "No entity types are configured for this hub.",
+    "noAdminRecipient": "Ev doz nayê tomarkirin: kilîta deşîfrekirinê ya rêveberê nehatiye mîhengkirin, ji ber vê yekê tu rêveber nikare bixwîne. Ji rêveberekê bixwazin ku yekê mîheng bike."
   },
   "blast": {
     "statTotal": "Bi Giştî",
