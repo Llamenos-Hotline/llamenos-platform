@@ -33,6 +33,7 @@ import {
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
+import { IN_VERIFICATION_ENV } from './review-and-merge-guards.js'
 import {
   runVerifyCi, runReviewCi, decideReviewGate, decideReviewSet,
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
@@ -2088,25 +2089,65 @@ async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | unde
 }
 
 /**
- * `llamenos-fleet review-and-merge <pr>` — see review-and-merge.ts's own
- * module comment for the full design. This wrapper is deliberately thin:
+ * `review-and-merge <pr> [--merge]` argv. The PR must be a bare number: the
+ * in-flight guard keys on it, and `9`, `#9` and a URL naming PR 9 must not be
+ * three different locks. `merge` is the ONE opt-in (#2742) and is `true` only
+ * when `--merge` is spelled exactly; anything else unrecognised is a usage
+ * error, never silently ignored — a mistyped `--mrege` that was dropped would
+ * read as a view-only run the operator did not mean.
+ */
+export function parseReviewAndMergeArgs(rest: readonly string[]):
+  { ok: true; pr: string; merge: boolean } | { ok: false } {
+  let pr: string | undefined
+  let merge = false
+  for (const a of rest) {
+    if (a === '--merge') merge = true
+    else if (/^\d+$/.test(a) && pr === undefined) pr = a
+    else return { ok: false }
+  }
+  return pr === undefined ? { ok: false } : { ok: true, pr, merge }
+}
+
+/**
+ * `llamenos-fleet review-and-merge <pr> [--merge]` — see review-and-merge.ts's
+ * own module comment for the full design. This wrapper is deliberately thin:
  * argv parsing and the exit code only, everything else lives in
  * `runReviewAndMerge` over injected deps so it is unit-tested without a real
  * `gh`/`git`/`claude` in sight.
  *
- * Exit 0 only for `merged` and `already-merged` — every other outcome
- * (`needs-codeowner`, `not-mergeable`) is a REFUSAL to merge, stated on
- * stdout via `describeOutcome`, and must read as non-zero to a caller
- * scripting around this command.
+ * VIEW-ONLY BY DEFAULT (#2742): without `--merge` this reviews, records the
+ * verdict and stops. This is the ONLY place `merge` is derived from argv, and
+ * it is never hard-coded `true` — the call site of the opt-in is the flag the
+ * operator typed.
+ *
+ * Exit 0 for `merged`, `already-merged` and `view-only` (the run did what it
+ * was asked to). Every refusal — `needs-codeowner`, `not-mergeable`,
+ * `guard-refused` and the rest — is non-zero, stated on stdout via
+ * `describeOutcome`.
  */
-async function runReviewAndMergeCommand(pr: string | undefined): Promise<number> {
-  if (pr === undefined) {
-    process.stderr.write('usage: llamenos-fleet review-and-merge <pr>\n')
+async function runReviewAndMergeCommand(rest: readonly string[]): Promise<number> {
+  const args = parseReviewAndMergeArgs(rest)
+  if (!args.ok) {
+    process.stderr.write('usage: llamenos-fleet review-and-merge <pr-number> [--merge]\n')
     return 2
   }
-  const outcome = await runReviewAndMerge(pr, defaultReviewAndMergeDeps(REPO_ROOT, log))
+  const outcome = await runReviewAndMerge(args.pr, defaultReviewAndMergeDeps(REPO_ROOT, log), { merge: args.merge })
   process.stdout.write(`${describeOutcome(outcome)}\n`)
-  return outcome.kind === 'merged' || outcome.kind === 'already-merged' ? 0 : 1
+  return outcome.kind === 'merged' || outcome.kind === 'already-merged' || outcome.kind === 'view-only' ? 0 : 1
+}
+
+/**
+ * A command that IS a verification (#2742): everything it spawns inherits the
+ * marker `review-and-merge` refuses to run under. Set on `process.env` rather
+ * than threaded through each spawn because the children that matter — test
+ * runs, reviewer sessions, anything a test shells out to — are started in
+ * many places and only environment inheritance reaches all of them.
+ */
+function asVerification(handler: CommandHandler): CommandHandler {
+  return (rest) => {
+    process.env[IN_VERIFICATION_ENV] = '1'
+    return handler(rest)
+  }
 }
 
 type CommandHandler = (rest: string[]) => Promise<number> | number
@@ -2143,7 +2184,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   },
   digest: (rest) => runDigest(rest[0]),
   'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
-  'verify-ci': () => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
+  'verify-ci': asVerification(() => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
     lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
     verify: verifyMechanical,
@@ -2159,8 +2200,8 @@ const HANDLERS: Record<string, CommandHandler> = {
       `its ${SCOPE_GRANT_PREFIX}<lane> grants are unknown, so none apply and it is judged on its own lane alone`,
     ))?.labels,
     trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
-  })),
-  'review-ci': () => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
+  }))),
+  'review-ci': asVerification(() => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
     apiKey: process.env[REVIEW_KEY_ENV],
     lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
@@ -2217,9 +2258,9 @@ const HANDLERS: Record<string, CommandHandler> = {
     // without disabling lookup — a lookup that finds nothing behaves
     // identically either way, and this command still runs the engine.
     cacheFor: (scope) => artifactReviewCache(process.env['FLEET_REVIEW_CACHE_DIR'], ciLog, scope),
-  })),
-  'review-gate': () => runReviewGate(),
-  'review-and-merge': (rest) => runReviewAndMergeCommand(rest[0]),
+  }))),
+  'review-gate': asVerification(() => runReviewGate()),
+  'review-and-merge': (rest) => runReviewAndMergeCommand(rest),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),
   // The deterministic gate decision table (board.ts) — read-only: derives

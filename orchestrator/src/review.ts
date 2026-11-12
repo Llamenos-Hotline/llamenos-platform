@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import type { EngineId, Lane } from './config.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
 import { gh } from './gh.js'
+import { IN_VERIFICATION_ENV } from './review-and-merge-guards.js'
 import { fleetRuntimeRoot } from './provenance.js'
 import { HIGH_IMPACT_PATHS } from './impact.js'
 import { briefReadCoverage, describeIncompleteRead } from './brief-coverage.js'
@@ -2086,6 +2087,9 @@ function verifierEnv(home: string): NodeJS.ProcessEnv {
     if (value !== undefined) env[key] = value
   }
   env['HOME'] = home
+  // #2742: a reviewer session is part of a verification; whatever it starts
+  // is refused by `review-and-merge`'s nesting guard.
+  env[IN_VERIFICATION_ENV] = '1'
   return env
 }
 

@@ -552,6 +552,13 @@ the one thing it must never produce. That is also what makes it the escape
 hatch for a PR owned by its required reviewer, which `review_requested`
 cannot reach (#1471) and `synchronize` is forbidden from reviewing.
 
+**`llamenos-fleet review-and-merge` is view-only unless `--merge` is passed (#2742).**
+It reviews, records the verdict and stops, saying it did not merge. It also refuses to
+run inside a verification (`FLEET_IN_VERIFICATION`, set for test runs and the
+`verify-ci` / `review-ci` / `review-gate` commands), to process one head SHA more than 5
+times, or to start while another run holds the same PR — state in
+`~/.llamenos-fleet/review-and-merge/`. See `review-and-merge-guards.ts`.
+
 **`llamenos-fleet review-and-merge` is non-functional until the GitHub App
 exists (#1483).** The Checks API refuses a personal access token
 (`You must authenticate via a GitHub App. (HTTP 403)`), so without the two

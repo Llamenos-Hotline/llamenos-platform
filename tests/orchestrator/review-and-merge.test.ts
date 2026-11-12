@@ -5,7 +5,13 @@ import {
   uncoveredProfiles, authorNeedsHumanApproval,
   type CheckRunInfo, type RequiredCheck, type ReviewAndMergeDeps, type PrSnapshotFacts,
 } from '../../orchestrator/src/review-and-merge.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { REVIEW_JOB } from '../../orchestrator/src/ci.js'
+import {
+  MAX_ATTEMPTS_PER_SHA, acquireInFlight, nestedInVerification, recordAttempt, IN_VERIFICATION_ENV,
+} from '../../orchestrator/src/review-and-merge-guards.js'
 import { REPO } from '../../orchestrator/src/gh.js'
 import {
   GITHUB_API, VerdictRecorderError,
@@ -166,6 +172,9 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     merge: vi.fn(async () => {}),
     clearForQueue: vi.fn(async () => {}),
     unclearForQueue: vi.fn(async () => {}),
+    nestedIn: vi.fn(() => undefined),
+    acquireInFlight: vi.fn(() => ({ ok: true as const, release: vi.fn() })),
+    recordAttempt: vi.fn(() => ({ ok: true as const, attempt: 1, ceiling: 5 })),
     log: vi.fn(),
     ...over,
   }
@@ -174,7 +183,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
 describe('runReviewAndMerge', () => {
   it('already-merged: an already-MERGED PR is left alone, with no review and no merge attempt', async () => {
     const deps = baseDeps({ prState: prStateMock('MERGED') })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome).toEqual({ kind: 'already-merged', pr: '9' })
     expect(deps.readPr).not.toHaveBeenCalled()
     expect(deps.invokeReviewer).not.toHaveBeenCalled()
@@ -183,14 +192,14 @@ describe('runReviewAndMerge', () => {
 
   it('refuses a closed (never merged) PR without touching anything else', async () => {
     const deps = baseDeps({ prState: prStateMock('CLOSED') })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(deps.merge).not.toHaveBeenCalled()
   })
 
   it('refuses when the PR itself cannot be read', async () => {
     const deps = baseDeps({ readPr: vi.fn(async () => undefined) })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(deps.invokeReviewer).not.toHaveBeenCalled()
   })
@@ -199,7 +208,7 @@ describe('runReviewAndMerge', () => {
     const deps = baseDeps({
       fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
     expect(deps.invokeReviewer).not.toHaveBeenCalled()
     expect(deps.postCheckRun).not.toHaveBeenCalled()
@@ -209,7 +218,7 @@ describe('runReviewAndMerge', () => {
 
   it('freshness miss: no cached success invokes the engine and posts the check-run', async () => {
     const deps = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => undefined) })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
     // #1637 — the posted summary is `composeReviewSet`'s (ci.ts), the same
     // shape the CI gate writes for the same check name: the roll-call/
@@ -222,7 +231,7 @@ describe('runReviewAndMerge', () => {
     const deps = baseDeps({
       fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'failure' }]),
     })
-    await runReviewAndMerge('9', deps)
+    await runReviewAndMerge('9', deps, { merge: true })
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
   })
 
@@ -230,7 +239,7 @@ describe('runReviewAndMerge', () => {
     const deps = baseDeps({
       invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'UNREADABLE', text: '(no output)' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'UNREADABLE', 'review unavailable: (no output)\n\n(no output)')
     expect(outcome.kind).toBe('not-mergeable')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('UNREADABLE')
@@ -241,7 +250,7 @@ describe('runReviewAndMerge', () => {
     const deps = baseDeps({
       invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — leaks a key' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(deps.merge).not.toHaveBeenCalled()
   })
@@ -256,7 +265,7 @@ describe('runReviewAndMerge', () => {
       exportHead: vi.fn(async () => ({ dir: '/tmp/export', cleanup })),
       invokeReviewer: vi.fn(async () => { throw new Error('engine exploded') }),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(cleanup).toHaveBeenCalledTimes(1)
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[1]).toBe('UNREADABLE')
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[2]).toContain('engine exploded')
@@ -269,14 +278,14 @@ describe('runReviewAndMerge', () => {
       exportHead: vi.fn(async () => ({ dir: '/tmp/export', cleanup: async () => { throw new Error('rm failed') } })),
       invokeReviewer: vi.fn(async () => { throw new Error('engine exploded') }),
     })
-    await expect(runReviewAndMerge('9', deps)).rejects.toThrow('rm failed')
+    await expect(runReviewAndMerge('9', deps, { merge: true })).rejects.toThrow('rm failed')
     expect(deps.postCheckRun).not.toHaveBeenCalled()
     expect(deps.merge).not.toHaveBeenCalled()
   })
 
   it('head-moved: refuses to merge when the head advanced after the review', async () => {
     const deps = baseDeps({ currentHeadSha: vi.fn(async () => 'head999') })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toMatch(/head moved/)
     expect(deps.merge).not.toHaveBeenCalled()
@@ -289,7 +298,7 @@ describe('runReviewAndMerge', () => {
         { name: 'fleet/verify', state: 'FAILURE', bucket: 'fail' },
       ]),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('fleet/verify')
     expect(deps.merge).not.toHaveBeenCalled()
@@ -304,27 +313,27 @@ describe('runReviewAndMerge', () => {
     const deps = baseDeps({
       readPr: vi.fn(async () => facts({ authorLogin: 'llamenos-auto', authorIsBot: false })),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     expect(outcome).toEqual({ kind: 'needs-codeowner', pr: '1546', headSha: 'head111', authorLogin: 'llamenos-auto' })
     expect(deps.merge, 'the fleet must never merge its own PR without a human code-owner').not.toHaveBeenCalled()
   })
 
   it('and a human-authored PR still merges — the stop is not "never merge anything"', async () => {
     const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorLogin: 'rhonda-rodododo', authorIsBot: false })) })
-    expect((await runReviewAndMerge('9', deps)).kind).toBe('merged')
+    expect((await runReviewAndMerge('9', deps, { merge: true })).kind).toBe('merged')
     expect(deps.merge).toHaveBeenCalledTimes(1)
   })
 
   it('bot-authored PR: stops short of merging and asks for a human code-owner, never approving itself', async () => {
     const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorIsBot: true, authorLogin: 'llamenos-bot' })) })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome).toEqual({ kind: 'needs-codeowner', pr: '9', headSha: 'head111', authorLogin: 'llamenos-bot' })
     expect(deps.merge).not.toHaveBeenCalled()
   })
 
   it('idempotent: a second run against an unchanged, already-merged head performs no second review or merge', async () => {
     const deps = baseDeps()
-    const first = await runReviewAndMerge('9', deps)
+    const first = await runReviewAndMerge('9', deps, { merge: true })
     expect(first.kind).toBe('merged')
     expect(deps.merge).toHaveBeenCalledTimes(1)
 
@@ -332,7 +341,7 @@ describe('runReviewAndMerge', () => {
     // after the first call's real merge) — never a second review, never a
     // second merge attempt.
     const deps2 = baseDeps({ prState: prStateMock('MERGED') })
-    const second = await runReviewAndMerge('9', deps2)
+    const second = await runReviewAndMerge('9', deps2, { merge: true })
     expect(second).toEqual({ kind: 'already-merged', pr: '9' })
     expect(deps2.invokeReviewer).not.toHaveBeenCalled()
     expect(deps2.merge).not.toHaveBeenCalled()
@@ -427,7 +436,7 @@ describe('runReviewAndMerge runs the FULL review set (#1637)', () => {
 
   it('runs the general review AND the profile, then posts one verdict for the set', async () => {
     const deps = baseDeps({ reviewSet: cryptoSet() })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
 
     expect(deps.invokeReviewer, 'the general non-author review is mandatory in every set').toHaveBeenCalledTimes(1)
     expect(deps.invokeProfileReviewer).toHaveBeenCalledTimes(1)
@@ -444,7 +453,7 @@ describe('runReviewAndMerge runs the FULL review set (#1637)', () => {
       reviewSet: cryptoSet(),
       exportHead: vi.fn(async () => ({ dir: '/tmp/export-1546', cleanup })),
     })
-    await runReviewAndMerge('1546', deps)
+    await runReviewAndMerge('1546', deps, { merge: true })
     expect(vi.mocked(deps.invokeReviewer).mock.calls[0]?.[3]).toBe('/tmp/export-1546')
     expect(vi.mocked(deps.invokeProfileReviewer).mock.calls[0]?.[4]).toBe('/tmp/export-1546')
     expect(deps.exportHead).toHaveBeenCalledTimes(1)
@@ -459,7 +468,7 @@ describe('runReviewAndMerge runs the FULL review set (#1637)', () => {
       invokeProfileReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({
         verdict: 'FAIL', text: 'the hub key is derived from an identity key\nVERDICT: FAIL' })),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[1]).toBe('FAIL')
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[2], 'the summary must name which reviewer said what')
       .toContain('crypto-security-reviewer: FAIL')
@@ -472,7 +481,7 @@ describe('runReviewAndMerge runs the FULL review set (#1637)', () => {
       reviewSet: cryptoSet(),
       invokeProfileReviewer: vi.fn(async (): Promise<SecondOpinionResult> => { throw new Error('kimi exited 1') }),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     // UNREADABLE, not FAIL: "the reviewer could not be run" is a different
     // fact from "the reviewer found a problem", and both fail the check.
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[1]).toBe('UNREADABLE')
@@ -486,14 +495,14 @@ describe('runReviewAndMerge runs the FULL review set (#1637)', () => {
       reviewSet: cryptoSet(),
       invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'FAIL', text: 'VERDICT: FAIL x' })),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     expect(vi.mocked(deps.postCheckRun).mock.calls[0]?.[1]).toBe('FAIL')
     expect(outcome.kind).toBe('not-mergeable')
   })
 
   it('still reviews and merges a PR whose set is the general reviewer alone', async () => {
     const deps = baseDeps()
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('merged')
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
     expect(deps.invokeProfileReviewer).not.toHaveBeenCalled()
@@ -517,7 +526,7 @@ describe('runReviewAndMerge still refuses a review set it cannot fully earn (#16
         reason: 'no agent definition "crypto-security-reviewer.md" in the base checkout\'s .claude/agents',
       })),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     expect(outcome.kind).toBe('review-set-unrunnable')
     expect(outcome.kind === 'review-set-unrunnable' && outcome.reason).toContain('crypto-security-reviewer')
     expect(deps.invokeReviewer, 'nothing is spent on a set that cannot be completed').not.toHaveBeenCalled()
@@ -537,7 +546,7 @@ describe('runReviewAndMerge still refuses a review set it cannot fully earn (#16
         ok: true as const, profile: { agent: 'docs-reviewer', instructions: 'you are docs-reviewer' },
       })),
     })
-    const outcome = await runReviewAndMerge('1546', deps)
+    const outcome = await runReviewAndMerge('1546', deps, { merge: true })
     expect(outcome.kind).toBe('review-set-unrunnable')
     expect(deps.postCheckRun).not.toHaveBeenCalled()
     expect(deps.merge).not.toHaveBeenCalled()
@@ -556,7 +565,7 @@ describe('runReviewAndMerge still refuses a review set it cannot fully earn (#16
         ok: true as const, profile: { agent: 'not-the-one-asked-for', instructions: 'x' },
       })),
     })
-    const outcome = await runReviewAndMerge('1184', deps)
+    const outcome = await runReviewAndMerge('1184', deps, { merge: true })
     expect(outcome.kind === 'review-set-unrunnable' && outcome.reason).toContain('rhonda-rodododo')
     expect(outcome.kind === 'review-set-unrunnable' && outcome.reason).not.toContain('Ask llamenos-auto')
   })
@@ -565,7 +574,7 @@ describe('runReviewAndMerge still refuses a review set it cannot fully earn (#16
     const deps = baseDeps({
       reviewSet: vi.fn(async () => ({ ok: false as const, reason: 'the PR\'s labels could not be read' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(deps.postCheckRun).not.toHaveBeenCalled()
     expect(deps.merge).not.toHaveBeenCalled()
@@ -708,7 +717,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
     const deps = baseDeps({
       recorderReady: vi.fn(async () => ({ ok: false as const, reason: 'FLEET_REVIEW_APP_ID is not set (see issue #1483)' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
 
     expect(outcome.kind).toBe('cannot-record')
     expect(outcome.kind === 'cannot-record' && outcome.reason).toContain('FLEET_REVIEW_APP_ID')
@@ -731,7 +740,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
     const deps = baseDeps({
       postCheckRun: vi.fn(async () => { throw new VerdictRecorderError('HTTP 401 — A JSON web token could not be decoded') }),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
 
     expect(outcome.kind).toBe('review-unrecorded')
     expect(outcome.kind === 'review-unrecorded' && outcome.verdict).toBe('PASS')
@@ -747,7 +756,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
     const deps = baseDeps({
       postCheckRun: vi.fn(async () => { throw new VerdictRecorderError('HTTP 403') }),
     })
-    await runReviewAndMerge('9', deps)
+    await runReviewAndMerge('9', deps, { merge: true })
     const logged = (deps.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('\n')
     expect(logged).not.toContain('posted')
   })
@@ -766,7 +775,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
       fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
       recorderReady: vi.fn(async () => ({ ok: false as const, reason: 'FLEET_REVIEW_APP_ID is not set' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
     expect(deps.recorderReady).not.toHaveBeenCalled()
     expect(deps.postCheckRun).not.toHaveBeenCalled()
@@ -781,7 +790,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
         ok: true as const, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [],
       })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('merged')
     expect(deps.recorderReady).toHaveBeenCalledTimes(1)
     expect(deps.postCheckRun).toHaveBeenCalledTimes(1)
@@ -794,7 +803,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
       })),
       resolveProfile: vi.fn(async () => ({ ok: false as const, reason: 'no agent definition' })),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('review-set-unrunnable')
     expect(deps.recorderReady).not.toHaveBeenCalled()
     expect(deps.postCheckRun).not.toHaveBeenCalled()
@@ -809,7 +818,7 @@ describe('runReviewAndMerge fails CLOSED when a verdict cannot be recorded (#148
 describe('runReviewAndMerge — queue clearance (#1894)', () => {
   it('applies the clearance label before merging a fleet-branch PR, and never removes it on success', async () => {
     const deps = baseDeps()
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('merged')
     expect(deps.clearForQueue).toHaveBeenCalledWith('9')
     expect(deps.unclearForQueue).not.toHaveBeenCalled()
@@ -822,7 +831,7 @@ describe('runReviewAndMerge — queue clearance (#1894)', () => {
 
   it('does not label a PR whose branch is not fleet-dispatched — the guard does not gate it', async () => {
     const deps = baseDeps({ readPr: vi.fn(async () => facts({ headBranch: 'some-human-branch' })) })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('merged')
     expect(deps.clearForQueue).not.toHaveBeenCalled()
     expect(deps.merge).toHaveBeenCalledWith('9')
@@ -832,7 +841,7 @@ describe('runReviewAndMerge — queue clearance (#1894)', () => {
     const deps = baseDeps({
       clearForQueue: vi.fn(async () => { throw new Error('label does not exist') }),
     })
-    const outcome = await runReviewAndMerge('9', deps)
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
     expect(outcome.kind).toBe('not-mergeable')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('queue-cleared')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('label does not exist')
@@ -844,7 +853,7 @@ describe('runReviewAndMerge — queue clearance (#1894)', () => {
     const deps = baseDeps({
       merge: vi.fn(async () => { throw mergeError }),
     })
-    await expect(runReviewAndMerge('9', deps)).rejects.toBe(mergeError)
+    await expect(runReviewAndMerge('9', deps, { merge: true })).rejects.toBe(mergeError)
     expect(deps.clearForQueue).toHaveBeenCalledWith('9')
     expect(deps.unclearForQueue).toHaveBeenCalledWith('9')
   })
@@ -855,7 +864,233 @@ describe('runReviewAndMerge — queue clearance (#1894)', () => {
       merge: vi.fn(async () => { throw mergeError }),
       unclearForQueue: vi.fn(async () => { throw new Error('api hiccup') }),
     })
-    await expect(runReviewAndMerge('9', deps)).rejects.toBe(mergeError)
+    await expect(runReviewAndMerge('9', deps, { merge: true })).rejects.toBe(mergeError)
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('queue-cleared'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #2742 — view-only by default, and the three runaway guards.
+// ---------------------------------------------------------------------------
+
+/** Every dep that does something to GitHub, a model or the merge queue. A
+ *  refusal by a guard must leave ALL of them untouched. */
+const SIDE_EFFECTS = [
+  'prState', 'readPr', 'prDiff', 'fetchReviewCheckRuns', 'exportHead', 'invokeReviewer',
+  'invokeProfileReviewer', 'postCheckRun', 'currentHeadSha', 'requiredChecks', 'clearForQueue', 'merge',
+] as const
+
+function expectNothingTouched(deps: ReviewAndMergeDeps): void {
+  for (const k of SIDE_EFFECTS) {
+    expect(deps[k] as ReturnType<typeof vi.fn>, `${k} was called by a refused run`).not.toHaveBeenCalled()
+  }
+}
+
+describe('runReviewAndMerge is VIEW-ONLY by default (#2742)', () => {
+  // Everything a merge needs is green and mergeable here: the ONLY thing
+  // between this PR and a merge is the opt-in.
+  it.each([
+    ['no options', undefined],
+    ['an empty options object', {}],
+    ['merge: false', { merge: false }],
+    ['merge: undefined', { merge: undefined }],
+  ])('%s: reviews and records the verdict, then stops without merging', async (_label, opts) => {
+    const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorLogin: 'a-human', headBranch: 'feat/x' })) })
+    const outcome = await runReviewAndMerge('9', deps, opts)
+    expect(outcome).toEqual({ kind: 'view-only', pr: '9', headSha: 'head111', reused: false })
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', expect.any(String))
+    // Not merely "merge was not called": nothing on the road to a merge ran.
+    expect(deps.merge).not.toHaveBeenCalled()
+    expect(deps.clearForQueue).not.toHaveBeenCalled()
+    expect(deps.requiredChecks).not.toHaveBeenCalled()
+  })
+
+  it('says plainly that it did not merge, and how to ask for one — never silence', async () => {
+    const text = describeOutcome(await runReviewAndMerge('9', baseDeps()))
+    expect(text).toContain('NOT merged')
+    expect(text).toContain('view-only')
+    expect(text).toContain('--merge')
+  })
+
+  it('a reused passing review is also view-only, and says it was reused', async () => {
+    const deps = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]) })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome).toMatchObject({ kind: 'view-only', reused: true })
+    expect(deps.invokeReviewer).not.toHaveBeenCalled()
+    expect(deps.merge).not.toHaveBeenCalled()
+    expect(describeOutcome(outcome)).toContain('reused')
+  })
+
+  it('a FAIL verdict is still recorded and still not a merge', async () => {
+    const deps = baseDeps({ invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'FAIL', text: 'VERDICT: FAIL' })) })
+    const outcome = await runReviewAndMerge('9', deps)
+    expect(outcome.kind).toBe('not-mergeable')
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String))
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('merge: true is the one thing that changes the result on the identical PR', async () => {
+    const mk = () => baseDeps({ readPr: vi.fn(async () => facts({ authorLogin: 'a-human', headBranch: 'feat/x' })) })
+    const viewOnly = mk()
+    const merging = mk()
+    expect((await runReviewAndMerge('9', viewOnly)).kind).toBe('view-only')
+    expect((await runReviewAndMerge('9', merging, { merge: true })).kind).toBe('merged')
+    expect(viewOnly.merge).not.toHaveBeenCalled()
+    expect(merging.merge).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['a truthy string', { merge: 'yes' as unknown as boolean }],
+    ['1', { merge: 1 as unknown as boolean }],
+  ])('only a real boolean true merges — %s does not', async (_label, opts) => {
+    const deps = baseDeps({ readPr: vi.fn(async () => facts({ authorLogin: 'a-human', headBranch: 'feat/x' })) })
+    expect((await runReviewAndMerge('9', deps, opts)).kind).toBe('view-only')
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+})
+
+describe('runReviewAndMerge refuses to run from inside a verification (#2742)', () => {
+  const nested = () => baseDeps({ nestedIn: vi.fn(() => 'inside a verification') })
+
+  it.each([['view-only', undefined], ['merging', { merge: true }]])(
+    'refuses (%s) before reading, locking, counting, reviewing, posting or merging anything',
+    async (_label, opts) => {
+      const deps = nested()
+      const outcome = await runReviewAndMerge('9', deps, opts)
+      expect(outcome).toEqual({ kind: 'guard-refused', pr: '9', guard: 'nested', reason: 'inside a verification' })
+      expectNothingTouched(deps)
+      expect(deps.acquireInFlight).not.toHaveBeenCalled()
+      expect(deps.recordAttempt).not.toHaveBeenCalled()
+    },
+  )
+
+  it('says so out loud, naming the guard and the issue', async () => {
+    const text = describeOutcome(await runReviewAndMerge('9', nested()))
+    expect(text).toContain('nested guard')
+    expect(text).toContain('2742')
+    expect(text).toContain('NOT merged')
+  })
+
+  it('the real detector refuses on the marker the verification sets', () => {
+    expect(nestedInVerification({ [IN_VERIFICATION_ENV]: '1' })).toBeDefined()
+    expect(nestedInVerification({})).toBeUndefined()
+  })
+})
+
+describe('runReviewAndMerge enforces a per-SHA attempt ceiling (#2742)', () => {
+  it('refuses once the ceiling is reached — no review, no post, no merge — and releases its lock', async () => {
+    const release = vi.fn()
+    const deps = baseDeps({
+      acquireInFlight: vi.fn(() => ({ ok: true as const, release })),
+      recordAttempt: vi.fn(() => ({ ok: false as const, reason: 'processed 5 times (ceiling 5)' })),
+    })
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
+    expect(outcome).toEqual({ kind: 'guard-refused', pr: '9', guard: 'attempt-ceiling', reason: 'processed 5 times (ceiling 5)' })
+    for (const k of ['prDiff', 'fetchReviewCheckRuns', 'exportHead', 'invokeReviewer', 'postCheckRun', 'currentHeadSha', 'requiredChecks', 'clearForQueue', 'merge'] as const) {
+      expect(deps[k] as ReturnType<typeof vi.fn>, `${k} ran after the ceiling tripped`).not.toHaveBeenCalled()
+    }
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(describeOutcome(outcome)).toContain('attempt-ceiling guard')
+  })
+
+  it('counts the HEAD the PR is on, not the PR number', async () => {
+    const deps = baseDeps({ readPr: vi.fn(async () => facts({ headSha: 'cafe123' })) })
+    await runReviewAndMerge('9', deps)
+    expect(deps.recordAttempt).toHaveBeenCalledWith('cafe123')
+  })
+
+  it('does not spend an attempt on a PR that is already merged or closed', async () => {
+    const merged = baseDeps({ prState: prStateMock('MERGED') })
+    await runReviewAndMerge('9', merged)
+    expect(merged.recordAttempt).not.toHaveBeenCalled()
+  })
+
+  it('with the real ledger: the same head is processed ceiling times, the next run is refused, a new head is not', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-ram-ceiling-'))
+    try {
+      const run = (headSha: string) => {
+        const deps = baseDeps({
+          readPr: vi.fn(async () => facts({ headSha })),
+          recordAttempt: (sha) => recordAttempt(sha, { dir }),
+          // Head is unmoved for the merge-readiness read.
+          currentHeadSha: vi.fn(async () => headSha),
+        })
+        return runReviewAndMerge('9', deps).then((outcome) => ({ outcome, deps }))
+      }
+      for (let i = 0; i < MAX_ATTEMPTS_PER_SHA; i++) {
+        expect((await run('sha-loop')).outcome.kind, `attempt ${i + 1}`).toBe('view-only')
+      }
+      const refused = await run('sha-loop')
+      expect(refused.outcome).toMatchObject({ kind: 'guard-refused', guard: 'attempt-ceiling' })
+      expect(refused.deps.invokeReviewer).not.toHaveBeenCalled()
+      expect((await run('sha-next-commit')).outcome.kind).toBe('view-only')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('runReviewAndMerge refuses a second concurrent run on one PR (#2742)', () => {
+  it('refuses before reading anything when the PR is already being processed', async () => {
+    const deps = baseDeps({ acquireInFlight: vi.fn(() => ({ ok: false as const, reason: 'pid 4242 holds it' })) })
+    const outcome = await runReviewAndMerge('9', deps, { merge: true })
+    expect(outcome).toEqual({ kind: 'guard-refused', pr: '9', guard: 'in-flight', reason: 'pid 4242 holds it' })
+    expectNothingTouched(deps)
+    expect(deps.recordAttempt).not.toHaveBeenCalled()
+    expect(describeOutcome(outcome)).toContain('in-flight guard')
+  })
+
+  it('with the real lock: a run started while another is mid-review is refused, and the first still completes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'llamenos-ram-inflight-'))
+    try {
+      let releaseReviewer: () => void = () => {}
+      const reviewerGate = new Promise<void>((r) => { releaseReviewer = r })
+      let enteredReviewer: () => void = () => {}
+      const entered = new Promise<void>((r) => { enteredReviewer = r })
+      const mk = (over: Partial<ReviewAndMergeDeps> = {}) => baseDeps({
+        acquireInFlight: (pr) => acquireInFlight(pr, { dir }),
+        ...over,
+      })
+      const first = mk({
+        invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => {
+          enteredReviewer()
+          await reviewerGate
+          return { verdict: 'PASS', text: 'VERDICT: PASS' }
+        }),
+      })
+      const firstRun = runReviewAndMerge('9', first)
+      await entered // the first run holds the PR and is inside its review
+
+      const second = mk()
+      const secondOutcome = await runReviewAndMerge('9', second)
+      expect(secondOutcome).toMatchObject({ kind: 'guard-refused', guard: 'in-flight' })
+      expectNothingTouched(second)
+
+      releaseReviewer()
+      expect((await firstRun).kind).toBe('view-only')
+
+      // The lock is released on completion: a later run is not refused.
+      expect((await runReviewAndMerge('9', mk())).kind).toBe('view-only')
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  it('releases the lock when the run throws, so one crash does not wedge the PR', async () => {
+    const release = vi.fn()
+    const deps = baseDeps({
+      acquireInFlight: vi.fn(() => ({ ok: true as const, release })),
+      merge: vi.fn(async () => { throw new Error('queue declined') }),
+      readPr: vi.fn(async () => facts({ authorLogin: 'a-human', headBranch: 'feat/x' })),
+    })
+    await expect(runReviewAndMerge('9', deps, { merge: true })).rejects.toThrow('queue declined')
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the lock on a normal refusal too', async () => {
+    const release = vi.fn()
+    const deps = baseDeps({
+      acquireInFlight: vi.fn(() => ({ ok: true as const, release })),
+      prState: prStateMock('CLOSED'),
+    })
+    expect((await runReviewAndMerge('9', deps)).kind).toBe('not-mergeable')
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })
