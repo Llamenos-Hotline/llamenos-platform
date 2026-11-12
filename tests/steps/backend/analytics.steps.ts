@@ -23,7 +23,7 @@ import {
   simulateEndCall,
   uniqueCallerNumber,
 } from '../../simulation-helpers'
-import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 
 // ── Local analytics test state ──────────────────────────────────────
 

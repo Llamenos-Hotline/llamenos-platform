@@ -2,8 +2,8 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType, RecipientEnvelope } from '@shared/types'
+import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
-import { ALWAYS_ON_SHIFT } from '@shared/always-on-shift'
 import { banHashes, sealCallerNumber } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
@@ -417,6 +417,7 @@ dev.post('/test-create-shift', async (c) => {
   const services = c.get('services')
   const hubId = body.hubId
   try {
+    // Always on: a window that closes at 23:59 fails once a day (#2693).
     await services.shifts.create(hubId, {
       encryptedName: btoa('BDD Test Shift'),
       ...ALWAYS_ON_SHIFT,
