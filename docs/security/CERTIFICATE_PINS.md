@@ -140,10 +140,11 @@ root CAs (or update the pin hashes accordingly).
    `ISRG_ROOT_*_HASH` constants and `DEFAULT_PIN_HASHES`
 4. Update `apps/ios/Sources/Services/CertificatePinning.swift` pin hashes
 4a. Update `apps/desktop/src/cert_pin.rs` `ISRG_ROOT_PINS`
-5. Update `/api/config` endpoint `pinConfig` response (signed by server Ed25519 key)
-6. Deploy backend first (with both old + new pins in `pinConfig`)
-7. Ship mobile update with new pin hashes (keep old as backup until expiry)
-8. After old certs expire: remove old pins from backend `pinConfig`
+5. Ship the client updates with the new pin hashes (keep the old ones as backup until expiry)
+6. After the old certificates expire: remove the old pins in a later client release
+
+The server does not serve pins (`GET /api/config/pins` was removed, #2708). Pins are compiled
+into each client, so a rotation is always a client release — never a server change.
 
 ## Hard-Fail Policy
 
