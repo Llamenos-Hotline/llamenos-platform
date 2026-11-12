@@ -338,9 +338,12 @@ async function validatingHub(services: Services, url: URL): Promise<string | und
     (callSid ? await services.calls.getHubIdForCall(callSid) : null) || undefined
   if (path.endsWith('/call-recording')) return fromCall(url.searchParams.get('parentCallSid'))
   if (path.endsWith('/user-answer') || path.endsWith('/call-status')) {
+    // Exactly the handlers' resolution: the token's hub — and, for a status
+    // callback only, the parent call's when there is no usable token.
     const callToken = url.searchParams.get('callToken')
-    if (callToken) return (await services.calls.resolveCallToken(callToken))?.hubId || undefined
-    return fromCall(url.searchParams.get('parentCallSid'))
+    const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
+    if (tokenData?.hubId) return tokenData.hubId
+    return path.endsWith('/call-status') ? fromCall(url.searchParams.get('parentCallSid')) : undefined
   }
   return url.searchParams.get('hub') || undefined
 }
@@ -913,6 +916,14 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   const { result: queueResult } = await adapter.parseQueueExitWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
+
+  // The caller has left the queue — hung up, or is being sent to voicemail — so
+  // nobody can be bridged to them any more. Stop every volunteer leg still
+  // ringing for them (#1052): left alone, each rang out its full timeout for a
+  // caller who was gone, and a volunteer who picked one up claimed a call with
+  // no one on it. Read before the call ends, which deletes the recorded legs.
+  // ('bridged' means a volunteer answered, and that answer already cancelled the others.)
+  if (queueResult !== 'bridged') await cancelLosingLegs(c.env, services, hubId, callSid)
 
   if (queueResult === 'hangup') {
     // Caller hung up while in queue — end the call as unanswered
