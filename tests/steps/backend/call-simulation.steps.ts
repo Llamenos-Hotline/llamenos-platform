@@ -4,7 +4,8 @@
  * Implements step definitions for:
  * - Call simulation lifecycle (incoming call, answer, end, voicemail)
  * - Telephony adapter validation (Twilio, SignalWire, Vonage)
- * - Shift routing (ring groups, fallback)
+ * - Shift and fallback-group setup (who a call rings is asserted against the
+ *   server's recorded ring set in signed-call-routing.steps.ts, #1052)
  * - Incoming message simulation (SMS, WhatsApp)
  */
 import { expect } from '@playwright/test'
@@ -41,8 +42,6 @@ interface CallSimState {
   providerConfig?: Record<string, unknown>
   validationResult?: { valid: boolean; error?: string }
   adapterInstance?: string
-  shiftVolunteers: Array<{ pubkey: string; deviceKey: string }>
-  ringGroup: string[]
 }
 
 const CALL_SIMULATION_KEY = 'call_simulation'
@@ -53,11 +52,7 @@ function getCallSimState(world: Record<string, unknown>): CallSimState {
 
 
 Before({ tags: '@backend' }, async ({ world }) => {
-  const sim = {
-    shiftVolunteers: [],
-    ringGroup: [],
-  }
-  setState(world, CALL_SIMULATION_KEY, sim)
+  setState(world, CALL_SIMULATION_KEY, {} satisfies CallSimState)
 })
 
 // ════════════════════════════════════════════════════════════════════
@@ -164,28 +159,6 @@ Then('each provider should have a display label and icon identifier', async ({ w
 // SHIFT ROUTING STEPS
 // ════════════════════════════════════════════════════════════════════
 
-Given('a shift is currently active with {int} volunteers', async ({ request, world }, count: number) => {
-  const hubId = getScenarioState(world).hubId
-  getCallSimState(world).shiftVolunteers = []
-  for (let i = 0; i < count; i++) {
-    const vol = await createVolunteerViaApi(request, { name: uniqueName(`Shift Vol ${i}`), hubId })
-    getCallSimState(world).shiftVolunteers.push({ pubkey: vol.pubkey, deviceKey: vol.deviceKey })
-    getScenarioState(world).volunteers.push({ ...vol, onShift: true })
-  }
-  const shift = await createShiftViaApi(request, {
-    name: uniqueName('Active Shift'),
-    ...ALWAYS_ON_SHIFT,
-    userPubkeys: getCallSimState(world).shiftVolunteers.map(v => v.pubkey),
-    hubId,
-  })
-  // Ringing needs the volunteer's consent as well as the admin's — see
-  // clockInViaApi.
-  for (const vol of getCallSimState(world).shiftVolunteers) {
-    await clockInViaApi(request, hubId, vol.deviceKey)
-  }
-  getScenarioState(world).shiftIds.push(shift.id)
-})
-
 Given('no shift is active and no fallback is configured', async ({ request, world }) => {
   // Calls, shifts and fallback groups all belong to a hub (#2460): there is no
   // instance-wide fallback group to clear, only this scenario's hub's.
@@ -203,10 +176,6 @@ Given('two overlapping shifts with different volunteers', async ({ request, worl
   const hubId = getScenarioState(world).hubId
   const vol1 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 1'), hubId })
   const vol2 = await createVolunteerViaApi(request, { name: uniqueName('Overlap Vol 2'), hubId })
-  getCallSimState(world).shiftVolunteers = [
-    { pubkey: vol1.pubkey, deviceKey: vol1.deviceKey },
-    { pubkey: vol2.pubkey, deviceKey: vol2.deviceKey },
-  ]
   getScenarioState(world).volunteers.push({ ...vol1, onShift: true }, { ...vol2, onShift: true })
 
   await createShiftViaApi(request, {
@@ -255,7 +224,6 @@ Given('a hub in the {string} time zone', async ({ request, world }, timeZone: st
 Given('a volunteer is clocked in on a shift covering the current time in {string}', async ({ request, world }, timeZone: string) => {
   const hubId = getScenarioState(world).hubId
   const vol = await createVolunteerViaApi(request, { name: uniqueName('TZ Vol'), hubId })
-  getCallSimState(world).shiftVolunteers = [{ pubkey: vol.pubkey, deviceKey: vol.deviceKey }]
   getScenarioState(world).volunteers.push({ ...vol, onShift: true })
   const shift = await createShiftViaApi(request, {
     name: uniqueName('TZ Shift'),
@@ -291,43 +259,6 @@ Then('the call should be refused because nobody is on shift', async ({ world }) 
   const { callHttpStatus, callResponseBody } = getScenarioState(world)
   expect(callHttpStatus, `incoming-call: ${JSON.stringify(callResponseBody)}`).toBe(422)
   expect(callResponseBody?.status).toBe('no-volunteers')
-})
-
-When('a call needs to be routed', async ({ request, world }) => {
-  const caller = uniqueCallerNumber()
-  const hubId = getScenarioState(world).hubId
-  try {
-    const result = await simulateIncomingCall(request, { callerNumber: caller, hubId, checkVolunteers: true })
-    getCallSimState(world).callId = result.callId
-    getCallSimState(world).callStatus = result.status
-    getScenarioState(world).callId = result.callId
-    getScenarioState(world).callStatus = result.status
-  } catch {
-    getCallSimState(world).callStatus = 'no-volunteers'
-    getScenarioState(world).callStatus = 'no-volunteers'
-  }
-})
-
-When('a call needs to be routed during the overlap', async ({ request, world }) => {
-  const caller = uniqueCallerNumber()
-  const hubId = getScenarioState(world).hubId
-  const result = await simulateIncomingCall(request, { callerNumber: caller, hubId })
-  getCallSimState(world).callId = result.callId
-  getCallSimState(world).callStatus = result.status
-})
-
-Then('all {int} volunteers should be in the ring group', async ({ world }, count: number) => {
-  expect(getCallSimState(world).callStatus).toBe('ringing')
-  expect(getCallSimState(world).shiftVolunteers.length).toBeGreaterThanOrEqual(count)
-})
-
-Then('volunteers from both shifts should be in the ring group', async ({ world }) => {
-  expect(getCallSimState(world).callStatus).toBe('ringing')
-  expect(getCallSimState(world).shiftVolunteers.length).toBeGreaterThanOrEqual(2)
-})
-
-Then('the router should return a no-volunteers error', async ({ world }) => {
-  expect(getCallSimState(world).callStatus).toBe('no-volunteers')
 })
 
 // ════════════════════════════════════════════════════════════════════

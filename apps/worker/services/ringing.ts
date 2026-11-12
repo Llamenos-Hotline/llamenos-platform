@@ -309,7 +309,7 @@ export async function cancelLosingLegs(
 ): Promise<void> {
   let legSids: string[]
   try {
-    legSids = await services.calls.takeRingLegs(callSid)
+    legSids = await services.calls.takeRingLegs(hubId, callSid)
   } catch (err) {
     logger.error('Failed to read recorded ring legs — losing legs will ring out', err, { callSid })
     return
