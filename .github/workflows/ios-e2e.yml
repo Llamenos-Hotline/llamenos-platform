@@ -113,23 +113,22 @@ jobs:
     # macOS job here that needs no Docker, no sudo and no booted simulator,
     # which is what makes it safe to co-tenant today.
     #
-    # Built ONCE PER RUNNER CLASS, because a test bundle cannot cross between
-    # them. The Mac mini is on Xcode 27.0 with only the iOS 26.5 simulator
-    # runtime; GitHub's macOS image is on Xcode 26.6. An `.xctestrun` is bound
-    # to the SDK it was built against, so a Mac-built bundle will not run on a
-    # hosted simulator (or vice versa). The two builds run concurrently on
-    # different hardware, so this costs no wall-clock — only a second hosted
-    # macOS slot for ~4 minutes.
+    # Built ONCE, on the Mac, and never on a GitHub-hosted macOS runner.
     #
-    # The alternative, building once and running everywhere, is what the
-    # artifact names below used to imply. It cannot work across two Xcode
-    # versions, and failing that way would look like a test bug rather than a
-    # toolchain mismatch.
+    # This used to build twice -- once per runner class, because an
+    # `.xctestrun` is bound to the SDK it was built against (the Mac mini is on
+    # Xcode 27.0, GitHub's macOS image on 26.6) and a bundle cannot cross
+    # between them -- so that two `ui` shards could run on `macos-15`. That
+    # whole arm is gone: see the `ui` matrix for why no job in this workflow
+    # may depend on the hosted macOS pool. The one-element `host` list stays
+    # so the artifact names, the report's `--host` and the guards that read
+    # this file keep their shape; tests/orchestrator/guards.test.ts fails the
+    # build if a hosted entry or a hosted image comes back.
     strategy:
       fail-fast: false
       matrix:
-        host: ${{ fromJSON(inputs.tier == 'smoke' && '["mac"]' || '["mac", "hosted"]') }}
-    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
+        host: [mac]
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     # 45 minutes for the build itself (measured max 10.0 over 71 green Mac
@@ -703,7 +702,7 @@ jobs:
     # the default `queue: single` CANCELS the older pending job, which in a
     # merge group is an ejection. The concurrency knob that matters is the
     # runner count, and it lives on the host (see `build`).
-    runs-on: ${{ matrix.host == 'mac' && fromJSON('["self-hosted", "macOS", "ARM64", "ios-e2e"]') || 'macos-15' }}
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
       # Read-only, used ONLY by the XCUITest step to ask what this run's other
@@ -718,40 +717,50 @@ jobs:
         # `--total` below is `strategy.job-total`, so the shard count follows
         # this list automatically — the smoke tier partitions its own classes
         # across 2 shards rather than running a fraction of the full 4.
-        # Each shard carries the runner class it runs on, so all four start at
-        # once instead of four queueing through the Mac's two runners.
         #
-        # The split is MEASURED, not arbitrary. Shards 0 and 3 are the two that
-        # have actually failed on GitHub's macOS runners — shard 0 on
-        # `testClockInViaAPI` / `testShiftStatusWithAPI` (10s waits that a
-        # contended runner misses) and shard 3 on
-        # `testPINWipeAfterTenFailedAttempts` at 313s against XCTest's 300s
-        # allowance. Shards 1 and 2 had passed on hosted runners twice each when
-        # this was measured. So the fragile pair goes to the hardware where they
-        # pass, and the proven pair goes to the capacity that is otherwise idle.
+        # EVERY shard runs on the Mac, and the shard count is deliberately MORE
+        # than the two runners. The two are different kinds of wait:
         #
-        # That premise has since been falsified for both (#2618): shard 2 failed
-        # `SettingsUITests.testCallSoundsToggleExists` and shard 1 failed
-        # `TriageUITests.testTriageFilterButtonVisible`, each on a hosted runner
-        # with its siblings green, ejecting PRs that touched no iOS code. The
-        # split is unchanged here -- it is a capacity trade, not a toggle -- and
-        # the XCUITest step now gives such a lone failure one retry.
+        #   * A job queued for the SELF-HOSTED runners waits until one frees.
+        #     Merge group run 43208716793: `ui (0)` and `ui (3)` were created
+        #     at 11:29:21, started at 11:57:14 and 11:58:03 -- a 28 minute
+        #     wait -- and both finished green.
+        #   * A job queued for a GitHub-HOSTED `macos-15` runner can be
+        #     abandoned. The same run: `ui (1)` and `ui (2)`, created at the
+        #     same second, ended `cancelled` at 11:44:23 with
+        #     runner_name="" and zero steps. They never ran, so `ci-status`
+        #     read "ios-e2e(abandoned) produced NO VERDICT" and ejected a
+        #     merge group whose code was fine. GitHub caps macOS at 5
+        #     concurrent jobs REPO-WIDE (more than that is not for sale on our
+        #     plan), and the rest of the repo's hosted macOS work spends it
+        #     before this workflow asks. #2724, #2713, #2740 and #2681 were
+        #     all ejected this way.
         #
-        # This also puts 5 of the 7 day-one-critical classes
-        # (apps/ios/Tests/UI/ci-smoke.txt) on the Mac: shard 0 carries
-        # APIConnectedUITests, AuthFlowUITests, PanicWipeUITests and
-        # ShiftFlowUITests; shard 3 carries SecurityUITests.
+        # The old split sent shards 1 and 2 to `macos-15` "because the capacity
+        # is otherwise idle". It was not idle, and it was not reliable even
+        # when it ran (#2618: both hosted shards failed on assertions their
+        # diffs could not reach). Two shards cannot run at once on two
+        # runners; the other two must queue, and a queue is fine so long as
+        # the thing queueing is a job that waits rather than one that is
+        # abandoned. So four shards on two Macs run as two waves of two.
         #
-        # Re-check this split if `ui-tests.py shard` changes its partition —
-        # the indices are positional, and a reshuffle would silently send the
-        # slow classes to the slow runners.
+        # Why four shards and not two longer ones: a shard's step is capped at
+        # 50 minutes and a whole shard is ~30, so two shards would each carry
+        # ~60 minutes of tests and need that cap raised. Four balanced shards
+        # cost the same Mac-minutes plus one more simulator boot and warm-up,
+        # and need no timeout change.
         #
-        # The smoke tier stays entirely on the Mac: it is two shards, which is
-        # exactly the Mac's concurrency, so there is nothing to gain from
-        # splitting it and a toolchain to avoid straddling.
+        # The packer prices every class on this host (`--mac-shards` below
+        # names all four indices), so the four shards balance on Mac
+        # wall-clock. The pins in ci-mac-shards.txt can no longer constrain
+        # anything -- every shard is a Mac shard -- but stay checked.
+        #
+        # Wall-clock for a full-tier run is therefore two shard-lengths
+        # (~60 minutes) after `build`, rather than ~30 on a good day and an
+        # ejection on a bad one. The merge queue's check budget is 90 minutes.
         include: ${{ fromJSON(inputs.tier == 'smoke'
           && '[{"shard":0,"host":"mac"},{"shard":1,"host":"mac"}]'
-          || '[{"shard":0,"host":"mac"},{"shard":3,"host":"mac"},{"shard":1,"host":"hosted"},{"shard":2,"host":"hosted"}]') }}
+          || '[{"shard":0,"host":"mac"},{"shard":1,"host":"mac"},{"shard":2,"host":"mac"},{"shard":3,"host":"mac"}]') }}
 
     steps:
       # MANDATORY, and must stay the literal first step — same guard, same
@@ -851,13 +860,9 @@ jobs:
       # a bun process too. It also refuses outright to act on 3000/5432, which
       # is why the allocator above keeps CI off those numbers.
       #
-      # This matrix is MIXED — two shards run here on the self-hosted Mac and
-      # two on GitHub-hosted macOS — so the step runs on both kinds and
-      # no-ops on a hosted one: a fresh VM per job cannot have inherited a
-      # leak, and refusing a job there over whatever else might hold a hashed
-      # slot port would be a failure mode invented for no benefit. Left
-      # unconditional rather than given an `if:`, so the log states which
-      # branch it took instead of the step silently disappearing.
+      # Every shard runs on the self-hosted Mac, where a leaked backend from a
+      # crashed earlier job is possible. The step is unconditional so the log
+      # states which branch it took instead of the step silently disappearing.
       #
       # `start` still refuses an occupied port on EVERY runner kind, reclaim
       # or no reclaim: that check is what keeps the suite off a database this
@@ -1129,12 +1134,11 @@ jobs:
           # gate nor the nightly can select these.
           if [ "${{ inputs.take-screenshots }}" = "true" ]; then extra+=(--include-non-gating); fi
           # The shard indices this workflow routes to the Mac, handed to the
-          # packer so the classes in ci-mac-shards.txt can only land there.
-          # Must match the `host: mac` entries in the matrix above;
-          # guards.test.ts asserts the two agree, because a silent mismatch
-          # puts the fragile classes back on hosted runners — which is the
-          # failure this whole mechanism exists to prevent.
-          extra+=(--mac-shards 0,3)
+          # packer so it prices every class on the Mac and keeps the classes in
+          # ci-mac-shards.txt on a Mac shard. That is all four now. Must match
+          # the `host: mac` entries in the matrix above; guards.test.ts asserts
+          # the two agree, and that no entry names a hosted host at all.
+          extra+=(--mac-shards 0,1,2,3)
           python3 apps/ios/scripts/ui-tests.py shard --index ${{ matrix.shard }} --total ${{ strategy.job-total }} "${extra[@]}" | tee "$RUNNER_TEMP/shard-args.txt"
           test -s "$RUNNER_TEMP/shard-args.txt" || { echo "::error::shard ${{ matrix.shard }} selected no test classes"; exit 1; }
 
