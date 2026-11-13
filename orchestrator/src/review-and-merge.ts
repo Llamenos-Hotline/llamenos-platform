@@ -744,13 +744,14 @@ export async function runReviewAndMerge(
   const claim = deps.acquireInFlight(pr)
   if (!claim.ok) return { kind: 'guard-refused', pr, guard: 'in-flight', reason: claim.reason }
   try {
-    return await processPr(pr, deps, opts.merge === true)
+    return await processPr(pr, deps, opts)
   } finally {
     claim.release()
   }
 }
 
-async function processPr(pr: string, deps: ReviewAndMergeDeps, merge: boolean): Promise<ReviewAndMergeOutcome> {
+async function processPr(pr: string, deps: ReviewAndMergeDeps, opts: ReviewAndMergeOptions): Promise<ReviewAndMergeOutcome> {
+  const merge = opts.merge === true
   const state = await deps.prState(pr)
   if (state === 'MERGED') {
     deps.log(`review-and-merge: PR ${pr} is already merged — nothing to do`)
