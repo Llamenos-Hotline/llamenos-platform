@@ -21,6 +21,7 @@ import {
   isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
+import { asksForSelfHostedMac, firstStepIsForkGuard, isSchedulableOnMacs, jobMergeGatingEvents, loadWorkflows as loadRunnerWorkflows, MAC_RUNNER_LABELS, needsClosure, resolveAll, resolveJob, type RawJob } from './workflow-runners.js'
 import { claimDigest, DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -4021,13 +4022,11 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    * runner (runner_name="", steps=0) and were abandoned after ~15 minutes, while
    * `ui (0)` and `ui (3)` — queued for the self-hosted Macs at the same second —
    * waited 28 minutes and passed. `ci-status` read "ios-e2e(abandoned) produced
-   * NO VERDICT" and ejected four innocent PRs. A job queued for our own runners
-   * waits; a job queued for the repo-wide-capped hosted pool is abandoned, so the
-   * only schedulable capacity is the two Macs and every job must queue for them.
+   * NO VERDICT" and ejected four innocent PRs. These two rails pin ios-e2e.yml's
+   * own matrix shape; the repo-wide rail below is what covers every runs-on.
    */
   describe('ios-e2e depends only on the self-hosted Macs, which queue rather than abandon', () => {
     const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
-    const MAC_LABELS = '[self-hosted, macOS, ARM64, ios-e2e]'
 
     /** Every `host` the build and ui matrices can produce, in both tiers. */
     function matrixHosts(): string[] {
@@ -4048,19 +4047,115 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       expect(matrixHosts().length, 'the host scan found nothing, so this rail proves nothing').toBeGreaterThanOrEqual(4)
     })
 
-    it('every job runs on the self-hosted Mac label set, with no hosted image anywhere in runs-on', () => {
-      const text = iosYaml()
-      const runsOn = [...text.matchAll(/^\s+runs-on: (.+)$/gm)].map((m) => (m[1] as string).trim())
-      expect(runsOn.length, 'expected the build and ui jobs').toBeGreaterThanOrEqual(2)
-      for (const r of runsOn) expect(r, `runs-on must be the Mac labels, got ${r}`).toBe(MAC_LABELS)
-      expect(text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n'), 'no hosted macOS image outside a comment').not.toMatch(/macos-(\d+|latest)/)
-    })
-
     it('runs the full tier on more shards than there are runners, all of them Mac shards', () => {
       const full = (iosYaml().match(/\|\| '(\[\{"shard".+?\])'\) \}\}/s)?.[1]) as string
       const entries = JSON.parse(full) as Array<{ shard: number; host: string }>
       expect(entries.map((e) => e.shard).sort()).toEqual([0, 1, 2, 3])
       expect(entries.every((e) => e.host === 'mac')).toBe(true)
+    })
+  })
+
+  /**
+   * #2544 — the same class, in every workflow. #2748's rail above read
+   * ios-e2e.yml alone, and it passed while PR #2749 was BLOCKED by ci.yml's
+   * `ios-compile-check` on `macos-15`: job 131373494457, labels `macos-15`,
+   * created 17:45:59, cancelled 18:02:04, runner_name="", 0 steps, and
+   * `ci-status`: "ios-compile-check(abandoned) produced NO VERDICT". A guard
+   * narrower than the class it protects against reports safety it does not
+   * provide, so this one resolves `runs-on` for EVERY job in EVERY workflow
+   * (workflow-runners.ts) — literal, label list, matrix, fromJSON, expression —
+   * and refuses any job it cannot resolve.
+   *
+   * A job may stay on a hosted macOS image only if it is listed here with the
+   * reason it needs one, AND it provably cannot gate a merge: no merge-gating
+   * trigger reaches it and no required check's verdict depends on it. Then an
+   * abandonment is a cancelled release or scheduled run, loud in its own
+   * workflow, and never a silent NO VERDICT on ci-status.
+   */
+  describe('no job that can gate a merge can land on a GitHub-hosted macOS image (#2544)', () => {
+    const HOSTED_MACOS_ALLOWED: Record<string, string> = {
+      'tauri-release.yml:build':
+        'imports the Apple signing certificate into a temporary keychain and makes it the default keychain; on the shared, persistent Macs that would swap the keychain under a running ios-e2e job and leave Developer ID material on a host that executes merge-queue code from every PR',
+      'mobile-release.yml:build-ios':
+        'creates build.keychain, imports the iOS distribution certificate and sets it as the default keychain — the same objection as tauri-release.yml:build',
+      'codeql.yml:analyze-swift':
+        'a capacity decision, not a technical one: a 45-90 minute traced build that would hold one of the only two runners that gate every iOS merge; staged and non-required, it runs on schedule/workflow_dispatch only',
+    }
+    /** The jobs that carry a required status check (ruleset on main: ci-status, CodeQL, gitleaks, fleet/verify, fleet/review). */
+    const REQUIRED_CARRIERS: Array<[file: string, job: string, name: string]> = [
+      ['ci.yml', 'ci-status', 'ci-status'],
+      ['codeql.yml', 'codeql', 'CodeQL'],
+    ]
+    const workflows = loadRunnerWorkflows()
+    const all = resolveAll(workflows)
+
+    it('resolves runs-on for every job in every workflow, and refuses to guess at any it cannot', () => {
+      expect(all.length, 'the scan found too few jobs, so this rail proves nothing').toBeGreaterThanOrEqual(50)
+      expect(all.filter((j) => j.unresolved !== undefined).map((j) => `${j.where}: ${j.unresolved}`)).toEqual([])
+      // Non-vacuous: the scan must see the Mac jobs, including the two this
+      // rail was written for, through a literal list AND through a matrix.
+      const onMacs = all.filter((j) => j.placements.some(asksForSelfHostedMac)).map((j) => j.where)
+      expect(onMacs).toEqual(expect.arrayContaining([
+        'ci.yml:ios-build-test', 'ci.yml:ios-compile-check', 'ios-e2e.yml:build', 'ios-e2e.yml:ui', 'desktop-voice.yml:artifacts',
+      ]))
+    })
+
+    it('every job that can resolve to a hosted macOS image is allowlisted with a reason, and no allowlist entry is stale', () => {
+      const hosted = all.filter((j) => j.placements.some((p) => p.kind === 'hosted-macos'))
+      const offenders = hosted.filter((j) => !(j.where in HOSTED_MACOS_ALLOWED)).map((j) =>
+        `${j.where} -> ${j.placements.filter((p) => p.kind === 'hosted-macos').map((p) => (p as { image: string }).image).join(',')}`)
+      expect(offenders, 'route it to [self-hosted, macOS, ARM64, ios-e2e] so it WAITS instead of being abandoned after ~15 min').toEqual([])
+      for (const where of Object.keys(HOSTED_MACOS_ALLOWED)) {
+        expect(hosted.map((j) => j.where), `${where} is allowlisted but no longer runs on hosted macOS — remove the exemption`).toContain(where)
+      }
+    })
+
+    it('no allowlisted hosted-macOS job runs under a merge-gating event', () => {
+      for (const where of Object.keys(HOSTED_MACOS_ALLOWED)) {
+        const [file, job] = where.split(':') as [string, string]
+        expect(jobMergeGatingEvents(file, job, workflows), `${where} can run under a merge-gating event, so its abandonment is a NO VERDICT on a PR or merge group`).toEqual([])
+      }
+    })
+
+    it('no required check depends on a hosted-macOS job, through needs or a called workflow', () => {
+      const hosted = new Set(all.filter((j) => j.placements.some((p) => p.kind === 'hosted-macos')).map((j) => j.where))
+      for (const [file, job, name] of REQUIRED_CARRIERS) {
+        const carrier = workflows.get(file)?.jobs?.[job]
+        expect(carrier, `${file}:${job} is gone — this rail would check nothing`).toBeDefined()
+        expect(carrier?.name ?? job).toBe(name)
+        const closure = needsClosure(file, job, workflows)
+        // ios-e2e.yml reached via ci.yml's `uses:` — proves the expansion works.
+        if (file === 'ci.yml') expect(closure.has('ios-e2e.yml:ui'), 'the closure did not expand the called workflow').toBe(true)
+        expect([...closure].filter((w) => hosted.has(w)), `${name} would read an abandoned hosted job as NO VERDICT`).toEqual([])
+      }
+    })
+
+    it('every self-hosted macOS job requests only labels the two registered Macs carry', () => {
+      for (const j of all) {
+        for (const p of j.placements.filter(asksForSelfHostedMac)) {
+          expect(isSchedulableOnMacs(p), `${j.where} asks for ${JSON.stringify((p as { labels: string[] }).labels)}; mac-mini-ios-1/2 carry only ${MAC_RUNNER_LABELS.join(',')} — it would wait forever`).toBe(true)
+        }
+      }
+    })
+
+    it('every job that can land on the Macs refuses a fork PR as its literal first step', () => {
+      for (const j of all.filter((x) => x.placements.some(asksForSelfHostedMac))) {
+        expect(firstStepIsForkGuard(workflows.get(j.file)?.jobs?.[j.job]), `${j.where} runs on a machine the operator owns without the fork-PR guard first`).toBe(true)
+      }
+    })
+
+    it('the resolver sees through every runs-on shape a hosted image can hide in', () => {
+      const r = (job: RawJob) => resolveJob('x.yml', 'j', job).placements.filter((p) => p.kind === 'hosted-macos')
+      expect(r({ 'runs-on': 'macos-15' })).toHaveLength(1)
+      expect(r({ 'runs-on': ['macos-14-large'] })).toHaveLength(1)
+      expect(r({ 'runs-on': { group: 'g', labels: 'macos-latest' } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { os: ['ubuntu-latest', 'macos-15'] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { include: [{ os: 'macos-latest' }] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { include: `\${{ fromJSON('[{"os":"macos-15"}]') }}` } } })).toHaveLength(1)
+      expect(r({ 'runs-on': "${{ matrix.host == 'mac' && fromJSON('[\"self-hosted\",\"macOS\"]') || 'macos-15' }}", strategy: { matrix: { host: ['mac'] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': "${{ inputs.fast && 'ubuntu-latest' || 'macos-15' }}" })).toHaveLength(1)
+      expect(r({ 'runs-on': [ 'self-hosted', 'macOS', 'ARM64', 'ios-e2e' ] })).toHaveLength(0)
+      expect(resolveJob('x.yml', 'j', { 'runs-on': '${{ inputs.runner }}' }).unresolved, 'an unresolvable runs-on must be refused, not passed').toBeDefined()
     })
   })
 

@@ -3046,44 +3046,82 @@ jobs:
   # or booted (generic destination), no test runs. The full verdict (unit
   # tests, then UI tests) still gates in the merge queue.
   #
-  # WHERE IT RUNS — the recorded runner-cost decision:
-  #   - GitHub-hosted `macos-15`: free on this public repo, capped at 5
-  #     concurrent macOS jobs repo-wide. ios-e2e.yml's hosted build leg does
-  #     the same build-for-testing in ~4 minutes; this job takes ONE slot
-  #     for roughly that per iOS-touching PR push (XCFramework cache hit;
-  #     ~15-20 min only when packages/crypto changes and the Rust build
-  #     re-runs). PR runs are cancel-in-progress, so a re-pushed PR does
-  #     not stack slots.
-  #   - The self-hosted Mac mini was REJECTED for this job: its two runners
-  #     are the merge queue's gating capacity (#1225, #1407), and #1761's
-  #     disk guard would refuse PR checks en masse whenever the shared
-  #     volume fills — turning a cheap gate into a flaky one.
-  # The merge queue still runs the FULL ios-build-test on the Mac mini;
-  # this job changes nothing about that.
+  # WHERE IT RUNS — the self-hosted Macs, so it WAITS for capacity (#2544).
+  #   - It used to run on GitHub-hosted `macos-15` ("free, capped at 5
+  #     concurrent macOS jobs repo-wide"). The cap is the problem: a hosted
+  #     job that never gets a runner is ABANDONED after ~15 minutes with
+  #     runner_name="" and zero steps. PR #2749, job 131373494457: labels
+  #     `macos-15`, created 17:45:59, cancelled 18:02:04, no runner, 0 steps —
+  #     and `ci-status` read "ios-compile-check(abandoned) produced NO
+  #     VERDICT". That is the exact class #2748 removed from ios-e2e.yml; this
+  #     job was outside its guard. A job queued for our own runners waits.
+  #   - The old objection was capacity: the two Mac runners gate the merge
+  #     queue (#1225, #1407). Measured over 25 merge groups (2026-11-12 01:08
+  #     to 11-13 06:27) the Macs were busy 1432 runner-minutes of 3519, ~41%;
+  #     this job adds ~10 iOS-touching PR pushes a day at a few minutes each,
+  #     a few percent. PR runs are cancel-in-progress, so re-pushes do not
+  #     stack.
+  #   - The other old objection — #1761's disk guard refusing PR checks when
+  #     the shared volume fills — is now the better failure: a refusal is a
+  #     red check with a reason, an abandonment is a check with no verdict.
+  # The merge queue still runs the FULL ios-build-test on the same Macs.
+  # tests/orchestrator/guards.test.ts fails CI if any job in any workflow
+  # can again land on a hosted macOS image without an allowlisted reason.
   ios-compile-check:
     needs: changes
     if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios == 'true'
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
     timeout-minutes: 30
 
     steps:
+      # MANDATORY, and must stay the literal first step. Unlike ios-build-test
+      # this job runs on `pull_request` itself, so this guard is the line
+      # between a fork PR's code and a machine the operator owns. See the long
+      # note on ios-e2e.yml's `build` copy of this step.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-compile-check FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Same guard, same reasoning as ios-build-test's copy: refuse loudly
+      # rather than let the shared volume fill and kill the runner agent.
+      - name: Guard the runner's disk headroom
+        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+
+      # Per-runner BUN_TMPDIR and HOME: this job shares the two Macs with
+      # ios-build-test and ios-e2e.yml, and tests/guards.test.ts fails CI if
+      # either goes missing. Reasoning on ios-e2e.yml's `build` copies.
+      - name: Give bun a per-runner temp dir
+        run: |
+          mkdir -p "$RUNNER_TEMP/bun-tmp"
+          echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
+
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        env:
+          TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies and run codegen
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
-      # Same cache, same key as ios-build-test: the XCFramework is a Rust
-      # artifact (cargo, not Xcode), so sharing it between this hosted
-      # runner and the Mac mini is safe — ios-e2e.yml already shares it
-      # across both runner classes.
+      # Same cache, same key as ios-build-test, now on the same machines.
       - name: Cache crypto XCFramework + bindings
         id: xcframework-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -3124,12 +3162,10 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      # No DerivedData cache, deliberately: the key ios-build-test uses is
-      # written by the Mac mini on Xcode 27 while this image is on Xcode 26,
-      # and restoring module caches across compiler versions fails the
-      # build for reasons that have nothing to do with the PR. A cold
-      # compile here costs the same ~4 minutes ios-e2e.yml's hosted build
-      # leg already pays.
+      # No DerivedData cache, deliberately: a restored DerivedData carries an
+      # .xctestrun from whatever build wrote it, so the bundle assertion
+      # below would pass on a stale plist without proving this compile
+      # produced anything. A fresh path under RUNNER_TEMP, removed at the end.
       - name: Compile app and every test bundle (nothing runs)
         working-directory: apps/ios
         run: |
@@ -3159,6 +3195,12 @@ jobs:
           grep -q "LlamenosTests" "$XCTESTRUN" || { echo "::error::LlamenosTests bundle missing from $XCTESTRUN"; exit 1; }
           grep -q "LlamenosUITests" "$XCTESTRUN" || { echo "::error::LlamenosUITests bundle missing from $XCTESTRUN — the #168 scheme shape"; exit 1; }
           echo "both test bundles present in $XCTESTRUN"
+
+      # A self-hosted runner keeps what a job leaves behind; ios-build-test
+      # removes its DerivedData the same way.
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
 
   # iOS UI tests (LlamenosUITests) against a native backend — see
   # ios-e2e.yml's header for why this was dark from May to September 2026.

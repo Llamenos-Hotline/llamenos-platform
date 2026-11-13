@@ -65,14 +65,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # macos-arm64 runs on the self-hosted Mac minis, not hosted
+        # `macos-latest` (#2544). A job queued for the GitHub-hosted macOS
+        # pool is abandoned after ~15 minutes when the repo-wide macOS cap is
+        # spent (runner_name="", zero steps) and reports no verdict, while a
+        # job queued for our own runners waits. The Macs ARE macOS arm64, so
+        # the real pin is still fetched and verified on its own OS.
+        # tests/orchestrator/guards.test.ts fails CI if any job can again
+        # resolve to a hosted macOS image without an allowlisted reason.
         include:
-          - { os: macos-latest, target: macos-arm64 }
+          - { os: [self-hosted, macOS, ARM64, ios-e2e], target: macos-arm64 }
           - { os: windows-latest, target: windows-x86_64 }
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     timeout-minutes: 20
     steps:
+      # MANDATORY, and must stay the literal first step: this workflow runs on
+      # `pull_request`, and one leg of it is now a machine the operator owns,
+      # so a fork PR's code must never reach it. Unconditional on every leg on
+      # purpose — an `if:` that skips it is the shape a fail-open takes. Same
+      # guard as ios-e2e.yml's `build` (see the long note there).
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::desktop-voice/artifacts FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,3 +118,12 @@ jobs:
           pinned="$(awk -v t="$TARGET" '!/^[[:space:]]*#/ && $1 == t { print $3 }' apps/desktop/linphone-sdk-checksums.txt)"
           echo "recorded=$recorded pinned=$pinned"
           [ -n "$pinned" ] && [ "$recorded" = "$pinned" ]
+
+      # A self-hosted runner keeps what a job leaves behind: drop the vendored
+      # SDK rather than leave it on the Macs' shared, disk-guarded volume.
+      - name: Remove the fetched SDK
+        if: always()
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: rm -rf "apps/desktop/vendor/linphone-sdk/$TARGET"
