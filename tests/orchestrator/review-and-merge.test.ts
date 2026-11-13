@@ -227,6 +227,43 @@ describe('runReviewAndMerge', () => {
     expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
   })
 
+  // --fresh (#2726/#2725): the head's existing green is exactly what is in
+  // doubt, so it is never reused. Merging stays the separate #2742 opt-in, so
+  // a fresh run without `merge` records and stops.
+  it('--fresh --merge reviews afresh past an existing green and then merges on the fresh verdict', async () => {
+    const deps = baseDeps({
+      fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
+    })
+    const outcome = await runReviewAndMerge('9', deps, { fresh: true, merge: true })
+    expect(deps.fetchReviewCheckRuns).not.toHaveBeenCalled()
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
+    expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
+  })
+
+  it('--fresh reviews afresh past an existing green, posts, and (view-only by default) never merges', async () => {
+    const deps = baseDeps({
+      fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
+    })
+    const outcome = await runReviewAndMerge('9', deps, { fresh: true })
+    expect(deps.fetchReviewCheckRuns).not.toHaveBeenCalled()
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', 'VERDICT: PASS\n\nVERDICT: PASS')
+    expect(outcome).toEqual({ kind: 'view-only', pr: '9', headSha: 'head111', reused: false })
+    expect(deps.requiredChecks).not.toHaveBeenCalled()
+    expect(deps.clearForQueue).not.toHaveBeenCalled()
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  it('--fresh records a FAIL as a failing check and merges nothing', async () => {
+    const deps = baseDeps({
+      invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'FAIL', text: 'VERDICT: FAIL — x' })),
+    })
+    const outcome = await runReviewAndMerge('9', deps, { fresh: true })
+    expect(outcome).toMatchObject({ kind: 'not-mergeable', pr: '9' })
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String))
+    expect(deps.merge).not.toHaveBeenCalled()
+  })
+
   it('a prior FAIL for this head is never reused as fresh — it is reviewed again', async () => {
     const deps = baseDeps({
       fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'failure' }]),

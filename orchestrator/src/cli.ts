@@ -2194,27 +2194,32 @@ async function readTrustAnchorApprovals(ctx: CiContext): Promise<string[] | unde
 }
 
 /**
- * `review-and-merge <pr> [--merge]` argv. The PR must be a bare number: the
- * in-flight guard keys on it, and `9`, `#9` and a URL naming PR 9 must not be
- * three different locks. `merge` is the ONE opt-in (#2742) and is `true` only
- * when `--merge` is spelled exactly; anything else unrecognised is a usage
- * error, never silently ignored — a mistyped `--mrege` that was dropped would
- * read as a view-only run the operator did not mean.
+ * `review-and-merge <pr> [--merge] [--fresh]` argv. The PR must be a bare
+ * number: the in-flight guard keys on it, and `9`, `#9` and a URL naming PR 9
+ * must not be three different locks. `merge` is the ONE opt-in (#2742) and is
+ * `true` only when `--merge` is spelled exactly. `fresh` (#2726/#2725) only
+ * ever makes a run do MORE — review again instead of reusing a green — and
+ * so, unlike `merge`, cannot widen what the run is allowed to do. Anything
+ * else unrecognised is a usage error, never silently ignored — a mistyped
+ * `--mrege` that was dropped would read as a view-only run the operator did
+ * not mean.
  */
 export function parseReviewAndMergeArgs(rest: readonly string[]):
-  { ok: true; pr: string; merge: boolean } | { ok: false } {
+  { ok: true; pr: string; merge: boolean; fresh: boolean } | { ok: false } {
   let pr: string | undefined
   let merge = false
+  let fresh = false
   for (const a of rest) {
     if (a === '--merge') merge = true
+    else if (a === '--fresh') fresh = true
     else if (/^\d+$/.test(a) && pr === undefined) pr = a
     else return { ok: false }
   }
-  return pr === undefined ? { ok: false } : { ok: true, pr, merge }
+  return pr === undefined ? { ok: false } : { ok: true, pr, merge, fresh }
 }
 
 /**
- * `llamenos-fleet review-and-merge <pr> [--merge]` — see review-and-merge.ts's
+ * `llamenos-fleet review-and-merge <pr> [--merge] [--fresh]` — see review-and-merge.ts's
  * own module comment for the full design. This wrapper is deliberately thin:
  * argv parsing and the exit code only, everything else lives in
  * `runReviewAndMerge` over injected deps so it is unit-tested without a real
@@ -2233,10 +2238,10 @@ export function parseReviewAndMergeArgs(rest: readonly string[]):
 async function runReviewAndMergeCommand(rest: readonly string[]): Promise<number> {
   const args = parseReviewAndMergeArgs(rest)
   if (!args.ok) {
-    process.stderr.write('usage: llamenos-fleet review-and-merge <pr-number> [--merge]\n')
+    process.stderr.write('usage: llamenos-fleet review-and-merge <pr-number> [--merge] [--fresh]\n')
     return 2
   }
-  const outcome = await runReviewAndMerge(args.pr, defaultReviewAndMergeDeps(REPO_ROOT, log), { merge: args.merge })
+  const outcome = await runReviewAndMerge(args.pr, defaultReviewAndMergeDeps(REPO_ROOT, log), { merge: args.merge, fresh: args.fresh })
   process.stdout.write(`${describeOutcome(outcome)}\n`)
   return outcome.kind === 'merged' || outcome.kind === 'already-merged' || outcome.kind === 'view-only' ? 0 : 1
 }
@@ -2352,10 +2357,15 @@ const HANDLERS: Record<string, CommandHandler> = {
     exportBase: (repoDir, sha) => exportReviewSnapshot(repoDir, sha),
     // A profile always gets the high-impact budget: something asked for it
     // by name, either a human's label or the PR's own crypto content.
+    // `baseDir` is GRANTED as well as named: the profile's brief tells it the
+    // base tree exists, so it must be readable, and the diff parts are
+    // compacted against the same two trees the general reviewer gets.
     profileReview: async (profile, diff, changedFiles, claim, baseDir) => toSecondOpinion(await invokeVerifierEngine({
       authorEngine: 'claude',
       exportDir: ctx.headDir,
-      prompt: buildProfileReviewPrompt(profile, ctx.pr, diff, changedFiles, ctx.headDir, claim, baseDir),
+      baseDir,
+      diff,
+      brief: (parts) => buildProfileReviewPrompt(profile, ctx.pr, parts, changedFiles, ctx.headDir, claim, baseDir),
       maxTurns: HIGH_IMPACT_MAX_TURNS,
       timeoutMs: HIGH_IMPACT_TIMEOUT_MS,
     })),

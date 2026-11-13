@@ -196,7 +196,8 @@ async function runReviewer(): Promise<{ text: string; reached: boolean }> {
   const run = await invokeVerifierEngine({
     authorEngine: 'claude',
     exportDir,
-    prompt: 'Reply with exactly: VERDICT: PASS\n',
+    diff: '',
+    brief: () => 'Reply with exactly: VERDICT: PASS\n',
     maxTurns: 1,
     timeoutMs: 30_000,
   })

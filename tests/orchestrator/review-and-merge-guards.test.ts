@@ -163,12 +163,17 @@ describe('acquireInFlight — one run per PR', () => {
 
 describe('parseReviewAndMergeArgs — merging is an explicit opt-in', () => {
   it('a bare PR number is view-only', () => {
-    expect(parseReviewAndMergeArgs(['9'])).toEqual({ ok: true, pr: '9', merge: false })
+    expect(parseReviewAndMergeArgs(['9'])).toEqual({ ok: true, pr: '9', merge: false, fresh: false })
   })
 
   it('--merge, in either position, opts in', () => {
-    expect(parseReviewAndMergeArgs(['9', '--merge'])).toEqual({ ok: true, pr: '9', merge: true })
-    expect(parseReviewAndMergeArgs(['--merge', '9'])).toEqual({ ok: true, pr: '9', merge: true })
+    expect(parseReviewAndMergeArgs(['9', '--merge'])).toEqual({ ok: true, pr: '9', merge: true, fresh: false })
+    expect(parseReviewAndMergeArgs(['--merge', '9'])).toEqual({ ok: true, pr: '9', merge: true, fresh: false })
+  })
+
+  it('--fresh is accepted in either position and does not imply --merge', () => {
+    expect(parseReviewAndMergeArgs(['9', '--fresh'])).toEqual({ ok: true, pr: '9', merge: false, fresh: true })
+    expect(parseReviewAndMergeArgs(['--fresh', '9', '--merge'])).toEqual({ ok: true, pr: '9', merge: true, fresh: true })
   })
 
   it.each([[[]], [['--merge']], [['9', '--mrege']], [['9', '--merge=true']], [['9', '10']], [['#9']], [['9', '--force']]])(

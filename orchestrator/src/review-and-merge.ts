@@ -27,6 +27,7 @@ import {
   DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS,
   type ReviewRunEngine, type SecondOpinionResult, type ReviewSnapshot,
 } from './review.js'
+import type { ReviewDiffPlan } from './review-diff.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -307,7 +308,8 @@ async function fetchAndExportHead(repoRoot: string, headSha: string, baseSha: st
  */
 async function invokeOneReviewer(
   pr: string,
-  prompt: string,
+  diff: string,
+  brief: (parts: ReviewDiffPlan) => string,
   report: VerifyReport,
   exportDir: string,
   highImpact: boolean,
@@ -319,7 +321,8 @@ async function invokeOneReviewer(
     authorEngine: 'claude',
     model: REVIEW_AND_MERGE_FALLBACK_MODEL,
     exportDir,
-    prompt,
+    diff,
+    brief,
     // So an exhausted budget here salvages a partial verdict too, rather
     // than this operator command being the one reviewer path that still
     // loses everything its session concluded (review.ts's
@@ -348,7 +351,7 @@ async function runNonAuthorReview(
 ): Promise<SecondOpinionResult> {
   const report = reportForPrompt(facts)
   return invokeOneReviewer(
-    pr, buildReviewPrompt(pr, diff, report, exportDir, undefined, facts.claim),
+    pr, diff, (parts) => buildReviewPrompt(pr, parts, report, exportDir, undefined, facts.claim),
     report, exportDir, report.impact === 'high',
   )
 }
@@ -375,8 +378,10 @@ async function runProfileReview(
   exportDir: string,
 ): Promise<SecondOpinionResult> {
   const report = reportForPrompt(facts)
-  const prompt = buildProfileReviewPrompt(profile, pr, diff, report.changedFiles, exportDir, facts.claim)
-  return invokeOneReviewer(pr, prompt, report, exportDir, true)
+  return invokeOneReviewer(
+    pr, diff, (parts) => buildProfileReviewPrompt(profile, pr, parts, report.changedFiles, exportDir, facts.claim),
+    report, exportDir, true,
+  )
 }
 
 /**
@@ -698,6 +703,11 @@ export interface ReviewAndMergeDeps {
 }
 
 export interface ReviewAndMergeOptions {
+  /** Review afresh even when this head already carries a green `fleet/review`.
+   *  Orthogonal to `merge`: a fresh run is still view-only unless `merge` is
+   *  also set, and a fresh run that merges has re-earned the green it merges
+   *  on rather than inheriting it. */
+  fresh?: boolean
   /** The opt-in. `false` (the default) reviews, records the verdict and
    *  STOPS; only an explicit `true` may merge. */
   merge?: boolean
@@ -734,13 +744,14 @@ export async function runReviewAndMerge(
   const claim = deps.acquireInFlight(pr)
   if (!claim.ok) return { kind: 'guard-refused', pr, guard: 'in-flight', reason: claim.reason }
   try {
-    return await processPr(pr, deps, opts.merge === true)
+    return await processPr(pr, deps, opts)
   } finally {
     claim.release()
   }
 }
 
-async function processPr(pr: string, deps: ReviewAndMergeDeps, merge: boolean): Promise<ReviewAndMergeOutcome> {
+async function processPr(pr: string, deps: ReviewAndMergeDeps, opts: ReviewAndMergeOptions): Promise<ReviewAndMergeOutcome> {
+  const merge = opts.merge === true
   const state = await deps.prState(pr)
   if (state === 'MERGED') {
     deps.log(`review-and-merge: PR ${pr} is already merged — nothing to do`)
@@ -825,7 +836,10 @@ async function processPr(pr: string, deps: ReviewAndMergeDeps, merge: boolean): 
   // `runReviewCi` runs the whole set, this command now runs the whole set,
   // and the version of this command that did NOT refused every
   // profile-bearing PR outright rather than posting one.
-  const cachedCheckRuns = await deps.fetchReviewCheckRuns(facts.headSha)
+  // `fresh` (#2726/#2725) never consults the cache: the head's existing green
+  // is exactly what is in doubt (e.g. judged by an engine that could not read
+  // the whole diff), and reusing it would reuse the verdict being questioned.
+  const cachedCheckRuns = opts.fresh === true ? undefined : await deps.fetchReviewCheckRuns(facts.headSha)
   let reused = false
   if (hasSuccessfulReview(cachedCheckRuns)) {
     deps.log(

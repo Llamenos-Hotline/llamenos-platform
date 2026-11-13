@@ -1405,6 +1405,7 @@ export function composeReviewSet(
       : r.failureKind === 'budget-exhausted' ? `${who} ran out of turns`
       : r.failureKind === 'brief-too-large' ? `${who} brief too large`
       : r.failureKind === 'brief-unread' ? `${who} did not read the whole brief`
+      : r.failureKind === 'diff-unread' ? `${who} did not read the whole diff`
       : `${who} unavailable`
     const headline = r.verdict === 'UNREADABLE'
       ? `${unreadablePrefix}: ${verdictSummary(r.text)}`

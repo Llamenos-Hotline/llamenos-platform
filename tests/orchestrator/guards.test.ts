@@ -5403,7 +5403,7 @@ describe('rail: review-and-merge is view-only by default and cannot recurse (#27
     expect(sites.map((s) => s.file.split('/').pop()), 'runReviewAndMerge is called from somewhere other than the CLI').toEqual(['cli.ts'])
     const opts = sites[0]?.args[2]
     expect(opts, 'the call site passes no options object').toBeDefined()
-    expect(opts?.getText()).toBe('{ merge: args.merge }')
+    expect(opts?.getText()).toBe('{ merge: args.merge, fresh: args.fresh }')
   })
 
   it('no source file spells the opt-in `merge: true` — a call site cannot inherit merge authority', () => {
