@@ -511,8 +511,10 @@ export class ConversationsService {
   private async loadAssigneeRecipients(
     assignedTo: string,
     hubId: string,
+    /** The transaction to read in when the caller holds one — never the root pool from inside it (#1208). */
+    q: Pick<Database, 'select' | 'execute'> = this.db,
   ): Promise<AssigneeRecipientState[]> {
-    const rows = await this.db
+    const rows = await q
       .select({
         id: devices.id,
         ed25519Pubkey: devices.ed25519Pubkey,
@@ -523,8 +525,8 @@ export class ConversationsService {
       .where(and(eq(devices.pubkey, assignedTo), isNotNull(devices.x25519Pubkey)))
     if (rows.length === 0) return []
 
-    const verifiers = new Set<string>([assignedTo, ...await listAdminPubkeys(this.db, hubId)])
-    const verifications = await this.db
+    const verifiers = new Set<string>([assignedTo, ...await listAdminPubkeys(q, hubId)])
+    const verifications = await q
       .select({
         targetDeviceId: deviceVerifications.targetDeviceId,
         targetPubkey: deviceVerifications.targetPubkey,
@@ -652,7 +654,7 @@ export class ConversationsService {
       if (!conv.assignedTo) throw new ServiceError(409, 'Conversation has no assignee')
 
       const recipients = new Map(
-        (await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId)).map((r) => [r.pubkey as string, r]),
+        (await this.loadAssigneeRecipients(conv.assignedTo, conv.hubId, tx)).map((r) => [r.pubkey as string, r]),
       )
       for (const { envelope } of entries) {
         if (!recipients.has(envelope.pubkey)) {
