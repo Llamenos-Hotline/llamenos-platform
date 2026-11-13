@@ -359,12 +359,19 @@ jobs:
               [ "$hung" -eq 1 ] || cat "$guard_log"
               cat "$guard_summary" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
               waited="$((attempt - 1)) x ${DISK_WAIT_POLL_SEC}s"
+              # The guard's own `disk-guard-verdict:` line carries free, need
+              # and the gap in MiB (#2644). A shortfall of 150 MB with nothing
+              # else running is a different fault from a busy disk, and only
+              # the busy disk is worth a wait; say which one this is.
+              verdict=$(grep -o 'disk-guard-verdict: refused .*' "$guard_log" 2>/dev/null | tail -1 || true)
               if [ "$rc" -eq 0 ]; then
                 [ "$attempt" -eq 1 ] || echo "disk headroom passed on attempt $attempt, after waiting $waited for a co-tenant CI job's teardown"
               elif [ "$others" -gt 0 ]; then
-                echo "::error::still refused after waiting $waited for $others co-tenant CI job(s) on this host to release space"
+                echo "::error::still refused after waiting $waited for $others co-tenant CI job(s) on this host to release space (${verdict:-no verdict line; guard did not finish})"
               elif [ "$attempt" -gt 1 ]; then
-                echo "::error::still refused after waiting $waited: every co-tenant CI job has finished and the space did not come back, so what holds it is not CI's"
+                echo "::error::still refused after waiting $waited: every co-tenant CI job has finished and the space did not come back, so what holds it is not CI's (${verdict:-no verdict line; guard did not finish})"
+              else
+                echo "::error::refused at once, NOT waiting: no other CI job is running on this host, so no teardown is coming to return space and waiting cannot help (${verdict:-no verdict line; guard did not finish}). The space is held by something CI does not own; the guard's reclaim output above lists what it removed and 'scripts/ci/mac-runner-disk-guard.sh report' lists the rest, including the /private/var/tmp simulator runtime dirs (#2644)."
               fi
               exit "$rc"
             fi
@@ -671,8 +678,9 @@ jobs:
       - name: Delete this build's simulator
         if: always()
         run: |
-          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
-          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          # Shutdown + delete + the /private/var/tmp runtime dir that `simctl delete`
+          # leaves behind (#2644). Never fails the step.
+          bash scripts/ci/mac-runner-disk-guard.sh delete-sim "${{ steps.sim.outputs.udid }}"
 
   ui:
     name: ui (${{ matrix.shard }})
@@ -1585,8 +1593,9 @@ jobs:
       - name: Delete this shard's simulator
         if: always()
         run: |
-          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
-          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          # Shutdown + delete + the /private/var/tmp runtime dir that `simctl delete`
+          # leaves behind (#2644). Never fails the step.
+          bash scripts/ci/mac-runner-disk-guard.sh delete-sim "${{ steps.sim.outputs.udid }}"
 
       # Sweep by AGE, never by name alone: other PRs' shards run on this same
       # host concurrently and their devices are also called ios-e2e-*.
