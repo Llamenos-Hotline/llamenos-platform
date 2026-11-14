@@ -139,8 +139,8 @@ export const hubKeys = pgTable(
  * plaintext `name`/`description`, because theirs are public constants shipped
  * in `packages/shared/permissions.ts`. `SettingsService` writes no other
  * plaintext; the database CHECK enforcing it lands in the release after this
- * code, because the release being replaced still writes plaintext names (see
- * docs/runbooks/migrations.md, "Add … CHECK … constraints").
+ * code (#2787), because the release being replaced still writes plaintext
+ * names (see docs/runbooks/migrations.md, "Add … CHECK … constraints").
  *
  * - `hub_id` NULL: deployment-wide — the seeded defaults, and platform roles,
  *   whose name/description live only in `platform_role_envelopes`.
