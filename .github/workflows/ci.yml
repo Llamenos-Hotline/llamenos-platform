@@ -2710,7 +2710,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
         run: |
-          verdict=$(python3 .github/scripts/classify-infra-failure.py android /tmp/gradle-e2e.log /tmp/android-e2e-script-started "$ANDROID_BUILD_DIR/outputs/androidTest-results")
+          # The host backend is checked HERE, after the emulator is gone: a test run
+          # whose every failure is "could not connect to 10.0.2.2" is the emulator's
+          # fault only if the backend it was reaching for is in fact up.
+          if curl -sf -m 10 -o /dev/null http://localhost:3000/api/health/live; then backend=up; else backend=down; fi
+          verdict=$(python3 .github/scripts/classify-infra-failure.py android /tmp/gradle-e2e.log /tmp/android-e2e-script-started "$ANDROID_BUILD_DIR/outputs/androidTest-results" \
+            --probe-dir "$ANDROID_BUILD_DIR/reports/m1-probe" --logcat /tmp/logcat.txt --host-backend "$backend")
           printf '%s\n' "$verdict"
           kind=$(printf '%s\n' "$verdict" | sed -n 's/^kind=//p')
           sigs=$(printf '%s\n' "$verdict" | sed -n 's/^signatures=//p')
@@ -2734,6 +2739,8 @@ jobs:
         run: |
           df -h / /tmp || true
           cp /tmp/gradle-e2e.log /tmp/gradle-e2e-attempt1.log 2>/dev/null || true
+          # Attempt 2 overwrites /tmp/logcat.txt; attempt 1's is the evidence for WHY it was retried.
+          cp /tmp/logcat.txt /tmp/logcat-attempt1.txt 2>/dev/null || true
           rm -f /tmp/android-e2e-script-started /tmp/gradle-e2e.log /tmp/gradle-e2e.exit
           adb emu kill >/dev/null 2>&1 || true
           adb kill-server >/dev/null 2>&1 || true
@@ -2817,6 +2824,7 @@ jobs:
             /tmp/logcat.txt
             /tmp/gradle-e2e.log
             /tmp/gradle-e2e-attempt1.log
+            /tmp/logcat-attempt1.txt
           retention-days: 7
 
   ios-build-test:
