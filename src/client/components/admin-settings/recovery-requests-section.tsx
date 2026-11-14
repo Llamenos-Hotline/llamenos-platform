@@ -165,7 +165,7 @@ export function RecoveryRequestsSection({
       toast(t('recoveryGroup.liveness.success'), 'success')
     } catch (err) {
       toast(
-        `${t('recoveryGroup.liveness.failed')}${err instanceof Error ? `: ${err.message}` : ''}`,
+        `${t('recoveryGroup.liveness.error')}${err instanceof Error ? `: ${err.message}` : ''}`,
         'error',
       )
     } finally {

@@ -1192,6 +1192,46 @@ class CryptoService @Inject constructor() {
             }
         }
 
+    /**
+     * Prove this device still holds its recovery share (#2782).
+     *
+     * [shareEnvelopeJson] is the holder's envelope exactly as
+     * `GET /api/recovery-group/shares/my` returns it: the JSON of the crate's
+     * `HpkeEnvelope` (base64url `enc`/`ct`, the UniFFI record's own encoding),
+     * so it maps onto [org.llamenos.core.HpkeEnvelope] field for field. Rust
+     * opens it with the device key, derives the share's liveness key and signs
+     * the server's single-use [challengeHex], bound to [hubId] and to this
+     * device's own signing pubkey. Returns the proof (hex). Neither the share
+     * nor the derived key enters Kotlin.
+     */
+    suspend fun recoveryShareLivenessProof(
+        shareEnvelopeJson: String,
+        hubId: String,
+        challengeHex: String,
+    ): String = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        if (!isUnlocked) throw CryptoException("No key loaded")
+        val stored = json.decodeFromString<StoredShareEnvelope>(shareEnvelopeJson)
+        try {
+            org.llamenos.core.mobileRecoveryShareLivenessProof(
+                shareEnvelope = org.llamenos.core.HpkeEnvelope(
+                    v = stored.v.toUByte(),
+                    labelId = stored.labelId.toUByte(),
+                    enc = stored.enc,
+                    ct = stored.ct,
+                ),
+                hubId = hubId,
+                challengeHex = challengeHex,
+            )
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("Recovery share liveness proof failed: ${e.message}", e)
+        }
+    }
+
+    /** A share envelope as the server stores it — the crate's serialized `HpkeEnvelope`. */
+    @kotlinx.serialization.Serializable
+    private data class StoredShareEnvelope(val v: Int, val labelId: Int, val enc: String, val ct: String)
+
     // ---- Call Metadata Decryption (stored-record format) ----
 
     /**

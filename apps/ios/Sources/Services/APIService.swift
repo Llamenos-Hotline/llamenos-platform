@@ -996,12 +996,18 @@ final class APIService: @unchecked Sendable {
         return try await request(method: "POST", path: "/api/recovery-group/user-envelope", body: body)
     }
 
-    func submitShareLivenessProof(hubId: String, proof: String) async throws -> OkResponse {
-        let body: [String: String] = [
-            "hubId": hubId,
-            "proof": proof,
-        ]
-        return try await request(method: "POST", path: "/api/recovery-group/shares/liveness", body: body)
+    /// A fresh single-use challenge to prove possession of this hub's share against (#2782).
+    func requestShareLivenessChallenge(hubId: String) async throws -> ShareLivenessChallengeResponse {
+        try await request(
+            method: "POST",
+            path: "/api/recovery-group/shares/liveness/challenge",
+            wireBody: ShareLivenessChallengeRequest(hubID: hubId)
+        )
+    }
+
+    /// Submit a liveness proof; the server verifies it against this holder's enrolled liveness key.
+    func submitShareLivenessProof(_ body: ShareLivenessProof) async throws -> ShareLivenessProofResponse {
+        try await request(method: "POST", path: "/api/recovery-group/shares/liveness", wireBody: body)
     }
 }
 

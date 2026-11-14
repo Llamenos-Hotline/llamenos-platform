@@ -369,6 +369,50 @@ pub fn mobile_hpke_open_key(
     Ok(hex_out)
 }
 
+/// Prove this device still holds its recovery share (#2782).
+///
+/// Opens `share_envelope` (sealed to this device under
+/// `LABEL_RECOVERY_GROUP_SHARE_WRAP`) with the device key in mobile state,
+/// derives the share's liveness key and signs the server's single-use
+/// `challenge_hex`, bound to `hub_id` and to this device's own signing pubkey —
+/// the identity the server authenticates the submission as. Returns the 64-byte
+/// proof as hex. Neither the share nor the derived key leaves Rust.
+#[uniffi::export]
+pub fn mobile_recovery_share_liveness_proof(
+    share_envelope: HpkeEnvelope,
+    hub_id: String,
+    challenge_hex: String,
+) -> Result<String, CryptoError> {
+    let challenge_bytes = hex::decode(&challenge_hex).map_err(CryptoError::HexError)?;
+    let challenge: [u8; crate::recovery_liveness::LIVENESS_CHALLENGE_LEN] =
+        challenge_bytes.as_slice().try_into().map_err(|_| {
+            CryptoError::InvalidInput(format!(
+                "liveness challenge must be 32 bytes, got {}",
+                challenge_bytes.len()
+            ))
+        })?;
+    with_secrets(|secrets, ds| {
+        let secret_hex = Zeroizing::new(hex::encode(secrets.encryption_seed));
+        let plaintext = Zeroizing::new(hpke_envelope::hpke_open(
+            &share_envelope,
+            &secret_hex,
+            crate::labels::LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            &[],
+        )?);
+        let Some((&x, y)) = plaintext.split_first() else {
+            return Err(CryptoError::InvalidInput("Decrypted share is empty".into()));
+        };
+        let share = crate::shamir::Share { x, y: y.to_vec() };
+        let sig = crate::recovery_liveness::sign_liveness_proof(
+            &share,
+            &hub_id,
+            &ds.signing_pubkey_hex,
+            &challenge,
+        )?;
+        Ok(hex::encode(sig))
+    })
+}
+
 // ── Symmetric encryption (AES-256-GCM) ────────────────────────────
 
 /// Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
@@ -1742,6 +1786,64 @@ mod tests {
         assert_eq!(decrypted, plaintext);
 
         mobile_lock();
+    }
+
+    #[test]
+    fn recovery_share_liveness_proof_signs_with_the_share_key_and_own_identity() {
+        let _encrypted =
+            mobile_generate_and_load("liveness-dev".into(), "13572468".into()).unwrap();
+        let ds = mobile_get_device_state().unwrap();
+
+        let secret = [5u8; 32];
+        let shares = crate::shamir::split(&secret, 3, 2).unwrap();
+        let mut plaintext = vec![shares[0].x];
+        plaintext.extend_from_slice(&shares[0].y);
+        let envelope = hpke_envelope::hpke_seal(
+            &plaintext,
+            &ds.encryption_pubkey_hex,
+            crate::labels::LABEL_RECOVERY_GROUP_SHARE_WRAP,
+            &[],
+        )
+        .unwrap();
+
+        let challenge = [3u8; 32];
+        let proof = mobile_recovery_share_liveness_proof(
+            envelope.clone(),
+            "hub-1".into(),
+            hex::encode(challenge),
+        )
+        .unwrap();
+        let sig: [u8; 64] = hex::decode(proof).unwrap().try_into().unwrap();
+        let pk = crate::recovery_liveness::liveness_public_key(&shares[0]).unwrap();
+        assert!(crate::recovery_liveness::verify_liveness_proof(
+            &pk,
+            "hub-1",
+            &ds.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        let other = crate::recovery_liveness::liveness_public_key(&shares[1]).unwrap();
+        assert!(!crate::recovery_liveness::verify_liveness_proof(
+            &other,
+            "hub-1",
+            &ds.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        assert!(mobile_recovery_share_liveness_proof(
+            envelope.clone(),
+            "hub-1".into(),
+            "00".into()
+        )
+        .is_err());
+
+        mobile_lock();
+        assert!(mobile_recovery_share_liveness_proof(
+            envelope,
+            "hub-1".into(),
+            hex::encode(challenge)
+        )
+        .is_err());
     }
 
     #[test]

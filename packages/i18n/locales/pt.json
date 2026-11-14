@@ -3242,7 +3242,7 @@
       "prove": "Verify my share",
       "proving": "Verifying…",
       "success": "Share verified. Admins will see your share as healthy.",
-      "failed": "Share verification failed"
+      "error": "Share verification failed"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

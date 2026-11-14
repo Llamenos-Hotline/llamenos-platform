@@ -581,33 +581,6 @@ pub fn mobile_recovery_liveness_public_key(
     )?))
 }
 
-/// Sign a recovery-share liveness proof (#2782) for a server-issued challenge.
-///
-/// `holder_pubkey` is this holder's hex signing pubkey (their authenticated
-/// identity), `challenge_hex` the 32-byte challenge from
-/// `POST /api/recovery-group/shares/liveness/challenge`. Returns the 64-byte
-/// signature as hex. The share never leaves the device; only the signature does.
-#[uniffi::export]
-pub fn mobile_recovery_liveness_sign(
-    share: &crate::shamir::ShamirShare,
-    hub_id: &str,
-    holder_pubkey: &str,
-    challenge_hex: &str,
-) -> Result<String, CryptoError> {
-    let share = share.to_share()?;
-    let challenge_bytes = hex::decode(challenge_hex).map_err(CryptoError::HexError)?;
-    let challenge: [u8; crate::recovery_liveness::LIVENESS_CHALLENGE_LEN] =
-        challenge_bytes.as_slice().try_into().map_err(|_| {
-            CryptoError::InvalidInput(format!(
-                "liveness challenge must be 32 bytes, got {}",
-                challenge_bytes.len()
-            ))
-        })?;
-    let sig =
-        crate::recovery_liveness::sign_liveness_proof(&share, hub_id, holder_pubkey, &challenge)?;
-    Ok(hex::encode(sig))
-}
-
 /// Generate an X25519 keypair for a recovery group.
 ///
 /// The private key is stored internally and never crosses the FFI boundary.

@@ -665,6 +665,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_shamir_combine(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_shamir_commit(
@@ -779,6 +781,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_seal_case(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_set_hub_key(
@@ -845,6 +849,8 @@ external fun uniffi_llamenos_core_fn_func_hpke_wrap_key_hex(`keyHex`: RustBuffer
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_group_generate_keypair(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_group_split_private_key(`handle`: Long,`total`: Byte,`threshold`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(`share`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_shamir_combine(`shares`: RustBuffer.ByValue,`threshold`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -959,6 +965,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_rotate(`oldSeedHex`: RustBu
 external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(`shareEnvelope`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`challengeHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_seal_case(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1148,6 +1156,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key() != 15169.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key() != 23991.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_shamir_combine() != 20665.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1317,6 +1328,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
@@ -3285,6 +3299,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+         * share (#2782). An enrolling client computes one per share and sends it beside
+         * the holder's share envelope; see `recovery_liveness`.
+         */
+    @Throws(CryptoException::class) fun `mobileRecoveryLivenessPublicKey`(`share`: ShamirShare): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(
+    
+        FfiConverterTypeShamirShare.lower(`share`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Combine Shamir shares to reconstruct the secret.
          *
          * `threshold`: the minimum number of shares required (K from the original split).
@@ -4163,6 +4193,27 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * Prove this device still holds its recovery share (#2782).
+         *
+         * Opens `share_envelope` (sealed to this device under
+         * `LABEL_RECOVERY_GROUP_SHARE_WRAP`) with the device key in mobile state,
+         * derives the share's liveness key and signs the server's single-use
+         * `challenge_hex`, bound to `hub_id` and to this device's own signing pubkey —
+         * the identity the server authenticates the submission as. Returns the 64-byte
+         * proof as hex. Neither the share nor the derived key leaves Rust.
+         */
+    @Throws(CryptoException::class) fun `mobileRecoveryShareLivenessProof`(`shareEnvelope`: HpkeEnvelope, `hubId`: kotlin.String, `challengeHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(
+    
+        FfiConverterTypeHpkeEnvelope.lower(`shareEnvelope`),FfiConverterString.lower(`hubId`),FfiConverterString.lower(`challengeHex`),_status)
 }
     )
     }

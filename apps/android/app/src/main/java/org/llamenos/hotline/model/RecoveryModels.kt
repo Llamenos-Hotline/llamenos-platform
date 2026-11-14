@@ -78,9 +78,15 @@ data class RecoveryEnvelopeRequest(
     val envelope: String,
 )
 
+/**
+ * `POST /api/recovery-group/shares/liveness` body (`shareLivenessProofSchema`, #2782):
+ * the server-issued [challenge] and the [proof] Rust signs over it with the key
+ * derived from this holder's share ([org.llamenos.hotline.crypto.CryptoService.recoveryShareLivenessProof]).
+ */
 @Serializable
 data class RecoveryLivenessRequest(
     val hubId: String,
+    val challenge: String,
     val proof: String,
 )
 
