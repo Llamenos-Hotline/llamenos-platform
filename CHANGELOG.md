@@ -210,6 +210,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.14 (2026-11-14)
+
+### Fixes
+
+- no transaction can wait on the pool, and an exhausted pool fails loudly (#1208, #1264) (#2752)
+
 ## 0.21.13 (2026-11-12)
 
 ### Fixes
