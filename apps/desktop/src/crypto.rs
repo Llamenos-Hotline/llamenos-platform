@@ -14,21 +14,21 @@
 use std::sync::{Mutex, MutexGuard};
 
 use llamenos_core::{
-    auth, backup, case_record, device_keys,
+    auth, backup, case_record, device_keys, encryption,
     encryption::RecipientKeyEnvelope,
     hpke_envelope,
     labels::{
-        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_EVENT_EPOCH, LABEL_MESSAGE,
-        LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_MESSAGE, LABEL_NOTE_KEY,
+        LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
         LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
     },
-    puk, sas, sigchain,
+    puk, sas, shamir, sigchain,
 };
 use tauri::Manager;
 
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, KeyInit},
 };
 use rand::Rng;
 
@@ -877,292 +877,92 @@ pub fn set_server_event_keys(
     Ok(())
 }
 
+/// The hub key held in `CryptoState`, as the fixed-size key the crate's AES-GCM
+/// helpers take. The copy is zeroized when it drops.
+fn hub_key_array(state: &CryptoState) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+    let guard = lock_mutex(&state.hub_key)?;
+    let key = guard.as_ref().ok_or("Hub key not loaded")?;
+    let arr: [u8; 32] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Hub key must be 32 bytes".to_string())?;
+    Ok(zeroize::Zeroizing::new(arr))
+}
+
 /// Decrypt hub event content using the hub key stored in CryptoState.
-/// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
-/// AAD: LABEL_HUB_EVENT bytes for domain separation.
+/// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM), AAD `LABEL_HUB_EVENT`.
+/// The cipher, AAD and framing live in `llamenos_core::encryption::decrypt_hub_event`.
 /// Returns the decrypted plaintext string.
 #[tauri::command]
 pub fn decrypt_hub_event(
     state: tauri::State<'_, CryptoState>,
     ciphertext_hex: String,
 ) -> Result<String, String> {
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
-
-    let data = hex::decode(&ciphertext_hex).map_err(err_str)?;
-    if data.len() < 28 {
-        return Err("Ciphertext too short (need at least 12-byte nonce + 16-byte tag)".into());
-    }
-
-    let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: llamenos_core::LABEL_HUB_EVENT.as_bytes(),
-            },
-        )
-        .map_err(|_| "Hub event decryption failed (wrong key or corrupted data)".to_string())?;
-
-    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
+    let key = hub_key_array(&state)?;
+    encryption::decrypt_hub_event(&ciphertext_hex, &key).map_err(err_str)
 }
 
-/// Encrypt a plaintext string with the hub key using an arbitrary label as AAD.
-/// Input: plaintext string, AAD label string.
+/// Encrypt a plaintext string with the hub key, binding `label` as AAD.
 /// Output: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
-/// Used for team/tag field encryption with domain-separated labels.
+/// Used for team/tag field encryption with domain-separated labels; the label
+/// registry check and the wire format are `llamenos_core::encryption::encrypt_hub_field`'s.
 #[tauri::command]
 pub fn encrypt_hub_field(
     state: tauri::State<'_, CryptoState>,
     plaintext: String,
     label: String,
 ) -> Result<String, String> {
-    use llamenos_core::labels::label_to_id;
-    if label_to_id(&label).is_none() {
-        return Err("Unknown crypto label: not in LABEL_REGISTRY".into());
-    }
-
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
-
-    let nonce_bytes = random_nonce();
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
-    let ciphertext = cipher
-        .encrypt(
-            nonce,
-            Payload {
-                msg: plaintext.as_bytes(),
-                aad: label.as_bytes(),
-            },
-        )
-        .map_err(|e| format!("Encryption failed: {e}"))?;
-
-    let mut packed = Vec::with_capacity(12 + ciphertext.len());
-    packed.extend_from_slice(&nonce_bytes);
-    packed.extend_from_slice(&ciphertext);
-    Ok(hex::encode(packed))
+    let key = hub_key_array(&state)?;
+    encryption::encrypt_hub_field(&plaintext, &key, &label).map_err(err_str)
 }
 
-/// Decrypt a hub-encrypted field using an arbitrary label as AAD.
-/// Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM), AAD label string.
-/// Used for team/tag field decryption with domain-separated labels.
+/// Decrypt a hub-encrypted field, binding `label` as AAD.
+/// Used for team/tag field decryption with domain-separated labels; see
+/// `llamenos_core::encryption::decrypt_hub_field`.
 #[tauri::command]
 pub fn decrypt_hub_field(
     state: tauri::State<'_, CryptoState>,
     ciphertext_hex: String,
     label: String,
 ) -> Result<String, String> {
-    use llamenos_core::labels::label_to_id;
-    if label_to_id(&label).is_none() {
-        return Err("Unknown crypto label: not in LABEL_REGISTRY".into());
-    }
-
-    let hub_key = lock_mutex(&state.hub_key)?;
-    let key = hub_key.as_ref().ok_or("Hub key not loaded")?;
-
-    let data = hex::decode(&ciphertext_hex).map_err(err_str)?;
-    if data.len() < 28 {
-        return Err("Ciphertext too short (need at least 12-byte nonce + 16-byte tag)".into());
-    }
-
-    let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid hub key: {e}"))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: label.as_bytes(),
-            },
-        )
-        .map_err(|_| {
-            "Hub field decryption failed (wrong key, label, or corrupted data)".to_string()
-        })?;
-
-    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
+    let key = hub_key_array(&state)?;
+    encryption::decrypt_hub_field(&ciphertext_hex, &key, &label).map_err(err_str)
 }
 
-// ── Shamir Secret Sharing (GF(2^8)) ────────────────────────────────
+// ── Shamir Secret Sharing ──────────────────────────────────────────
+//
+// The GF(2^8) arithmetic, the split/combine and the share commitment all live
+// in `llamenos_core::shamir` — the one implementation iOS and Android also
+// call. This module only adapts it to the hex JSON the IPC bridge carries.
+// The commitment is `SHA-256(LABEL_SHAMIR_COMMIT || x || y)`; desktop used to
+// hash `x || y` alone, so its commitments verified nowhere else and carried no
+// domain separation.
 
-/// GF(2^8) multiply using irreducible polynomial x^8 + x^4 + x^3 + x + 1.
-fn gf256_mul(a: u8, b: u8) -> u8 {
-    let mut result: u8 = 0;
-    let mut aa = a;
-    let mut bb = b;
-    for _ in 0..8 {
-        if bb & 1 != 0 {
-            result ^= aa;
-        }
-        let carry = aa & 0x80;
-        aa = aa.wrapping_shl(1);
-        if carry != 0 {
-            aa ^= 0x1b;
-        }
-        bb >>= 1;
-    }
-    result
-}
-
-/// GF(2^8) modular inverse via Fermat's little theorem: a^254 in GF(2^8).
-fn gf256_inv(a: u8) -> u8 {
-    assert!(a != 0, "Cannot invert zero in GF(256)");
-    let mut result = a;
-    for _ in 0..6 {
-        result = gf256_mul(result, result);
-        result = gf256_mul(result, a);
-    }
-    result = gf256_mul(result, result);
-    result
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct ShamirShareJson {
-    pub x: u8,
-    pub y: String, // hex
-}
-
-#[derive(serde::Serialize)]
-pub struct ShamirSplitResult {
-    pub shares: Vec<ShamirShareJson>,
-    pub commitments: Vec<String>, // SHA-256 hex
-}
-
-/// Shamir split: split a hex-encoded secret into N shares with threshold K.
-/// Returns Vec of {x, y_hex} share objects and Vec of SHA-256 commitment hex strings.
-/// Internal only — NOT exposed as an IPC command (secrets must not pass through the JS bridge).
-fn shamir_split(secret_hex: String, total: u8, threshold: u8) -> Result<ShamirSplitResult, String> {
-    if threshold < 2 || threshold > 5 {
-        return Err("Threshold must be 2-5".into());
-    }
-    if total < 3 || total > 5 {
-        return Err("Total must be 3-5".into());
-    }
-    if threshold > total {
-        return Err("Threshold cannot exceed total".into());
-    }
-
-    let secret = hex::decode(&secret_hex).map_err(|e| e.to_string())?;
-    let secret_len = secret.len();
-
-    // Random polynomial coefficients for each byte (degree = threshold - 1)
-    // coefficients[i] are the non-constant-term coefficients for the i-th degree.
-    // Randomness is the only initialisation (see random_nonce) — a dropped fill
-    // here would ship zero coefficients, making every share equal to the secret.
-    let mut coefficients: Vec<Vec<u8>> = Vec::new();
-    for _ in 0..threshold - 1 {
-        let coeff: Vec<u8> = (0..secret_len).map(|_| rand::rngs::OsRng.r#gen()).collect();
-        coefficients.push(coeff);
-    }
-
-    let mut shares = Vec::new();
-    for i in 1..=total {
-        let mut y = vec![0u8; secret_len];
-        for byte_idx in 0..secret_len {
-            let mut val = secret[byte_idx];
-            let mut x_pow = i;
-            for coeff in &coefficients {
-                val ^= gf256_mul(coeff[byte_idx], x_pow);
-                x_pow = gf256_mul(x_pow, i);
-            }
-            y[byte_idx] = val;
-        }
-        shares.push(ShamirShareJson {
-            x: i,
-            y: hex::encode(&y),
-        });
-    }
-
-    // SHA-256 commitments: hash(x || y)
-    use sha2::Digest;
-    let commitments: Vec<String> = shares
-        .iter()
-        .map(|s| {
-            let y_bytes = hex::decode(&s.y).unwrap_or_default();
-            let mut hasher = sha2::Sha256::new();
-            hasher.update([s.x]);
-            hasher.update(&y_bytes);
-            hex::encode(hasher.finalize())
-        })
-        .collect();
-
-    Ok(ShamirSplitResult {
-        shares,
-        commitments,
+/// The crate's `Share` for an IPC `{x, y}` pair.
+fn share_from_hex(x: u8, y_hex: &str) -> Result<shamir::Share, String> {
+    Ok(shamir::Share {
+        x,
+        y: hex::decode(y_hex).map_err(err_str)?,
     })
 }
 
-/// Shamir combine: reconstruct the secret from >= threshold shares.
-/// Internal only — NOT exposed as an IPC command (reconstructed secret must not enter JS).
-fn shamir_combine(shares_json: String) -> Result<String, String> {
-    let share_objs: Vec<ShamirShareJson> =
-        serde_json::from_str(&shares_json).map_err(|e| e.to_string())?;
-    if share_objs.len() < 2 {
-        return Err("Need at least 2 shares".into());
-    }
-
-    let shares: Vec<(u8, Vec<u8>)> = share_objs
-        .iter()
-        .map(|s| {
-            let y = hex::decode(&s.y).unwrap_or_default();
-            (s.x, y)
-        })
-        .collect();
-
-    let secret_len = shares[0].1.len();
-    let mut result = vec![0u8; secret_len];
-
-    for byte_idx in 0..secret_len {
-        let mut val: u8 = 0;
-        for i in 0..shares.len() {
-            let yi = shares[i].1[byte_idx];
-            let xi = shares[i].0;
-            let mut lagrange: u8 = 1;
-            for j in 0..shares.len() {
-                if i == j {
-                    continue;
-                }
-                let xj = shares[j].0;
-                let num = xj;
-                let den = xi ^ xj;
-                if den == 0 {
-                    return Err("Duplicate share x values".into());
-                }
-                lagrange = gf256_mul(lagrange, gf256_mul(num, gf256_inv(den)));
-            }
-            val ^= gf256_mul(yi, lagrange);
-        }
-        result[byte_idx] = val;
-    }
-
-    Ok(hex::encode(result))
-}
-
-/// Shamir commit: compute SHA-256 commitment for a share.
+/// Shamir commit: the crate's domain-separated SHA-256 commitment for a share.
 #[tauri::command]
 pub fn shamir_commit(x: u8, y_hex: String) -> Result<String, String> {
-    use sha2::Digest;
-    let y = hex::decode(&y_hex).map_err(|e| e.to_string())?;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update([x]);
-    hasher.update(&y);
-    Ok(hex::encode(hasher.finalize()))
+    let share = share_from_hex(x, &y_hex)?;
+    Ok(hex::encode(shamir::commit(&share)))
 }
 
-/// Shamir verify: check a share against its SHA-256 commitment (constant-time).
+/// Shamir verify: check a share against its commitment (constant-time, in the
+/// crate). A commitment that is not 32 bytes of hex-decodable data never matches.
 #[tauri::command]
 pub fn shamir_verify(x: u8, y_hex: String, commitment_hex: String) -> Result<bool, String> {
-    let computed = shamir_commit(x, y_hex)?;
-    let computed_bytes = hex::decode(&computed).map_err(|e| e.to_string())?;
-    let expected_bytes = hex::decode(&commitment_hex).map_err(|e| e.to_string())?;
-    if computed_bytes.len() != expected_bytes.len() {
+    let share = share_from_hex(x, &y_hex)?;
+    let expected = hex::decode(&commitment_hex).map_err(err_str)?;
+    let Ok(expected) = <[u8; 32]>::try_from(expected.as_slice()) else {
         return Ok(false);
-    }
-    use subtle::ConstantTimeEq;
-    Ok(computed_bytes.ct_eq(&expected_bytes).into())
+    };
+    Ok(shamir::verify(&share, &expected))
 }
 
 // ── H16: Recovery group key isolation — combine+decrypt in Rust only ──
@@ -1189,17 +989,21 @@ pub fn recovery_group_create(
 
     let secret = StaticSecret::random_from_rng(rand::rngs::OsRng);
     let public = PublicKey::from(&secret);
-    let secret_hex = hex::encode(secret.as_bytes());
 
     // Split immediately — the private key bytes are consumed here (also validates
-    // total/threshold).
-    let split_result = shamir_split(secret_hex, total, threshold)?;
+    // total/threshold). `StaticSecret` zeroizes on drop.
+    let shares = shamir::split(secret.as_bytes(), total, threshold).map_err(err_str)?;
+    drop(secret);
 
-    let mut share_envelopes = Vec::with_capacity(split_result.shares.len());
-    for (share, holder_pubkey) in split_result.shares.iter().zip(&holder_encryption_pubkeys) {
+    let commitments: Vec<String> = shares
+        .iter()
+        .map(|share| hex::encode(shamir::commit(share)))
+        .collect();
+    let mut share_envelopes = Vec::with_capacity(shares.len());
+    for (share, holder_pubkey) in shares.iter().zip(&holder_encryption_pubkeys) {
         // Share plaintext: x (1 byte) || y.
-        let mut plaintext = vec![share.x];
-        plaintext.extend(hex::decode(&share.y).map_err(err_str)?);
+        let mut plaintext = zeroize::Zeroizing::new(vec![share.x]);
+        plaintext.extend_from_slice(&share.y);
         let sealed = hpke_envelope::hpke_seal(
             &plaintext,
             holder_pubkey,
@@ -1213,7 +1017,7 @@ pub fn recovery_group_create(
     Ok(serde_json::json!({
         "publicKeyHex": hex::encode(public.as_bytes()),
         "shareEnvelopes": share_envelopes,
-        "commitments": split_result.commitments,
+        "commitments": commitments,
     }))
 }
 
@@ -1320,28 +1124,27 @@ pub fn recovery_group_reconstruct_from_shares(
     let secret_hex = state.encryption_secret_hex()?;
 
     // Decrypt each HPKE envelope to get share bytes, then parse x (first byte) and y (rest)
-    let mut share_objs: Vec<ShamirShareJson> = Vec::with_capacity(envelopes.len());
+    let mut shares: Vec<shamir::Share> = Vec::with_capacity(envelopes.len());
     for env in &envelopes {
         let aad = vec![]; // empty AAD
-        let plaintext =
-            hpke_envelope::hpke_open(&env.envelope, &secret_hex, &label, &aad).map_err(err_str)?;
+        let plaintext = zeroize::Zeroizing::new(
+            hpke_envelope::hpke_open(&env.envelope, &secret_hex, &label, &aad).map_err(err_str)?,
+        );
 
-        if plaintext.is_empty() {
+        let Some((&x, y)) = plaintext.split_first() else {
             return Err("Decrypted share is empty".into());
-        }
-
-        let x = plaintext[0];
-        let y = hex::encode(&plaintext[1..]);
-        share_objs.push(ShamirShareJson { x, y });
+        };
+        shares.push(shamir::Share { x, y: y.to_vec() });
     }
 
-    // Combine shares via Shamir
-    let shares_json = serde_json::to_string(&share_objs).map_err(err_str)?;
-    let recovered_hex = shamir_combine(shares_json)?;
-    let recovered_bytes = hex::decode(&recovered_hex).map_err(err_str)?;
+    // Combine shares via Shamir. The threshold is not known to the caller, so
+    // every share supplied is used (the crate rejects duplicate or zero x and
+    // mismatched lengths).
+    let threshold = u8::try_from(shares.len()).map_err(|_| "Too many shares".to_string())?;
+    let recovered = zeroize::Zeroizing::new(shamir::combine(&shares, threshold).map_err(err_str)?);
 
     // Store in CryptoState — key NEVER enters JavaScript
-    *lock_mutex(&state.recovery_group_key)? = Some(recovered_bytes);
+    *lock_mutex(&state.recovery_group_key)? = Some(recovered.to_vec());
 
     Ok(serde_json::json!({ "success": true }))
 }
@@ -1570,97 +1373,97 @@ pub fn provision_create_session(state: tauri::State<'_, CryptoState>) -> Result<
     Ok(pubkey_hex)
 }
 
-/// New device: compute the provisioning SAS code from the stored ephemeral secret
-/// and the primary device's encryption pubkey. The SAS is displayed for verification.
+impl CryptoState {
+    /// Body of [`provision_compute_sas`], without Tauri state.
+    fn provisioning_sas(&self, claim_hex: &str) -> Result<String, String> {
+        let guard = lock_mutex(&self.provisioning_ephemeral)?;
+        let ephemeral_secret = guard.as_ref().ok_or_else(|| {
+            "No provisioning session. Call provision_create_session first.".to_string()
+        })?;
+        llamenos_core::provisioning::compute_provisioning_sas(claim_hex, ephemeral_secret)
+            .map_err(err_str)
+    }
+
+    /// Body of [`provision_decrypt_and_import`], without Tauri state.
+    fn provisioning_import(
+        &self,
+        encrypted_hex: &str,
+        claim_hex: &str,
+        pin: &str,
+        device_id: String,
+    ) -> Result<serde_json::Value, String> {
+        // Take the ephemeral secret out (consumed — one-shot)
+        let ephemeral_secret = lock_mutex(&self.provisioning_ephemeral)?
+            .take()
+            .ok_or_else(|| {
+                "No provisioning session. Call provision_create_session first.".to_string()
+            })?;
+
+        // Decrypt the provisioned payload — returns BOTH device seeds.
+        //
+        // Both seeds are used exactly as transported. Re-deriving the encryption
+        // seed from the signing seed here (as this command used to do) gives the
+        // linked device a different X25519 key than the one existing ciphertext was
+        // wrapped to: it authenticates fine and decrypts nothing, with no error on
+        // either side. See packages/crypto/src/provisioning.rs and its
+        // `linked_device_decrypts_ciphertext_wrapped_to_primary` regression test.
+        let decrypted = llamenos_core::provisioning::decrypt_provisioned_bundle(
+            encrypted_hex,
+            claim_hex,
+            &ephemeral_secret,
+        )
+        .map_err(err_str)?;
+
+        let secrets = decrypted.secrets;
+
+        let device_state = device_keys::DeviceKeyState {
+            device_id,
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+        };
+
+        // Encrypt with PIN for persistent storage
+        let encrypted_keys = encrypt_secrets_with_pin(&secrets, pin, &device_state)?;
+
+        // Load into CryptoState
+        *lock_mutex(&self.secrets)? = Some(secrets);
+        *lock_mutex(&self.device_state)? = Some(device_state);
+
+        serde_json::to_value(&encrypted_keys).map_err(err_str)
+    }
+}
+
+/// New device: verify the primary's signed claim and compute the provisioning SAS
+/// from the stored ephemeral secret. The SAS is displayed for verification.
+///
+/// `claim_hex` is the 129-byte claim the primary published for this room
+/// (PROTOCOL.md §6.3, #1865) — NOT a public key. The crate checks the version,
+/// the Ed25519 signature, and that the signature covers THIS device's ephemeral
+/// public key before it derives anything, so a claim minted for another room is
+/// refused here and no SAS is ever shown for an unauthenticated exchange.
 #[tauri::command]
 pub fn provision_compute_sas(
     state: tauri::State<'_, CryptoState>,
-    primary_enc_pubkey_hex: String,
+    claim_hex: String,
 ) -> Result<String, String> {
-    let guard = lock_mutex(&state.provisioning_ephemeral)?;
-    let ephemeral_secret = guard.as_ref().ok_or_else(|| {
-        "No provisioning session. Call provision_create_session first.".to_string()
-    })?;
-
-    // Compute shared secret and derive SAS (same as Rust provisioning module).
-    // parse_x25519_pubkey validates: 32-byte x-only format, rejects all-zeros identity point.
-    let eph_sk = x25519_dalek::StaticSecret::from(*ephemeral_secret);
-    let primary_pk = llamenos_core::provisioning::parse_x25519_pubkey(&primary_enc_pubkey_hex)
-        .map_err(err_str)?;
-
-    let shared = eph_sk.diffie_hellman(&primary_pk);
-    let shared_bytes = shared.as_bytes();
-    if *shared_bytes == [0u8; 32] {
-        return Err("ECDH shared secret is all-zeros (low-order point)".into());
-    }
-
-    // SAS derivation: HKDF(ikm=shared, salt=SAS_SALT, info=SAS_INFO, len=4)
-    let hk = hkdf::Hkdf::<sha2::Sha256>::new(
-        Some(llamenos_core::labels::SAS_SALT.as_bytes()),
-        shared_bytes,
-    );
-    let mut sas_bytes = [0u8; 4];
-    hk.expand(llamenos_core::labels::SAS_INFO.as_bytes(), &mut sas_bytes)
-        .map_err(|e| format!("HKDF expand failed: {e}"))?;
-
-    let num = (sas_bytes[0] as u32) << 24
-        | (sas_bytes[1] as u32) << 16
-        | (sas_bytes[2] as u32) << 8
-        | sas_bytes[3] as u32;
-    let code = format!("{:06}", num % 1_000_000);
-    Ok(format!("{} {}", &code[..3], &code[3..]))
+    state.provisioning_sas(&claim_hex)
 }
 
 /// New device: decrypt the provisioned key bundle and import it as device keys.
 /// The decrypted seeds NEVER enter JavaScript — they go directly from decryption
 /// into CryptoState, encrypted with the user's PIN.
+/// `claim_hex` is the primary's signed claim, verified against this device's
+/// ephemeral key before decryption (see [`provision_compute_sas`]).
 /// Returns the PIN-encrypted device key blob for persistent storage.
 #[tauri::command]
 pub fn provision_decrypt_and_import(
     state: tauri::State<'_, CryptoState>,
     encrypted_hex: String,
-    primary_enc_pubkey_hex: String,
+    claim_hex: String,
     pin: String,
     device_id: String,
 ) -> Result<serde_json::Value, String> {
-    // Take the ephemeral secret out (consumed — one-shot)
-    let ephemeral_secret = lock_mutex(&state.provisioning_ephemeral)?
-        .take()
-        .ok_or_else(|| {
-            "No provisioning session. Call provision_create_session first.".to_string()
-        })?;
-
-    // Decrypt the provisioned payload — returns BOTH device seeds.
-    //
-    // Both seeds are used exactly as transported. Re-deriving the encryption
-    // seed from the signing seed here (as this command used to do) gives the
-    // linked device a different X25519 key than the one existing ciphertext was
-    // wrapped to: it authenticates fine and decrypts nothing, with no error on
-    // either side. See packages/crypto/src/provisioning.rs and its
-    // `linked_device_decrypts_ciphertext_wrapped_to_primary` regression test.
-    let decrypted = llamenos_core::provisioning::decrypt_provisioned_bundle(
-        &encrypted_hex,
-        &primary_enc_pubkey_hex,
-        &ephemeral_secret,
-    )
-    .map_err(err_str)?;
-
-    let secrets = decrypted.secrets;
-
-    let device_state = device_keys::DeviceKeyState {
-        device_id: device_id.clone(),
-        signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-        encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-    };
-
-    // Encrypt with PIN for persistent storage
-    let encrypted_keys = encrypt_secrets_with_pin(&secrets, &pin, &device_state)?;
-
-    // Load into CryptoState
-    *lock_mutex(&state.secrets)? = Some(secrets);
-    *lock_mutex(&state.device_state)? = Some(device_state);
-
-    serde_json::to_value(&encrypted_keys).map_err(err_str)
+    state.provisioning_import(&encrypted_hex, &claim_hex, &pin, device_id)
 }
 
 // ── Internal helpers ────────────────────────────────────────────────
@@ -1773,34 +1576,19 @@ fn open_server_event(
         .map(|(_, k)| k)
         .ok_or_else(|| format!("No server event key for epoch {epoch}"))?;
 
-    let data = hex::decode(ciphertext_hex).map_err(err_str)?;
-    if data.len() < 28 {
-        return Err("Ciphertext too short (need at least 12-byte nonce + 16-byte tag)".into());
-    }
-
-    let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
-    let nonce = Nonce::from_slice(&data[..12]);
-    let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid server event key: {e}"))?;
-    let padded = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: &data[12..],
-                aad: aad.as_bytes(),
-            },
-        )
-        .map_err(|_| "Server event decryption failed (wrong key or corrupted data)".to_string())?;
-
-    let plaintext = llamenos_core::padding::unpad(&padded)
-        .map_err(|e| format!("Server event padding is malformed: {e}"))?;
-    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8 in decrypted content: {e}"))
+    let key: &[u8; 32] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid server event key: must be 32 bytes".to_string())?;
+    encryption::decrypt_server_event(ciphertext_hex, key, epoch).map_err(err_str)
 }
 
 #[cfg(test)]
 mod server_event_tests {
     use super::*;
+    use aes_gcm::aead::Payload;
     use aes_gcm::{AeadCore, aead::OsRng};
+    use llamenos_core::labels::LABEL_HUB_EVENT_EPOCH;
 
     const EPOCH: u64 = 20748;
 
@@ -1875,6 +1663,7 @@ mod server_event_tests {
 #[cfg(test)]
 mod stored_record_conformance_tests {
     use super::*;
+    use aes_gcm::aead::Payload;
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use llamenos_core::labels::{LABEL_CALL_META, LABEL_MESSAGE, label_to_id};
 
@@ -2265,13 +2054,13 @@ mod ipc_surface_tests {
                 &[],
             )
             .unwrap();
-            shares.push(ShamirShareJson {
+            shares.push(shamir::Share {
                 x: plain[0],
-                y: hex::encode(&plain[1..]),
+                y: plain[1..].to_vec(),
             });
         }
-        let group_secret = shamir_combine(serde_json::to_string(&shares).unwrap()).unwrap();
-        let secret: [u8; 32] = hex::decode(group_secret).unwrap().try_into().unwrap();
+        let group_secret = shamir::combine(&shares, 2).unwrap();
+        let secret: [u8; 32] = group_secret.try_into().unwrap();
         let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
         assert_eq!(
             out["publicKeyHex"].as_str().unwrap(),
@@ -2513,6 +2302,238 @@ mod ipc_surface_tests {
         ] {
             assert!(!is_session_id(bad), "{bad:?} must be refused");
         }
+    }
+
+    // ── Shamir: one implementation, one commitment format (#2764) ──────────
+
+    /// `SHA-256("llamenos:shamir-commit:v1" || 0x07 || 0102..10)`, computed
+    /// outside Rust. Pinned so the commitment cannot drift back to the bare
+    /// `SHA-256(x || y)` desktop used to emit — a value iOS/Android would
+    /// never accept, and one with no domain separation.
+    const COMMIT_VECTOR_X: u8 = 7;
+    const COMMIT_VECTOR_Y_HEX: &str = "0102030405060708090a0b0c0d0e0f10";
+    const COMMIT_VECTOR: &str = "5a46e2f7c18caaa8227164f370875bcea284606ed6abe0dc1d1fb8cc0dff2db5";
+    /// The retired desktop format: `SHA-256(x || y)`, no label.
+    const UNLABELLED_COMMIT_VECTOR: &str =
+        "504b8fe1342d38eb394453eb2b208a5532d442ba129731c8e001bd8b39480565";
+
+    #[test]
+    fn shamir_commit_is_the_domain_separated_commitment_every_platform_uses() {
+        assert_eq!(
+            shamir_commit(COMMIT_VECTOR_X, COMMIT_VECTOR_Y_HEX.into()).unwrap(),
+            COMMIT_VECTOR
+        );
+        assert_ne!(COMMIT_VECTOR, UNLABELLED_COMMIT_VECTOR);
+        // The retired un-labelled commitment no longer verifies.
+        assert!(
+            !shamir_verify(
+                COMMIT_VECTOR_X,
+                COMMIT_VECTOR_Y_HEX.into(),
+                UNLABELLED_COMMIT_VECTOR.into()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_commitment_made_by_the_crate_verifies_on_desktop_and_back() {
+        // What iOS/Android produce (`mobile_shamir_commit` → `shamir::commit`)
+        // is accepted by the desktop command...
+        let shares = shamir::split(b"0123456789abcdef0123456789abcdef", 3, 2).unwrap();
+        for share in &shares {
+            let crate_commitment = hex::encode(shamir::commit(share));
+            let y_hex = hex::encode(&share.y);
+            assert!(shamir_verify(share.x, y_hex.clone(), crate_commitment.clone()).unwrap());
+            // ...and what desktop produces is accepted by the crate.
+            assert_eq!(
+                shamir_commit(share.x, y_hex.clone()).unwrap(),
+                crate_commitment
+            );
+            let desktop: [u8; 32] = hex::decode(shamir_commit(share.x, y_hex.clone()).unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert!(shamir::verify(share, &desktop));
+
+            // Tampering with either coordinate, or the commitment, fails.
+            let mut other_y = share.y.clone();
+            other_y[0] ^= 1;
+            assert!(
+                !shamir_verify(share.x, hex::encode(&other_y), crate_commitment.clone()).unwrap()
+            );
+            assert!(
+                !shamir_verify(share.x ^ 0x10, y_hex.clone(), crate_commitment.clone()).unwrap()
+            );
+            assert!(!shamir_verify(share.x, y_hex.clone(), "00".repeat(32)).unwrap());
+            assert!(
+                !shamir_verify(share.x, y_hex, "00".repeat(31)).unwrap(),
+                "short commitment"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_group_commitments_are_the_crates_commitments_for_the_sealed_shares() {
+        let holders: Vec<TestDevice> = (0..3).map(|_| device()).collect();
+        let pubkeys: Vec<String> = holders
+            .iter()
+            .map(|h| h.encryption_pubkey_hex.clone())
+            .collect();
+        let out = recovery_group_create(3, 2, pubkeys).unwrap();
+        let commitments = out["commitments"].as_array().unwrap();
+        for ((holder, env), commitment) in holders
+            .iter()
+            .zip(out["shareEnvelopes"].as_array().unwrap())
+            .zip(commitments)
+        {
+            let env: hpke_envelope::HpkeEnvelope = serde_json::from_value(env.clone()).unwrap();
+            let plain = hpke_envelope::hpke_open(
+                &env,
+                &hex::encode(holder.encryption_seed),
+                LABEL_RECOVERY_GROUP_SHARE_WRAP,
+                &[],
+            )
+            .unwrap();
+            let share = shamir::Share {
+                x: plain[0],
+                y: plain[1..].to_vec(),
+            };
+            let expected: [u8; 32] = hex::decode(commitment.as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert!(
+                shamir::verify(&share, &expected),
+                "a commitment the group returned does not verify under the crate"
+            );
+        }
+    }
+
+    // ── Hub field / event: the crate's AES-GCM, not a desktop copy (#2766) ──
+
+    fn state_with_hub_key(key: [u8; 32]) -> CryptoState {
+        let state = CryptoState::new();
+        *state.hub_key.lock().unwrap() = Some(key.to_vec());
+        state
+    }
+
+    #[test]
+    fn hub_fields_and_events_use_the_crates_wire_format() {
+        let key = random_key();
+        let state = state_with_hub_key(key);
+        let key_array = hub_key_array(&state).unwrap();
+        let label = llamenos_core::labels::LABEL_TAG_ENCRYPT;
+
+        // A field the crate sealed opens through the desktop key plumbing, and
+        // the reverse.
+        let sealed = encryption::encrypt_hub_field("night shift", &key_array, label).unwrap();
+        assert_eq!(
+            encryption::decrypt_hub_field(&sealed, &key_array, label).unwrap(),
+            "night shift"
+        );
+        assert!(encryption::decrypt_hub_field(&sealed, &key_array, LABEL_MESSAGE).is_err());
+
+        // A locked state, or a key of the wrong size, yields no key at all.
+        assert!(hub_key_array(&CryptoState::new()).is_err());
+        *state.hub_key.lock().unwrap() = Some(vec![0u8; 31]);
+        assert!(hub_key_array(&state).is_err());
+    }
+
+    // ── Provisioning: the signed claim, not a bare pubkey (#2765, #1865) ───
+
+    /// A new device (`new_device`) mid-link and the primary's bundle for it.
+    fn provisioning_room() -> (
+        CryptoState,
+        device_keys::DeviceSecrets,
+        String,
+        String,
+        String,
+    ) {
+        let primary_signing = random_key();
+        let primary_encryption = random_key();
+        let primary = device_keys::DeviceSecrets {
+            signing_seed: primary_signing,
+            encryption_seed: primary_encryption,
+        };
+        let new_device = CryptoState::new();
+        let ephemeral_pubkey_hex = new_device_session(&new_device);
+        let result = llamenos_core::provisioning::encrypt_device_bundle_for_provisioning(
+            &primary,
+            &ephemeral_pubkey_hex,
+        )
+        .unwrap();
+        (
+            new_device,
+            primary,
+            result.claim_hex,
+            result.encrypted_hex,
+            result.sas_code,
+        )
+    }
+
+    /// What `provision_create_session` does, without Tauri state.
+    fn new_device_session(state: &CryptoState) -> String {
+        let secret = random_key();
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+        *state.provisioning_ephemeral.lock().unwrap() = Some(secret);
+        hex::encode(public.as_bytes())
+    }
+
+    #[test]
+    fn provisioning_sas_comes_from_the_verified_claim_and_matches_the_primary() {
+        let (new_device, _primary, claim_hex, _encrypted, primary_sas) = provisioning_room();
+        assert_eq!(
+            new_device.provisioning_sas(&claim_hex).unwrap(),
+            primary_sas
+        );
+    }
+
+    #[test]
+    fn provisioning_sas_refuses_a_pubkey_in_place_of_the_claim() {
+        // Desktop used to take the primary's encryption pubkey here and derive a
+        // SAS from it with no signature check at all.
+        let (new_device, primary, claim_hex, _encrypted, _sas) = provisioning_room();
+        let pubkey_hex = hex::encode(primary.encryption_pubkey().to_bytes());
+        assert!(new_device.provisioning_sas(&pubkey_hex).is_err());
+
+        // A genuine claim signed for another room's ephemeral key is refused too.
+        let (_other_device, _other_primary, other_claim, _e, _s) = provisioning_room();
+        assert_ne!(claim_hex, other_claim);
+        assert!(new_device.provisioning_sas(&other_claim).is_err());
+
+        // A claim whose signature byte is flipped is refused.
+        let mut forged = hex::decode(&claim_hex).unwrap();
+        *forged.last_mut().unwrap() ^= 1;
+        assert!(new_device.provisioning_sas(&hex::encode(forged)).is_err());
+    }
+
+    #[test]
+    fn provisioning_import_adopts_the_primarys_seeds_only_for_a_verified_claim() {
+        let (new_device, primary, claim_hex, encrypted, _sas) = provisioning_room();
+        // A pubkey where the claim belongs fails closed — and consumes the
+        // one-shot ephemeral, so the room cannot be retried against the same key.
+        let pubkey_hex = hex::encode(primary.encryption_pubkey().to_bytes());
+        assert!(
+            new_device
+                .provisioning_import(&encrypted, &pubkey_hex, "123456", "dev-2".into())
+                .is_err()
+        );
+        assert!(new_device.secrets.lock().unwrap().is_none());
+
+        let (new_device, primary, claim_hex2, encrypted2, _sas) = provisioning_room();
+        assert_ne!(claim_hex, claim_hex2);
+        new_device
+            .provisioning_import(&encrypted2, &claim_hex2, "123456", "dev-2".into())
+            .unwrap();
+        let ds = new_device.get_device_state().unwrap();
+        assert_eq!(
+            ds.signing_pubkey_hex,
+            hex::encode(primary.signing_pubkey().to_bytes())
+        );
+        assert_eq!(
+            ds.encryption_pubkey_hex,
+            hex::encode(primary.encryption_pubkey().to_bytes())
+        );
     }
 }
 

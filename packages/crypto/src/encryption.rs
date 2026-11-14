@@ -503,6 +503,39 @@ pub fn decrypt_hub_field(
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
+/// Decrypt a hub-key-encrypted relay event: `hex(nonce_12 ‖ ciphertext ‖ tag_16)`
+/// under the hub key, AAD = `LABEL_HUB_EVENT`. Returns the event's JSON.
+///
+/// Stateless counterpart of the mobile `mobile_decrypt_hub_event`, so desktop
+/// (which keeps the hub key in its own process state) does not carry a second
+/// AES-GCM implementation of the same wire format.
+pub fn decrypt_hub_event(packed_hex: &str, hub_key: &[u8; 32]) -> Result<String, CryptoError> {
+    let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
+    let plaintext = Zeroizing::new(aes256gcm_decrypt(
+        hub_key,
+        &data,
+        LABEL_HUB_EVENT.as_bytes(),
+    )?);
+    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
+}
+
+/// Decrypt a server-published relay event sealed under the epoch-keyed server
+/// event key: `hex(nonce_12 ‖ ciphertext ‖ tag_16)`, AAD =
+/// `"{LABEL_HUB_EVENT_EPOCH}:{epoch}"`. The server pads every event to a
+/// power-of-2 bucket before sealing (see [`crate::padding`]); the padding is
+/// stripped before the JSON is returned.
+pub fn decrypt_server_event(
+    packed_hex: &str,
+    key: &[u8; 32],
+    epoch: u64,
+) -> Result<String, CryptoError> {
+    let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
+    let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
+    let padded = Zeroizing::new(aes256gcm_decrypt(key, &data, aad.as_bytes())?);
+    let plaintext = Zeroizing::new(crate::padding::unpad(&padded)?);
+    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
+}
+
 // ── Export Encryption ───────────────────────────────────────────────
 
 /// Encrypt a JSON export blob. Returns base64-encoded ciphertext.
@@ -750,6 +783,62 @@ mod tests {
                 "decrypt opened a field bound to unregistered label {label:?}"
             );
         }
+    }
+
+    #[test]
+    fn hub_event_opens_only_under_the_hub_event_label_and_key() {
+        let packed = aes256gcm_encrypt(
+            &HUB_FIELD_KEY,
+            br#"{"type":"call:ring"}"#,
+            LABEL_HUB_EVENT.as_bytes(),
+        )
+        .unwrap();
+        let hex_packed = hex::encode(&packed);
+        assert_eq!(
+            decrypt_hub_event(&hex_packed, &HUB_FIELD_KEY).unwrap(),
+            r#"{"type":"call:ring"}"#
+        );
+        assert!(
+            decrypt_hub_event(&hex_packed, &[0x43; 32]).is_err(),
+            "wrong key"
+        );
+
+        // A hub FIELD sealed under another label is not a hub event.
+        let field = aes256gcm_encrypt(&HUB_FIELD_KEY, b"x", LABEL_TAG_ENCRYPT.as_bytes()).unwrap();
+        assert!(decrypt_hub_event(&hex::encode(&field), &HUB_FIELD_KEY).is_err());
+        assert!(decrypt_hub_event("zz", &HUB_FIELD_KEY).is_err(), "not hex");
+        assert!(
+            decrypt_hub_event(&"07".repeat(27), &HUB_FIELD_KEY).is_err(),
+            "too short"
+        );
+    }
+
+    #[test]
+    fn server_event_is_bound_to_its_epoch_and_unpadded() {
+        let json = r#"{"type":"presence"}"#;
+        let padded = crate::padding::pad_to_bucket(json.as_bytes());
+        let aad = format!("{LABEL_HUB_EVENT_EPOCH}:7");
+        let packed =
+            hex::encode(aes256gcm_encrypt(&HUB_FIELD_KEY, &padded, aad.as_bytes()).unwrap());
+
+        assert_eq!(
+            decrypt_server_event(&packed, &HUB_FIELD_KEY, 7).unwrap(),
+            json
+        );
+        assert!(
+            decrypt_server_event(&packed, &HUB_FIELD_KEY, 8).is_err(),
+            "other epoch"
+        );
+        assert!(
+            decrypt_server_event(&packed, &[0x43; 32], 7).is_err(),
+            "other key"
+        );
+
+        // The hub-event label is a different domain from the epoch-keyed one.
+        let as_hub_event = hex::encode(
+            aes256gcm_encrypt(&HUB_FIELD_KEY, &padded, LABEL_HUB_EVENT.as_bytes()).unwrap(),
+        );
+        assert!(decrypt_server_event(&as_hub_event, &HUB_FIELD_KEY, 7).is_err());
     }
 
     #[test]

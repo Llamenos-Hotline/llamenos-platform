@@ -2753,6 +2753,7 @@ dependencies = [
  "url",
  "webpki-root-certs",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
