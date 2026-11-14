@@ -865,6 +865,74 @@ pub extern "C" fn ffi_case_open(
     plaintext.len() as i32
 }
 
+/// Verify a recovery-share liveness proof (#2782).
+///
+/// `liveness_pubkey` is the holder's stored 32-byte liveness verifying key,
+/// `challenge` the 32-byte server-issued challenge, `signature` the 64-byte
+/// proof. `hub_id` and `holder_pubkey` are UTF-8 and are bound into the signed
+/// message by `recovery_liveness::build_liveness_message` — the one definition
+/// of its layout, shared with every signer.
+///
+/// Returns 0 if the proof verifies, -1 if it does not, and a negative input
+/// error otherwise. A malformed key or signature is a failed proof (-1), never
+/// an error a caller could read as anything else.
+#[no_mangle]
+pub extern "C" fn ffi_recovery_liveness_verify(
+    liveness_pubkey: *const u8,
+    pk_len: usize,
+    hub_id: *const u8,
+    hub_id_len: usize,
+    holder_pubkey: *const u8,
+    holder_len: usize,
+    challenge: *const u8,
+    challenge_len: usize,
+    signature: *const u8,
+    sig_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(liveness_pubkey, hub_id, holder_pubkey, challenge, signature);
+    check_input_size!(hub_id_len, holder_len);
+
+    if pk_len != 32 {
+        set_error("liveness public key must be 32 bytes");
+        return -5;
+    }
+    if challenge_len != crate::recovery_liveness::LIVENESS_CHALLENGE_LEN {
+        set_error("liveness challenge must be 32 bytes");
+        return -5;
+    }
+    if sig_len != 64 {
+        set_error("liveness proof must be 64 bytes");
+        return -5;
+    }
+
+    let pk: [u8; 32] = unsafe { std::slice::from_raw_parts(liveness_pubkey, 32) }
+        .try_into()
+        .unwrap();
+    let chal: [u8; 32] = unsafe { std::slice::from_raw_parts(challenge, 32) }
+        .try_into()
+        .unwrap();
+    let sig: [u8; 64] = unsafe { std::slice::from_raw_parts(signature, 64) }
+        .try_into()
+        .unwrap();
+    let hub_slice = unsafe { std::slice::from_raw_parts(hub_id, hub_id_len) };
+    let holder_slice = unsafe { std::slice::from_raw_parts(holder_pubkey, holder_len) };
+    let (Ok(hub_str), Ok(holder_str)) = (
+        std::str::from_utf8(hub_slice),
+        std::str::from_utf8(holder_slice),
+    ) else {
+        set_error("hub id and holder pubkey must be valid UTF-8");
+        return -5;
+    };
+
+    if crate::recovery_liveness::verify_liveness_proof(&pk, hub_str, holder_str, &chal, &sig) {
+        0
+    } else {
+        set_error("liveness proof did not verify");
+        -1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1353,5 +1421,51 @@ mod tests {
             64,
         );
         assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn test_recovery_liveness_verify() {
+        let mut secret = [0u8; 32];
+        getrandom::getrandom(&mut secret).unwrap();
+        let shares = crate::shamir::split(&secret, 3, 2).unwrap();
+        let pk = crate::recovery_liveness::liveness_public_key(&shares[0]).unwrap();
+        let chal = [7u8; 32];
+        let hub = "hub-1";
+        let holder = "holder-1";
+        let sig =
+            crate::recovery_liveness::sign_liveness_proof(&shares[0], hub, holder, &chal).unwrap();
+        let call = |sig: &[u8; 64], hub: &str| {
+            ffi_recovery_liveness_verify(
+                pk.as_ptr(),
+                32,
+                hub.as_ptr(),
+                hub.len(),
+                holder.as_ptr(),
+                holder.len(),
+                chal.as_ptr(),
+                32,
+                sig.as_ptr(),
+                64,
+            )
+        };
+        assert_eq!(call(&sig, hub), 0);
+        assert_eq!(call(&sig, "hub-2"), -1);
+        assert_eq!(call(&[0u8; 64], hub), -1);
+        let short = [0u8; 16];
+        assert_eq!(
+            ffi_recovery_liveness_verify(
+                pk.as_ptr(),
+                32,
+                hub.as_ptr(),
+                hub.len(),
+                holder.as_ptr(),
+                holder.len(),
+                short.as_ptr(),
+                16,
+                sig.as_ptr(),
+                64,
+            ),
+            -5
+        );
     }
 }
