@@ -1321,46 +1321,46 @@ describe('SettingsService.getRoles', () => {
 })
 
 describe('SettingsService.createRole', () => {
-  it('throws 400 when required fields missing', async () => {
-    const { service } = setup()
-    await expect(
-      service.createRole({ name: 'Incomplete' }),
-    ).rejects.toMatchObject({ status: 400 })
-  })
-
-  it('throws 400 for invalid slug format', async () => {
-    const { service } = setup()
-    await expect(
-      service.createRole({ name: 'Test', slug: 'Bad Slug!', permissions: ['read'], description: 'Test' }),
-    ).rejects.toMatchObject({ status: 400 })
-  })
-
-  it('throws 409 when slug already exists', async () => {
+  it('throws 409 when the id already exists', async () => {
     const { db, service } = setup()
-    // The slug's unique index swallowed the insert (ON CONFLICT DO NOTHING
+    // The id's unique index swallowed the insert (ON CONFLICT DO NOTHING
     // returned no row) — this is also what the loser of a concurrent
-    // same-slug create sees, so it must be a 409, never a 500.
+    // same-id create sees, so it must be a 409, never a 500.
     db.$setInsertResult([])
 
     await expect(
-      service.createRole({ name: 'New', slug: 'existing', permissions: ['read'], description: 'Test' }),
+      service.createRole({ id: 'role-00000000-0000-4000-8000-000000000001', permissions: ['calls:answer'] }),
     ).rejects.toMatchObject({ status: 409 })
   })
 
-  it('creates role with valid data', async () => {
+  it('stores no plaintext: name null, description empty, slug = id (#2780)', async () => {
     const { db, service } = setup()
-    db.$setInsertResult([{ id: 'role-new' }]) // insert won: no slug conflict
+    const id = 'role-00000000-0000-4000-8000-000000000002'
+    db.$setInsertResult([{ id }])
+    db.$setSelectResult([makeRole({ id, name: null, slug: id, description: '', hubId: null })])
 
-    const result = await service.createRole({
-      name: 'Observer',
-      slug: 'observer',
-      permissions: ['calls.view'],
-      description: 'Observer role',
-    })
-    expect(result.slug).toBe('observer')
-    expect(result.isSystem).toBe(false)
-    expect(result.isDefault).toBe(false)
-    expect(db.insert).toHaveBeenCalled()
+    await service.createRole({ id, permissions: ['calls:answer'] })
+    const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]!.value.values.mock.calls[0]![0]
+    expect(values).toMatchObject({ id, name: null, slug: id, description: '', hubId: null })
+  })
+})
+
+describe('SettingsService.createHubRole', () => {
+  it('stores the sealed name as given and the hub as owner, never a plaintext name (#2780)', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeRole({ name: null, description: '', hubId: 'hub-a' })])
+
+    await service.createHubRole('hub-a', { permissions: ['calls:answer'], encryptedName: 'ab'.repeat(40) })
+    const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]!.value.values.mock.calls[0]![0]
+    expect(values).toMatchObject({ name: null, description: '', hubId: 'hub-a', encryptedName: 'ab'.repeat(40) })
+    expect(values.slug).toBe(values.id)
+  })
+
+  it('refuses a permission the catalogue does not define', async () => {
+    const { service } = setup()
+    await expect(
+      service.createHubRole('hub-a', { permissions: ['calls:answer', 'not:a-permission'], encryptedName: 'ab'.repeat(40) }),
+    ).rejects.toMatchObject({ status: 400 })
   })
 })
 
@@ -1369,24 +1369,50 @@ describe('SettingsService.updateRole', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.updateRole('nonexistent', { name: 'New' })).rejects.toMatchObject({ status: 404 })
+    await expect(service.updateRole('nonexistent', { permissions: [] })).rejects.toMatchObject({ status: 404 })
   })
 
   it('throws 403 when updating system role', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ isSystem: true })])
 
-    await expect(service.updateRole('role-1', { name: 'Hacked' })).rejects.toMatchObject({ status: 403 })
+    await expect(service.updateRole('role-1', { permissions: ['*'] })).rejects.toMatchObject({ status: 403 })
   })
 
-  it('updates name and returns updated role', async () => {
+  it('does not reach a hub-owned role from the deployment scope', async () => {
     const { db, service } = setup()
-    const updated = makeRole({ name: 'Updated Name' })
-    db.$setSelectResults([[makeRole()], [updated]])
+    db.$setSelectResult([makeRole({ hubId: 'hub-a' })])
 
-    const result = await service.updateRole('role-1', { name: 'Updated Name' })
-    expect(result.name).toBe('Updated Name')
+    await expect(service.updateRole('role-1', { permissions: [] })).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('writes the row and returns it read back', async () => {
+    // The permission path runs the hub-admin invariant, covered against real
+    // PostgreSQL in the integration tier; this pins the read-back.
+    const { db, service } = setup()
+    db.$setSelectResults([[makeRole()], [makeRole({ updatedAt: new Date() })]])
+
+    const result = await service.updateRole('role-1', {})
+    expect(result.id).toBe('role-1')
     expect(db.update).toHaveBeenCalled()
+  })
+})
+
+describe('SettingsService.updateHubRole', () => {
+  it('does not reach another hub\'s role', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeRole({ hubId: 'hub-b' })])
+
+    await expect(service.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
+      .rejects.toMatchObject({ status: 404 })
+  })
+
+  it('does not reach a deployment-wide role', async () => {
+    const { db, service } = setup()
+    db.$setSelectResult([makeRole({ hubId: null })])
+
+    await expect(service.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
+      .rejects.toMatchObject({ status: 404 })
   })
 })
 

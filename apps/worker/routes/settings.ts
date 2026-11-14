@@ -13,6 +13,8 @@ import {
   telephonyProviderSchema,
   createRoleSchema,
   updateRoleSchema,
+  createHubRoleSchema,
+  updateHubRoleSchema,
   addRoleEnvelopesSchema,
   webauthnSettingsSchema,
   transcriptionSettingsSchema,
@@ -47,7 +49,7 @@ import {
 import { okResponseSchema, errorResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { invalidateRolesCache } from '../services/settings'
+import { ServiceError } from '../services/settings'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import {
   getMessagingAdapterFromService,
@@ -72,7 +74,8 @@ import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } fr
  *   its hub with {@link targetHubId} / {@link ivrAudioHub} and pass it on.
  * - `deployment`: settings the whole deployment has exactly ONE of — the
  *   messaging sender every hub sends through, the login policy, the custom
- *   field and report-type vocabularies, TTLs, geocoding, roles. Mounted ONLY at
+ *   field and report-type vocabularies, TTLs, geocoding, the deployment-wide
+ *   roles. Mounted ONLY at
  *   `/api/settings` ({@link hubSettingsRoutes} does not carry it), so under a
  *   hub these paths do not exist and no permission a hub can grant reaches
  *   them. A handler here never consults a hub.
@@ -80,6 +83,8 @@ import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } fr
  *   do their work (the custom-field vocabulary a note is written in). Mounted
  *   on both, because a hub-only member holds no global role and the unscoped
  *   mount would refuse them. Reads only — a write here is the defect again.
+ * - `hubOwned`: rows a hub owns outright — its own roles (#2780). Mounted ONLY
+ *   at `/api/hubs/:hubId/settings`; there is no platform value to fall back to.
  *
  * A new setting goes on `deployment` unless it has a per-hub value. The set of
  * routes reachable under a hub is pinned by
@@ -1124,7 +1129,7 @@ deployment.delete('/report-types/:id',
 deployment.get('/roles',
   describeRoute({
     tags: ['Settings'],
-    summary: 'List all roles',
+    summary: 'List the deployment-wide roles',
     responses: {
       200: {
         description: 'List of roles',
@@ -1140,7 +1145,8 @@ deployment.get('/roles',
   requirePermission('system:view-roles'),
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getRoles()
+    // Deployment-wide roles only: a hub's own roles are listed under that hub.
+    const result = await services.settings.listRoles(null)
     return c.json(result)
   },
 )
@@ -1148,7 +1154,7 @@ deployment.get('/roles',
 deployment.post('/roles',
   describeRoute({
     tags: ['Settings'],
-    summary: 'Create a custom role',
+    summary: 'Create a platform (deployment-wide) role — name and description only in per-admin envelopes',
     responses: {
       201: {
         description: 'Role created',
@@ -1168,8 +1174,8 @@ deployment.post('/roles',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.createRole(body)
-    invalidateRolesCache()
-    await audit(services.audit, 'roleCreated', pubkey, { name: body.name }, undefined, null)
+    // The id only: a role's name is sealed, and the audit log is not where it leaks.
+    await audit(services.audit, 'roleCreated', pubkey, { roleId: result.id }, undefined, null)
     return c.json(result, 201)
   },
 )
@@ -1198,7 +1204,6 @@ deployment.patch('/roles/:id',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.updateRole(id, body)
-    invalidateRolesCache()
     await audit(services.audit, 'roleUpdated', pubkey, { roleId: id }, undefined, null)
     return c.json(result)
   },
@@ -1226,7 +1231,6 @@ deployment.delete('/roles/:id',
     const id = c.req.param('id')
     const services = c.get('services')
     const result = await services.settings.deleteRole(id)
-    invalidateRolesCache()
     await audit(services.audit, 'roleDeleted', pubkey, { roleId: id }, undefined, null)
     return c.json(result)
   },
@@ -1256,7 +1260,6 @@ deployment.post('/roles/:id/envelopes',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.settings.addRoleEnvelopes(id, body.envelopes)
-    invalidateRolesCache()
     await audit(services.audit, 'roleEnvelopesUpdated', pubkey, { roleId: id, count: body.envelopes.length }, undefined, null)
     return c.json(result)
   },
@@ -1488,6 +1491,100 @@ deployment.get('/geocoding/test',
   },
 )
 
+// --- Hub-owned roles (#2780) ---
+//
+// A role a hub defines for itself. Its name and description are sealed on the
+// client under that hub's key (`LABEL_HUB_ROLE_ENCRYPT`), so they are readable
+// by exactly the hub's members — the hub key's reader set, which the hub-admin
+// invariant keeps non-empty — and by nobody the hub did not admit, the server
+// and a super-admin outside the hub included. The rows belong to a hub, so this
+// router is mounted ONLY under `/api/hubs/:hubId/settings`.
+const hubOwned = new Hono<AppEnv>()
+
+/** The hub this request is routed under. hubContext has already admitted the caller to it. */
+function owningHub(c: Context<AppEnv>): string {
+  const hubId = c.get('hubId') as string | undefined
+  if (!hubId) throw new ServiceError(400, 'Hub-owned roles are only reachable under /hubs/:hubId')
+  return hubId
+}
+
+hubOwned.get('/roles',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'List the roles this hub offers: the deployment-wide roles and the hub\'s own',
+    responses: {
+      200: { description: 'Roles', content: { 'application/json': { schema: resolver(roleListResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requirePermission('system:view-roles'),
+  async (c) => {
+    const services = c.get('services')
+    return c.json(await services.settings.listRoles(owningHub(c)))
+  },
+)
+
+hubOwned.post('/roles',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Create a role owned by this hub — name and description sealed under the hub key',
+    responses: {
+      201: { description: 'Role created', content: { 'application/json': { schema: resolver(roleResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requirePermission('system:manage-roles'),
+  validator('json', createHubRoleSchema),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = owningHub(c)
+    const result = await services.settings.createHubRole(hubId, c.req.valid('json'))
+    await audit(services.audit, 'roleCreated', c.get('pubkey'), { roleId: result.id }, undefined, hubId)
+    return c.json(result, 201)
+  },
+)
+
+hubOwned.patch('/roles/:id',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Update a role owned by this hub',
+    responses: {
+      200: { description: 'Role updated', content: { 'application/json': { schema: resolver(roleResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requirePermission('system:manage-roles'),
+  validator('json', updateHubRoleSchema),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = owningHub(c)
+    const id = c.req.param('id')
+    const result = await services.settings.updateHubRole(hubId, id, c.req.valid('json'))
+    await audit(services.audit, 'roleUpdated', c.get('pubkey'), { roleId: id }, undefined, hubId)
+    return c.json(result)
+  },
+)
+
+hubOwned.delete('/roles/:id',
+  describeRoute({
+    tags: ['Settings'],
+    summary: 'Delete a role owned by this hub',
+    responses: {
+      200: { description: 'Role deleted', content: { 'application/json': { schema: resolver(okResponseSchema) } } },
+      ...authErrors,
+    },
+  }),
+  requirePermission('system:manage-roles'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = owningHub(c)
+    const id = c.req.param('id')
+    const result = await services.settings.deleteHubRole(hubId, id)
+    await audit(services.audit, 'roleDeleted', c.get('pubkey'), { roleId: id }, undefined, hubId)
+    return c.json(result)
+  },
+)
+
 /** `/api/settings` — the platform defaults of the per-hub settings, and every deployment-wide setting. */
 const settingsRoutes = new Hono<AppEnv>()
 settingsRoutes.route('/', scoped)
@@ -1504,3 +1601,4 @@ export default settingsRoutes
 export const hubSettingsRoutes = new Hono<AppEnv>()
 hubSettingsRoutes.route('/', scoped)
 hubSettingsRoutes.route('/', deploymentReads)
+hubSettingsRoutes.route('/', hubOwned)

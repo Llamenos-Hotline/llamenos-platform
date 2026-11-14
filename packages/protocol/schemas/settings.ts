@@ -65,8 +65,15 @@ export type RoleEnvelope = z.infer<typeof roleEnvelopeSchema>
 
 export const roleResponseSchema = z.object({
   id: z.string(),
-  /** null for non-system roles — plaintext name stored only in encrypted envelopes */
+  /**
+   * Plaintext only for the seeded default roles (public constants). Every
+   * custom role is null: a hub role's name is `encryptedName`, sealed under its
+   * hub key with `LABEL_HUB_ROLE_ENCRYPT`; a platform role's is in `envelopes`.
+   */
   name: z.string().nullable(),
+  /** The owning hub; null/absent for a deployment-wide role. */
+  hubId: z.string().nullable().optional(),
+  /** Equals `id` for every custom role — never a name-derived label. */
   slug: z.string(),
   permissions: z.array(z.string()),
   isDefault: z.boolean(),
@@ -231,22 +238,60 @@ export const telephonyProviderSchema = z.object({
   connectionId: z.string().optional(),
 })
 
-export const createRoleSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1).max(100),
-  slug: z.string().regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens'),
-  permissions: z.array(z.string()),
-  description: z.string().min(1).max(500),
-  encryptedName: z.string().optional(),
-  encryptedDescription: z.string().optional(),
-  envelopes: z.array(roleEnvelopeSchema).optional(),
-})
+/**
+ * A custom role id. The client mints it for a platform role because the
+ * envelopes bind it in their AAD (`{roleId}:name`), so it must exist before the
+ * seal. It also becomes the role's slug, which is why it is pinned to a shape
+ * that cannot carry a name.
+ */
+export const customRoleIdSchema = z.string().regex(
+  /^role-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  'Role id must be role-<uuid>',
+)
 
+/**
+ * A hub-key-sealed field: hex(nonce_12 ‖ ciphertext ‖ tag_16), the
+ * `encrypt_hub_field` wire format. At least the 28 bytes of nonce and tag.
+ */
+const hubSealedFieldSchema = z.string().regex(/^[0-9a-f]{56,4096}$/, 'Must be a hub-key-sealed hex field')
+
+/**
+ * Create a deployment-wide (platform) role. Its name and description travel
+ * only inside `envelopes`; the body is strict, so a plaintext `name`, `slug` or
+ * `description` is refused rather than silently stored or dropped (#2780).
+ */
+export const createRoleSchema = z.object({
+  id: customRoleIdSchema.optional(),
+  permissions: z.array(z.string()),
+  envelopes: z.array(roleEnvelopeSchema).optional(),
+}).strict()
+
+/** Edit a deployment-wide role. Its name changes through `/roles/:id/envelopes`. */
 export const updateRoleSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  description: z.string().max(500).optional(),
   permissions: z.array(z.string()).optional(),
-})
+}).strict()
+
+/**
+ * Create a hub-owned role under `/hubs/:hubId/settings/roles`. Name and
+ * description are sealed client-side under the hub key with
+ * `LABEL_HUB_ROLE_ENCRYPT`; the server never sees either in the clear (#2780).
+ */
+export const createHubRoleSchema = z.object({
+  permissions: z.array(z.string()),
+  encryptedName: hubSealedFieldSchema,
+  encryptedDescription: hubSealedFieldSchema.optional(),
+}).strict()
+
+/**
+ * Edit a hub-owned role. Written out rather than derived with `.partial()`:
+ * an omitted key leaves its column alone, and `encryptedDescription: null`
+ * clears the description.
+ */
+export const updateHubRoleSchema = z.object({
+  permissions: z.array(z.string()).optional(),
+  encryptedName: hubSealedFieldSchema.optional(),
+  encryptedDescription: hubSealedFieldSchema.nullable().optional(),
+}).strict()
 
 export const addRoleEnvelopesSchema = z.object({
   envelopes: z.array(roleEnvelopeSchema).min(1),

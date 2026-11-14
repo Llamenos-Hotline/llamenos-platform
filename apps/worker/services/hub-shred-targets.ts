@@ -46,8 +46,13 @@ const VIA_CASE: HubScope = { via: 'parent', fk: 'case_id', parentTable: 'case_re
 /**
  * User- and platform-scoped tables. A hub shred must never name one.
  *
+ * `roles` holds the deployment-wide roles every hub assigns, beside the roles a
+ * hub owns (`hub_id`, #2780). A hub's own roles need no target: their names are
+ * sealed under the hub key, so Class A leaves them unreadable, and deleting the
+ * hub row cascades them away. The deployment-wide rows a shred must not touch.
+ *
  * `puk_envelopes` is keyed (user_pubkey, device_id) and `user_role_envelopes`
- * (user_pubkey, role_id) with `roles` global — neither has a hub column, so
+ * (user_pubkey, role_id) with `role_id` usually a deployment-wide role — neither has a hub column, so
  * deleting either to shred hub A would lock the same user out of hub B. They
  * are correctly destroyed by *user* erasure, which is a different scope with a
  * different subject. `entity_type_templates` is excluded for a different
@@ -90,7 +95,7 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   // carrying cached envelopes would re-install the key this destroys.
   //
   // Class A is also what covers fields sealed directly under the hub key with
-  // encryptHubField (tags, teams): no wrap of theirs exists to clear, so once
+  // encryptHubField (tags, teams, hub-owned roles): no wrap of theirs exists to clear, so once
   // the key is gone their columns are unreadable without a target entry here.
   // ring_groups.encrypted_name and shifts.encrypted_name are NOT covered this
   // way today — they hold raw plaintext (#1506) and survive a shred legibly.

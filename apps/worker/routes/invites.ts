@@ -11,7 +11,7 @@ import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
-import { hubsWithPermission } from '../lib/hub-scope'
+import { checkRoleScope, hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
 import { ServiceError } from '../services/settings'
 
@@ -242,6 +242,10 @@ invites.post('/',
       return c.json({ error: 'Choose a role for this invite: neither the request nor the hub template names one' }, 400)
     }
 
+    // A role another hub owns is never grantable here, whoever is asking (#2780).
+    const scopeDenied = checkRoleScope(allRoles, roleIds, hubId)
+    if (scopeDenied) return c.json({ error: scopeDenied.error }, scopeDenied.status)
+
     // Validate that the creator can grant all requested roles (prevent privilege escalation)
     if (!permissionGranted(creatorPermissions, '*')) {
       for (const roleId of roleIds) {
@@ -251,7 +255,7 @@ invites.post('/',
         }
         for (const perm of role.permissions) {
           if (!permissionGranted(creatorPermissions, perm)) {
-            return c.json({ error: `Cannot grant role '${role.name}' — you lack permission '${perm}'` }, 403)
+            return c.json({ error: `Cannot grant role '${role.name ?? role.id}' — you lack permission '${perm}'` }, 403)
           }
         }
       }

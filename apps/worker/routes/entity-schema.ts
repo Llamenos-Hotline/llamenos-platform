@@ -18,9 +18,7 @@ import {
   templateListResponseSchema,
   templateApplyResponseSchema,
   templateUpdatesResponseSchema,
-  rolesFromTemplateResponseSchema,
   enabledResponseSchema,
-  createRolesFromTemplateBodySchema,
   entityTemplateCustomizeBodySchema,
 } from '@protocol/schemas/entity-schema'
 import {
@@ -34,7 +32,6 @@ import { audit } from '../services/audit'
 import { applyTemplate, detectTemplateUpdates } from '../lib/template-engine'
 import type { AppliedTemplateRecord } from '../lib/template-engine'
 import { loadBundledTemplates } from '../lib/template-loader'
-import { isValidPermission } from '@shared/permissions'
 import { createEntityRouter } from '../lib/entity-router'
 
 /**
@@ -574,68 +571,11 @@ entitySchema.post('/templates/apply',
   },
 )
 
-// --- Create roles from template suggestions (Epic 321) ---
-
-deployment.post('/roles/from-template',
-  describeRoute({
-    tags: ['Case Management'],
-    summary: 'Create custom roles from template suggested roles',
-    responses: {
-      201: {
-        description: 'Roles created from template',
-        content: { 'application/json': { schema: resolver(rolesFromTemplateResponseSchema) } },
-      },
-      ...authErrors,
-    },
-  }),
-  requirePermission('system:manage-roles'),
-  validator('json', createRolesFromTemplateBodySchema),
-  async (c) => {
-    const { roles } = c.req.valid('json')
-    const services = c.get('services')
-    const pubkey = c.get('pubkey')
-
-    // Validate all permissions in all roles before creating any
-    for (const suggested of roles) {
-      const invalidPerms = suggested.permissions.filter(p => !isValidPermission(p))
-      if (invalidPerms.length > 0) {
-        return c.json({
-          error: `Invalid permissions: ${invalidPerms.join(', ')}`,
-          role: suggested.name,
-          invalidPermissions: invalidPerms,
-        }, 400)
-      }
-    }
-
-    // Fetch existing roles to skip duplicates by slug
-    const { roles: existingRoles } = await services.settings.getRoles()
-    const existingSlugs = new Set(existingRoles.map(r => r.slug))
-
-    const created: Array<{ id: string; name: string | null }> = []
-
-    for (const suggested of roles) {
-      // Skip roles that already exist by slug
-      if (existingSlugs.has(suggested.slug)) continue
-
-      const role = await services.settings.createRole({
-        name: suggested.name,
-        slug: suggested.slug,
-        description: suggested.description,
-        permissions: suggested.permissions,
-      })
-
-      created.push({ id: role.id, name: role.name })
-      existingSlugs.add(suggested.slug)
-
-      await audit(services.audit, 'roleCreatedFromTemplate', pubkey, {
-        roleId: role.id,
-        roleName: role.name,
-      }, undefined, null)
-    }
-
-    return c.json({ created, count: created.length }, 201)
-  },
-)
+// Roles a template suggests are NOT created here. The server would have to
+// write their names in the clear, and a role name says what the hub does
+// (#2780). The client reads the suggestions from the template detail, seals
+// each name and description under the hub key, and creates them through
+// `POST /api/hubs/:hubId/settings/roles` like any other hub role.
 
 // --- CMS Report Type Definitions (Epic 343) ---
 

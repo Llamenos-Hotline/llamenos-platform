@@ -6,6 +6,8 @@
 import { sql } from 'drizzle-orm'
 import {
   boolean,
+  check,
+  index,
   integer,
   pgTable,
   primaryKey,
@@ -128,10 +130,31 @@ export const hubKeys = pgTable(
   (t) => [primaryKey({ columns: [t.hubId, t.recipientPubkey] })],
 )
 
+/**
+ * Role definitions — permission bundles.
+ *
+ * Role vocabulary ("Legal observer", "Jail support coordinator") describes
+ * what an organisation does and who does it, so it is sensitive and never
+ * stored in the clear (#2780). Only the seeded defaults (`is_default`) carry a
+ * plaintext `name`/`description`, because theirs are public constants shipped
+ * in `packages/shared/permissions.ts`. `SettingsService` writes no other
+ * plaintext; the database CHECK enforcing it lands in the release after this
+ * code, because the release being replaced still writes plaintext names (see
+ * docs/runbooks/migrations.md, "Add … CHECK … constraints").
+ *
+ * - `hub_id` NULL: deployment-wide — the seeded defaults, and platform roles,
+ *   whose name/description live only in `platform_role_envelopes`.
+ * - `hub_id` set: owned by that hub — name/description sealed under the hub key
+ *   (`LABEL_HUB_ROLE_ENCRYPT`) in `encrypted_name`/`encrypted_description`,
+ *   assignable only inside that hub, and deleted with it.
+ *
+ * `slug` equals `id` for every custom role: a typed or name-derived slug is a
+ * plaintext copy of the name.
+ */
 export const roles = pgTable('roles', {
   id: text('id').primaryKey(),
-  // null for non-system roles (name stored only in encrypted envelopes to maintain zero-knowledge)
   name: text('name'),
+  hubId: text('hub_id').references(() => hubs.id, { onDelete: 'cascade' }),
   slug: text('slug').notNull().unique(),
   permissions: text('permissions')
     .array()
@@ -148,7 +171,13 @@ export const roles = pgTable('roles', {
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+}, (t) => [
+  check(
+    'roles_hub_role_is_sealed',
+    sql`${t.hubId} IS NULL OR ${t.encryptedName} IS NOT NULL`,
+  ),
+  index('roles_hub_id_idx').on(t.hubId),
+])
 
 export const platformRoleEnvelopes = pgTable(
   'platform_role_envelopes',
