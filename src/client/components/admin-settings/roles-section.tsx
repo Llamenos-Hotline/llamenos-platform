@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { useAuth } from '@/lib/auth'
 import {
-  listRoles,
-  createRole,
-  updateRole,
-  deleteRole,
+  listHubRoles,
+  createHubRole,
+  updateHubRole,
+  deleteHubRole,
   getPermissionsCatalog,
-  type RoleDefinition,
 } from '@/lib/api'
+import { readableRoles, sealHubRoleField, type ReadableRole } from '@/lib/role-vocabulary'
 import { SettingsSection } from '@/components/settings-section'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
@@ -43,28 +43,39 @@ interface PermissionCatalog {
 
 interface RoleFormData {
   name: string
-  slug: string
   description: string
   permissions: string[]
 }
 
+const EMPTY_FORM: RoleFormData = { name: '', description: '', permissions: [] }
+
+/**
+ * The roles the active hub offers, and the editor for the ones it owns.
+ *
+ * A hub's own role is sealed under the hub key before it leaves this device —
+ * its name and description never reach the server in the clear, and it has no
+ * name-derived slug (#2780). The deployment-wide roles listed beside them (the
+ * seeded defaults, platform roles) are shown here but edited only from the
+ * platform settings: a change to one reaches every hub, which is not this
+ * hub's to make.
+ */
 export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const { hasPermission } = useAuth()
   const canManageRoles = hasPermission('system:manage-roles')
 
-  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [roles, setRoles] = useState<ReadableRole[]>([])
   const [catalog, setCatalog] = useState<PermissionCatalog | null>(null)
   const [loading, setLoading] = useState(true)
 
   // Editing state: role ID being edited, or 'new' for create mode
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<RoleFormData>({ name: '', slug: '', description: '', permissions: [] })
+  const [form, setForm] = useState<RoleFormData>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
 
   // Delete confirmation
-  const [deleteTarget, setDeleteTarget] = useState<RoleDefinition | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ReadableRole | null>(null)
 
   // Expanded permission domains in the editor
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set())
@@ -72,10 +83,10 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
   const loadData = useCallback(async () => {
     try {
       const [rolesRes, catalogRes] = await Promise.all([
-        listRoles(),
+        listHubRoles(),
         getPermissionsCatalog(),
       ])
-      setRoles(rolesRes.roles)
+      setRoles(await readableRoles(rolesRes.roles))
       setCatalog(catalogRes)
     } catch {
       toast(t('common.error', { defaultValue: 'Error' }), 'error')
@@ -90,16 +101,15 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
 
   function startCreate() {
     setEditingId('new')
-    setForm({ name: '', slug: '', description: '', permissions: [] })
+    setForm(EMPTY_FORM)
     setExpandedDomains(new Set())
   }
 
-  function startEdit(role: RoleDefinition) {
+  function startEdit(role: ReadableRole) {
     setEditingId(role.id)
     setForm({
-      name: role.name ?? '',
-      slug: role.slug,
-      description: role.description,
+      name: role.readable ? role.displayName : '',
+      description: role.displayDescription,
       permissions: [...role.permissions],
     })
     // Expand domains that have selected permissions
@@ -116,7 +126,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
 
   function cancelEdit() {
     setEditingId(null)
-    setForm({ name: '', slug: '', description: '', permissions: [] })
+    setForm(EMPTY_FORM)
     setExpandedDomains(new Set())
   }
 
@@ -156,35 +166,30 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
     })
   }
 
-  function autoSlug(name: string): string {
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 50)
-  }
-
   async function handleSave() {
-    if (!form.name.trim()) return
+    const name = form.name.trim()
+    const description = form.description.trim()
+    if (!name) return
     setSaving(true)
     try {
+      const encryptedName = await sealHubRoleField(name)
       if (editingId === 'new') {
-        const slug = form.slug.trim() || autoSlug(form.name)
-        const res = await createRole({
-          name: form.name.trim(),
-          slug,
-          description: form.description.trim(),
+        const created = await createHubRole({
           permissions: form.permissions,
+          encryptedName,
+          ...(description ? { encryptedDescription: await sealHubRoleField(description) } : {}),
         })
-        setRoles(prev => [...prev, res.role])
+        const [readable] = await readableRoles([created])
+        setRoles(prev => [...prev, readable])
         toast(t('common.success', { defaultValue: 'Success' }), 'success')
       } else if (editingId) {
-        const res = await updateRole(editingId, {
-          name: form.name.trim(),
-          description: form.description.trim(),
+        const updated = await updateHubRole(editingId, {
           permissions: form.permissions,
+          encryptedName,
+          encryptedDescription: description ? await sealHubRoleField(description) : null,
         })
-        setRoles(prev => prev.map(r => r.id === editingId ? res.role : r))
+        const [readable] = await readableRoles([updated])
+        setRoles(prev => prev.map(r => r.id === editingId ? readable : r))
         toast(t('common.success', { defaultValue: 'Success' }), 'success')
       }
       cancelEdit()
@@ -198,7 +203,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
   async function handleDelete() {
     if (!deleteTarget) return
     try {
-      await deleteRole(deleteTarget.id)
+      await deleteHubRole(deleteTarget.id)
       setRoles(prev => prev.filter(r => r.id !== deleteTarget.id))
         toast(t('common.success', { defaultValue: 'Success' }), 'success')
       if (editingId === deleteTarget.id) cancelEdit()
@@ -222,8 +227,9 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
     return domain.charAt(0).toUpperCase() + domain.slice(1).replace(/-/g, ' ')
   }
 
-  const canEdit = (role: RoleDefinition) => canManageRoles && !role.isSystem
-  const canDelete = (role: RoleDefinition) => canManageRoles && !role.isSystem && !role.isDefault
+  // Only the roles this hub owns are this hub's to change.
+  const canEdit = (role: ReadableRole) => canManageRoles && !!role.hubId
+  const canDelete = canEdit
 
   if (loading) return null
 
@@ -243,6 +249,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
         {roles.map(role => (
           <div
             key={role.id}
+            data-testid={`hub-role-item-${role.id}`}
             className={cn(
               'flex items-center gap-3 rounded-lg border border-border px-4 py-3 transition-colors',
               editingId === role.id && 'border-primary/30 bg-primary/5'
@@ -250,7 +257,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
           >
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium truncate">{role.name ?? role.slug}</span>
+                <span data-testid="hub-role-name" className="text-sm font-medium truncate">{role.displayName}</span>
                 {role.isSystem && (
                   <Badge variant="secondary" className="text-[10px] gap-1">
                     <Lock className="h-2.5 w-2.5" />
@@ -263,8 +270,8 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
                   </Badge>
                 )}
               </div>
-              {role.description && (
-                <p className="text-xs text-muted-foreground mt-0.5 truncate">{role.description}</p>
+              {role.displayDescription && (
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">{role.displayDescription}</p>
               )}
               <p className="text-xs text-muted-foreground mt-0.5">
                 {role.permissions.length} {t('roles.permissionCount', { defaultValue: 'permissions' })}
@@ -313,39 +320,21 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
               : t('common.edit', { defaultValue: 'Edit' })}
           </h4>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label>{t('roles.name', { defaultValue: 'Name' })}</Label>
-              <Input
-                value={form.name}
-                onChange={e => {
-                  const name = e.target.value
-                  setForm(prev => ({
-                    ...prev,
-                    name,
-                    ...(editingId === 'new' ? { slug: autoSlug(name) } : {}),
-                  }))
-                }}
-                placeholder={t('roles.namePlaceholder', { defaultValue: 'e.g. Team Lead' })}
-                maxLength={50}
-              />
-            </div>
-            {editingId === 'new' && (
-              <div className="space-y-1">
-                <Label>{t('roles.slug', { defaultValue: 'Slug' })}</Label>
-                <Input
-                  value={form.slug}
-                  onChange={e => setForm(prev => ({ ...prev, slug: e.target.value }))}
-                  placeholder={t('roles.namePlaceholder', { defaultValue: 'e.g. Intake Coordinator' })}
-                  maxLength={50}
-                />
-              </div>
-            )}
+          <div className="space-y-1">
+            <Label>{t('roles.name', { defaultValue: 'Name' })}</Label>
+            <Input
+              data-testid="hub-role-name-input"
+              value={form.name}
+              onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
+              placeholder={t('roles.namePlaceholder', { defaultValue: 'e.g. Team Lead' })}
+              maxLength={50}
+            />
           </div>
 
           <div className="space-y-1">
             <Label>{t('roles.description', { defaultValue: 'Description' })}</Label>
             <Textarea
+              data-testid="hub-role-description-input"
               value={form.description}
               onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
               placeholder={t('roles.descriptionPlaceholder', { defaultValue: 'Brief description of this role...' })}
@@ -423,6 +412,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
 
           <div className="flex gap-2">
             <Button
+              data-testid="hub-role-save-btn"
               disabled={saving || !form.name.trim()}
               onClick={handleSave}
             >
@@ -441,7 +431,7 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
 
       {/* Create button (shown when not editing) */}
       {editingId === null && canManageRoles && (
-        <Button variant="outline" onClick={startCreate}>
+        <Button variant="outline" data-testid="hub-role-create-btn" onClick={startCreate}>
           <Plus className="h-4 w-4" />
           {t('roles.create', { defaultValue: 'Create role' })}
         </Button>

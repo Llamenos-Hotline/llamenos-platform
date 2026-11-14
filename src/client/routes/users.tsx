@@ -9,12 +9,11 @@ import {
   listInvites,
   createInvite,
   revokeInvite,
-  listRoles,
   type User,
   type InviteCode,
-  type RoleDefinition,
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
+import { loadReadableRoles, type ReadableRole } from '@/lib/role-vocabulary'
 import { getHubOrigin } from '@/lib/api-config'
 import { buildInviteLink } from '@/lib/invite-code'
 import { useToast } from '@/lib/toast'
@@ -45,7 +44,7 @@ function UsersPage() {
   const { toast } = useToast()
   const [users, setUsers] = useState<User[]>([])
   const [invites, setInvites] = useState<InviteCode[]>([])
-  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [roles, setRoles] = useState<ReadableRole[]>([])
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -56,10 +55,10 @@ function UsersPage() {
 
   async function loadData() {
     try {
-      const [userRes, invRes, rolesRes] = await Promise.all([listUsers(), listInvites(), listRoles()])
+      const [userRes, invRes, readable] = await Promise.all([listUsers(), listInvites(), loadReadableRoles()])
       setUsers(userRes.users)
       setInvites(invRes.invites)
-      setRoles(rolesRes.roles)
+      setRoles(readable)
     } catch {
       toast(t('common.error'), 'error')
     } finally {
@@ -219,7 +218,7 @@ function UsersPage() {
 }
 
 function InviteForm({ roles, onCreated, onCancel }: {
-  roles: RoleDefinition[]
+  roles: ReadableRole[]
   onCreated: (invite: InviteCode) => void
   onCancel: () => void
 }) {
@@ -288,7 +287,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
               </SelectTrigger>
               <SelectContent>
                 {roles.map(role => (
-                  <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.name}</SelectItem>
+                  <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.displayName}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -309,7 +308,7 @@ function InviteForm({ roles, onCreated, onCancel }: {
 
 function UserRow({ user, roles, onUpdate, onDelete }: {
   user: User
-  roles: RoleDefinition[]
+  roles: ReadableRole[]
   onUpdate: (user: User) => void
   onDelete: () => void
 }) {
@@ -386,7 +385,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
       <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
         <Badge data-testid="volunteer-row-role-badge" variant={isAdminRole ? 'default' : 'secondary'}>
           {isAdminRole && <ShieldCheck className="h-3 w-3" />}
-          {primaryRole?.name || primaryRoleId || '\u2014'}
+          {primaryRole?.displayName || primaryRoleId || '\u2014'}
           {user.roles.length > 1 && (
             <span className="ml-1 text-xs opacity-70">+{user.roles.length - 1}</span>
           )}
@@ -414,7 +413,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
             </SelectTrigger>
             <SelectContent>
               {roles.map(role => (
-                <SelectItem key={role.id} value={role.id} data-testid="volunteer-row-role-option" data-role-id={role.id}>{role.name}</SelectItem>
+                <SelectItem key={role.id} value={role.id} data-testid="volunteer-row-role-option" data-role-id={role.id}>{role.displayName}</SelectItem>
               ))}
             </SelectContent>
           </Select>

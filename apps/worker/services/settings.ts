@@ -123,6 +123,7 @@ import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surface
 import {
   assertRoleChangeKeepsAdmins,
   hubFounderRoleIds,
+  isInstanceLevel,
   loadRoleCatalog,
   lockHubAdminSets,
   mergeHubRole,
@@ -329,6 +330,19 @@ function assertCatalogPermissions(permissions: readonly string[]): void {
   const invalid = permissions.filter(p => !isValidPermission(p))
   if (invalid.length > 0) {
     throw new ServiceError(400, `Invalid permissions: ${invalid.join(', ')}`)
+  }
+}
+
+/**
+ * A hub's own role describes authority inside that hub, so it may not carry a
+ * permission whose reach is the deployment (`*`, `system:manage-*`): a hub must
+ * never be able to define a role that acts beyond it.
+ */
+function assertHubPermissions(permissions: readonly string[]): void {
+  assertCatalogPermissions(permissions)
+  const instance = permissions.filter(isInstanceLevel)
+  if (instance.length > 0) {
+    throw new ServiceError(400, `A hub role cannot carry instance-level permissions: ${instance.join(', ')}`)
   }
 }
 
@@ -1912,7 +1926,7 @@ export class SettingsService {
     encryptedName: string
     encryptedDescription?: string
   }): Promise<Role> {
-    assertCatalogPermissions(data.permissions)
+    assertHubPermissions(data.permissions)
     const id = `role-${crypto.randomUUID()}`
     const now = new Date()
     await this.db.insert(rolesTable).values({
@@ -1951,7 +1965,7 @@ export class SettingsService {
     encryptedDescription?: string | null
   }): Promise<Role> {
     const existing = await this.requireOwnedRole(hubId, id)
-    if (data.permissions) assertCatalogPermissions(data.permissions)
+    if (data.permissions) assertHubPermissions(data.permissions)
     const sealed: Record<string, string | null> = {}
     if (data.encryptedName !== undefined) sealed.encryptedName = data.encryptedName
     if (data.encryptedDescription !== undefined) sealed.encryptedDescription = data.encryptedDescription

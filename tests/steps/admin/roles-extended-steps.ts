@@ -109,8 +109,6 @@ Given('a volunteer has only a custom {string} role', async ({ request, rolesWorl
   if (!role) {
     const slug = roleName.toLowerCase().replace(/\s+/g, '-')
     role = await createRoleViaApi(request, {
-      name: roleName,
-      slug,
       permissions: ['calls:read'],
     })
   }
@@ -187,8 +185,6 @@ async function expectFormOffersSystemRoles(page: Page, request: APIRequestContex
 Given('a role with {string} wildcard permission', async ({ request, rolesWorld }, permission: string) => {
   const slug = `wildcard-test-${Date.now()}`
   const role = await createRoleViaApi(request, {
-    name: `Wildcard Test ${Date.now()}`,
-    slug,
     permissions: [permission],
   })
   const vol = await createVolunteerViaApi(request, {

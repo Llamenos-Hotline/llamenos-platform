@@ -426,10 +426,7 @@ Then('the invite list should not contain the revoked code', async ({ request, wo
 When('an admin creates a custom role {string} with permissions {string}', async ({ request, world }, name: string, permsStr: string) => {
   const permissions = permsStr.split(',')
   const role = await createRoleViaApi(request, {
-    name,
-    slug: uniqueName('crud'),
     permissions,
-    description: 'CRUD test role',
   })
   getCrudState(world).roleId = role.id
   getCrudState(world).roleName = name

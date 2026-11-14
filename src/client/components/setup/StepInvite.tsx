@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import { createInvite, listRoles, type InviteCode, type RoleDefinition } from '@/lib/api'
+import { createInvite, type InviteCode } from '@/lib/api'
+import { loadReadableRoles, type ReadableRole } from '@/lib/role-vocabulary'
 import { getHubOrigin } from '@/lib/api-config'
 import { buildInviteLink } from '@/lib/invite-code'
 import { Input } from '@/components/ui/input'
@@ -36,17 +37,17 @@ export function StepInvite({ hubId, onFinish, headingRef }: Props) {
   // The roles this hub offers — user-defined permission bundles, never a
   // hardcoded list. Nothing is preselected: an empty choice means the hub
   // template's default member role, as on the users page.
-  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [roles, setRoles] = useState<ReadableRole[]>([])
   const [roleId, setRoleId] = useState('')
   const [generating, setGenerating] = useState(false)
   const [invites, setInvites] = useState<InviteCode[]>([])
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
 
   useEffect(() => {
-    listRoles()
-      .then(res => setRoles(res.roles))
+    loadReadableRoles(hubId)
+      .then(setRoles)
       .catch(() => toast(t('common.error'), 'error'))
-  }, [t, toast])
+  }, [hubId, t, toast])
 
   async function handleGenerate() {
     if (!name.trim() || !phone.trim()) return
@@ -71,7 +72,7 @@ export function StepInvite({ hubId, onFinish, headingRef }: Props) {
 
   function roleNames(invite: InviteCode): string {
     return invite.roleIds
-      .map(id => roles.find(r => r.id === id)?.name ?? id)
+      .map(id => roles.find(r => r.id === id)?.displayName ?? id)
       .join(', ')
   }
 
@@ -129,7 +130,7 @@ export function StepInvite({ hubId, onFinish, headingRef }: Props) {
             </SelectTrigger>
             <SelectContent>
               {roles.map(role => (
-                <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.name}</SelectItem>
+                <SelectItem key={role.id} value={role.id} data-testid="user-form-role-option" data-role-id={role.id}>{role.displayName}</SelectItem>
               ))}
             </SelectContent>
           </Select>

@@ -244,8 +244,6 @@ Then('they should fail permission checks for {string}', async ({request, world, 
 
 Given('a role with {string} permission', async ({request, world}, permission: string) => {
   const role = await createRoleViaApi(request, {
-    name: `Wildcard Test ${Date.now()}`,
-    slug: uniqueName('wildcard-test'),
     permissions: [permission],
   })
   getAuthTestState(world).roleIds.push(role.id)
@@ -296,8 +294,6 @@ Then('they should only have admin access to their assigned hub', async ({request
 
 Given('a custom role with {string} and {string} permissions', async ({request, world}, perm1: string, perm2: string) => {
   const role = await createRoleViaApi(request, {
-    name: `Custom Perm Test ${Date.now()}`,
-    slug: uniqueName('custom-perm'),
     permissions: [perm1, perm2],
   })
   getAuthTestState(world).roleIds.push(role.id)

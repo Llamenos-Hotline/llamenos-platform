@@ -7,9 +7,12 @@ import { Label } from '@/components/ui/label'
 import { PermissionPicker } from './permission-picker'
 import { Save, X, Plus } from 'lucide-react'
 
+/**
+ * There is no slug field: a custom role's slug is its id, because a label typed
+ * from the name is the name again in the clear (#2780).
+ */
 export interface RoleFormData {
   name: string
-  slug: string
   description: string
   permissions: string[]
 }
@@ -21,14 +24,6 @@ interface RoleEditorProps {
   saving: boolean
   onSave: (data: RoleFormData) => void
   onCancel: () => void
-  showSlug?: boolean
-}
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
 }
 
 export function RoleEditor({
@@ -38,23 +33,13 @@ export function RoleEditor({
   saving,
   onSave,
   onCancel,
-  showSlug = true,
 }: RoleEditorProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState<RoleFormData>(
-    initial ?? { name: '', slug: '', description: '', permissions: [] },
+    initial ?? { name: '', description: '', permissions: [] },
   )
-  const [autoSlug, setAutoSlug] = useState(!initial)
 
-  function handleNameChange(name: string) {
-    setForm((prev) => ({
-      ...prev,
-      name,
-      slug: autoSlug ? slugify(name) : prev.slug,
-    }))
-  }
-
-  const isValid = form.name.trim().length > 0 && (!showSlug || form.slug.trim().length > 0)
+  const isValid = form.name.trim().length > 0
 
   return (
     <div className="space-y-4 border rounded-md p-4 bg-muted/20">
@@ -65,29 +50,11 @@ export function RoleEditor({
             id="role-name"
             data-testid="role-name-input"
             value={form.name}
-            onChange={(e) => handleNameChange(e.target.value)}
+            onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
             maxLength={100}
             placeholder={t('roles.namePlaceholder', { defaultValue: 'e.g. Team Lead' })}
           />
         </div>
-
-        {showSlug && (
-          <div>
-            <Label htmlFor="role-slug">{t('roles.slug', { defaultValue: 'Slug' })}</Label>
-            <Input
-              id="role-slug"
-              data-testid="role-slug-input"
-              value={form.slug}
-              onChange={(e) => {
-                setAutoSlug(false)
-                setForm((prev) => ({ ...prev, slug: e.target.value }))
-              }}
-              maxLength={100}
-              pattern="[a-z0-9-]+"
-              placeholder={t('roles.slugPlaceholder', { defaultValue: 'e.g. team-lead' })}
-            />
-          </div>
-        )}
 
         <div>
           <Label htmlFor="role-desc">{t('roles.description', { defaultValue: 'Description' })}</Label>

@@ -184,10 +184,7 @@ Then('the ban list should contain exactly {int} entry for {string}', async ({req
 
 When('an admin creates a role with slug {string}', async ({ request, world }, slug: string) => {
   await createRoleViaApi(request, {
-    name: uniqueName('Edge Role'),
-    slug,
     permissions: ['notes:read-own'],
-    description: 'edge test',
   })
   getEdgeState(world).roleCreationStatuses.push(200)
 })
@@ -195,10 +192,7 @@ When('an admin creates a role with slug {string}', async ({ request, world }, sl
 When('an admin creates another role with slug {string}', async ({ request, world }, slug: string) => {
   try {
     await createRoleViaApi(request, {
-      name: uniqueName('Edge Role 2'),
-      slug,
       permissions: ['bans:read'],
-      description: 'edge duplicate test',
     })
     getEdgeState(world).roleCreationStatuses.push(200)
   } catch {

@@ -79,8 +79,6 @@ Given('the second hub\'s queue timeout is set to {int} seconds', async ({ reques
 
 Given('a hub admin who administers only the first hub', async ({ request, world, workerHub }) => {
   const role = await createRoleViaApi(request, {
-    name: uniqueName('scoped-settings-admin'),
-    slug: `scoped-settings-admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     permissions: ['settings:manage-spam', 'settings:manage-calls'],
   })
   // No global roles — every permission comes from membership of the first hub.

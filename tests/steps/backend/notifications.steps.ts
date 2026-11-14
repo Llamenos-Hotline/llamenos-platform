@@ -97,10 +97,7 @@ Given('a volunteer exists without cases:update permission', async ({ request, wo
   // A member of the scenario hub holding only cases:read-own there, so the refusal
   // is for the missing permission, not for being outside the hub (#2461).
   const role = await createRoleViaApi(request, {
-    name: `ReadOnly ${Date.now()}`,
-    slug: uniqueName('readonly'),
     permissions: ['cases:read-own'],
-    description: 'Read-only CMS access',
   })
   const vol = await createVolunteerViaApi(request, {
     name: `vol-readonly-${Date.now()}`,

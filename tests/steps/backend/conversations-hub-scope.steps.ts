@@ -121,7 +121,7 @@ Given('{string} is a member of hub {string} with no conversation permission', as
   // A real hub membership, holding a permission that is not a conversation
   // one: past hubContext (which admits any member), but with nothing to claim.
   const slug = `no-conversations-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const role = await createRoleViaApi(request, { name: `No conversations ${slug}`, slug, permissions: ['notes:read-own'] })
+  const role = await createRoleViaApi(request, { permissions: ['notes:read-own'] })
   s(world).roleIds.push(role.id)
   const user = await createUserViaApi(request, { name, roleIds: [role.id], hubId: hub(world, label) })
   s(world).actors[name] = user.seedHex

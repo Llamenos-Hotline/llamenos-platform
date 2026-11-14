@@ -1508,6 +1508,16 @@ function owningHub(c: Context<AppEnv>): string {
   return hubId
 }
 
+/**
+ * The grant ceiling, as `checkRoleGrant` applies it to assignments: whoever
+ * defines a role must already hold every permission they write into it.
+ */
+function roleCeilingDenied(c: Context<AppEnv>, permissions: readonly string[] | undefined): string | null {
+  const held = c.get('permissions')
+  const missing = (permissions ?? []).find(p => !checkPermission(held, p))
+  return missing ? `Cannot define a role carrying '${missing}' — you lack it` : null
+}
+
 hubOwned.get('/roles',
   describeRoute({
     tags: ['Settings'],
@@ -1538,7 +1548,10 @@ hubOwned.post('/roles',
   async (c) => {
     const services = c.get('services')
     const hubId = owningHub(c)
-    const result = await services.settings.createHubRole(hubId, c.req.valid('json'))
+    const body = c.req.valid('json')
+    const denied = roleCeilingDenied(c, body.permissions)
+    if (denied) return c.json({ error: denied }, 403)
+    const result = await services.settings.createHubRole(hubId, body)
     await audit(services.audit, 'roleCreated', c.get('pubkey'), { roleId: result.id }, undefined, hubId)
     return c.json(result, 201)
   },
@@ -1559,7 +1572,10 @@ hubOwned.patch('/roles/:id',
     const services = c.get('services')
     const hubId = owningHub(c)
     const id = c.req.param('id')
-    const result = await services.settings.updateHubRole(hubId, id, c.req.valid('json'))
+    const body = c.req.valid('json')
+    const denied = roleCeilingDenied(c, body.permissions)
+    if (denied) return c.json({ error: denied }, 403)
+    const result = await services.settings.updateHubRole(hubId, id, body)
     await audit(services.audit, 'roleUpdated', c.get('pubkey'), { roleId: id }, undefined, hubId)
     return c.json(result)
   },

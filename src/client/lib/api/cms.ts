@@ -74,13 +74,6 @@ export async function getTemplateDetails(templateId: string) {
   }>(hp(`/settings/cms/templates/${templateId}`))
 }
 
-export async function createRolesFromTemplate(roles: Array<{ name: string; slug: string; description: string; permissions: string[] }>) {
-  return request<{ created: Array<{ id: string; name: string }>; count: number }>('/settings/cms/roles/from-template', {
-    method: 'POST',
-    body: JSON.stringify({ roles }),
-  })
-}
-
 // =========================================================================
 // Entity Templates (EP06-A1)
 // =========================================================================

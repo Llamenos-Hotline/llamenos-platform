@@ -338,10 +338,7 @@ Then('the contact should no longer exist', async ({ request, world }) => {
 
 Given('a volunteer exists with only contacts:view permission', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
-    name: `Viewer ${Date.now()}`,
-    slug: uniqueName('viewer'),
     permissions: ['contacts:view'],
-    description: 'Contacts view only',
   })
   const vol = await createVolunteerViaApi(request, {
     name: `vol-viewer-${Date.now()}`,
@@ -574,10 +571,7 @@ When('the admin updates the record status hash to {string}', async ({ request, w
 
 Given('a volunteer exists with cases:read-own and cases:create permissions', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
-    name: `Scoped Vol ${Date.now()}`,
-    slug: uniqueName('scoped-vol'),
     permissions: ['cases:read-own', 'cases:create', 'cases:update-own'],
-    description: 'Scoped record access',
   })
   // Scoped role held IN the scenario hub — a global role grants nothing there (#1037)
   const vol = await createVolunteerViaApi(request, {
@@ -959,10 +953,7 @@ Then('the evidence access log should contain an entry with access type {string}'
 
 Given('a volunteer without evidence permissions exists', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
-    name: `No Evidence Access ${Date.now()}`,
-    slug: uniqueName('no-evidence-access'),
     permissions: ['notes:read-own'],
-    description: 'Cannot view or manage evidence',
   })
   const vol = await createVolunteerViaApi(request, {
     name: `vol-noevidence-${Date.now()}`,
@@ -983,10 +974,7 @@ When('the volunteer tries to view the evidence', async ({ request, world }) => {
 
 Given('a volunteer without audit:read permission exists', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
-    name: `Evidence Only ${Date.now()}`,
-    slug: uniqueName('evidence-only'),
     permissions: ['evidence:download', 'evidence:manage-custody'],
-    description: 'Can view evidence but not the admin-only access log',
   })
   const vol = await createVolunteerViaApi(request, {
     name: `vol-evidenceonly-${Date.now()}`,

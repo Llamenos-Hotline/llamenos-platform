@@ -126,7 +126,11 @@ export function mergeHubRole(
  * (including the `system:*` wildcard). Such a permission is never a hub
  * permission — see {@link hubFounderRoleIds}.
  */
-function isInstanceLevel(permission: string): boolean {
+/**
+ * A permission whose reach is the deployment, not a hub: `*` and every
+ * `system:` permission except the read-only `system:view-*`.
+ */
+export function isInstanceLevel(permission: string): boolean {
   return permission === '*' || (permission.startsWith('system:') && !permission.startsWith('system:view-'))
 }
 

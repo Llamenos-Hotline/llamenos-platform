@@ -293,6 +293,11 @@ export const updateHubRoleSchema = z.object({
   encryptedDescription: hubSealedFieldSchema.nullable().optional(),
 }).strict()
 
+export type CreateRoleBody = z.infer<typeof createRoleSchema>
+export type UpdateRoleBody = z.infer<typeof updateRoleSchema>
+export type CreateHubRoleBody = z.infer<typeof createHubRoleSchema>
+export type UpdateHubRoleBody = z.infer<typeof updateHubRoleSchema>
+
 export const addRoleEnvelopesSchema = z.object({
   envelopes: z.array(roleEnvelopeSchema).min(1),
 })
@@ -358,6 +363,8 @@ export const customFieldsListResponseSchema = z.object({
 export const roleListResponseSchema = z.object({
   roles: z.array(roleResponseSchema),
 })
+
+export type RoleListResponse = z.infer<typeof roleListResponseSchema>
 
 export const reportTypeListResponseSchema = z.object({
   reportTypes: z.array(reportTypeResponseSchema),

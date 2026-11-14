@@ -636,8 +636,6 @@ Given('I am logged in as a volunteer without PII access', async ({ page, backend
   const { createRoleViaApi, createVolunteerViaApi } = await import('../../api-helpers')
   const { loginAsVolunteer } = await import('../../helpers')
   const role = await createRoleViaApi(request, {
-    name: `PII Restricted ${Date.now()}`,
-    slug: `pii-restricted-${Date.now()}`,
     permissions: [
       'calls:answer', 'calls:read-active',
       'notes:read-own', 'shifts:read-own',

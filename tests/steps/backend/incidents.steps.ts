@@ -135,8 +135,6 @@ Given('a hub member whose role grants only {string}', async ({ request, world },
   if (s.holders[permission]) return
   const unique = uniqueName('inc', '-').toLowerCase()
   const role = await createRoleViaApi(request, {
-    name: `incident ${permission} ${unique}`,
-    slug: `incident-${permission.replace(/[^a-z0-9]+/gi, '-')}-${unique}`.toLowerCase(),
     permissions: [permission],
   })
   const member = await createVolunteerViaApi(request, { name: uniqueName('IncidentHolder') })

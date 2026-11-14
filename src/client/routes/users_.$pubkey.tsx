@@ -4,16 +4,15 @@ import { useAuth } from '@/lib/auth'
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
   listUsers,
-  listRoles,
   listAuditLog,
   listShifts,
   updateUser,
   type User,
-  type RoleDefinition,
   type AuditLogEntry,
   type Shift,
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
+import { loadReadableRoles, type ReadableRole } from '@/lib/role-vocabulary'
 import { useToast } from '@/lib/toast'
 import { useHubOwned } from '@/lib/hub-owned'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
@@ -56,7 +55,7 @@ function UserProfilePage() {
   const { pubkey } = Route.useParams()
   const { toast } = useToast()
   const [user, setUser] = useState<User | null>(null)
-  const [roles, setRoles] = useState<RoleDefinition[]>([])
+  const [roles, setRoles] = useState<ReadableRole[]>([])
   const [auditPage, setAuditPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [showPhone, setShowPhone] = useState(false)
@@ -67,11 +66,11 @@ function UserProfilePage() {
   useEffect(() => {
     Promise.all([
       listUsers(),
-      listRoles(),
-    ]).then(([userRes, rolesRes]) => {
+      loadReadableRoles(),
+    ]).then(([userRes, readable]) => {
       const found = userRes.users.find(u => u.pubkey === pubkey) || null
       setUser(found)
-      setRoles(rolesRes.roles)
+      setRoles(readable)
     }).catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
   }, [pubkey, t, toast])
@@ -158,7 +157,7 @@ function UserProfilePage() {
                   {holdsAdminRole ? (
                     <><ShieldCheck className="h-3 w-3" /> {t('users.roleAdmin')}</>
                   ) : (
-                    <><Shield className="h-3 w-3" /> {roles.find(r => r.id === user.roles[0])?.name || '\u2014'}</>
+                    <><Shield className="h-3 w-3" /> {roles.find(r => r.id === user.roles[0])?.displayName || '\u2014'}</>
                   )}
                 </Badge>
                 <Badge data-testid="volunteer-status-badge" variant="outline" className={

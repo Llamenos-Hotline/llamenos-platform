@@ -366,8 +366,6 @@ Given('a user without {string} permission', async ({ request, world }, _permissi
 
   const roleSlug = uniqueName('no-recovery')
   await createRoleViaApi(request, {
-    name: `No Recovery ${Date.now()}`,
-    slug: roleSlug,
     permissions: ['calls:view'],
   })
 
@@ -536,8 +534,6 @@ Given('a recovery group is enrolled with real share holders', async ({ request, 
   expect(s.hubId).toBeDefined()
 
   const holdShare = await createRoleViaApi(request, {
-    name: `Share Holder ${Date.now()}`,
-    slug: uniqueName('recovery-hold-share'),
     permissions: ['recovery:hold-share'],
   })
 
@@ -776,8 +772,6 @@ Given('a user with global {string} permission who is only a member of the first 
 
   const roleSlug = uniqueName('recovery-view-global')
   const role = await createRoleViaApi(request, {
-    name: `Recovery Viewer ${Date.now()}`,
-    slug: roleSlug,
     permissions: [permission],
   })
 
@@ -1185,8 +1179,6 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // the wildcard-permission admin as a holder instead).
   const holderRoleSlug = uniqueName('recovery-holder')
   const holderRole = await createRoleViaApi(request, {
-    name: `Recovery Holder ${Date.now()}`,
-    slug: holderRoleSlug,
     permissions: ['recovery:hold-share'],
   })
   // Role IDs are server-generated (`role-<uuid>`), NOT derived from the slug —
