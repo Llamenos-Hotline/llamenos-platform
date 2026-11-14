@@ -348,6 +348,35 @@ export class TestDB {
   }
 
   /**
+   * The routing state the server persisted on a live call (#1176): who the ringing
+   * service decided to ring (`ringSet`, null until it has decided) and the provider
+   * legs it dialled (`ringLegSids`, null until the dial returned, and cleared again
+   * once a winner has cancelled the losers). Null once the call has ended — the
+   * active row is deleted then. No API exposes the ring set, and it is what
+   * "which volunteers were rung" means, so routing assertions read it here.
+   */
+  static async getActiveCallRouting(callId: string): Promise<{
+    hubId: string | null
+    status: string
+    answeredBy: string | null
+    ringSet: { volunteers: string[]; usedFallback: boolean } | null
+    ringLegSids: string[] | null
+  } | null> {
+    const rows = await (await sql())`
+      SELECT hub_id, status, answered_by, ring_set, ring_leg_sids
+      FROM active_calls WHERE call_id = ${callId} LIMIT 1`
+    if (rows.length === 0) return null
+    const row = rows[0] as Record<string, unknown>
+    return {
+      hubId: (row.hub_id as string | null) ?? null,
+      status: row.status as string,
+      answeredBy: (row.answered_by as string | null) ?? null,
+      ringSet: (row.ring_set as { volunteers: string[]; usedFallback: boolean } | null) ?? null,
+      ringLegSids: (row.ring_leg_sids as string[] | null) ?? null,
+    }
+  }
+
+  /**
    * Update a single column on a row identified by id.
    */
   static async updateColumn(table: string, id: string, column: string, value: postgres.Serializable): Promise<void> {

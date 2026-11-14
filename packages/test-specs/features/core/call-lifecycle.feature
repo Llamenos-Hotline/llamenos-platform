@@ -31,10 +31,5 @@ Feature: Call Lifecycle Workflows
     When the same caller tries to call again
     Then the call should be rejected
 
-  # ─── Volunteer Removal Affects Routing ───────────────────────────────
-
-  Scenario: Volunteer removed from shift stops ringing on next call
-    Given 2 volunteers are on shift
-    When the admin removes the first volunteer from the shift
-    And a call arrives from a unique caller
-    Then only the second volunteer should be rung
+  # Removing a volunteer from the shift is asserted against the next call's real ring set
+  # in signed-call-routing.feature (#1052).

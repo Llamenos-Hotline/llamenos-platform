@@ -18,7 +18,11 @@ import type { WebhookUrlsResponse } from '@protocol/schemas/provider-setup'
  * of silently orphaning every number configured with the old URL.
  */
 export const TELEPHONY_WEBHOOK_PATHS = {
-  /** Inbound call. The hub is resolved from the dialled number, so no `?hub=`. */
+  /**
+   * Inbound call. The call's hub is the one owning the dialled number; a hub's
+   * own URL also names it in `?hub=`, so the webhook is checked against that
+   * hub's provider account rather than the platform's (#1052).
+   */
   voiceIncoming: '/api/telephony/incoming',
   /** Call status callback (completed, busy, no-answer, failed). */
   voiceStatus: '/api/telephony/call-status',
@@ -49,9 +53,13 @@ export function webhookOrigin(env: { WEBHOOK_BASE_URL?: string; DOMAIN?: string 
 
 /**
  * The full set of webhook URLs for a hub. Messaging URLs carry `?hub=` because
- * the messaging router reads the hub from it (`messaging/router.ts`); voice
- * URLs do not, because `/incoming` resolves the hub from the dialled number
- * and `/call-status` from the call record.
+ * the messaging router reads the hub from it (`messaging/router.ts`).
+ * `voiceIncoming` carries it too: the call's hub is still the one owning the
+ * dialled number, but the signature must be checked with the provider account
+ * that signed it, and a hub with its own account signs with that account — the
+ * platform's credentials would refuse every call to it (#1052). `/incoming`
+ * refuses a call whose `?hub=` does not own the dialled number. `voiceStatus`
+ * does not: `/call-status` resolves its hub from the call record.
  */
 export function buildProviderWebhookUrls(origin: string, hubId?: string): WebhookUrlsResponse {
   const hubQuery = hubId ? `?hub=${encodeURIComponent(hubId)}` : ''
@@ -59,7 +67,7 @@ export function buildProviderWebhookUrls(origin: string, hubId?: string): Webhoo
     MESSAGING_WEBHOOK_CHANNELS.map(channel => [channel, `${origin}${messagingWebhookPath(channel)}${hubQuery}`]),
   ) as WebhookUrlsResponse['messaging']
   return {
-    voiceIncoming: `${origin}${TELEPHONY_WEBHOOK_PATHS.voiceIncoming}`,
+    voiceIncoming: `${origin}${TELEPHONY_WEBHOOK_PATHS.voiceIncoming}${hubQuery}`,
     voiceStatus: `${origin}${TELEPHONY_WEBHOOK_PATHS.voiceStatus}`,
     messaging,
   }

@@ -90,13 +90,21 @@ describe('provider webhook URLs resolve to mounted routes — #2068', () => {
     expect([...MESSAGING_WEBHOOK_CHANNELS].sort()).toEqual([...messagingChannelTypeSchema.options].sort())
   })
 
-  it('messaging URLs carry the hub (the messaging router reads ?hub=); voice URLs do not', () => {
+  it('messaging and incoming-call URLs carry the hub; the status callback does not', () => {
     const urls = buildProviderWebhookUrls(ORIGIN, HUB)
     for (const url of Object.values(urls.messaging)) {
       expect(new URL(url).searchParams.get('hub')).toBe(HUB)
     }
-    expect(new URL(urls.voiceIncoming).search).toBe('')
+    // /incoming is checked against the provider account of the hub it names (#1052).
+    expect(new URL(urls.voiceIncoming).searchParams.get('hub')).toBe(HUB)
+    // /call-status resolves its hub from the call record.
     expect(new URL(urls.voiceStatus).search).toBe('')
+  })
+
+  it('the platform table names no hub', () => {
+    const urls = buildProviderWebhookUrls(ORIGIN)
+    expect(new URL(urls.voiceIncoming).search).toBe('')
+    for (const url of Object.values(urls.messaging)) expect(new URL(url).search).toBe('')
   })
 
   it('uses WEBHOOK_BASE_URL — the origin signatures are verified against — before DOMAIN', () => {

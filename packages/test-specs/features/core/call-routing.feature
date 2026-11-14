@@ -41,29 +41,12 @@ Feature: Call Routing & History
 
   # ── Backend: Shift Routing ────────────────────────────────────────
 
-  @backend
-  Scenario: Select ring group from active shift
-    Given a shift is currently active with 3 volunteers
-    When a call needs to be routed
-    Then all 3 volunteers should be in the ring group
-
-  # Busy-volunteer exclusion is asserted against the server's real ring set in
-  # demo-mock-telephony.feature (#1018).
-
-  # The fallback group's ring behaviour (which volunteers are actually rung when no shift is
-  # active) is asserted against the real ringing service in demo-mock-telephony.feature (#1017).
-
-  @backend
-  Scenario: Overlapping shifts merge volunteer pools
-    Given two overlapping shifts with different volunteers
-    When a call needs to be routed during the overlap
-    Then volunteers from both shifts should be in the ring group
-
-  @backend
-  Scenario: Empty ring group returns no-volunteers-available
-    Given no shift is active and no fallback is configured
-    When a call needs to be routed
-    Then the router should return a no-volunteers error
+  # Who a call rings — the active shift's volunteers, overlapping shifts merged, busy
+  # volunteers left out, the fallback group when nobody is on shift, nobody when there is
+  # neither — is asserted in signed-call-routing.feature, against the ring set the server
+  # recorded and the legs it asked the provider to dial, for calls driven through signed
+  # provider webhooks (#1052). The scenarios that used to stand here asserted the test's
+  # own volunteer list after a /test-simulate call that rings nobody.
 
   # ── Backend: Call Simulation Lifecycle ─────────────────────────────
 
@@ -136,19 +119,9 @@ Feature: Call Routing & History
 
   # ── Backend: Parallel ring & first-pickup-wins ────────────────────
 
-  @backend
-  Scenario: All on-shift volunteers ring simultaneously
-    And 3 volunteers are on shift
-    When a call arrives from "+15552223333"
-    Then all 3 volunteers receive a ring
-
-  @backend
-  Scenario: First pickup ends ringing for others
-    And 2 volunteers are on shift
-    When a call arrives from "+15554445555"
-    And volunteer 1 answers the call
-    Then the call status is "in-progress"
-    And volunteer 2 no longer receives a ring
+  # Parallel ringing and "the first pickup stops every other leg" are asserted in
+  # signed-call-routing.feature against what the server rang and told the provider to
+  # cancel (#1052). The answer races below exercise the atomic claim itself.
 
   @backend
   Scenario: Concurrent phone pickups - exactly one volunteer wins

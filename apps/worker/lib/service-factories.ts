@@ -247,7 +247,8 @@ function createAdapterFromConfig(config: TelephonyProviderConfig, webhookBaseUrl
   // `mock` is a worker-side test type, deliberately not part of the wire-level
   // TelephonyProviderType enum — compare on the raw string.
   if (isMockProviderConfig(config)) {
-    return new MockTelephonyAdapter(env, config.phoneNumber)
+    // `authToken` is the mock's webhook signing secret, the role it plays for Twilio.
+    return new MockTelephonyAdapter(env, config.phoneNumber, config.authToken, webhookBaseUrl)
   }
   switch (config.type) {
     case 'twilio':

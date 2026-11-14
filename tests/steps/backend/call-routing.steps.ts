@@ -232,16 +232,9 @@ Then('no volunteers receive a ring', async ({ world }) => {
   expect(state.callId).toBeUndefined()
 })
 
-Then('all {int} volunteers receive a ring', async ({ world }, count: number) => {
-  // All volunteers in the shift ring simultaneously — verified by ringing status
-  expect(getScenarioState(world).callStatus).toBe('ringing')
-  expect(getScenarioState(world).volunteers.length).toBeGreaterThanOrEqual(count)
-})
-
-Then('volunteer {int} no longer receives a ring', async ({ world }, _index: number) => {
-  // First pickup ends ringing for others — verified by in-progress status
-  expect(getScenarioState(world).callStatus).toBe('in-progress')
-})
+// Who a call rings, and that the first pickup stops the other legs, are asserted
+// against the server's ring set and the provider legs it cancelled, for calls driven
+// through signed webhooks: signed-call-routing.steps.ts (#1052).
 
 // ── Call History Assertions ────────────────────────────────────────
 

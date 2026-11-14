@@ -389,18 +389,21 @@ export class CallsService {
    * (UPDATE ... RETURNING would hand back the NEW value — the NULL just
    * written — which is why this is a locked read, then the clear.)
    */
-  async takeRingLegs(callId: string): Promise<string[]> {
+  async takeRingLegs(hubId: string, callId: string): Promise<string[]> {
+    // Scoped to the hub: a webhook another hub's credentials vouched for must
+    // never reach this hub's legs (the caller names the call by its SID).
+    const thisCall = and(eq(activeCalls.callId, callId), eq(activeCalls.hubId, hubId))
     return await this.db.transaction(async (tx) => {
       const [row] = await tx
         .select({ legSids: activeCalls.ringLegSids })
         .from(activeCalls)
-        .where(and(eq(activeCalls.callId, callId), isNotNull(activeCalls.ringLegSids)))
+        .where(and(thisCall, isNotNull(activeCalls.ringLegSids)))
         .for('update')
       if (!row) return []
       await tx
         .update(activeCalls)
         .set({ ringLegSids: null })
-        .where(eq(activeCalls.callId, callId))
+        .where(thisCall)
       return row.legSids ?? []
     })
   }

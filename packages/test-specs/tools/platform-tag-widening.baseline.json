@@ -5,7 +5,7 @@
     "admin/ban-management.feature": 2,
     "admin/settings.feature": 4,
     "core/auth-login.feature": 16,
-    "core/call-routing.feature": 43,
+    "core/call-routing.feature": 38,
     "core/dashboard.feature": 3,
     "core/messaging-flow.feature": 7,
     "core/note-encryption.feature": 8,

@@ -312,6 +312,43 @@ async function signalProviderAuthRejection(
 }
 
 /**
+ * The hub whose provider credentials must vouch for a webhook — so a hub with
+ * its own provider account has its webhooks checked against THAT account. The
+ * same hub the route's handler then acts for, never a different one:
+ *
+ *  - `/call-recording`, `/user-answer` and `/call-status` carry no `?hub=`
+ *    (CRIT-W1): their handlers resolve the hub from the call — through the
+ *    leg's opaque call token, or the parent call SID. Validation resolves it
+ *    the same way. A `?hub=` on them is ignored, never preferred: the handler
+ *    acts with the call's hub's adapter, so validating with any other hub's
+ *    credentials would let one hub's account vouch for another hub's call
+ *    (#2309). Before #1052 the token routes were validated with the PLATFORM
+ *    adapter, so on a hub with its own account every answered leg and every
+ *    status callback was refused — no call could be picked up.
+ *  - every other route names its hub in `?hub=`. `/incoming` does when the
+ *    hub's provider setup registered it (`buildProviderWebhookUrls`); without
+ *    one it is validated with the platform account, which is what a number on
+ *    the platform account is delivered through.
+ *
+ * Resolving the token is a read: it never consumes or claims it.
+ */
+async function validatingHub(services: Services, url: URL): Promise<string | undefined> {
+  const path = url.pathname
+  const fromCall = async (callSid: string | null) =>
+    (callSid ? await services.calls.getHubIdForCall(callSid) : null) || undefined
+  if (path.endsWith('/call-recording')) return fromCall(url.searchParams.get('parentCallSid'))
+  if (path.endsWith('/user-answer') || path.endsWith('/call-status')) {
+    // Exactly the handlers' resolution: the token's hub — and, for a status
+    // callback only, the parent call's when there is no usable token.
+    const callToken = url.searchParams.get('callToken')
+    const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
+    if (tokenData?.hubId) return tokenData.hubId
+    return path.endsWith('/call-status') ? fromCall(url.searchParams.get('parentCallSid')) : undefined
+  }
+  return url.searchParams.get('hub') || undefined
+}
+
+/**
  * Webhook validation middleware — applied per-route to actual webhook endpoints.
  * NOT a wildcard `use('*')` because authenticated webrtcRoutes are mounted at the
  * same `/telephony` prefix and must not be intercepted by webhook signature checks.
@@ -330,19 +367,7 @@ async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const env = c.env
   const services = c.get('services')
 
-  // For /incoming, we don't know the hub yet — use global adapter for validation
-  // For all other routes, hub is in query params — except /call-recording,
-  // whose callback carries none (CRIT-W1: its handler resolves the hub from the
-  // call record). Its signature is checked with THAT hub's adapter, so the
-  // credentials that vouch for the callback are the ones its recording is then
-  // fetched and deleted through — and a hub with its own provider account is
-  // not refused, which would leave its recordings at the provider, untracked
-  // (#2309). A `?hub=` on /call-recording is ignored, never preferred: the
-  // handler acts with the call's hub's adapter, so validating with any other
-  // hub's credentials would let one hub's account vouch for another hub's call.
-  const hubId = url.pathname.endsWith('/call-recording')
-    ? (await services.calls.getHubIdForCall(url.searchParams.get('parentCallSid') || '')) || undefined
-    : url.searchParams.get('hub') || undefined
+  const hubId = await validatingHub(services, url)
   const adapter = await getHubAdapter(env, services, hubId)
 
   // If no telephony provider is configured, reject with 403 — same as
@@ -437,8 +462,11 @@ telephony.post('/incoming',
   }),
   async (c) => {
   const services = c.get('services')
-  const globalAdapter = (await getTelephonyFromService(c.env, services.settings))!
-  const { callSid, callerNumber, calledNumber } = await globalAdapter.parseIncomingWebhook(c.req.raw)
+  // The account that delivered (and, in validateWebhook, signed) this call: the
+  // hub's own when its provider setup registered `?hub=`, else the platform's.
+  const namedHubId = new URL(c.req.url).searchParams.get('hub') || undefined
+  const deliveringAdapter = (await getHubAdapter(c.env, services, namedHubId))!
+  const { callSid, callerNumber, calledNumber } = await deliveringAdapter.parseIncomingWebhook(c.req.raw)
   logger.info('Incoming call', { callSid })
 
   // The call belongs to the hub that owns the number it was placed to — and a
@@ -447,7 +475,14 @@ telephony.post('/incoming',
   const hubId = await hubForCalledNumber(services, calledNumber)
   if (!hubId) {
     await signalUnroutedCall(services, !!calledNumber)
-    return telephonyResponse(globalAdapter.rejectCall())
+    return telephonyResponse(deliveringAdapter.rejectCall())
+  }
+  // A hub's account vouches for calls to that hub's number and to no other: one
+  // hub's credentials must never deliver a call into another hub.
+  if (namedHubId && namedHubId !== hubId) {
+    logger.error('Incoming call names one hub but was placed to another hub\'s number — refused', { callSid })
+    incCounter('llamenos_call_unrouted_total', { called_number: 'other_hub' })
+    return telephonyResponse(deliveringAdapter.rejectCall())
   }
   logger.info('Resolved hub for incoming call', { hubId })
   // `/incoming` names no hub in its URL, so its accepted traffic is
@@ -455,7 +490,7 @@ telephony.post('/incoming',
   providerAuthMonitor.recordAccepted(hubId)
 
   // Use hub-scoped adapter for all subsequent operations
-  const adapter = (await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? globalAdapter
+  const adapter = (await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? deliveringAdapter
 
   // #2309: the provider now keeps a log record of this call, naming the
   // caller's number. Where its API can delete one, it is tracked from the first
@@ -881,6 +916,14 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   const { result: queueResult } = await adapter.parseQueueExitWebhook(c.req.raw)
   const callSid = url.searchParams.get('callSid') || ''
   const lang = url.searchParams.get('lang') || DEFAULT_LANGUAGE
+
+  // The caller has left the queue — hung up, or is being sent to voicemail — so
+  // nobody can be bridged to them any more. Stop every volunteer leg still
+  // ringing for them (#1052): left alone, each rang out its full timeout for a
+  // caller who was gone, and a volunteer who picked one up claimed a call with
+  // no one on it. Read before the call ends, which deletes the recorded legs.
+  // ('bridged' means a volunteer answered, and that answer already cancelled the others.)
+  if (queueResult !== 'bridged') await cancelLosingLegs(c.env, services, hubId, callSid)
 
   if (queueResult === 'hangup') {
     // Caller hung up while in queue — end the call as unanswered

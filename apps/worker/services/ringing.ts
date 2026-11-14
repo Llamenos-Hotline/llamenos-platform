@@ -309,7 +309,7 @@ export async function cancelLosingLegs(
 ): Promise<void> {
   let legSids: string[]
   try {
-    legSids = await services.calls.takeRingLegs(callSid)
+    legSids = await services.calls.takeRingLegs(hubId, callSid)
   } catch (err) {
     logger.error('Failed to read recorded ring legs — losing legs will ring out', err, { callSid })
     return
@@ -350,6 +350,11 @@ export async function startParallelRinging(
     // who may pick up (first-pickup-wins, #1039).
     const resolved = await resolveRingableVolunteers(services, hubId)
     if (!resolved) {
+      // The decision is recorded like any other ring set — here, that nobody was
+      // rung, the fallback group having been consulted — so "who did this call
+      // ring" has a persisted answer on every path, not only when someone was
+      // available (#1176, #1052).
+      await services.calls.recordRingSet(callSid, { volunteers: [], usedFallback: true })
       reportUnroutableCall(callSid, hubId, 'no-volunteers', 'No volunteers on shift and the fallback group is empty')
       return { ringing: false, reason: 'no-volunteers', volunteersNotified: 0 }
     }

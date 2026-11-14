@@ -20,13 +20,8 @@ Feature: State Transition Validation
       | +15550100002   |
       | +15550100003   |
 
-  # ─── Shift Changes Affect Routing ────────────────────────────────────
-
-  Scenario: Shift changes affect next call routing immediately
-    Given 2 volunteers are on shift
-    When the admin removes the first volunteer from the shift
-    And an incoming call arrives
-    Then only the second volunteer should be rung
+  # Removing a volunteer from the shift is asserted against the next call's real ring set
+  # in signed-call-routing.feature (#1052).
 
   # ─── Report Conversion Idempotency ──────────────────────────────────
 

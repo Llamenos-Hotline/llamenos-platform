@@ -887,7 +887,7 @@ describe('first-pickup-wins: cancelling losing ring legs', () => {
 
     await cancelLosingLegs(makeEnv(), services, 'hub-1', 'CA-legs', 'LEG-2')
 
-    expect(services.calls.takeRingLegs).toHaveBeenCalledWith('CA-legs')
+    expect(services.calls.takeRingLegs).toHaveBeenCalledWith('hub-1', 'CA-legs')
     expect(mockAdapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2', 'LEG-3'], 'LEG-2')
   })
 

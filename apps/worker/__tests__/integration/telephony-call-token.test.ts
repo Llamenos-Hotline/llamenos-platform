@@ -422,6 +422,6 @@ describe('volunteer call token across the provider callback order (#1038)', () =
     expect(adapter.cancelRinging).toHaveBeenCalledWith(['LEG-1', 'LEG-2'], 'LEG-1')
 
     // Taken exactly once: the row no longer holds the legs.
-    expect(await calls.takeRingLegs('CA-9')).toEqual([])
+    expect(await calls.takeRingLegs(HUB, 'CA-9')).toEqual([])
   })
 })

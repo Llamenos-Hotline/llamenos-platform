@@ -78,13 +78,8 @@ Feature: Cross-DO Integration Workflows
     Then the call should go to voicemail
     And the call history should show an unanswered call
 
-  # ─── Shift Changes Affect Call Routing ─────────────────────────────
-
-  Scenario: Removing volunteer from shift affects routing
-    Given 2 volunteers are on shift
-    When the admin removes the first volunteer from the shift
-    And an incoming call arrives
-    Then only the second volunteer should be rung
+  # Removing a volunteer from the shift is asserted against the next call's real ring set
+  # in signed-call-routing.feature (#1052).
 
   # ─── Conversation Notes Link ───────────────────────────────────────
 

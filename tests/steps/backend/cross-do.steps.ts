@@ -24,6 +24,7 @@ import {
 } from '../../api-helpers'
 import {
   simulateIncomingCall,
+  simulateIncomingCallResponse,
   simulateAnswerCall,
   simulateEndCall,
   simulateVoicemail,
@@ -43,6 +44,10 @@ interface CrossDoState {
   shiftId?: string
   callId?: string
   callStatus?: string
+  /** HTTP status the last incoming-call simulation answered. */
+  callHttpStatus?: number
+  /** Whether that answer was the ban refusal. */
+  callBanned?: boolean
   noteId?: string
   conversationId?: string
   conversationIds: string[]
@@ -165,24 +170,27 @@ When('an admin bans {string}', async ({request, world}, phone: string) => {
 
 When('an incoming call arrives from {string}', async ({ request, world }, phone: string) => {
   const hubId = getScenarioState(world).hubId
-  try {
-    const result = await simulateIncomingCall(request, { callerNumber: phone, hubId })
-    getCrossDoState(world).callId = result.callId
-    getCrossDoState(world).callStatus = result.status
-  } catch (e) {
-    // Banned callers get a 403 — record as 'rejected' instead of throwing
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg.includes('banned') || msg.includes('403')) {
-      getCrossDoState(world).callStatus = 'rejected'
-    } else {
-      throw e
-    }
+  // Record the server's answer as it is. A refusal is read from the response —
+  // its status and ban marker — never inferred from an error message.
+  const response = await simulateIncomingCallResponse(request, { callerNumber: phone, hubId })
+  const state = getCrossDoState(world)
+  state.callHttpStatus = response.status
+  state.callBanned = response.data.banned === true
+  if (response.ok) {
+    state.callId = response.data.callId
+    state.callStatus = response.data.status
+    return
   }
+  expect(response.status, `incoming-call for ${phone}: HTTP ${response.status} ${JSON.stringify(response.data)}`).toBe(403)
+  state.callId = undefined
+  state.callStatus = 'rejected'
 })
 
 Then('the banned call should be rejected', async ({ world }) => {
-  // The incoming-call step catches the 403 and sets status to 'rejected'
-  expect(getCrossDoState(world).callStatus).toBe('rejected')
+  const state = getCrossDoState(world)
+  expect(state.callHttpStatus, 'the ban check refuses the call').toBe(403)
+  expect(state.callBanned, 'the refusal is the ban, not some other 403').toBe(true)
+  expect(state.callId, 'a refused call is never recorded').toBeUndefined()
 })
 
 Then('the call should be ringing', async ({ world }) => {
@@ -401,13 +409,21 @@ Then('the audit log should contain report assignment entries', async ({request, 
 // ─── Voicemail Fallback ─────────────────────────────────────────────
 
 When('no volunteer answers within the timeout', async ({ request, world }) => {
-  // Simulate voicemail (call goes unanswered)
-  await simulateVoicemail(request, getCrossDoState(world).callId!)
-  getCrossDoState(world).callStatus = 'unanswered'
+  // The caller times out into voicemail. Record what the SERVER answered, never a
+  // status this step chose (it used to set 'unanswered' itself, #1052).
+  const result = await simulateVoicemail(request, getCrossDoState(world).callId!)
+  getCrossDoState(world).callStatus = result.status
 })
 
-Then('the call should go to voicemail', async ({ world }) => {
-  expect(getCrossDoState(world).callStatus).toBe('unanswered')
+Then('the call should go to voicemail', async ({ request, world }) => {
+  const state = getCrossDoState(world)
+  expect(state.callStatus, 'the voicemail simulation answered').toBe('unanswered')
+  // The call has left the live table: the server no longer offers it to anyone.
+  const hubId = getScenarioState(world).hubId
+  const { status, data } = await apiGet<{ status: string; answeredBy: string | null }>(request, `/hubs/${hubId}/calls/${state.callId}`)
+  expect(status).toBe(200)
+  expect(data.status).toBe('unanswered')
+  expect(data.answeredBy ?? null).toBeNull()
 })
 
 Then('the call history should show an unanswered call', async ({ request, world }) => {
@@ -419,22 +435,17 @@ Then('the call history should show an unanswered call', async ({ request, world 
 })
 
 // ─── Shift Changes Affect Routing ───────────────────────────────────
+// Whether the next call rings only the volunteers left on the shift is asserted
+// against the server's recorded ring set in signed-call-routing.steps.ts (#1052).
 
 When('the admin removes the first volunteer from the shift', async ({ request, world }) => {
-  if (getScenarioState(world).shiftIds.length > 0 && getScenarioState(world).volunteers.length > 1) {
-    // Update shift to only include second volunteer
-    const secondVol = getScenarioState(world).volunteers[1]
-    await apiPatch(request, `/hubs/${getScenarioState(world).hubId}/shifts/${getScenarioState(world).shiftIds[0]}`, {
-      userPubkeys: [secondVol.pubkey],
-    })
-  }
-})
-
-Then('only the second volunteer should be rung', async ({ world }) => {
-  // callId is set by call-lifecycle.steps.ts via getScenarioState(world).callId;
-  // getCrossDoState(world).callId is set by cross-do-internal call steps. Accept either.
-  const callId = getCrossDoState(world).callId ?? getScenarioState(world).callId
-  expect(callId).toBeDefined()
+  const state = getScenarioState(world)
+  // Never a silent no-op: a scenario this step cannot act on is a broken scenario.
+  expect(state.shiftIds.length, 'no shift to remove the volunteer from').toBeGreaterThan(0)
+  expect(state.volunteers.length, 'the shift needs a second volunteer to keep').toBeGreaterThan(1)
+  const keep = state.volunteers.slice(1).map(v => v.pubkey)
+  const res = await apiPatch(request, `/hubs/${state.hubId}/shifts/${state.shiftIds[0]}`, { userPubkeys: keep })
+  expect(res.status, `update the shift: ${JSON.stringify(res.data)}`).toBe(200)
 })
 
 // ─── Conversation Notes ─────────────────────────────────────────────
