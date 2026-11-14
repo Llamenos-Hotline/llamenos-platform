@@ -514,83 +514,25 @@ describe('entity-schema routes', () => {
   })
 
   // -------------------------------------------------------------------------
-  // POST /cms/roles/from-template — Create roles from template suggestions
+  // POST /cms/roles/from-template — removed (#2780)
   // -------------------------------------------------------------------------
 
   describe('POST /cms/roles/from-template', () => {
-    it('creates roles and skips duplicate slugs', async () => {
-      const createRoleSpy = vi.fn().mockImplementation(({ name, slug }) =>
-        Promise.resolve({ id: `role-${slug}`, name }),
-      )
-      const getRolesSpy = vi.fn().mockResolvedValue({
-        roles: [{ id: 'r1', slug: 'existing-role' }],
-      })
-      const { app, auditLogSpy } = createTestApp({
-        permissions: ['system:manage-roles'],
-        serviceMock: {
-          settings: {
-            createRole: createRoleSpy,
-            getRoles: getRolesSpy,
-          },
-        },
-      })
-
-      const res = await app.request('/cms/roles/from-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roles: [
-            { name: 'Existing Role', slug: 'existing-role', description: 'An existing role', permissions: ['cases:read-own'] },
-            { name: 'New Role', slug: 'new-role', description: 'A new role', permissions: ['cases:create'] },
-          ],
-        }),
-      })
-
-      expect(res.status).toBe(201)
-      const json = await res.json()
-      // existing-role was skipped, only new-role created
-      expect(json.count).toBe(1)
-      expect(json.created[0].name).toBe('New Role')
-      expect(createRoleSpy).toHaveBeenCalledTimes(1)
-      expect(auditLogSpy).toHaveBeenCalledTimes(1)
-    })
-
-    it('returns 400 when a role contains an invalid permission', async () => {
-      const getRolesSpy = vi.fn().mockResolvedValue({ roles: [] })
+    it('is gone: the server no longer writes a template role\'s name in the clear', async () => {
       const createRoleSpy = vi.fn()
       const { app } = createTestApp({
-        permissions: ['system:manage-roles'],
-        serviceMock: { settings: { getRoles: getRolesSpy, createRole: createRoleSpy } },
+        permissions: ['*'],
+        serviceMock: { settings: { createRole: createRoleSpy } },
       })
-
       const res = await app.request('/cms/roles/from-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          roles: [
-            { name: 'Bad Role', slug: 'bad-role', description: 'A role with bad perms', permissions: ['not:a:real:permission'] },
-          ],
+          roles: [{ name: 'Legal observer', slug: 'legal-observer', description: 'Observes', permissions: ['cases:read-own'] }],
         }),
       })
-
-      expect(res.status).toBe(400)
-      const json = await res.json()
-      expect(typeof json.error).toBe('string')
-      expect(json.error).toMatch(/invalid permissions/i)
-      expect(json.error).toContain('not:a:real:permission')
-      expect(json.role).toBe('Bad Role')
-      expect(json.invalidPermissions).toEqual(['not:a:real:permission'])
+      expect(res.status).toBe(404)
       expect(createRoleSpy).not.toHaveBeenCalled()
-    })
-
-    it('requires system:manage-roles permission', async () => {
-      const { app } = createTestApp({ permissions: ['cases:manage-types'] })
-      const res = await app.request('/cms/roles/from-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: [] }),
-      })
-      expect(res.status).toBe(403)
     })
   })
 

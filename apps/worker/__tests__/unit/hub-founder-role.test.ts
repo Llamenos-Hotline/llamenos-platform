@@ -30,6 +30,17 @@ describe('hubFounderRoleIds', () => {
     expect(hubFounderRoleIds(catalog)).toEqual(['role-9f2c-coordinator'])
   })
 
+  it('never makes a new hub\'s founder hold a role another hub owns (#2780)', () => {
+    // hub-a's own admin-shaped role is the smallest admin bundle in the
+    // catalogue, so without the ownership rule it would be chosen — and then
+    // confer nothing in the new hub, which would be born with no admin.
+    const catalog: RoleCatalog = [
+      { id: 'role-a-coordinator', permissions: MIN, hubId: 'hub-a' },
+      role('role-hub-admin', [...MIN, 'users:*']),
+    ]
+    expect(hubFounderRoleIds(catalog)).toEqual(['role-hub-admin'])
+  })
+
   it('grants the least authority that still administers the hub', () => {
     const catalog: RoleCatalog = [
       role('role-big', ['users:*', 'shifts:*', 'settings:*', 'notes:*', 'bans:*']),

@@ -98,6 +98,19 @@ const HUB_REACHABLE = [
   'PUT /ivr-audio/:promptType/:language',
 ].sort()
 
+/**
+ * Rows a hub owns outright, with no platform value behind them: the hub's own
+ * roles (#2780), names sealed under the hub key. The same paths exist unscoped,
+ * but there they are the deployment-wide roles — different rows, a different
+ * handler — so this is a second resource that shares a path, not a fallback.
+ */
+const HUB_OWNED = [
+  'DELETE /roles/:id',
+  'GET /roles',
+  'PATCH /roles/:id',
+  'POST /roles',
+].sort()
+
 /** Settings the whole deployment has exactly one of. Unscoped only. */
 const DEPLOYMENT_ONLY = [
   'GET /transcription', 'PATCH /transcription',
@@ -107,7 +120,7 @@ const DEPLOYMENT_ONLY = [
   'POST /messaging/test', 'POST /messaging/telegram/register-webhook',
   'GET /setup', 'PATCH /setup',
   'GET /report-types', 'POST /report-types', 'PATCH /report-types/:id', 'DELETE /report-types/:id',
-  'GET /roles', 'POST /roles', 'PATCH /roles/:id', 'DELETE /roles/:id', 'POST /roles/:id/envelopes',
+  'POST /roles/:id/envelopes',
   'GET /users/:id/effective-permissions',
   'GET /permissions',
   'GET /migrations',
@@ -115,7 +128,6 @@ const DEPLOYMENT_ONLY = [
   'GET /cleanup-metrics',
   'GET /geocoding', 'PUT /geocoding', 'GET /geocoding/test',
   'GET /cms/cross-hub', 'PUT /cms/cross-hub',
-  'POST /cms/roles/from-template',
 ]
 
 const at = (prefix: string, row: string) => {
@@ -131,7 +143,19 @@ describe('settings reachable under /api/hubs/:hubId/settings (#2367)', () => {
   })
 
   it('are exactly the per-hub settings — a new one is a reviewed decision, not a default', () => {
-    expect(under(HUB)).toEqual(HUB_REACHABLE)
+    expect(under(HUB)).toEqual([...HUB_REACHABLE, ...HUB_OWNED].sort())
+  })
+
+  it.each(HUB_OWNED)('%s is mounted under a hub for its own roles, and unscoped for the deployment-wide ones', (row) => {
+    expect(routes.has(at(HUB, row))).toBe(true)
+    expect(routes.has(at(PLATFORM, row))).toBe(true)
+  })
+
+  it('no longer lets the server create a template\'s roles itself (#2780)', () => {
+    // It wrote each suggested role's name in the clear; the client seals them now.
+    for (const prefix of [HUB, PLATFORM]) {
+      expect(routes.has(at(prefix, 'POST /cms/roles/from-template'))).toBe(false)
+    }
   })
 
   it.each(DEPLOYMENT_ONLY)('%s is mounted unscoped and absent under a hub', (row) => {
