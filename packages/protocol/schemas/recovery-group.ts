@@ -177,7 +177,7 @@ export const shareLivenessProofSchema = z.object({
 export type ShareLivenessProof = z.infer<typeof shareLivenessProofSchema>
 
 export const shareLivenessProofResponseSchema = z.object({
-  ok: z.literal(true),
+  ok: z.boolean(),
   verifiedAt: z.string(),
 })
 export type ShareLivenessProofResponse = z.infer<typeof shareLivenessProofResponseSchema>
