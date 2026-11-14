@@ -33,29 +33,38 @@ import { argon2id } from '@noble/hashes/argon2.js'
 import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import {
   LABEL_CALL_META,
-  LABEL_DEVICE_PROVISION,
-  LABEL_DEVICE_PROVISION_BUNDLE,
   LABEL_MESSAGE,
   LABEL_NOTE_KEY,
   LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
   LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-  LABEL_PROVISIONING_SALT,
   LABEL_RECOVERY_GROUP_SHARE_WRAP,
   LABEL_RECOVERY_SHARE_CONTRIBUTE,
   LABEL_WS_CHALLENGE,
-  SAS_INFO,
-  SAS_SALT,
 } from '@shared/crypto-labels'
+import * as cryptoLabels from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
+import { shamirCommitment } from './shamir-mock'
+import { decryptProvisioningBundle, newDeviceProvisioningSas } from './provisioning-mock'
 import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
-
-/** Mirrors packages/crypto/src/provisioning.rs PROVISIONING_BUNDLE_VERSION. */
-const PROVISIONING_BUNDLE_VERSION = 1
-/** version(1) + signing seed(32) + encryption seed(32). */
-const PROVISIONING_BUNDLE_LEN = 65
 
 /** Mirrors `platform.ts` RECOVERY_SHARE_COMMITMENT_MISMATCH / crypto.rs. */
 const RECOVERY_SHARE_COMMITMENT_MISMATCH = 'Share does not match its commitment'
+
+/**
+ * Mirrors `encryption::require_registered_label` in the crate, which both
+ * `encrypt_hub_field` and `decrypt_hub_field` call before touching the key: a
+ * label outside LABEL_REGISTRY is refused rather than bound as AAD. The mock
+ * checks against every label string the shared constants declare.
+ */
+const REGISTERED_LABELS: ReadonlySet<string> = new Set(
+  Object.entries(cryptoLabels)
+    .filter(([name, value]) => name.startsWith('LABEL_') && typeof value === 'string')
+    .map(([, value]) => value as string),
+)
+
+function requireRegisteredLabel(label: string): void {
+  if (!REGISTERED_LABELS.has(label)) throw new Error('Unknown crypto label: not in LABEL_REGISTRY')
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -397,10 +406,7 @@ function shamirSplitInternal(secretHex: string, total: number, threshold: number
     shares.push({ x: i, y: bytesToHex(y) })
   }
 
-  const commitments = shares.map(s => {
-    const data = new Uint8Array([s.x, ...hexToBytes(s.y)])
-    return bytesToHex(sha256(data))
-  })
+  const commitments = shares.map(s => shamirCommitment(s.x, s.y))
 
   return { shares, commitments }
 }
@@ -1029,16 +1035,14 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   shamir_commit: (a) => {
     const x = a.x as number
     const yHex = a.yHex as string
-    const data = new Uint8Array([x, ...hexToBytes(yHex)])
-    return bytesToHex(sha256(data))
+    return shamirCommitment(x, yHex)
   },
 
   shamir_verify: (a) => {
     const x = a.x as number
     const yHex = a.yHex as string
     const commitmentHex = a.commitmentHex as string
-    const data = new Uint8Array([x, ...hexToBytes(yHex)])
-    return bytesToHex(sha256(data)) === commitmentHex
+    return shamirCommitment(x, yHex) === commitmentHex
   },
 
   // H16: Recovery group key isolation — split AND seal every share to its holder;
@@ -1114,7 +1118,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       new Uint8Array(0),
     )
     if (share.length === 0) throw new Error('Decrypted share is empty')
-    if (bytesToHex(sha256(share)) !== (a.commitmentHex as string)) {
+    // Same check as crypto.rs: the share is `x || y`, committed with the crate's
+    // domain-separated commitment (not a bare hash of the whole share).
+    if (shamirCommitment(share[0], bytesToHex(share.slice(1))) !== (a.commitmentHex as string)) {
       throw new Error(RECOVERY_SHARE_COMMITMENT_MISMATCH)
     }
 
@@ -1308,53 +1314,26 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   provision_compute_sas: (a) => {
     if (!mockProvisioningEphemeral) throw new Error('No provisioning session')
-    const primaryEncPubkeyHex = a.primaryEncPubkeyHex as string
-
-    const sharedSecret = x25519.getSharedSecret(mockProvisioningEphemeral, hexToBytes(primaryEncPubkeyHex))
-
-    const sasBytes = hkdf(sha256, sharedSecret,
-      utf8ToBytes(SAS_SALT),
-      utf8ToBytes(SAS_INFO), 4)
-    const sasNum = ((sasBytes[0] << 24) | (sasBytes[1] << 16) | (sasBytes[2] << 8) | sasBytes[3]) >>> 0
-    const sasCode6 = (sasNum % 1_000_000).toString().padStart(6, '0')
-    return `${sasCode6.slice(0, 3)} ${sasCode6.slice(3)}`
+    // Mirrors crypto.rs: the argument is the primary's SIGNED CLAIM, verified
+    // against this device's own ephemeral key before any SAS is derived (#1865).
+    return newDeviceProvisioningSas(a.claimHex as string, mockProvisioningEphemeral)
   },
 
   provision_decrypt_and_import: async (a) => {
     if (!mockProvisioningEphemeral) throw new Error('No provisioning session')
     const encryptedHex = a.encryptedHex as string
-    const primaryEncPubkeyHex = a.primaryEncPubkeyHex as string
+    const claimHex = a.claimHex as string
     const pin = a.pin as string
     const deviceId = a.deviceId as string
 
-    // ECDH
-    const sharedSecret = x25519.getSharedSecret(mockProvisioningEphemeral, hexToBytes(primaryEncPubkeyHex))
+    // One-shot, like Rust's `.take()`: a refused claim does not leave the
+    // ephemeral around for a retry against the same room key.
+    const ephemeral = mockProvisioningEphemeral
+    mockProvisioningEphemeral = null
 
-    // Derive symmetric key
-    const symmetricKey = hkdf(sha256, sharedSecret,
-      utf8ToBytes(LABEL_PROVISIONING_SALT),
-      utf8ToBytes(LABEL_DEVICE_PROVISION), 32)
-
-    // Decrypt
-    const data = hexToBytes(encryptedHex)
-    const nonce = data.slice(0, 12)
-    const ciphertext = data.slice(12)
-    const aad = utf8ToBytes(LABEL_DEVICE_PROVISION_BUNDLE)
-    const cipher = gcm(symmetricKey, nonce, aad)
-    const plaintext = cipher.decrypt(ciphertext)
-
-    // Parse the key bundle — matches Rust decrypt_provisioned_bundle.
-    // Both seeds are used exactly as transported; deriving the encryption seed
-    // from the signing seed would give this device a different X25519 key than
-    // the one existing ciphertext was wrapped to.
-    if (plaintext.length !== PROVISIONING_BUNDLE_LEN) {
-      throw new Error(`provisioning bundle must be ${PROVISIONING_BUNDLE_LEN} bytes, got ${plaintext.length}`)
-    }
-    if (plaintext[0] !== PROVISIONING_BUNDLE_VERSION) {
-      throw new Error(`unsupported provisioning bundle version: ${plaintext[0]}`)
-    }
-    const signingSeed = plaintext.slice(1, 33)
-    const encryptionSeed = plaintext.slice(33, PROVISIONING_BUNDLE_LEN)
+    // Both seeds are used exactly as transported (never re-derive one from the
+    // other); the claim, the bundle's signer and the AEAD are all checked inside.
+    const { signingSeed, encryptionSeed } = decryptProvisioningBundle(encryptedHex, claimHex, ephemeral)
 
     const signingPubkey = deriveEd25519Pubkey(signingSeed)
     const encryptionPubkey = deriveX25519Pubkey(encryptionSeed)
@@ -1371,8 +1350,6 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockSecrets = { signingSeed, encryptionSeed }
     mockDeviceState = state
     mockEncryptedKeys = result
-    mockProvisioningEphemeral = null // Consumed
-
     return result
   },
 
@@ -1405,6 +1382,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (!mockHubKey) throw new Error('Hub key not loaded')
     const plaintext = a.plaintext as string
     const label = a.label as string
+    requireRegisteredLabel(label)
     const nonce = randomBytes(12)
     const aad = utf8ToBytes(label)
     const cipher = gcm(mockHubKey, nonce, aad)
@@ -1419,6 +1397,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (!mockHubKey) throw new Error('Hub key not loaded')
     const ciphertextHex = a.ciphertextHex as string
     const label = a.label as string
+    requireRegisteredLabel(label)
     const data = hexToBytes(ciphertextHex)
     if (data.length < 28) throw new Error('Ciphertext too short')
     const nonce = data.slice(0, 12)
