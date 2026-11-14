@@ -85,12 +85,6 @@ UNRENDERED_BY_DESIGN: dict[str, str] = {
         "so there is no consumer on an Ansible host to render it for. It has NO fallback to "
         "HMAC_SECRET (D6): the app refuses to boot with the notifier configured and this unset"
     ),
-    "CERT_PIN_HASHES": (
-        "an OVERRIDE of the Let's Encrypt ISRG Root X1/X2 defaults. The Caddy role pins "
-        "acme_ca to Let's Encrypt with no fallback issuer, so the default is already the "
-        "correct chain for every deployed host; rendering an override could only diverge "
-        "from the cert Caddy actually serves"
-    ),
     "APNS_BUNDLE_ID": (
         "an OVERRIDE of org.llamenos.hotline (lib/apns-topic.ts), which is "
         "PRODUCT_BUNDLE_IDENTIFIER in apps/ios/project.yml -- only a fork shipping under "

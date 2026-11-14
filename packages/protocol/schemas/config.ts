@@ -33,18 +33,3 @@ export const configVerifyResponseSchema = z.object({
   verificationUrl: z.string(),
   trustAnchor: z.string(),
 })
-
-// --- Certificate pinning schemas ---
-
-export const pinEntrySchema = z.object({
-  algorithm: z.string(),
-  hash: z.string(),
-  label: z.string(),
-})
-
-export const configPinsResponseSchema = z.object({
-  pins: z.array(pinEntrySchema),
-  notBefore: z.string(),
-  notAfter: z.string(),
-  signature: z.string(),
-})
