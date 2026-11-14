@@ -69,19 +69,77 @@ Feature: Recovery Group Lifecycle
     And the user stores a different envelope for the same hub
     Then the response status is 200
 
-  # -- Share Liveness --
+  # -- Share Liveness (#2782) --
+  # A liveness proof is a signature under a key derived from the holder's own
+  # Shamir share, over a fresh single-use server challenge. Being authenticated
+  # as the holder proves nothing about the share, so every scenario below that
+  # authenticates correctly but lacks the share (or the challenge) is refused,
+  # and a refused proof must never leave the holder reading as healthy.
 
   @backend
-  Scenario: Share holder can submit liveness proof
-    Given a recovery group is enrolled for the hub
-    When a share holder submits a liveness proof for the hub
+  Scenario: A share holder proves liveness with their share
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 proves liveness with their share
     Then the response status is 200
     And the response body has "ok" equal to true
+    And share holder 1 reads as live in the recovery group
 
   @backend
-  Scenario: Non-holder liveness proof is rejected
-    Given a recovery group is enrolled for the hub
-    When a non-holder submits a liveness proof for the hub
+  Scenario: A liveness proof made without the holder's share is rejected
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 submits a liveness proof made without their share
+    Then the response status is 403
+    And share holder 1 does not read as live in the recovery group
+    And share holder 1 shows a failed liveness proof in the recovery group
+
+  @backend
+  Scenario: A failed liveness proof clears an earlier successful one
+    Given a recovery group is enrolled with real share holders
+    And share holder 1 has proven liveness with their share
+    When share holder 1 submits a liveness proof made without their share
+    Then the response status is 403
+    And share holder 1 does not read as live in the recovery group
+    And share holder 1 shows a failed liveness proof in the recovery group
+
+  @backend
+  Scenario: Another holder's share cannot prove liveness for this holder
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 proves liveness with share holder 2's share
+    Then the response status is 403
+    And share holder 1 does not read as live in the recovery group
+
+  @backend
+  Scenario: A liveness proof signed for a different hub is rejected
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 signs a liveness proof for a different hub
+    Then the response status is 403
+    And share holder 1 does not read as live in the recovery group
+
+  @backend
+  Scenario: A liveness proof cannot be replayed
+    Given a recovery group is enrolled with real share holders
+    And share holder 1 has proven liveness with their share
+    When share holder 1 replays their last liveness proof
+    Then the response status is 409
+
+  @backend
+  Scenario: A liveness proof for a challenge the server never issued is rejected
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 submits a liveness proof for a challenge the server never issued
+    Then the response status is 409
+    And share holder 1 does not read as live in the recovery group
+
+  @backend
+  Scenario: A hub member who is not a share holder cannot get a liveness challenge
+    Given a recovery group is enrolled with real share holders
+    When a hub member who is not a share holder requests a liveness challenge
+    Then the response status is 403
+
+  @backend
+  Scenario: A holder removed from the hub cannot prove liveness
+    Given a recovery group is enrolled with real share holders
+    When share holder 1 is removed from the hub
+    And share holder 1 proves liveness with their share
     Then the response status is 403
 
   # -- Own share envelope (#2002) --

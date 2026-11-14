@@ -33,12 +33,17 @@ import {
 } from '../../api-helpers'
 import { harnessClientHeaders } from '../../dev-surface-secret'
 import { sha256 } from '@noble/hashes/sha2.js'
+import { hkdf } from '@noble/hashes/hkdf.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
-import { LABEL_RECOVERY_PUK_SEED_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE } from '@shared/crypto-labels'
+import {
+  LABEL_RECOVERY_LIVENESS_PROOF,
+  LABEL_RECOVERY_PUK_SEED_WRAP,
+  LABEL_RECOVERY_SHARE_CONTRIBUTE,
+} from '@shared/crypto-labels'
 
-// Admin pubkey derived from ADMIN_SEED — used to enroll admin as a share holder
-// so liveness proof tests can authenticate correctly.
+// Admin pubkey derived from ADMIN_SEED — enrolled as a share holder by
+// "a recovery group is enrolled for the hub".
 const ADMIN_PUBKEY = seedHexToPubkey(ADMIN_SEED)
 
 // ── State ──────────────────────────────────────────────────────────
@@ -64,7 +69,7 @@ interface RecoveryGroupState {
   // -- Own share envelope (#2002) --
   /** Enrolled holders that authenticate as themselves. Index 0 is "share holder 1". */
   ownShare?: {
-    holders: Array<{ seedHex: string; pubkey: string; envelope: string }>
+    holders: Array<{ seedHex: string; pubkey: string; envelope: string; share: TestShare }>
     /** Enrolled, but holds a role WITHOUT recovery:hold-share. */
     unprivilegedHolder: { seedHex: string; pubkey: string }
     /** Hub member with recovery:hold-share who was never enrolled. */
@@ -82,6 +87,10 @@ interface RecoveryGroupState {
     survivingHolderPubkeys: string[]
     replacementHolderPubkey: string
   }
+
+  // -- Share liveness (#2782) --
+  /** The last proof submitted, so a scenario can replay it verbatim. */
+  lastLivenessSubmission?: { seedHex: string; body: { hubId: string; challenge: string; proof: string } }
 
   // -- Full ceremony: contribute -> complete -> sigchain -> decrypt --
   ceremony?: {
@@ -128,10 +137,67 @@ After({ tags: '@backend' }, async ({ request, world }) => {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function makeShareEnvelopes(count: number, pubkeys: string[] = []): Array<{ holderPubkey: string; shareEnvelope: string }> {
+// -- Share liveness (#2782) -----------------------------------------
+// An independent implementation of `packages/crypto/src/recovery_liveness.rs`
+// (noble here, ed25519-dalek + hkdf there). The server verifies through the
+// Rust crate, so a proof made here verifying there pins the wire format: if
+// either side's derivation or message layout drifts, every positive liveness
+// scenario fails.
+
+/** A Shamir share as the holder's device holds it after opening its envelope. */
+interface TestShare { x: number; y: Uint8Array }
+
+function makeTestShare(x: number): TestShare {
+  return { x, y: crypto.getRandomValues(new Uint8Array(32)) }
+}
+
+/** seed = HKDF-SHA256(ikm = x || y, salt = none, info = LABEL_RECOVERY_LIVENESS_PROOF, 32). */
+function livenessSeed(share: TestShare): Uint8Array {
+  const ikm = new Uint8Array(1 + share.y.length)
+  ikm[0] = share.x
+  ikm.set(share.y, 1)
+  return hkdf(sha256, ikm, undefined, utf8ToBytes(LABEL_RECOVERY_LIVENESS_PROOF), 32)
+}
+
+function livenessPublicKey(share: TestShare): string {
+  return bytesToHex(ed25519.getPublicKey(livenessSeed(share)))
+}
+
+function u32be(n: number): Uint8Array {
+  const b = new Uint8Array(4)
+  new DataView(b.buffer).setUint32(0, n)
+  return b
+}
+
+/** LABEL || 0x00 || u32be(len) hubId || u32be(len) holderPubkey || challenge. */
+function livenessMessage(hubId: string, holderPubkey: string, challengeHex: string): Uint8Array {
+  const parts = [
+    utf8ToBytes(LABEL_RECOVERY_LIVENESS_PROOF),
+    new Uint8Array([0]),
+    u32be(utf8ToBytes(hubId).length),
+    utf8ToBytes(hubId),
+    u32be(utf8ToBytes(holderPubkey).length),
+    utf8ToBytes(holderPubkey),
+    hexToBytes(challengeHex),
+  ]
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0
+  for (const p of parts) { out.set(p, o); o += p.length }
+  return out
+}
+
+function signLiveness(share: TestShare, hubId: string, holderPubkey: string, challengeHex: string): string {
+  return bytesToHex(ed25519.sign(livenessMessage(hubId, holderPubkey, challengeHex), livenessSeed(share)))
+}
+
+function makeShareEnvelopes(
+  count: number,
+  pubkeys: string[] = [],
+): Array<{ holderPubkey: string; shareEnvelope: string; livenessPublicKey: string }> {
   return Array.from({ length: count }, (_, i) => ({
     holderPubkey: pubkeys[i] ?? `deadbeef${String(i).padStart(56, '0')}`,
     shareEnvelope: encryptContent(`hpke-share-envelope-${i}`, generateContentKey(), 'llamenos:recovery'),
+    livenessPublicKey: livenessPublicKey(makeTestShare(i + 1)),
   }))
 }
 
@@ -471,40 +537,6 @@ When('the user stores a different envelope for the same hub', async ({ request, 
   setLastResponse(world, { status, data })
 })
 
-// ── Liveness proof steps ───────────────────────────────────────────
-
-When('a share holder submits a liveness proof for the hub', async ({ request, world }) => {
-  const s = getS(world)
-  expect(s.hubId).toBeDefined()
-
-  // Use the first enrolled holder's seed (admin, who is also a registered holder)
-  const holderSeed = s.holderSeeds[0] ?? s.adminSeed
-  const { status, data } = await apiPost(request, '/recovery-group/shares/liveness', {
-    hubId: s.hubId!,
-    proof: 'a'.repeat(128),
-  }, holderSeed)
-
-  s.lastStatus = status
-  s.lastBody = data as Record<string, unknown>
-  setLastResponse(world, { status, data })
-})
-
-When('a non-holder submits a liveness proof for the hub', async ({ request, world }) => {
-  const s = getS(world)
-  expect(s.hubId).toBeDefined()
-
-  const nonHolder = await createUserViaApi(request, { name: `Non Holder ${Date.now()}` })
-
-  const { status, data } = await apiPost(request, '/recovery-group/shares/liveness', {
-    hubId: s.hubId!,
-    proof: 'a'.repeat(128),
-  }, nonHolder.seedHex)
-
-  s.lastStatus = status
-  s.lastBody = data as Record<string, unknown>
-  setLastResponse(world, { status, data })
-})
-
 // ── Own share envelope steps (#2002) ───────────────────────────────
 
 const shareEnvelopeFor = (pubkey: string) => `share-envelope-for:${pubkey}`
@@ -550,14 +582,16 @@ Given('a recovery group is enrolled with real share holders', async ({ request, 
   const nonHolder = await createHubMember(request, s.hubId!, [holdShare.id])
 
   const enrolled = [...holderUsers.map((h) => h.pubkey), unprivilegedHolder.pubkey]
+  const shares = enrolled.map((_, i) => makeTestShare(i + 1))
   const { status } = await apiPost(request, '/recovery-group/enroll', {
     hubId: s.hubId!,
     threshold: 2,
     totalShares: 3,
     groupPublicKey: 'a'.repeat(64),
-    shareEnvelopes: enrolled.map((holderPubkey) => ({
+    shareEnvelopes: enrolled.map((holderPubkey, i) => ({
       holderPubkey,
       shareEnvelope: shareEnvelopeFor(holderPubkey),
+      livenessPublicKey: livenessPublicKey(shares[i]),
     })),
     shareCommitments: makeCommitments(3),
     sigchainLinkHash: 'b'.repeat(64),
@@ -567,7 +601,7 @@ Given('a recovery group is enrolled with real share holders', async ({ request, 
   expect(status).toBe(200)
 
   s.ownShare = {
-    holders: holderUsers.map((h) => ({ ...h, envelope: shareEnvelopeFor(h.pubkey) })),
+    holders: holderUsers.map((h, i) => ({ ...h, envelope: shareEnvelopeFor(h.pubkey), share: shares[i] })),
     unprivilegedHolder,
     nonHolder,
   }
@@ -642,6 +676,159 @@ Then('the share envelope returned is share holder {int}\'s own', async ({ world 
 Then('the response does not contain share holder {int}\'s envelope', async ({ world }, n: number) => {
   const body = JSON.stringify(getS(world).lastBody ?? {})
   expect(body).not.toContain(holderN(world, n).envelope)
+})
+
+
+// ── Share liveness steps (#2782) ───────────────────────────────────
+
+function recordResponse(world: Record<string, unknown>, status: number, data: unknown) {
+  const s = getS(world)
+  s.lastStatus = status
+  s.lastBody = data as Record<string, unknown>
+  setLastResponse(world, { status, data })
+}
+
+async function requestLivenessChallenge(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  seedHex: string,
+  hubId: string,
+): Promise<string | null> {
+  const { status, data } = await apiPost(request, '/recovery-group/shares/liveness/challenge', { hubId }, seedHex)
+  if (status !== 200) {
+    recordResponse(world, status, data)
+    return null
+  }
+  const challenge = (data as { challenge?: unknown }).challenge
+  expect(typeof challenge).toBe('string')
+  return challenge as string
+}
+
+async function submitLiveness(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  seedHex: string,
+  body: { hubId: string; challenge: string; proof: string },
+) {
+  const { status, data } = await apiPost(request, '/recovery-group/shares/liveness', body, seedHex)
+  getS(world).lastLivenessSubmission = { seedHex, body }
+  recordResponse(world, status, data)
+}
+
+/**
+ * Ask for a challenge as holder `n`, sign it with `share` over `signedHubId`,
+ * and submit it for the scenario's hub. Each argument is a way a proof can be
+ * wrong; the honest case passes the holder's own share and the scenario hub.
+ */
+async function proveLiveness(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  n: number,
+  share: TestShare,
+  signedHubId?: string,
+) {
+  const hubId = getS(world).hubId!
+  const holder = holderN(world, n)
+  const challenge = await requestLivenessChallenge(request, world, holder.seedHex, hubId)
+  if (challenge === null) return
+  await submitLiveness(request, world, holder.seedHex, {
+    hubId,
+    challenge,
+    proof: signLiveness(share, signedHubId ?? hubId, holder.pubkey, challenge),
+  })
+}
+
+When('share holder {int} proves liveness with their share', async ({ request, world }, n: number) => {
+  await proveLiveness(request, world, n, holderN(world, n).share)
+})
+
+Given('share holder {int} has proven liveness with their share', async ({ request, world }, n: number) => {
+  await proveLiveness(request, world, n, holderN(world, n).share)
+  expect(getS(world).lastStatus).toBe(200)
+})
+
+When(
+  'share holder {int} submits a liveness proof made without their share',
+  async ({ request, world }, n: number) => {
+    // Authenticated as the real holder, for a real challenge — the only thing
+    // missing is the share. This is the case the endpoint used to accept.
+    await proveLiveness(request, world, n, makeTestShare(n))
+  },
+)
+
+When(
+  'share holder {int} proves liveness with share holder {int}\'s share',
+  async ({ request, world }, n: number, other: number) => {
+    await proveLiveness(request, world, n, holderN(world, other).share)
+  },
+)
+
+When(
+  'share holder {int} signs a liveness proof for a different hub',
+  async ({ request, world }, n: number) => {
+    await proveLiveness(request, world, n, holderN(world, n).share, crypto.randomUUID())
+  },
+)
+
+When('share holder {int} replays their last liveness proof', async ({ request, world }, n: number) => {
+  const last = getS(world).lastLivenessSubmission
+  expect(last, 'no liveness proof has been submitted yet').toBeDefined()
+  expect(last!.seedHex).toBe(holderN(world, n).seedHex)
+  await submitLiveness(request, world, last!.seedHex, last!.body)
+})
+
+When(
+  'share holder {int} submits a liveness proof for a challenge the server never issued',
+  async ({ request, world }, n: number) => {
+    const s = getS(world)
+    const holder = holderN(world, n)
+    // A real challenge is outstanding, but the proof is for a different one the
+    // holder chose themselves: a proof computable at will is not evidence.
+    await requestLivenessChallenge(request, world, holder.seedHex, s.hubId!)
+    const forged = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    await submitLiveness(request, world, holder.seedHex, {
+      hubId: s.hubId!,
+      challenge: forged,
+      proof: signLiveness(holder.share, s.hubId!, holder.pubkey, forged),
+    })
+  },
+)
+
+When(
+  'a hub member who is not a share holder requests a liveness challenge',
+  async ({ request, world }) => {
+    await requestLivenessChallenge(request, world, getOwn(world).nonHolder.seedHex, getS(world).hubId!)
+  },
+)
+
+async function holderLiveness(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  n: number,
+): Promise<{ lastLivenessProof: string | null; lastLivenessFailure: string | null }> {
+  const s = getS(world)
+  const { status, data } = await apiGet(request, `/recovery-group/${s.hubId}`, s.adminSeed)
+  expect(status).toBe(200)
+  const holders = (data as { shareHolderLiveness: Array<{ holderPubkey: string; lastLivenessProof: string | null; lastLivenessFailure: string | null }> }).shareHolderLiveness
+  const entry = holders.find((h) => h.holderPubkey === holderN(world, n).pubkey)
+  expect(entry, `share holder ${n} is not in the recovery group`).toBeDefined()
+  return entry!
+}
+
+Then('share holder {int} reads as live in the recovery group', async ({ request, world }, n: number) => {
+  const entry = await holderLiveness(request, world, n)
+  expect(entry.lastLivenessProof).not.toBeNull()
+  expect(entry.lastLivenessFailure).toBeNull()
+})
+
+Then('share holder {int} does not read as live in the recovery group', async ({ request, world }, n: number) => {
+  const entry = await holderLiveness(request, world, n)
+  expect(entry.lastLivenessProof).toBeNull()
+})
+
+Then('share holder {int} shows a failed liveness proof in the recovery group', async ({ request, world }, n: number) => {
+  const entry = await holderLiveness(request, world, n)
+  expect(entry.lastLivenessFailure).not.toBeNull()
 })
 
 // ── Recovery-group-specific assertion steps ────────────────────────
