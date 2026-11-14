@@ -799,7 +799,7 @@ mod tests {
             r#"{"type":"call:ring"}"#
         );
         assert!(
-            decrypt_hub_event(&hex_packed, &[0x43; 32]).is_err(),
+            decrypt_hub_event(&hex_packed, &random_bytes_32()).is_err(),
             "wrong key"
         );
 
@@ -830,7 +830,7 @@ mod tests {
             "other epoch"
         );
         assert!(
-            decrypt_server_event(&packed, &[0x43; 32], 7).is_err(),
+            decrypt_server_event(&packed, &random_bytes_32(), 7).is_err(),
             "other key"
         );
 
