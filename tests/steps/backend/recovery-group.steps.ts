@@ -33,14 +33,10 @@ import {
 } from '../../api-helpers'
 import { harnessClientHeaders } from '../../dev-surface-secret'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { hkdf } from '@noble/hashes/hkdf.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
-import {
-  LABEL_RECOVERY_LIVENESS_PROOF,
-  LABEL_RECOVERY_PUK_SEED_WRAP,
-  LABEL_RECOVERY_SHARE_CONTRIBUTE,
-} from '@shared/crypto-labels'
+import { LABEL_RECOVERY_PUK_SEED_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE } from '@shared/crypto-labels'
+import { livenessPublicKey, signLivenessProof, type LivenessShare } from '../../helpers/recovery-liveness'
 
 // Admin pubkey derived from ADMIN_SEED — enrolled as a share holder by
 // "a recovery group is enrolled for the hub".
@@ -138,57 +134,16 @@ After({ tags: '@backend' }, async ({ request, world }) => {
 // ── Helpers ────────────────────────────────────────────────────────
 
 // -- Share liveness (#2782) -----------------------------------------
-// An independent implementation of `packages/crypto/src/recovery_liveness.rs`
-// (noble here, ed25519-dalek + hkdf there). The server verifies through the
-// Rust crate, so a proof made here verifying there pins the wire format: if
-// either side's derivation or message layout drifts, every positive liveness
-// scenario fails.
+// The signer is tests/helpers/recovery-liveness.ts, an implementation
+// independent of the Rust crate the server verifies with.
 
-/** A Shamir share as the holder's device holds it after opening its envelope. */
-interface TestShare { x: number; y: Uint8Array }
+type TestShare = LivenessShare
 
 function makeTestShare(x: number): TestShare {
   return { x, y: crypto.getRandomValues(new Uint8Array(32)) }
 }
 
-/** seed = HKDF-SHA256(ikm = x || y, salt = none, info = LABEL_RECOVERY_LIVENESS_PROOF, 32). */
-function livenessSeed(share: TestShare): Uint8Array {
-  const ikm = new Uint8Array(1 + share.y.length)
-  ikm[0] = share.x
-  ikm.set(share.y, 1)
-  return hkdf(sha256, ikm, undefined, utf8ToBytes(LABEL_RECOVERY_LIVENESS_PROOF), 32)
-}
-
-function livenessPublicKey(share: TestShare): string {
-  return bytesToHex(ed25519.getPublicKey(livenessSeed(share)))
-}
-
-function u32be(n: number): Uint8Array {
-  const b = new Uint8Array(4)
-  new DataView(b.buffer).setUint32(0, n)
-  return b
-}
-
-/** LABEL || 0x00 || u32be(len) hubId || u32be(len) holderPubkey || challenge. */
-function livenessMessage(hubId: string, holderPubkey: string, challengeHex: string): Uint8Array {
-  const parts = [
-    utf8ToBytes(LABEL_RECOVERY_LIVENESS_PROOF),
-    new Uint8Array([0]),
-    u32be(utf8ToBytes(hubId).length),
-    utf8ToBytes(hubId),
-    u32be(utf8ToBytes(holderPubkey).length),
-    utf8ToBytes(holderPubkey),
-    hexToBytes(challengeHex),
-  ]
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
-  let o = 0
-  for (const p of parts) { out.set(p, o); o += p.length }
-  return out
-}
-
-function signLiveness(share: TestShare, hubId: string, holderPubkey: string, challengeHex: string): string {
-  return bytesToHex(ed25519.sign(livenessMessage(hubId, holderPubkey, challengeHex), livenessSeed(share)))
-}
+const signLiveness = signLivenessProof
 
 function makeShareEnvelopes(
   count: number,

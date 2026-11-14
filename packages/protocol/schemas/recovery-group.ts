@@ -41,6 +41,8 @@ export const recoveryGroupEnrollSchema = z.object({
   emergencyFloorHours: z.number().int().min(1).max(24).optional().default(4),
 })
 export type RecoveryGroupEnroll = z.infer<typeof recoveryGroupEnrollSchema>
+/** The enroll request body as a client sends it (defaulted fields optional). */
+export type RecoveryGroupEnrollBody = z.input<typeof recoveryGroupEnrollSchema>
 
 const shareHolderLivenessSchema = z.object({
   holderPubkey: z.string(),

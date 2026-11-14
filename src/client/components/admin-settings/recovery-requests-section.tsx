@@ -4,11 +4,14 @@ import { useToast } from '@/lib/toast'
 import {
   contributeShare,
   cancelRecoverySession,
+  requestLivenessChallenge,
+  submitLivenessProof,
   type RecoverySessionInfo,
 } from '@/lib/api'
 import {
   RECOVERY_SHARE_COMMITMENT_MISMATCH,
   recoveryShareContribute,
+  recoveryShareLivenessProof,
   getDevicePubkeys,
   type HpkeEnvelope,
 } from '@/lib/platform'
@@ -29,11 +32,14 @@ import {
   AlertTriangle,
   Loader2,
   ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react'
 
 interface Props {
+  hubId: string
   sessions: RecoverySessionInfo[]
   onSessionsChanged: () => void
+  /** This user's own share envelope for the hub, or null if they hold no share there. */
   myShareEnvelope: string | null
   myShareCommitment: string | null
 }
@@ -59,6 +65,7 @@ function formatTimeRemaining(expiresAt: string): string {
 }
 
 export function RecoveryRequestsSection({
+  hubId,
   sessions,
   onSessionsChanged,
   myShareEnvelope,
@@ -72,6 +79,7 @@ export function RecoveryRequestsSection({
   const [urgentJustification, setUrgentJustification] = useState('')
   const [urgentApprover, setUrgentApprover] = useState('')
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null)
+  const [provingLiveness, setProvingLiveness] = useState(false)
 
   const activeSessions = sessions.filter(
     (s) => s.status === 'pending' || s.status === 'verified' || s.status === 'active',
@@ -136,6 +144,35 @@ export function RecoveryRequestsSection({
     }
   }
 
+  /**
+   * Prove to the hub that this device still holds its share (#2782): fetch a
+   * fresh challenge, have Rust sign it with the key derived from the share, and
+   * submit. The server verifies the proof; only then does the admin view show
+   * this contact's share as verified. A failure is shown, never swallowed —
+   * the server has already recorded it against this contact.
+   */
+  async function handleProveLiveness() {
+    if (!myShareEnvelope) return
+    setProvingLiveness(true)
+    try {
+      const { challenge } = await requestLivenessChallenge(hubId)
+      const proof = await recoveryShareLivenessProof(
+        JSON.parse(myShareEnvelope) as HpkeEnvelope,
+        hubId,
+        challenge,
+      )
+      await submitLivenessProof({ hubId, challenge, proof })
+      toast(t('recoveryGroup.liveness.success'), 'success')
+    } catch (err) {
+      toast(
+        `${t('recoveryGroup.liveness.failed')}${err instanceof Error ? `: ${err.message}` : ''}`,
+        'error',
+      )
+    } finally {
+      setProvingLiveness(false)
+    }
+  }
+
   async function handleCancel(sessionId: string) {
     setCancellingSession(sessionId)
     try {
@@ -153,6 +190,33 @@ export function RecoveryRequestsSection({
   return (
     <SectionBody>
       <SectionDescription>{t('recoveryGroup.requests.title')}</SectionDescription>
+
+      {myShareEnvelope && (
+        <div
+          className="rounded-lg border border-border p-4 space-y-2"
+          data-testid="recovery-liveness-panel"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            <span className="font-medium text-sm">{t('recoveryGroup.liveness.title')}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">{t('recoveryGroup.liveness.description')}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="recovery-prove-liveness"
+            disabled={provingLiveness}
+            onClick={handleProveLiveness}
+          >
+            {provingLiveness ? (
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+            ) : (
+              <ShieldCheck className="h-3 w-3 mr-1" />
+            )}
+            {provingLiveness ? t('recoveryGroup.liveness.proving') : t('recoveryGroup.liveness.prove')}
+          </Button>
+        </div>
+      )}
 
       {activeSessions.length > 0 && (
         <div className="space-y-3">

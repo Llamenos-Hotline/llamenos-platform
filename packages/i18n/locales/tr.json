@@ -4122,6 +4122,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Share verification failed",
+    "liveness": {
+      "title": "Your recovery share",
+      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
+      "prove": "Verify my share",
+      "proving": "Verifying…",
+      "success": "Share verified. Admins will see your share as healthy.",
+      "failed": "Share verification failed"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
