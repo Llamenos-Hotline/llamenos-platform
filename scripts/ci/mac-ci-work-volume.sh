@@ -308,7 +308,10 @@ relink() {
   fi
   mkdir -p "$target"
   if [ -d "$link" ]; then
-    rsync -a "$link/" "$target/" || die "copying $link to $target failed; $link is untouched"
+    # --delete: the target must MIRROR the source. A copy left on the volume by an
+    # earlier rollback is stale, and merging into it would resurrect files the
+    # runner had already removed.
+    rsync -a --delete "$link/" "$target/" || die "copying $link to $target failed; $link is untouched"
     old="$link.pre-ci-work"
     [ ! -e "$old" ] || die "$old already exists from an earlier attempt; look at it and remove it first"
     mv "$link" "$old"
@@ -330,7 +333,7 @@ unlink_back() { # unlink_back <link>: replace a symlink with a real directory ho
   [ -d "$target" ] || die "$link points at $target, which is not there (image detached?): attach it first so nothing is lost"
   tmp="$link.rollback"
   [ ! -e "$tmp" ] || die "$tmp already exists from an earlier attempt"
-  rsync -a "$target/" "$tmp/" || die "copying $target back failed; $link is untouched"
+  rsync -a --delete "$target/" "$tmp/" || die "copying $target back failed; $link is untouched"
   rm "$link"
   mv "$tmp" "$link"
   say "  restored a plain directory at $link (the copy on the volume is left in place: $target)"
@@ -507,8 +510,12 @@ EOF
   expect "cutover refuses while a simulator is booted (rc=$rc)" [ "$rc" != "0" ]
   : > "$sb/simctl.out"
 
+  # A stale copy left on the volume by an earlier rollback must not leak into the
+  # new workspace: the target is made to mirror the source.
+  mkdir -p "$sb/vol/actions-runner-ios-1/_work/repo"; echo stale > "$sb/vol/actions-runner-ios-1/_work/repo/stale-file"
   rc=0; out="$(run cutover)" || rc=$?
   expect "cutover succeeds when attached, verified and idle (rc=$rc)" [ "$rc" = "0" ]
+  expect "a stale file left on the volume by an earlier rollback does not survive the cutover" [ ! -e "$sb/vol/actions-runner-ios-1/_work/repo/stale-file" ]
   expect "runner 1's _work is now a link into the volume" [ "$(readlink "$sb/home/actions-runner-ios-1/_work")" = "$sb/vol/actions-runner-ios-1/_work" ]
   expect "runner 2's _work is now a link into the volume" [ "$(readlink "$sb/home/actions-runner-ios-2/_work")" = "$sb/vol/actions-runner-ios-2/_work" ]
   expect "the device set is a link into the volume" [ "$(readlink "$sb/home/dev/Devices")" = "$sb/vol/CoreSimulator/Devices" ]

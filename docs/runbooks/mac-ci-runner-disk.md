@@ -223,7 +223,72 @@ crossed whenever **idle free < 12 GiB + ~5 GiB per sibling job running**:
 
 ### 2026-11-14, with the CI work volume
 
-MEASURED_PLACEHOLDER
+Measured by `df -k` on the Mac, never `du` (APFS block sharing makes `du` lie by
+GiBs). Both runners idle unless stated.
+
+| Moment (UTC) | `/System/Volumes/Data` free | `/Volumes/CIWork` | `/Volumes/CIScratch` free |
+|---|---|---|---|
+| 15:27 before: runners on the internal disk | **18.5 GiB** | not created | 1,819 GiB |
+| 15:30 after cutover, idle | **20.9 GiB** (+2.4) | 293 GiB free of 300 (6.6 GiB held) | |
+| 15:35-15:50 two `ui` shards booted, `build` done | 19.54-19.62 GiB | 12.5 GiB used at peak | |
+| 15:55 shards done | 19.64 GiB | 4.9 GiB used (warm checkouts, toolcache) | |
+| 16:05 after `rollback` (see below) | 14.5 GiB | 5.1 GiB used (stale copies, refreshed by the next cutover) | 1,806 GiB |
+
+What two concurrent shards cost the **internal** volume, measured on that run:
+**1.35 GiB in total (~0.7 GiB per shard)**, all of it swap (`vm.swapusage` 1.2 ->
+2.4 GiB and one new 1 GiB swapfile). Before, the same shard held ~5 GiB there:
+device data 2.06 GiB, build products, results, the checkout, plus the swap. What the
+shards cost the CI work volume: ~4 GiB each. The remainder of that 5 GiB is now on
+a 300 GiB disk image whose backing store has 1.8 TiB.
+
+The refusal condition moves accordingly. Per volume, the guard refuses when that
+volume has less than 12 GiB:
+
+| volume | refuses when | with today's numbers |
+|---|---|---|
+| internal | idle free < 12 GiB + ~0.7 GiB (measured; 1.5 GiB if you budget the older swap estimate) per **sibling** job running | 20.9 GiB idle: two siblings need 13.4-15 GiB, so it never refuses; five siblings still pass on the conservative figure |
+| CI work volume | free < 12 GiB of 300 GiB | ~4 GiB per shard: refuses only after ~70 concurrent shards |
+
+### Verified with a real job (2026-11-14)
+
+Runners cut over, then:
+
+- `iOS E2E` dispatched on the branch (`tier=smoke`, run 43610627109): `build (mac)`
+  on `mac-mini-ios-2` (3 min 12 s), `ui (0)` on `mac-mini-ios-1` (15 min 34 s) and
+  `ui (1)` on `mac-mini-ios-2` (19 min 57 s). **All three green**, with `RUNNER_TEMP`,
+  the checkout and the CoreSimulator device set on `/Volumes/CIWork`, an
+  `ios-e2e-*` simulator created and booted through the linked device set, and the
+  guard printing `write paths OK: ... measuring /System/Volumes/Data, /Volumes/CIWork`
+  and `disk headroom OK` for each.
+- `#2756`'s `ios-compile-check` (the check that refused with `only 11.4 GiB free`),
+  re-run on a throwaway merge of `#2756` and this change (PR #2762, closed): **green**
+  on `mac-mini-ios-1`, job 132502298327, 90 s. Its original refusal was real; with
+  the layout above it cannot recur from disk.
+
+Then `rollback` was run (see the order note under "Operating the volume"), so
+the runners are on the internal disk until this change is on `main`. After it:
+internal free read 14.5 GiB, not the 18.5 it started at: the rolled-back
+workspaces and device set came back (3.1 + 2.1 GiB by `du`), the run had added a
+1 GiB swapfile that macOS returns only once memory pressure drops, and it is not
+a measurement of the steady state.
+
+### Does a third runner fit?
+
+**On disk, yes. On this machine, not on the evidence.**
+
+- Disk: with the work volume in use a third runner needs ~15 GiB idle on the
+  internal volume (12 + 2 siblings x 1.5 GiB, the conservative swap figure) and has
+  20.9. The previous arithmetic needed ~27 GiB and had 17.7. The work volume needs
+  ~12 GiB more of its 295 GiB free.
+- CPU and RAM are what limit it, and the disk work does not change them. The host is
+  16 GiB and 10 cores. During the two-shard run the **load average reached 85** in
+  the two minutes after both simulators booted (about 3 at rest) and swap grew from
+  1.2 to 2.4 GiB. `ios-e2e.yml` records four shards on this host completing zero
+  tests in 20 minutes. A third shard in that window would very likely time out,
+  and only an actual three-shard run would say. No third runner was registered:
+  that is the operator's call.
+- So: the disk no longer argues for a second host. Throughput does. The two-Mac
+  wall-clock arithmetic below is unchanged by any of this.
 
 ## Reclaim and the two timers
 

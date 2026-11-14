@@ -47,6 +47,7 @@ describe('mac-ci-work-volume.sh selftest', () => {
     'cutover succeeds when attached, verified and idle (rc=0)',
     "runner 1's workspace content came across",
     'the device came across',
+    'a stale file left on the volume by an earlier rollback does not survive the cutover',
     'a second cutover is a no-op (rc=0)',
     'a _work link to somewhere else is refused, not overwritten (rc=1)',
     'rollback refuses when the volume is detached, rather than lose what is on it (rc=1)',
