@@ -45,6 +45,9 @@ import { buildAuthMessage } from '@shared/auth-message'
 import { keyWrapAadHex } from '@shared/envelope-aad'
 import { bytesToHex } from '@shared/encoding'
 import { generateAdminKeys } from '../../../scripts/bootstrap-admin'
+import { x25519 } from '@noble/curves/ed25519.js'
+import { randomBytes } from '@noble/hashes/utils.js'
+import { encryptBundleForProvisioning, type ProvisioningOffer } from '../../mocks/provisioning-mock'
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
 const CRYPTO_LABELS_JSON = resolve(__dirname_, '../../../packages/protocol/crypto-labels.json')
@@ -723,44 +726,55 @@ Then('the webview should be unable to open a share envelope itself', async ({ pa
 })
 
 // ─── SAS derivation ─────────────────────────────────────────────────────
+//
+// The new device derives its SAS from the primary's SIGNED CLAIM (#1865), never
+// from a bare public key: the claim is verified against this device's own
+// ephemeral key before anything is derived. These steps play the primary with
+// `tests/mocks/provisioning-mock.ts`, the mirror of the crate's wire format.
 
-Given('a shared secret hex string', async ({ page }) => {
+Given('a provisioning room with a claim signed by the primary', async ({ page }) => {
   await ensureAppLoaded(page)
-  const keys = await page.evaluate(async () => {
+  const ephemeralPubkey = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      isCryptoUnlocked(): Promise<boolean>
-      deviceGenerateAndLoad(pin: string, deviceId: string): Promise<EncryptedDeviceKeys>
       provisionCreateSession(): Promise<string>
-      getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
     }
-    if (!(await p.isCryptoUnlocked())) {
-      await p.deviceGenerateAndLoad('12345678', crypto.randomUUID())
-    }
-    // A provisioning session fixes this side's ephemeral key; the peer's
-    // encryption pubkey is the "shared secret" input that varies.
-    await p.provisionCreateSession()
-    const me = await p.getDevicePubkeys()
-    const other = await p.provisionCreateSession()
-    return { peerA: me.encryptionPubkeyHex, peerB: other }
+    return p.provisionCreateSession()
   })
-  await setStash(page, '__test_sas_peers', keys)
+  const primary = (): ProvisioningOffer =>
+    encryptBundleForProvisioning(randomBytes(32), randomBytes(32), ephemeralPubkey)
+  const first = primary()
+  const other = primary()
+  // A claim a different primary signed for this same room, and one signed for
+  // a different room (this device's ephemeral key is not the one it covers).
+  const otherRoom = encryptBundleForProvisioning(
+    randomBytes(32),
+    randomBytes(32),
+    bytesToHex(x25519.getPublicKey(randomBytes(32))),
+  )
+  await setStash(page, '__test_sas_claims', {
+    claim: first.claimHex,
+    expected: first.sasCode,
+    otherPrimaryClaim: other.claimHex,
+    otherRoomClaim: otherRoom.claimHex,
+    barePubkey: bytesToHex(x25519.getPublicKey(randomBytes(32))),
+  })
 })
 
 When('I derive the SAS code', async ({ page }) => {
-  const codes = await page.evaluate(async () => {
+  const claims = await stash<{
+    claim: string
+    otherPrimaryClaim: string
+  }>(page, '__test_sas_claims')
+  const codes = await page.evaluate(async (c) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      provisionComputeSas(peer: string): Promise<string>
-    }
-    const { peerA, peerB } = (window as unknown as Record<string, unknown>).__test_sas_peers as {
-      peerA: string
-      peerB: string
+      provisionComputeSas(claimHex: string): Promise<string>
     }
     return {
-      first: await p.provisionComputeSas(peerA),
-      again: await p.provisionComputeSas(peerA),
-      different: await p.provisionComputeSas(peerB),
+      first: await p.provisionComputeSas(c.claim),
+      again: await p.provisionComputeSas(c.claim),
+      different: await p.provisionComputeSas(c.otherPrimaryClaim),
     }
-  })
+  }, claims)
   await setStash(page, '__test_sas', codes)
 })
 
@@ -770,16 +784,47 @@ Then('it should be exactly 6 digits', async ({ page }) => {
   expect(first.replace(/\s/g, '')).toMatch(/^\d{6}$/)
 })
 
-Then('deriving again with the same secret should produce the same code', async ({ page }) => {
+Then('it should equal the code the primary derived', async ({ page }) => {
+  const { first } = await stash<{ first: string }>(page, '__test_sas')
+  const { expected } = await stash<{ expected: string }>(page, '__test_sas_claims')
+  expect(first).toBe(expected)
+})
+
+Then('deriving again with the same claim should produce the same code', async ({ page }) => {
   const { first, again } = await stash<{ first: string; again: string }>(page, '__test_sas')
   expect(again).toBe(first)
 })
 
-Then('deriving with a different secret should produce a different code', async ({ page }) => {
+Then('deriving with a different primary\'s claim should produce a different code', async ({ page }) => {
   const { first, different } = await stash<{ first: string; different: string }>(page, '__test_sas')
   // A SAS that ignored its input would make the device-linking confirmation
   // meaningless — both peers would always read the same numbers.
   expect(different).not.toBe(first)
+})
+
+Then('a bare public key or another room\'s claim should be refused instead of yielding a code', async ({ page }) => {
+  const claims = await stash<{ barePubkey: string; otherRoomClaim: string }>(page, '__test_sas_claims')
+  const outcomes = await page.evaluate(async (c) => {
+    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      provisionComputeSas(claimHex: string): Promise<string>
+    }
+    const attempt = async (claimHex: string) => {
+      try {
+        return { code: await p.provisionComputeSas(claimHex) }
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+    return {
+      barePubkey: await attempt(c.barePubkey),
+      otherRoom: await attempt(c.otherRoomClaim),
+    }
+  }, claims)
+  // An unauthenticated exchange must never reach a SAS the user could confirm.
+  expect(outcomes.barePubkey.code).toBeUndefined()
+  expect(outcomes.barePubkey.error).toMatch(/claim must be 129 bytes/)
+  expect(outcomes.otherRoom.code).toBeUndefined()
+  expect(outcomes.otherRoom.error).toMatch(/signature verification failed/)
 })
 
 // ─── Auth tokens ────────────────────────────────────────────────────────
