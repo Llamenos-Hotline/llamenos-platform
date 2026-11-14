@@ -16,6 +16,10 @@
 // or rm exiting 0 with the path still present) is named, is never counted as
 // freed, does not abort the rest of the reclaim, and does not by itself refuse
 // a disk whose measured free space is enough.
+//
+// And the break-it for the hourly timer: its wrapper refreshes the script it runs
+// from origin/main, never adopts one that does not parse, and says STALE when it
+// could not refresh. The timer had been running a copy pinned six weeks earlier.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
@@ -60,6 +64,16 @@ describe('mac-runner-disk-guard.sh selftest', () => {
     'a failed delete does not fail closed when measured space is enough',
     'a healthy gate passes',
     'a healthy gate mentions no failures',
+    'timer: first run fetches main and pins its guard',
+    "timer: first run executes the pinned guard with 'reclaim'",
+    'timer: a new commit on main replaces the pinned guard',
+    'timer: the refreshed guard is the one that runs',
+    'timer: a guard that does not parse is not adopted',
+    'timer: a guard that does not parse is named STALE in the log',
+    'timer: the previous guard still runs after a bad refresh',
+    'timer: an unreachable origin is named STALE, not silent',
+    'timer: an unreachable origin still runs the pinned guard',
+    'timer: no pin and no origin aborts loudly instead of running nothing',
   ])('asserts: %s', (label) => {
     // A case that silently stopped running would otherwise read as green.
     expect(out).toContain(`  ok    ${label}`)

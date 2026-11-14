@@ -128,8 +128,9 @@ mini's exhaust.
 
 - Nothing here is host state. The preflight, the `-derivedDataPath` flags and
   the guard's write-path check are all code, evaluated on every invocation, so
-  a reboot or a runner restart cannot undo them. There is no symlink, no Xcode
-  `defaults` key and no LaunchAgent to drift.
+  a reboot or a runner restart cannot undo them. There is no symlink and no
+  Xcode `defaults` key to drift. There ARE two LaunchAgents (below), and one of
+  them did drift: see "The hourly timer" below.
 - After a reboot, external volumes mount when the user session starts, and the
   runners' LaunchAgents run in that same session. If the drive comes up late or
   not at all, CI is unaffected and ssh builds refuse until it is mounted.
@@ -153,3 +154,72 @@ needs System Settings, or MDM. It would require **all** of the following:
 
 Until then, CIScratch serves out-of-CI builds, which can reach it, and the
 internal volume's ~15 GiB is left to CI.
+
+## Headroom arithmetic, measured 2026-11-13/14
+
+The 12 GiB refusal on #2756's `ios-compile-check` was the guard working, and it
+was **not a leak**. Idle free space was 15.6 GiB; at the moment of refusal the
+volume showed 193 GiB used, against 188 GiB idle, because the sibling runner
+had a booted `ios-e2e-*` shard in flight. A running shard holds ~5 GiB
+(device data 2.06 GiB, build products, swap growth) that its teardown returns.
+So the floor is crossed whenever **idle free < 12 GiB + ~5 GiB per sibling job
+running**:
+
+| idle free | refuses when |
+|---|---|
+| 15.6 GiB (before) | one sibling shard is mid-run |
+| 17.7 GiB (after removing a merged worktree) | two siblings are mid-run |
+
+Two concurrent shards plus the starting job need ~22 GiB idle to never refuse.
+Nothing CI-owned was reclaimable: the guard's own reclaim reported "nothing
+CI-owned left to reclaim", `/private/var/tmp` held 2.9 MiB (#2724 is in effect
+in both runner checkouts, and there was nothing left for it to take), and
+DerivedData was 0.9 GiB.
+
+**What actually filled the volume** (not CI's, so not the guard's to delete):
+
+| Item | Size (`du`, informational) | Owner |
+|---|---|---|
+| `~/.worktrees/fleet-ios-2303` | 3.8 GiB | an iOS fleet worker; PR #2632 merged 2026-11-11, remote branch deleted, worktree clean. **Removed 2026-11-14: `df` 15 -> 17 GiB.** Nothing tears these down on the Mac (`orchestrator/src/worktree.ts` runs where the orchestrator runs). The guard DENYs `~/.worktrees` on purpose |
+| `~/Pictures/Photos Library.photoslibrary` | 12 GiB | the operator's. Moving it to CIScratch is the single biggest lever and is the operator's call |
+| `~/projects/llamenos-bundle-ios-{conv,call-note,invite}` | 2.6 + 1.7 + 0.1 GiB | October worker clones, two of them with no `.git` so nothing can verify them |
+| `~/projects/llamenos` | 2.5 GiB | 586 commits behind main, dirty (`Info.plist`, untracked `jniLibs/`) |
+| `~/.bun/install/cache` | 5.9 GiB | package cache; APFS clones may make deleting it free less than `du` says |
+| `~/Library/Containers/com.docker.docker`, `Application Support/com.docker.install` | 4.4 + 2.1 GiB | Docker Desktop |
+| `/Library/Updates` | 2.0 GiB | a downloaded macOS update (needs the operator) |
+
+The sweep log (`~/llamenos-mac-disk-sweep.log`) shows idle free falling from
+34 GiB (2026-10-22) to 15 GiB (2026-11-13), with dips to 5-8 GiB. Most of that
+is not attributable from an ssh session; `/Users/henry` and `/Users/vale` are
+empty, and the remainder is system data.
+
+### The hourly timer was running six-week-old code
+
+`org.llamenos.mac-reclaim` runs `~/.local/bin/llamenos-mac-reclaim`, which ran
+`~/.llamenos-mac/mac-runner-disk-guard.sh`: a copy **pinned on 2026-10-12**
+(`guard-pinned-at.txt`), with no `/private/var/tmp` reclaim in it. The
+job-start guard runs the checkout's current script, so the two disagreed for six
+weeks and nobody could tell from either log. `install-timer` now installs a
+wrapper that fetches `main`, adopts its guard only if it parses, and writes
+`STALE: ...` to `~/.llamenos-mac/reclaim.log` when it could not. It takes only
+`main`, never a PR checkout, because it runs hourly outside any job.
+`bash scripts/ci/mac-runner-disk-guard.sh install-timer` on the Mac applies it;
+until then the pin was refreshed by hand to `1730e95d`.
+
+A second timer, `org.llamenos.disk-sweep`, runs `~/llamenos-mac-disk-sweep.sh`,
+which is **not in this repository**. It recreates the `iPhone CI fixture`, deletes
+CI-named simulators older than 6 h and prunes default DerivedData over 1 GiB. If
+this host is rebuilt, that behaviour is gone.
+
+### Are two Macs enough?
+
+Not with margin, and the disk is the reason a third runner on this host is not
+the answer. From the last five merge-group `CI` runs: a full-tier group is
+`ios-build-test` (3 min) + `build` (3 min) + four `ui` shards of 22-27 min that
+run two at a time, so **~55-60 min of wall clock with both Macs saturated**; the
+second pair of shards waits 23-27 min for a runner. That leaves ~30 min of the
+90-min check budget. Any other macOS job routed to these runners (#2756) queues
+behind a shard, ~25 min, and that comes straight out of the same 30 min.
+A third runner here would need ~27 GiB idle free and there is 17.7. The options
+are a second Mac mini, or ~12 GiB back from the operator's own files (the Photos
+library) and a bigger internal disk. That is the operator's decision.
