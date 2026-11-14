@@ -33,9 +33,11 @@
 #     the boot volume if something recreates /Volumes/CIScratch as a plain
 #     directory. The preflight below fails loudly instead, before xcodebuild.
 #
-# Inside a GitHub Actions job the default is $RUNNER_TEMP instead: the runners
-# build on the internal volume, which is the volume their own guard measures
-# (and the guard refuses a job whose write paths are anywhere else).
+# Inside a GitHub Actions job the default is $RUNNER_TEMP instead. Where that
+# is - the internal volume, or the CI work volume's disk image when the runners
+# have been cut over (docs/runbooks/mac-ci-runner-disk.md) - is the volume their
+# own guard measures: it resolves where a job writes and holds each such volume
+# to the floor, and refuses a path the runner cannot read.
 #
 # ENVIRONMENT
 #   IOS_BUILD_DATA_VOLUME        mount point that must be mounted
