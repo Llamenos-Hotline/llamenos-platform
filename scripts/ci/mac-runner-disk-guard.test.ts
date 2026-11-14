@@ -17,6 +17,15 @@
 // freed, does not abort the rest of the reclaim, and does not by itself refuse
 // a disk whose measured free space is enough.
 //
+// And the break-it for the CI work volume (2026-11-14): the guard measures EVERY
+// volume a job writes to rather than assuming the internal disk. A RUNNER_TEMP or
+// device set on another readable volume is measured on it; a short work volume
+// refuses the job even when the host volume has room, and the refusal names the
+// short one whichever is listed first; a dangling link (the disk image not
+// attached) is refused as disk-guard-wrong-volume and says why; and a simulator
+// device set that is a SYMLINK is still swept, because plain `find` on a link
+// matches nothing (the control case reproduces that trap).
+//
 // And the break-it for the hourly timer: its wrapper refreshes the script it runs
 // from origin/main, never adopts one that does not parse, and says STALE when it
 // could not refresh. The timer had been running a copy pinned six weeks earlier.
@@ -64,6 +73,16 @@ describe('mac-runner-disk-guard.sh selftest', () => {
     'a failed delete does not fail closed when measured space is enough',
     'a healthy gate passes',
     'a healthy gate mentions no failures',
+    'accepts write paths on the host volume',
+    'a write path on another readable volume is measured, not waved through and not refused for being there',
+    'a device set SYMLINKED onto another volume is measured on the volume it really lands on',
+    'refuses a dangling symlink (what an unattached CI work volume leaves behind)',
+    'a RUNNER_TEMP link to an unattached work volume is refused as disk-guard-wrong-volume and says why',
+    'a short work volume refuses the job even though the host volume has room, and names it',
+    'the refusal does not depend on which volume is listed first',
+    'every measured volume above the floor passes, each reported',
+    '(control) a plain find on a symlinked device set matches nothing - the trap',
+    'the idle device under a symlinked device set is found, the young one is not',
     'timer: first run fetches main and pins its guard',
     "timer: first run executes the pinned guard with 'reclaim'",
     'timer: a new commit on main replaces the pinned guard',
