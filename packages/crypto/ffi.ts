@@ -56,6 +56,16 @@ const lib = dlopen(LIB_PATH, {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
   },
+  ffi_recovery_liveness_verify: {
+    args: [
+      FFIType.ptr, FFIType.u64, // liveness_pubkey (32)
+      FFIType.ptr, FFIType.u64, // hub_id (UTF-8)
+      FFIType.ptr, FFIType.u64, // holder_pubkey (UTF-8)
+      FFIType.ptr, FFIType.u64, // challenge (32)
+      FFIType.ptr, FFIType.u64, // signature (64)
+    ],
+    returns: FFIType.i32,
+  },
   ffi_ed25519_pubkey_from_seed: {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
@@ -227,6 +237,35 @@ export function ed25519Verify(pubkey: Uint8Array, message: Uint8Array, signature
   // Other error codes (null pointer, wrong sizes, etc.)
   const msg = getLastError()
   throw new CryptoError(code, msg)
+}
+
+/**
+ * Verify a recovery-share liveness proof (#2782).
+ *
+ * Delegates to `packages/crypto/src/recovery_liveness.rs`, which owns the signed
+ * message layout. Returns `false` for a proof that does not verify; throws only
+ * on malformed input sizes (wrong-length key, challenge or signature), which a
+ * caller must validate before it gets here.
+ */
+export function recoveryLivenessVerify(
+  livenessPubkey: Uint8Array,
+  hubId: string,
+  holderPubkey: string,
+  challenge: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  const hub = new TextEncoder().encode(hubId)
+  const holder = new TextEncoder().encode(holderPubkey)
+  const code = lib.symbols.ffi_recovery_liveness_verify(
+    ptr(livenessPubkey), livenessPubkey.length,
+    ptr(hub), hub.length,
+    ptr(holder), holder.length,
+    ptr(challenge), challenge.length,
+    ptr(signature), signature.length,
+  )
+  if (code === 0) return true
+  if (code === -1) return false
+  throw new CryptoError(code, getLastError())
 }
 
 export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {

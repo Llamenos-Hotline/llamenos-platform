@@ -10,17 +10,30 @@ export const recoverySessionStatusSchema = z.enum([
 ])
 export type RecoverySessionStatus = z.infer<typeof recoverySessionStatusSchema>
 
-const shareEnvelopeSchema = z.object({
+const hex = (bytes: number) => z.string().regex(new RegExp(`^[0-9a-f]{${bytes * 2}}$`))
+
+/**
+ * One holder's entry in an enroll/rotate body.
+ *
+ * `livenessPublicKey` is the Ed25519 public key the enrolling client derived
+ * from THIS holder's Shamir share (`recovery_liveness::liveness_public_key` in
+ * `packages/crypto`, #2782). It is the server's only way to check a liveness
+ * proof without holding the share: the share commitment is a hash and can only
+ * be checked by someone holding the share itself.
+ */
+export const recoveryShareEnvelopeSchema = z.object({
   holderPubkey: z.string(),
   shareEnvelope: z.string(),
+  livenessPublicKey: hex(32),
 })
+export type RecoveryShareEnvelope = z.infer<typeof recoveryShareEnvelopeSchema>
 
 export const recoveryGroupEnrollSchema = z.object({
   hubId: z.string().uuid(),
   threshold: z.number().int().min(2).max(5),
   totalShares: z.number().int().min(3).max(5),
   groupPublicKey: z.string(),
-  shareEnvelopes: z.array(shareEnvelopeSchema),
+  shareEnvelopes: z.array(recoveryShareEnvelopeSchema),
   shareCommitments: z.array(z.string()),
   duressCommitments: z.array(z.string().nullable()).optional(),
   sigchainLinkHash: z.string(),
@@ -31,7 +44,10 @@ export type RecoveryGroupEnroll = z.infer<typeof recoveryGroupEnrollSchema>
 
 const shareHolderLivenessSchema = z.object({
   holderPubkey: z.string(),
+  /** When this holder last demonstrated possession of their share (a verified liveness proof). Null if never, or since a failed proof. */
   lastLivenessProof: z.string().nullable(),
+  /** When this holder last submitted a liveness proof that did NOT verify. A failure clears `lastLivenessProof`. */
+  lastLivenessFailure: z.string().nullable(),
   createdAt: z.string(),
 })
 
@@ -126,11 +142,45 @@ export const userRecoveryEnvelopeSchema = z.object({
 })
 export type UserRecoveryEnvelope = z.infer<typeof userRecoveryEnvelopeSchema>
 
+/**
+ * `POST /api/recovery-group/shares/liveness/challenge` — ask for a fresh,
+ * single-use challenge to prove possession of this hub's share against.
+ * The holder is the authenticated caller; issuing a new challenge replaces any
+ * outstanding one.
+ */
+export const shareLivenessChallengeRequestSchema = z.object({
+  hubId: z.string().uuid(),
+})
+export type ShareLivenessChallengeRequest = z.infer<typeof shareLivenessChallengeRequestSchema>
+
+export const shareLivenessChallengeResponseSchema = z.object({
+  /** 32 random bytes, hex. Valid once, until `expiresAt`. */
+  challenge: hex(32),
+  expiresAt: z.string(),
+})
+export type ShareLivenessChallengeResponse = z.infer<typeof shareLivenessChallengeResponseSchema>
+
+/**
+ * `POST /api/recovery-group/shares/liveness` — a liveness proof (#2782).
+ *
+ * `proof` is the 64-byte Ed25519 signature (hex) produced by
+ * `recovery_liveness::sign_liveness_proof` with the key derived from the
+ * holder's share, over (hubId, holder pubkey, challenge). The server verifies
+ * it against the holder's enrolled `livenessPublicKey` and consumes the
+ * challenge; the share itself never leaves the device.
+ */
 export const shareLivenessProofSchema = z.object({
   hubId: z.string().uuid(),
-  proof: z.string(),
+  challenge: hex(32),
+  proof: hex(64),
 })
 export type ShareLivenessProof = z.infer<typeof shareLivenessProofSchema>
+
+export const shareLivenessProofResponseSchema = z.object({
+  ok: z.boolean(),
+  verifiedAt: z.string(),
+})
+export type ShareLivenessProofResponse = z.infer<typeof shareLivenessProofResponseSchema>
 
 /**
  * `GET /api/recovery-group/shares/my` — the calling holder's own share.
