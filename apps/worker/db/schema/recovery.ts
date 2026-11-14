@@ -10,6 +10,7 @@ import { sql } from 'drizzle-orm'
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   pgTable,
@@ -81,7 +82,24 @@ export const hubRecoveryGroupShares = pgTable(
       .references(() => hubRecoveryGroups.hubId, { onDelete: 'cascade' }),
     holderPubkey: text('holder_pubkey').notNull(),
     shareEnvelope: text('share_envelope').notNull(),
+    /**
+     * Hex Ed25519 public key derived from this holder's Shamir share by the
+     * enrolling client (`recovery_liveness::liveness_public_key`, #2782). The
+     * verifier for liveness proofs — it reveals nothing that narrows the share.
+     *
+     * Nullable only for the expand phase (docs/runbooks/migrations.md): the
+     * previous release inserts share rows without it. The enroll and rotate
+     * APIs require it, and a row without one cannot be proven live (the
+     * challenge endpoint refuses it) until the group is rotated. Contract to
+     * NOT NULL once no deployed release writes rows without it.
+     */
+    livenessPublicKey: text('liveness_public_key'),
+    /** Last VERIFIED liveness proof. Cleared by a proof that fails to verify. */
     lastLivenessProof: timestamp('last_liveness_proof', {
+      withTimezone: true,
+    }),
+    /** Last liveness proof that did NOT verify — surfaced to admins. */
+    lastLivenessFailure: timestamp('last_liveness_failure', {
       withTimezone: true,
     }),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -90,6 +108,40 @@ export const hubRecoveryGroupShares = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.hubId, table.holderPubkey] }),
+  ],
+)
+
+// ---------------------------------------------------------------------------
+// recovery_liveness_challenges
+// ---------------------------------------------------------------------------
+
+/**
+ * Outstanding single-use liveness challenges (#2782) — at most one per holder
+ * per hub (the primary key), so issuing a new challenge replaces the old one
+ * and the table is bounded by the number of enrolled holders.
+ *
+ * Cascades from the holder's share row: rotating or re-enrolling a group (which
+ * replaces every share row) invalidates every challenge issued against it.
+ */
+export const recoveryLivenessChallenges = pgTable(
+  'recovery_liveness_challenges',
+  {
+    hubId: text('hub_id').notNull(),
+    holderPubkey: text('holder_pubkey').notNull(),
+    /** 32 random bytes, hex. */
+    challenge: text('challenge').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.hubId, table.holderPubkey] }),
+    foreignKey({
+      name: 'recovery_liveness_challenges_share_fk',
+      columns: [table.hubId, table.holderPubkey],
+      foreignColumns: [hubRecoveryGroupShares.hubId, hubRecoveryGroupShares.holderPubkey],
+    }).onDelete('cascade'),
   ],
 )
 
