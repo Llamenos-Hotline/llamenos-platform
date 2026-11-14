@@ -6,7 +6,7 @@
  *
  * A function is only "resolved" here if it follows the two conventions this
  * codebase actually uses:
- *   - the path is a string or template literal, optionally wrapped in `hp(...)`
+ *   - the path is a string or template literal, optionally wrapped in `hp(...)`, `activeHubPath(...)` or `hubPath(hubId, ...)`
  *   - the call is `request<T>(path, { method, body })` or, when the generic is
  *     omitted, `request(path, ...)` inside a function with an explicit
  *     `Promise<T>` return type (TypeScript's contextual typing fills in T —
@@ -44,7 +44,7 @@ export interface ClientCall {
   method: HttpMethod
   /** Path pattern with `${expr}` substitutions rendered as `:param`, query string stripped. */
   pathPattern: string
-  /** Whether `hp(...)` wrapped the path — i.e. this call is hub-scope-aware. */
+  /** Whether a hub-scoping helper wrapped the path — i.e. this call is hub-scope-aware. */
   hubScoped: boolean
   bodyType?: TypeDescriptor
   responseType?: TypeDescriptor
@@ -65,10 +65,19 @@ function apiClientFiles(): string[] {
   return files
 }
 
-/** Unwrap `hp(x)` to `x`; returns whether it was wrapped. */
+/**
+ * Unwrap the hub-scoping helpers to the bare path: `hp(x)`, `activeHubPath(x)` and
+ * `hubPath(hubId, x)`. Returns whether the path was wrapped.
+ */
 function unwrapHp(expr: ts.Expression): { inner: ts.Expression; hubScoped: boolean } {
-  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === 'hp' && expr.arguments[0]) {
-    return { inner: expr.arguments[0], hubScoped: true }
+  if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression)) {
+    const name = expr.expression.text
+    if ((name === 'hp' || name === 'activeHubPath') && expr.arguments[0]) {
+      return { inner: expr.arguments[0], hubScoped: true }
+    }
+    if (name === 'hubPath' && expr.arguments[1]) {
+      return { inner: expr.arguments[1], hubScoped: true }
+    }
   }
   return { inner: expr, hubScoped: false }
 }
