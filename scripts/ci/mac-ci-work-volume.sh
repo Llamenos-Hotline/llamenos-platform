@@ -125,7 +125,10 @@ runner_roots() {
   local d
   # shellcheck disable=SC2086  # the glob is the point
   for d in $RUNNER_GLOB; do
-    [ -d "$d" ] && [ -f "$d/.runner" ] && printf '%s\n' "$d"
+    # An install that has run jobs: its `_work` exists. A configured-but-never-
+    # used install (a registration that was since removed) has none, and gets
+    # no link made for it.
+    [ -d "$d" ] && [ -f "$d/.runner" ] && { [ -e "$d/_work" ] || [ -L "$d/_work" ]; } && printf '%s\n' "$d"
   done
   return 0
 }
