@@ -231,7 +231,10 @@ pub(crate) fn derive_provisioning_key(shared_secret: &[u8]) -> [u8; 32] {
 ///
 /// SAS = HKDF(ikm=shared_secret, salt=SAS_SALT, info=SAS_INFO, len=4) → first 4 bytes → mod 1_000_000.
 /// Returns formatted "XXX XXX" string.
-fn compute_sas(shared_secret: &[u8]) -> String {
+///
+/// The single implementation of the 6-digit provisioning SAS: the mobile
+/// `compute_sas_code` export delegates here.
+pub(crate) fn compute_sas(shared_secret: &[u8]) -> String {
     let hk = Hkdf::<Sha256>::new(Some(SAS_SALT.as_bytes()), shared_secret);
     let mut sas_bytes = [0u8; 4];
     hk.expand(SAS_INFO.as_bytes(), &mut sas_bytes)
@@ -594,6 +597,16 @@ mod tests {
     use crate::device_keys::{generate_device_keys, unlock_device_keys};
     use crate::hpke_envelope::{generate_x25519_keypair, hpke_open_key, hpke_seal_key};
     use crate::labels::LABEL_NOTE_KEY;
+
+    /// The provisioning SAS pinned to a vector computed outside this crate:
+    /// HKDF-SHA256(ikm = 0x11 * 32, salt = SAS_SALT, info = SAS_INFO, L = 4),
+    /// big-endian, mod 1_000_000, as "XXX XXX" (Python `hmac`/`hashlib`).
+    /// Every other SAS test compares two runs of this same function, so only
+    /// a fixed vector can catch a change to the derivation itself.
+    #[test]
+    fn compute_sas_matches_independent_vector() {
+        assert_eq!(compute_sas(&[0x11u8; 32]), "044 037");
+    }
 
     /// Build a device with two independently random seeds (PROTOCOL.md §2.11).
     fn primary_device() -> (DeviceSecrets, String, String) {
