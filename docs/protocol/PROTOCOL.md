@@ -2233,30 +2233,30 @@ Hub-only: there is no unscoped `/api/reports` (#2395). `metadata.reportTitle` an
 ### 4.11 Bans
 
 ```
-POST /api/bans
+POST /api/hubs/:hubId/bans
 Permission: bans:create
 Body: { "phone": string (E.164), "reason": string }
 Response: { "ban": BanEntry }
 
-GET /api/bans
+GET /api/hubs/:hubId/bans
 Permission: bans:read
 Response: { "bans": BanEntry[] }
 
 // BanEntry = { "phoneHash": string, "reason": string, "bannedBy": string, "bannedAt": string }
 // phoneHash is the §2.10 banHash for the hub: an opaque unban handle. No number, masked or not.
 
-POST /api/bans/bulk
+POST /api/hubs/:hubId/bans/bulk
 Permission: bans:bulk-create
 Body: { "phones": string[] (E.164), "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/:phoneHash
+DELETE /api/hubs/:hubId/bans/:phoneHash
 Permission: bans:delete
 Response: { "ok": true }
-// :phoneHash is the 64-hex handle from GET /api/bans. A number in the path is refused (400).
+// :phoneHash is the 64-hex handle from GET /api/hubs/:hubId/bans. A number in the path is refused (400).
 ```
 
-Hub-scoped: `/api/hubs/:hubId/bans/*`
+Hub-only: there is no unscoped `/api/bans` (#2463). It used to serve the platform list behind the hub permissions, so a missing hub meant "every hub". The platform list is §4.47, `/api/admin/bans`.
 
 ### 4.12 Settings
 
@@ -3843,34 +3843,34 @@ Hub-scoped: `/api/hubs/:hubId/retention/*`
 
 ### 4.47 Platform Bans
 
-Platform-scoped bans (cross-hub). Requires `bans:*-platform` permissions.
+Platform-scoped bans (cross-hub). Requires `bans:*-platform` permissions. Under `/api/admin/`, beside the platform audit chain and platform incidents (#2463). The platform scope is a named resource, never a hub request with the hub left out.
 
 ```
-GET    /api/bans/platform
+GET    /api/admin/bans
 Permission: bans:read-platform
 Query: ?limit=&offset=
 Response: { "bans": PlatformBan[], "total": number }
 
-POST   /api/bans/platform
+POST   /api/admin/bans
 Permission: bans:create-platform
 Body: { "phone": string (E.164), "reason": string }
 Response: { "ok": true }
 
-POST   /api/bans/platform/bulk
+POST   /api/admin/bans/bulk
 Permission: bans:create-platform
 Body: { "phones": string[], "reason": string }
 Response: { "ok": true, "count": number }
 
-DELETE /api/bans/platform/:id
+DELETE /api/admin/bans/:id
 Permission: bans:delete-platform
 Response: { "ok": true }
 
-GET    /api/bans/platform/search
+GET    /api/admin/bans/search
 Permission: bans:read-platform
 Query: ?phone=<E.164>
 Response: { "bans": PlatformBan[] }
 
-POST   /api/bans/platform/promote
+POST   /api/admin/bans/promote
 Permission: bans:create-platform
 Body: { "banId": string, "phone": string (E.164) }
 Response: { "ok": true }
@@ -4461,8 +4461,8 @@ GET  /api/provider-templates
 ```
 GET  /api/settings/platform
 PATCH /api/settings/platform
-GET  /api/bans/platform
-POST /api/bans/platform
+GET  /api/admin/bans
+POST /api/admin/bans
 ```
 
 #### System & Analytics
@@ -4996,7 +4996,7 @@ The following endpoints are also implemented. See `apps/worker/routes/` for full
 - **`/api/provider-setup/*`** — Telephony/messaging provider configuration
 - **`/api/provider-templates/*`** — Provider template management
 - **`/api/hubs/:hubId/ring-groups/*`** — Call ring group management
-- **`/api/bans/platform/*`** — Platform-level ban management
+- **`/api/admin/bans/*`** — Platform-level ban management
 - **`/api/settings/platform/*`** — Platform-level settings
 - **`/api/signal-notification/*`** — Signal notifier integration
 - **`/api/hubs/:hubId/onboard/*`** — Hub onboarding flows

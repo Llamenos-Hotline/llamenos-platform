@@ -4,7 +4,7 @@
  * Replaces the DO-backed RecordsDO. The service never decrypts note content —
  * it stores and retrieves opaque encrypted blobs with their HPKE envelopes.
  */
-import { eq, and, desc, asc, sql, count, isNull, or } from 'drizzle-orm'
+import { eq, and, desc, asc, sql, count, or } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   notes,
@@ -14,7 +14,9 @@ import {
 } from '../db/schema'
 import type { AuditService } from './audit'
 import { ServiceError } from './settings'
-import type { BanHashes } from '../lib/crypto'
+import type { ScopedBanHash } from '../lib/crypto'
+import { scopeColumns, scopeWhere } from '../lib/owner-scope'
+import { assertNeverScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,7 +73,8 @@ export interface CreateReplyInput {
 }
 
 export interface AddBanInput {
-  hubId?: string
+  /** The list the ban goes on, stated by the caller and never inferred from a missing hub (#2463). */
+  scope: OwnerScope
   /** `banHash` of the number under this ban's scope. The number itself is never stored. */
   phoneHash: string
   reason: string
@@ -83,6 +86,23 @@ type NoteRow = typeof notes.$inferSelect
 type NoteReplyRow = typeof noteReplies.$inferSelect
 type BanRow = typeof bans.$inferSelect
 type ContactMetaRow = typeof contactMetadata.$inferSelect
+
+/** The unique index that dedupes a ban in this scope (see the `bans` table). */
+function banConflictTarget(scope: OwnerScope) {
+  switch (scope.kind) {
+    case 'hub':
+      return { target: [bans.hubId, bans.phone] }
+    case 'platform':
+      return { target: [bans.phone], where: sql`hub_id IS NULL` }
+    default:
+      return assertNeverScope(scope)
+  }
+}
+
+/** Rows matching any lookup, each hash compared only within its own scope. */
+function banLookupWhere(lookups: readonly ScopedBanHash[]) {
+  return or(...lookups.map(({ scope, phoneHash }) => and(eq(bans.phone, phoneHash), scopeWhere(bans.hubId, scope))))
+}
 
 // ---------------------------------------------------------------------------
 // Service
@@ -281,48 +301,31 @@ export class RecordsService {
   // -----------------------------------------------------------------------
 
   async addBan(input: AddBanInput): Promise<BanRow> {
-    const hubId = input.hubId || null  // normalize empty string to null
+    const { scope } = input
 
-    // Atomic idempotent insert (#1144). The previous implementation was
-    // SELECT-then-INSERT with no DB-level guard for the hub_id IS NULL
-    // case: the existing unique index is on (hub_id, phone), and in
-    // Postgres NULL <> NULL for uniqueness purposes, so platform-wide bans
-    // (hub_id IS NULL) were never deduped by the index at all — two
-    // concurrent bans for the same phone both inserted. Hub-scoped bans
-    // WERE covered by the index, but the insert itself was unguarded, so a
-    // concurrent duplicate there surfaced as an unhandled 23505 -> 500
-    // instead of the intended idempotent return.
-    //
-    // `bans_platform_phone_hash_idx` (a partial unique index on `phone`
-    // WHERE hub_id IS NULL, added alongside this fix) closes the first
-    // gap; onConflictDoNothing against whichever index actually applies
-    // closes the second.
+    // Atomic idempotent insert (#1144). Each scope has its own unique index:
+    // (hub_id, phone_hash) for a hub's list, and `bans_platform_phone_hash_idx`
+    // (phone_hash WHERE hub_id IS NULL) for the platform's, because Postgres
+    // treats NULLs as distinct, so the composite index never dedupes platform
+    // rows. The conflict target must be the index of the scope being written.
     const [ban] = await this.db
       .insert(bans)
       .values({
-        hubId,
+        ...scopeColumns(scope),
         phone: input.phoneHash,
         reason: input.reason,
         bannedBy: input.bannedBy,
       })
-      .onConflictDoNothing(
-        hubId
-          ? { target: [bans.hubId, bans.phone] }
-          : { target: [bans.phone], where: sql`hub_id IS NULL` },
-      )
+      .onConflictDoNothing(banConflictTarget(scope))
       .returning()
 
     if (ban) return ban
 
     // Conflict — the ban already exists; return it (idempotent).
-    const conditions = [
-      eq(bans.phone, input.phoneHash),
-      hubId ? eq(bans.hubId, hubId) : sql`${bans.hubId} IS NULL`,
-    ]
     const [existing] = await this.db
       .select()
       .from(bans)
-      .where(and(...conditions))
+      .where(and(eq(bans.phone, input.phoneHash), scopeWhere(bans.hubId, scope)))
 
     if (!existing) {
       // Should be unreachable — a conflict means a matching row exists —
@@ -333,15 +336,14 @@ export class RecordsService {
   }
 
   /**
-   * A scope's ban list: the hub's, or the platform's when there is no hub (the same
-   * scoping addBan, removeBan and checkBan use). It carries no number, masked or
-   * otherwise: `phoneHash` is an opaque handle for unbanning.
+   * One scope's ban list. It carries no number, masked or otherwise:
+   * `phoneHash` is an opaque handle for unbanning.
    */
-  async listBans(hubId?: string): Promise<{ bans: Array<{ phoneHash: string; reason: string | null; bannedBy: string | null; bannedAt: Date }> }> {
+  async listBans(scope: OwnerScope): Promise<{ bans: Array<{ phoneHash: string; reason: string | null; bannedBy: string | null; bannedAt: Date }> }> {
     const rows = await this.db
       .select()
       .from(bans)
-      .where(hubId ? eq(bans.hubId, hubId) : isNull(bans.hubId))
+      .where(scopeWhere(bans.hubId, scope))
       .orderBy(desc(bans.bannedAt))
     return {
       bans: rows.map(r => ({
@@ -354,10 +356,10 @@ export class RecordsService {
   }
 
   async bulkAddBans(
+    scope: OwnerScope,
     phoneHashes: string[],
     reason: string,
     bannedBy: string,
-    hubId?: string,
   ): Promise<number> {
     // RACE-13: Deduplicate within input, then INSERT...ON CONFLICT DO NOTHING
     // to handle concurrent imports atomically at the database level.
@@ -365,58 +367,47 @@ export class RecordsService {
 
     if (uniqueHashes.length === 0) return 0
 
+    const owner = scopeColumns(scope)
     const inserted = await this.db
       .insert(bans)
       .values(
         uniqueHashes.map((phoneHash) => ({
-          hubId: hubId || null,  // normalize empty string to null
+          ...owner,
           phone: phoneHash,
           reason,
           bannedBy,
         })),
       )
-      .onConflictDoNothing()
+      .onConflictDoNothing(banConflictTarget(scope))
       .returning({ id: bans.id })
 
     return inserted.length
   }
 
   /**
-   * Lift the ban on [phone] (the scope's keyed hash) in [hubId]'s list, or the
-   * platform list when no hub is given. Returns whether a ban was actually lifted, so
-   * the caller records an unban only when one happened (#2575).
+   * Lift the ban on [phoneHash] (the scope's keyed hash) in [scope]'s list. Returns
+   * whether a ban was actually lifted, so the caller records an unban only when one
+   * happened (#2575).
    */
-  async removeBan(phone: string, hubId?: string): Promise<boolean> {
-    const conditions = [eq(bans.phone, phone)]
-    if (hubId) {
-      conditions.push(eq(bans.hubId, hubId))
-    } else {
-      conditions.push(sql`${bans.hubId} IS NULL`)
-    }
-
+  async removeBan(scope: OwnerScope, phoneHash: string): Promise<boolean> {
     const removed = await this.db
       .delete(bans)
-      .where(and(...conditions))
+      .where(and(eq(bans.phone, phoneHash), scopeWhere(bans.hubId, scope)))
       .returning({ id: bans.id })
     return removed.length > 0
   }
 
   /**
-   * Whether a caller is banned by their hub's list or by the platform's. Each scope
-   * has its own key (`banHash`), so the candidate hashes are matched per scope: a
-   * hub's hash is only ever compared with that hub's rows, the platform's with the
-   * platform's.
+   * Whether any of the lookups matches a ban. Each lookup carries its own scope,
+   * because each scope has its own key (`banHash`): a hub's hash is only ever
+   * compared with that hub's rows, the platform's with the platform's.
    */
-  async checkBan(hashes: BanHashes, hubId?: string): Promise<boolean> {
-    const platform = and(eq(bans.phone, hashes.platform), isNull(bans.hubId))
-    const where = hubId && hashes.hub
-      ? or(and(eq(bans.phone, hashes.hub), eq(bans.hubId, hubId)), platform)
-      : platform
-
+  async checkBan(lookups: readonly ScopedBanHash[]): Promise<boolean> {
+    if (lookups.length === 0) return false
     const [row] = await this.db
       .select({ id: bans.id })
       .from(bans)
-      .where(where)
+      .where(banLookupWhere(lookups))
       .limit(1)
 
     return !!row
@@ -525,38 +516,36 @@ export class RecordsService {
     limit = 50,
     offset = 0,
   ): Promise<{ bans: BanRow[]; total: number }> {
+    const platform = scopeWhere(bans.hubId, PLATFORM_SCOPE)
     const [rows, [{ total }]] = await Promise.all([
       this.db
         .select()
         .from(bans)
-        .where(isNull(bans.hubId))
+        .where(platform)
         .orderBy(desc(bans.bannedAt))
         .limit(limit)
         .offset(offset),
       this.db
         .select({ total: count() })
         .from(bans)
-        .where(isNull(bans.hubId)),
+        .where(platform),
     ])
     return { bans: rows, total: Number(total) }
   }
 
-  /** Every ban matching one of the candidate (scope, hash) pairs; a null hubId is the platform scope. */
-  async searchBans(candidates: Array<{ hubId: string | null; phoneHash: string }>): Promise<BanRow[]> {
-    if (candidates.length === 0) return []
+  /** Every ban matching one of the lookups, each in its own scope. */
+  async searchBans(lookups: readonly ScopedBanHash[]): Promise<BanRow[]> {
+    if (lookups.length === 0) return []
     return this.db
       .select()
       .from(bans)
-      .where(or(...candidates.map(({ hubId, phoneHash }) => and(
-        eq(bans.phone, phoneHash),
-        hubId ? eq(bans.hubId, hubId) : isNull(bans.hubId),
-      ))))
+      .where(banLookupWhere(lookups))
   }
 
   async deletePlatformBan(banId: string): Promise<BanRow | null> {
     const [deleted] = await this.db
       .delete(bans)
-      .where(and(eq(bans.id, banId), isNull(bans.hubId)))
+      .where(and(eq(bans.id, banId), scopeWhere(bans.hubId, PLATFORM_SCOPE)))
       .returning()
     return deleted ?? null
   }

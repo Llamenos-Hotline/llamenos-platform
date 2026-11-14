@@ -17,6 +17,7 @@ import {
   suppressionHashes,
 } from './messaging-contact-hash'
 import { banHash, hashPhone } from './crypto'
+import { hubScope } from '@shared/owner-scope'
 
 const KEY = 'ab'.repeat(32) // gitleaks:allow
 const OTHER_KEY = 'cd'.repeat(32) // gitleaks:allow
@@ -62,7 +63,7 @@ describe('messagingContactHash', () => {
 
   it('shares nothing with the ban hash or the old HMAC_SECRET phone hash of the same number', () => {
     const hash = messagingContactHash(NUMBER, HUB_A, KEY)
-    expect(hash).not.toBe(banHash(NUMBER, HUB_A, KEY))
+    expect(hash).not.toBe(banHash(NUMBER, hubScope(HUB_A), KEY))
     expect(hash).not.toBe(hashPhone(NUMBER, KEY))
   })
 

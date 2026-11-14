@@ -1,17 +1,21 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
-import { request, hp, hubPath } from './client'
+import { request, activeHubPath, hubPath } from './client'
 import type { BanEntry } from '@protocol/schemas'
 
 export type { BanEntry }
 
 // --- Ban List ---
+//
+// A hub's ban list exists only under its hub (#2463): with no active hub these throw
+// NoActiveHubError instead of falling back to an unscoped path. The platform list is
+// a different resource, `/admin/bans` (lib/api/governance.ts).
 
 export async function listBans() {
-  return request<{ bans: BanEntry[] }>(hp('/bans'))
+  return request<{ bans: BanEntry[] }>(activeHubPath('/bans'))
 }
 
 export async function addBan(data: { phone: string; reason: string }) {
-  return request<{ ban: BanEntry }>(hp('/bans'), {
+  return request<{ ban: BanEntry }>(activeHubPath('/bans'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -27,11 +31,11 @@ export async function banAndHangup(callId: string, hubId: string, reason?: strin
 /** Lift a hub ban. Requires the admin's confirmation of exactly this ban (#2575). */
 export async function removeBan(phoneHash: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'ban', phoneHash)
-  return request<{ ok: true }>(hp(`/bans/${encodeURIComponent(phoneHash)}`), { method: 'DELETE' })
+  return request<{ ok: true }>(activeHubPath(`/bans/${encodeURIComponent(phoneHash)}`), { method: 'DELETE' })
 }
 
 export async function bulkAddBans(data: { phones: string[]; reason: string }) {
-  return request<{ count: number }>(hp('/bans/bulk'), {
+  return request<{ count: number }>(activeHubPath('/bans/bulk'), {
     method: 'POST',
     body: JSON.stringify(data),
   })

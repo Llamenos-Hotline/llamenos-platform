@@ -4,7 +4,7 @@ import type { AppEnv } from '../types'
 import type { Hub, MessagingChannelType, RecipientEnvelope } from '@shared/types'
 import { ALWAYS_ON_SHIFT } from '@shared/shifts'
 import { DEFAULT_HUB_TIMEZONE } from '@protocol/schemas/common'
-import { banHashes, sealCallerNumber } from '../lib/crypto'
+import { callBanLookup, sealCallerNumber } from '../lib/crypto'
 import { messagingContactHash } from '../lib/messaging-contact-hash'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
@@ -873,7 +873,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
   }
 
   // Check if the caller is banned (hash before lookup — mirrors real telephony flow)
-  const banned = await services.records.checkBan(banHashes(body.callerNumber, hubId, c.env.BAN_HASH_KEY), hubId)
+  const banned = await services.records.checkBan(callBanLookup(body.callerNumber, hubId, c.env.BAN_HASH_KEY))
   if (banned) {
     return c.json({ error: 'Caller is banned', banned: true }, 403)
   }

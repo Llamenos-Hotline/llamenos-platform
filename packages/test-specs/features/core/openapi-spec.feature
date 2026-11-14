@@ -56,8 +56,10 @@ Feature: OpenAPI Specification & Documentation
       | post   | /users            |
       | get    | /hubs/{hubId}/shifts           |
       | post   | /hubs/{hubId}/shifts           |
-      | get    | /bans             |
-      | post   | /bans             |
+      | get    | /hubs/{hubId}/bans             |
+      | post   | /hubs/{hubId}/bans             |
+      | get    | /admin/bans             |
+      | post   | /admin/bans             |
       | get    | /hubs/{hubId}/notes            |
       | post   | /hubs/{hubId}/notes            |
       | get    | /hubs/{hubId}/calls/active     |

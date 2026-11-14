@@ -7,16 +7,17 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { createHmac, hkdfSync } from 'node:crypto'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL } from '@shared/crypto-labels'
+import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
+import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 import {
   hashPhone,
   banHash,
-  banHashes,
-  PLATFORM_BAN_SCOPE,
+  callBanLookup,
   callerRateLimitDigest,
   sealCallerNumber,
   openCallerNumber,
@@ -536,34 +537,46 @@ describe('banHash', () => {
   const NUMBER = '+15551234567'
 
   it('is deterministic for one number, scope and key', () => {
-    expect(banHash(NUMBER, 'hub-1', KEY)).toBe(banHash(NUMBER, 'hub-1', KEY))
-    expect(banHash(NUMBER, 'hub-1', KEY)).toMatch(/^[0-9a-f]{64}$/)
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(banHash(NUMBER, hubScope('hub-1'), KEY))
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('differs per scope, so one hub, another hub and the platform cannot be compared', () => {
     const hashes = new Set([
-      banHash(NUMBER, 'hub-1', KEY),
-      banHash(NUMBER, 'hub-2', KEY),
-      banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
+      banHash(NUMBER, hubScope('hub-1'), KEY),
+      banHash(NUMBER, hubScope('hub-2'), KEY),
+      banHash(NUMBER, PLATFORM_SCOPE, KEY),
     ])
     expect(hashes.size).toBe(3)
   })
 
   it('differs per number and per key', () => {
-    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash('+15559876543', 'hub-1', KEY))
-    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(banHash(NUMBER, 'hub-1', 'c'.repeat(64)))
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).not.toBe(banHash('+15559876543', hubScope('hub-1'), KEY))
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).not.toBe(banHash(NUMBER, hubScope('hub-1'), 'c'.repeat(64)))
   })
 
   it('shares nothing with hashPhone, the hash conversations and threads use', () => {
-    expect(banHash(NUMBER, 'hub-1', KEY)).not.toBe(hashPhone(NUMBER, KEY))
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).not.toBe(hashPhone(NUMBER, KEY))
   })
 
-  it('banHashes gives the platform hash always and the hub hash only for a call that has a hub', () => {
-    expect(banHashes(NUMBER, 'hub-1', KEY)).toEqual({
-      hub: banHash(NUMBER, 'hub-1', KEY),
-      platform: banHash(NUMBER, PLATFORM_BAN_SCOPE, KEY),
-    })
-    expect(banHashes(NUMBER, undefined, KEY).hub).toBeUndefined()
+  it('callBanLookup checks a call against its hub and the platform, each under its own key', () => {
+    expect(callBanLookup(NUMBER, 'hub-1', KEY)).toEqual([
+      { scope: hubScope('hub-1'), phoneHash: banHash(NUMBER, hubScope('hub-1'), KEY) },
+      { scope: PLATFORM_SCOPE, phoneHash: banHash(NUMBER, PLATFORM_SCOPE, KEY) },
+    ])
+  })
+
+  it('keeps the key derivation it had before the scope was named, so no stored ban hash changes (#2463)', () => {
+    const reference = (keyScope: string) => {
+      const scopeKey = Buffer.from(hkdfSync('sha256', Buffer.from(KEY, 'hex'), Buffer.alloc(0), `${LABEL_BAN_KEY_DERIVE}:${keyScope}`, 32))
+      return createHmac('sha256', scopeKey).update(`${HMAC_BAN_PREFIX}${NUMBER}`).digest('hex')
+    }
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(reference('hub-1'))
+    expect(banHash(NUMBER, PLATFORM_SCOPE, KEY)).toBe(reference('platform'))
+  })
+
+  it('refuses a hub scope with no hub id rather than hashing under the hub-\'\' key', () => {
+    expect(() => hubScope('')).toThrow()
   })
 })
 

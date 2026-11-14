@@ -413,11 +413,11 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingBans = true, bansError = null) }
 
             try {
-                // Hub bans are `/api/bans` (hub-scoped), not under `/api/admin`, which
-                // carries only security-events and devices (#1149).
+                // A hub's ban list exists only under its hub (`/api/hubs/{id}/bans`, #2463).
+                // The platform list is a different resource, `/api/admin/bans`.
                 val response = apiService.request<BanListResponse>(
                     "GET",
-                    apiService.hp("/api/bans"),
+                    apiService.activeHubPath("/api/bans"),
                 )
                 _uiState.update {
                     it.copy(
@@ -457,7 +457,7 @@ class AdminViewModel @Inject constructor(
                     phone = phone.trim(),
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
-                apiService.requestNoContent("POST", apiService.hp("/api/bans"), request)
+                apiService.requestNoContent("POST", apiService.activeHubPath("/api/bans"), request)
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -474,7 +474,7 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(bansError = null) }
 
             try {
-                apiService.requestNoContent("DELETE", apiService.hp("/api/bans/$phoneHash"))
+                apiService.requestNoContent("DELETE", apiService.activeHubPath("/api/bans/$phoneHash"))
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -712,7 +712,7 @@ class AdminViewModel @Inject constructor(
                     phones = phones,
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
-                apiService.requestNoContent("POST", apiService.hp("/api/bans/bulk"), request)
+                apiService.requestNoContent("POST", apiService.activeHubPath("/api/bans/bulk"), request)
                 loadBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -1575,7 +1575,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingPlatformBans = true, platformBansError = null) }
             try {
-                val bansResponse = apiService.request<BanListResponse>("GET", "/api/bans/platform")
+                val bansResponse = apiService.request<BanListResponse>("GET", "/api/admin/bans")
                 _uiState.update {
                     it.copy(
                         isLoadingPlatformBans = false,
@@ -1609,7 +1609,7 @@ class AdminViewModel @Inject constructor(
                     identifier = identifierHash,
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
-                apiService.requestNoContent("POST", "/api/bans/platform", body)
+                apiService.requestNoContent("POST", "/api/admin/bans", body)
                 loadPlatformBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -1624,7 +1624,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(platformBansError = null) }
             try {
-                apiService.requestNoContent("DELETE", "/api/bans/platform/$banId")
+                apiService.requestNoContent("DELETE", "/api/admin/bans/$banId")
                 loadPlatformBans()
             } catch (e: Exception) {
                 _uiState.update {
@@ -1639,7 +1639,7 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(platformBansError = null) }
             try {
                 val response = apiService.request<BanListResponse>(
-                    "GET", "/api/bans/platform/search?q=$query",
+                    "GET", "/api/admin/bans/search?q=$query",
                 )
                 _uiState.update {
                     it.copy(platformBanSearchResults = response.bans)
@@ -1662,7 +1662,7 @@ class AdminViewModel @Inject constructor(
             _uiState.update { it.copy(platformBansError = null) }
             try {
                 apiService.requestNoContent(
-                    "POST", "/api/bans/platform/promote",
+                    "POST", "/api/admin/bans/promote",
                     PromoteBanBody(banID = banId, phone = phone.trim()),
                 )
                 loadPlatformBans()

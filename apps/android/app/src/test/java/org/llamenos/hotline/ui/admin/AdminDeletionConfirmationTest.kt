@@ -72,10 +72,10 @@ class AdminDeletionConfirmationTest {
                 bans.removeAll { it.getValue("phoneHash").jsonPrimitive.content == call.params["phoneHash"] }
                 json("""{"ok":true}""")
             },
-            Route("GET", "/api/bans/platform") {
+            Route("GET", "/api/admin/bans") {
                 json("""{"bans":${JsonArray(platformBans)},"total":${platformBans.size}}""")
             },
-            Route("DELETE", "/api/bans/platform/:id") { call ->
+            Route("DELETE", "/api/admin/bans/:id") { call ->
                 platformBans.removeAll { it.getValue("phoneHash").jsonPrimitive.content == call.params["id"] }
                 json("""{"ok":true}""")
             },
@@ -203,7 +203,7 @@ class AdminDeletionConfirmationTest {
         composeRule.onNodeWithTag("remove-platform-ban-$h").performClick()
         composeRule.onNodeWithTag("confirm-remove-platform-ban-button").performClick()
 
-        assertTrue("expected DELETE of the platform ban, saw ${routes.seen()}", routes.seen().contains("DELETE /api/bans/platform/$h"))
+        assertTrue("expected DELETE of the platform ban, saw ${routes.seen()}", routes.seen().contains("DELETE /api/admin/bans/$h"))
         assertTrue(platformBans.isEmpty())
     }
 

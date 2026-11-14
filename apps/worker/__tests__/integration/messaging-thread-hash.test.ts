@@ -40,6 +40,7 @@ import { eq } from 'drizzle-orm'
 import * as schema from '../../db/schema'
 import { createServices, type Services } from '../../services'
 import { banHash, hashPhone } from '../../lib/crypto'
+import { hubScope } from '@shared/owner-scope'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import type { AppEnv } from '../../types'
 import type { MessagingAdapter, IncomingMessage } from '../../messaging/adapter'
@@ -169,7 +170,7 @@ describe('a thread is named by a per-hub keyed hash', () => {
     expect(dump).not.toContain(SENDER)
     expect(dump).not.toContain(SENDER.slice(1))
     expect(dump).not.toContain(hashPhone(SENDER, HMAC_SECRET))
-    expect(dump).not.toContain(banHash(SENDER, HUB_A, BAN_HASH_KEY))
+    expect(dump).not.toContain(banHash(SENDER, hubScope(HUB_A), BAN_HASH_KEY))
 
     // The reply address is still there, sealed, and still opens.
     const [conv] = await fresh.db.select().from(schema.conversations).where(eq(schema.conversations.hubId, HUB_A))
