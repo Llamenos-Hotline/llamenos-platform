@@ -45,13 +45,6 @@ else
   fail "Cargo not found"
 fi
 
-# wasm-pack (for WASM builds)
-if command -v wasm-pack &>/dev/null; then
-  ok "wasm-pack $(wasm-pack --version 2>/dev/null | awk '{print $2}')"
-else
-  warn "wasm-pack not found — install for WASM builds: cargo install wasm-pack"
-fi
-
 # cargo-ndk (for Android builds)
 if command -v cargo-ndk &>/dev/null; then
   ok "cargo-ndk"
@@ -75,7 +68,6 @@ check_target() {
   fi
 }
 
-check_target "wasm32-unknown-unknown" "WASM"
 check_target "aarch64-apple-ios" "iOS device"
 check_target "aarch64-apple-ios-sim" "iOS simulator"
 check_target "aarch64-linux-android" "Android arm64"
