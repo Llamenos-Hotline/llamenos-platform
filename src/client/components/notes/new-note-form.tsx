@@ -25,12 +25,16 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
   const [manualCallId, setManualCallId] = useState('')
   const [text, setText] = useState('')
   const [fields, setFields] = useState<Record<string, string | number | boolean>>({})
+  const [callIdTouched, setCallIdTouched] = useState(false)
 
   useEffect(() => {
     if (currentCall && !callId) setCallId(currentCall.id)
   }, [currentCall, callId])
 
   const effectiveCallId = callId === '__manual' ? manualCallId : callId
+  // Save is disabled until a call/reference is given, so say why rather than leave a dead button.
+  const callIdMissing = !effectiveCallId.trim()
+  const showCallIdError = callIdMissing && (callIdTouched || text.trim().length > 0)
 
   function handleSave() {
     onSave(effectiveCallId, text, fields)
@@ -38,6 +42,7 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
     setCallId('')
     setManualCallId('')
     setFields({})
+    setCallIdTouched(false)
   }
 
   return (
@@ -50,10 +55,23 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="call-id">{t('notes.callId')}</Label>
+          <Label htmlFor="call-id">
+            {t('notes.callId')}
+            <span aria-hidden="true" className="text-destructive"> *</span>
+          </Label>
           {recentCalls.length > 0 ? (
-            <Select value={callId || undefined} onValueChange={setCallId}>
-              <SelectTrigger id="call-id" data-testid="call-id-select">
+            <Select
+              value={callId || undefined}
+              onValueChange={setCallId}
+              onOpenChange={open => { if (!open) setCallIdTouched(true) }}
+            >
+              <SelectTrigger
+                id="call-id"
+                data-testid="call-id-select"
+                aria-required="true"
+                aria-invalid={showCallIdError}
+                aria-describedby={showCallIdError ? 'call-id-error' : undefined}
+              >
                 <SelectValue placeholder={t('notes.selectCall')} />
               </SelectTrigger>
               <SelectContent>
@@ -71,7 +89,12 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
               data-testid="note-call-id"
               value={callId}
               onChange={e => setCallId(e.target.value)}
+              onBlur={() => setCallIdTouched(true)}
               placeholder={t('notes.callIdPlaceholder')}
+              required
+              aria-required="true"
+              aria-invalid={showCallIdError}
+              aria-describedby={showCallIdError ? 'call-id-error' : undefined}
             />
           )}
           {callId === '__manual' && (
@@ -79,8 +102,18 @@ export function NewNoteForm({ recentCalls, customFieldDefs, saving, onSave, onCa
               data-testid="note-call-id"
               value={manualCallId}
               onChange={e => setManualCallId(e.target.value)}
+              onBlur={() => setCallIdTouched(true)}
               placeholder={t('notes.callIdPlaceholder')}
+              required
+              aria-required="true"
+              aria-invalid={showCallIdError}
+              aria-describedby={showCallIdError ? 'call-id-error' : undefined}
             />
+          )}
+          {showCallIdError && (
+            <p id="call-id-error" role="alert" data-testid="note-call-id-error" className="text-xs text-destructive">
+              {t('notes.callIdRequired')}
+            </p>
           )}
           {currentCall && callId === currentCall.id && (
             <p className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">

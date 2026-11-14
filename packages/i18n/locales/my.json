@@ -799,6 +799,7 @@
     "callId": "ခေါ်ဆိုမှု ID",
     "callIdBadge": "ခေါ်ဆိုမှု",
     "callIdPlaceholder": "ခေါ်ဆိုမှု ID သို့မဟုတ် ကိုးကား",
+    "callIdRequired": "ဤမှတ်စု သက်ဆိုင်ရာ ခေါ်ဆိုမှု ID သို့မဟုတ် ကိုးကားချက်ကို ထည့်ပါ။",
     "callWith": "{{number}} နှင့် ခေါ်ဆိုမှု",
     "chatIdBadge": "ချတ်",
     "conversationBadge": "ချတ်",

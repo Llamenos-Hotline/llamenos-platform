@@ -799,6 +799,7 @@
     "callId": "የጥሪ መለያ",
     "callIdBadge": "ጥሪ",
     "callIdPlaceholder": "የጥሪ መለያ ወይም ማጣቀሻ",
+    "callIdRequired": "ይህ ማስታወሻ የሚመለከተውን የጥሪ መለያ ወይም ማጣቀሻ ያስገቡ።",
     "callWith": "ከ {{number}} ጋር ጥሪ",
     "chatIdBadge": "ቻት",
     "conversationBadge": "ቻት",

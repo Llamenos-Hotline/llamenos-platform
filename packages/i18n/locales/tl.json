@@ -2664,6 +2664,7 @@
     "callId": "ID ng Tawag",
     "callIdBadge": "Call",
     "callIdPlaceholder": "ID ng tawag o reference",
+    "callIdRequired": "Ilagay ang call ID o reference na kinabibilangan ng note na ito.",
     "callWith": "Tawag sa {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",

@@ -99,6 +99,7 @@ export const TestIds = {
   NOTE_SEARCH: 'note-search',
   NOTE_FORM: 'note-form',
   NOTE_CALL_ID: 'note-call-id',
+  NOTE_CALL_ID_ERROR: 'note-call-id-error',
   CALL_ID_SELECT: 'call-id-select',
   CALL_ID_MANUAL_OPTION: 'call-id-manual-option',
   NOTE_CONTENT: 'note-content',
