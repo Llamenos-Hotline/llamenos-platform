@@ -46,9 +46,9 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 (baseline 358, plus 2 new, minus 1 removed), clippy `-D warnings` clean with and without `mobile`,
 `fmt --check` clean, `cargo check --features server` clean, and `kotlin-bindings.sh check` OK.
 
-## Issues to file (one per independently landable unit)
+## Issues filed (one per independently landable unit)
 
-### C4 — Two HPKE envelope encodings; every host rebuilds `labelId`
+### C4 — Two HPKE envelope encodings; every host rebuilds `labelId` — #2771
 
 - **Today.** `HpkeEnvelope {v, labelId, enc, ct}` is base64url (`hpke_envelope.rs:76`). The stored note,
   message and record key envelopes are `KeyEnvelope {enc, ct}` and `RecipientKeyEnvelope {pubkey, enc, ct}`
@@ -78,7 +78,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
   **Effort:** (a) small to medium, (b) medium. **Worth it:** yes. (a) is unambiguous. (b) is cheap now and
   expensive after M2.
 
-### C5 — Desktop `CryptoState` re-implements crate functions inline
+### C5 — Desktop `CryptoState` re-implements crate functions inline — #2766
 
 - **Today.** `apps/desktop/src/crypto.rs` (2720 lines):
   - `encrypt_hub_field` / `decrypt_hub_field` (`:916-985`) are a byte-for-byte copy of `encryption::encrypt_hub_field` / `decrypt_hub_field` (`encryption.rs:483-506`). The crate's own doc says it is "identical to the desktop Tauri command".
@@ -91,7 +91,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Blast radius.** Desktop only, plus `tests/mocks/tauri-core.ts`, which mirrors it. **Wire-format
   change:** no. **Effort:** small. **Worth it:** yes.
 
-### C6 — Desktop Shamir is a second implementation, and its commitment has no domain separation (BUG)
+### C6 — Desktop Shamir is a second implementation, and its commitment has no domain separation (BUG) — #2764
 
 - **Today.** `apps/desktop/src/crypto.rs:992-1165` re-implements GF(2^8) Shamir (`gf256_mul`, `gf256_inv`,
   `shamir_split`, `shamir_combine`). Its `shamir_commit` (`:1146`) is `SHA-256(x ‖ y)`. The crate's
@@ -106,7 +106,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
   commitments only, which are already incompatible with every other platform. Pre-production, so no
   migration is needed. **Effort:** small. **Worth it:** yes, and before any recovery-group data exists.
 
-### C7 — Desktop provisioning commands predate #1865 and pass a pubkey where a claim is expected
+### C7 — Desktop provisioning commands predate #1865 and pass a pubkey where a claim is expected — #2765
 
 - **Today.** `provision_decrypt_and_import` (`crypto.rs:1619-1644`) passes `primary_enc_pubkey_hex`
   into the `claim_hex` parameter of `provisioning::decrypt_provisioned_bundle` (`provisioning.rs:484-486`).
@@ -121,7 +121,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Preserves, and restores.** The signed-claim binding (#1865) on the desktop new-device path.
 - **Wire-format change:** no. **Effort:** small. **Worth it:** yes, before the flow is wired.
 
-### C8 — Mobile device-linking FFI implements the pre-#1865 protocol and puts secrets in host memory
+### C8 — Mobile device-linking FFI implements the pre-#1865 protocol and puts secrets in host memory — #2767
 
 - **Today.**
   - iOS uses `generate_ephemeral_keypair_mobile` (`ffi_v3.rs:1085`, whose doc says "the secret IS exposed") and `compute_shared_x_hex` (`ffi.rs:129`). The ephemeral X25519 secret and the raw ECDH output both sit in Swift (`CryptoService.swift:147-167`).
@@ -137,7 +137,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Wire-format change:** no; it adopts the existing #1865 format. **Effort:** medium, iOS + Android +
   crate. **Worth it:** yes. Mobile linking cannot work today in any case.
 
-### C9 — Event decryption: seven implementations, two formats, keys in host memory
+### C9 — Event decryption: seven implementations, two formats, keys in host memory — #2768
 
 - **Today.**
   - Hub-key events use AAD `LABEL_HUB_EVENT`, in `ffi_v3.rs:870` `mobile_decrypt_hub_event`, `:905` `…_with_attribution`, `:1120` `…_trial` (a functional duplicate of `with_attribution`, per its own doc), and desktop `crypto.rs:880`.
@@ -153,7 +153,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Wire-format change:** no, if the bytes are kept. Deleting a whole format would be a protocol decision.
   **Effort:** medium. **Worth it:** yes.
 
-### C10 — UniFFI surface: unused exports, duplicates, and iOS/Android divergence
+### C10 — UniFFI surface: unused exports, duplicates, and iOS/Android divergence — #2769
 
 - **No consumer on either platform:** `hpke_wrap_key_hex`, `hpke_unwrap_key_hex`,
   `encrypt_note_for_recipients`, `mobile_wake_key_pubkey`, `encrypt_with_pin`, `decrypt_with_pin`,
@@ -169,7 +169,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Wire-format change:** no. Regenerate the Kotlin binding with `kotlin-bindings.sh sync`.
   **Effort:** small. **Worth it:** yes.
 
-### C11 — Second PIN-storage format and a dead export cipher
+### C11 — Second PIN-storage format and a dead export cipher — #2770
 
 - **Today.** `encryption.rs:533-637` defines `EncryptedKeyData`, `derive_kek_from_pin`,
   `encrypt_with_pin`, `decrypt_with_pin` and `is_valid_pin`. The format has a vestigial `iterations`
@@ -183,7 +183,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Preserves.** No live data uses the format. The remaining format is the stronger one.
 - **Wire-format change:** no live format changes. **Effort:** small. **Worth it:** yes, and cheap now.
 
-### C12 — One AEAD helper and one RNG helper
+### C12 — One AEAD helper and one RNG helper — #2772
 
 - **Today.** 29 non-test `Aes256Gcm::new_from_slice` call sites in the crate, plus 5 in desktop, each
   re-implementing `nonce(12) ‖ ct ‖ tag(16)` packing, the `< 28` length check and nonce generation. There
@@ -196,7 +196,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Wire-format change:** no. **Effort:** medium; it touches most modules. **Worth it:** yes, after
   C5/C9 have removed the call sites that are going away anyway.
 
-### C13 — `CryptoError` is flat and stringly
+### C13 — `CryptoError` is flat and stringly — #2773
 
 - **Today.** `flat_error` (`errors.rs:7`) means hosts get only a message. `InvalidInput(String)` and
   `InvalidFormat(String)` carry dozens of distinct conditions, `InvalidFormat` alone at 47 sites.
@@ -209,7 +209,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Wire-format change:** no, though the error ABI changes. **Effort:** medium. **Worth it:** later,
   alongside C10.
 
-### C14 — Labels with no consumer, some naming data the encryption scope covers (privacy)
+### C14 — Labels with no consumer, some naming data the encryption scope covers (privacy) — #2774 (and #1876)
 
 - **Today.** 31 of 109 labels in `crypto-labels.json` have no reference in the crate or in any
   hand-written consumer. These include `LABEL_SHIFT_NAME`, `LABEL_RING_GROUP_NAME`,
@@ -221,7 +221,7 @@ Verification: `crypto:test` 313 passed (baseline 312, plus 1 golden), `crypto:te
 - **Verdict on the registry itself:** leave it alone. Tombstoning unused entries is a wire-format change
   with near-zero benefit. The defect is the missing consumers, not the strings.
 
-### C15 — Docs describe a key hierarchy that does not exist
+### C15 — Docs describe a key hierarchy that does not exist — #2775
 
 The root `CLAUDE.md` "E2EE notes" bullet describes "PUK → items_key → per-note content key (cascading
 lazy key rotation)". In code, notes wrap a random per-note key directly for each reader with HPKE
