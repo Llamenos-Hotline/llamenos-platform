@@ -105,19 +105,59 @@ bun packages/test-specs/tools/audit-silent-steps.ts --json        # machine-read
 
 ### The ratchet
 
-Like `COVERAGE_THRESHOLDS`, the audit's `BASELINE` (in
-`tools/audit-silent-steps.ts`) is a count that may only move DOWN. Exit
-code is non-zero when a platform's current count exceeds its baseline —
-proven during development by appending an empty `Then` step to
-`tests/steps/crypto/crypto-steps.ts`, watching the desktop-backend count
-go from 52 to 53 and the run exit 1, then reverting it.
+The ratchet is a **per-step list**, not a count: `tools/silent-steps.baseline.json`
+names every known offender by platform, file, keyword, pattern and reason (not
+line number, which moves), and the run fails — naming the step — on any finding
+that is not listed. Exit code is non-zero on such a finding.
 
-Baseline measured 2026-10-08, when this audit was introduced:
+It used to be one number per platform (`BASELINE`: 52 desktop/backend, 87
+Android, measured 2026-10-08). That failed in exactly the way a count does: it
+cannot tell a step that was fixed from a step that was added, so each fix made
+room for a new offender, and with nothing running it the counts drifted until
+it exited 1 on unmodified `main` (53/52 and 93/87, #2678). Unpicking the drift
+(`git` history of the step files against the 2026-10-08 tree) showed three
+different things behind it:
 
-| Platform | Findings | Disposition |
-|---|---|---|
-| `desktop-backend` | 52 | Filed as [#1747](https://github.com/Llamenos-Hotline/llamenos-platform/issues/1747) (not fixed here — none fall under `tests/steps/crypto/`, which this lane owns and which the audit confirms already carries zero violations under the #1222 rule; the rest are in desktop/backend-owned step files this lane has no write access to). |
-| `android` | 87 | Handed to [#765](https://github.com/rhonda-rodododo/llamenos-platform/issues/765) (Android substitute/empty-step sweep), which already owns fixing this exact category. |
+- **Nine of the added "silent" steps asserted, loudly, through helpers the audit
+  did not recognise** — `SimulationClient.awaitServerState`, `awaitSwitchState`,
+  `waitForNode`, `composeRule.waitUntil`, Playwright's `waitForURL`. Each throws
+  when the outcome never happens. They are now counted as assertions
+  (`KOTLIN_THROWING_WAIT_HELPERS`), and a test re-reads every Kotlin helper's
+  definition and fails if it stops throwing, so the allow-list is a checked claim.
+  The same recognition also clears older steps that were false positives for the same reason.
+- **Two backend `Given` steps that are deliberately empty** (the `workerHub` fixture
+  already did the work). They are `exempt` in the baseline, each with its reason.
+  An exemption is the only way to be empty on purpose; a bigger `known` is not.
+- **One Android `When` that is a real gap** (`I set a future send time`: Android has
+  no send-time picker). It stays in `known` as debt.
+
+To lock in progress after fixing a step: `bun packages/test-specs/tools/audit-silent-steps.ts --write-baseline`.
+A baseline entry the code no longer produces is reported as *stale* but is not
+fatal, so two PRs that each fix a step do not fail each other in the merge queue.
+Regenerating the baseline is never the answer to a red run.
+
+### Vacuous assertions (#2678)
+
+An assertion that cannot fail is a different silent pass from one that is
+missing, and the "contains an `assert…(` call" test passes it. The audit now
+reports a `Then` whose **only** assertions are vacuous, reason
+`vacuous-assertion`:
+
+- `expect(true).toBeTruthy()` / `.toBe(true)` (and `false` mirrors); `assertTrue(true)`.
+- `assertAnyTagDisplayed(a, b, …)` where one alternative is a screen **anchor**
+  (`dashboard-title`, `create-identity`). An any-of is as strong as its weakest
+  alternative, and an anchor is present on the screen the step is already on —
+  `("recent-notes-card", "dashboard-title")` passes on any dashboard. This is the
+  shape of the `KeyImportSteps` assertions the issue named; those two Android
+  steps were bound by no scenario and are deleted. A *lone* anchor is allowed
+  ("I am on the dashboard" is a fair thing to assert).
+
+The anchor list is a judgement about the app, so it is explicit
+(`KOTLIN_SCREEN_ANCHOR_TAGS`). A static check cannot know that an arbitrary tag is
+always present; an always-true assertion that does not fit these shapes is not
+found. The 189 steps the rule found on first run are in the baseline as debt —
+most are the `assertAnyTagDisplayed("pin-pad", "dashboard-title")` pattern in
+Android steps — and they only ever leave.
 
 ### Swallowed failures (#2675)
 
@@ -184,26 +224,16 @@ correctly-named Swift test (a percentage ratchet); Android is credited only when
 the scenario is shipped and bound (the `android-dead-tags.baseline.json`
 ratchet). A tag with nothing behind it is reported as uncovered, not dropped.
 
-### Known limitation: CI wiring
+### CI wiring
 
-The script is deterministic, self-contained and directly runnable
-(`bun run test-specs:audit-silent-steps`, added to root `package.json` in
-#2675); its exit code distinguishes a passing from a failing ratchet. What it
-does **not** have is a step in `.github/workflows/ci.yml`, which is reserved to
-`@rhonda-rodododo` in `CODEOWNERS` and outside every lane's write grant. Wiring
-it is a two-line change:
+`.github/workflows/ci.yml` is reserved to `@rhonda-rodododo` in `CODEOWNERS`, so it
+does not call this script — but it does run `bun run test:repo`, which runs
+`bun test packages/test-specs/tools/`. `audit-silent-steps.test.ts` has a *repo
+contract* block that runs the real audit against the real step files and fails on
+a silent step outside the baseline, on an exemption with no reason, or on the
+swallowed-failure ratchet being exceeded. That is the CI wiring (#2678): the guard
+runs on every PR, with no workflow change. Calling the script directly
+(`bun run test-specs:audit-silent-steps`) remains an equivalent, optional step.
 
-```yaml
-# .github/workflows/ci.yml, next to the "Validate test-specs coverage" step
-- name: Audit silent-pass BDD steps
-  run: bun run test-specs:audit-silent-steps
-```
-
-**Do that only after the first ratchet is reconciled.** Because nothing runs
-the script, its silent-pass baselines have drifted: on 2026-11-10 it reports 53
-desktop/backend (baseline 52) and 93 Android (baseline 87) and exits 1 on an
-unmodified `main`. Wiring it in as-is would turn CI red on code nobody touched;
-raising the baseline to match would be the "never to make a red run green" move
-the ratchet forbids. The drift is the finding — someone has to fix, or
-consciously triage, the seven added silent steps first. The swallowed-failure
-ratchet added in #2675 is exact today.
+Proven by injecting an unasserting `@Then` into an Android step file: the script
+exited 1 naming it, and the repo-contract test failed; then reverted.
