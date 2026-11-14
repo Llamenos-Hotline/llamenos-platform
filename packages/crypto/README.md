@@ -1,13 +1,16 @@
 # packages/crypto
 
-Shared Rust cryptographic core for Llamenos. All cryptographic operations are implemented **once** in this crate and compiled to three targets:
+Shared Rust cryptographic core for Llamenos. All cryptographic operations are implemented **once** in this crate and compiled to three targets (native, UniFFI, and a C-ABI `cdylib` for the server):
 
 | Target | How | Used by |
 |--------|-----|---------|
 | Native Rust | Path dependency in `apps/desktop/Cargo.toml` | Tauri desktop (keys never enter webview) |
 | UniFFI XCFramework | `./scripts/build-mobile.sh ios` | iOS SwiftUI client |
 | UniFFI JNI `.so` | `./scripts/build-mobile.sh android` | Android Kotlin/Compose client |
-| WASM | `wasm-bindgen` (test builds only) | Browser mock layer for Playwright |
+| C-ABI `cdylib` (`--features server`) | `./scripts/build-server.sh`, loaded by `ffi.ts` via `bun:ffi` | Bun backend (`apps/worker`) |
+
+There is no WASM build. The Playwright test build does not load this crate at all: it
+aliases the Tauri IPC layer to the JavaScript mock in `tests/mocks/`.
 
 ## What it provides
 
@@ -15,9 +18,9 @@ Shared Rust cryptographic core for Llamenos. All cryptographic operations are im
 - **Ed25519/X25519 device keys** — per-device signing + encryption keypairs; PIN-protected storage via Argon2id
 - **Sigchain** — append-only, hash-chained, Ed25519-signed device authorization log
 - **PUK (Per-User Key)** — user-level key hierarchy with Cascading Lazy Key Rotation (CLKR)
-- **57 domain separation labels** — Albrecht defense; enforced at decrypt
+- **Domain separation labels** — Albrecht defense; enforced at decrypt. The label strings live in `../protocol/crypto-labels.json`; the numeric `labelId` is the index into `LABEL_REGISTRY` (`src/labels.rs`), pinned append-only by `label-registry.wire.snapshot`. Do not restate the count anywhere — it changes.
 - **Blind indexing** — HMAC-SHA256-based server-side search over encrypted data
-- **MLS** (RFC 9420, OpenMLS 0.9) — group key management for hub state
+- **MLS** (RFC 9420, OpenMLS 0.9) — group key management for hub state, behind the default-off `mls` feature
 - **SFrame** — voice E2EE key derivation
 - **Payload padding** — power-of-2 bucketing for traffic analysis resistance
 
@@ -32,7 +35,7 @@ bun run crypto:fmt            # format check
 
 # Mobile
 ./scripts/build-mobile.sh ios      # → LlamenosCoreFFI.xcframework
-./scripts/build-mobile.sh android  # → libllamenos_crypto.so (multiple ABIs)
+./scripts/build-mobile.sh android  # → libllamenos_core.so (multiple ABIs)
 ```
 
 ## Key rules

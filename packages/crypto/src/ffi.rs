@@ -4,18 +4,16 @@
 //! and `Vec<T>` parameters for functions that use slices (`&[T]`).
 //!
 //! These are the only versions visible to Swift/Kotlin via UniFFI bindings.
-//! The original functions remain available for direct Rust consumers (Tauri, WASM).
+//! The original functions remain available for direct Rust consumers (the Tauri
+//! desktop shell links the crate natively).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::encryption::{
-    derive_kek_from_pin, encrypt_note, random_bytes_32, EncryptedNote, KeyEnvelope,
-};
+use crate::encryption::{encrypt_note, random_bytes_32, EncryptedNote, KeyEnvelope};
 use crate::errors::CryptoError;
 use crate::hpke_envelope;
-use crate::labels::{SAS_INFO, SAS_SALT};
 use zeroize::Zeroize;
 
 /// RACE-12: Recovery key entry with TTL tracking.
@@ -111,16 +109,6 @@ pub fn encrypt_note_for_recipients(
     encrypt_note(payload_json, author_pubkey, &admin_pubkeys)
 }
 
-/// Derive a 32-byte KEK from a credential using Argon2id, returned as hex.
-#[allow(dead_code)]
-pub(crate) fn derive_kek_hex(credential: &str, salt_hex: &str) -> Result<String, CryptoError> {
-    let salt = hex::decode(salt_hex).map_err(CryptoError::HexError)?;
-    let mut kek = derive_kek_from_pin(credential, &salt);
-    let hex_out = hex::encode(kek);
-    kek.zeroize();
-    Ok(hex_out)
-}
-
 /// Compute the X25519 shared secret for device provisioning.
 ///
 /// X25519 public keys are always 32 bytes (x-only Montgomery-form u-coordinate).
@@ -211,24 +199,16 @@ pub fn decrypt_with_shared_key_hex(
 /// Derive a 6-digit SAS code from an ECDH shared secret.
 #[uniffi::export]
 pub fn compute_sas_code(shared_x_hex: &str) -> Result<String, CryptoError> {
-    use hkdf::Hkdf;
-    use sha2::Sha256;
-
-    let shared_x = hex::decode(shared_x_hex).map_err(CryptoError::HexError)?;
+    // The derivation is `provisioning::compute_sas` — the one the provisioning
+    // flow itself uses — so the code mobile displays cannot drift from it.
+    // (A `//` comment, not `///`: UniFFI copies doc comments into the tracked
+    // Kotlin binding, and this note is about the Rust side only.)
+    let shared_x =
+        zeroize::Zeroizing::new(hex::decode(shared_x_hex).map_err(CryptoError::HexError)?);
     if shared_x.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
     }
-
-    let hk = Hkdf::<Sha256>::new(Some(SAS_SALT.as_bytes()), &shared_x);
-    let mut okm = [0u8; 4];
-    hk.expand(SAS_INFO.as_bytes(), &mut okm)
-        .expect("HKDF 4-byte expand should not fail");
-
-    let num =
-        ((okm[0] as u32) << 24 | (okm[1] as u32) << 16 | (okm[2] as u32) << 8 | (okm[3] as u32))
-            % 1_000_000;
-    let code = format!("{num:06}");
-    Ok(format!("{} {}", &code[..3], &code[3..]))
+    Ok(crate::provisioning::compute_sas(&shared_x))
 }
 
 /// Decrypt a server-encrypted event payload (AES-256-GCM).
@@ -304,19 +284,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decrypted, payload);
-    }
-
-    #[test]
-    fn derive_kek_via_ffi() {
-        let salt_hex = hex::encode([0xABu8; 16]);
-        let result = derive_kek_hex("1234", &salt_hex).unwrap();
-        assert_eq!(result.len(), 64);
-
-        let result2 = derive_kek_hex("1234", &salt_hex).unwrap();
-        assert_eq!(result, result2);
-
-        let result3 = derive_kek_hex("5678", &salt_hex).unwrap();
-        assert_ne!(result, result3);
     }
 
     #[test]
@@ -397,6 +364,28 @@ mod tests {
         let shared_x_bob = compute_shared_x_hex(&bob_sk, &alice_pk).unwrap();
         let sas_bob = compute_sas_code(&shared_x_bob).unwrap();
         assert_eq!(sas, sas_bob);
+    }
+
+    /// `sas_code_format` only checks shape and self-agreement, so it cannot
+    /// fail if the derivation itself changes (salt and info swapped, a
+    /// different byte order, a different modulus) — both parties run the same
+    /// function. Pin the code to a vector computed independently of this
+    /// crate: HKDF-SHA256(ikm = 0x11 * 32, salt = SAS_SALT, info = SAS_INFO,
+    /// L = 4), read big-endian, mod 1_000_000, as "XXX XXX" (Python
+    /// `hmac`/`hashlib`). Desktop and both mobile platforms display this code
+    /// for the same shared secret, so a drift here is a broken ceremony.
+    #[test]
+    fn sas_code_matches_independent_vector() {
+        let shared_x = hex::encode([0x11u8; 32]);
+        assert_eq!(compute_sas_code(&shared_x).unwrap(), "044 037");
+    }
+
+    #[test]
+    fn sas_code_rejects_wrong_length_secret() {
+        assert!(matches!(
+            compute_sas_code(&hex::encode([0x11u8; 31])),
+            Err(CryptoError::InvalidSecretKey)
+        ));
     }
 
     #[test]

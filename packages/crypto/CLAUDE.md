@@ -9,25 +9,36 @@ This crate provides a single, auditable implementation of all cryptographic oper
 - **Desktop (Tauri v2)**: Linked as a native Rust dependency (`apps/desktop/Cargo.toml` path dep)
 - **iOS (native SwiftUI)**: Exposed via UniFFI XCFramework (`build-mobile.sh ios`)
 - **Android (native Kotlin/Compose)**: Exposed via UniFFI JNI `.so` files (`build-mobile.sh android`)
-- **Browser (test builds only)**: Compiled to WebAssembly via `wasm-bindgen`
+- **Server (Bun)**: C-ABI `cdylib` built with `--features server` (`src/ffi_server.rs`), loaded by `ffi.ts` via `bun:ffi`
+
+There is no WASM build: the Playwright test build aliases the Tauri IPC layer to the JavaScript mock in `tests/mocks/` and never loads this crate.
 
 ## Modules
 
 | Module | Purpose |
 |--------|---------|
-| `labels` | 68 domain separation constants (source of truth: `../../packages/protocol/crypto-labels.json`) |
+| `labels` | Domain separation constants. Strings: `../../packages/protocol/crypto-labels.json`. Numeric `labelId`: the index into `LABEL_REGISTRY`, pinned append-only by `label-registry.wire.snapshot` (never read a labelId from the JSON; never restate the count) |
 | `hpke_envelope` | HPKE key wrapping/unwrapping (RFC 9180 X25519-HKDF-SHA256-AES256-GCM) |
-| `encryption` | Per-note/message/file envelope encryption (HPKE + AES-256-GCM) |
+| `encryption` | Per-note/message/file envelope encryption (HPKE + AES-256-GCM), stored multi-reader records, drafts, hub fields |
+| `envelope_aad` | The one definition of an envelope AAD (mirrors `packages/shared/envelope-aad.ts`) |
+| `case_record` | Case records + case comments, sealed per purpose — no platform chooses the label or AAD |
+| `audit_key` | Per-user audit key (AES-256-GCM) and its HPKE wrapping |
+| `backup` | Offline key backup — the one canonical backup file format |
+| `erasure` | Erasure-override and device-wipe signatures |
+| `shamir` | Shamir secret sharing over GF(2^8) for recovery groups |
+| `kdf_params` | Argon2id parameters, shared by every PIN/passphrase KDF; `test-kdf` release-build guard |
 | `device_keys` | Ed25519 signing + X25519 encryption keypair generation and PIN-protected storage |
 | `sigchain` | Append-only, hash-chained, Ed25519-signed device authorization records |
 | `puk` | Per-User Key hierarchy + Cascading Lazy Key Rotation (CLKR) |
 | `auth` | Ed25519 auth token generation/verification |
 | `blind_index` | Blind indexing for server-side E2EE search (HMAC-SHA256) |
-| `provisioning` | X25519 ECDH device provisioning with SAS verification |
+| `provisioning` | X25519 ECDH device provisioning with signed claim and 6-digit SAS (the only SAS-code implementation in the crate) |
+| `sas` | 10-emoji SAS over two Ed25519 keys + nonce (`LABEL_SAS_DERIVE`) — a separate ceremony from the provisioning SAS |
 | `mls` | MLS group management (RFC 9420, OpenMLS 0.9) — **behind the `mls` feature, default-off** (see Feature Flags) |
 | `sframe` | SFrame voice E2EE key derivation |
 | `padding` | Power-of-2 payload padding (traffic analysis mitigation) |
-| `ffi`, `ffi_v3` | UniFFI bindings for iOS/Android |
+| `ffi`, `ffi_v3` | UniFFI bindings for iOS/Android (`ffi`: stateless hex-boundary wrappers; `ffi_v3`: the stateful mobile session) |
+| `ffi_server` | C-ABI exports for the Bun server (`--features server`) |
 
 ## Protocol Compatibility
 

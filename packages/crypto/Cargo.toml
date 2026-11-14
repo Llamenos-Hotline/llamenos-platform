@@ -76,7 +76,7 @@ openmls_basic_credential = { version = "0.6", optional = true }
 [features]
 default = []
 server = []
-# test-kdf: Use fast Argon2id parameters (m=8KB, t=1, p=1) instead of production
+# test-kdf: Use fast Argon2id parameters (m=1MB, t=1, p=1) instead of production
 # params (m=64MB, t=3, p=4). SECURITY: This feature MUST ONLY be enabled in test/debug
 # builds — never in release builds shipped to users. It reduces KDF brute-force
 # resistance from ~seconds to ~microseconds per guess.

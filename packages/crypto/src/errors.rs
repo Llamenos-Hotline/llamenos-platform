@@ -9,7 +9,7 @@ pub enum CryptoError {
     #[error("Invalid secret key: must be 32 bytes hex")]
     InvalidSecretKey,
 
-    #[error("Invalid public key: must be 32 bytes x-only hex")]
+    #[error("Invalid public key: must be a valid 32-byte key, hex-encoded")]
     InvalidPublicKey,
 
     #[error("Invalid ephemeral public key")]
@@ -27,7 +27,7 @@ pub enum CryptoError {
     #[error("Invalid hex encoding: {0}")]
     HexError(#[from] hex::FromHexError),
 
-    #[error("Invalid nonce length: expected 24 bytes")]
+    #[error("Invalid nonce length: expected 12 bytes")]
     InvalidNonce,
 
     #[error("Invalid ciphertext: too short")]
@@ -45,7 +45,7 @@ pub enum CryptoError {
     #[error("Wrong PIN or corrupted data")]
     WrongPin,
 
-    #[error("Invalid PIN: must be 6-8 digits")]
+    #[error("Invalid PIN: use 8 or more digits, or a passphrase of 8 or more characters with at least one letter")]
     InvalidPin,
 
     #[error("Invalid input: {0}")]
