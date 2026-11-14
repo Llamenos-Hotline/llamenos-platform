@@ -105,7 +105,6 @@ import { getIvrVoiceCatalogForProvider } from '../telephony/ivr-voice-catalogs'
 import { speechLanguageFor } from './ivr-speech/voices'
 import type { SealedRecordingEraser } from './call-recordings'
 import { MOCK_PROVIDER_TYPE } from '../telephony/mock'
-import { encryptCredentials } from './provider-setup/crypto'
 import type { Role } from '@shared/permissions'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import {
@@ -332,10 +331,16 @@ async function lockReplaceAll(tx: Pick<Database, 'execute'>, table: string): Pro
  * (kept in `authToken`, the role Twilio's auth token plays) is encrypted at rest
  * like any provider credential; a mock with no secret accepts no webhooks.
  */
-function mockCredentials(phoneNumber: string, options: { webhookSecret?: string; serverKek?: string }): string {
+async function mockCredentials(
+  phoneNumber: string,
+  options: { webhookSecret?: string; serverKek?: string },
+): Promise<string> {
   const creds = { type: MOCK_PROVIDER_TYPE, phoneNumber }
   if (!options.webhookSecret) return JSON.stringify(creds)
   if (!options.serverKek) throw new ServiceError(500, 'A mock webhook secret cannot be stored without SERVER_KEK')
+  // Loaded on demand: `provider-setup/crypto` binds the native crypto library at import time, and this
+  // module is imported (for `ServiceError`) by code that must stay loadable without it.
+  const { encryptCredentials } = await import('./provider-setup/crypto')
   return encryptCredentials({ ...creds, authToken: options.webhookSecret }, options.serverKek)
 }
 
@@ -2847,7 +2852,7 @@ export class SettingsService {
     const id = existing?.id ?? crypto.randomUUID()
     const values = {
       providerType: MOCK_PROVIDER_TYPE,
-      credentials: mockCredentials(phoneNumber, options),
+      credentials: await mockCredentials(phoneNumber, options),
       status: 'connected',
       phoneNumbers: [phoneNumber],
       updatedAt: new Date(),
