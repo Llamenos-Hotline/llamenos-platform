@@ -661,7 +661,7 @@ authenticatedRoutes.post('/shares/liveness',
         challenge: body.challenge,
         proof: body.proof,
       })
-      return c.json({ ok: true as const, verifiedAt })
+      return c.json({ ok: true, verifiedAt })
     } catch (err) {
       if (err instanceof RecoveryGroupError) {
         return c.json({ error: err.message }, err.status)
