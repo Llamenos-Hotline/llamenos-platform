@@ -124,32 +124,40 @@
 # volume hit zero, so free space when they started was ~10 GiB. A 12 GiB
 # threshold would have refused them, which is the outcome this issue asks for.
 #
-# WHICH VOLUME IT MEASURES, AND WHY THAT IS CHECKED, NOT ASSUMED
-# ---------------------------------------------------------------
-# The threshold is only meaningful on the filesystem the job writes to. It
-# measures VOLUME (/System/Volumes/Data), and `guard` first proves that every
-# path a job writes is on that same filesystem: RUNNER_TEMP (DerivedData and
+# WHICH VOLUMES IT MEASURES, AND WHY THAT IS CHECKED, NOT ASSUMED
+# ----------------------------------------------------------------
+# The threshold is only meaningful on the filesystem a job writes to. `guard`
+# therefore resolves every path a job writes - RUNNER_TEMP (DerivedData and
 # build products), RUNNER_WORKSPACE (the checkout), the runner's own `_diag`
-# (the write that crashed the agent in #1665) and the CoreSimulator device set.
-# If any of them resolves elsewhere - a symlink onto the external
-# /Volumes/CIScratch SSD is the realistic way - the job is REFUSED, because a
-# guard reading 15 GiB free on the internal disk says nothing about the disk
-# the build is filling.
+# (the write that crashed the agent in #1665) and the CoreSimulator device set
+# (symlinks followed: df names the filesystem the data really lands on) - and
+# measures EACH distinct volume against the floor. The host volume
+# (/System/Volumes/Data) is always one of them: swap, `_diag`, CoreSimulator
+# caches and /private/var/tmp live there whatever else has moved.
 #
-# Refused rather than measured-as-well, because on this host such a path is
-# broken twice over (measured 2026-11-05):
-#   * the runner service cannot read the external drive at all. macOS TCC
-#     "Removable Volumes" records the runner's node binary as DENIED, and a
-#     launchd-started process gets EPERM on /Volumes/CIScratch while an ssh
-#     session is allowed - so every shell-side check looks healthy. On
-#     2026-10-21 a DerivedData symlink there wedged this script's own
-#     directory walk for 36 minutes per job.
-#   * any grant would not survive: the runner self-updates into a new
-#     `externals.<version>/` directory, which changes the binary TCC keys on.
-# The runners start from launchd at boot, before an external mount is
-# guaranteed, too. CI's build data therefore stays on the internal volume, and
-# out-of-CI builds over ssh use the SSD instead (scripts/lib/ios-build-data.sh).
-# docs/runbooks/mac-ci-runner-disk.md has the layout and the operator options.
+# That is the CI work volume layout (docs/runbooks/mac-ci-runner-disk.md,
+# scripts/ci/mac-ci-work-volume.sh): `_work` and the simulator device set sit on
+# a disk image hosted on the external SSD, so the build's ~5 GiB per shard no
+# longer competes for the internal disk. Nothing here assumes that layout. A
+# job whose RUNNER_TEMP is on the internal disk is measured on the internal
+# disk; one whose RUNNER_TEMP is on the image is measured on the image AND the
+# internal disk. The guard reads where the job writes, so it cannot refuse a
+# healthy job for the wrong disk's number, or pass one that then fills the
+# disk it was not looking at.
+#
+# A write path the runner cannot even `stat` is REFUSED (`disk-guard-wrong-
+# volume`), before anything walks a directory. On this host that is macOS TCC
+# "Removable Volumes" denying the runner service the external SSD itself
+# (measured 2026-11-05 and again 2026-11-14: a launchd-started process gets
+# EPERM on /Volumes/CIScratch while an ssh session is allowed, so every
+# shell-side check looks healthy). On 2026-10-21 a DerivedData symlink onto the
+# SSD wedged this script's own directory walk for 36 minutes per job. A grant
+# would not survive either: the runner self-updates into a new `externals.
+# <version>/` directory, which changes the binary TCC keys on. The image is
+# the way round it that needs no grant: the volume a disk image mounts is
+# not the gated one, so a launchd-started process reads and writes it freely
+# (measured 2026-11-14), and a dangling `_work` link when the image is not
+# attached is refused here rather than recreated on the boot volume.
 #
 # MAC_DISK_WARN_FREE_GIB (default 16) is the band where the host still runs but
 # is drifting toward the refusal, emitted as a `::warning::` so it is visible
@@ -285,8 +293,83 @@ summarize() {
 }
 
 free_kib() {
-  # `df -k` on the data volume. POSIX output, 4th column is available 1K blocks.
+  # `df -k` on the host volume. POSIX output, 4th column is available 1K blocks.
   df_available_kib "$VOLUME"
+}
+
+# Mount points of every volume this run is accountable for, one per line, host
+# volume first. `guard` fills it from the paths the job writes
+# (check_write_paths); `report` and `reclaim` fill it from what the runner
+# installs on this host write to (ensure_measured_volumes). Empty means "only
+# $VOLUME", which is what a caller that never resolved any path gets.
+MEASURED_VOLUMES=""
+
+add_measured_volume() {
+  case "
+$MEASURED_VOLUMES
+" in
+    *"
+$1
+"*) return 0 ;;
+  esac
+  if [ -z "$MEASURED_VOLUMES" ]; then MEASURED_VOLUMES="$1"; else MEASURED_VOLUMES="${MEASURED_VOLUMES}
+$1"; fi
+}
+
+# The volumes `report` and `reclaim` account for when no job has told us where
+# it writes: the host volume, plus wherever each runner's `_work` and the
+# CoreSimulator device set really are (symlinks followed). A path df cannot stat
+# is skipped here - the job-start `guard` is what refuses it.
+ensure_measured_volumes() {
+  local p mp host
+  [ -z "$MEASURED_VOLUMES" ] || return 0
+  host="$(mount_point_of "$VOLUME")"
+  [ -n "$host" ] || host="$VOLUME"
+  add_measured_volume "$host"
+  for p in "$HOME"/actions-runner-*/_work "$SIM_DEVICES"; do
+    [ -e "$p" ] || continue
+    mp="$(mount_point_of "$p")"
+    [ -z "$mp" ] || add_measured_volume "$mp"
+  done
+  return 0
+}
+
+# Total available KiB across every measured volume: the figure a reclaim pass is
+# judged by, wherever the space it frees happens to be.
+total_free_kib() {
+  local mp total=0 kib
+  ensure_measured_volumes
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    kib="$(df_available_kib "$mp")"
+    total=$(( total + ${kib:-0} ))
+  done <<VOLS
+$MEASURED_VOLUMES
+VOLS
+  printf '%s' "$total"
+}
+
+measured_volume_list() {
+  ensure_measured_volumes
+  printf '%s' "$MEASURED_VOLUMES" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'
+}
+
+total_free_gib() {
+  awk -v k="$(total_free_kib)" 'BEGIN { printf "%.1f", k / 1048576 }'
+}
+
+# "A GiB on /x, B GiB on /y" for the step summary and the log.
+free_summary() {
+  local mp out="" kib
+  ensure_measured_volumes
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    kib="$(df_available_kib "$mp")"
+    out="${out}${out:+, }$(awk -v k="${kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }') GiB on ${mp}"
+  done <<VOLS
+$MEASURED_VOLUMES
+VOLS
+  printf '%s' "$out"
 }
 
 df_available_kib() {
@@ -572,10 +655,16 @@ runner_dd_roots() {
 # ── report ──────────────────────────────────────────────────────────────────
 
 report() {
-  log "── disk ──"
-  df -h "$VOLUME" || true
-  log ""
-  log "free on $VOLUME: $(free_gib) GiB   (refuse below ${MIN_FREE_GIB} GiB, warn below ${WARN_FREE_GIB} GiB)"
+  local mp
+  log "── disk (every volume this host's CI writes to; each is held to the floor) ──"
+  ensure_measured_volumes
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    df -h "$mp" || true
+    log "free on $mp: $(awk -v k="$(df_available_kib "$mp")" 'BEGIN { printf "%.1f", k / 1048576 }') GiB   (refuse below ${MIN_FREE_GIB} GiB, warn below ${WARN_FREE_GIB} GiB)"
+  done <<VOLS
+$MEASURED_VOLUMES
+VOLS
   log ""
 
   # Swap is on this same volume and grows on demand. macOS gives it back by
@@ -764,9 +853,20 @@ delete_sim() {
 
 # ── reclaim ─────────────────────────────────────────────────────────────────
 
+# Simulator device directories (those holding a device.plist) untouched for more
+# than <minutes>. `-H`, not the default: when the device set is a symlink onto
+# the CI work volume, plain `find "$SIM_DEVICES"` examines only the link, matches
+# `-type d` against nothing, and prints NOTHING - so every leaked simulator
+# would go unreclaimed while the log said "nothing CI-owned left to reclaim".
+sim_device_dirs_older_than() {
+  find -H "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+$1" \
+    -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true
+}
+
 reclaim() {
-  local before after freed deleted_any=0
-  before="$(free_kib)"
+  local before after freed deleted_any=0 before_gib
+  before="$(total_free_kib)"
+  before_gib="$(awk -v k="$before" 'BEGIN { printf "%.1f", k / 1048576 }')"
 
   log "── reclaim ──"
 
@@ -798,8 +898,7 @@ reclaim() {
           fi
           ;;
       esac
-    done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${SIM_MAX_AGE_MIN}" \
-               -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
+    done < <(sim_device_dirs_older_than "$SIM_MAX_AGE_MIN")
   fi
 
   # 1b. The #1861 gap: devices NOTHING in CI owns. A destination selected by
@@ -837,8 +936,7 @@ reclaim() {
         # simctl no longer knows the device; the directory is an orphan.
         prune "$dir" "removed orphaned stale simulator directory: $name ($udid)"
       fi
-    done < <(find "$SIM_DEVICES" -maxdepth 1 -type d -mmin "+${stale_min}" \
-               -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)
+    done < <(sim_device_dirs_older_than "$stale_min")
   fi
 
   # 2. Devices the installed Xcode can no longer run (a runtime was removed by
@@ -900,7 +998,7 @@ reclaim() {
     sleep "${MAC_DISK_RECLAIM_SETTLE_SEC:-10}"
   fi
 
-  after="$(free_kib)"
+  after="$(total_free_kib)"
   freed=$(awk -v a="$after" -v b="$before" 'BEGIN { printf "%.2f", (a - b) / 1048576 }')
   RECLAIM_FREED_KIB=$(( after > before ? after - before : 0 ))
   if [ "$DELETE_FAILURES" -gt 0 ]; then
@@ -908,19 +1006,19 @@ reclaim() {
     printf '%s' "$DELETE_FAILED_LIST"
   fi
   if awk -v f="$freed" 'BEGIN { exit !(f > 0) }'; then
-    log "  reclaimed ${freed} GiB (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+    log "  reclaimed ${freed} GiB (free across $(measured_volume_list): ${before_gib} -> $(total_free_gib) GiB)"
   elif [ "$deleted_any" -gt 0 ]; then
     # Deletions DID happen; the flat delta is the APFS lag above (or other
     # activity on this shared host consumed the space as fast as we freed
     # it). Saying "nothing left to reclaim" here is how #1861's report read
     # while a 3.86 GiB device sat deleted-but-unmeasured.
-    log "  deletions issued; df shows no delta yet — APFS reclaims asynchronously, the space appears on a later read (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+    log "  deletions issued; df shows no delta yet — APFS reclaims asynchronously, the space appears on a later read (free across $(measured_volume_list): ${before_gib} -> $(total_free_gib) GiB)"
   elif [ "$DELETE_FAILURES" -gt 0 ]; then
-    log "  nothing reclaimed: every delete attempted FAILED (listed above) (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB)"
+    log "  nothing reclaimed: every delete attempted FAILED (listed above) (free across $(measured_volume_list): ${before_gib} -> $(total_free_gib) GiB)"
   else
     # Free space is a live number on a shared host; a non-positive delta means
     # there was nothing of CI's left to take, not that reclaim failed.
-    log "  nothing CI-owned left to reclaim (free: $(awk -v k="$before" 'BEGIN{printf "%.1f", k/1048576}') -> $(free_gib) GiB; other activity on this host moves this number)"
+    log "  nothing CI-owned left to reclaim (free across $(measured_volume_list): ${before_gib} -> $(total_free_gib) GiB; other activity on this host moves this number)"
   fi
   log ""
 }
@@ -983,14 +1081,20 @@ mount_point_of() {
 
 # Prints the marker line `write paths OK:` on success; the workflow's watchdog
 # fallback looks for it, so a hang INSIDE this check is a refusal, not a pass.
+#
+# Every path a job writes is resolved to the volume it really lands on, and that
+# volume is added to MEASURED_VOLUMES for `gate` to hold to the floor. The one
+# thing refused here is a path whose filesystem cannot be read at all.
 check_write_paths() {
-  local want entry label path mp bad=0 runner_root
+  local host entry label path mp bad=0 runner_root
   local -a paths
-  want="$(mount_point_of "$VOLUME")"
-  if [ -z "$want" ]; then
-    log "::error::ios runner REFUSED to run: disk-guard cannot read the filesystem of ${VOLUME}, the volume it measures. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+  host="$(mount_point_of "$VOLUME")"
+  if [ -z "$host" ]; then
+    log "::error::ios runner REFUSED to run: disk-guard cannot read the filesystem of ${VOLUME}, the host volume it measures. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
     return 1
   fi
+  MEASURED_VOLUMES=""
+  add_measured_volume "$host"
 
   paths=("CoreSimulator device set|$SIM_DEVICES")
   if [ -n "${RUNNER_TEMP:-}" ]; then
@@ -1004,7 +1108,7 @@ check_write_paths() {
     fi
   fi
 
-  log "── write paths (must be on ${want}, the volume this guard measures) ──"
+  log "── write paths (each resolved to the volume it really lands on; every such volume is held to the floor) ──"
   for entry in "${paths[@]}"; do
     label="${entry%%|*}"
     path="${entry#*|}"
@@ -1017,34 +1121,54 @@ check_write_paths() {
     log "  checking: $label ($path)"
     mp="$(mount_point_of "$path")"
     if [ -z "$mp" ]; then
-      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on a filesystem this runner cannot even stat. On this host that is macOS TCC 'Removable Volumes' denying the runner service access to an external drive (a symlink onto /Volumes/CIScratch is the usual cause). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. CI build data must stay on ${want}; see docs/runbooks/mac-ci-runner-disk.md."
-      bad=1
-    elif [ "$mp" != "$want" ]; then
-      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on ${mp}, but this guard's ${MIN_FREE_GIB} GiB floor measures ${want}, so its verdict would say nothing about the disk this job fills. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. The runner service cannot use an external drive (TCC 'Removable Volumes'; launchd starts it before external mounts), so move that path back onto ${want}; see docs/runbooks/mac-ci-runner-disk.md."
+      log "::error::ios runner REFUSED to run: disk-guard-wrong-volume — $label ($path) is on a filesystem this runner cannot even stat. On this host that is macOS TCC 'Removable Volumes' denying the runner service the external SSD (/Volumes/CIScratch itself, reached by a symlink or a work folder), or a link whose target is not mounted (the CI work volume's disk image is not attached). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. CI build data lives on the internal disk or on the CI work volume's disk image, never on the SSD directly; see docs/runbooks/mac-ci-runner-disk.md."
       bad=1
     else
-      log "  ok: on $mp"
+      add_measured_volume "$mp"
+      if [ "$mp" = "$host" ]; then
+        log "  ok: on $mp (the host volume)"
+      else
+        log "  ok: on $mp (not the host volume: measured separately below)"
+      fi
     fi
   done
   [ "$bad" -eq 0 ] || return 1
-  log "write paths OK: every path this job writes is on ${want}"
+  log "write paths OK: every path this job writes is on a volume this guard can read; measuring $(measured_volume_list)"
   log ""
 }
 
 # ── gate ────────────────────────────────────────────────────────────────────
 
 gate() {
-  local free; free="$(free_gib)"
+  local mp free free_kib_now short_mib refused=0 volumes
+  ensure_measured_volumes
+  volumes="$MEASURED_VOLUMES"
 
-  if awk -v f="$free" -v m="$MIN_FREE_GIB" 'BEGIN { exit !(f < m) }'; then
-    # Free, required and the gap, in MiB, in one machine-readable line the
-    # workflow reads. A host 150 MB short and a host 8 GiB short are different
-    # faults and used to read the same (#2644).
-    local free_kib_now short_mib
-    free_kib_now="$(free_kib)"
-    short_mib="$(awk -v k="$free_kib_now" -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", (m * 1048576 - k) / 1024 + 0.999 }')"
-    log "disk-guard-verdict: refused free_mib=$(( free_kib_now / 1024 )) need_mib=$(awk -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", m * 1024 }') short_mib=${short_mib} reclaimed_mib=$(( RECLAIM_FREED_KIB / 1024 ))"
-    log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${VOLUME} of the ${MIN_FREE_GIB} GiB this job needs (short by ${short_mib} MiB; this reclaim pass freed $(( RECLAIM_FREED_KIB / 1024 )) MiB). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Two concurrent iOS shards consume ~10 GiB of simulator data, build products and swap on this host; below ${MIN_FREE_GIB} GiB the runner AGENT runs out of space writing its own _diag log and dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on the runner host — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    free_kib_now="$(df_available_kib "$mp")"
+    free="$(awk -v k="${free_kib_now:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')"
+    if awk -v f="$free" -v m="$MIN_FREE_GIB" 'BEGIN { exit !(f < m) }'; then
+      refused=1
+      # Free, required and the gap, in MiB, in one machine-readable line the
+      # workflow reads. A host 150 MB short and a host 8 GiB short are different
+      # faults and used to read the same (#2644). `volume=` names which of the
+      # measured volumes it is: the internal disk and the CI work volume run
+      # out for different reasons.
+      short_mib="$(awk -v k="${free_kib_now:-0}" -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", (m * 1048576 - k) / 1024 + 0.999 }')"
+      log "disk-guard-verdict: refused free_mib=$(( ${free_kib_now:-0} / 1024 )) need_mib=$(awk -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", m * 1024 }') short_mib=${short_mib} reclaimed_mib=$(( RECLAIM_FREED_KIB / 1024 )) volume=${mp}"
+      log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${mp} of the ${MIN_FREE_GIB} GiB this job needs (short by ${short_mib} MiB; this reclaim pass freed $(( RECLAIM_FREED_KIB / 1024 )) MiB across all measured volumes). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Concurrent iOS shards consume simulator data, build products and swap on this host; below ${MIN_FREE_GIB} GiB the runner AGENT runs out of space writing its own _diag log and dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on ${mp} — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
+    elif awk -v f="$free" -v w="$WARN_FREE_GIB" 'BEGIN { exit !(f < w) }'; then
+      log "::warning::ios runner disk headroom is low: ${free} GiB free on ${mp}, above the ${MIN_FREE_GIB} GiB refusal threshold but below the ${WARN_FREE_GIB} GiB comfort band. Concurrent shards can consume ~5 GiB each here. Reclaim space on the host before this becomes a refusal (#1665)."
+      log "disk headroom OK: ${free} GiB free on ${mp} (need ${MIN_FREE_GIB} GiB)"
+    else
+      log "disk headroom OK: ${free} GiB free on ${mp} (need ${MIN_FREE_GIB} GiB)"
+    fi
+  done <<VOLS
+$volumes
+VOLS
+
+  if [ "$refused" -eq 1 ]; then
     cat <<EOF
 
 The reclaim above already removed everything this script can prove is CI's.
@@ -1075,15 +1199,26 @@ EOF
     fi
     return 1
   fi
-
-  if awk -v f="$free" -v w="$WARN_FREE_GIB" 'BEGIN { exit !(f < w) }'; then
-    log "::warning::ios runner disk headroom is low: ${free} GiB free on ${VOLUME}, above the ${MIN_FREE_GIB} GiB refusal threshold but below the ${WARN_FREE_GIB} GiB comfort band. Two concurrent shards can consume ~10 GiB. Reclaim space on the host before this becomes a refusal (#1665)."
-  fi
-
-  log "disk headroom OK: ${free} GiB free on ${VOLUME} (need ${MIN_FREE_GIB} GiB)"
 }
 
 # ── selftest ────────────────────────────────────────────────────────────────
+
+# Runs gate() against stand-in volumes with fixed free space, so the per-volume
+# floor is tested without depending on how full the machine running it is:
+# /big has 100 GiB, /small has 2, anything else 100. A SUBSHELL body, kept out of
+# a `$( )` on purpose: macOS /bin/bash 3.2 misparses a `case` inside command
+# substitution (see selftest_reclaim_with_failing_rm).
+selftest_gate_fake_volumes() (
+  df_available_kib() {
+    case "$1" in
+      /small) echo 2097152 ;;
+      *) echo 104857600 ;;
+    esac
+  }
+  MEASURED_VOLUMES="$1"; MIN_FREE_GIB=12; WARN_FREE_GIB=16; RECLAIM_FREED_KIB=0; DELETE_FAILURES=0
+  gate 2>&1
+)
+
 #
 # Audits the delete guard by trying to BREAK it, which is the only way to know
 # it holds (`feedback_audit_gates_by_breaking`). Reading the DENY array proves
@@ -1244,40 +1379,119 @@ EOF
     fi
   done
 
-  log "── selftest: write paths must be on the measured volume ──"
+  log "── selftest: every volume a job writes to is measured (host volume + wherever the work really is) ──"
   # /dev is its own filesystem (devfs on macOS, devtmpfs on Linux) on every
-  # host this runs on, so it stands in for "a path on another disk" without
+  # host this runs on, so it stands in for "a path on another volume" without
   # needing a mount. Subshells keep the overrides from leaking.
   mkdir -p "$sandbox/write-same"
-  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="$sandbox/write-same"; RUNNER_WORKSPACE=""
-       check_write_paths ) >/dev/null 2>&1; then
-    log "  ok    accepts write paths on the measured volume"
+  local wp_out wp_rc
+  wp_rc=0
+  wp_out="$( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="$sandbox/write-same"; RUNNER_WORKSPACE=""
+             check_write_paths 2>&1 )" || wp_rc=$?
+  if [ "$wp_rc" = "0" ] && [[ "$wp_out" == *"write paths OK:"* ]]; then
+    log "  ok    accepts write paths on the host volume"
   else
-    log "  FAIL  refused write paths that are on the measured volume"
+    log "  FAIL  refused write paths that are on the host volume (rc=$wp_rc)"
     fails=$((fails + 1))
   fi
-  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="/dev"; RUNNER_WORKSPACE=""
-       check_write_paths ) >/dev/null 2>&1; then
-    log "  FAIL  accepted RUNNER_TEMP on a different filesystem from the measured volume"
-    fails=$((fails + 1))
+  wp_rc=0
+  wp_out="$( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="/dev"; RUNNER_WORKSPACE=""
+             check_write_paths 2>&1
+             printf 'MEASURED=%s\n' "$(printf '%s' "$MEASURED_VOLUMES" | tr '\n' '|')" )" || wp_rc=$?
+  if [ "$wp_rc" = "0" ] && [[ "$wp_out" == *"not the host volume: measured separately"* ]] && [[ "$wp_out" == *"MEASURED="*"|/dev"* ]]; then
+    log "  ok    a write path on another readable volume is measured, not waved through and not refused for being there"
   else
-    log "  ok    refuses RUNNER_TEMP on a different filesystem"
+    log "  FAIL  a RUNNER_TEMP on another volume was not added to the measured volumes (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
   fi
   ln -s /dev "$sandbox/write-symlink"
-  if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-symlink"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
-       check_write_paths ) >/dev/null 2>&1; then
-    log "  FAIL  accepted a device set SYMLINKED onto a different filesystem"
-    fails=$((fails + 1))
+  wp_rc=0
+  wp_out="$( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-symlink"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
+             check_write_paths 2>&1
+             printf 'MEASURED=%s\n' "$(printf '%s' "$MEASURED_VOLUMES" | tr '\n' '|')" )" || wp_rc=$?
+  if [ "$wp_rc" = "0" ] && [[ "$wp_out" == *"MEASURED="*"|/dev"* ]]; then
+    log "  ok    a device set SYMLINKED onto another volume is measured on the volume it really lands on"
   else
-    log "  ok    refuses a write path symlinked onto a different filesystem"
+    log "  FAIL  a symlinked device set was measured on the link's volume, not its target's (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
   fi
   ln -s "$sandbox/does-not-exist" "$sandbox/write-dangling"
   if ( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-dangling"; RUNNER_TEMP=""; RUNNER_WORKSPACE=""
        check_write_paths ) >/dev/null 2>&1; then
-    log "  FAIL  accepted a DANGLING symlink as a write path (an unmounted drive looks like this)"
+    log "  FAIL  accepted a DANGLING symlink as a write path (an unattached disk image or unmounted drive looks like this)"
     fails=$((fails + 1))
   else
-    log "  ok    refuses a dangling symlink (what an unmounted drive leaves behind)"
+    log "  ok    refuses a dangling symlink (what an unattached CI work volume leaves behind)"
+  fi
+  # The work volume's disk image not being attached must read as a refusal that
+  # says so, not as a job quietly writing to the boot volume.
+  wp_rc=0
+  wp_out="$( VOLUME="$sandbox"; SIM_DEVICES="$sandbox/write-same"; RUNNER_TEMP="$sandbox/write-dangling"; RUNNER_WORKSPACE=""
+             check_write_paths 2>&1 )" || wp_rc=$?
+  if [ "$wp_rc" = "1" ] && [[ "$wp_out" == *"disk-guard-wrong-volume"* ]] && [[ "$wp_out" == *"disk image is not attached"* ]]; then
+    log "  ok    a RUNNER_TEMP link to an unattached work volume is refused as disk-guard-wrong-volume and says why"
+  else
+    log "  FAIL  an unattached work volume was not refused with a reason (rc=$wp_rc)"
+    fails=$((fails + 1))
+  fi
+
+  log "── selftest: the floor is held on EACH measured volume, and the refusal names the short one ──"
+  # Two stand-in volumes with fixed free space, so the case does not depend on
+  # how full the machine running it is: /big has 100 GiB, /small has 2.
+  wp_rc=0
+  wp_out="$(selftest_gate_fake_volumes "/big
+/small")" || wp_rc=$?
+  if [ "$wp_rc" = "1" ] \
+     && [[ "$wp_out" == *"disk-guard-verdict: refused "*"volume=/small"* ]] \
+     && [[ "$wp_out" == *"only 2.0 GiB free on /small"* ]] \
+     && [[ "$wp_out" != *"disk-guard-verdict: refused "*"volume=/big"* ]] \
+     && [[ "$wp_out" == *"disk headroom OK: 100.0 GiB free on /big"* ]]; then
+    log "  ok    a short work volume refuses the job even though the host volume has room, and names it"
+  else
+    log "  FAIL  the floor was not held per volume (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
+  fi
+  wp_rc=0
+  wp_out="$(selftest_gate_fake_volumes "/small
+/big")" || wp_rc=$?
+  if [ "$wp_rc" = "1" ] && [[ "$wp_out" == *"only 2.0 GiB free on /small"* ]]; then
+    log "  ok    the refusal does not depend on which volume is listed first"
+  else
+    log "  FAIL  a short FIRST volume was not refused (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
+  fi
+  wp_rc=0
+  wp_out="$(selftest_gate_fake_volumes "/big
+/also-big")" || wp_rc=$?
+  if [ "$wp_rc" = "0" ] && [[ "$wp_out" == *"disk headroom OK: 100.0 GiB free on /big"* ]] && [[ "$wp_out" == *"on /also-big"* ]]; then
+    log "  ok    every measured volume above the floor passes, each reported"
+  else
+    log "  FAIL  healthy volumes were not passed and reported (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
+  fi
+
+  log "── selftest: a simulator device set that is a symlink is still swept ──"
+  # `find` on a symlink examines only the link. Left as it was, a device set
+  # moved onto the CI work volume would match nothing and no leaked simulator
+  # would ever be reclaimed, with the log reading "nothing CI-owned left".
+  mkdir -p "$sandbox/real-devices/AAAA-old" "$sandbox/real-devices/BBBB-young"
+  : > "$sandbox/real-devices/AAAA-old/device.plist"; : > "$sandbox/real-devices/BBBB-young/device.plist"
+  find "$sandbox/real-devices/AAAA-old" -exec touch -t 202001010000 {} +
+  ln -s "$sandbox/real-devices" "$sandbox/linked-devices"
+  local plain hform
+  plain="$(find "$sandbox/linked-devices" -maxdepth 1 -type d -mmin +120 -exec test -e '{}/device.plist' ';' -print 2>/dev/null || true)"
+  hform="$( SIM_DEVICES="$sandbox/linked-devices"; sim_device_dirs_older_than 120 )"
+  if [ -z "$plain" ]; then
+    log "  ok    (control) a plain find on a symlinked device set matches nothing - the trap"
+  else
+    log "  FAIL  (control) plain find followed the symlink on this platform; the trap this guards is not reproducible here"
+    fails=$((fails + 1))
+  fi
+  if [ "$hform" = "$sandbox/linked-devices/AAAA-old" ]; then
+    log "  ok    the idle device under a symlinked device set is found, the young one is not"
+  else
+    log "  FAIL  sim_device_dirs_older_than on a symlinked set returned: '$hform'"
+    fails=$((fails + 1))
   fi
 
   selftest_derived_data_ownership "$sandbox"
@@ -1792,7 +2006,7 @@ case "$MODE" in
     # First, and before anything that walks a directory: if a write path is on
     # an unreadable volume, report/reclaim would wedge on it (2026-10-21).
     if ! check_write_paths; then
-      summarize "REFUSED: a path this job writes is not on ${VOLUME}, the volume the disk floor measures. Environmental, not this PR."
+      summarize "REFUSED: a path this job writes is on a filesystem the runner cannot read. Environmental, not this PR."
       exit 1
     fi
     report
@@ -1802,9 +2016,9 @@ case "$MODE" in
       failed_note=" ${DELETE_FAILURES} reclaim delete(s) FAILED and are not counted as freed (#2566)."
     fi
     if gate; then
-      summarize "disk headroom OK — $(free_gib) GiB free (need ${MIN_FREE_GIB} GiB).${failed_note}"
+      summarize "disk headroom OK — $(free_summary) free (need ${MIN_FREE_GIB} GiB on each).${failed_note}"
     else
-      summarize "REFUSED: only $(free_gib) GiB free, need ${MIN_FREE_GIB} GiB. Environmental, not this PR (#1665).${failed_note}"
+      summarize "REFUSED: $(free_summary) free, need ${MIN_FREE_GIB} GiB on each. Environmental, not this PR (#1665).${failed_note}"
       exit 1
     fi
     ;;

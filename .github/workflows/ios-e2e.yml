@@ -268,8 +268,12 @@ jobs:
       #
       # The fallback is only taken once the guard has proved (its
       # `write paths OK:` line) that RUNNER_TEMP, the checkout, the runner's
-      # _diag and the simulator device set are all on the volume df reads;
-      # without that, a df number is about a disk the job is not using.
+      # _diag and the simulator device set are all on a volume it can read;
+      # without that, a df number is about a disk the job is not using. It
+      # reads the host volume AND the volume RUNNER_TEMP is on (the CI work
+      # volume's disk image when the runner uses it, docs/runbooks/
+      # mac-ci-runner-disk.md) and takes the smaller, because the guard holds
+      # each to the same floor.
       #
       # DISK_MIN_FREE_GIB is exported to the script as MAC_DISK_MIN_FREE_GIB,
       # so the script's gate and the watchdog's df fallback cannot disagree.
@@ -325,7 +329,7 @@ jobs:
               # Never `wait` on something that may not have died: a process
               # stuck in the kernel ignores SIGKILL, and waiting is the bug.
               if kill -0 "$gpid" 2>/dev/null; then disown "$gpid" 2>/dev/null || true; else wait "$gpid" 2>/dev/null || true; fi
-              free_kib=$(df -k "$volume" 2>/dev/null | awk 'NR==2 {print $4}')
+              free_kib=$(df -k "$volume" "$RUNNER_TEMP" 2>/dev/null | awk 'NR>1 && (min == "" || $4 + 0 < min + 0) { min = $4 } END { print min }')
               free_gib=$(awk -v k="${free_kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')
               echo "::group::disk guard output before it hung (attempt $attempt)"
               cat "$guard_log"
@@ -336,17 +340,17 @@ jobs:
               # paths (an external drive the runner cannot read), so the df
               # fallback below would be measuring the wrong disk: refuse.
               if ! grep -q '^write paths OK:' "$guard_log"; then
-                echo "::error::disk guard hung (attempt $attempt) while checking that this job's write paths are on ${volume} (last output: '${last_line}'). A path this job writes is on a filesystem the runner service cannot read (macOS TCC 'Removable Volumes' denies it the external drive), so no free-space reading here would describe it. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. See docs/runbooks/mac-ci-runner-disk.md."
+                echo "::error::disk guard hung (attempt $attempt) while checking the volumes this job's write paths are on (last output: '${last_line}'). A path this job writes is on a filesystem the runner service cannot read (macOS TCC 'Removable Volumes' denies it the external drive itself; the CI work volume's disk image is the way round that), so no free-space reading here would describe it. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. See docs/runbooks/mac-ci-runner-disk.md."
                 printf 'REFUSED: guard hung checking write paths (%s). Environmental, not this PR.\n' "$last_line" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
                 exit 1
               fi
               if awk -v f="$free_gib" -v m="$DISK_MIN_FREE_GIB" 'BEGIN { exit !(f >= m) }'; then
-                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on ${volume}, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
+                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on the tighter of ${volume} and RUNNER_TEMP's volume, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
                 printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df fallback: **%s GiB free**, need %s GiB. Proceeded without reclaim.\n\n' \
                   "${RUNNER_NAME:-local}" "$cap" "$last_line" "$free_gib" "$DISK_MIN_FREE_GIB" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
                 exit 0
               fi
-              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and the df fallback shows only ${free_gib} GiB free on ${volume} of the ${DISK_MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and the df fallback shows only ${free_gib} GiB free on the tighter of ${volume} and RUNNER_TEMP's volume, of the ${DISK_MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
               printf 'REFUSED: only %s GiB free, need %s GiB (guard script hung; df fallback). Environmental, not this PR.\n' "$free_gib" "$DISK_MIN_FREE_GIB" > "$guard_summary"
               rc=1
             elif wait "$gpid"; then
@@ -1604,7 +1608,9 @@ jobs:
       - name: Sweep simulators orphaned by earlier runs
         if: always()
         run: |
-          find "$HOME/Library/Developer/CoreSimulator/Devices" -maxdepth 1 -type d -mmin +360 \
+          # -H: the device set can be a symlink onto the CI work volume, and a
+          # plain find on a link examines only the link and matches nothing.
+          find -H "$HOME/Library/Developer/CoreSimulator/Devices" -maxdepth 1 -type d -mmin +360 \
             -exec test -e '{}/device.plist' ';' -print 2>/dev/null | while read -r dir; do
             udid=$(basename "$dir")
             name=$(/usr/libexec/PlistBuddy -c 'Print :name' "$dir/device.plist" 2>/dev/null || echo "")
