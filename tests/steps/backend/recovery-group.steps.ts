@@ -770,7 +770,6 @@ Given('a user with global {string} permission who is only a member of the first 
   const s = getS(world)
   expect(s.hubId).toBeDefined()
 
-  const roleSlug = uniqueName('recovery-view-global')
   const role = await createRoleViaApi(request, {
     permissions: [permission],
   })
@@ -1177,7 +1176,6 @@ Given('a recovery group is enrolled with two real contributing holders', async (
   // the two real contributing holders (mirrors the "Given a recovery group
   // is enrolled for the hub" pattern above, which sidesteps this by using
   // the wildcard-permission admin as a holder instead).
-  const holderRoleSlug = uniqueName('recovery-holder')
   const holderRole = await createRoleViaApi(request, {
     permissions: ['recovery:hold-share'],
   })

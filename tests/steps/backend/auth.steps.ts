@@ -10,7 +10,6 @@ import {
   testEndpointAccess,
   createVolunteerViaApi,
   createRoleViaApi,
-  uniqueName,
 } from '../../api-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex } from '@shared/encoding'

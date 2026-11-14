@@ -465,11 +465,10 @@ When('the {string} user sends {string} to {string} with valid role body', async 
   const user = getPermMatrixState(world).roleUsers[role]
   if (!user) throw new Error(`No test user for role "${role}"`)
 
+  // A valid body carries no plaintext name, slug or description (#2780): a platform
+  // role's name exists only in per-admin envelopes.
   getSharedState(world).lastResponse = await apiPost(request, '/settings/roles', {
-    name: uniqueName('PM Role'),
-    slug: uniqueName('pm-role'),
     permissions: ['notes:read-own'],
-    description: 'PM test role',
   }, user.deviceKey)
 })
 

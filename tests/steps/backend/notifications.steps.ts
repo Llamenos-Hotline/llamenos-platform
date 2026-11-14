@@ -26,7 +26,6 @@ import {
   addHubMemberViaApi,
   ADMIN_SEED,
   uniquePhone,
-  uniqueName,
 } from '../../api-helpers'
 import type { NotifyContactsResult } from '../../api-helpers'
 

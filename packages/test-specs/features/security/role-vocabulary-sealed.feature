@@ -26,7 +26,7 @@ Feature: A hub's role vocabulary is never stored in the clear
   @backend
   Scenario: A hub's role is neither listed nor grantable outside that hub
     Given the admin has created a sealed hub role
-    And a second hub exists
+    And another hub the role does not belong to exists
     Then the role is not listed by the second hub or by the deployment
     When the admin grants the role to a member of the second hub
     Then the response status should be 400

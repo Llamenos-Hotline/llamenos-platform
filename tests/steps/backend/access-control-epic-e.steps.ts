@@ -128,7 +128,6 @@ async function scopedRole(
   request: APIRequestContext,
   permission: string,
 ): Promise<string> {
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const role = await createRoleViaApi(request, {
     permissions: [permission],
   })
@@ -255,7 +254,6 @@ Given('a registered user {string} holds role {string} in hub {string}', async ({
 
 // A role the instance never heard of by name: only its permissions can make its holder an admin.
 Given('a registered user {string} holds a custom role granting {string} and {string} in hub {string}', async ({ request, world }, label: string, first: string, second: string, hubLabel: string) => {
-  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const role = await createRoleViaApi(request, { permissions: [first, second] })
   await registerHubMember(request, world, label, hubLabel, [role.id])
 })

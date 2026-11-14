@@ -27,8 +27,9 @@ export interface RoleIdentity {
  * the applied template ids, the template catalog, and the hub's roles.
  *
  * `defaultMemberRole` may name a role by id (`role-volunteer`) or by slug
- * (`volunteer`), because a template's `suggestedRoles` carry slugs and
- * `POST /roles/from-template` mints ids for them. A name that matches no
+ * (`volunteer`). Only a seeded default has a slug a template can know: a
+ * custom role's slug is its random id (#2780), so a template's own suggested
+ * roles are never named this way. A name that matches no
  * existing role resolves to nothing rather than to a dangling id: a hubRoles
  * entry naming a role that does not exist would grant no permissions anyway,
  * and would be indistinguishable from a typo on inspection.

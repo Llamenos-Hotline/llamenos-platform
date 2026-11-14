@@ -13,6 +13,7 @@ import { VolunteerPage } from '../../pages/index'
 import {
   apiPost,
   listRolesViaApi,
+  findNamedRole,
   createRoleViaApi,
   deleteRoleViaApi,
   updateRoleViaApi,
@@ -155,7 +156,7 @@ When('I assign the {string} role to the volunteer', async ({ page, request }, ro
   // volunteer created by "a volunteer exists", and wait for the PATCH to succeed.
   const pubkey = await existingVolunteerPubkey(page)
   const roles = await listRolesViaApi(request)
-  const targetRole = roles.find(r => r.name === roleName)
+  const targetRole = findNamedRole(roles, roleName)
   expect(targetRole, `role "${roleName}" must exist`).toBeTruthy()
 
   const volunteerRow = VolunteerPage.getRowById(page, pubkey)

@@ -906,14 +906,26 @@ export async function enableMockTelephonyViaApi(
 
 // ── Roles CRUD ────────────────────────────────────────────────────
 
+/** `roleResponseSchema` as the tests read it. `name` is null for every custom role (#2780). */
 export interface RoleDefinition {
   id: string
-  name: string
+  name: string | null
+  hubId?: string | null
   slug: string
   permissions: string[]
   isDefault: boolean
   isSystem: boolean
   description: string
+  encryptedName?: string | null
+  encryptedDescription?: string | null
+}
+
+/** A role whose name is in the clear — only ever a seeded default (#2780). */
+export type NamedRole = RoleDefinition & { name: string }
+
+/** The seeded default role named `name` ("Reviewer", "Volunteer"), if listed. */
+export function findNamedRole(roles: readonly RoleDefinition[], name: string): NamedRole | undefined {
+  return roles.find((r): r is NamedRole => r.name === name)
 }
 
 export async function listRolesViaApi(

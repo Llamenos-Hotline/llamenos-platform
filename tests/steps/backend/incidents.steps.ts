@@ -133,7 +133,6 @@ Given('an isolated hub for incident scenarios', async ({ request, world }) => {
 Given('a hub member whose role grants only {string}', async ({ request, world }, permission: string) => {
   const s = st(world)
   if (s.holders[permission]) return
-  const unique = uniqueName('inc', '-').toLowerCase()
   const role = await createRoleViaApi(request, {
     permissions: [permission],
   })

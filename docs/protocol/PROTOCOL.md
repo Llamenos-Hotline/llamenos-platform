@@ -2475,25 +2475,76 @@ Response: { "ok": true }
 
 #### Roles (PBAC)
 
+A role's name and description are organisational vocabulary and are never sent
+or stored in the clear (#2780). Only the seeded default roles carry a plaintext
+`name`, because theirs are public constants. Every custom role has `name: null`
+and `slug` equal to its `id`; a slug typed from the name would be the name again.
+
+Two scopes:
+
+- **Deployment-wide** (`hubId: null`): the seeded defaults and platform roles. A
+  platform role's name and description exist only in per-admin HPKE `envelopes`
+  (`LABEL_PLATFORM_ROLE_NAME_ENCRYPT` / `LABEL_PLATFORM_ROLE_DESC_ENCRYPT`, AAD
+  `"{roleId}:name"` / `"{roleId}:description"`).
+- **Hub-owned** (`hubId` set): sealed by the client under that hub's key with
+  `LABEL_HUB_ROLE_ENCRYPT`, in the hub-field format `hex(nonce_12 ‖ ct ‖ tag_16)`
+  with the label as AAD. Readable by exactly the hub's members. A hub role is
+  listed and grantable only inside its own hub, never as a global role, and may
+  not carry an instance-level permission (`*`, `system:*` other than
+  `system:view-*`).
+
+Request bodies are strict: a plaintext `name`, `slug` or `description` is a 400.
+
 ```
 GET /api/settings/roles
-Auth: Required
-Response: { "roles": Role[] }
+Permission: system:view-roles
+Response: { "roles": Role[] }            -- deployment-wide roles only
 
 POST /api/settings/roles
 Permission: system:manage-roles
-Body: { "name": string, "slug": string, "permissions": string[], "description": string }
-Response: Role
+Body: { "id"?: "role-<uuid>", "permissions": string[], "envelopes"?: RoleEnvelope[] }
+Response: Role (201)
 
-PATCH /api/settings/roles/:id
+PATCH /api/settings/roles/:id            -- deployment-wide roles; 404 for a hub's
 Permission: system:manage-roles
-Body: partial Role
+Body: { "permissions"?: string[] }
 Response: Role
 
 DELETE /api/settings/roles/:id
 Permission: system:manage-roles
 Response: { "ok": true }
+
+POST /api/settings/roles/:id/envelopes   -- re-seal a platform role's name
+Permission: system:manage-roles
+Body: { "envelopes": RoleEnvelope[] }
+Response: { "ok": true }
+
+GET /api/hubs/:hubId/settings/roles
+Permission: system:view-roles
+Response: { "roles": Role[] }            -- deployment-wide roles + this hub's own
+
+POST /api/hubs/:hubId/settings/roles
+Permission: system:manage-roles (and the caller holds every permission granted)
+Body: { "permissions": string[], "encryptedName": hex, "encryptedDescription"?: hex }
+Response: Role (201)
+
+PATCH /api/hubs/:hubId/settings/roles/:id
+Permission: system:manage-roles
+Body: { "permissions"?: string[], "encryptedName"?: hex, "encryptedDescription"?: hex | null }
+Response: Role
+
+DELETE /api/hubs/:hubId/settings/roles/:id
+Permission: system:manage-roles
+Response: { "ok": true }
 ```
+
+A template's suggested roles (`GET /api/settings/cms/templates/:id`) are public
+constants. The client seals each one it imports and creates it through
+`POST /api/hubs/:hubId/settings/roles`; the server has no route that creates
+roles from a template. Residual exposure: a hub role's permission set is stored
+in the clear, and a template's suggested permission sets are public, so a role
+imported unmodified from a template can be matched to its template entry by
+its permissions alone.
 
 #### Permissions Catalog
 
@@ -4242,10 +4293,6 @@ Permission: cases:manage-types
 Body: { "templateId": string }
 Response: { "applied": true, "entityTypes": number, "relationshipTypes": number, "reportTypes": number, "suggestedRoles": SuggestedRole[] } (201)
 
-POST   /api/settings/cms/roles/from-template
-Permission: system:manage-roles
-Body: { "roles": SuggestedRole[] }
-Response: { "created": { "id": string, "name": string }[], "count": number } (201)
 ```
 
 Hub-scoped: `/api/hubs/:hubId/settings/cms/*`
@@ -4670,11 +4717,6 @@ POST   /api/settings/cms/templates/apply
        Permission: cases:manage-types
        Body: { "templateId": string }
        Response: { "applied": true, "entityTypes": number, ... }
-
-POST   /api/settings/cms/roles/from-template
-       Permission: system:manage-roles
-       Body: { "roles": SuggestedRole[] }
-       Response: { "created": Array<{ id, name }>, "count": number }
 
 GET    /api/settings/cms/report-types?hubId=
        Permission: settings:read

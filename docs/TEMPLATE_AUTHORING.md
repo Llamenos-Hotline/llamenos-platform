@@ -457,7 +457,7 @@ Templates can suggest volunteer roles with pre-configured permissions:
 ]
 ```
 
-After applying a template, admins can create these roles via **Settings > Roles > Create from Template**. This calls `POST /api/settings/cms/roles/from-template`.
+After applying a template, admins can import these roles via **Settings > Roles > Import from template**. The client seals each role's name and description under the hub key (`LABEL_HUB_ROLE_ENCRYPT`) and creates it with `POST /api/hubs/:hubId/settings/roles`; the server never writes a role name in the clear (#2780). Because a role's permission set is stored in the clear, a role imported unmodified can be matched to its template entry — vary the permissions if that matters.
 
 Suggested roles are recommendations, not requirements. Admins can modify permissions, rename roles, or create entirely different role structures.
 

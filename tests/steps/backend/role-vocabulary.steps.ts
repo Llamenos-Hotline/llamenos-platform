@@ -133,7 +133,7 @@ When('the admin creates a platform role with the plaintext name {string}', async
   }))
 })
 
-Given('a second hub exists', async ({ request, world }) => {
+Given('another hub the role does not belong to exists', async ({ request, world }) => {
   const id = await createHubViaApi(request, uniqueName('bdd-role-vocab-b'))
   s(world).secondHubId = id
 })

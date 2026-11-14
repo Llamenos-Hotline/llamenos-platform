@@ -147,11 +147,13 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `platformRoles[].encryptedName` | **E2EE** | Indefinite | Per-admin HPKE envelopes (label: `LABEL_PLATFORM_ROLE_NAME_ENCRYPT`) |
 | `platformRoles[].encryptedDescription` | **E2EE** | Indefinite | Per-admin HPKE envelopes (label: `LABEL_PLATFORM_ROLE_DESC_ENCRYPT`) |
 | `platformRoles[].adminEnvelopes[]` | **E2EE** | Indefinite | HPKE-wrapped key, one per super-admin |
-| `platformRoles[].permissions` | Plaintext | Indefinite | Permission string array (not sensitive — defines capabilities, not identity) |
+| `platformRoles[].permissions` | Plaintext | Indefinite | Permission string array. Defines capabilities, not identity — but see the template fingerprint note below |
 | `hubRoles[].encryptedName` | **E2EE** | Indefinite | Hub-key encrypted (label: `LABEL_HUB_ROLE_ENCRYPT`) |
 | `hubRoles[].encryptedDescription` | **E2EE** | Indefinite | Hub-key encrypted (label: `LABEL_HUB_ROLE_ENCRYPT`) |
-| `hubRoles[].permissions` | Plaintext | Indefinite | Permission string array |
-| `hubRoles[].slug` | Plaintext | Indefinite | URL-safe identifier |
+| `hubRoles[].permissions` | Plaintext | Indefinite | Permission string array. A role imported unmodified from a template can be matched to its public template entry by this set alone (#2780) |
+| `roles[].slug` | Plaintext | Indefinite | Equals the role id for every custom role — never typed or derived from the name, which it would leak (#2780). Seeded defaults keep public slugs |
+| `roles[].name`, `roles[].description` | Plaintext **only for seeded defaults** | Indefinite | Public constants from `packages/shared/permissions.ts`. Null / empty for every custom role (#2780) |
+| `hubRoles[].hubId` | Plaintext | Hub lifetime | The owning hub; a hub role is listed and grantable only there, and is deleted with the hub |
 | `userRoleAssignments` | Plaintext | Account lifetime | Array of role IDs per user (global and per-hub) |
 
 #### Device & Identity Management (EP02)
