@@ -40,6 +40,17 @@ export const hubDetailResponseSchema = z.object({
   hub: hubResponseSchema,
 })
 
+/**
+ * The caller's own permissions IN one hub — what the server authorises with
+ * inside it (`hubContext`: that hub's role assignment, plus a super-admin's
+ * globals). `/auth/me` carries only the account-wide union, which describes no
+ * single hub; this is the per-hub answer a client gates its UI on (#1101).
+ */
+export const hubPermissionsResponseSchema = z.object({
+  hubId: z.string(),
+  permissions: z.array(z.string()),
+})
+
 export const hubKeyEnvelopeResponseSchema = z.object({
   envelope: recipientEnvelopeSchema,
 })

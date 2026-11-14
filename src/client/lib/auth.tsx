@@ -14,6 +14,7 @@ import { permissionGranted } from '@shared/permissions'
 import { loginWithPasskey as webauthnLogin } from './webauthn'
 import { useConfig, forgetHubPreference } from './config'
 import { setErrorToastsSuppressed } from './toast'
+import { useHubPermissions } from './hub-permissions'
 
 /** Hub membership changes rarely; a slow refresh avoids needing a relaunch. */
 const HUB_MEMBERSHIP_REFRESH_MS = 5 * 60_000
@@ -22,7 +23,8 @@ interface AuthState {
   isKeyUnlocked: boolean
   publicKey: string | null
   roles: string[]
-  permissions: string[]
+  /** The account-wide union from `/auth/me` — across every hub. Never hub-resolved. */
+  accountPermissions: string[]
   primaryRoleName: string | null
   name: string | null
   isLoading: boolean
@@ -46,6 +48,13 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
+  /**
+   * What the user may do in the hub being browsed (#1101), as the server resolves
+   * it for that hub. Empty until that answer arrives — never the account-wide
+   * union, which would offer actions this hub refuses. With no active hub there is
+   * nothing hub-specific to resolve, so it is the account-wide set.
+   */
+  permissions: string[]
   signIn: (seedHex: string, pin: string) => Promise<void>
   loginAfterKeyLoaded: (pubkeyHex: string) => Promise<void>
   signInWithPasskey: () => Promise<void>
@@ -55,7 +64,14 @@ interface AuthContextValue extends AuthState {
   renewSession: () => Promise<void>
   unlockWithPin: (pin: string) => Promise<boolean>
   lockKey: () => void
+  /** Gates on `permissions` — what the UI may offer in the active hub. */
   hasPermission: (permission: string) => boolean
+  /**
+   * Gates on the account-wide union. Only for work that acts on ALL member hubs at
+   * once (e.g. the assignee re-wrap relay listener): the multi-hub axiom forbids
+   * gating that on the hub being browsed. UI gating uses `hasPermission`.
+   */
+  hasAccountPermission: (permission: string) => boolean
   isAdmin: boolean
   isAuthenticated: boolean
   hasDeviceKey: boolean
@@ -72,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isKeyUnlocked: false,
     publicKey: null,
     roles: [],
-    permissions: [],
+    accountPermissions: [],
     primaryRoleName: null,
     name: null,
     isLoading: true,
@@ -118,7 +134,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   //
   // AuthProvider owns the trigger because it is the only place that knows when
   // a session exists; ConfigProvider sits above it and cannot read auth state.
-  const { refreshMemberHubs, clearMemberHubs } = useConfig()
+  const { refreshMemberHubs, clearMemberHubs, currentHubId } = useConfig()
+
+  // Per-hub UI permissions (#1101). Authority is per hub (#1064), so the set the UI
+  // gates on is the active hub's — not the account-wide union /auth/me returns.
+  // `accountPermissions` is the revision: re-reading /auth/me revalidates the hub.
+  const hubPermissions = useHubPermissions(state.publicKey, currentHubId, state.accountPermissions)
+  const permissions = currentHubId ? (hubPermissions ?? []) : state.accountPermissions
 
   // Listen for key manager lock/unlock events
   useEffect(() => {
@@ -142,7 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...s,
         sessionExpired: true,
         sessionExpiring: false,
-        ...(s.isKeyUnlocked ? {} : { roles: [], permissions: [], primaryRoleName: null, name: null }),
+        ...(s.isKeyUnlocked ? {} : { roles: [], accountPermissions: [], primaryRoleName: null, name: null }),
       }))
     })
     return () => setOnAuthExpired(null)
@@ -224,7 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             isKeyUnlocked: keyManager.isUnlocked(),
             publicKey: me.pubkey,
             roles: me.roles || [],
-            permissions: me.permissions || [],
+            accountPermissions: me.permissions || [],
             primaryRoleName: me.primaryRole?.name || null,
             name: me.name,
             isLoading: false,
@@ -265,7 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             isKeyUnlocked: true,
             publicKey: me.pubkey,
             roles: me.roles || [],
-            permissions: me.permissions || [],
+            accountPermissions: me.permissions || [],
             primaryRoleName: me.primaryRole?.name || null,
             name: me.name,
             isLoading: false,
@@ -324,7 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isKeyUnlocked: true,
         publicKey: pubkeyHex,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -373,7 +395,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isKeyUnlocked: true,
         publicKey: pubkeyHex,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -416,7 +438,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isKeyUnlocked: true,
         publicKey: pubkey,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -461,7 +483,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isKeyUnlocked: false, // No device key available — crypto locked
         publicKey: pubkey,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         name: me.name,
         isLoading: false,
@@ -500,7 +522,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...s,
         name: me.name,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         publicKey: me.pubkey,
         transcriptionEnabled: me.transcriptionEnabled,
@@ -533,7 +555,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ...s,
         name: me.name,
         roles: me.roles || [],
-        permissions: me.permissions || [],
+        accountPermissions: me.permissions || [],
         primaryRoleName: me.primaryRole?.name || null,
         publicKey: me.pubkey,
         transcriptionEnabled: me.transcriptionEnabled,
@@ -590,7 +612,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isKeyUnlocked: false,
       publicKey: null,
       roles: [],
-      permissions: [],
+      accountPermissions: [],
       primaryRoleName: null,
       name: null,
       isLoading: false,
@@ -616,6 +638,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     ...state,
+    permissions,
     signIn,
     loginAfterKeyLoaded,
     signInWithPasskey,
@@ -625,8 +648,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     renewSession,
     unlockWithPin,
     lockKey,
-    hasPermission: (permission: string) => permissionGranted(state.permissions, permission),
-    isAdmin: permissionGranted(state.permissions, 'settings:manage'),
+    hasPermission: (permission: string) => permissionGranted(permissions, permission),
+    hasAccountPermission: (permission: string) => permissionGranted(state.accountPermissions, permission),
+    isAdmin: permissionGranted(permissions, 'settings:manage'),
     isAuthenticated: sessionUsable,
     hasDeviceKey: state.isKeyUnlocked,
     webauthnEnrollmentRequired: state.webauthnRequired && !state.webauthnRegistered,

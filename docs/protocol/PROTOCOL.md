@@ -2675,6 +2675,16 @@ GET /api/hubs/:hubId
 Auth: Required (membership checked)
 Response: { "hub": Hub }
 
+GET /api/hubs/:hubId/permissions/me
+Auth: Required (membership checked; 404 unknown hub, 403 no role in it)
+Response: { "hubId": string, "permissions": string[] }
+// The caller's own permissions IN this hub: exactly the set `hubContext` authorises the request with
+// (that hub's role assignment, plus a super-admin's globals). `/auth/me` returns only the account-wide
+// union, which describes no single hub, and `/settings/users/:id/effective-permissions` needs a GLOBAL
+// `users:read` that a member whose roles are all hub-scoped does not hold. Clients gate what they RENDER
+// for the hub being browsed on this; it is browsing context only and never gates call, relay or
+// notification handling, which span every member hub (#1101).
+
 PATCH /api/hubs/:hubId
 Permission: system:manage-hubs
 Body: partial Hub
