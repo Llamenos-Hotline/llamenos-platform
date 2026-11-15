@@ -12,6 +12,7 @@ including #2752 (pool deadlock), #2754 (#1052 routing BDD), #2748 (all iOS shard
 
 **What this run did not do:** it closed nothing, labelled nothing, dispatched nothing and opened no PR.
 The triage role's hard limits forbid all four. §6 holds the exact commands for the operator.
+**§7 records what was applied when this document landed** (on `origin/main` @ `b2e4a35a2`).
 
 ---
 
@@ -628,3 +629,44 @@ gh issue edit 1705 --add-label m1-phase:5-claim-m1
 - Code claims: `git grep` / `git show origin/main:<path>` at the line numbers cited in each row.
 - **Not run:** the #2586 startup (dev Postgres refused: too many clients), the #2514 snapshot/DB diff
   (needs a DB), and any runtime reproduction of the offline-queue loss (code-read only).
+
+---
+
+## 7. Applied when this document landed (2026-11-14, `origin/main` @ `b2e4a35a2`)
+
+Each row's evidence was re-checked on `b2e4a35a2` before acting. It is one commit past the triage base, a `ci(mac)` change that touches none of the cited code.
+
+**Phase labels (§6.2): applied to 66 issues.** That is the 65 in §6.2, plus #1650 (`4-real-signals`): it sits in §1.5's Phase 4 table but was missing from §6.2's command list. #1674 moved from `4-real-signals` to `0-queue-health`. **Skipped:** #1314, which was already CLOSED. The 5 proposed closures left open (below) carry no phase label, as §6.2 directs.
+
+**`needs-decision` changes (§6.2): not applied.** `needs-decision` is a fleet dispatch veto (`vetoLabels`, fleet-core plan). Adding it to the 16 listed issues would take dispatchable work out of the pool: #1705 is DISP plus D13, and #1357 item 1 is DISP. Removing it from #1229 would expose an operator-only step to dispatch. These are left for the operator.
+
+**Closed with evidence (10):**
+- the work is on main: #1091, #1320, #1336, #1355, #1358, #1735, #2390, #2541;
+- duplicates of #2389: #765, #1323.
+
+#1091's cold-emulator item and #765's `hub-switch.feature` `@wip` (blocker #955 closed) were carried into #2389 by comment.
+
+**Left open, with the rationale commented, for the operator (5).** These are scope or product judgements, not "on main" or "duplicate":
+- #1229: decided and implemented, but making the GHCR package public is an operator step;
+- #1499: retiring a salvage snapshot;
+- #1921: "superseded by a document" is not a duplicate of an issue;
+- #1105: its fate depends on D2;
+- #1434: its remainder is not on main. The item is recorded on #1705.
+
+**Filed:**
+- **#2791** (M1, `m1-phase:1-data-loss`): the desktop offline queue is never persisted (finding 1, §1.4, K3). The fix is a device-local seal in the crate, independent of D2.
+- **#2792** (M1, `m1-phase:2-e2ee-readable`): every hub-key consumer fails, and no test notices (desktop tags and teams, iOS contacts, PR #2788). It is the instrument gap behind #1042. Linked from #1042.
+- **#2793** (M2): navigation as data, from product direction 2026-10-30 §5.1 item 1 (not this document). The drift today: desktop 37 slugs, Android hand copy 33, iOS 22 hardcoded links.
+
+**Commented:**
+- PR #2788: the hub-key regression risk (§1.3).
+- PR #2681 and #2678: **7** failed merge groups, all on head `6bb1df73c`, all on `repo-tests`.
+- PR #2713 and #1101: **3** failed merge groups, all on head `131df9c12`, all on `recovery-group.spec.ts`.
+
+The run IDs are in the PR comments. The ejector counts were re-measured from the `ci.yml` `merge_group` runs whose branch names the PR. A group names only its first PR, so these counts are a floor.
+
+**Not done (operator):**
+- the §3 decisions;
+- the §6.3 milestone moves (D23);
+- dequeueing #2681, or making it ineligible (it is unarmed, CLEAN and still labelled `queue-cleared`);
+- adding #2033, #1806 and #2678 to M1.
