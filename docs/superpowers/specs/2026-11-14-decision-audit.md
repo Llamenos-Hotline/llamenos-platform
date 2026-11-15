@@ -4,9 +4,7 @@ Read-only pass, checked against `origin/main` @ `986ff2340`, the full issue thre
 recorded in memory and `~/tier-overnight-status/` (operator-questions-2026-10-27 / -10-30,
 product-direction-2026-10-30, bundles-d2-d3-d4, bundles-d5-d7-d8).
 
-**Intended location:** `docs/superpowers/specs/2026-11-14-decision-audit.md`. This run was read-only on the
-repo (no commits, no PR, no labels, no comments, no board writes), so the file lives here. The drafted
-comments below are for the operator to post.
+**Status:** the audit itself was a read-only pass. Its recommended actions were then applied through the GitHub API on 2026-11-14 (see *Applied* at the end), after each row's evidence was re-checked against `origin/main` @ `b2e4a35a2`.
 
 ## The count
 
@@ -24,7 +22,7 @@ So the operator's list is **3 decisions + 4 actions**, not 27.
 
 ## Table
 
-| # | Verdict | Evidence | Recommended action (operator performs it; nothing was written) |
+| # | Verdict | Evidence | Recommended action |
 |---|---|---|---|
 | **#2170** provider fallback | already-answered | D8 (2026-10-25, plus an addendum) and the 2026-10-29 decisions in the thread: reuse `voice.unavailableMessage`, an optional per-hub outage prompt, play every enabled language in turn, no forwarding, rsync to the second VPS, Telnyx→TeXML, co-located PBX only. | Remove `needs-decision`. Dispatchable per `bundles-d5-d7-d8.md` (B-D8-*). |
 | **#2175** rollback vs forward-only migrations | already-answered | Operator, 2026-10-29: *"design migrations as expand/contract … A backup before every upgrade is mandatory."* Also 2026-10-30: the pre-upgrade snapshot is kept unencrypted, only on FDE hosts, so automatic rollback can restore it. | Remove `needs-decision`. Engineer: a CI rejection of destructive DDL outside a "contract" release, plus the snapshot restore in `update.yml`'s rescue. |
@@ -54,7 +52,7 @@ So the operator's list is **3 decisions + 4 actions**, not 27.
 | **#719** RustFS + PAT + updater key custody | **OPERATOR (credentials + one conflict)** | 2026-11-10: *"rustfs should be uploaded"* (decided). Still no `RUSTFS_*` or `RELEASES_REPO_PAT` secrets. `tauri-release.yml:538-546` refuses without all five, one of which is `RUSTFS_ENDPOINT`. | Keep `needs-human`. Comment below. |
 | **#745** iOS signing secrets + APNs | **OPERATOR (account action)** | `mobile-release.yml:456-504` consumes the four secrets. Building the IPA and attaching it to a GH Release is inside the 2026-11-10 boundary. TestFlight upload stays local (fastlane, #744). | Keep `needs-human`. Comment below. |
 
-## Drafted `## Decision needed` comments (for the 6 kept)
+## `## Decision needed` comments (for the 6 kept; posted verbatim)
 
 ### #1342
 
@@ -119,3 +117,13 @@ Set `IOS_CERTIFICATE_BASE64`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROF
 - No issue exists for §5.1 nav-as-data (adopted 2026-10-30). #1240's compact-width requirement belongs in it.
 - `roles` is in `CROSS_HUB_TABLES`, which conflicts with the 2026-11-04 no-hubless-data ruling (#2780). Org-model B5 placement is still open under #2294.
 - Salvage `5995e5181` is a client-side shim for #2033 and must not be landed as #2033's fix.
+
+## Applied (2026-11-14)
+
+Before acting, every row's evidence was re-checked against `origin/main` @ `b2e4a35a2`. All 27 still held, so no item was skipped.
+
+- **Labels.** `needs-decision` removed from #2170, #2175, #2179, #2177, #1245, #1388, #1194, #1204, #1209, #1240, #1331, #1332, #1568, #1592, #2780 and #1030. `needs-human` removed from #1142, #954, #1314 and #1008. #1229 changed from `needs-decision` to `needs-human`. Each of those 21 got one comment saying why the label came off and who decides now, with the evidence quoted from this table.
+- **Decision comments.** The six drafts above were posted verbatim on #1342, #1674, #1495, #741, #719 and #745. Their labels were kept.
+- **Closed.** #1245 (completed), #1388, #954 and #1314 (not planned). #2033 got a note that salvage `5995e5181` is reference material only: it is a client-side decode shim, and the fix belongs upstream in the server mapper or codegen.
+- **Board** (project #1, "Decisions & M1 Strategy"). The 20 items that no longer need the operator were removed, leaving 7: #1342, #1674, #1495, #741, #719, #745 and #1229. `Urgency`, `Area`, `Blocks`, `Blocked items` and `Recommendation` were set from the *Board:* lines above. Fields the table leaves empty stayed empty: Urgency on #741, #745 and #1229, and Blocks on #1229. `Area` is mapped onto the board's fixed options: roles/permissions → Roles & permissions, fleet/CI and fleet governance → CI & pipeline, release/* → Release & publishing.
+- **Result.** The open issues carrying `needs-decision` are now exactly #1342, #1674 and #1495. Those carrying `needs-human` are exactly #741, #719, #745 and #1229.
