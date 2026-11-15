@@ -1,5 +1,7 @@
 node_modules
 dist/
+# macOS Finder metadata (the Mac CI host and any developer Mac)
+.DS_Store
 .dev.vars
 .wrangler/
 *.local
