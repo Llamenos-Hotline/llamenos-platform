@@ -71,7 +71,7 @@ export function OfflineBanner() {
           <WifiOff className="h-4 w-4 shrink-0" />
           <span>{t('offline.banner')}</span>
           {pendingCount > 0 && (
-            <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
+            <span data-testid="offline-pending-count" className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-xs">
               {t('offline.pendingCount', { count: pendingCount })}
             </span>
           )}

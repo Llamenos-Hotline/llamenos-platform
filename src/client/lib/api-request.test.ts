@@ -12,12 +12,15 @@ import {
   bootstrapAdmin,
 } from './api'
 import * as keyManager from './key-manager'
-import { offlineQueue } from './offline-queue'
+import { offlineQueue, OfflineQueueStorageError } from './offline-queue'
+import * as platform from './platform'
 
 vi.mock('./platform', () => ({
   createAuthToken: vi.fn(async () => JSON.stringify({ timestamp: Date.now(), token: 'mock-token' })),
   encryptDraft: vi.fn(async (text: string) => text),
   decryptDraft: vi.fn(async (text: string) => text),
+  sealOfflineQueue: vi.fn(async (json: string) => `sealed:${json}`),
+  openOfflineQueue: vi.fn(async (sealed: string) => sealed.slice('sealed:'.length)),
   lockCrypto: vi.fn(async () => {}),
   decryptWithPin: vi.fn(async () => null),
 }))
@@ -110,14 +113,14 @@ describe('bootstrapAdmin', () => {
 })
 
 describe('request retry logic', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubGlobal('fetch', vi.fn())
     sessionStorage.clear()
     keyManager.lock()
     setOnAuthExpired(null)
     setOnApiActivity(null)
     setActiveHub(null)
-    offlineQueue.clear()
+    await offlineQueue.clear()
   })
 
   afterEach(() => {
@@ -340,6 +343,19 @@ describe('request retry logic', () => {
 
     await expect(request('/notes', { method: 'POST', body: '{}' })).rejects.toBeInstanceOf(OfflineQueuedError)
     expect(offlineQueue.pendingCount).toBe(1)
+
+    Object.defineProperty(navigator, 'onLine', { value: true, writable: true, configurable: true })
+  })
+
+  it('reports the write as failed, not queued, when the queue cannot be sealed', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.mocked(platform.sealOfflineQueue).mockRejectedValueOnce(new Error('Device key is locked. Enter PIN to unlock.'))
+
+    Object.defineProperty(navigator, 'onLine', { value: false, writable: true, configurable: true })
+
+    await expect(request('/notes', { method: 'POST', body: '{}' })).rejects.toBeInstanceOf(OfflineQueueStorageError)
+    expect(offlineQueue.pendingCount).toBe(0)
 
     Object.defineProperty(navigator, 'onLine', { value: true, writable: true, configurable: true })
   })

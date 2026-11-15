@@ -27,6 +27,7 @@ vi.mock('./key-manager', () => ({
   isUnlocked: () => keys.unlocked,
   setOnCall: vi.fn(),
   onLock: () => () => {},
+  onUnlock: () => () => {},
 }))
 vi.mock('./api/client', async (importActual) => ({
   ...(await importActual<typeof import('./api/client')>()),

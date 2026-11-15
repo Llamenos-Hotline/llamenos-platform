@@ -13,6 +13,7 @@ import { installGlobalErrorHandlers, uploadPendingReports, isCrashReportingEnabl
 import * as testPlatform from '@/lib/platform'
 import * as testKeyManager from '@/lib/key-manager'
 import * as testApi from '@/lib/api'
+import { offlineQueue as testOfflineQueue } from '@/lib/offline-queue'
 import '@/lib/i18n'
 import '@/app.css'
 
@@ -37,6 +38,7 @@ declare global {
     __TEST_SET_ACTIVE_HUB: (id: string | null) => void
     __TEST_GET_ACTIVE_HUB: () => string | null
     __TEST_API_CONFIG: typeof import('./lib/api-config')
+    __TEST_OFFLINE_QUEUE: typeof import('./lib/offline-queue').offlineQueue
     /** Set via page.addInitScript to exercise packaged-desktop-only behavior (#738/#739) under the Playwright mock. */
     __TEST_SIMULATE_PACKAGED_TAURI__?: boolean
   }
@@ -52,6 +54,7 @@ if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.PLA
   window.__TEST_SET_ACTIVE_HUB = testApi.setActiveHub
   window.__TEST_GET_ACTIVE_HUB = testApi.getActiveHub
   window.__TEST_API_CONFIG = testApiConfig
+  window.__TEST_OFFLINE_QUEUE = testOfflineQueue
 }
 
 declare module '@tanstack/react-router' {

@@ -25,7 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/config', () => ({ useConfig: () => ({ currentHubId: 'hub-A' }) }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: () => {} }) }))
-vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true }))
+vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true, onUnlock: () => () => {} }))
 vi.mock('@/lib/admin-recipient', () => ({ adminHpkeRecipient: () => 'pk-admin' }))
 vi.mock('@/lib/platform', () => ({
   encryptNote: async () => ({ encryptedContent: 'ct', authorEnvelope: undefined, adminEnvelopes: [] }),
