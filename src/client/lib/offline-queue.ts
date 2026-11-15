@@ -18,6 +18,7 @@
 import { getApiUrl } from './api-config'
 import { netFetch } from './net'
 import { onUnlock, isUnlocked } from './key-manager'
+import * as platform from './platform'
 
 /** Types of operations that can be queued */
 export type QueuedOperationType =
@@ -67,15 +68,11 @@ export class OfflineQueueStorageError extends Error {
   }
 }
 
+// Imported statically, never with `import()`: the queue is written exactly when
+// the network is down, and a lazily fetched chunk would fail to load right then.
 const platformSealer: OfflineQueueSealer = {
-  async seal(json) {
-    const { sealOfflineQueue } = await import('./platform')
-    return sealOfflineQueue(json)
-  },
-  async open(sealed) {
-    const { openOfflineQueue } = await import('./platform')
-    return openOfflineQueue(sealed)
-  },
+  seal: json => platform.sealOfflineQueue(json),
+  open: sealed => platform.openOfflineQueue(sealed),
 }
 
 const OPERATION_TYPES: ReadonlySet<string> = new Set<QueuedOperationType>([
