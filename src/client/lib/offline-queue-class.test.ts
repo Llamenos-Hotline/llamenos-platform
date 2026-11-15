@@ -1,12 +1,44 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { OfflineQueue, classifyOperation, isQueueableMethod, isNetworkError } from './offline-queue'
+import {
+  OfflineQueue,
+  OfflineQueueStorageError,
+  classifyOperation,
+  isQueueableMethod,
+  isNetworkError,
+  type OfflineQueueSealer,
+} from './offline-queue'
+
+const STORAGE_KEY = 'llamenos-offline-queue'
+
+/**
+ * A reversible stand-in for the device-local seal, so these tests exercise the
+ * queue's own persistence logic. The real seal (platform.ts → Tauri IPC → the
+ * crate) is exercised end to end, across a restart, in
+ * offline-queue-restart.test.ts.
+ */
+function fakeSealer(): OfflineQueueSealer & { failSeal: boolean; failOpen: boolean } {
+  return {
+    failSeal: false,
+    failOpen: false,
+    async seal(json) {
+      if (this.failSeal) throw new Error('Device key is locked. Enter PIN to unlock.')
+      return `sealed:${btoa(json)}`
+    },
+    async open(sealed) {
+      if (this.failOpen || !sealed.startsWith('sealed:')) throw new Error('Decryption failed')
+      return atob(sealed.slice('sealed:'.length))
+    },
+  }
+}
 
 describe('OfflineQueue', () => {
   let queue: OfflineQueue
+  let sealer: ReturnType<typeof fakeSealer>
 
   beforeEach(() => {
     localStorage.clear()
-    queue = new OfflineQueue()
+    sealer = fakeSealer()
+    queue = new OfflineQueue({ sealer })
   })
 
   afterEach(() => {
@@ -14,133 +46,133 @@ describe('OfflineQueue', () => {
   })
 
   describe('enqueue', () => {
-    it('adds operations to the queue', () => {
-      const id = queue.enqueue('/notes', 'POST', '{"text":"hello"}')
+    it('adds operations to the queue', async () => {
+      const id = await queue.enqueue('/notes', 'POST', '{"text":"hello"}')
       expect(queue.pendingCount).toBe(1)
       expect(queue.getQueue()[0].type).toBe('note:create')
       expect(queue.getQueue()[0].id).toBe(id)
     })
 
-    it('assigns unique IDs to each operation', () => {
-      const id1 = queue.enqueue('/notes', 'POST', '{}')
-      const id2 = queue.enqueue('/notes', 'POST', '{}')
+    it('assigns unique IDs to each operation', async () => {
+      const id1 = await queue.enqueue('/notes', 'POST', '{}')
+      const id2 = await queue.enqueue('/notes', 'POST', '{}')
       expect(id1).not.toBe(id2)
     })
 
-    it('sets attempts to 0 and lastError to null on enqueue', () => {
-      queue.enqueue('/notes', 'POST', '{}')
+    it('sets attempts to 0 and lastError to null on enqueue', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
       const op = queue.getQueue()[0]
       expect(op.attempts).toBe(0)
       expect(op.lastError).toBeNull()
     })
 
-    it('stores ISO timestamp on enqueue', () => {
+    it('stores ISO timestamp on enqueue', async () => {
       const before = new Date().toISOString()
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const after = new Date().toISOString()
       const op = queue.getQueue()[0]
       expect(op.queuedAt >= before).toBe(true)
       expect(op.queuedAt <= after).toBe(true)
     })
 
-    it('allows null body', () => {
-      queue.enqueue('/notes', 'POST', null)
+    it('allows null body', async () => {
+      await queue.enqueue('/notes', 'POST', null)
       expect(queue.getQueue()[0].body).toBeNull()
     })
   })
 
   describe('remove', () => {
-    it('removes an operation by ID', () => {
-      const id = queue.enqueue('/notes', 'POST', '{}')
-      queue.remove(id)
+    it('removes an operation by ID', async () => {
+      const id = await queue.enqueue('/notes', 'POST', '{}')
+      await queue.remove(id)
       expect(queue.pendingCount).toBe(0)
     })
 
-    it('ignores unknown IDs', () => {
-      queue.enqueue('/notes', 'POST', '{}')
-      queue.remove('nonexistent')
+    it('ignores unknown IDs', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.remove('nonexistent')
       expect(queue.pendingCount).toBe(1)
     })
 
-    it('removes only the matching operation', () => {
-      const id1 = queue.enqueue('/notes', 'POST', '{}')
-      queue.enqueue('/messages', 'POST', '{}')
-      queue.remove(id1)
+    it('removes only the matching operation', async () => {
+      const id1 = await queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/messages', 'POST', '{}')
+      await queue.remove(id1)
       expect(queue.pendingCount).toBe(1)
       expect(queue.getQueue()[0].type).toBe('message:send')
     })
   })
 
   describe('clear', () => {
-    it('removes all operations', () => {
-      queue.enqueue('/notes', 'POST', '{}')
-      queue.enqueue('/messages', 'POST', '{}')
-      queue.clear()
+    it('removes all operations', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/messages', 'POST', '{}')
+      await queue.clear()
       expect(queue.pendingCount).toBe(0)
     })
 
-    it('works on empty queue', () => {
-      queue.clear()
+    it('works on empty queue', async () => {
+      await queue.clear()
       expect(queue.pendingCount).toBe(0)
     })
   })
 
   describe('subscribe', () => {
-    it('calls listener immediately with current queue', () => {
-      queue.enqueue('/notes', 'POST', '{}')
+    it('calls listener immediately with current queue', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
       const listener = vi.fn()
       queue.subscribe(listener)
       expect(listener).toHaveBeenCalledTimes(1)
       expect(listener).toHaveBeenCalledWith(queue.getQueue())
     })
 
-    it('notifies on enqueue', () => {
+    it('notifies on enqueue', async () => {
       const listener = vi.fn()
       queue.subscribe(listener)
       listener.mockClear()
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       expect(listener).toHaveBeenCalledTimes(1)
     })
 
-    it('notifies on remove', () => {
-      const id = queue.enqueue('/notes', 'POST', '{}')
+    it('notifies on remove', async () => {
+      const id = await queue.enqueue('/notes', 'POST', '{}')
       const listener = vi.fn()
       queue.subscribe(listener)
       listener.mockClear()
-      queue.remove(id)
+      await queue.remove(id)
       expect(listener).toHaveBeenCalledTimes(1)
     })
 
-    it('notifies on clear', () => {
-      queue.enqueue('/notes', 'POST', '{}')
+    it('notifies on clear', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
       const listener = vi.fn()
       queue.subscribe(listener)
       listener.mockClear()
-      queue.clear()
+      await queue.clear()
       expect(listener).toHaveBeenCalledTimes(1)
     })
 
-    it('returns unsubscribe function', () => {
+    it('returns unsubscribe function', async () => {
       const listener = vi.fn()
       const unsub = queue.subscribe(listener)
       unsub()
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       expect(listener).toHaveBeenCalledTimes(1)
     })
 
-    it('passes a copy of the queue, not the original', () => {
-      queue.enqueue('/notes', 'POST', '{}')
+    it('passes a copy of the queue, not the original', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
       let captured: unknown
       queue.subscribe((q) => { captured = q })
       expect(captured).not.toBe(queue.getQueue())
     })
 
-    it('survives listener exceptions', () => {
+    it('survives listener exceptions', async () => {
       const badListener = vi.fn(() => { throw new Error('boom') })
       const goodListener = vi.fn()
       expect(() => queue.subscribe(badListener)).toThrow('boom')
       queue.subscribe(goodListener)
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       expect(goodListener).toHaveBeenCalledTimes(2)
     })
   })
@@ -160,7 +192,7 @@ describe('OfflineQueue', () => {
     })
 
     it('prevents concurrent replays', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(new Response(null, { status: 200 })), 100)))
 
@@ -173,7 +205,7 @@ describe('OfflineQueue', () => {
     })
 
     it('succeeds on 200 and removes from queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -183,7 +215,7 @@ describe('OfflineQueue', () => {
     })
 
     it('succeeds on 409 conflict and removes from queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Conflict', { status: 409 }))
 
@@ -193,7 +225,7 @@ describe('OfflineQueue', () => {
     })
 
     it('increments attempts on 500 and keeps in queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Server Error', { status: 500 }))
 
@@ -205,7 +237,7 @@ describe('OfflineQueue', () => {
     })
 
     it('increments attempts on 401 and keeps in queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Unauthorized', { status: 401 }))
 
@@ -216,7 +248,7 @@ describe('OfflineQueue', () => {
     })
 
     it('increments attempts on 429 and keeps in queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Too Many Requests', { status: 429 }))
 
@@ -226,7 +258,7 @@ describe('OfflineQueue', () => {
     })
 
     it('increments attempts on permanent client error (400) but keeps in queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Bad Request', { status: 400 }))
 
@@ -237,7 +269,7 @@ describe('OfflineQueue', () => {
     })
 
     it('increments attempts on permanent client error (403) but keeps in queue', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Forbidden', { status: 403 }))
 
@@ -248,7 +280,7 @@ describe('OfflineQueue', () => {
     })
 
     it('keeps in queue on 401 (auth error, retryable)', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Unauthorized', { status: 401 }))
 
@@ -257,7 +289,7 @@ describe('OfflineQueue', () => {
     })
 
     it('removes after MAX_ATTEMPTS permanent failures', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Bad Request', { status: 400 }))
 
@@ -268,8 +300,8 @@ describe('OfflineQueue', () => {
     })
 
     it('stops replay on network error and keeps remaining items', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
-      queue.enqueue('/messages', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/messages', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
 
@@ -279,8 +311,8 @@ describe('OfflineQueue', () => {
     })
 
     it('breaks on going offline during replay', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
-      queue.enqueue('/messages', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/messages', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockImplementation(() => {
         Object.defineProperty(navigator, 'onLine', { value: false, writable: true, configurable: true })
@@ -295,7 +327,7 @@ describe('OfflineQueue', () => {
     })
 
     it('includes auth headers from callback', async () => {
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -313,7 +345,7 @@ describe('OfflineQueue', () => {
     })
 
     it('does not include body for null body', async () => {
-      queue.enqueue('/notes', 'POST', null)
+      await queue.enqueue('/notes', 'POST', null)
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response(null, { status: 200 }))
 
@@ -326,7 +358,7 @@ describe('OfflineQueue', () => {
 
     it('applies exponential backoff on retryable failures', async () => {
       vi.useFakeTimers()
-      queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/notes', 'POST', '{}')
       const fetchMock = vi.mocked(globalThis.fetch)
       fetchMock.mockResolvedValue(new Response('Error', { status: 500 }))
 
@@ -340,17 +372,17 @@ describe('OfflineQueue', () => {
   })
 
   describe('online status', () => {
-    it('reflects navigator.onLine initially', () => {
+    it('reflects navigator.onLine initially', async () => {
       expect(queue.online).toBe(navigator.onLine)
     })
 
-    it('updates on online event', () => {
+    it('updates on online event', async () => {
       const event = new Event('online')
       window.dispatchEvent(event)
       expect(queue.online).toBe(true)
     })
 
-    it('updates on offline event', () => {
+    it('updates on offline event', async () => {
       const event = new Event('offline')
       window.dispatchEvent(event)
       expect(queue.online).toBe(false)
@@ -358,25 +390,111 @@ describe('OfflineQueue', () => {
   })
 
   describe('persistence', () => {
-    it('loads from localStorage on construction', () => {
-      const stored = [{ id: 'test-id', type: 'note:create' as const, path: '/notes', method: 'POST', body: '{}', queuedAt: new Date().toISOString(), attempts: 0, lastError: null }]
-      localStorage.setItem('llamenos-offline-queue', JSON.stringify(stored))
-
-      const q2 = new OfflineQueue()
-      expect(q2.pendingCount).toBe(1)
-      expect(q2.getQueue()[0].id).toBe('test-id')
-      q2.destroy()
+    it('persists every enqueue sealed, never as plaintext', async () => {
+      await queue.enqueue('/notes', 'POST', '{"encryptedContent":"secret-body"}')
+      const stored = localStorage.getItem(STORAGE_KEY)
+      expect(stored).not.toBeNull()
+      expect(stored).not.toContain('secret-body')
+      expect(stored?.startsWith('sealed:')).toBe(true)
     })
 
-    it('handles corrupted localStorage gracefully', () => {
-      localStorage.setItem('llamenos-offline-queue', 'not-json{')
-      const q2 = new OfflineQueue()
-      expect(q2.pendingCount).toBe(0)
-      q2.destroy()
+    it('reads the queue back after a restart once hydrated', async () => {
+      const id1 = await queue.enqueue('/notes', 'POST', '{}')
+      const id2 = await queue.enqueue('/reports', 'POST', '{}')
+      queue.destroy()
+
+      const restarted = new OfflineQueue({ sealer })
+      // Sealed until the device key opens it.
+      expect(restarted.hydrated).toBe(false)
+      expect(restarted.pendingCount).toBe(0)
+      await restarted.hydrate()
+      expect(restarted.hydrated).toBe(true)
+      expect(restarted.getQueue().map(op => op.id)).toEqual([id1, id2])
+      restarted.destroy()
     })
 
-    it('handles empty localStorage gracefully', () => {
-      const q2 = new OfflineQueue()
+    it('merges the persisted queue ahead of an enqueue made before hydration', async () => {
+      const persistedId = await queue.enqueue('/notes', 'POST', '{}')
+      queue.destroy()
+
+      const restarted = new OfflineQueue({ sealer })
+      const newId = await restarted.enqueue('/messages', 'POST', '{}')
+      expect(restarted.getQueue().map(op => op.id)).toEqual([persistedId, newId])
+
+      const third = new OfflineQueue({ sealer })
+      await third.hydrate()
+      expect(third.getQueue().map(op => op.id)).toEqual([persistedId, newId])
+      restarted.destroy()
+      third.destroy()
+    })
+
+    it('rejects an enqueue it cannot seal and does not keep the operation', async () => {
+      sealer.failSeal = true
+      await expect(queue.enqueue('/notes', 'POST', '{}')).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      expect(queue.pendingCount).toBe(0)
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+    })
+
+    it('surfaces a persisted queue that will not open and leaves it in storage', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      const stored = localStorage.getItem(STORAGE_KEY)
+      queue.destroy()
+
+      sealer.failOpen = true
+      const restarted = new OfflineQueue({ sealer })
+      await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      // A later write must not overwrite operations it has not read.
+      await expect(restarted.enqueue('/messages', 'POST', '{}')).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      expect(localStorage.getItem(STORAGE_KEY)).toBe(stored)
+      restarted.destroy()
+    })
+
+    it('rejects a persisted value that is not a sealed queue', async () => {
+      localStorage.setItem(STORAGE_KEY, 'not-a-sealed-queue')
+      const restarted = new OfflineQueue({ sealer })
+      await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      restarted.destroy()
+    })
+
+    it('rejects an opened queue whose contents are not queued operations', async () => {
+      localStorage.setItem(STORAGE_KEY, await sealer.seal('[{"id":1}]'))
+      const restarted = new OfflineQueue({ sealer })
+      await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      restarted.destroy()
+    })
+
+    it('clear discards the persisted queue too, even unopened', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      queue.destroy()
+      const restarted = new OfflineQueue({ sealer })
+      await restarted.clear()
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+      expect(restarted.hydrated).toBe(true)
+      restarted.destroy()
+    })
+
+    it('removes storage once the last operation is replayed', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.replay(async () => ({}))
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+      vi.unstubAllGlobals()
+    })
+
+    it('replay opens the persisted queue first, so a restart replays it', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      queue.destroy()
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
+      const restarted = new OfflineQueue({ sealer })
+      const result = await restarted.replay(async () => ({}))
+      expect(result).toEqual({ succeeded: 1, failed: 0, remaining: 0 })
+      vi.unstubAllGlobals()
+      restarted.destroy()
+    })
+
+    it('handles empty localStorage', async () => {
+      const q2 = new OfflineQueue({ sealer })
+      expect(q2.hydrated).toBe(true)
       expect(q2.pendingCount).toBe(0)
       q2.destroy()
     })
@@ -384,122 +502,122 @@ describe('OfflineQueue', () => {
 })
 
 describe('classifyOperation', () => {
-  it('classifies note:create', () => {
+  it('classifies note:create', async () => {
     expect(classifyOperation('/notes', 'POST')).toBe('note:create')
   })
 
-  it('classifies note:update', () => {
+  it('classifies note:update', async () => {
     expect(classifyOperation('/notes/123', 'PATCH')).toBe('note:update')
   })
 
-  it('classifies message:send', () => {
+  it('classifies message:send', async () => {
     expect(classifyOperation('/messages', 'POST')).toBe('message:send')
   })
 
-  it('classifies shift:toggle from shifts path', () => {
+  it('classifies shift:toggle from shifts path', async () => {
     expect(classifyOperation('/shifts/my-status', 'PATCH')).toBe('shift:toggle')
   })
 
-  it('classifies shift:toggle from availability path', () => {
+  it('classifies shift:toggle from availability path', async () => {
     expect(classifyOperation('/availability', 'PATCH')).toBe('shift:toggle')
   })
 
-  it('classifies availability:update', () => {
+  it('classifies availability:update', async () => {
     expect(classifyOperation('/availability', 'PATCH')).toBe('shift:toggle')
   })
 
-  it('classifies conversation:claim', () => {
+  it('classifies conversation:claim', async () => {
     expect(classifyOperation('/claim', 'POST')).toBe('conversation:claim')
   })
 
-  it('classifies conversation:update', () => {
+  it('classifies conversation:update', async () => {
     expect(classifyOperation('/conversations/123', 'PATCH')).toBe('conversation:update')
   })
 
-  it('classifies report:create', () => {
+  it('classifies report:create', async () => {
     expect(classifyOperation('/reports', 'POST')).toBe('report:create')
   })
 
-  it('classifies report:message', () => {
+  it('classifies report:message', async () => {
     expect(classifyOperation('/reports/123/messages', 'POST')).toBe('report:message')
   })
 
-  it('classifies ban:add', () => {
+  it('classifies ban:add', async () => {
     expect(classifyOperation('/bans', 'POST')).toBe('ban:add')
   })
 
-  it('classifies ban:remove', () => {
+  it('classifies ban:remove', async () => {
     expect(classifyOperation('/bans/123', 'DELETE')).toBe('ban:remove')
   })
 
-  it('falls back to generic:write', () => {
+  it('falls back to generic:write', async () => {
     expect(classifyOperation('/unknown', 'POST')).toBe('generic:write')
   })
 
-  it('does not classify report:create for report messages path', () => {
+  it('does not classify report:create for report messages path', async () => {
     expect(classifyOperation('/reports/123/messages', 'POST')).toBe('report:message')
   })
 })
 
 describe('isQueueableMethod', () => {
-  it('returns true for POST', () => {
+  it('returns true for POST', async () => {
     expect(isQueueableMethod('POST')).toBe(true)
   })
 
-  it('returns true for PUT', () => {
+  it('returns true for PUT', async () => {
     expect(isQueueableMethod('PUT')).toBe(true)
   })
 
-  it('returns true for PATCH', () => {
+  it('returns true for PATCH', async () => {
     expect(isQueueableMethod('PATCH')).toBe(true)
   })
 
-  it('returns true for DELETE', () => {
+  it('returns true for DELETE', async () => {
     expect(isQueueableMethod('DELETE')).toBe(true)
   })
 
-  it('returns false for GET', () => {
+  it('returns false for GET', async () => {
     expect(isQueueableMethod('GET')).toBe(false)
   })
 
-  it('returns false for HEAD', () => {
+  it('returns false for HEAD', async () => {
     expect(isQueueableMethod('HEAD')).toBe(false)
   })
 
-  it('is case-insensitive', () => {
+  it('is case-insensitive', async () => {
     expect(isQueueableMethod('post')).toBe(true)
     expect(isQueueableMethod('get')).toBe(false)
   })
 })
 
 describe('isNetworkError', () => {
-  it('returns true for TypeError with fetch message', () => {
+  it('returns true for TypeError with fetch message', async () => {
     expect(isNetworkError(new TypeError('fetch failed'))).toBe(true)
   })
 
-  it('returns true for TypeError with network message', () => {
+  it('returns true for TypeError with network message', async () => {
     expect(isNetworkError(new TypeError('network error'))).toBe(true)
   })
 
-  it('returns true for TypeError with Failed to fetch', () => {
+  it('returns true for TypeError with Failed to fetch', async () => {
     expect(isNetworkError(new TypeError('Failed to fetch'))).toBe(true)
   })
 
-  it('returns false for AbortError', () => {
+  it('returns false for AbortError', async () => {
     expect(isNetworkError(new DOMException('Aborted', 'AbortError'))).toBe(false)
   })
 
-  it('returns true when navigator is offline', () => {
+  it('returns true when navigator is offline', async () => {
     Object.defineProperty(navigator, 'onLine', { value: false, writable: true, configurable: true })
     expect(isNetworkError(new Error('something'))).toBe(true)
     Object.defineProperty(navigator, 'onLine', { value: true, writable: true, configurable: true })
   })
 
-  it('returns false for random errors when online', () => {
+  it('returns false for random errors when online', async () => {
     expect(isNetworkError(new Error('random'))).toBe(false)
   })
 
-  it('returns false for non-Error objects when online', () => {
+  it('returns false for non-Error objects when online', async () => {
     expect(isNetworkError('string error')).toBe(false)
     expect(isNetworkError(42)).toBe(false)
     expect(isNetworkError(null)).toBe(false)

@@ -32,9 +32,12 @@ import { randomBytes } from '@noble/hashes/utils.js'
 import { argon2id } from '@noble/hashes/argon2.js'
 import { utf8ToBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import {
+  HKDF_CONTEXT_DRAFTS,
+  HKDF_SALT,
   LABEL_CALL_META,
   LABEL_MESSAGE,
   LABEL_NOTE_KEY,
+  LABEL_OFFLINE_QUEUE,
   LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
   LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
   LABEL_RECOVERY_GROUP_SHARE_WRAP,
@@ -101,6 +104,23 @@ function requireAllowedLabel(command: string, label: string, allowed: readonly s
   if (!allowed.includes(label)) {
     throw new Error(`${command}: label '${label}' is not openable from the webview`)
   }
+}
+
+// ── Device-local sealing ─────────────────────────────────────────────
+// Mirror of `encryption::seal_device_local` / `open_device_local`
+// (packages/crypto/src/encryption.rs) as called by
+// `seal_device_local_from_state` in apps/desktop/src/crypto.rs: key =
+// HKDF-SHA256(salt = HKDF_SALT, ikm = device X25519 seed, info = purpose),
+// AES-256-GCM with the purpose as AAD, wire `nonce(12) ‖ ct ‖ tag`. It needs
+// the device key and NOTHING else — in particular no hub key.
+const DEVICE_LOCAL_PURPOSES: readonly string[] = [HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE]
+
+function deviceLocalKey(purpose: string): Uint8Array {
+  if (!DEVICE_LOCAL_PURPOSES.includes(purpose)) {
+    throw new Error(`Invalid input: '${purpose}' is not a device-local sealing purpose`)
+  }
+  const secrets = requireSecrets()
+  return hkdf(sha256, secrets.encryptionSeed, utf8ToBytes(HKDF_SALT), utf8ToBytes(purpose), 32)
 }
 
 // ── Provisioning ephemeral key mock state ────────────────────────────
@@ -1405,6 +1425,26 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const aad = utf8ToBytes(label)
     const cipher = gcm(mockHubKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
+    return new TextDecoder().decode(plaintext)
+  },
+
+  seal_device_local_from_state: (a) => {
+    const purpose = a.purpose as string
+    const key = deviceLocalKey(purpose)
+    const nonce = randomBytes(12)
+    const ciphertext = gcm(key, nonce, utf8ToBytes(purpose)).encrypt(utf8ToBytes(a.plaintext as string))
+    const packed = new Uint8Array(12 + ciphertext.length)
+    packed.set(nonce)
+    packed.set(ciphertext, 12)
+    return bytesToHex(packed)
+  },
+
+  open_device_local_from_state: (a) => {
+    const purpose = a.purpose as string
+    const key = deviceLocalKey(purpose)
+    const data = hexToBytes(a.ciphertextHex as string)
+    if (data.length < 28) throw new Error('Invalid ciphertext: too short')
+    const plaintext = gcm(key, data.slice(0, 12), utf8ToBytes(purpose)).decrypt(data.slice(12))
     return new TextDecoder().decode(plaintext)
   },
 

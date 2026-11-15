@@ -20,8 +20,8 @@ export interface OfflineQueueState {
   isReplaying: boolean
   /** Manually trigger a replay of queued operations */
   replay: () => Promise<{ succeeded: number; failed: number; remaining: number }>
-  /** Clear all queued operations */
-  clear: () => void
+  /** Clear all queued operations (in memory and at rest) */
+  clear: () => Promise<void>
 }
 
 export function useOfflineQueue(): OfflineQueueState {
@@ -53,9 +53,7 @@ export function useOfflineQueue(): OfflineQueueState {
     }
   }, [])
 
-  const clear = useCallback(() => {
-    offlineQueue.clear()
-  }, [])
+  const clear = useCallback(() => offlineQueue.clear(), [])
 
   return {
     queue,
