@@ -324,3 +324,69 @@ pair of shards waits 23-27 min for a runner. That leaves ~30 min of the 90-min c
 budget. Any other macOS job routed to these runners (#2756) queues behind a shard,
 ~25 min, and that comes straight out of the same 30 min. See the third-runner
 numbers in the section above for what the disk now allows and what it does not.
+
+## The ssh developer checkout and the other runner directories
+
+`~/projects/llamenos` is the checkout that people and workers use over ssh. CI never
+reads it: each runner checks out into its own `_work`. It still needs to stay current,
+because an operator who reaches for a script there gets whatever version is checked
+out. On 2026-11-14 it was 653 commits behind and did not contain
+`scripts/ci/mac-ci-work-volume.sh`.
+
+**Before you reset it, audit it.** The stash stack and the local branches can hold
+work that exists nowhere else. This repo squash-merges, so `git cherry` and three-dot
+diffs report merged work as missing. Compare content instead:
+
+```sh
+git fetch origin
+git stash list --format='%H %gs'
+git stash show --include-untracked --stat 'stash@{N}'
+# per file: is the stash's version, or its patch, already on main?
+git diff 'stash@{N}^1' 'stash@{N}' -- <file> | git apply --cached -R --check   # against a temp index of origin/main
+# branches: commits that are on no remote ref, then compare each with its PR's head
+git rev-list --count <branch> --not --remotes
+git fetch origin pull/<n>/head:refs/audit/pr<n> && git rev-list --count refs/audit/pr<n>..<branch>
+```
+
+Before you drop anything, write it all to a bundle. It costs about 100 MiB and nobody
+has to judge each item: `git bundle create <file> --branches --glob='refs/archive/*'`,
+with each stash SHA pointed at a temporary `refs/archive/stash-N` first.
+
+What turned up on 2026-11-14, so the next audit has a baseline:
+
+- **7 stashes, all landed or superseded.** Four of them were nothing but
+  `apps/ios/Sources/App/Info.plist`, which `xcodegen generate` rewrites on every
+  build. It resets the knope-managed `CFBundleShortVersionString` to `1.0`. This is
+  #2794, and until it is fixed every ssh build leaves this checkout dirty. Restore
+  the file with `git checkout -- apps/ios/Sources/App/Info.plist`. It is not a real
+  edit.
+- **An untracked `apps/android/app/src/main/jniLibs/`** dated 2026-03-01, from the
+  layout before #355. It is deliberately **not** gitignored: AGP packages it into
+  every variant whenever the build-type copy is missing, so it has to stay visible.
+  The build-side refusal is #2795.
+- **66 local branches.** 33 had commits on no remote ref. 20 of those were fully
+  inside their PR's head, 6 more were rebased copies (same patch as the PR's head),
+  and 9 commits across 7 branches are local-only. All 9 belong to closed issues or May-era work that was
+  superseded. The branches were left in place.
+- Archive: `~/llamenos-checkout-archive-2026-11-14/` holds the bundle of all 66
+  branches and 7 stashes, the old working-tree diff, the moved `jniLibs` and
+  `branches.txt` / `stash-list.txt`. Delete it once nobody has asked for anything
+  from it.
+- Two more worktrees, `~/projects/llamenos-1242` and `~/projects/llamenos-1262`, are
+  clean and sit exactly on their pushed `salvage/llamenos-*` branches.
+
+**Runner directories.** There are five `~/actions-runner*` directories. Only two
+of them are registered:
+
+| directory | `.runner` agent name | GitHub registration (2026-11-14) | LaunchAgent |
+|---|---|---|---|
+| `actions-runner-ios-1` | `mac-mini-ios-1` | online | yes |
+| `actions-runner-ios-2` | `mac-mini-ios-2` | online | yes |
+| `actions-runner-ios-3` | `mac-mini-ios-3` | **none** (stale config) | no |
+| `actions-runner-ios-4` | `mac-mini-ios-4` | **none** (stale config) | no |
+| `actions-runner` | not configured | none | no |
+
+Check with `gh api repos/Llamenos-Hotline/llamenos-platform/actions/runners --jq
+'.runners[]|[.name,.status,.busy]|@tsv'` against each directory's `.runner`. Removing the
+stale three is the operator's call. If anyone does, measure the space it frees with
+`df`, not `du`.
