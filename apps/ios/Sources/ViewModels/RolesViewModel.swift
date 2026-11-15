@@ -32,14 +32,11 @@ final class RolesAPIService: RolesAPIServiceProtocol, @unchecked Sendable {
     /// A hub's own roles exist only under `/api/hubs/:hubId/settings/roles` (#2780) —
     /// `/api/settings/roles` lists the deployment-wide roles and nothing a hub owns.
     func listRoles(hubId: String?) async throws -> RoleListResponse {
-        let path: String
         if let hubId {
             let encoded = hubId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? hubId
-            path = "/api/hubs/\(encoded)/settings/roles"
-        } else {
-            path = "/api/settings/roles"
+            return try await apiService.request(method: "GET", path: "/api/hubs/\(encoded)/settings/roles")
         }
-        return try await apiService.request(method: "GET", path: path)
+        return try await apiService.request(method: "GET", path: "/api/settings/roles")
     }
 
     func getPermissionsCatalog() async throws -> PermissionsCatalogResponse {
