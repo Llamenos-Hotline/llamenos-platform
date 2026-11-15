@@ -620,6 +620,22 @@ mod tests {
         }
     }
 
+    /// Pinned cross-platform vector: `SHA-256("llamenos:shamir-commit:v1" || x || y)`
+    /// computed outside Rust. The desktop crate's `ipc_surface_tests` pins the
+    /// SAME literal against its own `shamir_commit` command, so a commitment
+    /// format change on either side fails a test on both.
+    #[test]
+    fn commitment_matches_the_pinned_cross_platform_vector() {
+        let share = Share {
+            x: 7,
+            y: hex::decode("0102030405060708090a0b0c0d0e0f10").unwrap(),
+        };
+        assert_eq!(
+            hex::encode(commit(&share)),
+            "5a46e2f7c18caaa8227164f370875bcea284606ed6abe0dc1d1fb8cc0dff2db5"
+        );
+    }
+
     #[test]
     fn commitment_includes_domain_prefix() {
         let share = Share { x: 1, y: vec![42] };

@@ -1472,14 +1472,17 @@ export async function provisionCreateSession(): Promise<string> {
 }
 
 /**
- * New device: compute the provisioning SAS code.
- * Uses the ephemeral secret stored in CryptoState + the primary's encryption pubkey.
+ * New device: verify the primary's signed claim and compute the provisioning SAS.
+ * `claimHex` is the 129-byte claim the primary published for this room
+ * (PROTOCOL.md §6.3, #1865) — NOT a public key. Rust checks its signature covers
+ * this device's own ephemeral key before deriving anything, using the ephemeral
+ * secret stored in CryptoState.
  */
 export async function provisionComputeSas(
-  primaryEncPubkeyHex: string,
+  claimHex: string,
 ): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('provision_compute_sas', { primaryEncPubkeyHex })
+    return tauriInvoke<string>('provision_compute_sas', { claimHex })
   }
   throw new Error('WASM provision_compute_sas not yet implemented')
 }
@@ -1495,14 +1498,14 @@ export type ProvisioningImportResult = EncryptedDeviceKeys
  */
 export async function provisionDecryptAndImport(
   encryptedHex: string,
-  primaryEncPubkeyHex: string,
+  claimHex: string,
   pin: string,
   deviceId: string,
 ): Promise<ProvisioningImportResult> {
   if (useTauri) {
     return tauriInvoke<ProvisioningImportResult>('provision_decrypt_and_import', {
       encryptedHex,
-      primaryEncPubkeyHex,
+      claimHex,
       pin,
       deviceId,
     })

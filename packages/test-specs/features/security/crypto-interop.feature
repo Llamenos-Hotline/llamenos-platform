@@ -210,12 +210,14 @@ Feature: Crypto Interop
   # ── SAS derivation (desktop) ─────────────────────────────────────────
 
   @desktop
-  Scenario: SAS code derivation is deterministic
-    Given a shared secret hex string
+  Scenario: SAS code derivation is deterministic and bound to the primary's signed claim
+    Given a provisioning room with a claim signed by the primary
     When I derive the SAS code
     Then it should be exactly 6 digits
-    And deriving again with the same secret should produce the same code
-    And deriving with a different secret should produce a different code
+    And it should equal the code the primary derived
+    And deriving again with the same claim should produce the same code
+    And deriving with a different primary's claim should produce a different code
+    And a bare public key or another room's claim should be refused instead of yielding a code
 
   # ── Auth Tokens (desktop) ────────────────────────────────────────────
 
