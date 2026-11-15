@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "Не удалось проверить долю",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "Ваша доля восстановления",
+      "description": "Подтвердите, что это устройство по-прежнему хранит вашу долю восстановления. Доля никогда не покидает устройство; хаб проверяет только подпись, созданную с её помощью.",
+      "prove": "Проверить мою долю",
+      "proving": "Проверка…",
+      "success": "Доля проверена. Администраторы увидят, что ваша доля в порядке.",
+      "error": "Не удалось проверить долю"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

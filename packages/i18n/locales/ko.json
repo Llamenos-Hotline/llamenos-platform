@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "조각 확인에 실패했습니다",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "내 복구 조각",
+      "description": "이 기기가 여전히 내 복구 조각을 가지고 있음을 증명하세요. 조각은 기기 밖으로 나가지 않으며, 허브는 그 조각으로 만든 서명만 확인합니다.",
+      "prove": "내 조각 확인",
+      "proving": "확인 중…",
+      "success": "조각이 확인되었습니다. 관리자에게 내 조각이 정상으로 표시됩니다.",
+      "error": "조각 확인에 실패했습니다"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

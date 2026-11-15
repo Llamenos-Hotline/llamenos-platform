@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "Xác minh phần khôi phục thất bại",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "Phần khôi phục của bạn",
+      "description": "Chứng minh thiết bị này vẫn giữ phần khôi phục của bạn. Phần của bạn không bao giờ rời khỏi thiết bị; hub chỉ kiểm tra chữ ký được tạo bằng nó.",
+      "prove": "Xác minh phần của tôi",
+      "proving": "Đang xác minh…",
+      "success": "Đã xác minh phần. Quản trị viên sẽ thấy phần của bạn ở trạng thái tốt.",
+      "error": "Xác minh phần khôi phục thất bại"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

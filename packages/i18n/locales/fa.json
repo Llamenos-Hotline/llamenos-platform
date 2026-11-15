@@ -4032,14 +4032,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "تأیید سهم ناموفق بود",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "سهم بازیابی شما",
+      "description": "ثابت کنید این دستگاه هنوز سهم بازیابی شما را دارد. سهم شما هرگز از دستگاه خارج نمی‌شود؛ هاب فقط امضایی را که با آن ساخته شده بررسی می‌کند.",
+      "prove": "تأیید سهم من",
+      "proving": "در حال تأیید…",
+      "success": "سهم تأیید شد. مدیران سهم شما را سالم خواهند دید.",
+      "error": "تأیید سهم ناموفق بود"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

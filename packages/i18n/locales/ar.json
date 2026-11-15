@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "فشل التحقق من الحصة",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "حصة الاسترداد الخاصة بك",
+      "description": "أثبت أن هذا الجهاز ما زال يحتفظ بحصة الاسترداد الخاصة بك. لا تغادر حصتك الجهاز أبدًا؛ فالمركز يتحقق فقط من توقيع تم إنشاؤه بها.",
+      "prove": "التحقق من حصتي",
+      "proving": "جارٍ التحقق…",
+      "success": "تم التحقق من الحصة. سيرى المشرفون أن حصتك سليمة.",
+      "error": "فشل التحقق من الحصة"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

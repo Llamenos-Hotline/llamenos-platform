@@ -4265,14 +4265,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "Ma ni̱ kúu ndakuaa-ka parte",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "Parte ña̱ ndakoo-ni̱ mií",
+      "description": "Ka̱ʼa̱n ña̱ ni̱ ndaʼa-ka dispositivo yóʼo parte ña̱ ndakoo-ni̱. Parte-ni̱ ndáa-ka ni̱ ndáa-ka kúu dispositivo; hub só̱lo ndakuaa firma ña̱ kuiʼva ni̱ chi̱ka̱a̱ ña̱.",
+      "prove": "Ndakuaa parte-ri",
+      "proving": "Ndakuaa-ña…",
+      "success": "Ni̱ ndakuaa parte. Administrador kúu ni̱ kana̱ ña̱ parte-ni̱ ndáa-ka.",
+      "error": "Ma ni̱ kúu ndakuaa-ka parte"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "Nabigo ang pag-verify ng bahagi",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "Ang iyong recovery share",
+      "description": "Patunayang hawak pa rin ng device na ito ang iyong recovery share. Hindi kailanman lumalabas sa device ang share mo; ang hub ay sumusuri lang ng lagdang ginawa gamit ito.",
+      "prove": "I-verify ang share ko",
+      "proving": "Nagve-verify…",
+      "success": "Na-verify ang share. Makikita ng mga admin na maayos ang share mo.",
+      "error": "Nabigo ang pag-verify ng bahagi"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

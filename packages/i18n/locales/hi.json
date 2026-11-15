@@ -3235,14 +3235,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "हिस्से का सत्यापन विफल रहा",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "आपका रिकवरी हिस्सा",
+      "description": "साबित करें कि यह डिवाइस अब भी आपका रिकवरी हिस्सा रखता है। आपका हिस्सा डिवाइस से बाहर कभी नहीं जाता; हब केवल उससे बने हस्ताक्षर की जाँच करता है।",
+      "prove": "मेरा हिस्सा सत्यापित करें",
+      "proving": "सत्यापित किया जा रहा है…",
+      "success": "हिस्सा सत्यापित हो गया। एडमिन आपके हिस्से को स्वस्थ देखेंगे।",
+      "error": "हिस्से का सत्यापन विफल रहा"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

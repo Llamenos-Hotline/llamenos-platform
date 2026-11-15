@@ -2484,14 +2484,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "የማጋራት ማረጋገጫ አልተሳካም",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "የእርስዎ የማገገሚያ ድርሻ",
+      "description": "ይህ መሣሪያ የማገገሚያ ድርሻዎን አሁንም እንደያዘ ያረጋግጡ። ድርሻዎ ከመሣሪያው ፈጽሞ አይወጣም፤ ማዕከሉ በእሱ የተፈረመውን ፊርማ ብቻ ይመረምራል።",
+      "prove": "ድርሻዬን አረጋግጥ",
+      "proving": "በማረጋገጥ ላይ…",
+      "success": "ድርሻው ተረጋግጧል። አስተዳዳሪዎች ድርሻዎን ጤናማ ሆኖ ያዩታል።",
+      "error": "የማጋራት ማረጋገጫ አልተሳካም"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",

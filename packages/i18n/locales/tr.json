@@ -4122,14 +4122,14 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
-    "livenessFailed": "Share verification failed",
+    "livenessFailed": "Pay doğrulaması başarısız oldu",
     "liveness": {
-      "title": "Your recovery share",
-      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
-      "prove": "Verify my share",
-      "proving": "Verifying…",
-      "success": "Share verified. Admins will see your share as healthy.",
-      "error": "Share verification failed"
+      "title": "Kurtarma payınız",
+      "description": "Bu cihazın kurtarma payınızı hâlâ elinde tuttuğunu kanıtlayın. Payınız cihazdan asla çıkmaz; hub yalnızca onunla atılmış bir imzayı denetler.",
+      "prove": "Payımı doğrula",
+      "proving": "Doğrulanıyor…",
+      "success": "Pay doğrulandı. Yöneticiler payınızı sağlıklı olarak görecek.",
+      "error": "Pay doğrulaması başarısız oldu"
     },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
