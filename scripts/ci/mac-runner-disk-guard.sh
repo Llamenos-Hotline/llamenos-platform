@@ -173,6 +173,7 @@
 #   mac-runner-disk-guard.sh guard     # check write paths, report, reclaim, re-measure, then gate
 #   mac-runner-disk-guard.sh delete-sim <udid> # job teardown: shutdown + delete + its /private/var/tmp dir; never fails
 #   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
+#   mac-runner-disk-guard.sh min-free-kib <path>...  # smallest free KiB across those paths' filesystems (the workflow's hang fallback)
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
 # `guard` is what CI calls. On a GitHub-hosted runner it prints one line and
@@ -373,7 +374,26 @@ VOLS
 }
 
 df_available_kib() {
-  df -k "$1" | awk 'NR==2 {print $4}'
+  df -k "$1" | awk 'NR==2 {print $4}' || true
+}
+
+# Smallest available KiB across the filesystems the given paths are on; empty
+# when none could be read. ONE df PER PATH, and never `df a b | awk 'NR>1 ...'`:
+# GNU df prints one header then a row per operand, but BSD/macOS df prints the
+# header once PER OPERAND (header,row,header,row). A row-index parse of the
+# multi-operand form reads the second header as data, its $4 ("Available")
+# evaluates to 0, and 0 becomes the minimum - 0.0 GiB free on a disk with
+# hundreds (#2760 review). `df_available_kib` is the single-operand form where
+# NR==2 is right on both. A path df cannot stat contributes nothing, so a
+# caller whose paths ALL fail sees empty and must treat that as "unknown".
+min_free_kib() {
+  local p kib min=""
+  for p in "$@"; do
+    kib="$(df_available_kib "$p" 2>/dev/null)"
+    case "$kib" in ''|*[!0-9]*) continue ;; esac
+    if [ -z "$min" ] || [ "$kib" -lt "$min" ]; then min="$kib"; fi
+  done
+  printf '%s' "$min"
 }
 
 apparent_gib() {
@@ -1219,6 +1239,24 @@ selftest_gate_fake_volumes() (
   gate 2>&1
 )
 
+# Runs min_free_kib against a stand-in `df` shaped like macOS's: header AND row
+# per operand. /big has 100 GiB, /small has 2, anything else is unreadable.
+# A SUBSHELL body for the same bash 3.2 reason as selftest_gate_fake_volumes.
+selftest_min_free_bsd_df() (
+  df() {
+    local a
+    for a in "$@"; do
+      case "$a" in -*) continue ;; esac
+      case "$a" in
+        /big)   printf 'Filesystem   1024-blocks      Used Available Capacity iused ifree %%iused  Mounted on\n/dev/disk3s5   494384795 393784795 104857600    80%%  100   100   50%%   /big\n' ;;
+        /small) printf 'Filesystem   1024-blocks      Used Available Capacity iused ifree %%iused  Mounted on\n/dev/disk4s1   494384795 492287643   2097152    99%%  100   100   50%%   /small\n' ;;
+        *) printf 'df: %s: No such file or directory\n' "$a" >&2; return 1 ;;
+      esac
+    done
+  }
+  min_free_kib "$@"
+)
+
 #
 # Audits the delete guard by trying to BREAK it, which is the only way to know
 # it holds (`feedback_audit_gates_by_breaking`). Reading the DENY array proves
@@ -1467,6 +1505,32 @@ EOF
     log "  ok    every measured volume above the floor passes, each reported"
   else
     log "  FAIL  healthy volumes were not passed and reported (rc=$wp_rc): $wp_out"
+    fails=$((fails + 1))
+  fi
+
+  log "── selftest: the hang fallback's free-space minimum survives BSD df output (#2760) ──"
+  # BSD/macOS df prints the header once PER OPERAND. This fake does the same, so
+  # a one-df-for-all-paths parse reads the second header as a data row and
+  # reports 0 free; one df per path (min_free_kib) cannot.
+  wp_out="$(selftest_min_free_bsd_df "/big" "/small")"
+  if [ "$wp_out" = "2097152" ]; then
+    log "  ok    two operands on BSD-shaped df give the smaller real figure, not 0"
+  else
+    log "  FAIL  min_free_kib /big /small on BSD-shaped df returned '$wp_out', expected 2097152"
+    fails=$((fails + 1))
+  fi
+  wp_out="$(selftest_min_free_bsd_df "/big" "/big")"
+  if [ "$wp_out" = "104857600" ]; then
+    log "  ok    two healthy operands on BSD-shaped df report the real free space (not 0)"
+  else
+    log "  FAIL  min_free_kib /big /big on BSD-shaped df returned '$wp_out', expected 104857600"
+    fails=$((fails + 1))
+  fi
+  wp_out="$(selftest_min_free_bsd_df "/gone" "/gone")"
+  if [ -z "$wp_out" ]; then
+    log "  ok    paths df cannot read yield no figure (unknown), never a fabricated one"
+  else
+    log "  FAIL  unreadable paths returned '$wp_out', expected empty"
     fails=$((fails + 1))
   fi
 
@@ -1985,6 +2049,14 @@ if [ "$MODE" = "selftest" ]; then
   exit $?
 fi
 
+# Plain df arithmetic, no Darwin or runner-environment assumptions, so the
+# workflow's hang fallback and the Linux-run test exercise the same code.
+if [ "$MODE" = "min-free-kib" ]; then
+  shift
+  min_free_kib "$@"
+  exit 0
+fi
+
 if [ "$(uname -s)" != "Darwin" ]; then
   log "::error::mac-runner-disk-guard.sh is for the self-hosted macOS runners; this host is $(uname -s)."
   exit 1
@@ -2023,7 +2095,7 @@ case "$MODE" in
     fi
     ;;
   *)
-    log "usage: $(basename "$0") <report|reclaim|guard|delete-sim <udid>|install-timer|selftest>"
+    log "usage: $(basename "$0") <report|reclaim|guard|delete-sim <udid>|min-free-kib <path>...|install-timer|selftest>"
     exit 2
     ;;
 esac

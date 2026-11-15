@@ -329,7 +329,10 @@ jobs:
               # Never `wait` on something that may not have died: a process
               # stuck in the kernel ignores SIGKILL, and waiting is the bug.
               if kill -0 "$gpid" 2>/dev/null; then disown "$gpid" 2>/dev/null || true; else wait "$gpid" 2>/dev/null || true; fi
-              free_kib=$(df -k "$volume" "$RUNNER_TEMP" 2>/dev/null | awk 'NR>1 && (min == "" || $4 + 0 < min + 0) { min = $4 } END { print min }')
+              # One df per path, inside the script: macOS df prints a header per
+              # operand, so parsing a two-operand df by row index reads a header
+              # as data and reports 0 GiB free (#2760).
+              free_kib=$(bash scripts/ci/mac-runner-disk-guard.sh min-free-kib "$volume" "$RUNNER_TEMP" 2>/dev/null || true)
               free_gib=$(awk -v k="${free_kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')
               echo "::group::disk guard output before it hung (attempt $attempt)"
               cat "$guard_log"

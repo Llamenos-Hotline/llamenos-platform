@@ -26,12 +26,19 @@
 // device set that is a SYMLINK is still swept, because plain `find` on a link
 // matches nothing (the control case reproduces that trap).
 //
+// And the break-it for #2760: macOS df prints a header per OPERAND, so a two-operand
+// `df a b | awk 'NR>1 ...'` reads the second header as data and reports 0 GiB free.
+// The hang fallback now asks one df per path (`min-free-kib`); the selftest feeds it
+// BSD-shaped output, and the sweep below fails on any parsed multi-operand df left
+// anywhere in CI scripts or workflows.
+//
 // And the break-it for the hourly timer: its wrapper refreshes the script it runs
 // from origin/main, never adopts one that does not parse, and says STALE when it
 // could not refresh. The timer had been running a copy pinned six weeks earlier.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join, relative } from 'node:path'
 
 const SCRIPT = join(import.meta.dir, 'mac-runner-disk-guard.sh')
 
@@ -81,6 +88,9 @@ describe('mac-runner-disk-guard.sh selftest', () => {
     'a short work volume refuses the job even though the host volume has room, and names it',
     'the refusal does not depend on which volume is listed first',
     'every measured volume above the floor passes, each reported',
+    'two operands on BSD-shaped df give the smaller real figure, not 0',
+    'two healthy operands on BSD-shaped df report the real free space (not 0)',
+    'paths df cannot read yield no figure (unknown), never a fabricated one',
     '(control) a plain find on a symlinked device set matches nothing - the trap',
     'the idle device under a symlinked device set is found, the young one is not',
     'timer: first run fetches main and pins its guard',
@@ -96,5 +106,60 @@ describe('mac-runner-disk-guard.sh selftest', () => {
   ])('asserts: %s', (label) => {
     // A case that silently stopped running would otherwise read as green.
     expect(out).toContain(`  ok    ${label}`)
+  })
+})
+
+// A df whose output is parsed must take ONE path operand. GNU df prints one
+// header then a row per operand; BSD/macOS df prints header,row,header,row, so any
+// row-index parse (NR==2, NR>1, tail -1) of a multi-operand df is wrong on the Mac
+// runners (#2760). Display-only calls (`df -h / /tmp || true`) are not parsed and
+// are left alone.
+describe('no CI script parses a multi-operand df', () => {
+  const REPO = join(import.meta.dir, '..', '..')
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const name of readdirSync(dir)) {
+      if (name === 'node_modules' || name === '.git') continue
+      const full = join(dir, name)
+      if (statSync(full).isDirectory()) walk(full, out)
+      else if (/\.(sh|ya?ml)$/.test(name)) out.push(full)
+    }
+    return out
+  }
+  const files = [
+    ...walk(join(REPO, 'scripts')),
+    ...walk(join(REPO, '.github')),
+    ...walk(join(REPO, 'orchestrator')),
+    ...walk(join(REPO, 'deploy/scripts')),
+  ]
+  // `df`, any flags, then two or more operands, whose output is piped or captured.
+  const MULTI_OPERAND_PARSED = /(?:^\s*|\$\(\s*|[|;&`(]\s*)df(?:\s+-[A-Za-z]+)*(?:\s+["$/.~][^\s|)]*){2,}[^\n]*(?:\|\s*(?:awk|sed|tail|head|grep|cut|sort|while)\b|\))/
+
+  test('the sweep reads the files it is meant to', () => {
+    expect(files.some((f) => f.endsWith('.github/workflows/ios-e2e.yml'))).toBe(true)
+    expect(files.some((f) => f.endsWith('scripts/ci/mac-runner-disk-guard.sh'))).toBe(true)
+  })
+
+  test('the pattern catches the #2760 shape and spares single-operand and display-only calls', () => {
+    expect(MULTI_OPERAND_PARSED.test(`free=$(df -k "$volume" "$RUNNER_TEMP" 2>/dev/null | awk 'NR>1 {print $4}')`)).toBe(true)
+    expect(MULTI_OPERAND_PARSED.test(`df -P /a /b | tail -1`)).toBe(true)
+    expect(MULTI_OPERAND_PARSED.test(`df -k "$1" | awk 'NR==2 {print $4}'`)).toBe(false)
+    expect(MULTI_OPERAND_PARSED.test(`df -h / /tmp || true`)).toBe(false)
+  })
+
+  test('no script or workflow parses df output taken over several operands', () => {
+    const offenders: string[] = []
+    for (const f of files) {
+      if (f === __filename) continue
+      readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
+        if (/^\s*#/.test(line)) return
+        if (MULTI_OPERAND_PARSED.test(line)) offenders.push(`${relative(REPO, f)}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  test('the workflow hang fallback measures through min-free-kib', () => {
+    const wf = readFileSync(join(REPO, '.github/workflows/ios-e2e.yml'), 'utf8')
+    expect(wf).toContain('mac-runner-disk-guard.sh min-free-kib "$volume" "$RUNNER_TEMP"')
   })
 })
