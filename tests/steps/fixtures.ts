@@ -119,6 +119,12 @@ export type BanWorld = {
   reason?: string
   /** The two numbers a bulk-add/import step banned. */
   phones?: string[]
+  /**
+   * Reasons the scenario's two bans were filed under. The worker's hub is shared by
+   * every scenario that worker runs, so "the two bans" are identified by reason, never
+   * by the hub's total count.
+   */
+  reasons?: string[]
 }
 
 /** Call scenarios (in-call-actions-steps.ts, custom-fields-steps.ts). */

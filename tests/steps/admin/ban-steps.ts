@@ -27,6 +27,8 @@ function recordedReason(banWorld: BanWorld): string {
   return banWorld.reason as string
 }
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const banRow = (page: Page, reason: string) => page.getByTestId(TestIds.BAN_ROW).filter({ hasText: reason })
 
 /** The ban list shows a reason and a date and none of the banned number's digits. */
@@ -190,6 +192,7 @@ When('I add two bans with different phone numbers', async ({ page, banWorld }) =
   await expect(banRow(page, 'Reason 2')).toBeVisible({ timeout: Timeouts.ELEMENT })
 
   banWorld.phones = [phone1, phone2]
+  banWorld.reasons = ['Reason 1', 'Reason 2']
 })
 
 Then('both phone numbers should appear in the ban list', async ({ page, backendRequest: request, workerHub, banWorld }) => {
@@ -199,15 +202,20 @@ Then('both phone numbers should appear in the ban list', async ({ page, backendR
   // "the ban page loaded").
   expect(phones ?? [], 'the add/import step must record the phones it banned').toHaveLength(2)
 
-  // The two bans were made in this scenario's own hub, so the list holds exactly
-  // two, neither carrying a number.
-  const bans = await listBansViaApi(request, workerHub)
+  // The hub is the worker's, shared with every other scenario that worker runs, so the
+  // scenario's two bans are the ones filed under its own reasons — never the hub's total.
+  // A bulk import files both numbers under the one reason it was given.
+  const reasons = banWorld.reasons ?? [recordedReason(banWorld), recordedReason(banWorld)]
+  // UI first: it polls until the import/add has landed, so the API read below cannot race it.
+  const rows = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: new RegExp([...new Set(reasons)].map(escapeRegExp).join('|')) })
+  await expect(rows).toHaveCount(2, { timeout: Timeouts.ELEMENT })
+
+  // API: exactly those two, neither carrying a number.
+  const bans = (await listBansViaApi(request, workerHub)).filter(b => reasons.includes(b.reason))
   expect(bans).toHaveLength(2)
   for (const ban of bans) expect(ban).not.toHaveProperty('phone')
 
-  // UI: two rows, none showing either number's digits.
-  const rows = page.getByTestId(TestIds.BAN_ROW)
-  await expect(rows).toHaveCount(2, { timeout: Timeouts.ELEMENT })
+  // None of the rows shows either number's digits.
   const text = (await rows.allInnerTexts()).join(' ').replace(/\D/g, '')
   for (const phone of phones!) expect(text).not.toContain(phone.replace(/\D/g, '').slice(-7))
 })
