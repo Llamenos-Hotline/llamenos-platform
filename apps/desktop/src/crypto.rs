@@ -239,6 +239,29 @@ impl CryptoState {
         Ok(hex::encode(plaintext))
     }
 
+    /// Seal device-local data (a draft, the offline write queue) under a key
+    /// derived from this device's own X25519 seed — the inner half of
+    /// `seal_device_local_from_state`. Needs no hub key: per-device data must
+    /// stay sealable and readable whether or not any hub key is loaded.
+    fn seal_device_local_hex(&self, plaintext: &str, purpose: &str) -> Result<String, String> {
+        self.with_secrets(|s| {
+            encryption::seal_device_local(plaintext.as_bytes(), purpose, &s.encryption_seed)
+                .map(hex::encode)
+                .map_err(err_str)
+        })
+    }
+
+    /// Open data sealed by [`Self::seal_device_local_hex`] — the inner half of
+    /// `open_device_local_from_state`.
+    fn open_device_local_hex(&self, ciphertext_hex: &str, purpose: &str) -> Result<String, String> {
+        let packed = hex::decode(ciphertext_hex).map_err(err_str)?;
+        let plaintext = self.with_secrets(|s| {
+            encryption::open_device_local(&packed, purpose, &s.encryption_seed).map_err(err_str)
+        })?;
+        String::from_utf8(plaintext.to_vec())
+            .map_err(|e| format!("Invalid UTF-8 in device-local plaintext: {e}"))
+    }
+
     /// Seal a case ciphertext as this device — the inner half of
     /// `seal_case_from_state`, callable without a Tauri runtime so the
     /// conformance tests run the exact production call.
@@ -927,6 +950,29 @@ pub fn decrypt_hub_field(
 ) -> Result<String, String> {
     let key = hub_key_array(&state)?;
     encryption::decrypt_hub_field(&ciphertext_hex, &key, &label).map_err(err_str)
+}
+
+/// Seal per-device data (note drafts, the offline write queue) under a key
+/// derived in the crate from the device's own X25519 seed. `purpose` must be one
+/// of `encryption::DEVICE_LOCAL_PURPOSES`. Output: hex `nonce(12) ‖ ct ‖ tag`.
+/// The derived key never leaves Rust.
+#[tauri::command]
+pub fn seal_device_local_from_state(
+    state: tauri::State<'_, CryptoState>,
+    plaintext: String,
+    purpose: String,
+) -> Result<String, String> {
+    state.seal_device_local_hex(&plaintext, &purpose)
+}
+
+/// Open data sealed by `seal_device_local_from_state` for the same purpose.
+#[tauri::command]
+pub fn open_device_local_from_state(
+    state: tauri::State<'_, CryptoState>,
+    ciphertext_hex: String,
+    purpose: String,
+) -> Result<String, String> {
+    state.open_device_local_hex(&ciphertext_hex, &purpose)
 }
 
 // ── Shamir Secret Sharing ──────────────────────────────────────────
@@ -1914,6 +1960,64 @@ mod ipc_surface_tests {
 
     fn seal(dev: &TestDevice, plaintext: &[u8], label: &str) -> hpke_envelope::HpkeEnvelope {
         hpke_envelope::hpke_seal(plaintext, &dev.encryption_pubkey_hex, label, &[]).unwrap()
+    }
+
+    /// The offline queue and drafts are per-device: they must seal and open with
+    /// NO hub key loaded, which is the state every desktop client is in today
+    /// (nothing generates or loads one). Sealing them under the hub key made
+    /// every queued write vanish on restart.
+    #[test]
+    fn device_local_seal_needs_no_hub_key() {
+        use llamenos_core::labels::{HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE};
+        let dev = device();
+        assert!(lock_mutex(&dev.state.hub_key).unwrap().is_none());
+        for purpose in [LABEL_OFFLINE_QUEUE, HKDF_CONTEXT_DRAFTS] {
+            let sealed = dev
+                .state
+                .seal_device_local_hex("[{\"id\":\"op\"}]", purpose)
+                .unwrap();
+            let opened = dev.state.open_device_local_hex(&sealed, purpose).unwrap();
+            assert_eq!(opened, "[{\"id\":\"op\"}]");
+        }
+    }
+
+    /// The key is derived from the device's X25519 seed, so a ciphertext
+    /// survives a lock/unlock of the same device and opens for no other.
+    #[test]
+    fn device_local_seal_is_bound_to_this_device() {
+        use llamenos_core::labels::LABEL_OFFLINE_QUEUE;
+        let dev = device();
+        let sealed = dev
+            .state
+            .seal_device_local_hex("queue", LABEL_OFFLINE_QUEUE)
+            .unwrap();
+        let packed = hex::decode(&sealed).unwrap();
+        let opened =
+            encryption::open_device_local(&packed, LABEL_OFFLINE_QUEUE, &dev.encryption_seed)
+                .unwrap();
+        assert_eq!(opened.as_slice(), b"queue");
+        assert!(
+            device()
+                .state
+                .open_device_local_hex(&sealed, LABEL_OFFLINE_QUEUE)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn device_local_seal_refuses_a_locked_state_and_a_foreign_purpose() {
+        use llamenos_core::labels::LABEL_OFFLINE_QUEUE;
+        assert!(
+            CryptoState::new()
+                .seal_device_local_hex("queue", LABEL_OFFLINE_QUEUE)
+                .is_err()
+        );
+        let dev = device();
+        assert!(
+            dev.state
+                .seal_device_local_hex("x", LABEL_HUB_KEY_WRAP)
+                .is_err()
+        );
     }
 
     #[test]

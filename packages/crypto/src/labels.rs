@@ -460,6 +460,13 @@ pub const HMAC_IVR_MEDIA_URL: &str = "llamenos:ivr-media-url:v1";
 /// Domain separation for SAS emoji derivation (device verification ceremony)
 pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 
+// --- Device-local storage ---
+
+/// Offline write queue, sealed at rest under a key derived from THIS device's
+/// own X25519 seed (`encryption::seal_device_local`). Per-device data: never
+/// hub-shared, never leaves the device.
+pub const LABEL_OFFLINE_QUEUE: &str = "llamenos:offline-queue:v1";
+
 // =============================================================================
 // LABEL REGISTRY — maps numeric IDs (u8) to label strings.
 //
@@ -491,6 +498,7 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 // Indices 102-104: Ban-list hashing and the live-call caller number seal (#2182)
 // Indices 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
 // Index 109: Case comment (#2499)
+// Index 110: Device-local offline write queue
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -646,6 +654,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_PROVIDER_REF_KEY, // 108
     // 109: Case comment, sealed per purpose by `case_record` (#2499)
     LABEL_CASE_COMMENT, // 109
+    // 110: Device-local offline write queue, sealed by `encryption::seal_device_local`
+    LABEL_OFFLINE_QUEUE, // 110
 ];
 
 /// Look up a label string by its numeric ID.

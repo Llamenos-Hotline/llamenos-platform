@@ -123,3 +123,4 @@ export const LABEL_MESSAGING_CONTACT_HUB_KEY = 'llamenos:messaging-contact-hub-k
 export const LABEL_CALL_RECORDING_SEAL = 'llamenos:call-recording-seal:v1'
 export const LABEL_PROVIDER_REF_KEY = 'llamenos:provider-ref-key:v1'
 export const LABEL_CASE_COMMENT = 'llamenos:case-comment'
+export const LABEL_OFFLINE_QUEUE = 'llamenos:offline-queue:v1'

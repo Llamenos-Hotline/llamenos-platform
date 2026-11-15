@@ -419,46 +419,89 @@ fn derive_encryption_key(secret_key: &[u8; 32], label: &str) -> [u8; 32] {
     okm
 }
 
-/// Encrypt a draft (local auto-save) with HKDF-derived key.
-#[cfg_attr(feature = "mobile", uniffi::export)]
-pub fn encrypt_draft(plaintext: &str, secret_key_hex: &str) -> Result<String, CryptoError> {
+// ── Device-local sealing (drafts, offline write queue) ──────────────
+//
+// Data that belongs to ONE device and never leaves it — a note draft, the
+// offline write queue — is sealed under a key derived from that device's own
+// X25519 seed, never under a hub key. It must stay readable by this device
+// whether or not any hub key exists, and no other member of any hub has a
+// reason to read it. Each purpose derives its own key (HKDF info = purpose) and
+// binds the purpose as AES-GCM AAD, so a ciphertext of one purpose cannot be
+// opened as another.
+
+/// The closed set of purposes [`seal_device_local`] / [`open_device_local`]
+/// accept. A purpose outside it is refused rather than derived, so no caller
+/// can turn the device secret into a key for a label meant for something else
+/// (a note key, a hub key wrap).
+pub const DEVICE_LOCAL_PURPOSES: &[&str] = &[HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE];
+
+fn require_device_local_purpose(purpose: &str) -> Result<(), CryptoError> {
+    if DEVICE_LOCAL_PURPOSES.contains(&purpose) {
+        Ok(())
+    } else {
+        Err(CryptoError::InvalidInput(format!(
+            "'{purpose}' is not a device-local sealing purpose"
+        )))
+    }
+}
+
+/// Seal `plaintext` for this device only, under
+/// `HKDF-SHA256(salt = HKDF_SALT, ikm = device_secret, info = purpose)`,
+/// with `purpose` as AAD.
+///
+/// Wire format: `nonce_12 ‖ ciphertext ‖ tag_16`.
+pub fn seal_device_local(
+    plaintext: &[u8],
+    purpose: &str,
+    device_secret: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
+    require_device_local_purpose(purpose)?;
+    let key = Zeroizing::new(derive_encryption_key(device_secret, purpose));
+    aes256gcm_encrypt(&key, plaintext, purpose.as_bytes())
+}
+
+/// Open a ciphertext produced by [`seal_device_local`] for the same `purpose`
+/// and device secret. Fails on a wrong device, wrong purpose, truncated or
+/// corrupted data.
+pub fn open_device_local(
+    packed: &[u8],
+    purpose: &str,
+    device_secret: &[u8; 32],
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    require_device_local_purpose(purpose)?;
+    let key = Zeroizing::new(derive_encryption_key(device_secret, purpose));
+    Ok(Zeroizing::new(aes256gcm_decrypt(
+        &key,
+        packed,
+        purpose.as_bytes(),
+    )?))
+}
+
+fn secret_from_hex(secret_key_hex: &str) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let sk_bytes = Zeroizing::new(hex::decode(secret_key_hex).map_err(CryptoError::HexError)?);
     if sk_bytes.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
     }
-    let mut sk = [0u8; 32];
+    let mut sk = Zeroizing::new([0u8; 32]);
     sk.copy_from_slice(&sk_bytes);
+    Ok(sk)
+}
 
-    let mut key = derive_encryption_key(&sk, HKDF_CONTEXT_DRAFTS);
-    let packed = aes256gcm_encrypt(&key, plaintext.as_bytes(), HKDF_CONTEXT_DRAFTS.as_bytes())?;
-
-    key.zeroize();
-    sk.zeroize();
-
+/// Encrypt a draft (local auto-save) — [`seal_device_local`] under
+/// `HKDF_CONTEXT_DRAFTS`, hex-encoded.
+#[cfg_attr(feature = "mobile", uniffi::export)]
+pub fn encrypt_draft(plaintext: &str, secret_key_hex: &str) -> Result<String, CryptoError> {
+    let sk = secret_from_hex(secret_key_hex)?;
+    let packed = seal_device_local(plaintext.as_bytes(), HKDF_CONTEXT_DRAFTS, &sk)?;
     Ok(hex::encode(&packed))
 }
 
-/// Decrypt a draft.
+/// Decrypt a draft produced by [`encrypt_draft`].
 #[cfg_attr(feature = "mobile", uniffi::export)]
 pub fn decrypt_draft(packed_hex: &str, secret_key_hex: &str) -> Result<String, CryptoError> {
-    let sk_bytes = Zeroizing::new(hex::decode(secret_key_hex).map_err(CryptoError::HexError)?);
-    if sk_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
-    let mut sk = [0u8; 32];
-    sk.copy_from_slice(&sk_bytes);
-
-    let mut key = derive_encryption_key(&sk, HKDF_CONTEXT_DRAFTS);
+    let sk = secret_from_hex(secret_key_hex)?;
     let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
-    let plaintext = Zeroizing::new(aes256gcm_decrypt(
-        &key,
-        &data,
-        HKDF_CONTEXT_DRAFTS.as_bytes(),
-    )?);
-
-    key.zeroize();
-    sk.zeroize();
-
+    let plaintext = open_device_local(&data, HKDF_CONTEXT_DRAFTS, &sk)?;
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -872,6 +915,71 @@ mod tests {
         let encrypted = encrypt_draft(plaintext, &sk).unwrap();
         let decrypted = decrypt_draft(&encrypted, &sk).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn device_local_roundtrips_for_every_purpose() {
+        let secret = [7u8; 32];
+        for &purpose in DEVICE_LOCAL_PURPOSES {
+            let packed = seal_device_local(b"queued ops", purpose, &secret).unwrap();
+            let opened = open_device_local(&packed, purpose, &secret).unwrap();
+            assert_eq!(opened.as_slice(), b"queued ops", "purpose {purpose}");
+        }
+    }
+
+    #[test]
+    fn device_local_purposes_do_not_cross_open() {
+        let secret = [7u8; 32];
+        let packed = seal_device_local(b"queue", LABEL_OFFLINE_QUEUE, &secret).unwrap();
+        assert!(open_device_local(&packed, HKDF_CONTEXT_DRAFTS, &secret).is_err());
+    }
+
+    #[test]
+    fn device_local_is_bound_to_the_device_secret() {
+        let packed = seal_device_local(b"queue", LABEL_OFFLINE_QUEUE, &[7u8; 32]).unwrap();
+        assert!(open_device_local(&packed, LABEL_OFFLINE_QUEUE, &[8u8; 32]).is_err());
+    }
+
+    #[test]
+    fn device_local_refuses_a_purpose_outside_the_closed_set() {
+        let secret = [7u8; 32];
+        // Registered labels, but not device-local purposes: deriving a key for
+        // them from the device secret is refused, in both directions.
+        for label in [LABEL_NOTE_KEY, LABEL_HUB_KEY_WRAP, HKDF_CONTEXT_EXPORT, ""] {
+            assert!(seal_device_local(b"x", label, &secret).is_err(), "{label}");
+            let packed = seal_device_local(b"x", LABEL_OFFLINE_QUEUE, &secret).unwrap();
+            assert!(
+                open_device_local(&packed, label, &secret).is_err(),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_rejects_tampered_and_truncated_ciphertext() {
+        let secret = [7u8; 32];
+        let mut packed = seal_device_local(b"queue", LABEL_OFFLINE_QUEUE, &secret).unwrap();
+        assert!(open_device_local(&packed[..27], LABEL_OFFLINE_QUEUE, &secret).is_err());
+        let last = packed.len() - 1;
+        packed[last] ^= 1;
+        assert!(open_device_local(&packed, LABEL_OFFLINE_QUEUE, &secret).is_err());
+    }
+
+    /// `encrypt_draft` is `seal_device_local` under `HKDF_CONTEXT_DRAFTS`: a
+    /// draft sealed by either opens with the other, so the mobile hex wrappers
+    /// and the desktop stateful command produce one wire format.
+    #[test]
+    fn draft_wrappers_share_the_device_local_wire_format() {
+        let secret = [9u8; 32];
+        let secret_hex = hex::encode(secret);
+        let via_wrapper = hex::decode(encrypt_draft("draft", &secret_hex).unwrap()).unwrap();
+        let opened = open_device_local(&via_wrapper, HKDF_CONTEXT_DRAFTS, &secret).unwrap();
+        assert_eq!(opened.as_slice(), b"draft");
+        let via_seal = seal_device_local(b"draft", HKDF_CONTEXT_DRAFTS, &secret).unwrap();
+        assert_eq!(
+            decrypt_draft(&hex::encode(via_seal), &secret_hex).unwrap(),
+            "draft"
+        );
     }
 
     #[test]
