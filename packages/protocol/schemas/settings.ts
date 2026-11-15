@@ -279,18 +279,20 @@ export const updateRoleSchema = z.object({
 export const createHubRoleSchema = z.object({
   permissions: z.array(z.string()),
   encryptedName: hubSealedFieldSchema,
-  encryptedDescription: hubSealedFieldSchema.optional(),
+  encryptedDescription: z.optional(hubSealedFieldSchema),
 }).strict()
 
 /**
  * Edit a hub-owned role. Written out rather than derived with `.partial()`:
  * an omitted key leaves its column alone, and `encryptedDescription: null`
- * clears the description.
+ * clears the description. (`z.optional(x)` rather than `x.optional()` on the
+ * `encrypted*` keys: `local/no-plaintext-in-encrypted-field` recognises a schema
+ * declaration by its `z.` root.)
  */
 export const updateHubRoleSchema = z.object({
   permissions: z.array(z.string()).optional(),
-  encryptedName: hubSealedFieldSchema.optional(),
-  encryptedDescription: hubSealedFieldSchema.nullable().optional(),
+  encryptedName: z.optional(hubSealedFieldSchema),
+  encryptedDescription: z.optional(z.nullable(hubSealedFieldSchema)),
 }).strict()
 
 export type CreateRoleBody = z.infer<typeof createRoleSchema>

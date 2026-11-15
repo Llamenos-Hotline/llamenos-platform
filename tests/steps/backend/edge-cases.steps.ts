@@ -47,6 +47,7 @@ interface EdgeState {
   banCount: number
   bulkResult?: { count: number }
   roleCreationStatuses: number[]
+  roleId?: string
   volunteerPubkey?: string
   shiftId?: string
   createdSuccessfully: boolean
@@ -182,30 +183,27 @@ Then('the ban list should contain exactly {int} entry for {string}', async ({req
   expect(matches.length).toBe(count)
 })
 
-When('an admin creates a role with slug {string}', async ({ request, world }, slug: string) => {
-  await createRoleViaApi(request, {
-    permissions: ['notes:read-own'],
+When('an admin creates a role', async ({ request, world }) => {
+  const role = await createRoleViaApi(request, { permissions: ['notes:read-own'] })
+  const edge = getEdgeState(world)
+  edge.roleId = role.id
+  edge.roleCreationStatuses.push(201)
+})
+
+// A role's slug is its id (#2780), so the duplicate a caller can actually
+// attempt is a client-minted id that is already taken.
+When("an admin creates another role reusing the first role's id", async ({ request, world }) => {
+  const edge = getEdgeState(world)
+  expect(edge.roleId, 'the first role must have been created').toBeTruthy()
+  const { status } = await apiPost(request, '/settings/roles', {
+    id: edge.roleId,
+    permissions: ['bans:read'],
   })
-  getEdgeState(world).roleCreationStatuses.push(200)
+  edge.roleCreationStatuses.push(status)
 })
 
-When('an admin creates another role with slug {string}', async ({ request, world }, slug: string) => {
-  try {
-    await createRoleViaApi(request, {
-      permissions: ['bans:read'],
-    })
-    getEdgeState(world).roleCreationStatuses.push(200)
-  } catch {
-    // createRoleViaApi handles 409 internally, but let's track the status
-    getEdgeState(world).roleCreationStatuses.push(409)
-  }
-})
-
-Then('the second role creation should return {int}', async ({}, _status: number) => {
-  // createRoleViaApi handles 409 by returning the existing role,
-  // so we verify there's only one role with that slug
-  // This is tested implicitly by the slug uniqueness constraint
-  expect(true).toBeTruthy()
+Then('the second role creation should return {int}', async ({ world }, status: number) => {
+  expect(getEdgeState(world).roleCreationStatuses).toEqual([201, status])
 })
 
 // ─── Input Boundary Values ──────────────────────────────────────────

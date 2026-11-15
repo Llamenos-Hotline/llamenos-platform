@@ -11,7 +11,10 @@ final class MockRolesAPIService: RolesAPIServiceProtocol {
         EffectivePermissionsWire(userId: "", permissions: [])
     )
 
-    func listRoles() async throws -> RoleListResponse {
+    var listedHubIds: [String?] = []
+
+    func listRoles(hubId: String?) async throws -> RoleListResponse {
+        listedHubIds.append(hubId)
         switch listRolesResult {
         case .success(let response): return response
         case .failure(let error): throw error
@@ -44,14 +47,15 @@ struct RolesViewModelTests {
         isSystem: Bool = true,
         isDefault: Bool = false,
         assignedUserCount: Double? = nil
-    ) -> RoleListResponseRole {
-        RoleListResponseRole(
+    ) -> RoleResponse {
+        RoleResponse(
             assignedUserCount: assignedUserCount,
             createdAt: "2026-01-01T00:00:00Z",
             description: "System administrator role",
             encryptedDescription: nil,
             encryptedName: nil,
             envelopes: nil,
+            hubID: nil,
             id: id,
             isDefault: isDefault,
             isSystem: isSystem,
@@ -70,7 +74,7 @@ struct RolesViewModelTests {
             makeSystemRole(id: "r3", slug: "admin", name: "Admin"),
             makeSystemRole(id: "r4", slug: "auditor", name: "Auditor", isSystem: false),
         ]))
-        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
         await vm.loadRoles(includeCatalog: false)
         #expect(vm.roles.count == 4)
         #expect(vm.isLoading == false)
@@ -83,20 +87,21 @@ struct RolesViewModelTests {
         mock.listRolesResult = .success(RoleListResponse(roles: [
             makeSystemRole(name: "System Admin"),
         ]))
-        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
         await vm.loadRoles(includeCatalog: false)
         #expect(vm.roles[0].name == "System Admin")
     }
 
     @Test func customRoleFallsBackToSlugWhenNoEnvelope() async {
         let mock = MockRolesAPIService()
-        let role = RoleListResponseRole(
+        let role = RoleResponse(
             assignedUserCount: nil,
             createdAt: "2026-01-01T00:00:00Z",
             description: "",
             encryptedDescription: "enc",
             encryptedName: "enc",
             envelopes: nil,
+            hubID: nil,
             id: "r1",
             isDefault: false,
             isSystem: false,
@@ -106,9 +111,53 @@ struct RolesViewModelTests {
             updatedAt: "2026-01-01T00:00:00Z"
         )
         mock.listRolesResult = .success(RoleListResponse(roles: [role]))
-        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
         await vm.loadRoles(includeCatalog: false)
         #expect(vm.roles[0].name == "custom-role")
+    }
+
+    @Test func activeHubScopesTheListing() async {
+        let mock = MockRolesAPIService()
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { "hub-1" })
+        await vm.loadRoles(includeCatalog: false)
+        #expect(mock.listedHubIds == ["hub-1"])
+    }
+
+    @Test func noActiveHubListsDeploymentWideRolesOnly() async {
+        let mock = MockRolesAPIService()
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
+        await vm.loadRoles(includeCatalog: false)
+        #expect(mock.listedHubIds == [nil])
+    }
+
+    /// A hub role this device cannot open (no hub key here) must show its id —
+    /// never the sealed ciphertext and never an empty name.
+    @Test func hubRoleThatCannotBeOpenedShowsItsIdNotCiphertext() async {
+        let sealed = String(repeating: "ab", count: 40)
+        let mock = MockRolesAPIService()
+        mock.listRolesResult = .success(RoleListResponse(roles: [
+            RoleResponse(
+                assignedUserCount: nil,
+                createdAt: "2026-01-01T00:00:00Z",
+                description: "",
+                encryptedDescription: sealed,
+                encryptedName: sealed,
+                envelopes: nil,
+                hubID: "hub-1",
+                id: "role-0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
+                isDefault: false,
+                isSystem: false,
+                name: nil,
+                permissions: ["notes:read"],
+                slug: "role-0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f",
+                updatedAt: "2026-01-01T00:00:00Z"
+            ),
+        ]))
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { "hub-1" })
+        await vm.loadRoles(includeCatalog: false)
+        #expect(vm.roles[0].name == "role-0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f")
+        #expect(vm.roles[0].name != sealed)
+        #expect(vm.roles[0].roleDescription.isEmpty)
     }
 
     @Test func permissionsByDomainGroupsCorrectly() {
@@ -131,7 +180,7 @@ struct RolesViewModelTests {
     @Test func loadRolesSetsErrorOnFailure() async {
         let mock = MockRolesAPIService()
         mock.listRolesResult = .failure(URLError(.notConnectedToInternet))
-        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
         await vm.loadRoles(includeCatalog: false)
         #expect(vm.errorMessage != nil)
         #expect(vm.roles.isEmpty)
@@ -142,7 +191,7 @@ struct RolesViewModelTests {
         mock.listRolesResult = .success(RoleListResponse(roles: [
             makeSystemRole(assignedUserCount: 5.0),
         ]))
-        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService())
+        let vm = RolesViewModel(rolesAPI: mock, cryptoService: CryptoService(), hubIdProvider: { nil })
         await vm.loadRoles(includeCatalog: false)
         #expect(vm.roles[0].assignedUserCount == 5)
     }

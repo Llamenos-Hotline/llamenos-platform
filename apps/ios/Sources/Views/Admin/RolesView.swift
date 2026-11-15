@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - RolesView
 
-/// Read-only role viewer: hub roles with effective permissions and
+/// Read-only role viewer: the active hub's roles (deployment-wide and hub-owned, names opened on this device) with effective permissions and
 /// assigned-user counts, mirroring the desktop hub-roles-section / role-list.
 /// Role CRUD stays on desktop; this surface is the viewer of record on mobile.
 struct RolesView: View {
@@ -66,7 +66,8 @@ struct RolesView: View {
         if let existing = viewModelBox.value { return existing }
         let vm = RolesViewModel(
             rolesAPI: RolesAPIService(apiService: appState.apiService),
-            cryptoService: appState.cryptoService
+            cryptoService: appState.cryptoService,
+            hubIdProvider: { [hubContext = appState.hubContext] in hubContext.activeHubId }
         )
         viewModelBox.value = vm
         return vm
