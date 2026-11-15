@@ -53,7 +53,7 @@ COPY site/package.json site/package.json
 RUN bun install --frozen-lockfile --production --ignore-scripts --filter '!llamenos-site'
 
 # Stage 2: Build Rust crypto FFI (.so)
-FROM rust:1-slim@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS rust-builder
+FROM rust:1-slim@sha256:cc9edbcadf2c27013a642b1d1bb7504e26b1142d6b5ebe58f64cf2eb2bc128ae AS rust-builder
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY packages/crypto/ packages/crypto/
@@ -246,7 +246,7 @@ RUN bun run build
 # Digest bump (issue #650, 2026-09-20): refreshes the Alpine package layer
 # (curl/c-ares/libcrypto3/libssl3 CVEs) under the same 2.11.4 tag — same Caddy
 # version, no behavior change. See the `static` stage below for the matching bump.
-FROM caddy:2.11.8-builder-alpine@sha256:e42a64b3bc70aa3a1387bde85b930e507a378fecae5852d5bfde9dcd37d0b999 AS caddy-builder
+FROM caddy:2.11.9-builder-alpine@sha256:646fee578e680989ca5c7fd1ce6f1de574d19fd71ef2221810cc0510a9f40c86 AS caddy-builder
 RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 
 # Stage 7 (`static`): Caddy image serving the built SPA. Matches the
