@@ -571,7 +571,7 @@ jobs:
       contents: read
     # Measured on ubuntu-latest: 3.4 min with no rust-cache hit (the test
     # run itself is ~2.5 min of that). Self-hosted, warm: 2.5-5.6 min.
-    # The Kotlin-binding check adds one more cold build (uniffi-bindgen feature set).
+    # The Kotlin- and Swift-binding checks share one more cold build (uniffi-bindgen feature set).
     timeout-minutes: 25
     env:
       # packages/crypto/rust-toolchain.toml pins `stable` plus eleven extra
@@ -616,6 +616,14 @@ jobs:
       # packages/crypto/ and apps/android/, so a Rust change and a hand-edit both land here.
       - name: Android UniFFI Kotlin binding is current
         run: packages/crypto/scripts/kotlin-bindings.sh check
+
+      # packages/crypto/bindings/swift/ is the same kind of tracked generated output
+      # and had no guard at all: a doc-comment edit on encrypt_draft/decrypt_draft
+      # changed the UniFFI checksums, the Kotlin binding was regenerated, the Swift
+      # one was not, and an iOS build would have died at load with "UniFFI API
+      # checksum mismatch" (#2797). `crypto` already covers packages/crypto/.
+      - name: iOS UniFFI Swift binding is current
+        run: packages/crypto/scripts/generate-bindings.sh check
 
   # ─── Dependency Vulnerability Scan ───────────────────────────
   audit:

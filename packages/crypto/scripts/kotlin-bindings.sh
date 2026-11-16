@@ -7,7 +7,7 @@
 #
 # Gradle compiles apps/android/.../org/llamenos/core/llamenos_core.kt, and
 # Android-only work (compile gate, unit tests, lint) has no Rust toolchain, so
-# unlike the iOS binding the file stays tracked. A tracked generated file is a
+# the file stays tracked (the Swift binding is tracked and checked the same way: generate-bindings.sh). A tracked generated file is a
 # snapshot of code it is no longer derived from unless something regenerates it
 # and compares: `check` is that something (crypto-tests runs it), and `sync` is
 # the only way the file is meant to change (build-mobile.sh android runs it).

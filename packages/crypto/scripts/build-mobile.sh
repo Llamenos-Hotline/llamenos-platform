@@ -183,6 +183,10 @@ build_ios() {
   cargo run --features uniffi-bindgen --bin uniffi-bindgen -- \
     generate --library "$bindgen_lib" --language swift --out-dir "$ios_dist"
 
+  # generate-bindings.sh is the single generator of the tracked bindings/swift/;
+  # the copy above is only for the XCFramework, so refresh the tracked files too.
+  "$SCRIPT_DIR/generate-bindings.sh" sync
+
   local header_file="$ios_dist/LlamenosCoreFFI.h"
   local modulemap_file="$ios_dist/LlamenosCoreFFI.modulemap"
 
