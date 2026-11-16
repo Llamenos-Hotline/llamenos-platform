@@ -29,8 +29,9 @@ permissions:
 
 jobs:
   semgrep:
-    # Release-PR exemption (#1817) — the SAME predicate codeql.yml
-    # and security-audit.yml carry; keep them byte-identical.
+    # Release-PR exemption (#1817) — the SAME predicate security-audit.yml
+    # carries; keep them byte-identical. (codeql.yml's copy is gone, #2806:
+    # there the skip left a required context uncreated.)
     # The knope release PR (head branch `release`) diffs version strings and
     # a changelog — no code — so a full Semgrep scan per regeneration (6 on
     # 2026-10-11) measures nothing. The scan still runs on the push to main

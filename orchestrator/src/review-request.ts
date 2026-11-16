@@ -7,8 +7,8 @@ import { isFleetOwnedBranch } from './automerge.js'
  * the orchestrator, where it is version-controlled and testable (#1760).
  *
  * `fleet/review` fires ONLY on a `review_requested` event (plus the
- * republish-only `synchronize`, which can never START a review — see ci.ts's
- * `REVIEW_REPUBLISH_ACTION`). A push is not a request. Before this module
+ * republish-only `opened`/`reopened`/`synchronize`, which can never START a review — see ci.ts's
+ * `REVIEW_REPUBLISH_ACTIONS`). A push is not a request. Before this module
  * existed, nothing in the PR-open path ever made the request, so every PR
  * the fleet opened was born with `requested_reviewers` empty and a
  * `fleet/review` that could only ever republish `NO-VERDICT:unreviewed` —

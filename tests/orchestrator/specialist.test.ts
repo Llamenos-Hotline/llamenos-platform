@@ -373,8 +373,12 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     // review, structurally (`republishOnly`, ci.ts). The rails that pin that
     // half live in tests/orchestrator/guards.test.ts — this one only pins
     // the trigger list itself.
-    expect(on['pull_request']).toEqual({ types: ['review_requested', 'synchronize'] })
-    for (const forbiddenType of ['labeled', 'unlabeled', 'opened', 'reopened', 'edited']) {
+    //
+    // #2806 added `opened` and `reopened`, republish-only on the same terms
+    // (`REVIEW_REPUBLISH_ACTIONS`), so a PR no CODEOWNERS entry requests a
+    // review on still gets a `fleet/review` check run.
+    expect(on['pull_request']).toEqual({ types: ['review_requested', 'opened', 'reopened', 'synchronize'] })
+    for (const forbiddenType of ['labeled', 'unlabeled', 'edited', 'ready_for_review']) {
       expect((on['pull_request'] as { types: string[] }).types, forbiddenType).not.toContain(forbiddenType)
     }
     for (const forbidden of ['push', 'pull_request_target', 'schedule']) {

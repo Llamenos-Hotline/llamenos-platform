@@ -101,10 +101,19 @@
 #    `gitleaks`, `CodeQL` and `fleet/verify` — and the merge queue tests the
 #    real merge commit.
 #
-#    STILL NEVER `opened`, `labeled` or `push`. `opened` re-enters through
-#    CODEOWNERS (see `reviewTriggerLogins`), `labeled` is what #1158 retired,
-#    and a `push` event carries no PR to attach a check to. That ban is
-#    unchanged and nothing below relaxes it.
+#    `opened` AND `reopened` ARE TRIGGERS TOO (#2806), on the same terms as
+#    `synchronize`: republish-only, never a model call. `opened` used to be
+#    banned on the theory that it "re-enters through CODEOWNERS" — that a
+#    review request always follows an open. It does not when no CODEOWNERS
+#    entry covers a touched path: #2805 got no request, so no run, so NO
+#    `fleet/review` check run at all on its head, and a required context
+#    that never exists is never satisfied. The open-time run makes the
+#    context exist (green on `bot-authored`/`release-pr`/`low-tier`, red
+#    `unreviewed` otherwise); the review request still does the reviewing.
+#
+#    STILL NEVER `labeled` or `push`. `labeled` is what #1158 retired, and a
+#    `push` event carries no PR to attach a check to. That ban is unchanged
+#    and nothing below relaxes it.
 #
 #    `review_requested` remains the ONLY thing that can start a review AND
 #    clear this context. `workflow_dispatch` runs a real review too, but its
@@ -368,6 +377,16 @@ on:
   # `rhonda-rodododo` where `llamenos-auto` cannot be asked). It fires on
   # both the first request and every re-request, which is the whole signal.
   #
+  # `opened`/`reopened` (#2806) exist so the required context EXISTS on a
+  # head nobody requested a review for. They are republish-only exactly like
+  # `synchronize` (`REVIEW_REPUBLISH_ACTIONS`, ci.ts). Without them the first
+  # `fleet/review` on a PR came only from a review request, and the only
+  # automatic one is CODEOWNERS — so a PR touching only unowned paths (#2805,
+  # a Dependabot `deploy/docker/` bump) never got a `fleet/review` check run
+  # at all and sat BLOCKED forever with every visible check green.
+  # tests/orchestrator/required-context-creation.test.ts fails if any
+  # required context loses a creator on any of these actions.
+  #
   # `synchronize` (#1284) exists so the required context REAPPEARS on a head
   # that moved. It can only republish what the PR already earned for this
   # exact tree (`cache-hit`), conclude on its own terms (`low-tier`,
@@ -378,12 +397,12 @@ on:
   # `fleet/review` at all and the PR unmergeable until a human removes and
   # re-adds the reviewer by hand.
   #
-  # NEVER add `opened`/`labeled`/`push` — see invariant 2.
+  # NEVER add `labeled`/`push` — see invariant 2.
   # GitHub cannot filter this trigger by WHO was requested, so the job runs
   # on every review request and the gate step decides; it must never become
   # a job-level `if:` (invariant 1).
   pull_request:
-    types: [review_requested, synchronize]
+    types: [review_requested, opened, reopened, synchronize]
   # The ESCAPE HATCH — and a real one, which is the whole of #1471. It runs
   # the full review set, reaches `run-engine` like any review request, and
   # can return FAIL. It is write-access-gated (a `workflow_dispatch` cannot
@@ -534,7 +553,7 @@ jobs:
     # starts and can never disagree with the gate's own later decision.
     # Pinned by a rail in tests/orchestrator/guards.test.ts, which also
     # asserts `ubuntu-latest` appears here ONLY under that condition.
-    runs-on: ${{ (github.event.action == 'synchronize' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
+    runs-on: ${{ ((github.event_name == 'pull_request' && contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
     # Read by the label-clearing job below. `outcome` and `clear_labels` are
     # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
     # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
