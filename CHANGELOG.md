@@ -210,6 +210,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.15 (2026-11-16)
+
+### Fixes
+
+- delegate Shamir, hub AES-GCM and provisioning to packages/crypto (#2764, #2765, #2766) (#2784)
+
 ## 0.21.14 (2026-11-14)
 
 ### Fixes
