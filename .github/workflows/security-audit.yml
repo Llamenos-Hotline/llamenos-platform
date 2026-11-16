@@ -123,7 +123,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-audit (pinned — avoid silent behaviour drift)
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit@0.22.1
           # Prebuilt binary or a hard failure — never a silent source build.
@@ -526,7 +526,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-deny (pinned — avoid silent config-schema drift)
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@0.20.2
           # Prebuilt binary or a hard failure — never a silent source build.
