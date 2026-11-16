@@ -1,6 +1,8 @@
 import { test, expect } from './console-guard'
 import {
+  enterPin,
   loginAsAdmin,
+  TEST_PIN,
   Timeouts,
 } from './helpers'
 
@@ -33,41 +35,37 @@ test.describe('Offline Resilience', () => {
     await expect(page.getByTestId('offline-banner')).not.toBeVisible({ timeout: Timeouts.ELEMENT })
   })
 
-  test('offline queue persists operations in localStorage', async ({ page }) => {
-    // Go offline
+  test('a queued write survives a reload, sealed for this device', async ({ page, consoleWatch }) => {
+    // After the reload the app replays the queue on its first successful
+    // request; the probe route does not exist, so the write stays queued.
+    consoleWatch.expect({
+      message: /^Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+      source: /\/api\/offline-queue-probe(\?|$)/,
+      reason: 'the reloaded app replays the queued probe write to a route that does not exist',
+    })
+
     await page.context().setOffline(true)
+    const id = await page.evaluate(() =>
+      window.__TEST_OFFLINE_QUEUE!.enqueue('/offline-queue-probe', 'POST', '{"probe":"offline-queue-plaintext-marker"}'),
+    )
 
-    // Evaluate: enqueue an operation directly via the offline queue
-    const queueLength = await page.evaluate(() => {
-      // Manually test localStorage-based queue
-      const STORAGE_KEY = 'llamenos-offline-queue'
-      const queue = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-      queue.push({
-        id: crypto.randomUUID(),
-        type: 'note:create',
-        path: '/notes',
-        method: 'POST',
-        body: JSON.stringify({ callId: 'test-call-1', encryptedContent: 'test' }),
-        queuedAt: new Date().toISOString(),
-        attempts: 0,
-        lastError: null,
-      })
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(queue))
-      return queue.length
-    })
+    // Persisted at enqueue time, and sealed: the body is not in storage.
+    const stored = await page.evaluate(() => localStorage.getItem('llamenos-offline-queue'))
+    expect(stored).not.toBeNull()
+    expect(stored).not.toContain('offline-queue-plaintext-marker')
 
-    expect(queueLength).toBe(1)
-
-    // Verify it persists across page evaluation
-    const persistedLength = await page.evaluate(() => {
-      const queue = JSON.parse(localStorage.getItem('llamenos-offline-queue') || '[]')
-      return queue.length
-    })
-    expect(persistedLength).toBe(1)
-
-    // Clean up
-    await page.evaluate(() => localStorage.removeItem('llamenos-offline-queue'))
+    // Restart the webview: the IPC mock's CryptoState and all memory are gone.
     await page.context().setOffline(false)
+    await page.reload()
+    await enterPin(page, TEST_PIN)
+    await page.waitForURL(u => !u.toString().includes('/login'), { timeout: Timeouts.AUTH })
+
+    // The unlock opens the persisted queue with the device key.
+    await page.waitForFunction(() => window.__TEST_OFFLINE_QUEUE?.hydrated === true, undefined, { timeout: Timeouts.ELEMENT })
+    const ids = await page.evaluate(() => window.__TEST_OFFLINE_QUEUE!.getQueue().map(op => op.id))
+    expect(ids).toContain(id)
+
+    await page.evaluate(() => window.__TEST_OFFLINE_QUEUE!.clear())
   })
 
   test('offline queue does not queue GET requests', async ({ page }) => {
@@ -101,46 +99,17 @@ test.describe('Offline Resilience', () => {
     await page.context().setOffline(true)
     await expect(page.getByTestId('offline-banner')).toBeVisible({ timeout: Timeouts.ELEMENT })
 
-    // Inject queued operations into localStorage and trigger the queue subscriber
-    await page.evaluate(() => {
-      const ops = [
-        {
-          id: crypto.randomUUID(),
-          type: 'note:create',
-          path: '/notes',
-          method: 'POST',
-          body: '{}',
-          queuedAt: new Date().toISOString(),
-          attempts: 0,
-          lastError: null,
-        },
-        {
-          id: crypto.randomUUID(),
-          type: 'message:send',
-          path: '/conversations/test/messages',
-          method: 'POST',
-          body: '{}',
-          queuedAt: new Date().toISOString(),
-          attempts: 0,
-          lastError: null,
-        },
-      ]
-      localStorage.setItem('llamenos-offline-queue', JSON.stringify(ops))
-
-      // Dispatch a storage event to trigger any listeners
-      window.dispatchEvent(new StorageEvent('storage', {
-        key: 'llamenos-offline-queue',
-        newValue: JSON.stringify(ops),
-      }))
+    // Queue two writes through the app's own offline queue.
+    await page.evaluate(async () => {
+      const queue = window.__TEST_OFFLINE_QUEUE!
+      await queue.enqueue('/notes', 'POST', '{}')
+      await queue.enqueue('/conversations/test/messages', 'POST', '{}')
     })
 
-    // The banner text should contain some indication of pending count
-    // Note: The exact display depends on the queue subscriber updating
-    const banner = page.getByTestId('offline-banner')
-    await expect(banner).toBeVisible()
+    await expect(page.getByTestId('offline-pending-count')).toContainText('2')
 
     // Clean up
-    await page.evaluate(() => localStorage.removeItem('llamenos-offline-queue'))
+    await page.evaluate(() => window.__TEST_OFFLINE_QUEUE!.clear())
     await page.context().setOffline(false)
   })
 

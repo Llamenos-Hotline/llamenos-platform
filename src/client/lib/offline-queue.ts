@@ -6,10 +6,19 @@
  * on reconnect with exponential backoff.
  *
  * The queue does NOT store read operations — only mutating requests (POST, PUT, PATCH, DELETE).
+ *
+ * At rest the queue is sealed for THIS device (`sealOfflineQueue` in platform.ts:
+ * a key the crate derives from the device's own X25519 seed under
+ * `LABEL_OFFLINE_QUEUE`). It is per-device data, so it never depends on a hub
+ * key. Persisting is part of enqueueing: if the queue cannot be sealed, the
+ * enqueue rejects and the operation is NOT queued — a write is never reported
+ * as queued while it lives only in memory.
  */
 
 import { getApiUrl } from './api-config'
 import { netFetch } from './net'
+import { onUnlock, isUnlocked } from './key-manager'
+import * as platform from './platform'
 
 /** Types of operations that can be queued */
 export type QueuedOperationType =
@@ -45,6 +54,55 @@ export interface QueuedOperation {
 
 type QueueChangeListener = (queue: QueuedOperation[]) => void
 
+/** Seals the serialized queue for at-rest storage on this device. */
+export interface OfflineQueueSealer {
+  seal(json: string): Promise<string>
+  open(sealed: string): Promise<string>
+}
+
+/** The queue could not be sealed to, or opened from, device storage. */
+export class OfflineQueueStorageError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(`${message}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+    this.name = 'OfflineQueueStorageError'
+  }
+}
+
+// Imported statically, never with `import()`: the queue is written exactly when
+// the network is down, and a lazily fetched chunk would fail to load right then.
+const platformSealer: OfflineQueueSealer = {
+  seal: json => platform.sealOfflineQueue(json),
+  open: sealed => platform.openOfflineQueue(sealed),
+}
+
+const OPERATION_TYPES: ReadonlySet<string> = new Set<QueuedOperationType>([
+  'note:create', 'note:update', 'message:send', 'shift:toggle', 'availability:update',
+  'conversation:claim', 'conversation:update', 'report:create', 'report:message',
+  'ban:add', 'ban:remove', 'generic:write',
+])
+
+function isQueuedOperation(value: unknown): value is QueuedOperation {
+  if (typeof value !== 'object' || value === null) return false
+  const op = value as Record<string, unknown>
+  return typeof op.id === 'string'
+    && typeof op.type === 'string' && OPERATION_TYPES.has(op.type)
+    && typeof op.path === 'string'
+    && typeof op.method === 'string'
+    && (op.body === null || typeof op.body === 'string')
+    && typeof op.queuedAt === 'string'
+    && typeof op.attempts === 'number'
+    && (op.lastError === null || typeof op.lastError === 'string')
+}
+
+/** Parse an opened queue; throws if it is not a list of queued operations. */
+function parseQueue(json: string): QueuedOperation[] {
+  const parsed: unknown = JSON.parse(json)
+  if (!Array.isArray(parsed) || !parsed.every(isQueuedOperation)) {
+    throw new Error('opened offline queue is not a list of queued operations')
+  }
+  return parsed
+}
+
 const STORAGE_KEY = 'llamenos-offline-queue'
 const MAX_ATTEMPTS = 10
 const BASE_RETRY_DELAY = 1_000
@@ -71,11 +129,28 @@ export class OfflineQueue {
   private listeners = new Set<QueueChangeListener>()
   private replaying = false
   private isOnline = navigator.onLine
+  /**
+   * The persisted, still-sealed queue from a previous session, until it has
+   * been opened into memory. While it is set, nothing may be written: a write
+   * would overwrite operations this session has not read yet.
+   */
+  private sealed: string | null
+  /** Serialises storage writes so an older snapshot never lands after a newer one. */
+  private writes: Promise<void> = Promise.resolve()
+  private readonly sealer: OfflineQueueSealer
+  private readonly storage: Storage
 
-  constructor() {
-    this.load()
+  constructor(options: { sealer?: OfflineQueueSealer; storage?: Storage } = {}) {
+    this.sealer = options.sealer ?? platformSealer
+    this.storage = options.storage ?? localStorage
+    this.sealed = this.storage.getItem(STORAGE_KEY)
     window.addEventListener('online', this.handleOnline)
     window.addEventListener('offline', this.handleOffline)
+  }
+
+  /** Whether the persisted queue has been opened into memory (or there was none). */
+  get hydrated(): boolean {
+    return this.sealed === null
   }
 
   /** Add a listener for queue changes (for UI pending count) */
@@ -104,10 +179,12 @@ export class OfflineQueue {
   }
 
   /**
-   * Enqueue a write operation for later replay.
-   * Returns the queued operation ID.
+   * Enqueue a write operation for later replay, and persist it.
+   * Resolves with the queued operation ID once the operation is sealed to
+   * storage. Rejects with an `OfflineQueueStorageError` — and leaves the
+   * operation out of the queue — if it could not be persisted.
    */
-  enqueue(path: string, method: string, body: string | null): string {
+  async enqueue(path: string, method: string, body: string | null): Promise<string> {
     const op: QueuedOperation = {
       id: crypto.randomUUID(),
       type: classifyOperation(path, method),
@@ -119,27 +196,47 @@ export class OfflineQueue {
       lastError: null,
     }
     this.queue.push(op)
-    void this.save()
     this.notifyListeners()
+    try {
+      await this.persist()
+    } catch (err) {
+      this.queue = this.queue.filter(o => o.id !== op.id)
+      this.notifyListeners()
+      throw err
+    }
     return op.id
   }
 
   /**
    * Remove an operation from the queue (e.g., after successful replay or manual cancel).
    */
-  remove(id: string): void {
+  async remove(id: string): Promise<void> {
+    await this.hydrate()
     this.queue = this.queue.filter(op => op.id !== id)
-    void this.save()
     this.notifyListeners()
+    await this.persist()
   }
 
   /**
-   * Clear all queued operations.
+   * Discard every queued operation — in memory and at rest, including a
+   * persisted queue that has not been opened yet.
    */
-  clear(): void {
+  async clear(): Promise<void> {
     this.queue = []
-    void this.save()
+    this.sealed = null
     this.notifyListeners()
+    await this.persist()
+  }
+
+  /**
+   * Open the queue persisted by a previous session and merge it ahead of
+   * anything queued since. Needs the device key unlocked; called on unlock.
+   * Rejects with an `OfflineQueueStorageError` if the persisted queue cannot
+   * be opened — it is left in storage untouched, never silently dropped.
+   */
+  async hydrate(): Promise<void> {
+    if (this.sealed === null) return
+    await this.serialized(() => this.openSealed())
   }
 
   /**
@@ -152,11 +249,28 @@ export class OfflineQueue {
     failed: number
     remaining: number
   }> {
-    if (this.replaying || this.queue.length === 0) {
+    if (this.replaying) {
       return { succeeded: 0, failed: 0, remaining: this.queue.length }
     }
-
+    // Claimed before the first await, so a concurrent call cannot also start.
     this.replaying = true
+    try {
+      // A restart's persisted operations replay too, not only this session's.
+      await this.hydrate()
+      if (this.queue.length === 0) {
+        return { succeeded: 0, failed: 0, remaining: 0 }
+      }
+      return await this.replayHydrated(getHeaders)
+    } finally {
+      this.replaying = false
+    }
+  }
+
+  private async replayHydrated(getHeaders: (method: string, path: string) => Record<string, string> | Promise<Record<string, string>>): Promise<{
+    succeeded: number
+    failed: number
+    remaining: number
+  }> {
     let succeeded = 0
     let failed = 0
     const toRemove: string[] = []
@@ -216,11 +330,10 @@ export class OfflineQueue {
       }
     }
 
-    // Remove successfully replayed operations
+    // Remove successfully replayed operations, and persist the attempt counts
     this.queue = this.queue.filter(op => !toRemove.includes(op.id))
-    void this.save()
     this.notifyListeners()
-    this.replaying = false
+    await this.persist()
 
     return { succeeded, failed, remaining: this.queue.length }
   }
@@ -247,57 +360,46 @@ export class OfflineQueue {
     this.notifyListeners()
   }
 
-  private load(): void {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-
-      // Try to parse as encrypted (hex string) first, fall back to legacy JSON
-      if (raw.startsWith('[') || raw.startsWith('{')) {
-        // Legacy unencrypted format — load and will re-encrypt on next save
-        this.queue = JSON.parse(raw) as QueuedOperation[]
-      } else {
-        // Encrypted format — will be decrypted async on first access
-        this._encryptedRaw = raw
-      }
-    } catch {
-      this.queue = []
-    }
+  /** Run `task` after every earlier storage operation, whether or not it failed. */
+  private serialized(task: () => Promise<void>): Promise<void> {
+    const run = this.writes.then(task)
+    this.writes = run.catch(() => {})
+    return run
   }
 
-  private _encryptedRaw: string | null = null
-
-  /** Decrypt queue if loaded from encrypted storage (async, called before first use) */
-  async decryptIfNeeded(): Promise<void> {
-    if (!this._encryptedRaw) return
-    try {
-      const { decryptDraft } = await import('./platform')
-      const decrypted = await decryptDraft(this._encryptedRaw)
-      if (decrypted) {
-        this.queue = JSON.parse(decrypted) as QueuedOperation[]
+  /** Write the current queue to storage, sealed. Rejects if it could not be. */
+  private persist(): Promise<void> {
+    return this.serialized(async () => {
+      // A persisted queue not yet read must be merged first, or this write
+      // would replace operations from the previous session.
+      await this.openSealed()
+      if (this.queue.length === 0) {
+        this.storage.removeItem(STORAGE_KEY)
+        return
       }
-    } catch {
-      // Can't decrypt (key not loaded yet) — queue will be empty until unlock
-      this.queue = []
-    }
-    this._encryptedRaw = null
+      let sealed: string
+      try {
+        sealed = await this.sealer.seal(JSON.stringify(this.queue))
+      } catch (cause) {
+        throw new OfflineQueueStorageError('Could not seal the offline queue', cause)
+      }
+      this.storage.setItem(STORAGE_KEY, sealed)
+    })
   }
 
-  private async save(): Promise<void> {
-    const json = JSON.stringify(this.queue)
+  private async openSealed(): Promise<void> {
+    const sealed = this.sealed
+    if (sealed === null) return
+    let persisted: QueuedOperation[]
     try {
-      const { encryptDraft } = await import('./platform')
-      const encrypted = await encryptDraft(json)
-      if (encrypted) {
-        localStorage.setItem(STORAGE_KEY, encrypted)
-      }
-      // If encryption returned null (key not loaded), do not persist —
-      // queue remains in memory only. It will be persisted on next
-      // save() call after crypto is unlocked.
-    } catch {
-      // encryptDraft unavailable (test build or crypto not initialized)
-      // Do not fall back to plaintext. Queue stays in memory.
+      persisted = parseQueue(await this.sealer.open(sealed))
+    } catch (cause) {
+      throw new OfflineQueueStorageError('Could not open the persisted offline queue', cause)
     }
+    const persistedIds = new Set(persisted.map(op => op.id))
+    this.queue = [...persisted, ...this.queue.filter(op => !persistedIds.has(op.id))]
+    this.sealed = null
+    this.notifyListeners()
   }
 
   private notifyListeners(): void {
@@ -314,6 +416,17 @@ export class OfflineQueue {
 
 /** Singleton offline queue instance */
 export const offlineQueue = new OfflineQueue()
+
+// The persisted queue opens with the device key, so it is read on unlock (and
+// at once if the key is already unlocked). A queue that will not open is a
+// defect — it is reported, not discarded.
+function hydrateOnUnlock(): void {
+  offlineQueue.hydrate().catch((err: unknown) => {
+    console.error('[offline-queue] persisted queue could not be opened', err)
+  })
+}
+onUnlock(hydrateOnUnlock)
+if (isUnlocked()) hydrateOnUnlock()
 
 /**
  * Determine if a failed fetch should be queued for offline replay.

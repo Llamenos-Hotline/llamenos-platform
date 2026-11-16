@@ -235,6 +235,9 @@ pub fn run() {
             crypto::decrypt_server_event,
             crypto::encrypt_hub_field,
             crypto::decrypt_hub_field,
+            // Device-local sealing (drafts, offline queue) — key derived from the device seed
+            crypto::seal_device_local_from_state,
+            crypto::open_device_local_from_state,
             // SAS emoji verification
             crypto::derive_sas,
             // Shamir secret sharing (only stateless verification — split/combine are internal)

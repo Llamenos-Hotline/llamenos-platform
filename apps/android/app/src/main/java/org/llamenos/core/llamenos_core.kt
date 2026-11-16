@@ -1103,7 +1103,7 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_draft() != 19509.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_decrypt_draft() != 58624.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_note() != 12866.toShort()) {
@@ -1112,7 +1112,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_pin() != 1896.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_encrypt_draft() != 25499.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_encrypt_draft() != 7182.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_encrypt_with_pin() != 12239.toShort()) {
@@ -3048,7 +3048,7 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     }
 }
         /**
-         * Decrypt a draft.
+         * Decrypt a draft produced by [`encrypt_draft`].
          */
     @Throws(CryptoException::class) fun `decryptDraft`(`packedHex`: kotlin.String, `secretKeyHex`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
@@ -3090,7 +3090,8 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Encrypt a draft (local auto-save) with HKDF-derived key.
+         * Encrypt a draft (local auto-save) — [`seal_device_local`] under
+         * `HKDF_CONTEXT_DRAFTS`, hex-encoded.
          */
     @Throws(CryptoException::class) fun `encryptDraft`(`plaintext`: kotlin.String, `secretKeyHex`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(

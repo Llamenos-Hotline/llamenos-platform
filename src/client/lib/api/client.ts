@@ -172,8 +172,12 @@ export async function request<T>(path: string, options: RequestInit & { retries?
 
       // On successful request, attempt to replay any queued offline operations
       if (offlineQueue.pendingCount > 0 && navigator.onLine) {
-        // Fire-and-forget replay — don't block the current request
-        offlineQueue.replay(getAuthHeadersForReplay).catch(() => {})
+        // Fire-and-forget replay — don't block the current request. Replay
+        // handles network and HTTP failures per operation; it rejects only when
+        // the queue cannot be read or written, which is a defect to report.
+        offlineQueue.replay(getAuthHeadersForReplay).catch((replayErr: unknown) => {
+          console.error('[offline-queue] replay could not persist the queue', replayErr)
+        })
       }
 
       // 204 No Content (and 205) carry no body, and several routes use them —
@@ -193,7 +197,9 @@ export async function request<T>(path: string, options: RequestInit & { retries?
       // If this is a network error and the operation is queueable, add to offline queue
       if (isOfflineNetworkError(lastError) && isQueueableMethod(method) && isQueueablePath(path)) {
         const body = options.body ? (typeof options.body === 'string' ? options.body : null) : null
-        offlineQueue.enqueue(path, method, body)
+        // Rejects (and the operation is not queued) if it cannot be persisted —
+        // that error reaches the caller instead of a false "queued".
+        await offlineQueue.enqueue(path, method, body)
         throw new OfflineQueuedError(path, method)
       }
       throw new NetworkError(lastError.message, lastError)

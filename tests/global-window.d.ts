@@ -35,6 +35,8 @@ declare global {
     __TEST_GET_ACTIVE_HUB?: () => string | null
     __TEST_SET_ACTIVE_HUB?: (id: string | null) => void
     __TEST_PLATFORM?: typeof import('../src/client/lib/platform')
+    /** The app's offline write queue singleton (`src/client/lib/offline-queue.ts`). */
+    __TEST_OFFLINE_QUEUE?: typeof import('../src/client/lib/offline-queue').offlineQueue
     __TEST_LAST_DEVICE_SEED_HEX?: string
     /** Backups the mocked `save_backup_file` "wrote to disk" (path + file contents). */
     __TEST_SAVED_BACKUPS?: Array<{ path: string; contents: string }>

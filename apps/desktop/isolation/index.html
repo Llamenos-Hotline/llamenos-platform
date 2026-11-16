@@ -62,6 +62,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // Hub-key field encryption (team/tag names — key stays in Rust)
     'encrypt_hub_field',
     'decrypt_hub_field',
+    // Device-local sealing (drafts, offline queue — key derived from the device seed in Rust)
+    'seal_device_local_from_state',
+    'open_device_local_from_state',
     // Server event decryption
     'set_server_event_keys',
     'decrypt_hub_event',

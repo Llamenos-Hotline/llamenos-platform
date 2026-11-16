@@ -11,7 +11,7 @@
  * Import from here instead of directly from @tauri-apps/*.
  */
 
-import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import type { AdminHpkeRecipient } from './admin-recipient'
 import type { PukHpkeEnvelope } from '@protocol/schemas'
@@ -74,6 +74,8 @@ export type TauriIpcCommand =
   | 'decrypt_server_event'
   | 'encrypt_hub_field'
   | 'decrypt_hub_field'
+  | 'seal_device_local_from_state'
+  | 'open_device_local_from_state'
   | 'derive_sas'
   | 'shamir_commit'
   | 'shamir_verify'
@@ -1318,19 +1320,60 @@ export async function decryptTranscription(
   return decryptMessage(encryptedContent, adminEnvelopes)
 }
 
+// ── Device-local sealing (drafts, offline write queue) ──────────────
+//
+// Per-device data is sealed under a key the crate derives from this device's own
+// X25519 seed (`seal_device_local` in packages/crypto) — never under the hub key.
+// It must stay sealable with no hub key loaded; sealing it under the hub key
+// dropped every queued offline write on restart (no client loads a hub key).
+
+/** The closed set of purposes the Rust side accepts (`DEVICE_LOCAL_PURPOSES`). */
+export type DeviceLocalPurpose = typeof HKDF_CONTEXT_DRAFTS | typeof LABEL_OFFLINE_QUEUE
+
 /**
- * Encrypt draft data using the hub key with HKDF_CONTEXT_DRAFTS domain separation.
- * Drafts are local-only (localStorage), encrypted with the hub key held in Rust CryptoState.
+ * Seal per-device data. Throws when the device key is locked or the seal fails —
+ * a caller must not treat a failed seal as "saved".
  */
-export async function encryptDraft(plaintext: string): Promise<string> {
-  return encryptHubField(plaintext, HKDF_CONTEXT_DRAFTS)
+export async function sealDeviceLocal(plaintext: string, purpose: DeviceLocalPurpose): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('seal_device_local_from_state', { plaintext, purpose })
+  }
+  throw new Error('seal_device_local_from_state requires the Tauri runtime')
 }
 
 /**
- * Decrypt draft data encrypted with encryptDraft.
+ * Open data sealed by `sealDeviceLocal` for the same purpose. Throws when the
+ * device key is locked, or the ciphertext is not this device's / this purpose's.
  */
+export async function openDeviceLocal(ciphertextHex: string, purpose: DeviceLocalPurpose): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('open_device_local_from_state', { ciphertextHex, purpose })
+  }
+  throw new Error('open_device_local_from_state requires the Tauri runtime')
+}
+
+/** Seal a note draft (local auto-save) for this device. */
+export async function encryptDraft(plaintext: string): Promise<string> {
+  return sealDeviceLocal(plaintext, HKDF_CONTEXT_DRAFTS)
+}
+
+/** Open a draft sealed by `encryptDraft`; null if it does not open. */
 export async function decryptDraft(ciphertextHex: string): Promise<string | null> {
-  return decryptHubField(ciphertextHex, HKDF_CONTEXT_DRAFTS)
+  try {
+    return await openDeviceLocal(ciphertextHex, HKDF_CONTEXT_DRAFTS)
+  } catch {
+    return null
+  }
+}
+
+/** Seal the serialized offline write queue for this device. Throws on failure. */
+export async function sealOfflineQueue(json: string): Promise<string> {
+  return sealDeviceLocal(json, LABEL_OFFLINE_QUEUE)
+}
+
+/** Open the offline write queue sealed by `sealOfflineQueue`. Throws on failure. */
+export async function openOfflineQueue(ciphertextHex: string): Promise<string> {
+  return openDeviceLocal(ciphertextHex, LABEL_OFFLINE_QUEUE)
 }
 
 /**

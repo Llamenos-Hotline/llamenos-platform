@@ -2476,7 +2476,7 @@ fileprivate struct FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer {
     }
 }
 /**
- * Decrypt a draft.
+ * Decrypt a draft produced by [`encrypt_draft`].
  */
 public func decryptDraft(packedHex: String, secretKeyHex: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
@@ -2510,7 +2510,8 @@ public func decryptWithPin(data: EncryptedKeyData, pin: String)throws  -> String
 })
 }
 /**
- * Encrypt a draft (local auto-save) with HKDF-derived key.
+ * Encrypt a draft (local auto-save) — [`seal_device_local`] under
+ * `HKDF_CONTEXT_DRAFTS`, hex-encoded.
  */
 public func encryptDraft(plaintext: String, secretKeyHex: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
@@ -3553,7 +3554,7 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_decrypt_draft() != 19509) {
+    if (uniffi_llamenos_core_checksum_func_decrypt_draft() != 58624) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_decrypt_note() != 12866) {
@@ -3562,7 +3563,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_decrypt_with_pin() != 1896) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_encrypt_draft() != 25499) {
+    if (uniffi_llamenos_core_checksum_func_encrypt_draft() != 7182) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_encrypt_with_pin() != 12239) {

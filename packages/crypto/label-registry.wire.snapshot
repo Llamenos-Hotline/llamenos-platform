@@ -125,3 +125,4 @@
 107	llamenos:call-recording-seal:v1
 108	llamenos:provider-ref-key:v1
 109	llamenos:case-comment
+110	llamenos:offline-queue:v1
