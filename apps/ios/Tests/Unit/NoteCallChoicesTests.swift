@@ -65,7 +65,7 @@ final class NoteCallChoicesTests: XCTestCase {
                       \#(call("theirs-active", status: "in-progress", answeredBy: other, at: "2026-10-26T09:00:00.000Z"))]}
             """#),
             "GET /api/hubs/\(hub)/calls/history": (200, #"""
-            {"calls":[\#(call("old-1", status: "completed", answeredBy: other, at: "2026-10-25T10:00:00.000Z"))],"total":1,"page":1,"limit":50}
+            {"calls":[\#(call("old-1", status: "completed", answeredBy: other, at: "2026-10-25T10:00:00.000Z"))],"total":1,"page":1,"limit":50,"access":{"scope":"all"}}
             """#),
         ])
         return NoteCallChoicesViewModel(

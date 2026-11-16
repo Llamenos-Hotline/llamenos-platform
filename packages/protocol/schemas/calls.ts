@@ -99,8 +99,10 @@ export const banCallResponseSchema = z.object({
  * The window is access control, not cryptographic expiry: a record the caller
  * already fetched stays decryptable with their device key.
  */
+export const callHistoryAccessScopeSchema = z.enum(['all', 'own'])
+
 export const callHistoryAccessSchema = z.object({
-  scope: z.enum(['all', 'own']),
+  scope: callHistoryAccessScopeSchema,
   /** The hub's volunteer access window in days. Present when `scope` is `own`. */
   windowDays: z.number().int().optional(),
   /** ISO 8601 server time: the oldest answer time served. Present when `scope` is `own`. */
