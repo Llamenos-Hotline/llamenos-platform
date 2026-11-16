@@ -51,6 +51,7 @@ const DDL = `
     ended_at TIMESTAMPTZ,
     duration INTEGER,
     answered_by TEXT,
+    answered_at TIMESTAMPTZ,
     status TEXT NOT NULL,
     has_transcription BOOLEAN DEFAULT FALSE,
     has_voicemail BOOLEAN DEFAULT FALSE,

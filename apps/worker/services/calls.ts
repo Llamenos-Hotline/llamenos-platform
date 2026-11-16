@@ -459,32 +459,59 @@ export class CallsService {
   /**
    * End an active call: remove from active_calls and insert into call_records.
    * The history record's §2.5 metadata ({ answeredBy, callerNumber }) is sealed
-   * for the admin envelope set here — callers cannot supply their own. The row's
+   * for the call's reader set here — callers cannot supply their own. The row's
    * sealed caller number goes with the row.
+   *
+   * The reader set depends on who answered (#1342) and is resolved from the
+   * database, so it is resolved BEFORE the transaction: a root-pool query
+   * inside it is refused (`db/pool-gate.ts`, #1208). The delete is then
+   * conditional on the answerer the set was resolved for. If a ringing call
+   * was answered in between, the delete matches nothing and the set is
+   * resolved again for the new answerer; an answer happens at most once, so
+   * the second attempt settles it. A call that is gone is 404, as before.
    */
   async endCall(hubId: string, callId: string): Promise<CallRecordRow> {
-    const record = await this.db.transaction(async (tx) => {
-      // Fetch and delete the active call
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const live = await this.getActiveCallById(hubId, callId)
+      if (!live) throw new ServiceError(404, 'Call not found')
+      const recipients = await this.resolveRecordRecipients(live)
+      const record = await this.archiveEndedCall(hubId, callId, live.answeredBy ?? null, recipients)
+      if (record) return record
+    }
+    throw new Error(`endCall: call ${callId} kept changing answerer while ending`)
+  }
+
+  /**
+   * The transactional half of {@link endCall}: delete the live row — only if it
+   * is still answered by `answeredBy` — and write its sealed history record.
+   * `null` when the row no longer matches (answered meanwhile, or ended).
+   */
+  private async archiveEndedCall(
+    hubId: string,
+    callId: string,
+    answeredBy: string | null,
+    recipients: string[] | null,
+  ): Promise<CallRecordRow | null> {
+    return this.db.transaction(async (tx) => {
       const [call] = await tx
         .delete(activeCalls)
         .where(
           and(
             eq(activeCalls.callId, callId),
             eq(activeCalls.hubId, hubId),
+            answeredBy === null ? isNull(activeCalls.answeredBy) : eq(activeCalls.answeredBy, answeredBy),
           ),
         )
         .returning()
 
-      if (!call) {
-        throw new ServiceError(404, 'Call not found')
-      }
+      if (!call) return null
 
       const endedAt = new Date()
       const duration = Math.floor(
         (endedAt.getTime() - new Date(call.startedAt).getTime()) / 1000,
       )
       const finalStatus = call.answeredBy ? 'completed' : 'unanswered'
-      const sealed = this.sealCallMetadata(call, await this.resolveRecordRecipients(call))
+      const sealed = this.sealCallMetadata(call, recipients)
 
       const [row] = await tx
         .insert(callRecords)
@@ -511,8 +538,6 @@ export class CallsService {
 
       return row
     })
-
-    return record
   }
 
   // =========================================================================
