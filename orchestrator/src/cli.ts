@@ -1856,7 +1856,8 @@ async function runReviewGate(): Promise<number> {
     // "request a review" to imply the previous one was somehow lost.
     if (isRepublishOnlyEvent(event)) {
       process.stderr.write(
-        `${REVIEW_JOB}: this push changed the tree, so no verdict this PR has already earned covers the new head\n`,
+        `${REVIEW_JOB}: no verdict this PR has already earned covers this head's tree — it was opened, ` +
+          'reopened or pushed without a review being requested for it\n',
       )
     }
     // What to DO about it, from `reviewNotRequestedAdvice` — which refuses to

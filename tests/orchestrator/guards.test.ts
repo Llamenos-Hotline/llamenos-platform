@@ -18,7 +18,7 @@ import { checkRunsViolations, orchestratorSources, statusesViolations, MISSING_C
 import { commitSha as commitShaOf } from '../../orchestrator/src/gh.js'
 import {
   runReviewCi, decideReviewGate, CI_DIFF_FLAGS, REVIEW_GATE_STANDING, reviewGateFailsClosed,
-  isRepublishOnlyEvent, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
+  isRepublishOnlyEvent, REVIEW_REPUBLISH_ACTIONS, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
 import { claimDigest, DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
@@ -954,8 +954,18 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // alone. `merge_group` is hosted because its sole step republishes the
     // queued PR's verdict through `gh` and cannot reach the engine (#2648);
     // `pull_request: review_requested` and `workflow_dispatch` must not match.
-    expect(runsOn, 'a hosted runner is only ever the synchronize or merge_group arm')
-      .toMatch(/\(github\.event\.action == 'synchronize' \|\| github\.event_name == 'merge_group'\) && fromJSON\('\["ubuntu-latest"\]'\) \|\|/)
+    //
+    // #2806 widened the republish-only arm from `synchronize` alone to
+    // `REVIEW_REPUBLISH_ACTIONS` (opened, reopened, synchronize). The hosted
+    // list here must be EXACTLY that set: one action more and an
+    // engine-capable event could land on a hosted runner; one fewer and a
+    // republish queues on the review box in front of real reviews.
+    const hosted = runsOn.match(
+      /\(\(github\.event_name == 'pull_request' && contains\(fromJSON\('(\[[^\]]*\])'\), github\.event\.action\)\) \|\| github\.event_name == 'merge_group'\) && fromJSON\('\["ubuntu-latest"\]'\) \|\|/,
+    )
+    expect(hosted, 'a hosted runner is only ever the republish-only pull_request arm or the merge_group arm').not.toBeNull()
+    expect(JSON.parse(hosted?.[1] ?? '[]'), 'the hosted pull_request actions must be exactly REVIEW_REPUBLISH_ACTIONS')
+      .toEqual([...REVIEW_REPUBLISH_ACTIONS])
     expect(block, 'runs-on must never be an unconditional GitHub-hosted runner')
       .not.toMatch(/\n {4}runs-on:\s*ubuntu-latest\s*$/m)
   })
@@ -1555,9 +1565,17 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // REQUIRED instead: without it `fleet/review` cannot report on the queue's
   // synthetic commit at all, and a required context that never reports
   // leaves every entry at `AWAITING_CHECKS` forever.
-  it('fleet-review.yml triggers on pull_request (review_requested + synchronize), workflow_dispatch AND merge_group, and NEVER push', () => {
+  //
+  // #2806 added `opened` and `reopened`, on exactly `synchronize`'s terms:
+  // republish-only (`REVIEW_REPUBLISH_ACTIONS`), so they cannot reach the
+  // engine either. `opened` was banned because it "re-enters through
+  // CODEOWNERS"; it does not when no entry owns a touched path, and #2805 sat
+  // with no `fleet/review` check run at all because of it.
+  // required-context-creation.test.ts is the rail that fails if a head event
+  // stops creating the context.
+  it('fleet-review.yml triggers on pull_request (review_requested + the republish-only actions), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*synchronize\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
@@ -1573,10 +1591,13 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     // block would trip on that explanation rather than on a real entry.
     const typesLine = pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? ''
     expect(typesLine.length, 'pull_request types: line not found').toBeGreaterThan(0)
-    for (const forbiddenType of ['labeled', 'opened']) {
-      expect(typesLine, `fleet-review.yml pull_request trigger must be review_requested + synchronize only — adding ${forbiddenType} reopens the every-label/CODEOWNERS bug`)
+    for (const forbiddenType of ['labeled', 'edited', 'ready_for_review']) {
+      expect(typesLine, `fleet-review.yml pull_request trigger must be review_requested + REVIEW_REPUBLISH_ACTIONS only — adding ${forbiddenType} reopens the every-label bug`)
         .not.toContain(forbiddenType)
     }
+    const types = (typesLine.match(/\[([^\]]*)\]/)?.[1] ?? '').split(',').map((t) => t.trim()).filter((t) => t.length > 0)
+    expect(types.filter((t) => t !== 'review_requested'), 'every non-request trigger must be republish-only')
+      .toEqual([...REVIEW_REPUBLISH_ACTIONS])
     expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
       .not.toMatch(/\n {2}push:/)
     // #1187: present, and scoped to the one merge-queue event.
@@ -3415,6 +3436,20 @@ describe('rail: a push republishes a verdict and never starts one (#1284)', () =
   it('a push naming a real trigger login is still not a review request', () => {
     const decision = reviewRequestFor({ ...push, requestedReviewer: REVIEW_REQUEST_LOGIN })
     expect(decision.requested).toBe(false)
+  })
+
+  // #2806: `opened` and `reopened` joined the republish-only set so the
+  // required context exists on a PR nobody requested a review for. They must
+  // be exactly as unable to start a review as a push is.
+  it('an open or reopen is republish-only too, and never a review request even naming a trigger login', () => {
+    for (const action of ['opened', 'reopened']) {
+      const e = { ...push, action, requestedReviewer: REVIEW_REQUEST_LOGIN }
+      expect(isRepublishOnlyEvent(e), action).toBe(true)
+      const decision = reviewRequestFor(e)
+      expect(decision.requested, action).toBe(false)
+      if (decision.requested) throw new Error('unreachable')
+      expect(decision.reason, action).toContain(`\`${action}\` is not a review request`)
+    }
   })
 
   it('reads the action from FLEET_REVIEW_EVENT_ACTION — the name fleet-review.yml sets', () => {

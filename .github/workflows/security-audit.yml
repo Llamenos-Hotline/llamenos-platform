@@ -56,8 +56,11 @@ env:
 jobs:
   # ─── JavaScript/TypeScript Dependency Audit ─────────────────
   # The five PR-eligible jobs below each carry the SAME release-PR exemption
-  # (#1817) as codeql.yml and semgrep.yml — keep the
-  # predicate byte-identical across all three files. The knope release PR
+  # (#1817) as semgrep.yml — keep the predicate byte-identical across both
+  # files. It is safe here ONLY because none of these jobs carries a required
+  # context; codeql.yml's copy was removed (#2806) because its skipped legs
+  # left GHAS's required `CodeQL` carrier uncreated on every release PR —
+  # tests/orchestrator/required-context-creation.test.ts. The knope release PR
   # (head branch `release`) diffs version strings and a changelog; this
   # workflow's pull_request paths filter matches its Cargo.toml/Cargo.lock
   # bumps, so it used to burn a full audit + three image builds per

@@ -1,0 +1,264 @@
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
+
+/**
+ * Who CREATES each required status context, on each event that puts a new
+ * head in front of the merge gate — derived from the workflow files, never
+ * from a list of strings that merely claims it (#2806).
+ *
+ * A required context that is never created is never satisfied. GitHub does
+ * not show it as red or pending: the PR reads BLOCKED with every visible
+ * check green, and nothing anywhere says why. Two live instances, 2026-11-15:
+ *
+ *   - #2805, a Dependabot bump touching only `deploy/docker/`. No CODEOWNERS
+ *     entry covered it, so GitHub requested no reviewer; Fleet Review then
+ *     triggered only on `review_requested`/`synchronize`, so it never ran, and
+ *     `fleet/review` had ZERO check runs on the head. Whether the context
+ *     existed depended on which PATHS the PR touched.
+ *   - #2799, the knope release PR. codeql.yml skipped its uploading legs on
+ *     head branch `release` (#1817), so GHAS never created its `CodeQL`
+ *     carrier — and on a pull request the required `CodeQL` name has two
+ *     carriers (codeql.yml's header), the worst of which counts. Every release
+ *     PR since merged only through the ruleset's bypass actor.
+ *
+ * The invariant: for every required context and every head event, some
+ * workflow creates that context UNCONDITIONALLY — triggered by the event, with
+ * no `paths`/`paths-ignore` filter (a filter is, by construction, a set of
+ * paths that do not get the context) and no branch filter that excludes the
+ * protected branch. And where a context is ALSO carried by a code-scanning
+ * tool on pull requests, the upload that creates that carrier must not be
+ * gated off any pull-request head.
+ *
+ * `review_requested` is deliberately NOT a head event: the only automatic
+ * review request is CODEOWNERS, so a context created only on a review request
+ * exists only for PRs touching owned paths — the #2805 shape exactly.
+ *
+ * A job-level `if:` on a GitHub Actions carrier does NOT make it absent: a
+ * job skipped by `if:` still creates its check run, concluded `skipped`, and
+ * GitHub accepts that like a pass. That is a fail-OPEN hazard, guarded by
+ * other rails (fleet-review.yml invariant 1), not a creation one. A skipped
+ * UPLOAD is different: no upload, no code-scanning carrier, no context.
+ */
+
+/** The required status contexts of ruleset 15885614 (`main`), exactly as
+ *  `GET /repos/Llamenos-Hotline/llamenos-platform/rules/branches/main`
+ *  returns them. The ruleset is the operator's to edit, not this repo's
+ *  (a partial `PUT` once deleted every other rule), so this is a mirror: when
+ *  a context is added there, add it here, and this suite then tells you
+ *  whether anything creates it. `llamenos-fleet missing-checks` is the live
+ *  counterpart, per head. */
+export const RULESET_REQUIRED_CONTEXTS = ['ci-status', 'gitleaks', 'CodeQL', 'fleet/verify', 'fleet/review'] as const
+
+/** The branch the ruleset protects (`~DEFAULT_BRANCH`). */
+export const PROTECTED_BRANCH = 'main'
+
+export type HeadEvent =
+  | { event: 'pull_request'; action: 'opened' | 'reopened' | 'synchronize' }
+  | { event: 'merge_group'; action: 'checks_requested' }
+
+/** Every event on which GitHub evaluates the required contexts against a head
+ *  that has not been judged yet: a PR opened or reopened, a PR whose head
+ *  moved, and the merge queue's own synthetic commit. */
+export const HEAD_EVENTS: readonly HeadEvent[] = [
+  { event: 'pull_request', action: 'opened' },
+  { event: 'pull_request', action: 'reopened' },
+  { event: 'pull_request', action: 'synchronize' },
+  { event: 'merge_group', action: 'checks_requested' },
+]
+
+/** GitHub's default `types` when a trigger names none. */
+const DEFAULT_TYPES: Record<HeadEvent['event'], readonly string[]> = {
+  pull_request: ['opened', 'synchronize', 'reopened'],
+  merge_group: ['checks_requested'],
+}
+
+/** The check-run name GitHub's code scanning gives the analyses each action
+ *  uploads. `github/codeql-action/analyze` uploads under tool `CodeQL`, and
+ *  on a pull request GHAS's alert gate for that tool is a check run named
+ *  `CodeQL` from the `github-advanced-security` app. */
+const CODE_SCANNING_UPLOADERS: Record<string, string> = {
+  'github/codeql-action/analyze': 'CodeQL',
+}
+
+export interface Workflow {
+  file: string
+  text: string
+}
+
+interface Job {
+  name?: unknown
+  if?: unknown
+  needs?: unknown
+  steps?: Array<{ uses?: unknown; with?: Record<string, unknown> }>
+}
+
+interface Trigger {
+  types?: unknown
+  branches?: unknown
+  'branches-ignore'?: unknown
+  paths?: unknown
+  'paths-ignore'?: unknown
+}
+
+export function repoWorkflows(repoRoot: string = process.cwd()): Workflow[] {
+  const dir = join(repoRoot, '.github', 'workflows')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml')).sort()
+  if (files.length < 5) throw new Error(`found only ${files.length} workflow file(s) under ${dir} — refusing a vacuous pass`)
+  return files.map((f) => ({ file: f, text: readFileSync(join(dir, f), 'utf8') }))
+}
+
+function asStrings(v: unknown): string[] {
+  if (v === undefined || v === null) return []
+  return (Array.isArray(v) ? v : [v]).map(String)
+}
+
+/** The trigger block for one event, `null` when the workflow does not run on
+ *  it at all. `on: push`, `on: [push, pull_request]` and the mapping form all
+ *  normalise here; a bare `pull_request:` (null value) is a trigger with
+ *  GitHub's defaults. */
+function triggerFor(on: unknown, event: string): Trigger | null {
+  if (typeof on === 'string') return on === event ? {} : null
+  if (Array.isArray(on)) return on.map(String).includes(event) ? {} : null
+  if (on !== null && typeof on === 'object' && event in on) {
+    const t = (on as Record<string, unknown>)[event]
+    return t !== null && typeof t === 'object' ? (t as Trigger) : {}
+  }
+  return null
+}
+
+/** Minimal GitHub branch-filter glob: `*` within a segment, `**` across. */
+function branchGlobMatches(glob: string, branch: string): boolean {
+  const re = glob.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')
+  return new RegExp(`^${re}$`).test(branch)
+}
+
+/** Why this workflow does NOT run unconditionally on `e`, or `null` if it does. */
+function triggerGap(on: unknown, e: HeadEvent): string | null {
+  const t = triggerFor(on, e.event)
+  if (t === null) return `does not trigger on \`${e.event}\``
+  const types = t.types === undefined ? DEFAULT_TYPES[e.event] : asStrings(t.types)
+  if (!types.includes(e.action)) return `\`${e.event}\` types [${types.join(', ')}] exclude \`${e.action}\``
+  for (const key of ['paths', 'paths-ignore'] as const) {
+    if (t[key] !== undefined) {
+      return `\`${e.event}\` has a \`${key}\` filter (${asStrings(t[key]).join(', ')}) — every PR outside it never gets this context`
+    }
+  }
+  const branches = asStrings(t.branches)
+  if (branches.length > 0 && !branches.some((b) => branchGlobMatches(b, PROTECTED_BRANCH))) {
+    return `\`${e.event}\` branches [${branches.join(', ')}] exclude \`${PROTECTED_BRANCH}\``
+  }
+  const ignored = asStrings(t['branches-ignore'])
+  if (ignored.some((b) => branchGlobMatches(b, PROTECTED_BRANCH))) {
+    return `\`${e.event}\` branches-ignore [${ignored.join(', ')}] excludes \`${PROTECTED_BRANCH}\``
+  }
+  return null
+}
+
+function jobsOf(doc: unknown): Record<string, Job> {
+  const jobs = (doc as { jobs?: unknown } | null)?.jobs
+  return jobs !== null && typeof jobs === 'object' ? (jobs as Record<string, Job>) : {}
+}
+
+/** Every job reachable through `needs`, the job itself included. A skipped
+ *  dependency skips its dependents unless they say `always()`, so any `if:`
+ *  in this closure can keep an upload from happening. */
+function needsClosure(jobs: Record<string, Job>, key: string, seen: Set<string> = new Set()): Set<string> {
+  if (seen.has(key)) return seen
+  seen.add(key)
+  for (const dep of asStrings(jobs[key]?.needs)) needsClosure(jobs, dep, seen)
+  return seen
+}
+
+/** `always()` is the one job-level condition that can never be false. */
+function isUnconditional(job: Job | undefined): boolean {
+  if (job?.if === undefined) return true
+  return String(job.if).replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim() === 'always()'
+}
+
+function uploadsAs(job: Job): string | null {
+  for (const step of job.steps ?? []) {
+    const uses = typeof step.uses === 'string' ? step.uses.split('@')[0] ?? '' : ''
+    const tool = CODE_SCANNING_UPLOADERS[uses]
+    if (tool === undefined) continue
+    const upload = step.with?.upload
+    if (upload === false || upload === 'false' || upload === 'never') continue
+    return tool
+  }
+  return null
+}
+
+export interface CreationReport {
+  /** Each line names the context, the event, and why nothing creates it. */
+  violations: string[]
+  /** `context → event → creators`, for the suite's own sanity assertions. */
+  creators: Map<string, Map<string, string[]>>
+}
+
+const eventLabel = (e: HeadEvent) => `${e.event}.${e.action}`
+
+export function analyseRequiredContextCreation(
+  workflows: readonly Workflow[],
+  required: readonly string[] = RULESET_REQUIRED_CONTEXTS,
+): CreationReport {
+  const parsed = workflows.map((w) => ({ file: w.file, doc: parseYaml(w.text) as Record<string, unknown> | null }))
+  const violations: string[] = []
+  const creators = new Map<string, Map<string, string[]>>()
+
+  for (const context of required) {
+    const byEvent = new Map<string, string[]>()
+    creators.set(context, byEvent)
+    const named = parsed.flatMap(({ file, doc }) =>
+      Object.entries(jobsOf(doc))
+        .filter(([key, job]) => String(job.name ?? key) === context)
+        .map(([key]) => ({ file, key, on: doc?.on })))
+    if (named.length === 0) {
+      violations.push(`\`${context}\`: no workflow job is named \`${context}\`, so nothing ever creates this required context`)
+      continue
+    }
+    for (const e of HEAD_EVENTS) {
+      const gaps: string[] = []
+      const ok: string[] = []
+      for (const c of named) {
+        const gap = triggerGap(c.on, e)
+        if (gap === null) ok.push(`${c.file}#${c.key}`)
+        else gaps.push(`${c.file}#${c.key} ${gap}`)
+      }
+      byEvent.set(eventLabel(e), ok)
+      if (ok.length === 0) {
+        violations.push(`\`${context}\` on ${eventLabel(e)}: nothing creates it — ${gaps.join('; ')}`)
+      }
+    }
+  }
+
+  // Code-scanning carriers. A tool whose analyses are uploaded on pull
+  // requests gets a check run named after the tool on every PR head that
+  // received an upload — and on no other. If that name is required, every
+  // uploading job must reach every pull-request head.
+  for (const { file, doc } of parsed) {
+    const jobs = jobsOf(doc)
+    for (const [key, job] of Object.entries(jobs)) {
+      const tool = uploadsAs(job)
+      if (tool === null || !required.includes(tool)) continue
+      for (const e of HEAD_EVENTS) {
+        if (e.event !== 'pull_request') continue
+        if (triggerFor(doc?.on, 'pull_request') === null) continue
+        const gap = triggerGap(doc?.on, e)
+        if (gap !== null) {
+          violations.push(`\`${tool}\` (code-scanning carrier) on ${eventLabel(e)}: ${file}#${key} uploads it, but the workflow ${gap}`)
+          continue
+        }
+        const conditional = [...needsClosure(jobs, key)].filter((k) => !isUnconditional(jobs[k]))
+        if (conditional.length > 0) {
+          violations.push(
+            `\`${tool}\` (code-scanning carrier) on ${eventLabel(e)}: ${file}#${key} uploads it, but ` +
+              conditional.map((k) => `job \`${k}\` has \`if: ${String(jobs[k]?.if)}\``).join(', ') +
+              ' — any head that condition skips never gets GHAS\'s carrier, so the required context is never satisfied there',
+          )
+        }
+      }
+    }
+  }
+
+  return { violations, creators }
+}

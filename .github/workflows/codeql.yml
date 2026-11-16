@@ -192,17 +192,19 @@ jobs:
   # ─── Required legs: exact parity with default setup ───────────────────
   analyze:
     name: Analyze advanced (${{ matrix.language }})
-    # Release-PR exemption (#1817) — the SAME predicate semgrep.yml
-    # and security-audit.yml carry; keep them byte-identical.
-    # The knope release PR (head branch `release`) diffs version strings and
-    # a changelog — no code — yet every merge to main regenerated it and ran
-    # all five legs (~8 min each) over that diff, 6 times on 2026-10-11
-    # alone. Skipping here is safe because the legs still run on the push to
-    # main the merge itself produces, and the rollup below names the skip
-    # rather than reading it as a failure. scripts/check-codeql-languages.ts
-    # allowlists exactly this expression — any other `if:` here is a
-    # violation.
-    if: github.event_name != 'pull_request' || github.head_ref != 'release'
+    # NO `if:`, on any event — including the knope release PR (#2806).
+    # #1817 skipped these legs on head branch `release` to save ~40 runner
+    # minutes per regenerated release PR, reasoning that the rollup's own
+    # `CodeQL` check-run kept the required context satisfied. It did not:
+    # on a pull request the required `CodeQL` name has TWO carriers (see the
+    # header), and the second — GHAS's alert gate — exists only once these
+    # legs UPLOAD. Skip them and GitHub never creates it, so every release PR
+    # since #1823 sat BLOCKED with every visible check green and merged only
+    # through the ruleset's bypass actor (#2603, #2729, #2747, #2757, #2799:
+    # one `CodeQL` carrier each, every one enqueued by the bypass actor).
+    # scripts/check-codeql-languages.ts fails on any `if:` here, and
+    # tests/orchestrator/required-context-creation.test.ts fails on any
+    # condition that can keep an uploading leg off a pull request.
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -425,12 +427,9 @@ jobs:
 
   # ─── Rollup: the `CodeQL` check-run on every event (see the header) ───
   # Needs ONLY the required matrix. `needs.analyze.result` is `success` only
-  # if every leg succeeded; a failed or cancelled leg fails this job —
-  # and so does a `skipped` one, with exactly ONE exemption (#1817, see the
-  # `analyze` job's `if:`): the knope release PR, whose version-bump diff
-  # carries no code to analyse. Everywhere else `skipped` is not accepted,
-  # because `analyze` has no other condition under which skipping it would be
-  # legitimate.
+  # if every leg succeeded; a failed, cancelled or `skipped` leg fails this
+  # job. There is no legitimate skip: `analyze` has no `if:` (#2806 removed
+  # #1817's release-PR exemption, which left GHAS's carrier uncreated).
   codeql:
     name: CodeQL
     needs: [analyze]
@@ -447,8 +446,6 @@ jobs:
       - name: Require every required leg to have analysed and uploaded
         env:
           ANALYZE_RESULT: ${{ needs.analyze.result }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REF: ${{ github.head_ref }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -461,16 +458,6 @@ jobs:
             echo "All required CodeQL legs analysed and uploaded."
             exit 0
           fi
-          # The ONE legitimate skip (#1817): the knope release PR's diff is
-          # a version bump with no code, so `analyze` is gated off for that
-          # head branch and reports `skipped` here. Full analysis still
-          # runs on the push to main the merge produces. Any OTHER skipped
-          # leg stays a failure — a missing leg is missing coverage.
-          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REF" == "release" && "$ANALYZE_RESULT" == "skipped" ]]; then
-            echo "Required CodeQL legs skipped by design on the knope release PR (#1817): version-bump-only diff; analysis runs on the push to main when it merges."
-            exit 0
-          fi
-
           # Everything below only EXPLAINS the failure; it never decides it.
           # `needs.analyze.result` collapses three different states into "not
           # success", and they have different remedies:
@@ -492,7 +479,7 @@ jobs:
             case "$state" in
               success) echo "  $lang: success" ;;
               "")      echo "::error::  $lang: NEVER CREATED — GitHub did not start this matrix leg (check githubstatus.com). Not a code or SARIF-upload failure; recover with: gh run rerun --failed $RUN_ID" ;;
-              skipped) echo "::error::  $lang: skipped — gated off by an \`if:\`; only the knope release PR may skip (#1817), so this is a coverage hole." ;;
+              skipped) echo "::error::  $lang: skipped — gated off by an \`if:\`; no required leg may skip (#2806), so this is a coverage hole and GHAS's \`CodeQL\` carrier will never be created on this head." ;;
               *)       echo "::error::  $lang: $state — the leg ran and did not succeed; read its log." ;;
             esac
           done

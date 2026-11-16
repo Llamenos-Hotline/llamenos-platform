@@ -206,10 +206,27 @@ export function commitsAllBotAuthored(
 }
 
 /**
- * The `pull_request` ACTION that means "the head moved" — a push, a
- * force-push, a rebase, or the "Update branch" button.
+ * The `pull_request` ACTIONS that put a head in front of the merge gate with
+ * no review request attached: `opened` and `reopened` (a head the gate has
+ * never seen, or has not seen since the PR was closed), and `synchronize` (the
+ * head moved — a push, a force-push, a rebase, or the "Update branch" button).
+ * They are exactly the actions on which every OTHER required context
+ * (`ci-status`, `gitleaks`, `CodeQL`, `fleet/verify`) is created, and
+ * tests/orchestrator/required-context-creation.test.ts fails if
+ * `fleet-review.yml` stops triggering on any of them.
  *
- * `fleet-review.yml` triggers on it (#1284) for ONE reason: `fleet/review`
+ * `opened`/`reopened` joined `synchronize` in #2806. Before that the only
+ * route to a FIRST `fleet/review` on a PR was a review request, and the only
+ * automatic review request is CODEOWNERS — so a PR touching only paths no
+ * entry owns (#2805: a Dependabot bump of `deploy/docker/Dockerfile`) got no
+ * request, no Fleet Review run, and no `fleet/review` check run at all. A
+ * required context that does not exist is never satisfied, so the PR sat
+ * BLOCKED indefinitely with every visible check green. On `opened` the gate
+ * now concludes on its own terms — `bot-authored`, `release-pr`, `low-tier`
+ * green; `unreviewed` red, naming whom to ask — and a later review request
+ * replaces that with a real verdict.
+ *
+ * `fleet-review.yml` triggers on `synchronize` (#1284) for ONE reason: `fleet/review`
  * is a required context under `strict_required_status_checks_policy`, and a
  * check run attaches to the commit it ran on. A rebase moves the head, the
  * earned verdict stays on the OLD sha, and the new head carries no
@@ -231,7 +248,7 @@ export function commitsAllBotAuthored(
  * CLEAN and queueable with no verdict for the code it would merge. A review
  * for another tree is not a review of this one; request one.
  */
-export const REVIEW_REPUBLISH_ACTION = 'synchronize'
+export const REVIEW_REPUBLISH_ACTIONS = ['opened', 'reopened', 'synchronize'] as const
 
 /**
  * The event name of the operator's manual dispatch — `fleet-review.yml`'s
@@ -320,11 +337,13 @@ export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'b
 
 /**
  * Whether this event may only REPUBLISH an existing verdict — never start a
- * new review. True for exactly one thing: a `pull_request` whose action is
- * `synchronize` (#1284).
+ * new review. True for exactly one thing: a `pull_request` whose action is in
+ * `REVIEW_REPUBLISH_ACTIONS` (`synchronize`, #1284; `opened`/`reopened`, #2806).
  *
- * This is the whole of what makes adding `synchronize` to `fleet-review.yml`
- * safe against the quota burn its absence originally prevented. A push is
+ * This is the whole of what makes adding those actions to `fleet-review.yml`
+ * safe against the quota burn their absence originally prevented — `opened`
+ * was once banned because every run was a model call, and on `opened`
+ * CODEOWNERS also requests a reviewer, so one PR would have paid twice. A push is
  * not a request, so `reviewRequestFor` already refuses it — but that refusal
  * rests on a `synchronize` payload happening to carry no
  * `requested_reviewer`, which is GitHub's schema, not this repo's rule.
@@ -333,7 +352,9 @@ export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'b
  * quietly turn every push into a model call.
  */
 export function isRepublishOnlyEvent(e: Pick<ReviewRequestEvent, 'eventName' | 'action'>): boolean {
-  return e.eventName === 'pull_request' && (e.action ?? '').trim() === REVIEW_REPUBLISH_ACTION
+  if (e.eventName !== 'pull_request') return false
+  const action = (e.action ?? '').trim()
+  return (REVIEW_REPUBLISH_ACTIONS as readonly string[]).includes(action)
 }
 
 /** `reviewRequestFor`'s answer: a request, or the reason this event is not one. */
@@ -391,8 +412,8 @@ export function reviewRequestFor(e: ReviewRequestEvent): ReviewRequestDecision {
   if (isRepublishOnlyEvent(e)) {
     return {
       requested: false,
-      reason: 'this is a push, not a review request — `fleet/review` carries forward the verdict this PR last ' +
-        'earned, but never starts a new review on a push',
+      reason: `\`${(e.action ?? '').trim()}\` is not a review request — \`fleet/review\` carries forward the ` +
+        'verdict this PR last earned for this tree, but never starts a new review on an open, reopen or push',
     }
   }
   const login = loginOf(e.requestedReviewer)
