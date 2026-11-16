@@ -9,7 +9,7 @@ import { setActiveHub, ApiError, NoActiveHubError } from './client'
 import { getRecoveryGroup } from './recovery'
 import { updateDirectoryContact } from './directory'
 import { initUpload, completeUpload, getFileEnvelopes } from './files'
-import { createRolesFromTemplate } from './cms'
+import { createHubRole, createRole, deleteHubRole, listHubRoles, listRoles, updateHubRole } from './roles'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
 import { confirmDeletionThroughDialog } from '../admin-deletion.test-helpers'
 
@@ -97,9 +97,14 @@ describe('files', () => {
 // Deployment-wide settings exist only on the unscoped mount (#2367): a hub
 // being active must not move these calls under /hubs/:hubId, where they 404.
 describe('deployment-wide settings', () => {
-  it('creates roles from a template on the unscoped settings/cms route', async () => {
-    await createRolesFromTemplate([])
-    expect(calls).toEqual([{ method: 'POST', url: '/api/settings/cms/roles/from-template' }])
+  it('manages the deployment-wide roles on the unscoped settings route', async () => {
+    setActiveHub('hub-1')
+    await listRoles()
+    await createRole({ permissions: [] })
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/settings/roles' },
+      { method: 'POST', url: '/api/settings/roles' },
+    ])
   })
 
   it('manages the admin report-type vocabulary on the unscoped settings route', async () => {
@@ -128,6 +133,30 @@ describe('passkey registration', () => {
     await registerPasskey('My Phone')
 
     expect(registerCredential).toHaveBeenCalledWith('My Phone')
+    expect(calls).toEqual([])
+  })
+})
+
+// A hub's own roles are rows that hub owns (#2780): they exist only under
+// /hubs/:hubId, and the server-side template import they replace is gone.
+describe('hub-owned roles', () => {
+  it('reads and writes the active hub\'s roles under /hubs/:hubId/settings/roles', async () => {
+    setActiveHub('hub-1')
+    await listHubRoles()
+    await createHubRole({ permissions: [], encryptedName: 'ab'.repeat(28) })
+    await updateHubRole('role-x', { permissions: [] })
+    await deleteHubRole('role-x')
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/hubs/hub-1/settings/roles' },
+      { method: 'POST', url: '/api/hubs/hub-1/settings/roles' },
+      { method: 'PATCH', url: '/api/hubs/hub-1/settings/roles/role-x' },
+      { method: 'DELETE', url: '/api/hubs/hub-1/settings/roles/role-x' },
+    ])
+  })
+
+  it('refuses to send a hub role without an active hub', async () => {
+    setActiveHub(null)
+    await expect(listHubRoles()).rejects.toBeInstanceOf(NoActiveHubError)
     expect(calls).toEqual([])
   })
 })

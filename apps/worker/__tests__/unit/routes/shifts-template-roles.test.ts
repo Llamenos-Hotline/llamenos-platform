@@ -12,6 +12,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import shiftRoutes from '@worker/routes/shifts'
 import { permissionGranted, isValidPermission, DEFAULT_ROLES } from '@shared/permissions'
+import { isInstanceLevel } from '@worker/lib/hub-admin'
 
 const TEMPLATES_DIR = join(import.meta.dirname, '../../../../../packages/protocol/templates')
 
@@ -66,8 +67,12 @@ describe('shipped template roles that can answer calls (#1348)', () => {
   })
 
   describe.each(roles)('$template / $role', ({ permissions }) => {
-    it('is importable — POST /roles/from-template rejects any permission outside the catalog', () => {
+    it('is importable — a hub role is refused for any permission outside the catalog', () => {
       expect(permissions.filter(p => !isValidPermission(p))).toEqual([])
+    })
+
+    it('is importable — a hub role is refused for an instance-level permission (#2780)', () => {
+      expect(permissions.filter(isInstanceLevel)).toEqual([])
     })
 
     it('clocks in, heartbeats and clocks out as itself in its hub', async () => {

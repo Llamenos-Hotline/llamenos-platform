@@ -321,8 +321,6 @@ export const caseNumberBodySchema = z.object({
   hubId: z.string().optional(),
 })
 
-// --- Create roles from template suggestions (Epic 321) ---
-
 // --- List/wrapper response schemas ---
 
 export const entityTypeListResponseSchema = z.object({
@@ -378,24 +376,8 @@ export const templateUpdatesResponseSchema = z.object({
   updates: z.array(templateUpdateItemSchema),
 })
 
-export const rolesFromTemplateResponseSchema = z.object({
-  created: z.array(z.object({ id: z.string(), name: z.string() })),
-  count: z.number(),
-})
-
 export const enabledResponseSchema = z.object({
   enabled: z.boolean(),
-})
-
-// --- Create roles from template suggestions (Epic 321) ---
-
-export const createRolesFromTemplateBodySchema = z.object({
-  roles: z.array(z.object({
-    name: z.string().min(1).max(100),
-    slug: z.string().regex(/^[a-z0-9_-]+$/, 'Slug must be lowercase alphanumeric with hyphens/underscores'),
-    description: z.string().min(1).max(500),
-    permissions: z.array(z.string()).min(1),
-  })).min(1).max(50),
 })
 
 // --- Entity field file value (EP06-A2) ---

@@ -598,7 +598,9 @@ Role names like "ICE Rapid Response Coordinator" or "Protest Legal Observer" rev
 
 - **Platform roles**: Per-admin HPKE envelopes — each super-admin gets their own envelope for name and description fields
 - **Hub roles**: Hub-key symmetric encryption — all hub members can decrypt
-- **Template-suggested roles**: Arrive as plaintext from JSON templates, immediately encrypted on creation; server never persists plaintext after encrypt-on-create
+- **Template-suggested roles**: The suggestions are public constants in the shipped templates. The client seals each one it imports under the hub key before sending it, so the server never receives a role name in the clear — there is no server-side "create from template" route (#2780). Residual exposure: a role's permission set is stored in the clear, so a role imported unmodified can be matched to its template entry, revealing which template's role the hub adopted (not what it renamed it to)
+- **Slugs**: A custom role's slug is its id. A slug typed from the name would be the name in the clear
+- **Seeded defaults** ("Hub Admin", "Volunteer", ...): stored in plaintext — they are public constants in the source
 
 ## Device Identity and Verification Attack Surface (EP02)
 

@@ -13,6 +13,7 @@ import { VolunteerPage } from '../../pages/index'
 import {
   apiPost,
   listRolesViaApi,
+  findNamedRole,
   createRoleViaApi,
   deleteRoleViaApi,
   updateRoleViaApi,
@@ -75,17 +76,12 @@ Then('the {string} role should be the default role', async ({ request, rolesWorl
   expect(role!.isDefault).toBe(true)
 })
 
-When('I create a custom role {string} with permissions', async ({ request, rolesWorld }, roleName: string) => {
-  // The API write is the real, verified write. createRoleViaApi already resolves a 409
-  // (slug created by a parallel/repeated run) to the existing role, so any other failure
-  // is a genuine error and must fail the step — the old catch-all swallowed it.
-  // No UI branch: TestIds.ROLE_CREATE_BTN ('role-create-btn') never matches real DOM
-  // (platform-roles-section.tsx renders 'platform-role-create-btn'; the hub
-  // roles-section.tsx renders no create-role testid at all), so it never fired.
-  const slug = roleName.toLowerCase().replace(/\s+/g, '-')
+When('I create a custom role {string} with permissions', async ({ request, rolesWorld }, _roleName: string) => {
+  // The API write is the real, verified write; any failure fails the step.
+  // The name is not sent: a role's name is sealed (#2780), and a platform role
+  // created without envelopes simply has none. No UI branch: TestIds.ROLE_CREATE_BTN
+  // ('role-create-btn') never matches real DOM, so it never fired.
   const role = await createRoleViaApi(request, {
-    name: roleName,
-    slug,
     permissions: ['calls:read', 'calls:list'],
   })
   rolesWorld.lastCreatedRoleId = role.id
@@ -98,20 +94,20 @@ Then('the role should be created successfully', async ({ request, rolesWorld }) 
   expect(found).toBeTruthy()
 })
 
-Then('the role slug should be {string}', async ({ request }, slug: string) => {
+Then('the role\'s slug should not reveal its name', async ({ request, rolesWorld }) => {
   const roles = await listRolesViaApi(request)
-  const found = roles.find(r => r.slug === slug)
+  const found = roles.find(r => r.id === rolesWorld.lastCreatedRoleId)
   expect(found).toBeTruthy()
+  // A custom role's slug is its id — never a label derived from the name.
+  expect(found!.slug).toBe(found!.id)
+  expect(found!.name).toBeNull()
 })
 
-Given('a custom role {string} exists', async ({ request, rolesWorld }, roleName: string) => {
-  const slug = roleName.toLowerCase().replace(/\s+/g, '-')
-  const roles = await listRolesViaApi(request)
+Given('a custom role {string} exists', async ({ request, rolesWorld }, _roleName: string) => {
   // A failed create must fail the Given — the old catch left lastCreatedRoleId empty, which
-  // made the following delete/update steps silently skip their writes.
-  const role = roles.find(r => r.slug === slug) ?? await createRoleViaApi(request, {
-    name: roleName,
-    slug,
+  // made the following delete/update steps silently skip their writes. Each scenario
+  // creates its own: a custom role has no name-derived slug to find an earlier one by.
+  const role = await createRoleViaApi(request, {
     permissions: ['calls:read'],
   })
   rolesWorld.lastCreatedRoleId = role.id
@@ -160,7 +156,7 @@ When('I assign the {string} role to the volunteer', async ({ page, request }, ro
   // volunteer created by "a volunteer exists", and wait for the PATCH to succeed.
   const pubkey = await existingVolunteerPubkey(page)
   const roles = await listRolesViaApi(request)
-  const targetRole = roles.find(r => r.name === roleName)
+  const targetRole = findNamedRole(roles, roleName)
   expect(targetRole, `role "${roleName}" must exist`).toBeTruthy()
 
   const volunteerRow = VolunteerPage.getRowById(page, pubkey)
@@ -197,40 +193,20 @@ Then('it should not have {string} permission', async ({}, permission: string) =>
 
 // --- Feature file steps that need additional coverage ---
 
-When('I create a custom role with an existing slug', async ({ request }) => {
-  // Make sure the slug is taken (createRoleViaApi tolerates it already existing), then
-  // attempt a second create with the same slug and record the server's answer.
-  // The old step swallowed every outcome, and its Then passed on "page title visible".
-  // No UI branch: TestIds.ROLE_CREATE_BTN never matches real DOM (see above).
-  const slug = 'call-monitor'
-  await createRoleViaApi(request, { name: 'Call Monitor', slug, permissions: ['calls:read'] })
+When('I create a role with the plaintext name {string}', async ({ request }, name: string) => {
+  // Submit a plaintext name to the real endpoint and record the answer. The server
+  // must refuse it outright — silently dropping it would leave a client believing
+  // the name was kept (#2780).
   const { status } = await apiPost(request, '/settings/roles', {
-    name: 'Duplicate Test',
-    slug,
+    name,
+    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     permissions: ['calls:read'],
-    description: 'Duplicate slug attempt',
+    description: `${name} role`,
   })
   ;(globalThis as Record<string, unknown>).__test_role_create_status = status
 })
 
-Then('I should see a duplicate slug error', async () => {
-  const status = (globalThis as Record<string, unknown>).__test_role_create_status as number
-  expect(status).toBe(409)
-})
-
-When('I create a role with slug {string}', async ({ request }, slug: string) => {
-  // The old step was a no-op (ROLE_CREATE_BTN never matches real DOM) and its Then passed
-  // on "page title visible". Submit the slug to the real endpoint and record the answer.
-  const { status } = await apiPost(request, '/settings/roles', {
-    name: slug,
-    slug,
-    permissions: ['calls:read'],
-    description: 'Invalid slug attempt',
-  })
-  ;(globalThis as Record<string, unknown>).__test_role_create_status = status
-})
-
-Then('I should see an invalid slug error', async () => {
+Then('the server should refuse the plaintext role name', async () => {
   const status = (globalThis as Record<string, unknown>).__test_role_create_status as number
   expect(status).toBe(400)
 })

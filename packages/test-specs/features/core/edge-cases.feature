@@ -38,9 +38,9 @@ Feature: Edge Cases and Error Handling
     And an admin bans phone "+15550009999" again
     Then the ban list should contain exactly 1 entry for "+15550009999"
 
-  Scenario: Duplicate role slug is rejected
-    When an admin creates a role with slug "edge-case-role"
-    And an admin creates another role with slug "edge-case-role"
+  Scenario: Duplicate role id is rejected
+    When an admin creates a role
+    And an admin creates another role reusing the first role's id
     Then the second role creation should return 409
 
   # ─── Input Boundary Values ─────────────────────────────────────────

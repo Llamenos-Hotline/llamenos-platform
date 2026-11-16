@@ -426,23 +426,33 @@ Then('the invite list should not contain the revoked code', async ({ request, wo
 When('an admin creates a custom role {string} with permissions {string}', async ({ request, world }, name: string, permsStr: string) => {
   const permissions = permsStr.split(',')
   const role = await createRoleViaApi(request, {
-    name,
-    slug: uniqueName('crud'),
     permissions,
-    description: 'CRUD test role',
   })
   getCrudState(world).roleId = role.id
   getCrudState(world).roleName = name
 })
 
-Then('the roles list should contain {string}', async ({request}, name: string) => {
+// The role is found by the id it was created under: a custom role has no name in
+// the clear to search by (#2780), so the scenario's name labels the role it made.
+function createdRoleId(world: Record<string, unknown>, name: string): string {
+  const state = getCrudState(world)
+  expect(state.roleName, `no role "${name}" was created in this scenario`).toBe(name)
+  expect(state.roleId).toBeTruthy()
+  return state.roleId!
+}
+
+Then('the roles list should contain {string}', async ({ request, world }, name: string) => {
+  const id = createdRoleId(world, name)
   const roles = await listRolesViaApi(request)
-  expect(roles.some(r => r.name === name)).toBeTruthy()
+  const role = roles.find(r => r.id === id)
+  expect(role).toBeTruthy()
+  expect(role!.name, 'a custom role\'s name is never stored in the clear').toBeNull()
 })
 
-Then('the roles list should not contain {string}', async ({request}, name: string) => {
+Then('the roles list should not contain {string}', async ({ request, world }, name: string) => {
+  const id = createdRoleId(world, name)
   const roles = await listRolesViaApi(request)
-  expect(roles.some(r => r.name === name)).toBeFalsy()
+  expect(roles.some(r => r.id === id)).toBeFalsy()
 })
 
 When('the admin updates the role permissions to {string}', async ({ request, world }, permsStr: string) => {

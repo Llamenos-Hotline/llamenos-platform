@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  roleUsableIn,
+  resolveHubRoleIds,
   permissionGranted,
   resolvePermissions,
   hasPermission,
@@ -477,5 +479,34 @@ describe('PERMISSION_CATALOG', () => {
     expect(domains.has('audit')).toBe(true)
     expect(domains.has('system')).toBe(true)
     expect(domains.has('files')).toBe(true)
+  })
+})
+
+// A role a hub owns (#2780) is usable only in that hub: its name is sealed under
+// that hub's key, and as a global role it would follow its holder everywhere.
+describe('hub-owned roles', () => {
+  const now = new Date().toISOString()
+  const owned: Role = {
+    id: 'role-a-coordinator', name: null, hubId: 'hub-a', slug: 'role-a-coordinator',
+    permissions: ['notes:read-all'], isDefault: false, isSystem: false, description: '',
+    createdAt: now, updatedAt: now,
+  }
+  const shared: Role = { ...owned, id: 'role-shared', slug: 'role-shared', hubId: null, permissions: ['calls:answer'] }
+  const catalog = [owned, shared]
+
+  it('is usable in its own hub only, and never as a global role', () => {
+    expect(roleUsableIn('role-a-coordinator', catalog, 'hub-a')).toBe(true)
+    expect(roleUsableIn('role-a-coordinator', catalog, 'hub-b')).toBe(false)
+    expect(roleUsableIn('role-a-coordinator', catalog, null)).toBe(false)
+    expect(roleUsableIn('role-shared', catalog, 'hub-b')).toBe(true)
+    expect(roleUsableIn('role-shared', catalog, null)).toBe(true)
+  })
+
+  it('confers nothing in another hub even if an assignment names it there', () => {
+    const hubRoles = [{ hubId: 'hub-b', roleIds: ['role-a-coordinator', 'role-shared'] }]
+    expect(resolveHubRoleIds([], hubRoles, catalog, 'hub-b')).toEqual(['role-shared'])
+    expect(resolveHubPermissions([], hubRoles, catalog, 'hub-b')).toEqual(['calls:answer'])
+    expect(resolveHubRoleIds([], [{ hubId: 'hub-a', roleIds: ['role-a-coordinator'] }], catalog, 'hub-a'))
+      .toEqual(['role-a-coordinator'])
   })
 })

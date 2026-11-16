@@ -262,8 +262,27 @@ export function getPermissionsByDomain(): Record<string, { key: Permission; labe
 
 export interface Role {
   id: string
-  /** null for non-system roles — plaintext name stored only in encrypted envelopes */
+  /**
+   * Plaintext only for the seeded {@link DEFAULT_ROLES}, whose names are public
+   * constants shipped in this file. Every custom role is `null` here: a hub
+   * role's name is sealed under its hub key (`encryptedName`,
+   * `LABEL_HUB_ROLE_ENCRYPT`), a platform role's in per-admin `envelopes`. A
+   * role vocabulary describes what an organisation does and who does it, so it
+   * is never stored in the clear (#2780).
+   */
   name: string | null
+  /**
+   * The hub that owns this role, or null/absent for a deployment-wide role
+   * (the seeded defaults and platform roles). A hub-owned role is assignable
+   * only inside its hub — see {@link roleUsableIn}.
+   */
+  hubId?: string | null
+  /**
+   * A stable identifier, not a label: for every custom role it equals `id`.
+   * A slug typed from (or derived from) the name would leak the name it sits
+   * next to, so custom roles never carry one. The seeded defaults keep their
+   * public slugs (`volunteer`, `hub-admin`).
+   */
   slug: string
   permissions: string[]
   isDefault: boolean   // ships with system
@@ -448,7 +467,7 @@ export function hasPermission(roleIds: string[], roles: Role[], permission: stri
 export const HUB_ADMIN_PERMISSIONS = ['settings:manage', 'notes:read-all'] as const
 
 /** The slice of a role definition the admin predicate needs. */
-export type RoleCatalog = ReadonlyArray<Pick<Role, 'id' | 'permissions'>>
+export type RoleCatalog = ReadonlyArray<Pick<Role, 'id' | 'permissions' | 'hubId'>>
 
 function permissionsOfRole(roleId: string, catalog: RoleCatalog): readonly string[] {
   return (catalog.find(r => r.id === roleId) ?? DEFAULT_ROLES.find(r => r.id === roleId))?.permissions ?? []
@@ -577,7 +596,25 @@ export function resolveHubRoleIds(
   if (assignment) {
     for (const id of assignment.roleIds) roleIds.add(id)
   }
-  return Array.from(roleIds)
+  // A role another hub owns carries no authority here, however it got into
+  // the assignment: the grant paths refuse it, and this is the backstop.
+  return Array.from(roleIds).filter(id => roleUsableIn(id, allRoleDefs, hubId))
+}
+
+/**
+ * True when `roleId` may be granted, and carries authority, in `hubId` — or,
+ * with `hubId` null, as an account-wide (global) role.
+ *
+ * A deployment-wide role (no `hubId`) is usable everywhere. A hub-owned role is
+ * usable only in its own hub: its name is sealed under that hub's key, so no
+ * other hub's members can even read what it is, and it must never be granted
+ * globally, where it would follow the user into every hub (#2780). An unknown
+ * id is "usable" here — whether it exists is the grant path's question, asked
+ * with its own error.
+ */
+export function roleUsableIn(roleId: string, allRoleDefs: ReadonlyArray<Pick<Role, 'id' | 'hubId'>>, hubId: string | null): boolean {
+  const owner = allRoleDefs.find(r => r.id === roleId)?.hubId ?? null
+  return owner === null || owner === hubId
 }
 
 /**

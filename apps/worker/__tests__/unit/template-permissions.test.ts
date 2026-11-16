@@ -1,8 +1,8 @@
 /**
  * Template ↔ permission reconciliation gate (#1363).
  *
- * `POST /roles/from-template` 400s an ENTIRE role import when any permission
- * is unknown to the catalog, and a permission rename that forgets the
+ * Importing a template role (`POST /api/hubs/:hubId/settings/roles`, #2780)
+ * 400s when any permission is unknown to the catalog, and a permission rename that forgets the
  * templates surfaces in front of an operator provisioning their hub (#1360:
  * `volunteers:read` → `users:read` broke 10 templates). This suite makes that
  * a CI failure instead, and prints the reverse reports (#1348's class:

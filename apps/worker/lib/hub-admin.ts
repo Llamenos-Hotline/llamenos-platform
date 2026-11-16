@@ -59,7 +59,7 @@
 import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
-import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
+import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
 import { ServiceError } from '../services/settings'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
@@ -126,7 +126,11 @@ export function mergeHubRole(
  * (including the `system:*` wildcard). Such a permission is never a hub
  * permission — see {@link hubFounderRoleIds}.
  */
-function isInstanceLevel(permission: string): boolean {
+/**
+ * A permission whose reach is the deployment, not a hub: `*` and every
+ * `system:` permission except the read-only `system:view-*`.
+ */
+export function isInstanceLevel(permission: string): boolean {
   return permission === '*' || (permission.startsWith('system:') && !permission.startsWith('system:view-'))
 }
 
@@ -151,7 +155,9 @@ function isInstanceLevel(permission: string): boolean {
  */
 export function hubFounderRoleIds(catalog: RoleCatalog): string[] {
   const known = new Set(catalog.map(r => r.id))
+  // A hub-owned role belongs to the hub that made it, never to a new one (#2780).
   const candidates = [...catalog, ...DEFAULT_ROLES.filter(r => !known.has(r.id))]
+    .filter(r => (r.hubId ?? null) === null)
     .filter(r => !r.permissions.some(isInstanceLevel) && rolesConferHubAdmin([r.id], catalog))
     .sort((a, b) => a.permissions.length - b.permissions.length || a.id.localeCompare(b.id))
   return candidates.length > 0 ? [candidates[0].id] : []
@@ -170,7 +176,9 @@ function hubsWhereGranted(state: AdminState, catalog: RoleCatalog, required: rea
   if (!canAct(state)) return []
   const roleIdsByHub = new Map<string, string[]>()
   for (const { hubId, roleIds } of state.hubRoles) {
-    roleIdsByHub.set(hubId, [...(roleIdsByHub.get(hubId) ?? []), ...roleIds])
+    // Same backstop as resolveHubRoleIds: another hub's role confers nothing here.
+    const usable = roleIds.filter(id => roleUsableIn(id, catalog, hubId))
+    roleIdsByHub.set(hubId, [...(roleIdsByHub.get(hubId) ?? []), ...usable])
   }
   return [...roleIdsByHub].filter(([, roleIds]) => rolesGrantAll(roleIds, required, catalog)).map(([hubId]) => hubId)
 }
@@ -212,7 +220,7 @@ export function hubsAdministered(state: AdminState, catalog: RoleCatalog, hubIds
 
 /** The live role definitions. Default roles missing from the table resolve through DEFAULT_ROLES. */
 export async function loadRoleCatalog(db: Executor): Promise<RoleCatalog> {
-  return db.select({ id: roleDefinitions.id, permissions: roleDefinitions.permissions }).from(roleDefinitions)
+  return db.select({ id: roleDefinitions.id, permissions: roleDefinitions.permissions, hubId: roleDefinitions.hubId }).from(roleDefinitions)
 }
 
 /** Every hub id. */

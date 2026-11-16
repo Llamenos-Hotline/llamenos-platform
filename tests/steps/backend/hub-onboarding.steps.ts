@@ -125,8 +125,6 @@ Given('onboarding is complete for hub {string}', async ({ request, world }) => {
 Given('I have permission {string}', async ({ request, world }, perm: string) => {
   const state = getOB(world)
   const role = await createRoleViaApi(request, {
-    name: uniqueName('onboard-role'),
-    slug: uniqueName('onboard'),
     permissions: [perm],
   })
   const user = await createUserViaApi(request, {

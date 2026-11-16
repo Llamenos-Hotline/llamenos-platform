@@ -66,8 +66,6 @@ Given('I am a hub admin for hub {string}', async ({ request, world }, hubName: s
   const actor = getHubActor(world)
   // Create a role with hub-admin-level permissions
   const role = await createRoleViaApi(request, {
-    name: uniqueName(`hub-admin-${hubName}`),
-    slug: uniqueName(`hub-admin-${hubName}`),
     permissions: [
       'telephony:manage-providers',
       'telephony:view-providers',

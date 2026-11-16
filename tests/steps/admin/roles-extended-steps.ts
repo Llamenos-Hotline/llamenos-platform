@@ -16,6 +16,7 @@ import {
   createVolunteerViaApi,
   createRoleViaApi,
   listRolesViaApi,
+  findNamedRole,
   testEndpointAccess,
   getMeViaApi,
   addHubMemberViaApi,
@@ -103,17 +104,12 @@ Then('they should have permissions from both roles', async ({ request, rolesWorl
   expect(me.data!.permissions.length).toBeGreaterThan(0)
 })
 
-Given('a volunteer has only a custom {string} role', async ({ request, rolesWorld }, roleName: string) => {
-  const roles = await listRolesViaApi(request)
-  let role = roles.find(r => r.name === roleName)
-  if (!role) {
-    const slug = roleName.toLowerCase().replace(/\s+/g, '-')
-    role = await createRoleViaApi(request, {
-      name: roleName,
-      slug,
-      permissions: ['calls:read'],
-    })
-  }
+Given('a volunteer has only a custom {string} role', async ({ request, rolesWorld }, _roleName: string) => {
+  // Created per scenario: a custom role has no name in the clear to find an
+  // earlier one by (#2780).
+  const role = await createRoleViaApi(request, {
+    permissions: ['calls:read'],
+  })
 
   const vol = await createVolunteerViaApi(request, {
     name: `Custom ${Date.now()}`,
@@ -175,9 +171,11 @@ async function expectFormOffersSystemRoles(page: Page, request: APIRequestContex
   await expect(trigger).toBeVisible({ timeout: Timeouts.ELEMENT })
   await trigger.click()
   for (const role of systemRoles) {
+    // A system role is a seeded default, whose name is a public constant.
+    expect(role.name, `system role ${role.id} has a name`).not.toBeNull()
     const option = page.locator(`[data-testid="${TestIds.USER_FORM_ROLE_OPTION}"][data-role-id="${role.id}"]`)
     await expect(option, `role "${role.name}" offered in form`).toBeVisible({ timeout: Timeouts.ELEMENT })
-    await expect(option).toContainText(role.name)
+    await expect(option).toContainText(role.name ?? role.id)
   }
   await page.keyboard.press('Escape')
 }
@@ -185,10 +183,7 @@ async function expectFormOffersSystemRoles(page: Page, request: APIRequestContex
 // --- Wildcard domain steps ---
 
 Given('a role with {string} wildcard permission', async ({ request, rolesWorld }, permission: string) => {
-  const slug = `wildcard-test-${Date.now()}`
   const role = await createRoleViaApi(request, {
-    name: `Wildcard Test ${Date.now()}`,
-    slug,
     permissions: [permission],
   })
   const vol = await createVolunteerViaApi(request, {
@@ -249,7 +244,7 @@ Given('a volunteer with {string} role', async ({ request, rolesWorld, workerHub 
 When('I change their role to {string} via the dropdown', async ({ page, request, rolesWorld }, roleName: string) => {
   expect(rolesWorld.volunteerNsec, 'a volunteer must exist first (see "a volunteer with {string} role")').toBeTruthy()
   const pubkey = seedHexToPubkey(rolesWorld.volunteerNsec)
-  const role = (await listRolesViaApi(request)).find(r => r.name === roleName)
+  const role = findNamedRole(await listRolesViaApi(request), roleName)
   expect(role, `role "${roleName}" must exist`).toBeTruthy()
 
   await Navigation.goToVolunteers(page)
@@ -269,7 +264,7 @@ Then('the volunteer should display the {string} badge', async ({ page, rolesWorl
 
 Given('I changed a volunteer\'s role to {string}', async ({ request, rolesWorld, workerHub }, roleName: string) => {
   // Setup: a volunteer holding the role (assigned through the API).
-  const role = (await listRolesViaApi(request)).find(r => r.name === roleName)
+  const role = findNamedRole(await listRolesViaApi(request), roleName)
   expect(role, `role "${roleName}" must exist`).toBeTruthy()
   // The Volunteers page lists the active hub's members only (#1044), so the
   // volunteer must be created in the worker hub, not as a global-role account.

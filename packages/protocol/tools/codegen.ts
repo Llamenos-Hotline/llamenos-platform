@@ -192,6 +192,11 @@ const REFERENCED_BY_NAME = new Set([
   // or adding a schema renamed it out from under the Android/iOS call screens. It is named
   // `CallRecordStatus` — its own schema's name — whatever holds it.
   'CallRecordStatus',
+  // #2780 — `roleListResponseSchema.roles` holds exactly `roleResponseSchema`. It used to
+  // differ (no `hubId`), so quicktype named the list item `RoleListResponseRole` and iOS
+  // imported that. Once hub roles gained `hubId` the two became identical and the item was
+  // renamed `Role`, breaking the iOS compile. It is `RoleResponse` — its own schema's name.
+  'RoleResponse',
 ])
 
 /**

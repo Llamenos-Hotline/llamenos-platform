@@ -316,8 +316,6 @@ Given('a volunteer without cases:update permission is logged in', async ({ page,
   const { createRoleViaApi, createVolunteerViaApi } = await import('../../api-helpers')
   const { loginAsVolunteer } = await import('../../helpers')
   const role = await createRoleViaApi(request, {
-    name: `CMS Viewer ${Date.now()}`,
-    slug: `cms-viewer-${Date.now()}`,
     permissions: [
       'calls:answer', 'calls:read-active',
       'notes:read-own', 'shifts:read-own',

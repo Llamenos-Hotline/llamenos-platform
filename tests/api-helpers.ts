@@ -906,14 +906,26 @@ export async function enableMockTelephonyViaApi(
 
 // ── Roles CRUD ────────────────────────────────────────────────────
 
+/** `roleResponseSchema` as the tests read it. `name` is null for every custom role (#2780). */
 export interface RoleDefinition {
   id: string
-  name: string
+  name: string | null
+  hubId?: string | null
   slug: string
   permissions: string[]
   isDefault: boolean
   isSystem: boolean
   description: string
+  encryptedName?: string | null
+  encryptedDescription?: string | null
+}
+
+/** A role whose name is in the clear — only ever a seeded default (#2780). */
+export type NamedRole = RoleDefinition & { name: string }
+
+/** The seeded default role named `name` ("Reviewer", "Volunteer"), if listed. */
+export function findNamedRole(roles: readonly RoleDefinition[], name: string): NamedRole | undefined {
+  return roles.find((r): r is NamedRole => r.name === name)
 }
 
 export async function listRolesViaApi(
@@ -924,38 +936,54 @@ export async function listRolesViaApi(
   return data.roles
 }
 
+/**
+ * Create a deployment-wide custom role. It has no name in the clear — that is
+ * the point (#2780): a platform role's name lives only in per-admin
+ * `envelopes`, and its slug is its id. Most tests need only the permission
+ * bundle, so they pass `permissions` alone. A role a hub owns is created with
+ * {@link createHubRoleViaApi}.
+ */
 export async function createRoleViaApi(
   request: APIRequestContext,
-  opts: { name: string; slug: string; permissions: string[]; description?: string; encryptedName?: string; encryptedDescription?: string; envelopes?: Array<{ adminPubkey: string; encryptedName: string; encryptedDescription: string }> },
+  opts: { permissions: string[]; envelopes?: Array<{ adminPubkey: string; encryptedName: string; encryptedDescription: string }> },
 ): Promise<RoleDefinition> {
   const { status, data } = await apiPost<RoleDefinition>(request, '/settings/roles', {
-    name: opts.name,
-    slug: opts.slug,
     permissions: opts.permissions,
-    description: opts.description || `Custom role: ${opts.name}`,
-    encryptedName: opts.encryptedName,
-    encryptedDescription: opts.encryptedDescription,
-    envelopes: opts.envelopes,
+    ...(opts.envelopes ? { envelopes: opts.envelopes } : {}),
   })
-  if (status === 409) {
-    // Role already exists (parallel test created it) — fetch and return it
-    const roles = await listRolesViaApi(request)
-    const existing = roles.find(r => r.slug === opts.slug)
-    if (existing) return existing
-    throw new Error(`Role slug "${opts.slug}" conflicts but not found in list`)
+  if (status !== 201) {
+    throw new Error(`Failed to create role: ${status} ${JSON.stringify(data)}`)
   }
-  if (status !== 200 && status !== 201) {
-    throw new Error(`Failed to create role: ${status}`)
-  }
-  // API returns the role directly, not wrapped in { role: ... }
-  const role = (data as unknown as { role?: RoleDefinition })?.role ?? data
-  return role
+  return data
+}
+
+/**
+ * Create a role owned by `hubId`, its name and description already sealed
+ * under that hub's key. The server stores the ciphertext as given; tests that
+ * need a sealed value use `sealHubFieldForTest` from `tests/helpers`.
+ */
+export async function createHubRoleViaApi(
+  request: APIRequestContext,
+  hubId: string,
+  opts: { permissions: string[]; encryptedName: string; encryptedDescription?: string },
+): Promise<{ status: number; role: RoleDefinition }> {
+  const { status, data } = await apiPost<RoleDefinition>(request, `/hubs/${hubId}/settings/roles`, opts)
+  return { status, role: data }
+}
+
+export async function listHubRolesViaApi(
+  request: APIRequestContext,
+  hubId: string,
+): Promise<RoleDefinition[]> {
+  const { status, data } = await apiGet<{ roles: RoleDefinition[] }>(request, `/hubs/${hubId}/settings/roles`)
+  if (status !== 200) throw new Error(`Failed to list hub roles: ${status}`)
+  return data.roles
 }
 
 export async function updateRoleViaApi(
   request: APIRequestContext,
   id: string,
-  updates: { name?: string; permissions?: string[]; description?: string },
+  updates: { permissions?: string[] },
 ): Promise<void> {
   const { status } = await apiPatch(request, `/settings/roles/${id}`, updates)
   if (status !== 200) throw new Error(`Failed to update role: ${status}`)

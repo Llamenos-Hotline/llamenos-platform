@@ -11,7 +11,7 @@ import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'
 import { ServiceError } from '../services/settings'
-import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, type Role } from '@shared/permissions'
+import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, roleUsableIn, type Role } from '@shared/permissions'
 
 export type TargetHub =
   | { ok: true; hubId: string | undefined }
@@ -67,19 +67,44 @@ export function checkRoleGrant(
   c: Context<AppEnv>,
   roleIds: readonly string[],
 ): { status: 400 | 403; error: string } | null {
+  const allRoles: Role[] = c.get('allRoles')
+  // Scope before authority, so a super-admin's `*` does not skip it: a role a
+  // hub owns is granted only inside that hub, never in another and never as a
+  // global role that would follow the user everywhere (#2780).
+  const scopeDenied = checkRoleScope(allRoles, roleIds, (c.get('hubId') as string | undefined) ?? null)
+  if (scopeDenied) return scopeDenied
   const callerPermissions = c.get('permissions')
   if (permissionGranted(callerPermissions, '*')) return null
-  const allRoles: Role[] = c.get('allRoles')
   for (const roleId of roleIds) {
     const role = findRole(roleId, allRoles)
     if (!role) return { status: 400, error: `Unknown role: ${roleId}` }
     for (const perm of resolvePermissions([roleId], allRoles)) {
       if (!permissionGranted(callerPermissions, perm)) {
-        return { status: 403, error: `Cannot grant role '${role.name}' — you lack permission '${perm}'` }
+        // By id: a custom role's name is sealed and never in an error body.
+        return { status: 403, error: `Cannot grant role '${role.name ?? role.id}' — you lack permission '${perm}'` }
       }
     }
   }
   return null
+}
+
+/**
+ * Refuse any role in `roleIds` that is not grantable in `hubId` (null: as a
+ * global role) — a role another hub owns. See {@link roleUsableIn}.
+ */
+export function checkRoleScope(
+  allRoles: readonly Role[],
+  roleIds: readonly string[],
+  hubId: string | null,
+): { status: 400; error: string } | null {
+  const foreign = roleIds.find(id => !roleUsableIn(id, allRoles, hubId))
+  if (!foreign) return null
+  return {
+    status: 400,
+    error: hubId
+      ? `Role ${foreign} belongs to another hub and cannot be granted in this one`
+      : `Role ${foreign} belongs to a hub and can only be granted inside it`,
+  }
 }
 
 /** True when the request carries global super-admin authority (`*`). */

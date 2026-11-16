@@ -3,8 +3,9 @@
  * answerable to nobody:
  *
  *  1. The catalog (`PERMISSION_CATALOG` in `@shared/permissions`) — the names
- *     `isValidPermission` accepts. `POST /roles/from-template` rejects an
- *     entire import with a 400 when a template names anything outside this
+ *     `isValidPermission` accepts. Importing a template's roles
+ *     (`POST /api/hubs/:hubId/settings/roles`, one per role, #2780) rejects the
+ *     role with a 400 when a template names anything outside this
  *     set, so a rename that forgets the templates breaks hub setup (#1360 was
  *     the last instance: `volunteers:read` → `users:read`).
  *  2. The enforced set — permission-shaped string literals appearing in
@@ -86,7 +87,7 @@ export function extractGuardCallPermissions(source: string): Set<string> {
  * (`@shared/permissions`) — `*`, `domain:*` over a non-empty catalog domain,
  * or an exact catalog entry — evaluated against the passed catalog so the
  * audit stays pure. A green audit against the real catalog provably means
- * `POST /roles/from-template` cannot 400 on a shipped template.
+ * importing a shipped template's roles cannot 400 on an unknown permission.
  */
 export function auditTemplatePermissions(
   templates: TemplateLike[],

@@ -12,7 +12,7 @@ vi.mock('@worker/lib/service-factories', async (orig) => ({
   ...factories,
 }))
 
-import settingsRoute from '@worker/routes/settings'
+import settingsRoute, { hubSettingsRoutes } from '@worker/routes/settings'
 import { encodePcm16Wav } from '@/lib/ivr-wav'
 
 function createTestApp(opts: {
@@ -21,9 +21,12 @@ function createTestApp(opts: {
   services?: Record<string, unknown>
   /** Set when the request is routed under /hubs/:hubId (hubContext sets it). */
   hubId?: string
+  /** Mount the hub router (`/api/hubs/:hubId/settings`) instead of the unscoped one. */
+  hubMount?: boolean
 } = {}) {
   const {
     hubId,
+    hubMount = false,
     permissions = ['*'],
     pubkey = 'test-pubkey-' + '0'.repeat(50),
     services = {},
@@ -100,7 +103,7 @@ function createTestApp(opts: {
     await next()
   })
 
-  app.route('/', settingsRoute)
+  app.route('/', hubMount ? hubSettingsRoutes : settingsRoute)
   return app
 }
 
@@ -831,8 +834,8 @@ describe('settings route', () => {
       expect(res.status).toBe(403)
     })
 
-    it('POST /roles creates with permission', async () => {
-      const createSpy = vi.fn().mockResolvedValue({ id: 'role-new', name: 'New Role' })
+    it('POST /roles creates a platform role from its permissions and envelopes alone', async () => {
+      const createSpy = vi.fn().mockResolvedValue({ id: 'role-new', name: null })
       const app = createTestApp({
         permissions: ['system:manage-roles'],
         services: { settings: { createRole: createSpy } },
@@ -840,14 +843,48 @@ describe('settings route', () => {
       const res = await app.request('/roles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'New Role', slug: 'new-role', permissions: ['settings:read'], description: 'A new role' }),
+        body: JSON.stringify({ permissions: ['settings:read'] }),
       })
       expect(res.status).toBe(201)
-      expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Role' }))
+      expect(createSpy).toHaveBeenCalledWith({ permissions: ['settings:read'] })
     })
 
-    it('PATCH /roles/:id updates with permission', async () => {
-      const updateSpy = vi.fn().mockResolvedValue({ id: 'role-1', name: 'Updated' })
+    it.each([
+      ['name', { name: 'Legal observer' }],
+      ['slug', { slug: 'legal-observer' }],
+      ['description', { description: 'Observes arrests' }],
+    ])('POST /roles refuses a plaintext %s rather than dropping it (#2780)', async (_field, extra) => {
+      const createSpy = vi.fn()
+      const app = createTestApp({
+        permissions: ['system:manage-roles'],
+        services: { settings: { createRole: createSpy } },
+      })
+      const res = await app.request('/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: ['settings:read'], ...extra }),
+      })
+      expect(res.status).toBe(400)
+      expect(createSpy).not.toHaveBeenCalled()
+    })
+
+    it('PATCH /roles/:id updates permissions with permission', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ id: 'role-1', name: null })
+      const app = createTestApp({
+        permissions: ['system:manage-roles'],
+        services: { settings: { updateRole: updateSpy } },
+      })
+      const res = await app.request('/roles/role-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: ['settings:read'] }),
+      })
+      expect(res.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith('role-1', { permissions: ['settings:read'] })
+    })
+
+    it('PATCH /roles/:id refuses a plaintext name', async () => {
+      const updateSpy = vi.fn()
       const app = createTestApp({
         permissions: ['system:manage-roles'],
         services: { settings: { updateRole: updateSpy } },
@@ -857,8 +894,16 @@ describe('settings route', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'Updated' }),
       })
+      expect(res.status).toBe(400)
+      expect(updateSpy).not.toHaveBeenCalled()
+    })
+
+    it('GET /roles lists the deployment-wide roles only', async () => {
+      const listSpy = vi.fn().mockResolvedValue({ roles: [] })
+      const app = createTestApp({ services: { settings: { listRoles: listSpy } } })
+      const res = await app.request('/roles')
       expect(res.status).toBe(200)
-      expect(updateSpy).toHaveBeenCalledWith('role-1', expect.any(Object))
+      expect(listSpy).toHaveBeenCalledWith(null)
     })
 
     it('DELETE /roles/:id removes with permission', async () => {
@@ -870,6 +915,83 @@ describe('settings route', () => {
       const res = await app.request('/roles/role-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
       expect(deleteSpy).toHaveBeenCalledWith('role-1')
+    })
+  })
+
+  describe('hub-owned roles (#2780)', () => {
+    const SEALED = 'ab'.repeat(40)
+
+    it('GET /roles under a hub lists the deployment-wide roles and that hub\'s own', async () => {
+      const listSpy = vi.fn().mockResolvedValue({ roles: [] })
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { listRoles: listSpy } } })
+      const res = await app.request('/roles')
+      expect(res.status).toBe(200)
+      expect(listSpy).toHaveBeenCalledWith('hub-a')
+    })
+
+    it('POST /roles under a hub stores the sealed name for that hub', async () => {
+      const createSpy = vi.fn().mockResolvedValue({ id: 'role-x', name: null, hubId: 'hub-a' })
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { createHubRole: createSpy } } })
+      const res = await app.request('/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: ['calls:answer'], encryptedName: SEALED }),
+      })
+      expect(res.status).toBe(201)
+      expect(createSpy).toHaveBeenCalledWith('hub-a', { permissions: ['calls:answer'], encryptedName: SEALED })
+    })
+
+    it.each([
+      ['a plaintext name beside the sealed one', { permissions: ['calls:answer'], encryptedName: SEALED, name: 'Legal observer' }],
+      ['a name that is not ciphertext', { permissions: ['calls:answer'], encryptedName: 'Legal observer' }],
+      ['no sealed name at all', { permissions: ['calls:answer'] }],
+    ])('POST /roles under a hub refuses %s', async (_case, body) => {
+      const createSpy = vi.fn()
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { createHubRole: createSpy } } })
+      const res = await app.request('/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      expect(res.status).toBe(400)
+      expect(createSpy).not.toHaveBeenCalled()
+    })
+
+    it('POST /roles under a hub refuses a permission the caller does not hold', async () => {
+      const createSpy = vi.fn()
+      const app = createTestApp({
+        hubMount: true,
+        hubId: 'hub-a',
+        permissions: ['system:manage-roles', 'calls:answer'],
+        services: { settings: { createHubRole: createSpy } },
+      })
+      const res = await app.request('/roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: ['calls:answer', 'notes:read-all'], encryptedName: SEALED }),
+      })
+      expect(res.status).toBe(403)
+      expect(createSpy).not.toHaveBeenCalled()
+    })
+
+    it('PATCH and DELETE under a hub act on that hub\'s role', async () => {
+      const updateSpy = vi.fn().mockResolvedValue({ id: 'role-x', name: null })
+      const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
+      const app = createTestApp({
+        hubMount: true,
+        hubId: 'hub-a',
+        services: { settings: { updateHubRole: updateSpy, deleteHubRole: deleteSpy } },
+      })
+      const patch = await app.request('/roles/role-x', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ encryptedDescription: null }),
+      })
+      expect(patch.status).toBe(200)
+      expect(updateSpy).toHaveBeenCalledWith('hub-a', 'role-x', { encryptedDescription: null })
+      const del = await app.request('/roles/role-x', { method: 'DELETE' })
+      expect(del.status).toBe(200)
+      expect(deleteSpy).toHaveBeenCalledWith('hub-a', 'role-x')
     })
   })
 

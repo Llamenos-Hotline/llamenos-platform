@@ -12,7 +12,9 @@ struct EffectivePermissionsWire: Codable, Sendable {
 // MARK: - RolesAPIServiceProtocol
 
 protocol RolesAPIServiceProtocol {
-    func listRoles() async throws -> RoleListResponse
+    /// `hubId` set: the roles that hub offers (deployment-wide + its own).
+    /// `nil`: the deployment-wide roles alone.
+    func listRoles(hubId: String?) async throws -> RoleListResponse
     func getPermissionsCatalog() async throws -> PermissionsCatalogResponse
     func getEffectivePermissions(userId: String, hubId: String?) async throws -> EffectivePermissionsWire
 }
@@ -27,8 +29,14 @@ final class RolesAPIService: RolesAPIServiceProtocol, @unchecked Sendable {
         self.apiService = apiService
     }
 
-    func listRoles() async throws -> RoleListResponse {
-        try await apiService.request(method: "GET", path: "/api/settings/roles")
+    /// A hub's own roles exist only under `/api/hubs/:hubId/settings/roles` (#2780) —
+    /// `/api/settings/roles` lists the deployment-wide roles and nothing a hub owns.
+    func listRoles(hubId: String?) async throws -> RoleListResponse {
+        if let hubId {
+            let encoded = hubId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? hubId
+            return try await apiService.request(method: "GET", path: "/api/hubs/\(encoded)/settings/roles")
+        }
+        return try await apiService.request(method: "GET", path: "/api/settings/roles")
     }
 
     func getPermissionsCatalog() async throws -> PermissionsCatalogResponse {
@@ -47,12 +55,16 @@ final class RolesAPIService: RolesAPIServiceProtocol, @unchecked Sendable {
 
 // MARK: - DecryptedRole
 
-/// A role with its E2EE name/description resolved for display.
-/// System roles carry plaintext names; custom roles keep them in per-admin
-/// HPKE envelopes (LABEL_PLATFORM_ROLE_NAME_ENCRYPT / _DESC_ENCRYPT, AAD
-/// "{roleId}:name" / "{roleId}:description" — the desktop construction in
-/// platform-roles-section.tsx). Falls back to the slug when no envelope for
-/// this device exists or the envelope does not open.
+/// A role with its E2EE name/description resolved for display. Mirrors the
+/// desktop `role-vocabulary.ts`; there are three kinds of role (#2780):
+/// - seeded defaults carry a plaintext `name` (public constants);
+/// - hub-owned roles (`hubId` set) are sealed under that hub's key with
+///   LABEL_HUB_ROLE_ENCRYPT — opened in Rust by hub id, the key never enters Swift;
+/// - platform roles keep them in per-admin HPKE envelopes
+///   (LABEL_PLATFORM_ROLE_NAME_ENCRYPT / _DESC_ENCRYPT, AAD "{roleId}:name" /
+///   "{roleId}:description").
+/// A role this device cannot open shows its slug, which for a custom role IS its
+/// id — never an empty string that would read as "unnamed".
 struct DecryptedRole: Identifiable, Sendable {
     let id: String
     let slug: String
@@ -92,15 +104,21 @@ struct DecryptedRole: Identifiable, Sendable {
 final class RolesViewModel {
     private let rolesAPI: RolesAPIServiceProtocol
     private let cryptoService: CryptoService
+    private let hubIdProvider: () -> String?
 
     var roles: [DecryptedRole] = []
     var catalogLabels: [String: String] = [:]
     var isLoading = false
     var errorMessage: String?
 
-    init(rolesAPI: RolesAPIServiceProtocol, cryptoService: CryptoService) {
+    init(
+        rolesAPI: RolesAPIServiceProtocol,
+        cryptoService: CryptoService,
+        hubIdProvider: @escaping () -> String?
+    ) {
         self.rolesAPI = rolesAPI
         self.cryptoService = cryptoService
+        self.hubIdProvider = hubIdProvider
     }
 
     /// System roles first, then the default role, then alphabetical —
@@ -118,7 +136,7 @@ final class RolesViewModel {
         isLoading = true
         errorMessage = nil
         do {
-            let response = try await rolesAPI.listRoles()
+            let response = try await rolesAPI.listRoles(hubId: hubIdProvider())
             roles = Self.sortRoles(response.roles.map(decryptRole))
             if includeCatalog, let catalog = try? await rolesAPI.getPermissionsCatalog() {
                 catalogLabels = catalog.permissions
@@ -136,8 +154,8 @@ final class RolesViewModel {
 
     // MARK: - Envelope Decryption
 
-    private func decryptRole(_ role: RoleListResponseRole) -> DecryptedRole {
-        if role.isSystem, let name = role.name {
+    private func decryptRole(_ role: RoleResponse) -> DecryptedRole {
+        if let name = role.name {
             return DecryptedRole(
                 id: role.id, slug: role.slug, name: name,
                 roleDescription: role.description,
@@ -145,6 +163,10 @@ final class RolesViewModel {
                 isSystem: role.isSystem, isDefault: role.isDefault,
                 assignedUserCount: role.assignedUserCount.map(Int.init)
             )
+        }
+
+        if let hubId = role.hubID {
+            return decryptHubRole(role, hubId: hubId)
         }
 
         guard let myPubkey = cryptoService.encryptionPubkeyHex,
@@ -164,7 +186,29 @@ final class RolesViewModel {
         )
     }
 
-    private func fallback(_ role: RoleListResponseRole) -> DecryptedRole {
+    private func decryptHubRole(_ role: RoleResponse, hubId: String) -> DecryptedRole {
+        guard let sealedName = role.encryptedName,
+              let name = cryptoService.decryptHubField(
+                  ciphertextHex: sealedName, hubId: hubId, label: CryptoLabels.LABEL_HUB_ROLE_ENCRYPT
+              )
+        else {
+            return fallback(role)
+        }
+        let description = role.encryptedDescription.flatMap {
+            cryptoService.decryptHubField(
+                ciphertextHex: $0, hubId: hubId, label: CryptoLabels.LABEL_HUB_ROLE_ENCRYPT
+            )
+        } ?? ""
+        return DecryptedRole(
+            id: role.id, slug: role.slug, name: name,
+            roleDescription: description,
+            permissions: role.permissions,
+            isSystem: role.isSystem, isDefault: role.isDefault,
+            assignedUserCount: role.assignedUserCount.map(Int.init)
+        )
+    }
+
+    private func fallback(_ role: RoleResponse) -> DecryptedRole {
         DecryptedRole(
             id: role.id, slug: role.slug, name: role.slug,
             roleDescription: "",

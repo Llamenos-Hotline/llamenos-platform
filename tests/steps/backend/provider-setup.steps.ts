@@ -82,8 +82,6 @@ Given('I am a provider setup volunteer', async ({ request, world }) => {
 
 Given('I am a volunteer with telephony:view-providers permission', async ({ request, world }) => {
   const role = await createRoleViaApi(request, {
-    name: uniqueName('ps-view-role'),
-    slug: uniqueName('ps-view'),
     permissions: ['telephony:view-providers', 'telephony:view-numbers'],
   })
   const vol = await createUserViaApi(request, {

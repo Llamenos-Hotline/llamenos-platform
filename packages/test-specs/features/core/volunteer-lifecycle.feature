@@ -143,7 +143,7 @@ Feature: Volunteer Lifecycle
     Given I am logged in as an admin
     When I create a custom role "Call Monitor" with permissions
     Then the role should be created successfully
-    And the role slug should be "call-monitor"
+    And the role's slug should not reveal its name
 
   @desktop @ios @android
   Scenario: Delete a custom role
@@ -179,17 +179,13 @@ Feature: Volunteer Lifecycle
     Then it should have "reports:create" permission
     And it should not have "notes:read" permission
 
+  # A role's name says what the organisation does, so it is never sent or stored
+  # in the clear, and no slug typed from it exists to collide or to validate (#2780).
   @desktop @ios @android
-  Scenario: Reject duplicate role slug
+  Scenario: Reject a role named in the clear
     Given I am logged in as an admin
-    When I create a custom role with an existing slug
-    Then I should see a duplicate slug error
-
-  @desktop @ios @android
-  Scenario: Reject invalid slug format
-    Given I am logged in as an admin
-    When I create a role with slug "Invalid Slug!"
-    Then I should see an invalid slug error
+    When I create a role with the plaintext name "Call Monitor"
+    Then the server should refuse the plaintext role name
 
   @desktop @ios @android
   Scenario: Update custom role permissions

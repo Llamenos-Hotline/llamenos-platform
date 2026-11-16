@@ -6,9 +6,11 @@ import { RolesSection as RolesSectionInner } from '@/components/admin-settings/r
 import {
   listTemplates,
   getTemplateDetails,
-  createRolesFromTemplate,
+  listHubRoles,
+  createHubRole,
   type TemplateSummary,
 } from '@/lib/api'
+import { readableRoles, sealHubRoleField } from '@/lib/role-vocabulary'
 import {
   Dialog,
   DialogContent,
@@ -84,15 +86,35 @@ export function HubRolesSection() {
     })
   }, [])
 
+  /**
+   * A template's suggested roles are public constants, but which of them THIS
+   * hub adopted is not: each is sealed under the hub key here and created like
+   * any other hub role, so the server never writes their names (#2780). A role
+   * whose name the hub already uses is skipped — compared by the opened name,
+   * because there is no plaintext slug left to compare.
+   */
   const handleImport = useCallback(async () => {
     const rolesToImport = suggestedRoles.filter(r => selectedRoleSlugs.has(r.slug))
     if (rolesToImport.length === 0) return
 
     setImporting(true)
     try {
-      const result = await createRolesFromTemplate(rolesToImport)
-      if (result.count > 0) {
-        toast(t('roles.importSuccess', { count: result.count, defaultValue: '{{count}} role(s) imported' }), 'success')
+      const existing = await readableRoles((await listHubRoles()).roles)
+      const taken = new Set(existing.filter(r => r.readable).map(r => r.displayName.trim().toLowerCase()))
+      let count = 0
+      for (const role of rolesToImport) {
+        const key = role.name.trim().toLowerCase()
+        if (taken.has(key)) continue
+        await createHubRole({
+          permissions: role.permissions,
+          encryptedName: await sealHubRoleField(role.name),
+          ...(role.description ? { encryptedDescription: await sealHubRoleField(role.description) } : {}),
+        })
+        taken.add(key)
+        count++
+      }
+      if (count > 0) {
+        toast(t('roles.importSuccess', { count, defaultValue: '{{count}} role(s) imported' }), 'success')
       } else {
         toast(t('roles.importAllExist', { defaultValue: 'All selected roles already exist' }), 'info')
       }

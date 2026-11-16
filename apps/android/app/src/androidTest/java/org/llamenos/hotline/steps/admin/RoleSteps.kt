@@ -72,9 +72,9 @@ class RoleSteps : BaseSteps() {
         assertAnyTagDisplayed("admin-tabs", "custom-fields-list", "custom-fields-empty")
     }
 
-    @Then("the role slug should be {string}")
-    fun theRoleSlugShouldBe(slug: String) {
-        // Server-side slug generation — verified at API level
+    @Then("the role's slug should not reveal its name")
+    fun theRoleSlugShouldNotRevealItsName() {
+        // A custom role's slug is its id (#2780) — verified at API level
     }
 
     @Given("a custom role {string} exists")
@@ -157,29 +157,18 @@ class RoleSteps : BaseSteps() {
         // This is validated by access-control.feature scenarios
     }
 
-    // ---- Duplicate / invalid slug ----
+    // ---- Plaintext role name ----
 
-    @When("I create a custom role with an existing slug")
-    fun iCreateACustomRoleWithAnExistingSlug() {
-        // API-level operation — duplicate slug rejection is server-side
+    @When("I create a role with the plaintext name {string}")
+    fun iCreateARoleWithThePlaintextName(name: String) {
+        // API-level operation — the server refuses a plaintext role name (#2780)
         navigateToAdminTab("volunteers")
         composeRule.waitForIdle()
     }
 
-    @Then("I should see a duplicate slug error")
-    fun iShouldSeeADuplicateSlugError() {
-        // Server returns 409 Conflict — Android shows error toast/snackbar
-        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
-    }
-
-    @When("I create a role with slug {string}")
-    fun iCreateARoleWithSlug(slug: String) {
-        // API-level operation
-    }
-
-    @Then("I should see an invalid slug error")
-    fun iShouldSeeAnInvalidSlugError() {
-        // Server validates slug format — Android shows error
+    @Then("the server should refuse the plaintext role name")
+    fun theServerShouldRefuseThePlaintextRoleName() {
+        // Server returns 400 — Android shows error toast/snackbar
         assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 
