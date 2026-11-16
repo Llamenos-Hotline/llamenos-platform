@@ -98,7 +98,7 @@ const EVENT_CATEGORIES: Record<string, string[]> = {
   settings: [
     'settingsUpdated', 'telephonyConfigured', 'transcriptionToggled',
     'ivrUpdated', 'customFieldsUpdated', 'spamSettingsUpdated',
-    'callSettingsUpdated', 'mockTelephonyToggled',
+    'callSettingsUpdated', 'callHistoryAccessUpdated', 'mockTelephonyToggled',
     'providerRecordingPostureEnforced',
     'hubEscrowKeySet', 'hubEscrowKeyCleared',
   ],

@@ -76,7 +76,7 @@ async function seedAdmin(roles: string[] = []) {
 /** CallsService wired the way createServices wires it. */
 function wiredCalls(adminUserPubkeys: () => Promise<string[]>) {
   return new CallsService(fresh.db, {
-    getAdminRecipients: async () =>
+    getRecordRecipients: async () =>
       buildReaderPubkeys(fresh.db, undefined, await adminUserPubkeys()),
     serverKek: SERVER_KEK,
   })

@@ -173,7 +173,11 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     records: new RecordsService(db, audit),
     audit,
     shifts: new ShiftsService(db),
-    calls: new CallsService(db, { getAdminRecipients: resolveAdminRecipients, serverKek: opts?.serverKek }),
+    calls: new CallsService(db, {
+      getRecordRecipients: (hubId, answeredBy) =>
+        identity.listCallRecordRecipients(opts?.env?.ADMIN_DECRYPTION_PUBKEY, hubId, answeredBy),
+      serverKek: opts?.serverKek,
+    }),
     conversations,
     blasts: new BlastsService(db, opts?.hmacSecret, opts?.serverKek, opts?.messagingHashKey, messagingSuppression),
     messagingSuppression,

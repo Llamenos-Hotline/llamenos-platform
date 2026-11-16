@@ -84,6 +84,12 @@ export const callRecords = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     duration: integer('duration'),
     answeredBy: text('answered_by'),
+    /**
+     * When `answered_by` picked up; NULL for a call nobody answered. The
+     * volunteer access window (#1342) is measured from here, server-side, in
+     * the same query as `answered_by = self`.
+     */
+    answeredAt: timestamp('answered_at', { withTimezone: true }),
     status: text('status').notNull(),
     hasTranscription: boolean('has_transcription').default(false),
     hasVoicemail: boolean('has_voicemail').default(false),
@@ -98,6 +104,8 @@ export const callRecords = pgTable(
   (table) => [
     index('call_records_hub_id_idx').on(table.hubId),
     index('call_records_started_at_idx').on(table.startedAt.desc()),
+    // Own call history (#1342): hub + answerer + answer time, newest first.
+    index('call_records_hub_answered_by_answered_at_idx').on(table.hubId, table.answeredBy, table.answeredAt.desc()),
   ],
 )
 

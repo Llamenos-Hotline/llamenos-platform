@@ -7,7 +7,7 @@
  * Wildcard "*" grants all permissions; "domain:*" grants all within domain.
  */
 
-import type { ReaderPurpose } from '@protocol/schemas/hubs'
+import type { ReaderPurpose, SubjectReaderPurpose } from '@protocol/schemas/hubs'
 
 // --- Permission Catalog ---
 
@@ -17,6 +17,10 @@ export const PERMISSION_CATALOG = {
   'calls:read-active': 'See active calls (caller info redacted)',
   'calls:read-active-full': 'See active calls with full caller info',
   'calls:read-history': 'View call history',
+  // #1342 (D3): the calls this user answered, in this hub, inside the hub's
+  // volunteer access window (`callHistoryAccessDays`, default 7). Narrower than
+  // calls:read-history, never a substitute for it.
+  'calls:read-own-history': 'View the calls you answered, within the hub access window',
   'calls:read-presence': 'View volunteer presence',
   'calls:read-recording': 'Listen to call recordings',
   'calls:hangup': 'Hang up an active call',
@@ -364,6 +368,12 @@ export const DEFAULT_ROLES: Omit<Role, 'createdAt' | 'updatedAt'>[] = [
     permissions: [
       'calls:answer', 'calls:read-active', 'calls:hangup', 'calls:report-spam',
       'calls:identify-caller',
+      // #1342 (D3): a volunteer reads the calls THEY answered, as a system of
+      // record, for the hub's access window. The answering volunteer's device
+      // key goes into the record's envelope at seal time (the `call-history-own`
+      // subject reader purpose below), so this works from the first call after
+      // the invite is redeemed.
+      'calls:read-own-history',
       'notes:create', 'notes:read-own', 'notes:update-own', 'notes:reply',
       'contacts:search',
       'conversations:claim', 'conversations:send', 'conversations:read-assigned',
@@ -515,6 +525,26 @@ export const READER_PURPOSE_PERMISSIONS = {
   admin: HUB_ADMIN_PERMISSIONS,
   'call-history': ['calls:read-history'],
 } as const satisfies Record<ReaderPurpose, readonly Permission[]>
+
+/**
+ * Reader purposes whose reader is the record's own SUBJECT, never every holder
+ * (PROTOCOL §2.4.2, "Subject readers"). A member is a subject reader of a record
+ * when they ARE its subject (for `call-history-own`: the volunteer who answered
+ * the call) and hold, in the record's hub, the purpose's permissions.
+ *
+ * Kept out of {@link READER_PURPOSE_PERMISSIONS} on purpose:
+ * - that table is the client-facing `GET /hubs/:hubId/readers` enum, and its
+ *   answer is EVERY holder — for this purpose, every volunteer's device, which
+ *   no client may seal one volunteer's call to;
+ * - every row there is also required to set a hub's escrow key, and a subject
+ *   purpose confers no read over anyone else's records, so it adds nothing an
+ *   escrow setter must hold.
+ *
+ * The server alone seals to these (`lib/readers.ts` `subjectReadersFor`).
+ */
+export const SUBJECT_READER_PURPOSE_PERMISSIONS = {
+  'call-history-own': ['calls:read-own-history'],
+} as const satisfies Record<SubjectReaderPurpose, readonly Permission[]>
 
 /**
  * Get the "primary" role for display purposes — the highest-privilege role.

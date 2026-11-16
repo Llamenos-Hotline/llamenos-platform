@@ -42,6 +42,10 @@ import {
   type RecordingPostureEnforcementResponse,
 } from '@protocol/schemas/settings'
 import {
+  callHistoryAccessSettingsSchema,
+  callHistoryAccessSettingsPatchSchema,
+} from '@protocol/schemas/calls'
+import {
   geocodingConfigSchema,
   geocodingConfigAdminSchema,
   geocodingTestResponseSchema,
@@ -94,6 +98,13 @@ import { IVR_LANGUAGE_PATTERN, IVR_PROMPT_TYPE_PATTERN, ivrAudioFormatError } fr
 const scoped = new Hono<AppEnv>()
 const deployment = new Hono<AppEnv>()
 const deploymentReads = new Hono<AppEnv>()
+/**
+ * Settings that exist ONLY per hub, with no platform default to layer over —
+ * mounted only in {@link hubSettingsRoutes}. The volunteer call-history access
+ * window (#1342) is one: it bounds what a hub's own members may read of the
+ * hub's own calls, which is the hub's decision alone.
+ */
+const hubOnlySettings = new Hono<AppEnv>()
 
 /**
  * Which hub a `scoped` settings request targets. The hub the request was routed
@@ -1601,6 +1612,59 @@ hubOwned.delete('/roles/:id',
   },
 )
 
+// --- Volunteer call-history access window (#1342): hub-only ---
+//
+// ACCESS retention, not data retention: it narrows what a holder of only
+// `calls:read-own-history` is served, and deletes nothing. Changes are audited
+// with the window before and after.
+
+hubOnlySettings.get('/call-history-access',
+  describeRoute({
+    tags: ['Settings'],
+    summary: "Get the hub's volunteer call-history access window",
+    responses: {
+      200: {
+        description: 'Access window',
+        content: { 'application/json': { schema: resolver(callHistoryAccessSettingsSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-calls'),
+  async (c) => {
+    const result = await c.get('services').settings.getCallHistoryAccess(c.get('hubId') as string)
+    return c.json(result)
+  },
+)
+
+hubOnlySettings.patch('/call-history-access',
+  describeRoute({
+    tags: ['Settings'],
+    summary: "Change the hub's volunteer call-history access window",
+    responses: {
+      200: {
+        description: 'Access window after the change',
+        content: { 'application/json': { schema: resolver(callHistoryAccessSettingsSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:manage-calls'),
+  validator('json', callHistoryAccessSettingsPatchSchema),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = c.get('hubId') as string
+    const { before, after } = await services.settings.updateCallHistoryAccess(hubId, c.req.valid('json'))
+    if (before.volunteerAccessDays !== after.volunteerAccessDays) {
+      await audit(services.audit, 'callHistoryAccessUpdated', c.get('pubkey'), {
+        oldVolunteerAccessDays: before.volunteerAccessDays,
+        newVolunteerAccessDays: after.volunteerAccessDays,
+      }, undefined, hubId)
+    }
+    return c.json(after)
+  },
+)
+
 /** `/api/settings` — the platform defaults of the per-hub settings, and every deployment-wide setting. */
 const settingsRoutes = new Hono<AppEnv>()
 settingsRoutes.route('/', scoped)
@@ -1616,5 +1680,6 @@ export default settingsRoutes
  */
 export const hubSettingsRoutes = new Hono<AppEnv>()
 hubSettingsRoutes.route('/', scoped)
+hubSettingsRoutes.route('/', hubOnlySettings)
 hubSettingsRoutes.route('/', deploymentReads)
 hubSettingsRoutes.route('/', hubOwned)

@@ -298,6 +298,8 @@ Feature: Permission Matrix
       | volunteer    | has       | 200    |
       | reporter     | denied    | 403    |
 
+  # The volunteer is served only the calls they answered, inside the hub's access
+  # window (calls:read-own-history, #1342) — call-history-own.feature pins what.
   Scenario Outline: <role> <expected> access to call history
     When the "<role>" user sends "GET" to "/api/hubs/:hubId/calls/history"
     Then the response status should be <status>
@@ -307,7 +309,7 @@ Feature: Permission Matrix
       | super-admin  | has       | 200    |
       | hub-admin    | has       | 200    |
       | reviewer     | denied    | 403    |
-      | volunteer    | denied    | 403    |
+      | volunteer    | has       | 200    |
       | reporter     | denied    | 403    |
 
   Scenario Outline: <role> <expected> access to volunteer presence

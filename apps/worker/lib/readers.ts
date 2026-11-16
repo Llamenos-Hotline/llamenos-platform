@@ -30,8 +30,8 @@
 import { eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { devices, hubs, users } from '../db/schema'
-import { READER_PURPOSE_PERMISSIONS, type RoleCatalog } from '@shared/permissions'
-import type { ReaderPurpose } from '@protocol/schemas/hubs'
+import { READER_PURPOSE_PERMISSIONS, SUBJECT_READER_PURPOSE_PERMISSIONS, type RoleCatalog } from '@shared/permissions'
+import type { ReaderPurpose, SubjectReaderPurpose } from '@protocol/schemas/hubs'
 import { ServiceError } from '../services/settings'
 import { resolveEncryptionPubkeys } from './encryption-keys'
 import { adminStateOf, holdsInHub, listHolderPubkeys } from './hub-admin'
@@ -93,6 +93,45 @@ export async function readersFor(db: Database, hubId: string, purpose: ReaderPur
     for (const key of byUser.get(holder) ?? []) add(hpkeRecipientPubkey(key))
   }
   add(escrow)
+  return readers
+}
+
+/**
+ * The SUBJECT reader set of a record of `hubId` (PROTOCOL §2.4.2, "Subject
+ * readers"): the registered device X25519 keys of `subjectPubkey` — the one
+ * member the record is about, e.g. the volunteer who answered a call — when,
+ * and only when, they hold the purpose's permissions in that hub. Never anyone
+ * else's keys, and never the escrow key (the hub-wide sets a record is also
+ * sealed to already carry it).
+ *
+ * Resolved with the same candidate filter and hub-roles-only predicate as
+ * {@link readersFor}: a subject who has left the hub, is mid-erasure, or holds
+ * the permission only through a global role is not a reader. Empty when they
+ * hold nothing, or hold it with no registered device — a subject reader set is
+ * an ADDITION to a hub-wide set, so empty is not an A8 violation on its own;
+ * the caller refuses or alerts on the union, never on this part.
+ *
+ * Fixed at seal time like every reader set: a member granted the permission
+ * later does not gain records sealed before. For `call-history-own` that costs
+ * nothing — a volunteer's own calls are answered after they hold it (#1342).
+ */
+export async function subjectReadersFor(
+  db: Database,
+  hubId: string,
+  purpose: SubjectReaderPurpose,
+  subjectPubkey: string,
+): Promise<HpkeRecipientPubkey[]> {
+  const holders = await listHolderPubkeys(db, hubId, SUBJECT_READER_PURPOSE_PERMISSIONS[purpose])
+  if (!holders.includes(subjectPubkey)) return []
+  const keys = (await resolveEncryptionPubkeys(db, [subjectPubkey])).get(subjectPubkey) ?? []
+  const seen = new Set<string>()
+  const readers: HpkeRecipientPubkey[] = []
+  for (const raw of keys) {
+    const key = hpkeRecipientPubkey(raw)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    readers.push(key)
+  }
   return readers
 }
 

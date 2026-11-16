@@ -99,6 +99,20 @@ export const readerPurposeSchema = z.enum(['admin', 'call-history'])
 
 export type ReaderPurpose = z.infer<typeof readerPurposeSchema>
 
+/**
+ * Purposes whose reader is the record's own SUBJECT (PROTOCOL §2.4.2, "Subject
+ * readers"), mapped to permissions in `SUBJECT_READER_PURPOSE_PERMISSIONS`
+ * (packages/shared/permissions.ts). Server-internal: never accepted by
+ * `GET /hubs/:hubId/readers`, whose answer is every holder — for these purposes
+ * that would be every member's device, not the one subject's.
+ *
+ * - `call-history-own`: the volunteer who answered a call, when they hold
+ *   `calls:read-own-history` in the call's hub (#1342, D3).
+ */
+export const subjectReaderPurposeSchema = z.enum(['call-history-own'])
+
+export type SubjectReaderPurpose = z.infer<typeof subjectReaderPurposeSchema>
+
 /** `GET /api/hubs/:hubId/readers?purpose=` query. */
 export const hubReadersQuerySchema = z.object({
   purpose: readerPurposeSchema,

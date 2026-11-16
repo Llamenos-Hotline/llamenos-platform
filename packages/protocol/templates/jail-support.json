@@ -1166,6 +1166,7 @@
         "contacts:create",
         "contacts:view",
         "calls:answer",
+        "calls:read-own-history",
         "calls:read-active",
         "notes:create",
         "notes:read-own",
