@@ -203,6 +203,17 @@ ANDROID_INFRA_LINES = (
     ("adb-device-not-found", re.compile(r"adb: device '[^']+' not found")),
     ("emulator-boot-timeout", re.compile(r"Timeout waiting for emulator to boot")),
     ("emulator-no-disk-space", re.compile(r"FATAL\s*\|\s*Your device does not have enough disk space")),
+    # A dependency repository refusing or failing the request while Gradle
+    # resolves the build, before any test exists to run. Seen verbatim in
+    # run 43823933518, android-e2e (0) -- Maven Central throttling the hosted
+    # runner (shards 1-3 of the same run passed):
+    #   Could not HEAD 'https://repo.maven.apache.org/maven2/...jar'. Received
+    #   status code 429 from server: Too Many Requests
+    # Only the throttle and server-side statuses: a 404 (an artifact that does
+    # not exist -- a bad version bump) or a 401/403 is the build's own fault and
+    # stays genuine.
+    ("dependency-repo-unavailable",
+     re.compile(r"Could not (?:HEAD|GET) 'https?://[^']+'\. Received status code (?:429|5\d\d) from server")),
 )
 # A per-test failure line Gradle prints for connected tests:
 # `Feature > scenario[Pixel_5(AVD) - 14] FAILED`, and the summary sentence.
