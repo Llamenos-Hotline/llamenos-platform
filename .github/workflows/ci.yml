@@ -2916,13 +2916,18 @@ jobs:
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
       # Key includes all Rust sources + Cargo manifests + the build script.
+      # The paths are absolute under github.workspace, never relative: on the
+      # Mac a relative cache path is archived under the SAVING runner's
+      # workspace and restores into it, not this one (see the same step in
+      # ios-e2e.yml, which shares this key; pinned by
+      # scripts/ci/mac-ci-work-volume.test.ts).
       - name: Cache crypto XCFramework + bindings
         id: xcframework-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            apps/ios/LlamenosCoreFFI.xcframework
-            packages/crypto/dist/ios/LlamenosCore.swift
+            ${{ github.workspace }}/apps/ios/LlamenosCoreFFI.xcframework
+            ${{ github.workspace }}/packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
       - name: Install Rust stable (for crypto xcframework)
@@ -2946,7 +2951,20 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Copy UniFFI bindings (from build or cache)
+        env:
+          CACHE_HIT: ${{ steps.xcframework-cache.outputs.cache-hit }}
         run: |
+          # A cache hit that put nothing in THIS workspace skipped the build, so
+          # say which of the two happened instead of a bare `cp: No such file`.
+          for f in apps/ios/LlamenosCoreFFI.xcframework packages/crypto/dist/ios/LlamenosCore.swift; do
+            [ -e "$f" ] && continue
+            if [ "$CACHE_HIT" = "true" ]; then
+              echo "::error title=XCFramework cache restored outside this workspace::the cache reported a hit but $f is not in $GITHUB_WORKSPACE, so the build was skipped. The entry's archive paths do not resolve into this workspace (a relative cache path under the symlinked _work does exactly this)."
+            else
+              echo "::error title=XCFramework build produced no $f::the cache missed and the build ran, but $f is not in $GITHUB_WORKSPACE."
+            fi
+            exit 1
+          done
           cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
 
       - name: Check for hardcoded secrets in Swift source
@@ -3080,17 +3098,20 @@ jobs:
       - name: Install dependencies and run codegen
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
-      # Same cache, same key as ios-build-test: the XCFramework is a Rust
-      # artifact (cargo, not Xcode), so sharing it between this hosted
-      # runner and the Mac mini is safe — ios-e2e.yml already shares it
-      # across both runner classes.
+      # Same key as ios-build-test, but NOT the same entries: actions/cache
+      # versions an entry by its path strings, and these are absolute under
+      # github.workspace, which differs per runner. They were relative, and
+      # shared with the Mac — until the Mac's `_work` became a symlink and
+      # every entry it saved was archived under that runner's own workspace
+      # (`../../../../../../Volumes/CIWork/actions-runner-ios-<N>/...`), so a
+      # hit restored nothing here. Absolute paths also retire those entries.
       - name: Cache crypto XCFramework + bindings
         id: xcframework-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            apps/ios/LlamenosCoreFFI.xcframework
-            packages/crypto/dist/ios/LlamenosCore.swift
+            ${{ github.workspace }}/apps/ios/LlamenosCoreFFI.xcframework
+            ${{ github.workspace }}/packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
       - name: Install Rust stable (for crypto xcframework)
@@ -3114,7 +3135,20 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Copy UniFFI bindings (from build or cache)
+        env:
+          CACHE_HIT: ${{ steps.xcframework-cache.outputs.cache-hit }}
         run: |
+          # A cache hit that put nothing in THIS workspace skipped the build, so
+          # say which of the two happened instead of a bare `cp: No such file`.
+          for f in apps/ios/LlamenosCoreFFI.xcframework packages/crypto/dist/ios/LlamenosCore.swift; do
+            [ -e "$f" ] && continue
+            if [ "$CACHE_HIT" = "true" ]; then
+              echo "::error title=XCFramework cache restored outside this workspace::the cache reported a hit but $f is not in $GITHUB_WORKSPACE, so the build was skipped. The entry's archive paths do not resolve into this workspace (a relative cache path under the symlinked _work does exactly this)."
+            else
+              echo "::error title=XCFramework build produced no $f::the cache missed and the build ran, but $f is not in $GITHUB_WORKSPACE."
+            fi
+            exit 1
+          done
           cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
 
       - name: Install xcodegen
