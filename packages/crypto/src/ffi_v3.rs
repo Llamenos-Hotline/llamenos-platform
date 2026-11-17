@@ -1211,6 +1211,22 @@ pub fn mobile_decrypt_hub_field(
     crate::encryption::decrypt_hub_field(&packed_hex, &key, &label)
 }
 
+/// Blind-index `values` for a case triage field under the stored hub key of
+/// `hub_id`, one hex token per value, in order (#2779). `field_label` must be
+/// one of `blind_index::BLIND_INDEX_FIELDS` (`HMAC_CASE_STATUS`,
+/// `HMAC_CASE_SEVERITY`). The client writes these tokens as `statusHash` /
+/// `severityHash`, and maps a token it reads back to a status by computing the
+/// tokens of its entity type's vocabulary. The hub key never leaves Rust.
+#[uniffi::export]
+pub fn mobile_blind_index_tokens(
+    hub_id: String,
+    field_label: String,
+    values: Vec<String>,
+) -> Result<Vec<String>, CryptoError> {
+    let key = hub_key_copy(&hub_id)?;
+    crate::blind_index::field_blind_indexes(&key, &field_label, &values)
+}
+
 /// Clear server event keys from Rust memory.
 #[uniffi::export]
 pub fn mobile_clear_server_event_keys() {
@@ -2058,6 +2074,38 @@ mod tests {
             "an unregistered label must not seal"
         );
         mobile_clear_hub_keys();
+    }
+
+    #[test]
+    fn blind_index_tokens_use_the_stored_hub_key_by_hub_id() {
+        use crate::labels::HMAC_CASE_STATUS;
+        mobile_set_hub_key("bi-hub".into(), hex::encode([0x42u8; 32])).unwrap();
+        mobile_set_hub_key("bi-other-hub".into(), hex::encode([0x43u8; 32])).unwrap();
+        let here = mobile_blind_index_tokens(
+            "bi-hub".into(),
+            HMAC_CASE_STATUS.into(),
+            vec!["open".into()],
+        )
+        .unwrap();
+        // The crate's known answer for hub key 0x42.. / HMAC_CASE_STATUS / "open".
+        assert_eq!(
+            here[0],
+            "1d4ac0e1a18dd11314d37d71f7286964d04e74c25927b6c5c29a174adc894d74"
+        );
+        let there = mobile_blind_index_tokens(
+            "bi-other-hub".into(),
+            HMAC_CASE_STATUS.into(),
+            vec!["open".into()],
+        )
+        .unwrap();
+        assert_ne!(here, there, "a token is scoped to its hub's key");
+        assert!(mobile_blind_index_tokens(
+            "bi-missing-hub".into(),
+            HMAC_CASE_STATUS.into(),
+            vec!["open".into()],
+        )
+        .is_err());
+        assert!(mobile_blind_index_tokens("bi-hub".into(), "status".into(), vec!["open".into()]).is_err());
     }
 
     #[test]

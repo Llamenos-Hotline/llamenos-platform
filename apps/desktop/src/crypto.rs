@@ -14,7 +14,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use llamenos_core::{
-    auth, backup, case_record, device_keys, encryption,
+    auth, backup, blind_index, case_record, device_keys, encryption,
     encryption::RecipientKeyEnvelope,
     hpke_envelope,
     labels::{
@@ -950,6 +950,21 @@ pub fn decrypt_hub_field(
 ) -> Result<String, String> {
     let key = hub_key_array(&state)?;
     encryption::decrypt_hub_field(&ciphertext_hex, &key, &label).map_err(err_str)
+}
+
+/// Blind-index `values` for a case triage field under the hub key held in
+/// `CryptoState`, one hex token per value, in order (#2779). `field_label`
+/// must be one of `llamenos_core::blind_index::BLIND_INDEX_FIELDS`
+/// (`HMAC_CASE_STATUS`, `HMAC_CASE_SEVERITY`). The hub key never enters
+/// JavaScript; only the tokens do.
+#[tauri::command]
+pub fn blind_index_tokens(
+    state: tauri::State<'_, CryptoState>,
+    field_label: String,
+    values: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let key = hub_key_array(&state)?;
+    blind_index::field_blind_indexes(&key, &field_label, &values).map_err(err_str)
 }
 
 /// Seal per-device data (note drafts, the offline write queue) under a key

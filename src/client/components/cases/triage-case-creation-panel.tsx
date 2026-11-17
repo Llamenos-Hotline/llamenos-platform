@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
+import { severityToken, statusToken } from '@/lib/triage-tokens'
 import { Lock, Loader2, Plus, ArrowRight } from 'lucide-react'
 
 interface TriageCaseCreationPanelProps {
@@ -91,10 +92,13 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
         encryptedFields = await sealCase('fields', fieldsPayload, readers.fields)
       }
 
+      // Hub-keyed blind indexes, never the plaintext values (#2779).
       const body: CreateRecordBody = {
         entityTypeId: selectedType.id,
-        statusHash: selectedType.defaultStatus,
-        severityHash: selectedType.defaultSeverity,
+        statusHash: await statusToken(selectedType.defaultStatus),
+        severityHash: selectedType.defaultSeverity
+          ? await severityToken(selectedType.defaultSeverity)
+          : undefined,
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
         ...(encryptedFields && {

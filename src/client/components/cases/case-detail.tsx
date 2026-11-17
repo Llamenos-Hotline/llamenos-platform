@@ -30,6 +30,7 @@ import {
   listRecords,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
+import { useTriageTokens } from '@/lib/triage-tokens'
 import { useRecordFieldRecipients } from '@/lib/record-recipients'
 
 type DetailTab = 'details' | 'timeline' | 'cases' | 'reports'
@@ -53,9 +54,9 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
 
   const isEvent = entityType.category === 'event'
 
-  const severityDef = record.severityHash
-    ? entityType.severities?.find(s => s.value === record.severityHash)
-    : undefined
+  // Status and severity arrive as hub-keyed blind indexes (#2779).
+  const triage = useTriageTokens([entityType])
+  const severityDef = triage?.severityFor(entityType, record.severityHash)
 
   const tabs: Array<{ key: DetailTab; label: string; icon: typeof FileText }> = [
     { key: 'details', label: t('cases.tabDetails', { defaultValue: 'Details' }), icon: FileText },
@@ -85,7 +86,7 @@ export function CaseDetail({ record, entityType, onStatusChange, onBack }: CaseD
                 {record.caseNumber || record.id.slice(0, 8)}
               </span>
               <StatusPill
-                currentStatus={record.statusHash}
+                currentStatus={triage?.statusFor(entityType, record.statusHash)?.value ?? ''}
                 statuses={entityType.statuses}
                 onStatusChange={(s) => onStatusChange(record.id, s)}
               />
