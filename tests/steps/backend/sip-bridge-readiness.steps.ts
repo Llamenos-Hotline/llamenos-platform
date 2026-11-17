@@ -19,6 +19,7 @@
 import { expect } from '@playwright/test'
 import { When, Then } from './fixtures'
 import { getSharedState, setLastResponse } from './shared-state'
+import { readJsonResponse } from '../../api-helpers'
 
 interface DependencyCheck {
   status?: unknown
@@ -46,12 +47,11 @@ When('I fetch the worker readiness report', async ({ request, world }) => {
   // the sipBridge check is reported, never gating (#1418), so its assertion
   // reads the body regardless of the status line. Anything else (a connection
   // error, a non-JSON body) throws here rather than passing vacuously.
-  const res = await request.get('/api/health/ready')
-  const data = await res.json().catch(() => null)
+  const { status, data } = await readJsonResponse(await request.get('/api/health/ready'))
   if (data === null) {
-    throw new Error(`readiness probe returned HTTP ${res.status()} with a non-JSON body`)
+    throw new Error(`readiness probe returned HTTP ${status} with an empty body`)
   }
-  setLastResponse(world, { status: res.status(), data })
+  setLastResponse(world, { status, data })
 })
 
 // ── Then ─────────────────────────────────────────────────────────────

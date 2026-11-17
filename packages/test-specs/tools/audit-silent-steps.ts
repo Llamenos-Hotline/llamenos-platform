@@ -740,9 +740,20 @@ export function writeSilentBaseline(findings: SilentStepFinding[], path = SILENT
  * 2026-11-11: #2665 (admin revokes an invite) added "Admin can see pending invites
  * and revoke them", which reuses the already-flagged InviteSteps Then. The step
  * count did not move (291); one more device scenario now routes through it.
+ *
+ * desktop-backend 66 -> 64 on 2026-11-17: main had since added four `.json().catch(() => null)`
+ * steps (setup-completion x3, sip-bridge-readiness) and deleted two, so the merge group measured
+ * 68. The four now read the body through `readJsonResponse` (tests/api-helpers.ts), which throws
+ * on a non-JSON body, so the ceiling follows the measurement down instead of absorbing them.
+ *
+ * Relationship to the silent-step baseline: they measure DIFFERENT defects and neither
+ * supersedes the other. `silent-steps.baseline.json` is per-step and authoritative for steps
+ * that assert nothing; this is a per-platform COUNT, authoritative only for steps that catch and
+ * discard a failure. A count cannot name the step that broke it, which is why a failure here
+ * lists every swallowing step and why the ceiling must be re-measured, not bumped, when it trips.
  */
 const SWALLOW_BASELINE: { steps: Record<AuditPlatform, number>; androidExecutedThroughThen: number } = {
-  steps: { "desktop-backend": 66, android: 291 },
+  steps: { "desktop-backend": 64, android: 291 },
   androidExecutedThroughThen: 5,
 };
 

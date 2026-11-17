@@ -200,6 +200,15 @@ Not every swallow is a defect — dismissing an optional dialog legitimately
 ignores a timeout — which is why this is a ratchet and not a ban: it stops the
 count growing and keeps the list in front of whoever touches a step.
 
+The two ratchets are independent and neither supersedes the other: the per-step
+`silent-steps.baseline.json` is authoritative for steps that assert nothing, and
+the swallow count is authoritative only for steps that catch and discard a failure.
+A count cannot name the step that broke it, so when it trips, find the new steps
+(diff the audit's listing against the base), fix them, and *lower* the number to
+the new measurement — never raise it. Re-measured 2026-11-17: desktop/backend 66 →
+64 after four new `.json().catch(() => null)` steps were rewritten to
+`readJsonResponse`, which throws on a non-JSON body.
+
 ### Inherited platform tags (#2675)
 
 A platform tag is a claim, and Gherkin makes claims additive: a scenario carries

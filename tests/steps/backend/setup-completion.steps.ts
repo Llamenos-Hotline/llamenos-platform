@@ -33,6 +33,7 @@ import {
   apiPatch,
   apiPost,
   createUserViaApi,
+  readJsonResponse,
   uniqueName,
 } from '../../api-helpers'
 
@@ -141,18 +142,15 @@ When('the admin notes the founded default hubs', async ({ request, world }) => {
 })
 
 When('an anonymous caller reads the setup state', async ({ request, world }) => {
-  const res = await request.get('/api/setup/state')
-  setLastResponse(world, { status: res.status(), data: await res.json().catch(() => null) })
+  setLastResponse(world, await readJsonResponse(await request.get('/api/setup/state')))
 })
 
 When('an anonymous caller saves wizard progress at step {string}', async ({ request, world }, step: string) => {
-  const res = await request.patch('/api/setup/state', { data: { step } })
-  setLastResponse(world, { status: res.status(), data: await res.json().catch(() => null) })
+  setLastResponse(world, await readJsonResponse(await request.patch('/api/setup/state', { data: { step } })))
 })
 
 When('an anonymous caller completes setup', async ({ request, world }) => {
-  const res = await request.post('/api/setup/complete', { data: {} })
-  setLastResponse(world, { status: res.status(), data: await res.json().catch(() => null) })
+  setLastResponse(world, await readJsonResponse(await request.post('/api/setup/complete', { data: {} })))
 })
 
 When('that user reads the setup state', async ({ request, world }) => {
