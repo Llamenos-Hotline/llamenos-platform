@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { renderHook, waitFor } from '@testing-library/react'
 import type {
   HubKeyEnvelopeResponse,
   HubKeyEnvelopesBody,
@@ -49,6 +50,12 @@ class FakeHubKeyServer {
   roles = new Map<string, string>()
   puts = 0
   rotations = 0
+  /** The hub is not there for this server (deleted elsewhere): every key route answers 404 "Hub not found". */
+  gone = false
+
+  private served(ApiError: ApiErrorCtor) {
+    if (this.gone) throw new ApiError(404, '{"error":"Hub not found"}')
+  }
 
   join(member: Member) {
     this.members.set(member.pubkey, member)
@@ -61,6 +68,7 @@ class FakeHubKeyServer {
   }
 
   getEnvelope(caller: string, ApiError: ApiErrorCtor): HubKeyEnvelopeResponse {
+    this.served(ApiError)
     if (!this.members.has(caller)) throw new ApiError(403, '{"error":"Access denied"}')
     const wrap = this.wraps.get(caller)
     if (!wrap) throw new ApiError(404, '{"error":"No key envelope for this user"}')
@@ -76,6 +84,7 @@ class FakeHubKeyServer {
   }
 
   recipients(caller: string, ApiError: ApiErrorCtor): HubKeyRecipientsResponse {
+    this.served(ApiError)
     if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
     const rotationRequired = this.rotationDue && this.wraps.size > 0
     return {
@@ -90,6 +99,7 @@ class FakeHubKeyServer {
   }
 
   put(caller: string, body: HubKeyEnvelopesBody, ApiError: ApiErrorCtor): HubKeySetResponse {
+    this.served(ApiError)
     if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
     if (body.expectedGeneration !== this.generation) throw new ApiError(409, '{"error":"Hub key generation mismatch"}')
     this.puts++
@@ -99,11 +109,13 @@ class FakeHubKeyServer {
   }
 
   getRotation(caller: string, ApiError: ApiErrorCtor): HubKeyRotationResponse {
+    this.served(ApiError)
     if (!this.members.has(caller)) throw new ApiError(403, '{"error":"Access denied"}')
     return { epoch: this.epoch, rotation: this.rotation }
   }
 
   rotate(caller: string, body: HubKeyRotateBody, ApiError: ApiErrorCtor): HubKeyRotateResponse {
+    this.served(ApiError)
     if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
     if (body.expectedGeneration !== this.generation) throw new ApiError(409, '{"error":"Hub key generation mismatch"}')
     const wrapped = new Set(body.envelopes.map(e => e.pubkey))
@@ -228,6 +240,60 @@ describe('hub key lifecycle', () => {
     const sealed = await a.roles.sealHubRoleField(HUB, 'Legal observer')
     const [readable] = await b.roles.readableRoles([hubRole('role-a', sealed)])
     expect(readable).toMatchObject({ readable: true, displayName: 'Legal observer' })
+  })
+
+  describe('a hub the server does not serve (deleted elsewhere, or a membership list ahead of the server)', () => {
+    let errors: ReturnType<typeof vi.spyOn>
+    let warnings: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+      vi.doUnmock('./auth')
+      vi.doUnmock('./member-hubs')
+      vi.doUnmock('./relay/context')
+      vi.restoreAllMocks()
+    })
+
+    it('is "no key", never a thrown error or a console.error, for every caller of the key', { timeout: 60_000 }, async () => {
+      const admin = await device('admin', { manager: true })
+      server.gone = true
+
+      expect(await admin.hubKeys.ensureHubKey(HUB)).toBe(false)
+      expect(await admin.hubKeys.decryptFromHub(HUB, '00', 'llamenos:hub-role-encrypt:v1')).toBeNull()
+      await expect(admin.hubKeys.encryptForHub(HUB, 'x', 'llamenos:hub-role-encrypt:v1'))
+        .rejects.toBeInstanceOf(admin.hubKeys.HubKeyUnavailableError)
+      expect(errors).not.toHaveBeenCalled()
+    })
+
+    it('is reported once by the mounted lifecycle — across remounts and relay reconnects — and never as an error', { timeout: 60_000 }, async () => {
+      let relay: 'connected' | 'disconnected' = 'connected'
+      vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => true }) }))
+      vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
+      vi.doMock('./relay/context', () => ({ useRelayState: () => relay }))
+      const admin = await device('admin', { manager: true })
+      server.gone = true
+
+      const sync = () => renderHook(() => admin.hubKeys.useHubKeys())
+      const first = sync()
+      await waitFor(() => expect(warnings).toHaveBeenCalledTimes(1))
+      // A reconnect re-runs the sync; a remount mounts it afresh.
+      relay = 'disconnected'
+      first.rerender()
+      relay = 'connected'
+      first.rerender()
+      first.unmount()
+      sync().unmount()
+      await admin.hubKeys.resyncHubKeys()
+
+      expect(warnings).toHaveBeenCalledTimes(1)
+      expect(warnings.mock.calls[0]?.[0]).toContain(`hub ${HUB}`)
+      expect(errors).not.toHaveBeenCalled()
+    })
   })
 
   it('a manager who lacks a wrap of an EXISTING key does not replace it', { timeout: 60_000 }, async () => {

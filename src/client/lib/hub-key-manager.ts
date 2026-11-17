@@ -170,22 +170,31 @@ async function generateAndInstall(hubId: string, recipients: HubKeyRecipientsRes
 }
 
 /**
- * Load this device's copy of `hubId`'s key, generating the hub's first key if
- * this user manages the hub and nobody holds one. Returns whether the key is
- * now held. Never throws for an answer the server legitimately gives; it does
- * throw for a wrap addressed to this device that will not open — that is a
- * defect (wrong key or AAD at write time), not a state.
+ * Where a load of `hubId`'s key ended: `held`; `waiting` for a manager's device
+ * to share it; or `not-served` — the server has no such hub for this account
+ * (deleted elsewhere, or the membership list is ahead of it), which is a state
+ * a client meets, not a failure.
  */
-async function loadOrGenerate(hubId: string): Promise<boolean> {
-  if (await hasHubKey(hubId)) return true
+type KeyLoad = 'held' | 'waiting' | 'not-served'
+
+/**
+ * Load this device's copy of `hubId`'s key, generating the hub's first key if
+ * this user manages the hub and nobody holds one. Never throws for an answer
+ * the server legitimately gives; it does throw for a wrap addressed to this
+ * device that will not open — that is a defect (wrong key or AAD at write
+ * time), not a state.
+ */
+async function loadOrGenerate(hubId: string): Promise<KeyLoad> {
+  if (await hasHubKey(hubId)) return 'held'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const { envelope } = await getHubKeyEnvelope(hubId)
       await unwrapHubKey(hubId, envelope)
-      return true
+      return 'held'
     } catch (err) {
-      // 404: no wrap for this user (yet). 403: not a member of this hub.
-      if (isStatus(err, 403)) return false
+      // 404: no wrap for this user (yet) — or no such hub, which only the
+      // recipients read below can tell apart. 403: not a member of this hub.
+      if (isStatus(err, 403)) return 'waiting'
       if (!isStatus(err, 404)) throw err
     }
 
@@ -193,30 +202,37 @@ async function loadOrGenerate(hubId: string): Promise<boolean> {
     try {
       recipients = await getHubKeyRecipients(hubId)
     } catch (err) {
-      // 403: this user does not manage keys in this hub, so must wait for a
-      // manager to share it. 409: the hub is shredded.
-      if (isStatus(err, 403, 409)) return false
+      // 404: there is no such hub (this read 404s for nothing else). 403: this
+      // user does not manage keys in this hub, so must wait for a manager to
+      // share it. 409: the hub is shredded.
+      if (isStatus(err, 404)) return 'not-served'
+      if (isStatus(err, 403, 409)) return 'waiting'
       throw err
     }
     // A key exists and this user's wrap is missing: a manager holding the key
     // has to add it (`distributeHubKey`). Generating here would replace the key
     // everyone else holds.
-    if (recipients.envelopes.length > 0) return false
-    if (await generateAndInstall(hubId, recipients)) return true
+    if (recipients.envelopes.length > 0) return 'waiting'
+    if (await generateAndInstall(hubId, recipients)) return 'held'
     // Lost the race: another manager installed a key. Load theirs.
   }
-  return false
+  return 'waiting'
 }
 
-const inFlight = new Map<string, Promise<boolean>>()
+const inFlight = new Map<string, Promise<KeyLoad>>()
 
 /** `loadOrGenerate`, at most one at a time per hub. */
-export function ensureHubKey(hubId: string): Promise<boolean> {
+function loadHubKey(hubId: string): Promise<KeyLoad> {
   const running = inFlight.get(hubId)
   if (running) return running
   const run = loadOrGenerate(hubId).finally(() => inFlight.delete(hubId))
   inFlight.set(hubId, run)
   return run
+}
+
+/** Whether this device now holds `hubId`'s key. */
+export async function ensureHubKey(hubId: string): Promise<boolean> {
+  return (await loadHubKey(hubId)) === 'held'
 }
 
 /**
@@ -586,6 +602,23 @@ function describe(err: unknown): string {
 }
 
 /**
+ * What `useHubKeys` last said about each hub it could not load a key for, so a
+ * state that persists across relay reconnects and remounts is reported once,
+ * when it begins, rather than on every sync.
+ */
+const reportedUnavailable = new Map<string, Exclude<KeyLoad, 'held'>>()
+
+function reportUnavailable(hubId: string, state: Exclude<KeyLoad, 'held'>): void {
+  if (reportedUnavailable.get(hubId) === state) return
+  reportedUnavailable.set(hubId, state)
+  if (state === 'waiting') {
+    console.info(`[hub-key] hub ${hubId}: waiting for a hub admin's device to share the key`)
+  } else {
+    console.warn(`[hub-key] hub ${hubId}: the server does not serve this hub to this account (deleted, or the membership list is ahead of the server) — no key to load`)
+  }
+}
+
+/**
  * For one hub: load the key; adopt a rotation that replaced it; and where this
  * user manages the hub, rotate it if someone who held it has left, then share
  * it with members who lack it. Rotation runs before distribution, so a new
@@ -593,11 +626,12 @@ function describe(err: unknown): string {
  */
 async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
   try {
-    const held = await ensureHubKey(hubId)
-    if (!held) {
-      console.info(`[hub-key] hub ${hubId}: waiting for a hub admin's device to share the key`)
+    const loaded = await loadHubKey(hubId)
+    if (loaded !== 'held') {
+      reportUnavailable(hubId, loaded)
       return
     }
+    reportedUnavailable.delete(hubId)
     const adopted = await adoptHubKeyRotation(hubId)
     if (adopted === 'adopted') console.info(`[hub-key] hub ${hubId}: adopted the rotated key`)
     if (!mayManage || adopted === 'unverifiable' || adopted === 'not-held') return
@@ -609,6 +643,12 @@ async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
       if (added > 0) console.info(`[hub-key] shared hub ${hubId}'s key with ${added} member(s)`)
     })
   } catch (err) {
+    // The hub went away between the load and a later read: the same state as
+    // `not-served`, not a failure.
+    if (isStatus(err, 404)) {
+      reportUnavailable(hubId, 'not-served')
+      return
+    }
     // Offline: the next relay reconnect syncs again.
     if (err instanceof NetworkError) {
       console.warn(`[hub-key] hub ${hubId} deferred until reconnect — ${describe(err)}`)
@@ -664,6 +704,7 @@ export function useHubKeys(): void {
     let cancelled = false
     void (async () => {
       for (const hubId of left) {
+        reportedUnavailable.delete(hubId)
         await forgetHubKey(hubId).catch(err => console.error(`[hub-key] hub ${hubId}: ${describe(err)}`))
       }
       for (const hubId of hubIds) {
