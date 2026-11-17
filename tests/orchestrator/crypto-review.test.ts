@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   isCryptoDiff, isCryptoDescription, requiredAdditionalReviewers, CRYPTO_SECURITY_REVIEWER_AGENT, CRYPTO_REVIEW_PATHS,
 } from '../../orchestrator/src/review.js'
-import { codeownersMatcher, trackedFiles, trackedFilesUnder } from './codeowners.js'
+import { namedCodeownersMatcher, trackedFiles, trackedFilesUnder } from './codeowners.js'
 
 describe('isCryptoDiff / requiredAdditionalReviewers', () => {
   it('requests the crypto reviewer for a diff touching packages/crypto/', () => {
@@ -45,7 +45,7 @@ describe('isCryptoDiff / requiredAdditionalReviewers', () => {
 describe('crypto paths are owned in CODEOWNERS, not only gated in code', () => {
   it('owns every tracked crypto-review file', () => {
     const files = trackedFiles()
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const p of CRYPTO_REVIEW_PATHS) {
       const under = trackedFilesUnder(p, files)
       expect(under.length, `CRYPTO_REVIEW_PATHS entry "${p}" matches no tracked file`).toBeGreaterThan(0)

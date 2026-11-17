@@ -8,7 +8,11 @@ import { throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
-import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
+import {
+  catchAllViolations, codeownersMatcher, codeownersMatcherOf, codeownersRules, isCatchAllPattern, namedCodeownersMatcher,
+  namedCodeownersMatcherOf, trackedFiles, trackedFilesUnder,
+} from './codeowners.js'
+import { codeOwnersOf, parseCodeOwners } from '../../orchestrator/src/board.js'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
@@ -91,7 +95,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
 
   it('CODEOWNERS owns every tracked file under every HIGH_IMPACT_PATH, by gitignore semantics', () => {
     const files = trackedFiles()
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     const unowned: string[] = []
     for (const p of HIGH_IMPACT_PATHS) {
       for (const f of trackedFilesUnder(p, files)) {
@@ -108,7 +112,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
     const configs = trackedFiles().filter((f) => /^vitest\.[^/]+\.config\.ts$/.test(f))
     expect(configs).toContain('vitest.orchestrator.config.ts')
     expect(configs).toContain('vitest.unit.config.ts')
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of configs) {
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
       expect(HIGH_IMPACT_PATHS, `${f} is missing from HIGH_IMPACT_PATHS`).toContain(f)
@@ -207,7 +211,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
       'scripts/verify-runtime.ts',
       'scripts/lib/test-reporter.sh',
     ]
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of [...family, ...named]) {
       expect(files, `${f} is not a tracked file`).toContain(f)
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
@@ -218,8 +222,97 @@ describe('rail: the fleet cannot merge its own changes', () => {
     }
   })
 
-  it('has no catch-all `*` rule — one would gate every PR and stop the fleet merging anything', () => {
-    expect(codeownersPatterns()).not.toContain('*')
+  // #2825. A path no rule owns gets no auto-requested reviewer, and on a PR
+  // `llamenos-auto` authored that auto-request is the ONLY thing that starts
+  // `fleet/review` (`reviewTriggerLogins`, ci.ts — GitHub refuses to request
+  // a PR's own author). So the context is created (#2806) and can then never
+  // go green: #2805 (`deploy/docker/`) and #2824 (root `CLAUDE.md`, zero
+  // pending reviewers) sat BLOCKED that way. Every tracked file must resolve
+  // to an owner by GitHub's own last-match rule — which also catches a later
+  // rule that names nobody, the CODEOWNERS spelling of "un-own this".
+  it('every tracked file has a CODEOWNERS owner — an unowned path can never earn a fleet/review verdict', () => {
+    const owner = codeownersMatcher()
+    const unowned = trackedFiles().filter((f) => !owner.owns(f))
+    expect(
+      unowned,
+      `${unowned.length} tracked file(s) resolve to no CODEOWNERS owner, so a PR touching only them gets no ` +
+      `review request and its fleet/review can never go green (#2825):\n${unowned.slice(0, 40).join('\n')}`,
+    ).toEqual([])
+  })
+
+  // GitHub resolves CODEOWNERS by the LAST matching rule. A catch-all
+  // anywhere but first overrides every named entry above it — the secret
+  // globs, the trust anchors, the gates — and with one owner today that
+  // would change nothing visible, which is exactly how it would survive
+  // until the day a second owner appears. First, exactly once, with an owner.
+  it('the catch-all is the FIRST rule, appears once, and names an owner — so every named entry still wins', () => {
+    expect(catchAllViolations(codeownersRules())).toEqual([])
+  })
+
+  // The all-path spellings the matcher (the `ignore` package, gitignore
+  // semantics — the one board.ts resolves ownership with) treats as matching
+  // EVERY path. Enumerated here so a change of matcher semantics shows up as
+  // a diff; the detector itself does not read this list, it asks the matcher.
+  const ALL_PATH_SPELLINGS = [
+    '*', '**', '/**', '**/*', '/**/*', '/*', '**/**', '/**/**', '**/**/*', '***', '/***', '?*', '[!/]*',
+  ]
+  // Look like catch-alls and are not: each misses root-level files (a trailing
+  // `/` means directories only) or is narrower than every path. Recognising
+  // one as a catch-all would reject a legitimate named entry.
+  const NOT_ALL_PATH_SPELLINGS = [
+    '*/', '**/', '/**/', '*/**', '/*/**', '*/*', '**/*/', '**/*.*', '*.*', '**/.*', '**/*.pem', 'apps/', '/CODEOWNERS',
+  ]
+
+  it.each(ALL_PATH_SPELLINGS)('%s is recognised as a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(true)
+  })
+
+  it.each(NOT_ALL_PATH_SPELLINGS)('%s is not mistaken for a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(false)
+  })
+
+  // The reviewer's scenario (#2826): the catch-all re-added at the BOTTOM,
+  // where last-match-wins lets it override every named entry. Run against the
+  // real file's rules for every spelling and every position but the first —
+  // the guard must fail, and the override must be real (the secret-shaped
+  // glob's owner really does change), so this proves the failure is a
+  // control failing rather than a hypothetical.
+  describe.each(ALL_PATH_SPELLINGS)('a `%s` rule anywhere but first', (spelling) => {
+    const real = codeownersRules()
+    const [intruder] = parseCodeOwners(`${spelling} @intruder`)
+    if (intruder === undefined) throw new Error(`${spelling} did not parse as a rule`)
+    const positions = [1, Math.floor(real.length / 2), real.length]
+
+    it.each(positions)('at index %i fails the placement guard', (at) => {
+      const rules = [...real.slice(0, at), intruder, ...real.slice(at)]
+      expect(catchAllViolations(rules).length, 'a displaced catch-all passed the guard').toBeGreaterThan(0)
+    })
+
+    it('overrides every named entry under last-match-wins — the hazard is real', () => {
+      const rules = [...real, intruder]
+      const secret = 'apps/worker/.env'
+      expect(codeownersMatcherOf(real).owns(secret)).toBe(true)
+      expect(codeOwnersOf(rules, secret)).toEqual(['intruder'])
+      expect(codeOwnersOf(real, secret)).not.toContain('intruder')
+    })
+
+    it('does not leave the named matcher vacuous: it still excludes the intruder and keeps named entries', () => {
+      const named = namedCodeownersMatcherOf([...real, intruder])
+      expect(named.owns('apps/worker/.env'), 'named entries were lost').toBe(true)
+      expect(named.owns('README.md'), 'the intruder was treated as a named entry').toBe(false)
+    })
+  })
+
+  // The named-entry rails above use `namedCodeownersMatcher`, which drops
+  // the catch-all. If it ever stopped dropping it, every one of them would
+  // pass with the named entry deleted. Proved on the real file: some tracked
+  // file must be owned ONLY through the catch-all.
+  it('the named-entry rails are not answered by the catch-all', () => {
+    const all = codeownersMatcher()
+    const named = namedCodeownersMatcher()
+    const onlyViaCatchAll = trackedFiles().filter((f) => all.owns(f) && !named.owns(f))
+    expect(onlyViaCatchAll, 'no tracked file is owned only via the catch-all — the named matcher is not excluding it')
+      .toContain('README.md')
   })
 })
 
@@ -751,7 +844,7 @@ describe('rail: a shipped client\'s trust anchors always reach a human', () => {
   // fleet gate does not judge without the operator ever being asked.
   it.each(TRUST_ANCHOR_FILES.map((a) => [a.path]))('%s is a tracked file CODEOWNERS owns', (f) => {
     expect(trackedFiles(), `${f} is in TRUST_ANCHOR_FILES but not tracked`).toContain(f)
-    expect(codeownersMatcher().owns(f), `${f} is a trust anchor with no CODEOWNERS owner`).toBe(true)
+    expect(namedCodeownersMatcher().owns(f), `${f} is a trust anchor with no CODEOWNERS owner`).toBe(true)
   })
 
   it('only a human may sign one off — never the fleet\'s own reviewer identity', () => {
@@ -789,7 +882,7 @@ describe('rail: never-write binds even an unrestricted lane', () => {
     const name = pattern.replace('*', 'sample')
     const samples = [name, `deploy/ansible/${name}`, `apps/android/app/${name}`]
     if (!pattern.includes('*') && !TEMPLATED_SECRET_PATTERNS.includes(pattern)) samples.push(`deploy/${name}.orig`)
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of samples) {
       expect(matchesSecretPath(f, pattern), `test sample ${f} is not a secret to the gate — fix the sample`).toBe(true)
       expect(owner.owns(f), `${f} is refused by the gate as \`${pattern}\` but has no CODEOWNERS owner`).toBe(true)

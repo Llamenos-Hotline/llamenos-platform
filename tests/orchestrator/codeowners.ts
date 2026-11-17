@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import ignore from 'ignore'
+import { codeOwnersOf, parseCodeOwners, type CodeOwnerRule } from '../../orchestrator/src/board.js'
 
 /**
  * CODEOWNERS stopped being documentation with this change: it IS the fleet's
@@ -12,7 +12,8 @@ import ignore from 'ignore'
  * file and the real tracked tree, never a fixture, because a fixture would
  * keep passing while the shipped one lost an entry.
  *
- * Matched with the `ignore` package, which implements gitignore semantics —
+ * Matched (via `codeOwnersOf`, orchestrator/src/board.ts) with the `ignore`
+ * package, which implements gitignore semantics —
  * the SAME syntax GitHub parses CODEOWNERS with. This is the whole point of
  * the round that introduced it: the previous check compared pattern strings
  * with `startsWith`, so `apps/worker/lib/auth` "covered"
@@ -23,12 +24,7 @@ import ignore from 'ignore'
  * bespoke glob — the value here is using the same semantics as the consumer.
  */
 export function codeownersPatterns(repoRoot: string = process.cwd()): string[] {
-  return readFileSync(join(repoRoot, 'CODEOWNERS'), 'utf8')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith('#'))
-    .map((l) => l.split(/\s+/)[0] ?? '')
-    .filter((p) => p.length > 0)
+  return codeownersRules(repoRoot).map((r) => r.pattern)
 }
 
 /**
@@ -85,14 +81,94 @@ function walk(root: string, rel: string): string[] {
 }
 
 export interface CodeownersMatcher {
-  /** True when at least one CODEOWNERS rule matches this path, by gitignore
-   *  semantics — the same semantics GitHub applies. */
+  /** True when `file` resolves to at least one owner. */
   owns(file: string): boolean
 }
 
+// Paths a catch-all must own, chosen so each shape that distinguishes one
+// all-path spelling from a merely broad one is present: a root file, a
+// dotfile, an extensionless name, nested files at several depths, a name with
+// a space, a non-ASCII name. A pattern that owns all of them is, for every
+// purpose these tests have, a catch-all; one that misses any (`*/` and `**/`
+// miss the root files, `**/*.*` misses the extensionless ones) is narrower
+// and is a legitimate named entry.
+const CATCH_ALL_PROBES: readonly string[] = [
+  'README.md', '.env', 'LICENSE', 'a', 'a/b', 'a/b/c.d', 'deep/er/est/file', '.github/workflows/x.yml',
+  'dir with space/f', 'é/ü.ts', 'x.pem',
+]
+
+// True when `pattern`, taken alone, owns EVERY path — GitHub's catch-all, in
+// any spelling. Decided by asking the matcher (`codeOwnersOf`, the one
+// board.ts resolves ownership with) rather than by comparing strings: the
+// first cut listed `*`, `**` and `/**`, and `**/*` — which the matcher treats
+// identically — slipped past it (#2826). A later `**/* @owner` would then
+// have overridden every named entry under last-match-wins (the secret-shaped
+// globs included) while `namedCodeownersMatcher` kept it as an ordinary named
+// entry and every rail stayed green over a control that no longer controlled
+// anything. `/*`, `***`, `?*`, `[!/]*` and `**/**/*` are caught the same way.
+// Owner-independent: a catch-all that names nobody still un-owns every path
+// above it.
+export function isCatchAllPattern(pattern: string): boolean {
+  const rule: CodeOwnerRule = { pattern, owners: ['probe'] }
+  return CATCH_ALL_PROBES.every((path) => codeOwnersOf([rule], path).length > 0)
+}
+
+export function codeownersRules(repoRoot: string = process.cwd()): CodeOwnerRule[] {
+  return parseCodeOwners(readFileSync(join(repoRoot, 'CODEOWNERS'), 'utf8'))
+}
+
+/**
+ * Everything wrong with where the catch-all sits, as human-readable lines
+ * (empty = fine). Pure over `rules` so the mutation tests can hand it a
+ * CODEOWNERS the real file does not contain.
+ */
+export function catchAllViolations(rules: readonly CodeOwnerRule[]): string[] {
+  const at = rules.flatMap((r, i) => (isCatchAllPattern(r.pattern) ? [i] : []))
+  const out: string[] = []
+  if (at.length !== 1) out.push(`expected exactly one catch-all rule, found ${at.length} at index [${at.join(', ')}]`)
+  if (at[0] !== 0) out.push(`the catch-all must be the FIRST rule, found first at index ${at[0] ?? 'none'}`)
+  const first = at[0] === undefined ? undefined : rules[at[0]]
+  if (first !== undefined && first.owners.length === 0) out.push('the catch-all names no owner, so it owns nothing')
+  return out
+}
+
+/**
+ * What GitHub will actually do with a path: the LAST matching rule decides,
+ * catch-all included, and a matching rule that names nobody leaves the path
+ * unowned. Resolved by `codeOwnersOf` (orchestrator/src/board.ts) — the same
+ * parser and matcher the fleet's merge-blocker reads use — so the tests and
+ * the board cannot disagree about who owns a file.
+ *
+ * This is the matcher for "can a PR touching this path ever earn a review"
+ * (#2825). It is the WRONG matcher for "is this sensitive path deliberately
+ * owned": with a catch-all every path is owned, so asking it that question
+ * passes whether or not the named entry survives — use
+ * `namedCodeownersMatcherOf` for those.
+ */
+export function codeownersMatcherOf(rules: readonly CodeOwnerRule[]): CodeownersMatcher {
+  return { owns: (file) => codeOwnersOf([...rules], file).length > 0 }
+}
+
+/**
+ * Ownership by a NAMED rule — every catch-all (in ANY spelling, see
+ * `isCatchAllPattern`) removed before resolving. Every rail that asserts a
+ * sensitive path (crypto, secrets, trust anchors, the gates,
+ * HIGH_IMPACT_PATHS) is owned uses this, because the explicit entry is the
+ * control: it states WHY the path needs its owner, it survives the catch-all
+ * ever being narrowed or handed to someone else, and deleting it must fail a
+ * test. Against `codeownersMatcher` it would not — the catch-all would answer
+ * for it.
+ */
+export function namedCodeownersMatcherOf(rules: readonly CodeOwnerRule[]): CodeownersMatcher {
+  return codeownersMatcherOf(rules.filter((r) => !isCatchAllPattern(r.pattern)))
+}
+
 export function codeownersMatcher(repoRoot: string = process.cwd()): CodeownersMatcher {
-  const ig = ignore().add(codeownersPatterns(repoRoot))
-  return { owns: (file) => ig.ignores(file) }
+  return codeownersMatcherOf(codeownersRules(repoRoot))
+}
+
+export function namedCodeownersMatcher(repoRoot: string = process.cwd()): CodeownersMatcher {
+  return namedCodeownersMatcherOf(codeownersRules(repoRoot))
 }
 
 /** The tracked files under one high-impact path, where the path is either a
