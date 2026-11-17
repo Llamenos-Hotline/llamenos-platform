@@ -96,33 +96,70 @@
 #     builds, not a reboot. Swap is reported, never touched — and it is a large
 #     part of why the threshold below is what it is.
 #
-# THE THRESHOLD
-# -------------
-# MAC_DISK_MIN_FREE_GIB defaults to 12 GiB, derived from measurement rather
-# than chosen:
+# THE THRESHOLD: A FLOOR PER VOLUME, FROM WHAT LANDS ON IT
+# --------------------------------------------------------
+# The floor is derived from measurement rather than chosen, and it is the sum
+# of what a job puts on a volume, so each volume is held to what lands on IT:
 #
-#   per concurrent `ui` shard, measured on this host
-#     simulator device data after a full shard   2.4-2.6 GiB  (two samples, the
-#                                                             two devices the
-#                                                             crashed run leaked)
-#     expanded Build/Products from the artifact  ~0.8 GiB
-#     .xcresult result bundle                    ~0.1 GiB
-#     PostgreSQL data dir + logs                 ~0.1 GiB
-#     swap growth attributable to the shard      ~1.5 GiB  (3 new 1 GiB
-#                                                           swapfiles appeared
-#                                                           during the two
-#                                                           crashed shards)
+#   per concurrent `ui` shard, measured on this host, by where it lands
+#     simulator device data after a full shard   2.4-2.6 GiB  -> the device set's volume
+#                                                             (two samples, the two
+#                                                             devices the crashed
+#                                                             run leaked)
+#     expanded Build/Products from the artifact  ~0.8 GiB  \
+#     .xcresult result bundle                    ~0.1 GiB   > RUNNER_TEMP's volume
+#     PostgreSQL data dir + logs                 ~0.1 GiB  /
+#     swap growth attributable to the shard      ~1.5 GiB  -> the host volume, always
+#                                                             (3 new 1 GiB swapfiles
+#                                                             during the two crashed
+#                                                             shards; 0.7 GiB measured
+#                                                             per shard on 2026-11-14)
 #                                                ---------
 #                                                ~5 GiB
 #
+#   plus 2 GiB, once, on the volume the runner's `_diag` is on, so the agent
+#   can always write the log whose write is what actually crashed it.
+#
 #   This host has exactly two runners serving the label, so at most two jobs
-#   run at once and both can start within seconds of each other:  2 x 5 = 10.
-#   Plus a 2 GiB floor so the agent can always write the `_diag` log whose
-#   write is what actually crashed it.  ->  12 GiB.
+#   run at once and both can start within seconds of each other.
+#
+#   volume                     floor = 2 x (per-job GiB landing there) + agent
+#   everything on one volume   2 x (2.5 + 1.0 + 1.5) + 2  = 12 GiB  (the #1665 layout)
+#   host, CI work volume used  2 x 1.5 + 2                =  5 GiB  (swap + _diag only)
+#   CI work volume             2 x (2.5 + 1.0)            =  7 GiB
 #
 # Checked against the incident: the two shards consumed ~10 GiB before the
 # volume hit zero, so free space when they started was ~10 GiB. A 12 GiB
-# threshold would have refused them, which is the outcome this issue asks for.
+# threshold would have refused them, which is the outcome #1665 asks for, and
+# a host with everything on the internal disk still gets exactly that.
+#
+# Why per volume and not 12 everywhere (2026-11-16): once `_work` and the
+# device set moved onto the CI work volume, holding the internal disk to 12 GiB
+# refused jobs for bytes that no longer land there. The internal disk sat at
+# 11 GiB free, 95% full of the operator's and other accounts' data, while a job
+# would add ~1.5 GiB of swap to it, and the 286 GiB free on the volume the job
+# actually fills was not what decided. A guard that refuses on an irrelevant
+# number is as wrong as one that passes on it. Every directory CI still writes
+# on the internal disk was measured that day, `df` for the volume and `du` for
+# the directory: ~/Library/Developer/Xcode/DerivedData 0.9 GiB, idle since
+# 2026-11-07 (CI never writes it: every xcodebuild in a Mac job passes
+# -derivedDataPath under RUNNER_TEMP, and the test suite fails if one does
+# not), the SwiftPM cache 0.28 GiB, unchanged since 2026-11-02 (a warm cache the
+# size of the dependency set, not a per-job write), the user TMPDIR 12 MiB,
+# ~/Library/Developer/CoreSimulator/Caches 0 (reclaimed every job), and
+# /private/var/tmp 7 MiB (the #2644 sweep plus delete-sim). None grows per job,
+# so none is in the budget. Swap is, and the _diag floor is.
+#
+# Overrides, each an environment variable, so retuning is a workflow-level
+# decision an operator can make from this script's `report`:
+#   MAC_DISK_CONCURRENT_JOBS (2), MAC_DISK_SIM_JOB_MIB (2560),
+#   MAC_DISK_TEMP_JOB_MIB (1024), MAC_DISK_HOST_JOB_MIB (1536),
+#   MAC_DISK_AGENT_FLOOR_MIB (2048), MAC_DISK_WRITE_FLOOR_MIB (1024: the least
+#   any volume a job writes to is held to, e.g. a checkout on a volume of its
+#   own), MAC_DISK_WARN_MARGIN_MIB (4096: warn when within this of the floor).
+#   MAC_DISK_MIN_FREE_GIB / MAC_DISK_WARN_FREE_GIB, when set, hold EVERY
+#   measured volume to that one figure instead: a blunt override that ignores
+#   where the bytes land, for an operator who wants it, never the default.
 #
 # WHICH VOLUMES IT MEASURES, AND WHY THAT IS CHECKED, NOT ASSUMED
 # ----------------------------------------------------------------
@@ -159,21 +196,17 @@
 # (measured 2026-11-14), and a dangling `_work` link when the image is not
 # attached is refused here rather than recreated on the boot volume.
 #
-# MAC_DISK_WARN_FREE_GIB (default 16) is the band where the host still runs but
-# is drifting toward the refusal, emitted as a `::warning::` so it is visible
+# A volume within MAC_DISK_WARN_MARGIN_MIB of its floor still runs but is
+# drifting toward the refusal, emitted as a `::warning::` so it is visible
 # before it costs anybody a queue cycle.
-#
-# Both are environment variables on purpose: retuning them is a workflow-level
-# decision an operator can make from measurement printed by this script's own
-# `report`, without editing code.
 #
 # USAGE
 #   mac-runner-disk-guard.sh report    # measure and print; never fails
 #   mac-runner-disk-guard.sh reclaim   # prune CI-owned space; never fails
 #   mac-runner-disk-guard.sh guard     # check write paths, report, reclaim, re-measure, then gate
+#   mac-runner-disk-guard.sh gate      # check write paths, then gate: df only, nothing walked (the workflow's hang fallback)
 #   mac-runner-disk-guard.sh delete-sim <udid> # job teardown: shutdown + delete + its /private/var/tmp dir; never fails
 #   mac-runner-disk-guard.sh install-timer # install hourly launchd reclaim
-#   mac-runner-disk-guard.sh min-free-kib <path>...  # smallest free KiB across those paths' filesystems (the workflow's hang fallback)
 #   mac-runner-disk-guard.sh selftest  # prove the delete guard refuses what it must
 #
 # `guard` is what CI calls. On a GitHub-hosted runner it prints one line and
@@ -203,8 +236,19 @@ set -euo pipefail
 MODE="${1:-guard}"
 
 VOLUME="${MAC_DISK_GUARD_VOLUME:-/System/Volumes/Data}"
-MIN_FREE_GIB="${MAC_DISK_MIN_FREE_GIB:-12}"
-WARN_FREE_GIB="${MAC_DISK_WARN_FREE_GIB:-16}"
+# Per-volume floors: see THE THRESHOLD above. MiB, integers, so bash 3.2 can
+# add them without awk.
+CONCURRENT_JOBS="${MAC_DISK_CONCURRENT_JOBS:-2}"
+SIM_JOB_MIB="${MAC_DISK_SIM_JOB_MIB:-2560}"
+TEMP_JOB_MIB="${MAC_DISK_TEMP_JOB_MIB:-1024}"
+HOST_JOB_MIB="${MAC_DISK_HOST_JOB_MIB:-1536}"
+AGENT_FLOOR_MIB="${MAC_DISK_AGENT_FLOOR_MIB:-2048}"
+WRITE_FLOOR_MIB="${MAC_DISK_WRITE_FLOOR_MIB:-1024}"
+WARN_MARGIN_MIB="${MAC_DISK_WARN_MARGIN_MIB:-4096}"
+# The blunt override: when set, every measured volume is held to this one
+# figure, wherever the bytes land. Empty (the default) means derived floors.
+MIN_FREE_GIB="${MAC_DISK_MIN_FREE_GIB:-}"
+WARN_FREE_GIB="${MAC_DISK_WARN_FREE_GIB:-}"
 # Age, never name alone: other PRs' shards run on this host concurrently and
 # their devices are also called `ios-e2e-*`, so deleting by name would kill a
 # live run. A booted device's directory mtime advances continuously while it
@@ -317,6 +361,68 @@ $1
 $1"; fi
 }
 
+# What each measured volume must keep free, as "mount-point|consumer|MiB" lines.
+# A consumer is counted once per volume however many paths of it land there
+# (two runners' `_work` on one image are still CONCURRENT_JOBS x TEMP_JOB_MIB).
+VOLUME_NEEDS=""
+
+# add_need <mount-point> <consumer> — record that <consumer> lands on the volume
+# mounted at <mount-point>. Consumers: host (swap, always the host volume),
+# agent (the runner's _diag), sim (the device set), temp (RUNNER_TEMP / `_work`),
+# write (any other path a job writes: held to WRITE_FLOOR_MIB).
+add_need() {
+  local mib
+  case "
+$VOLUME_NEEDS
+" in
+    *"
+$1|$2|"*) return 0 ;;
+  esac
+  case "$2" in
+    host)  mib=$(( CONCURRENT_JOBS * HOST_JOB_MIB )) ;;
+    sim)   mib=$(( CONCURRENT_JOBS * SIM_JOB_MIB )) ;;
+    temp)  mib=$(( CONCURRENT_JOBS * TEMP_JOB_MIB )) ;;
+    agent) mib=$AGENT_FLOOR_MIB ;;
+    write) mib=0 ;;
+    *) log "::error::mac-runner-disk-guard: unknown consumer '$2' (script defect)"; exit 1 ;;
+  esac
+  if [ -z "$VOLUME_NEEDS" ]; then VOLUME_NEEDS="$1|$2|$mib"; else VOLUME_NEEDS="${VOLUME_NEEDS}
+$1|$2|$mib"; fi
+}
+
+# floor_mib <mount-point> — the free space this volume is held to. The sum of
+# what lands on it, never less than WRITE_FLOOR_MIB; or, when the blunt
+# MAC_DISK_MIN_FREE_GIB override is set, that figure for every volume.
+floor_mib() {
+  if [ -n "$MIN_FREE_GIB" ]; then
+    awk -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", m * 1024 }'
+    return 0
+  fi
+  printf '%s\n' "$VOLUME_NEEDS" | awk -F'|' -v mp="$1" -v w="$WRITE_FLOOR_MIB" '
+    { c = $(NF - 1); m = $NF; p = $1; for (i = 2; i <= NF - 2; i++) p = p "|" $i }
+    p == mp { s += m }
+    END { if (s < w) s = w; printf "%d", s }'
+}
+
+warn_mib() {
+  if [ -n "$WARN_FREE_GIB" ]; then
+    awk -v m="$WARN_FREE_GIB" 'BEGIN { printf "%d", m * 1024 }'
+    return 0
+  fi
+  printf '%d' $(( $(floor_mib "$1") + WARN_MARGIN_MIB ))
+}
+
+# "sim + temp" — what the floor of <mount-point> is made of, for the log.
+needs_of() {
+  [ -z "$MIN_FREE_GIB" ] || { printf 'MAC_DISK_MIN_FREE_GIB override'; return 0; }
+  printf '%s\n' "$VOLUME_NEEDS" | awk -F'|' -v mp="$1" '
+    { c = $(NF - 1); p = $1; for (i = 2; i <= NF - 2; i++) p = p "|" $i }
+    p == mp { o = o (o == "" ? "" : " + ") c }
+    END { print (o == "" ? "nothing budgeted" : o) }'
+}
+
+gib_of_mib() { awk -v m="$1" 'BEGIN { printf "%.1f", m / 1024 }'; }
+
 # The volumes `report` and `reclaim` account for when no job has told us where
 # it writes: the host volume, plus wherever each runner's `_work` and the
 # CoreSimulator device set really are (symlinks followed). A path df cannot stat
@@ -327,11 +433,22 @@ ensure_measured_volumes() {
   host="$(mount_point_of "$VOLUME")"
   [ -n "$host" ] || host="$VOLUME"
   add_measured_volume "$host"
-  for p in "$HOME"/actions-runner-*/_work "$SIM_DEVICES"; do
+  add_need "$host" host
+  for p in "$HOME"/actions-runner-*/_work "$SIM_DEVICES" "$HOME"/actions-runner-*/_diag; do
     [ -e "$p" ] || continue
     mp="$(mount_point_of "$p")"
-    [ -z "$mp" ] || add_measured_volume "$mp"
+    [ -n "$mp" ] || continue
+    add_measured_volume "$mp"
+    case "$p" in
+      */_work) add_need "$mp" temp ;;
+      */_diag) add_need "$mp" agent ;;
+      *) add_need "$mp" sim ;;
+    esac
   done
+  # No runner install found (a host being set up, or a sandbox): the agent's
+  # log goes to the host volume, which is where every install keeps it.
+  case "
+$VOLUME_NEEDS" in *"|agent|"*) ;; *) add_need "$host" agent ;; esac
   return 0
 }
 
@@ -366,34 +483,20 @@ free_summary() {
   while IFS= read -r mp; do
     [ -n "$mp" ] || continue
     kib="$(df_available_kib "$mp")"
-    out="${out}${out:+, }$(awk -v k="${kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }') GiB on ${mp}"
+    out="${out}${out:+, }$(awk -v k="${kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }') GiB on ${mp} (need $(gib_of_mib "$(floor_mib "$mp")"))"
   done <<VOLS
 $MEASURED_VOLUMES
 VOLS
   printf '%s' "$out"
 }
 
+# ONE operand, always. GNU df prints one header then a row per operand, but
+# BSD/macOS df prints the header once PER OPERAND, so a row-index parse of a
+# multi-operand df reads the second header as data and reports 0 GiB free on a
+# disk with hundreds (#2760). The test suite fails on any parsed multi-operand
+# df in CI scripts or workflows.
 df_available_kib() {
   df -k "$1" | awk 'NR==2 {print $4}' || true
-}
-
-# Smallest available KiB across the filesystems the given paths are on; empty
-# when none could be read. ONE df PER PATH, and never `df a b | awk 'NR>1 ...'`:
-# GNU df prints one header then a row per operand, but BSD/macOS df prints the
-# header once PER OPERAND (header,row,header,row). A row-index parse of the
-# multi-operand form reads the second header as data, its $4 ("Available")
-# evaluates to 0, and 0 becomes the minimum - 0.0 GiB free on a disk with
-# hundreds (#2760 review). `df_available_kib` is the single-operand form where
-# NR==2 is right on both. A path df cannot stat contributes nothing, so a
-# caller whose paths ALL fail sees empty and must treat that as "unknown".
-min_free_kib() {
-  local p kib min=""
-  for p in "$@"; do
-    kib="$(df_available_kib "$p" 2>/dev/null)"
-    case "$kib" in ''|*[!0-9]*) continue ;; esac
-    if [ -z "$min" ] || [ "$kib" -lt "$min" ]; then min="$kib"; fi
-  done
-  printf '%s' "$min"
 }
 
 apparent_gib() {
@@ -681,7 +784,7 @@ report() {
   while IFS= read -r mp; do
     [ -n "$mp" ] || continue
     df -h "$mp" || true
-    log "free on $mp: $(awk -v k="$(df_available_kib "$mp")" 'BEGIN { printf "%.1f", k / 1048576 }') GiB   (refuse below ${MIN_FREE_GIB} GiB, warn below ${WARN_FREE_GIB} GiB)"
+    log "free on $mp: $(awk -v k="$(df_available_kib "$mp")" 'BEGIN { printf "%.1f", k / 1048576 }') GiB   (refuse below $(gib_of_mib "$(floor_mib "$mp")") GiB, warn below $(gib_of_mib "$(warn_mib "$mp")") GiB; floor is $(needs_of "$mp"))"
   done <<VOLS
 $MEASURED_VOLUMES
 VOLS
@@ -1106,7 +1209,7 @@ mount_point_of() {
 # volume is added to MEASURED_VOLUMES for `gate` to hold to the floor. The one
 # thing refused here is a path whose filesystem cannot be read at all.
 check_write_paths() {
-  local host entry label path mp bad=0 runner_root
+  local host entry label consumer path mp bad=0 runner_root
   local -a paths
   host="$(mount_point_of "$VOLUME")"
   if [ -z "$host" ]; then
@@ -1114,24 +1217,30 @@ check_write_paths() {
     return 1
   fi
   MEASURED_VOLUMES=""
+  VOLUME_NEEDS=""
   add_measured_volume "$host"
+  # Swap lands here whatever else has moved.
+  add_need "$host" host
 
-  paths=("CoreSimulator device set|$SIM_DEVICES")
+  # label|consumer|path. The consumer is what the path costs the volume it
+  # really lands on (THE THRESHOLD).
+  paths=("CoreSimulator device set|sim|$SIM_DEVICES")
   if [ -n "${RUNNER_TEMP:-}" ]; then
-    paths+=("RUNNER_TEMP (DerivedData, build products)|$RUNNER_TEMP")
+    paths+=("RUNNER_TEMP (DerivedData, build products)|temp|$RUNNER_TEMP")
   fi
   if [ -n "${RUNNER_WORKSPACE:-}" ]; then
-    paths+=("RUNNER_WORKSPACE (checkout)|$RUNNER_WORKSPACE")
+    paths+=("RUNNER_WORKSPACE (checkout)|write|$RUNNER_WORKSPACE")
     runner_root="${RUNNER_WORKSPACE%%/_work/*}"
     if [ "$runner_root" != "$RUNNER_WORKSPACE" ]; then
-      paths+=("runner _diag (the agent's own log)|$runner_root/_diag")
+      paths+=("runner _diag (the agent's own log)|agent|$runner_root/_diag")
     fi
   fi
 
   log "── write paths (each resolved to the volume it really lands on; every such volume is held to the floor) ──"
   for entry in "${paths[@]}"; do
     label="${entry%%|*}"
-    path="${entry#*|}"
+    consumer="${entry#*|}"; consumer="${consumer%%|*}"
+    path="${entry#*|*|}"
     if [ ! -e "$path" ] && [ ! -L "$path" ]; then
       log "  absent, nothing to check: $label ($path)"
       continue
@@ -1145,6 +1254,7 @@ check_write_paths() {
       bad=1
     else
       add_measured_volume "$mp"
+      add_need "$mp" "$consumer"
       if [ "$mp" = "$host" ]; then
         log "  ok: on $mp (the host volume)"
       else
@@ -1153,14 +1263,24 @@ check_write_paths() {
     fi
   done
   [ "$bad" -eq 0 ] || return 1
+  # The agent's _diag is only known from RUNNER_WORKSPACE; without it, it is
+  # where every runner install keeps it, under the home directory on the host.
+  case "
+$VOLUME_NEEDS" in *"|agent|"*) ;; *) add_need "$host" agent ;; esac
   log "write paths OK: every path this job writes is on a volume this guard can read; measuring $(measured_volume_list)"
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    log "  floor on $mp: $(gib_of_mib "$(floor_mib "$mp")") GiB ($(needs_of "$mp"))"
+  done <<VOLS
+$MEASURED_VOLUMES
+VOLS
   log ""
 }
 
 # ── gate ────────────────────────────────────────────────────────────────────
 
 gate() {
-  local mp free free_kib_now short_mib refused=0 volumes
+  local mp free free_kib_now short_mib refused=0 volumes need_mib need warn_mib what
   ensure_measured_volumes
   volumes="$MEASURED_VOLUMES"
 
@@ -1168,21 +1288,26 @@ gate() {
     [ -n "$mp" ] || continue
     free_kib_now="$(df_available_kib "$mp")"
     free="$(awk -v k="${free_kib_now:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')"
-    if awk -v f="$free" -v m="$MIN_FREE_GIB" 'BEGIN { exit !(f < m) }'; then
+    need_mib="$(floor_mib "$mp")"
+    need="$(gib_of_mib "$need_mib")"
+    warn_mib="$(warn_mib "$mp")"
+    what="$(needs_of "$mp")"
+    if [ $(( ${free_kib_now:-0} / 1024 )) -lt "$need_mib" ]; then
       refused=1
       # Free, required and the gap, in MiB, in one machine-readable line the
       # workflow reads. A host 150 MB short and a host 8 GiB short are different
       # faults and used to read the same (#2644). `volume=` names which of the
-      # measured volumes it is: the internal disk and the CI work volume run
-      # out for different reasons.
-      short_mib="$(awk -v k="${free_kib_now:-0}" -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", (m * 1048576 - k) / 1024 + 0.999 }')"
-      log "disk-guard-verdict: refused free_mib=$(( ${free_kib_now:-0} / 1024 )) need_mib=$(awk -v m="$MIN_FREE_GIB" 'BEGIN { printf "%d", m * 1024 }') short_mib=${short_mib} reclaimed_mib=$(( RECLAIM_FREED_KIB / 1024 )) volume=${mp}"
-      log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${mp} of the ${MIN_FREE_GIB} GiB this job needs (short by ${short_mib} MiB; this reclaim pass freed $(( RECLAIM_FREED_KIB / 1024 )) MiB across all measured volumes). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Concurrent iOS shards consume simulator data, build products and swap on this host; below ${MIN_FREE_GIB} GiB the runner AGENT runs out of space writing its own _diag log and dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on ${mp} — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
-    elif awk -v f="$free" -v w="$WARN_FREE_GIB" 'BEGIN { exit !(f < w) }'; then
-      log "::warning::ios runner disk headroom is low: ${free} GiB free on ${mp}, above the ${MIN_FREE_GIB} GiB refusal threshold but below the ${WARN_FREE_GIB} GiB comfort band. Concurrent shards can consume ~5 GiB each here. Reclaim space on the host before this becomes a refusal (#1665)."
-      log "disk headroom OK: ${free} GiB free on ${mp} (need ${MIN_FREE_GIB} GiB)"
+      # measured volumes it is, and `floor=` what that volume's need is made of:
+      # the internal disk and the CI work volume run out for different reasons,
+      # and are held to different floors.
+      short_mib=$(( need_mib - ${free_kib_now:-0} / 1024 ))
+      log "disk-guard-verdict: refused free_mib=$(( ${free_kib_now:-0} / 1024 )) need_mib=${need_mib} short_mib=${short_mib} reclaimed_mib=$(( RECLAIM_FREED_KIB / 1024 )) volume=${mp} floor=$(printf '%s' "$what" | tr -d ' ')"
+      log "::error::ios runner REFUSED to run: disk-headroom — only ${free} GiB free on ${mp} of the ${need} GiB this job needs there (${what}; short by ${short_mib} MiB; this reclaim pass freed $(( RECLAIM_FREED_KIB / 1024 )) MiB across all measured volumes). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT. Concurrent iOS shards consume simulator data, build products and swap on this host, each on the volume its path really lands on; below its floor the runner AGENT runs out of space writing its own _diag log or a job dies mid-step, which uploads no job log at all and ejects whatever PR is in the merge queue with no attributable cause (#1665). Refusing here instead. To fix: free space on ${mp} — 'scripts/ci/mac-runner-disk-guard.sh report' prints every consumer and what reclaiming it would cost."
+    elif [ $(( ${free_kib_now:-0} / 1024 )) -lt "$warn_mib" ]; then
+      log "::warning::ios runner disk headroom is low: ${free} GiB free on ${mp}, above its ${need} GiB refusal floor (${what}) but below the $(gib_of_mib "$warn_mib") GiB comfort band. Reclaim space on the host before this becomes a refusal (#1665)."
+      log "disk headroom OK: ${free} GiB free on ${mp} (need ${need} GiB: ${what})"
     else
-      log "disk headroom OK: ${free} GiB free on ${mp} (need ${MIN_FREE_GIB} GiB)"
+      log "disk headroom OK: ${free} GiB free on ${mp} (need ${need} GiB: ${what})"
     fi
   done <<VOLS
 $volumes
@@ -1239,22 +1364,46 @@ selftest_gate_fake_volumes() (
   gate 2>&1
 )
 
-# Runs min_free_kib against a stand-in `df` shaped like macOS's: header AND row
-# per operand. /big has 100 GiB, /small has 2, anything else is unreadable.
-# A SUBSHELL body for the same bash 3.2 reason as selftest_gate_fake_volumes.
-selftest_min_free_bsd_df() (
-  df() {
-    local a
-    for a in "$@"; do
-      case "$a" in -*) continue ;; esac
-      case "$a" in
-        /big)   printf 'Filesystem   1024-blocks      Used Available Capacity iused ifree %%iused  Mounted on\n/dev/disk3s5   494384795 393784795 104857600    80%%  100   100   50%%   /big\n' ;;
-        /small) printf 'Filesystem   1024-blocks      Used Available Capacity iused ifree %%iused  Mounted on\n/dev/disk4s1   494384795 492287643   2097152    99%%  100   100   50%%   /small\n' ;;
-        *) printf 'df: %s: No such file or directory\n' "$a" >&2; return 1 ;;
-      esac
-    done
+# Runs check_write_paths + gate - exactly what `guard` and `gate` decide on -
+# against three stand-in volumes with fixed free space: the host volume, the CI
+# work volume and an external scratch disk no write path is on. A path is
+# resolved through symlinks first, as df does, so a runner whose `_work` is a
+# link onto the work volume keeps its `_diag` on the host volume, as on the
+# real host. A SUBSHELL body for the same bash 3.2 reason as
+# selftest_gate_fake_volumes.
+#   selftest_floor_layout <sandbox> <host GiB> <work GiB> <scratch GiB> <cutover|internal> [uniform GiB]
+selftest_floor_layout() (
+  sbr="$(cd -P "$1" && pwd -P)"
+  FAKE_HOST="$2"; FAKE_WORK="$3"; FAKE_SCRATCH="$4"
+  mount_point_of() {
+    local r
+    r="$(cd -P "$1" 2>/dev/null && pwd -P)" || return 0
+    case "$r" in
+      "$sbr"/host|"$sbr"/host/*) echo /fake-host ;;
+      "$sbr"/work|"$sbr"/work/*) echo /fake-work ;;
+      "$sbr"/scratch|"$sbr"/scratch/*) echo /fake-scratch ;;
+    esac
   }
-  min_free_kib "$@"
+  df_available_kib() {
+    case "$1" in
+      /fake-host) awk -v g="$FAKE_HOST" 'BEGIN { printf "%d", g * 1048576 }' ;;
+      /fake-work) awk -v g="$FAKE_WORK" 'BEGIN { printf "%d", g * 1048576 }' ;;
+      /fake-scratch) awk -v g="$FAKE_SCRATCH" 'BEGIN { printf "%d", g * 1048576 }' ;;
+    esac
+  }
+  mkdir -p "$sbr/host/runner/_diag" "$sbr/host/Devices" "$sbr/work/runner-work/_temp" "$sbr/work/runner-work/repo" "$sbr/work/Devices" "$sbr/scratch"
+  case "$5" in
+    cutover)  [ -L "$sbr/host/runner/_work" ] || ln -s "$sbr/work/runner-work" "$sbr/host/runner/_work"; SIM_DEVICES="$sbr/work/Devices" ;;
+    internal) mkdir -p "$sbr/host/runner/_work/_temp" "$sbr/host/runner/_work/repo"; SIM_DEVICES="$sbr/host/Devices" ;;
+  esac
+  VOLUME="$sbr/host"
+  RUNNER_TEMP="$sbr/host/runner/_work/_temp"
+  RUNNER_WORKSPACE="$sbr/host/runner/_work/repo"
+  # No 6th argument: the floors exactly as this script loaded them, so a
+  # changed DEFAULT is caught here too, not only a changed computation.
+  [ "$#" -lt 6 ] || MIN_FREE_GIB="$6"
+  RECLAIM_FREED_KIB=0; DELETE_FAILURES=0
+  check_write_paths && gate
 )
 
 #
@@ -1508,29 +1657,75 @@ EOF
     fails=$((fails + 1))
   fi
 
-  log "── selftest: the hang fallback's free-space minimum survives BSD df output (#2760) ──"
-  # BSD/macOS df prints the header once PER OPERAND. This fake does the same, so
-  # a one-df-for-all-paths parse reads the second header as a data row and
-  # reports 0 free; one df per path (min_free_kib) cannot.
-  wp_out="$(selftest_min_free_bsd_df "/big" "/small")"
-  if [ "$wp_out" = "2097152" ]; then
-    log "  ok    two operands on BSD-shaped df give the smaller real figure, not 0"
+  log "── selftest: each volume is held to what lands on IT, not to one number for all (2026-11-16) ──"
+  # The host the cutover left: 11 GiB free on the internal disk, 286 on the
+  # work volume, a nearly full external disk nothing writes to. Swap and the
+  # agent's _diag are all a job adds to the internal disk now.
+  local fl_out fl_rc
+  mkdir -p "$sandbox/floors" "$sandbox/floors-internal"
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors" 11 286 1 cutover 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "0" ] \
+     && [[ "$fl_out" == *"disk headroom OK: 11.0 GiB free on /fake-host (need 5.0 GiB: host + agent)"* ]] \
+     && [[ "$fl_out" == *"disk headroom OK: 286.0 GiB free on /fake-work (need 7.0 GiB: sim + temp + write)"* ]]; then
+    log "  ok    cut over: 11 GiB on the internal disk passes its 5 GiB floor (swap + _diag), the work volume is held to 7"
   else
-    log "  FAIL  min_free_kib /big /small on BSD-shaped df returned '$wp_out', expected 2097152"
+    log "  FAIL  cut-over layout with 11 GiB internal / 286 GiB work was not passed on per-volume floors (rc=$fl_rc): $fl_out"
     fails=$((fails + 1))
   fi
-  wp_out="$(selftest_min_free_bsd_df "/big" "/big")"
-  if [ "$wp_out" = "104857600" ]; then
-    log "  ok    two healthy operands on BSD-shaped df report the real free space (not 0)"
+  if [[ "$fl_out" != *"/fake-scratch"* ]]; then
+    log "  ok    a short volume no write path is on is never measured, so it cannot refuse a job"
   else
-    log "  FAIL  min_free_kib /big /big on BSD-shaped df returned '$wp_out', expected 104857600"
+    log "  FAIL  the scratch volume nothing writes to was measured: $fl_out"
     fails=$((fails + 1))
   fi
-  wp_out="$(selftest_min_free_bsd_df "/gone" "/gone")"
-  if [ -z "$wp_out" ]; then
-    log "  ok    paths df cannot read yield no figure (unknown), never a fabricated one"
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors" 11 286 1 cutover 12 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "1" ] && [[ "$fl_out" == *"volume=/fake-host"* ]]; then
+    log "  ok    (control) the old one-floor-for-all rule refuses that same healthy host on the internal disk's number"
   else
-    log "  FAIL  unreadable paths returned '$wp_out', expected empty"
+    log "  FAIL  (control) MAC_DISK_MIN_FREE_GIB=12 did not refuse the 11 GiB internal disk (rc=$fl_rc): $fl_out"
+    fails=$((fails + 1))
+  fi
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors" 4 286 1 cutover 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "1" ] \
+     && [[ "$fl_out" == *"disk-guard-verdict: refused free_mib=4096 need_mib=5120 short_mib=1024 "*"volume=/fake-host floor=host+agent"* ]] \
+     && [[ "$fl_out" != *"refused "*"volume=/fake-work"* ]]; then
+    log "  ok    cut over: an internal disk genuinely short of swap + _diag refuses, and names it"
+  else
+    log "  FAIL  a 4 GiB internal disk was not refused against its 5 GiB floor (rc=$fl_rc): $fl_out"
+    fails=$((fails + 1))
+  fi
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors" 11 6 1 cutover 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "1" ] \
+     && [[ "$fl_out" == *"disk-guard-verdict: refused free_mib=6144 need_mib=7168 short_mib=1024 "*"volume=/fake-work floor=sim+temp+write"* ]] \
+     && [[ "$fl_out" == *"disk headroom OK: 11.0 GiB free on /fake-host"* ]]; then
+    log "  ok    cut over: a work volume genuinely short of device data + build products refuses, the healthy internal disk does not"
+  else
+    log "  FAIL  a 6 GiB work volume was not refused against its 7 GiB floor (rc=$fl_rc): $fl_out"
+    fails=$((fails + 1))
+  fi
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors-internal" 11 286 1 internal 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "1" ] \
+     && [[ "$fl_out" == *"need_mib=12288 "*"volume=/fake-host floor=host+sim+temp+write+agent"* ]] \
+     && [[ "$fl_out" != *"/fake-work"* ]]; then
+    log "  ok    everything on the internal disk: it is held to the full 12 GiB (#1665), and an idle work volume is not measured"
+  else
+    log "  FAIL  the all-internal layout was not held to 12 GiB on the internal disk (rc=$fl_rc): $fl_out"
+    fails=$((fails + 1))
+  fi
+  fl_rc=0; fl_out="$(selftest_floor_layout "$sandbox/floors-internal" 13 286 1 internal 2>&1)" || fl_rc=$?
+  if [ "$fl_rc" = "0" ] && [[ "$fl_out" == *"need 12.0 GiB: host + sim + temp + write + agent"* ]]; then
+    log "  ok    everything on the internal disk with 13 GiB free passes its 12 GiB floor"
+  else
+    log "  FAIL  13 GiB on the all-internal layout was not passed (rc=$fl_rc): $fl_out"
+    fails=$((fails + 1))
+  fi
+  fl_out="$( VOLUME_NEEDS=""; MIN_FREE_GIB=""
+             add_need /v temp; add_need /v temp; add_need /v sim
+             floor_mib /v )"
+  if [ "$fl_out" = "7168" ]; then
+    log "  ok    a consumer is counted once per volume, however many runners' paths land there"
+  else
+    log "  FAIL  two runners' RUNNER_TEMP on one volume were double-counted: floor_mib=$fl_out, expected 7168"
     fails=$((fails + 1))
   fi
 
@@ -2049,14 +2244,6 @@ if [ "$MODE" = "selftest" ]; then
   exit $?
 fi
 
-# Plain df arithmetic, no Darwin or runner-environment assumptions, so the
-# workflow's hang fallback and the Linux-run test exercise the same code.
-if [ "$MODE" = "min-free-kib" ]; then
-  shift
-  min_free_kib "$@"
-  exit 0
-fi
-
 if [ "$(uname -s)" != "Darwin" ]; then
   log "::error::mac-runner-disk-guard.sh is for the self-hosted macOS runners; this host is $(uname -s)."
   exit 1
@@ -2088,14 +2275,24 @@ case "$MODE" in
       failed_note=" ${DELETE_FAILURES} reclaim delete(s) FAILED and are not counted as freed (#2566)."
     fi
     if gate; then
-      summarize "disk headroom OK — $(free_summary) free (need ${MIN_FREE_GIB} GiB on each).${failed_note}"
+      summarize "disk headroom OK — $(free_summary).${failed_note}"
     else
-      summarize "REFUSED: $(free_summary) free, need ${MIN_FREE_GIB} GiB on each. Environmental, not this PR (#1665).${failed_note}"
+      summarize "REFUSED: $(free_summary). Environmental, not this PR (#1665).${failed_note}"
       exit 1
     fi
     ;;
+  gate)
+    # The workflow's hang fallback: the same write-path resolution and the
+    # same per-volume floors as `guard`, with no report and no reclaim, so
+    # nothing walks a directory. Only ever run after a `guard` attempt printed
+    # `write paths OK:`, i.e. once every df below is known to answer.
+    if ! check_write_paths; then
+      exit 1
+    fi
+    gate || exit 1
+    ;;
   *)
-    log "usage: $(basename "$0") <report|reclaim|guard|delete-sim <udid>|min-free-kib <path>...|install-timer|selftest>"
+    log "usage: $(basename "$0") <report|reclaim|guard|gate|delete-sim <udid>|install-timer|selftest>"
     exit 2
     ;;
 esac
