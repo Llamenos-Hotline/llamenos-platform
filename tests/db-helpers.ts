@@ -377,6 +377,23 @@ export class TestDB {
   }
 
   /**
+   * Move a finished call's answer (and start/end) `days` into the past (#1342).
+   * The volunteer access window is measured from `call_records.answered_at` on
+   * the server clock, and no API can make a call older, so a scenario that needs
+   * a call past the window ages one here.
+   */
+  static async backdateCallRecord(callId: string, days: number): Promise<void> {
+    const rows = await (await sql())`
+      UPDATE call_records
+         SET answered_at = answered_at - make_interval(days => ${days}),
+             started_at  = started_at  - make_interval(days => ${days}),
+             ended_at    = ended_at    - make_interval(days => ${days})
+       WHERE call_id = ${callId}
+      RETURNING call_id`
+    if (rows.length !== 1) throw new Error(`backdateCallRecord: no call record ${callId}`)
+  }
+
+  /**
    * Update a single column on a row identified by id.
    */
   static async updateColumn(table: string, id: string, column: string, value: postgres.Serializable): Promise<void> {

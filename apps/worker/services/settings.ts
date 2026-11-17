@@ -94,6 +94,11 @@ import type {
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
 import type { IvrLanguageSettings } from '@protocol/schemas/settings'
+import {
+  callHistoryAccessSettingsSchema,
+  type CallHistoryAccessSettings,
+  type CallHistoryAccessSettingsPatch,
+} from '@protocol/schemas/calls'
 import type { HubChannelType } from '@protocol/schemas/provider-setup'
 import type {
   ReportTypeDefinition,
@@ -185,6 +190,15 @@ const DEFAULT_CALL_SETTINGS: CallSettings = {
 }
 
 /**
+ * A hub's stored access window, through the schema: an absent or out-of-range
+ * value reads as the default rather than as a window nobody chose.
+ */
+function parseCallHistoryAccess(stored: unknown): CallHistoryAccessSettings {
+  const parsed = callHistoryAccessSettingsSchema.safeParse(stored ?? {})
+  return parsed.success ? parsed.data : callHistoryAccessSettingsSchema.parse({})
+}
+
+/**
  * On a self-hosted PBX every prompt nobody uploaded is generated speech
  * (IvrSpeechService), so a language with no offline voice is not just absent
  * from the menu: its callers are spoken to in another language. Say which, and
@@ -236,6 +250,9 @@ const ALLOWED_HUB_SETTINGS = new Set([
   'subAccountConfigId',
   'heartbeatTimeout',
   'ivrLanguages',
+  // #1342: the volunteer call-history ACCESS window. Written only by
+  // updateCallHistoryAccess (settings:manage-calls, audited with old and new).
+  'callHistoryAccess',
 ])
 
 const VALID_PROVIDER_TYPES = [
@@ -641,6 +658,60 @@ export class SettingsService {
       .set({ callSettings: updated })
       .where(eq(systemSettings.id, SINGLETON_ID))
     return updated
+  }
+
+  // =========================================================================
+  // Volunteer call-history access window (#1342)
+  // =========================================================================
+
+  /**
+   * The hub's volunteer call-history access window: how many days back a member
+   * holding only `calls:read-own-history` may read the calls they answered.
+   * The default (7 days) when the hub never set one.
+   *
+   * Access control only. It deletes nothing and is unrelated to the retention
+   * policy (`retention.ts`, services/erasure.ts): a record past a volunteer's
+   * window stays the admin system of record.
+   */
+  async getCallHistoryAccess(hubId: string): Promise<CallHistoryAccessSettings> {
+    return parseCallHistoryAccess((await this.getHubSettings(hubId)).callHistoryAccess)
+  }
+
+  /**
+   * Apply a PATCH to the hub's access window and return the window before and
+   * after, for the audit entry. A body that names nothing changes nothing.
+   *
+   * Read and write share one transaction under a per-hub advisory lock, so two
+   * concurrent changes are serialised and each audit entry's `before` is the
+   * value that change actually replaced.
+   */
+  async updateCallHistoryAccess(
+    hubId: string,
+    patch: CallHistoryAccessSettingsPatch,
+  ): Promise<{ before: CallHistoryAccessSettings; after: CallHistoryAccessSettings }> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`callHistoryAccess:${hubId}`}))`)
+      const [row] = await tx
+        .select({ settings: hubSettingsTable.settings })
+        .from(hubSettingsTable)
+        .where(eq(hubSettingsTable.hubId, hubId))
+      const before = parseCallHistoryAccess((row?.settings as Record<string, unknown> | undefined)?.callHistoryAccess)
+      const after: CallHistoryAccessSettings = {
+        ...before,
+        ...(patch.volunteerAccessDays !== undefined ? { volunteerAccessDays: patch.volunteerAccessDays } : {}),
+      }
+      const merge = { callHistoryAccess: after }
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId, settings: merge })
+        .onConflictDoUpdate({
+          target: hubSettingsTable.hubId,
+          set: {
+            settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${hubSettingsTable.settings.mapToDriverValue(merge)}::jsonb`,
+          },
+        })
+      return { before, after }
+    })
   }
 
   // =========================================================================

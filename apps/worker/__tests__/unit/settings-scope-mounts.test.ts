@@ -59,6 +59,7 @@ const HUB_REACHABLE = [
   'DELETE /cms/report-types/:id',
   'DELETE /ivr-audio/:promptType/:language',
   'GET /call',
+  'GET /call-history-access',
   'GET /cms/auto-assignment',
   'GET /cms/case-management',
   'GET /cms/entity-types',
@@ -79,6 +80,7 @@ const HUB_REACHABLE = [
   'GET /telephony-provider',
   'GET /telephony-provider/recording-posture',
   'PATCH /call',
+  'PATCH /call-history-access',
   'PATCH /cms/entity-types/:id',
   'PATCH /cms/entity-types/:id/customize',
   'PATCH /cms/relationship-types/:id',
@@ -110,6 +112,13 @@ const HUB_OWNED = [
   'PATCH /roles/:id',
   'POST /roles',
 ].sort()
+
+/**
+ * Settings that exist ONLY per hub — no platform default to layer over, so not
+ * mounted unscoped at all. The volunteer call-history access window (#1342)
+ * bounds what a hub's members read of the hub's own calls: the hub's call alone.
+ */
+const HUB_ONLY = ['GET /call-history-access', 'PATCH /call-history-access']
 
 /** Settings the whole deployment has exactly one of. Unscoped only. */
 const DEPLOYMENT_ONLY = [
@@ -164,6 +173,11 @@ describe('settings reachable under /api/hubs/:hubId/settings (#2367)', () => {
   })
 
   it('still mounts every per-hub setting unscoped, as the platform default', () => {
-    for (const row of HUB_REACHABLE) expect(routes.has(at(PLATFORM, row)), row).toBe(true)
+    for (const row of HUB_REACHABLE.filter(r => !HUB_ONLY.includes(r))) expect(routes.has(at(PLATFORM, row)), row).toBe(true)
+  })
+
+  it.each(HUB_ONLY)('%s exists only under a hub — there is no platform value of it', (row) => {
+    expect(routes.has(at(HUB, row))).toBe(true)
+    expect(routes.has(at(PLATFORM, row))).toBe(false)
   })
 })

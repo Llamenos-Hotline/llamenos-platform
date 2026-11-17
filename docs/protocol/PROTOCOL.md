@@ -807,6 +807,20 @@ readersFor(hub, purpose) =
 | `admin`        | `settings:manage` + `notes:read-all` (the admin minimum) | D1 |
 | `call-history` | `calls:read-history`                       | D2 |
 
+**Subject readers.** Some records are additionally sealed to the one member
+they are *about*. A subject reader purpose maps to permissions in
+`SUBJECT_READER_PURPOSE_PERMISSIONS` (`packages/shared/permissions.ts`), and its
+reader set is the subject's own registered X25519 device keys, present only
+when the subject holds those permissions through their roles in the record's
+hub (same candidate filter as above). It is never a set of all holders, so it
+is not a value of `GET /api/hubs/:hubId/readers?purpose=`, and it is not part of
+the escrow-setter requirement. It only ever ADDS to a hub-wide set; it does not
+replace one.
+
+| Subject purpose    | Subject                          | Permissions held in the hub | Operator decision |
+|--------------------|----------------------------------|-----------------------------|-------------------|
+| `call-history-own` | the volunteer who answered a call | `calls:read-own-history`   | D3 (#1342) |
+
 Rules:
 
 - **Permissions, never roles.** A hub's role catalogue is user-definable, so
@@ -886,7 +900,13 @@ No part of the caller's number is on this list: the last four digits are not sto
 
 #### Algorithm
 
-Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the transitional instance key `ADMIN_DECRYPTION_PUBKEY` alone (in no hub reader set, §2.4.2); super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
+Same envelope pattern as per-message encryption but using `LABEL_CALL_META`. Every call belongs to a hub (#2460), and when it ends the server seals its record, per call, to the union (deduplicated) of (§2.4.2):
+
+- the hub's `admin` reader set, plus the transitional instance key `ADMIN_DECRYPTION_PUBKEY` (in no reader set);
+- the hub's `call-history` reader set (holders of `calls:read-history`, D2);
+- the `call-history-own` subject readers: the answering volunteer's own devices, when they hold `calls:read-own-history` in the hub (D3, #1342). No other volunteer's.
+
+The wire field keeps its name, `adminEnvelopes`; each envelope names the key it is sealed to, so a reader finds its own by `pubkey`. Readers are fixed when the call ends. Super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
 
 ```
 encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
@@ -2050,9 +2070,27 @@ GET /api/calls/presence
 Permission: calls:read-presence
 Response: { "volunteers": [...] }
 
-GET /api/calls/history?page=1&limit=50&search=&dateFrom=&dateTo=
-Permission: calls:read-history
-Response: { "calls": EncryptedCallRecord[], "total": number }
+GET /api/hubs/:hubId/calls/history?page=1&limit=50&search=&status=&dateFrom=&dateTo=
+Permission: calls:read-history or calls:read-own-history
+Response: { "calls": EncryptedCallRecord[], "total": number, "page": number, "limit": number,
+            "access": { "scope": "all" }
+                    | { "scope": "own", "windowDays": number, "availableSince": ISO-8601 } }
+// calls:read-history: every finished call of the hub, scope "all".
+// Otherwise calls:read-own-history (#1342): only the calls the caller answered whose answer time
+// is at or after availableSince = server now − the hub's volunteerAccessDays, bounded in the same
+// query as the hub and the filters (total and pages describe exactly that set). `access` is always
+// present: a client with scope "own" says "calls older than <windowDays> days are no longer
+// available to you" rather than presenting a short list as the whole history.
+// The window is ACCESS CONTROL, not cryptographic expiry: the volunteer's device key is in the
+// record's envelope (§2.5), so a record already fetched stays decryptable after the window
+// passes. Nothing is deleted; the record stays the admin system of record.
+
+GET /api/hubs/:hubId/calls/:callId
+Permission: calls:read-active
+Response: CallRecord
+// A live call, or a finished one under the same bound as /history: any finished call to a holder
+// of calls:read-history, only the caller's own inside the window to a holder of
+// calls:read-own-history, otherwise 404 (as for an unknown id).
 
 POST /api/calls/:callId/answer
 Permission: calls:answer
@@ -2396,6 +2434,19 @@ PATCH /api/settings/call
 Permission: settings:manage
 Body: partial CallSettings
 Response: { "ok": true }
+
+GET /api/hubs/:hubId/settings/call-history-access
+Permission: settings:manage-calls
+Response: { "volunteerAccessDays": number }   // CallHistoryAccessSettings; 7 when never set
+
+PATCH /api/hubs/:hubId/settings/call-history-access
+Permission: settings:manage-calls
+Body: { "volunteerAccessDays"?: integer 1..365 }   // forPatch: an omitted key changes nothing
+Response: { "volunteerAccessDays": number }
+// Hub-only: there is no platform value. The volunteer call-history ACCESS window (#1342) — how
+// far back a holder of only calls:read-own-history is served their own calls. It is not data
+// retention and never deletes. A change is audited (`callHistoryAccessUpdated`) with
+// oldVolunteerAccessDays and newVolunteerAccessDays.
 ```
 
 #### IVR Languages
@@ -5789,6 +5840,7 @@ resolvePermissions(role_ids[], all_role_definitions[]):
 | `calls:read-active` | See active calls (caller info redacted) |
 | `calls:read-active-full` | See active calls with full caller info |
 | `calls:read-history` | View call history |
+| `calls:read-own-history` | View the calls you answered, within the hub access window (#1342) |
 | `calls:read-presence` | View volunteer presence |
 | `calls:read-recording` | Listen to call recordings |
 | `calls:debug` | Debug call state |

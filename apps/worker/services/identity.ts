@@ -9,7 +9,7 @@ import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
-import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey } from '../lib/readers'
+import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor } from '../lib/readers'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import type { Database } from '../db'
@@ -445,6 +445,31 @@ export class IdentityService {
     const readers: string[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
     const instance = hpkeRecipientPubkey(transitionalInstanceKey?.trim().toLowerCase())
     return instance && !readers.includes(instance) ? [instance, ...readers] : readers
+  }
+
+  /**
+   * Every key a finished call's §2.5 record of `hubId` is sealed to (#1342):
+   *
+   * - {@link listAdminEnvelopeRecipients}: the hub's `admin` reader set and the
+   *   transitional instance key — the admin system of record (D1);
+   * - the hub's `call-history` reader set: holders of `calls:read-history` (D2);
+   * - the `call-history-own` subject readers: `answeredBy`'s own devices, when
+   *   they hold `calls:read-own-history` in this hub (D3). Never any other
+   *   volunteer's.
+   *
+   * Fixed at seal time (§2.4.2). Deduplicated, admin recipients first. Empty
+   * only when the hub has no admin reader and no instance key is configured;
+   * the caller treats that as the A8 alarm it is.
+   */
+  async listCallRecordRecipients(
+    transitionalInstanceKey: string | undefined,
+    hubId: string,
+    answeredBy: string | null,
+  ): Promise<string[]> {
+    const admin = await this.listAdminEnvelopeRecipients(transitionalInstanceKey, hubId)
+    const history = await readersFor(this.db, hubId, 'call-history')
+    const own = answeredBy ? await subjectReadersFor(this.db, hubId, 'call-history-own', answeredBy) : []
+    return [...new Set<string>([...admin, ...history, ...own])]
   }
 
   /**

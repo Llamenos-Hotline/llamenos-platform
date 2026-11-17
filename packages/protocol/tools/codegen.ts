@@ -197,6 +197,10 @@ const REFERENCED_BY_NAME = new Set([
   // imported that. Once hub roles gained `hubId` the two became identical and the item was
   // renamed `Role`, breaking the iOS compile. It is `RoleResponse` — its own schema's name.
   'RoleResponse',
+  // #1342 — `callHistoryResponse.access`. Inline it mints a bare `Access` beside the
+  // identical `CallHistoryAccess`, and a bare `Access` is a Swift-module collision waiting.
+  'CallHistoryAccess',
+  'CallHistoryAccessScope',
 ])
 
 /**

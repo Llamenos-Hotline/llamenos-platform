@@ -68,6 +68,16 @@ export interface PoolGateOptions {
   onReentry?: (err: PoolReentryError) => void
 }
 
+/**
+ * Every duration the gate measures or enforces, in fractional milliseconds on
+ * the monotonic clock. `Date.now()` is wall time truncated to whole
+ * milliseconds and can step; a wait measured with it reads up to 1ms short.
+ */
+const now = (): number => performance.now()
+
+/** A measured duration as the gate reports it: whole milliseconds, never rounded up past what elapsed. */
+const wholeMs = (ms: number): number => Math.floor(ms)
+
 interface Lease {
   readonly label: string
   readonly since: number
@@ -76,7 +86,7 @@ interface Lease {
 interface Waiter {
   readonly label: string
   readonly grant: (lease: Lease) => void
-  readonly timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | undefined
 }
 
 /** The open transaction the current async context runs inside, if any. */
@@ -146,10 +156,10 @@ export class PoolGate {
   }
 
   /** Current holders and waiters — what an exhaustion error reports. */
-  snapshot(now = Date.now()): { holders: Array<{ label: string; heldMs: number }>; waiting: number } {
+  snapshot(at = now()): { holders: Array<{ label: string; heldMs: number }>; waiting: number } {
     return {
       holders: [...this.holders]
-        .map((h) => ({ label: h.label, heldMs: now - h.since }))
+        .map((h) => ({ label: h.label, heldMs: wholeMs(at - h.since) }))
         .sort((a, b) => b.heldMs - a.heldMs),
       waiting: this.waiters.length,
     }
@@ -164,7 +174,7 @@ export class PoolGate {
     if (!scope?.open) return
     const err = new PoolReentryError(
       `pool "${this.opts.name}": "${label}" was issued on the root pool from inside an open ` +
-      `transaction on pool "${scope.pool}" (begun ${Date.now() - scope.since}ms ago at ${scope.origin}). ` +
+      `transaction on pool "${scope.pool}" (begun ${wholeMs(now() - scope.since)}ms ago at ${scope.origin}). ` +
       'That transaction already holds a pooled connection and possibly locks; waiting on the pool for ' +
       `another one deadlocks the server once concurrent transactions reach the pool size (max=${this.opts.max}, #1208). ` +
       'Run it on the transaction handle, or before the transaction begins / after it commits.',
@@ -176,21 +186,30 @@ export class PoolGate {
   async acquire(label: string): Promise<Lease> {
     this.assertNotInTransaction(label)
     if (this.holders.size < this.opts.max && this.waiters.length === 0) {
-      const lease: Lease = { label, since: Date.now() }
+      const lease: Lease = { label, since: now() }
       this.holders.add(lease)
       return lease
     }
     return await new Promise<Lease>((resolve, reject) => {
-      const since = Date.now()
-      const waiter: Waiter = {
-        label,
-        grant: resolve,
-        timer: setTimeout(() => {
-          const at = this.waiters.indexOf(waiter)
-          if (at >= 0) this.waiters.splice(at, 1)
-          reject(this.exhausted(label, since))
-        }, this.opts.acquireTimeoutMs),
+      const since = now()
+      const deadline = since + this.opts.acquireTimeoutMs
+      const waiter: Waiter = { label, grant: resolve, timer: undefined }
+      // The deadline is the gate's, not the timer's: Bun fires a timer up to
+      // ~1ms before its delay has elapsed, and a waiter rejected then has not
+      // waited acquireTimeoutMs (CI: "waited 299ms" on a 300ms timeout). An
+      // early fire re-arms for what is left of the wait.
+      const expire = (): void => {
+        const left = deadline - now()
+        if (left > 0) {
+          waiter.timer = setTimeout(expire, Math.ceil(left))
+          return
+        }
+        waiter.timer = undefined
+        const at = this.waiters.indexOf(waiter)
+        if (at >= 0) this.waiters.splice(at, 1)
+        reject(this.exhausted(label, since))
       }
+      waiter.timer = setTimeout(expire, this.opts.acquireTimeoutMs)
       this.waiters.push(waiter)
     })
   }
@@ -200,15 +219,15 @@ export class PoolGate {
     const next = this.waiters.shift()
     if (!next) return
     clearTimeout(next.timer)
-    const granted: Lease = { label: next.label, since: Date.now() }
+    const granted: Lease = { label: next.label, since: now() }
     this.holders.add(granted)
     next.grant(granted)
   }
 
   private exhausted(label: string, since: number): PoolExhaustedError {
-    const now = Date.now()
-    const waitedMs = now - since
-    const { holders, waiting } = this.snapshot(now)
+    const at = now()
+    const waitedMs = wholeMs(at - since)
+    const { holders, waiting } = this.snapshot(at)
     const shown = holders.slice(0, 5).map((h) => `${h.heldMs}ms: ${h.label}`).join('; ')
     const more = holders.length > 5 ? `; …${holders.length - 5} more` : ''
     const err = new PoolExhaustedError(
@@ -282,7 +301,7 @@ export function gateClient(client: SQL, gate: PoolGate) {
       const [options, body] = args.length === 2 ? args : [undefined, args[0]]
       const origin = callerFrame(new Error().stack)
       return await admitted(`transaction from ${origin}`, async () => {
-        const scope: TransactionScope = { pool: gate.name, origin, since: Date.now(), open: true }
+        const scope: TransactionScope = { pool: gate.name, origin, since: now(), open: true }
         const run: TransactionBody<T> = (tx) => transactionScope.run(scope, () => body(tx))
         try {
           return options === undefined ? await client.begin(run) : await client.begin(options, run)

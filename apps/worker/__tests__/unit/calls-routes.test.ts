@@ -56,6 +56,7 @@ function callRecordRow(overrides: Partial<typeof callRecords.$inferSelect> = {})
     endedAt: new Date('2026-09-30T10:05:00.000Z'),
     duration: 300,
     answeredBy: 'a'.repeat(64),
+    answeredAt: new Date('2026-09-30T10:00:05.000Z'),
     status: 'completed',
     hasTranscription: false,
     hasVoicemail: false,
@@ -163,6 +164,7 @@ function makeMockSettingsService() {
     getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
     isHubChannelEnabled: vi.fn().mockResolvedValue(true),
     getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+    getCallHistoryAccess: vi.fn().mockResolvedValue({ volunteerAccessDays: 7 }),
   }
 }
 
@@ -422,7 +424,8 @@ describe('Calls Routes', () => {
         dateTo: undefined,
         page: 1,
         limit: 10,
-      })
+      }, undefined)
+      expect(body.access).toEqual({ scope: 'all' })
     })
 
     it('forwards the status filter the clients send (#1139)', async () => {
@@ -444,7 +447,7 @@ describe('Calls Routes', () => {
         dateTo: undefined,
         page: 1,
         limit: 50,
-      })
+      }, undefined)
     })
 
     it('rejects a status outside completed/unanswered — active-call states are not history (#1139)', async () => {
@@ -466,6 +469,97 @@ describe('Calls Routes', () => {
       const { app } = createTestApp({ permissions: [] })
       const res = await app.request('/history')
       expect(res.status).toBe(403)
+    })
+
+    // #1342: calls:read-own-history alone — the caller's own calls inside the hub's
+    // access window, bounded IN the service query, and the window said out loud.
+    describe('with calls:read-own-history only', () => {
+      const SELF = 'f'.repeat(64)
+
+      it('asks the service for the caller\'s own calls since the window opened, on the server clock', async () => {
+        const callsSvc = makeMockCallsService()
+        callsSvc.listCallHistory.mockResolvedValue({ calls: [callRecordRow({ callId: 'mine', answeredBy: SELF })], total: 1, hasMore: false })
+        const settings = makeMockSettingsService()
+        settings.getCallHistoryAccess.mockResolvedValue({ volunteerAccessDays: 3 })
+        const services = makeServices({ calls: callsSvc, settings })
+        const { app } = createTestApp({ permissions: ['calls:read-own-history'], pubkey: SELF, services })
+
+        const before = Date.now()
+        const res = await app.request('/history?limit=10')
+        const after = Date.now()
+        expect(res.status).toBe(200)
+        expect(settings.getCallHistoryAccess).toHaveBeenCalledWith('hub-1')
+
+        const [hubArg, , own] = callsSvc.listCallHistory.mock.calls[0] as [string, unknown, { answeredBy: string; answeredSince: Date }]
+        expect(hubArg).toBe('hub-1')
+        expect(own.answeredBy).toBe(SELF)
+        const threeDays = 3 * 24 * 60 * 60 * 1000
+        expect(own.answeredSince.getTime()).toBeGreaterThanOrEqual(before - threeDays)
+        expect(own.answeredSince.getTime()).toBeLessThanOrEqual(after - threeDays)
+
+        const body = await res.json()
+        expect(body.access).toEqual({ scope: 'own', windowDays: 3, availableSince: own.answeredSince.toISOString() })
+        expect(body.calls.map((c: { id: string }) => c.id)).toEqual(['mine'])
+      })
+
+      it('says the window even when nothing is inside it, so an empty page never reads as lost data', async () => {
+        const services = makeServices()
+        const { app } = createTestApp({ permissions: ['calls:read-own-history'], pubkey: SELF, services })
+        const res = await app.request('/history')
+        expect(res.status).toBe(200)
+        const body = await res.json()
+        expect(body.calls).toEqual([])
+        expect(body.access).toMatchObject({ scope: 'own', windowDays: 7 })
+      })
+
+      it('calls:read-history wins over calls:read-own-history: no window, no answeredBy bound', async () => {
+        const callsSvc = makeMockCallsService()
+        const services = makeServices({ calls: callsSvc })
+        const { app } = createTestApp({ permissions: ['calls:read-history', 'calls:read-own-history'], services })
+        const res = await app.request('/history')
+        expect(res.status).toBe(200)
+        expect(callsSvc.listCallHistory.mock.calls[0][2]).toBeUndefined()
+        expect((await res.json()).access).toEqual({ scope: 'all' })
+      })
+    })
+  })
+
+  describe('GET /:callId — a finished call is history (#1342)', () => {
+    const SELF = 'f'.repeat(64)
+
+    it('calls:read-active alone never reaches the history record', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.getCallRecord.mockResolvedValue(callRecordRow())
+      const { app } = createTestApp({ permissions: ['calls:read-active'], services: makeServices({ calls: callsSvc }) })
+      const res = await app.request('/call-1')
+      expect(res.status).toBe(404)
+      expect(callsSvc.getCallRecord).not.toHaveBeenCalled()
+    })
+
+    it('calls:read-own-history looks the record up under the same own-and-window bound as the list', async () => {
+      const callsSvc = makeMockCallsService()
+      callsSvc.getCallRecord.mockResolvedValue(callRecordRow({ answeredBy: SELF }))
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-own-history'],
+        pubkey: SELF,
+        services: makeServices({ calls: callsSvc }),
+      })
+      const res = await app.request('/call-1')
+      expect(res.status).toBe(200)
+      const [hubArg, callArg, own] = callsSvc.getCallRecord.mock.calls[0] as [string, string, { answeredBy: string; answeredSince: Date }]
+      expect([hubArg, callArg, own.answeredBy]).toEqual(['hub-1', 'call-1', SELF])
+      expect(own.answeredSince).toBeInstanceOf(Date)
+    })
+
+    it('a record outside the bound reads as missing', async () => {
+      const callsSvc = makeMockCallsService() // getCallRecord → null: not theirs, or past the window
+      const { app } = createTestApp({
+        permissions: ['calls:read-active', 'calls:read-own-history'],
+        pubkey: SELF,
+        services: makeServices({ calls: callsSvc }),
+      })
+      const res = await app.request('/call-1')
+      expect(res.status).toBe(404)
     })
   })
 
