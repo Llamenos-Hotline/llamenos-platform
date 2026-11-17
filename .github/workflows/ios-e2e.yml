@@ -269,14 +269,15 @@ jobs:
       # The fallback is only taken once the guard has proved (its
       # `write paths OK:` line) that RUNNER_TEMP, the checkout, the runner's
       # _diag and the simulator device set are all on a volume it can read;
-      # without that, a df number is about a disk the job is not using. It
-      # reads the host volume AND the volume RUNNER_TEMP is on (the CI work
-      # volume's disk image when the runner uses it, docs/runbooks/
-      # mac-ci-runner-disk.md) and takes the smaller, because the guard holds
-      # each to the same floor.
+      # without that, a df number is about a disk the job is not using. It is
+      # the guard's own `gate` mode: the same write-path resolution and the
+      # same per-volume floors (each volume held to what this job puts on IT:
+      # 5 GiB of swap + _diag on the internal disk once the CI work volume is
+      # in use, 7 GiB of device data + build products on the work volume, 12
+      # on a host with everything on one disk), with no report and no reclaim,
+      # so nothing walks a directory. The fallback and the guard cannot
+      # disagree, because they are one computation.
       #
-      # DISK_MIN_FREE_GIB is exported to the script as MAC_DISK_MIN_FREE_GIB,
-      # so the script's gate and the watchdog's df fallback cannot disagree.
       # Nothing here signals a process group: only the guard's own pid and
       # its direct children are ever signalled.
       - name: Guard the runner's disk headroom (wait out a co-tenant)
@@ -285,11 +286,8 @@ jobs:
           DISK_WAIT_MAX_MIN: "35"
           DISK_WAIT_POLL_SEC: "60"
           DISK_GUARD_ATTEMPT_MAX_SEC: "90"
-          DISK_MIN_FREE_GIB: "12"
         run: |
           set -uo pipefail
-          export MAC_DISK_MIN_FREE_GIB="$DISK_MIN_FREE_GIB"
-          volume="${MAC_DISK_GUARD_VOLUME:-/System/Volumes/Data}"
           guard_log="$RUNNER_TEMP/disk-guard.log"
           guard_summary="$RUNNER_TEMP/disk-guard-summary.md"
           # This runner's install root, so its own Runner.Worker is not
@@ -329,11 +327,6 @@ jobs:
               # Never `wait` on something that may not have died: a process
               # stuck in the kernel ignores SIGKILL, and waiting is the bug.
               if kill -0 "$gpid" 2>/dev/null; then disown "$gpid" 2>/dev/null || true; else wait "$gpid" 2>/dev/null || true; fi
-              # One df per path, inside the script: macOS df prints a header per
-              # operand, so parsing a two-operand df by row index reads a header
-              # as data and reports 0 GiB free (#2760).
-              free_kib=$(bash scripts/ci/mac-runner-disk-guard.sh min-free-kib "$volume" "$RUNNER_TEMP" 2>/dev/null || true)
-              free_gib=$(awk -v k="${free_kib:-0}" 'BEGIN { printf "%.1f", k / 1048576 }')
               echo "::group::disk guard output before it hung (attempt $attempt)"
               cat "$guard_log"
               echo "::endgroup::"
@@ -347,14 +340,20 @@ jobs:
                 printf 'REFUSED: guard hung checking write paths (%s). Environmental, not this PR.\n' "$last_line" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
                 exit 1
               fi
-              if awk -v f="$free_gib" -v m="$DISK_MIN_FREE_GIB" 'BEGIN { exit !(f >= m) }'; then
-                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to df: ${free_gib} GiB free on the tighter of ${volume} and RUNNER_TEMP's volume, ${DISK_MIN_FREE_GIB} needed. Proceeding WITHOUT reclaim."
-                printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df fallback: **%s GiB free**, need %s GiB. Proceeded without reclaim.\n\n' \
-                  "${RUNNER_NAME:-local}" "$cap" "$last_line" "$free_gib" "$DISK_MIN_FREE_GIB" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+              # Every df below already answered once, in the attempt above.
+              fallback_log="$RUNNER_TEMP/disk-guard-fallback.log"
+              if bash scripts/ci/mac-runner-disk-guard.sh gate >"$fallback_log" 2>&1; then
+                cat "$fallback_log"
+                echo "::warning::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}'). Its report/reclaim is blocked on a path that is not about free space, so the check fell back to the guard's df-only gate, which held every volume this job writes to its own floor and passed. Proceeding WITHOUT reclaim."
+                printf '### iOS runner disk guard (%s)\n\nGuard script hung after %ss (last output: %s). df-only fallback passed: %s. Proceeded without reclaim.\n\n' \
+                  "${RUNNER_NAME:-local}" "$cap" "$last_line" "$(grep '^disk headroom OK' "$fallback_log" | tr '\n' ' ')" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
                 exit 0
               fi
-              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and the df fallback shows only ${free_gib} GiB free on the tighter of ${volume} and RUNNER_TEMP's volume, of the ${DISK_MIN_FREE_GIB} GiB this job needs. THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
-              printf 'REFUSED: only %s GiB free, need %s GiB (guard script hung; df fallback). Environmental, not this PR.\n' "$free_gib" "$DISK_MIN_FREE_GIB" > "$guard_summary"
+              # Into the guard log, so the verdict and shortfall lines below
+              # read the fallback's numbers like any other refusal.
+              tee -a "$guard_log" < "$fallback_log"
+              echo "::error::disk guard did not finish within ${cap}s (attempt $attempt; last output: '${last_line}') and its df-only fallback refused ($(grep -o 'disk-guard-verdict: refused .*' "$fallback_log" | tail -1)). THIS IS NOT A TEST FAILURE AND NOT THIS PR'S FAULT."
+              printf 'REFUSED: guard script hung; df-only fallback: %s. Environmental, not this PR.\n' "$(grep '^disk-guard-verdict:' "$fallback_log" | tr '\n' ' ')" > "$guard_summary"
               rc=1
             elif wait "$gpid"; then
               rc=0
@@ -1649,6 +1648,7 @@ jobs:
             udid=$(basename "$dir")
             name=$(/usr/libexec/PlistBuddy -c 'Print :name' "$dir/device.plist" 2>/dev/null || echo "")
             case "$name" in
-              ios-e2e-*) xcrun simctl delete "$udid" 2>/dev/null && echo "swept $name ($udid)" ;;
+              # delete-sim: also the /private/var/tmp dir a bare delete leaks (#2644).
+              ios-e2e-*) bash scripts/ci/mac-runner-disk-guard.sh delete-sim "$udid"; echo "swept $name ($udid)" ;;
             esac
           done || true

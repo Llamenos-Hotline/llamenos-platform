@@ -3036,11 +3036,16 @@ jobs:
             DEBUG_INFORMATION_FORMAT=dwarf \
             2>&1 | xcbeautify --report junit --report-path test-results/ios-unit.xml
 
+      # delete-sim, never a bare `simctl delete`: that removes the device but
+      # leaves its ~3 MB /private/var/tmp launchd_sim directory on the internal
+      # disk, one per run, forever (#2644: 2,040 of them took the host under
+      # its floor). delete-sim shuts down, deletes, then removes that directory
+      # once simctl no longer lists the device, and never fails the teardown.
+      # ios-e2e.yml's build and ui teardowns do the same.
       - name: Delete this job's simulator
         if: always()
         run: |
-          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
-          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          bash scripts/ci/mac-runner-disk-guard.sh delete-sim "${{ steps.sim.outputs.udid }}"
 
       - name: Remove this job's DerivedData
         if: always()
