@@ -1105,7 +1105,7 @@ describe('hubs routes', () => {
   })
 
   describe('GET /hubs/:hubId/key/recipients', () => {
-    const answer = { generation: 2, envelopes: [], members: [{ pubkey: 'f'.repeat(64), encryptionPubkey: null }] }
+    const answer = { generation: 2, epoch: 0, rotation: null, rotationRequired: false, envelopes: [], members: [{ pubkey: 'f'.repeat(64), encryptionPubkey: null }] }
 
     it('answers a manager in the hub', async () => {
       const spy = vi.fn().mockResolvedValue(answer)
@@ -1131,6 +1131,94 @@ describe('hubs routes', () => {
       const { app } = createTestApp({ permissions: ['hubs:read'] })
       const res = await app.request('/hubs/hub-1/key/recipients')
       expect(res.status).toBe(403)
+    })
+  })
+
+  describe('POST /hubs/:hubId/key/rotate', () => {
+    const body = {
+      expectedGeneration: 3,
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      rotation: { proof: 'ab'.repeat(40), check: 'cd'.repeat(40) },
+      resealed: {
+        tags: [],
+        teams: [],
+        roles: [{ from: { id: 'r1', encryptedName: 'old', encryptedDescription: null }, to: { id: 'r1', encryptedName: 'new', encryptedDescription: null } }],
+      },
+    }
+    const post = (app: Hono<AppEnv>, payload: unknown = body) => app.request('/hubs/hub-1/key/rotate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    it('rotates for a hub admin and audits it', async () => {
+      const spy = vi.fn().mockResolvedValue({ generation: 4, epoch: 1 })
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['settings:manage', 'notes:read-all'],
+        serviceMock: { identity: { rotateHubKey: spy } },
+      })
+      const res = await post(app)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ generation: 4, epoch: 1 })
+      expect(spy).toHaveBeenCalledWith('hub-1', body)
+      expect(auditLogSpy).toHaveBeenCalledWith(
+        'hubKeyRotated',
+        expect.any(String),
+        expect.objectContaining({ epoch: 1, recipients: 1 }),
+        'hub-1',
+      )
+    })
+
+    it('refuses a super-admin with no role in the hub (D1)', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['*'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const res = await post(app)
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('refuses a member who neither manages keys nor administers the hub', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['hubs:read'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const res = await post(app)
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('passes the service refusals through: a wrap for a non-member is 403, a stale read is 409', async () => {
+      for (const [status, message] of [
+        [403, 'Hub key rotation: a new key may be wrapped only for current members of the hub'],
+        [409, 'Hub key rotation: 1 role value(s) not re-sealed — re-read and retry'],
+      ] as const) {
+        const { app } = createTestApp({
+          permissions: ['hubs:manage-keys'],
+          serviceMock: { identity: { rotateHubKey: vi.fn().mockRejectedValue(new ServiceError(status, message)) } },
+        })
+        const res = await post(app)
+        expect(res.status).toBe(status)
+        expect(await res.json()).toEqual({ error: message })
+      }
+    })
+
+    it('rejects a body without a rotation statement', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['hubs:manage-keys'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const { rotation: _omitted, ...withoutStatement } = body
+      const res = await post(app, withoutStatement)
+      expect(res.status).toBe(400)
+      expect(spy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('GET /hubs/:hubId/key/rotation', () => {
+    it('answers any member with the epoch and statement', async () => {
+      const answer = { epoch: 2, rotation: { proof: 'aa', check: 'bb' } }
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({ permissions: ['hubs:read'], serviceMock: { identity: { getHubKeyRotation: spy } } })
+      const res = await app.request('/hubs/hub-1/key/rotation')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual(answer)
+      expect(spy).toHaveBeenCalledWith('hub-1')
     })
   })
 })
