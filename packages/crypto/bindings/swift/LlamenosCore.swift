@@ -1203,6 +1203,77 @@ public func FfiConverterTypeEncryptedNote_lower(_ value: EncryptedNote) -> RustB
 
 
 /**
+ * A sealed shift field in wire form: the ciphertext plus one envelope per
+ * reader. Maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+public struct EncryptedShiftField: Equatable, Hashable {
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    public let encryptedContent: String
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    public let readerEnvelopes: [RecipientKeyEnvelope]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * hex: iv(12) || ciphertext || tag(16)
+         */encryptedContent: String, 
+        /**
+         * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+         */readerEnvelopes: [RecipientKeyEnvelope]) {
+        self.encryptedContent = encryptedContent
+        self.readerEnvelopes = readerEnvelopes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension EncryptedShiftField: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEncryptedShiftField: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EncryptedShiftField {
+        return
+            try EncryptedShiftField(
+                encryptedContent: FfiConverterString.read(from: &buf), 
+                readerEnvelopes: FfiConverterSequenceTypeRecipientKeyEnvelope.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: EncryptedShiftField, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.encryptedContent, into: &buf)
+        FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.readerEnvelopes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedShiftField_lift(_ buf: RustBuffer) throws -> EncryptedShiftField {
+    return try FfiConverterTypeEncryptedShiftField.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedShiftField_lower(_ value: EncryptedShiftField) -> RustBuffer {
+    return FfiConverterTypeEncryptedShiftField.lower(value)
+}
+
+
+/**
  * Ephemeral X25519 keypair for device-linking ECDH provisioning.
  *
  * Unlike identity keys, the secret IS exposed — provisioning is a one-shot
@@ -2352,6 +2423,83 @@ public func FfiConverterTypeCryptoError_lower(_ value: CryptoError) -> RustBuffe
     return FfiConverterTypeCryptoError.lower(value)
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * What a shift ciphertext is. The only choice a caller makes — it names the
+ * field being sealed, never how. A UniFFI enum on mobile.
+ */
+
+public enum ShiftFieldPurpose: Equatable, Hashable {
+    
+    /**
+     * A volunteer's reason for an availability block.
+     */
+    case availabilityReason
+    /**
+     * The note on a shift override.
+     */
+    case overrideNote
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ShiftFieldPurpose: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeShiftFieldPurpose: FfiConverterRustBuffer {
+    typealias SwiftType = ShiftFieldPurpose
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ShiftFieldPurpose {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .availabilityReason
+        
+        case 2: return .overrideNote
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ShiftFieldPurpose, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .availabilityReason:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .overrideNote:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShiftFieldPurpose_lift(_ buf: RustBuffer) throws -> ShiftFieldPurpose {
+    return try FfiConverterTypeShiftFieldPurpose.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShiftFieldPurpose_lower(_ value: ShiftFieldPurpose) -> RustBuffer {
+    return FfiConverterTypeShiftFieldPurpose.lower(value)
+}
+
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -3324,6 +3472,19 @@ public func mobileOpenCase(purpose: CasePurpose, encryptedContent: String, envel
 })
 }
 /**
+ * Open a shift field as this device from all of its envelopes; Rust picks the
+ * one addressed to this device's X25519 key.
+ */
+public func mobileOpenShiftField(purpose: ShiftFieldPurpose, encryptedContent: String, envelopes: [RecipientKeyEnvelope])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_open_shift_field(
+        FfiConverterTypeShiftFieldPurpose_lower(purpose),
+        FfiConverterString.lower(encryptedContent),
+        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
+    )
+})
+}
+/**
  * Create the initial PUK (generation 1), wrapped to the device's X25519 pubkey.
  * Returns JSON: { pukState, seedHex, envelope }
  */
@@ -3390,6 +3551,23 @@ public func mobileSealCase(purpose: CasePurpose, plaintext: String, readerPubkey
     return try  FfiConverterTypeEncryptedCaseCiphertext_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_seal_case(
         FfiConverterTypeCasePurpose_lower(purpose),
+        FfiConverterString.lower(plaintext),
+        FfiConverterSequenceString.lower(readerPubkeys),$0
+    )
+})
+}
+/**
+ * Seal an availability reason or a shift override note as this device, for
+ * this device plus `reader_pubkeys` (X25519, hex).
+ *
+ * No label and no AAD argument: `crate::shift_record` derives both from
+ * `purpose`. The result maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+public func mobileSealShiftField(purpose: ShiftFieldPurpose, plaintext: String, readerPubkeys: [String])throws  -> EncryptedShiftField  {
+    return try  FfiConverterTypeEncryptedShiftField_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_seal_shift_field(
+        FfiConverterTypeShiftFieldPurpose_lower(purpose),
         FfiConverterString.lower(plaintext),
         FfiConverterSequenceString.lower(readerPubkeys),$0
     )
@@ -3757,6 +3935,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_open_shift_field() != 64391) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3773,6 +3954,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_seal_shift_field() != 23967) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956) {

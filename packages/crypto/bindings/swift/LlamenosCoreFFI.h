@@ -592,6 +592,11 @@ void uniffi_llamenos_core_fn_func_mobile_lock(RustCallStatus *_Nonnull out_statu
 RustBuffer uniffi_llamenos_core_fn_func_mobile_open_case(RustBuffer purpose, RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_SHIFT_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_open_shift_field(RustBuffer purpose, RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_puk_create(RustCallStatus *_Nonnull out_status
@@ -622,6 +627,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(RustCallStatus *
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_case(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_SHIFT_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_shift_field(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SET_HUB_KEY
@@ -1342,6 +1352,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_open_case(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_SHIFT_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_open_shift_field(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_puk_create(void
@@ -1375,6 +1391,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_case(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_SHIFT_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_shift_field(void
     
 );
 #endif

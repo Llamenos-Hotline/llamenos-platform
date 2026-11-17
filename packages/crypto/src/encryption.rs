@@ -269,6 +269,39 @@ pub struct RecordReader {
     pub encryption_pubkey: String,
 }
 
+/// Normalise a client-supplied reader list for a purpose-sealed record
+/// (`crate::case_record`, `crate::shift_record`): lowercase hex, 32-byte X25519
+/// keys, duplicates dropped (first occurrence wins), and at least one reader.
+/// `what` names the record kind in the error ("case", "shift field").
+pub(crate) fn normalise_x25519_readers(
+    reader_pubkeys: &[String],
+    what: &str,
+) -> Result<Vec<RecordReader>, CryptoError> {
+    let mut readers: Vec<RecordReader> = Vec::with_capacity(reader_pubkeys.len());
+    for pk in reader_pubkeys {
+        let bytes = hex::decode(pk).map_err(CryptoError::HexError)?;
+        if bytes.len() != 32 {
+            return Err(CryptoError::InvalidInput(format!(
+                "{what} reader pubkey must be a 32-byte X25519 key, got {} bytes",
+                bytes.len()
+            )));
+        }
+        let pk = hex::encode(bytes);
+        if !readers.iter().any(|r| r.encryption_pubkey == pk) {
+            readers.push(RecordReader {
+                address: pk.clone(),
+                encryption_pubkey: pk,
+            });
+        }
+    }
+    if readers.is_empty() {
+        return Err(CryptoError::InvalidInput(format!(
+            "{what} ciphertext has no readers — it would be undecryptable by everyone"
+        )));
+    }
+    Ok(readers)
+}
+
 /// Decode a fixed-length wire field written as hex or as unpadded base64url.
 fn decode_wire_bytes<const N: usize>(field: &str, value: &str) -> Result<[u8; N], CryptoError> {
     let bytes = if value.len() == 2 * N {

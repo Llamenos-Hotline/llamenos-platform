@@ -769,6 +769,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_open_case(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_open_shift_field(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_create(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_derive_state(
@@ -780,6 +782,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_seal_case(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_seal_shift_field(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_set_hub_key(
     ): Short
@@ -950,6 +954,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_lock(uniffi_out_err: UniffiRust
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_open_case(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_open_shift_field(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_create(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_derive_state(`seedHex`: RustBuffer.ByValue,`generation`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -961,6 +967,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: Rus
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_seal_case(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_seal_shift_field(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_set_hub_key(`hubId`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1304,6 +1312,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_open_shift_field() != 64391.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1320,6 +1331,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_shift_field() != 23967.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956.toShort()) {
@@ -2080,6 +2094,55 @@ public object FfiConverterTypeEncryptedNote: FfiConverterRustBuffer<EncryptedNot
             FfiConverterString.write(value.`encryptedContent`, buf)
             FfiConverterTypeKeyEnvelope.write(value.`authorEnvelope`, buf)
             FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`adminEnvelopes`, buf)
+    }
+}
+
+
+
+/**
+ * A sealed shift field in wire form: the ciphertext plus one envelope per
+ * reader. Maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+data class EncryptedShiftField (
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    val `encryptedContent`: kotlin.String
+    , 
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    val `readerEnvelopes`: List<RecipientKeyEnvelope>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEncryptedShiftField: FfiConverterRustBuffer<EncryptedShiftField> {
+    override fun read(buf: ByteBuffer): EncryptedShiftField {
+        return EncryptedShiftField(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeRecipientKeyEnvelope.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EncryptedShiftField) = (
+            FfiConverterString.allocationSize(value.`encryptedContent`) +
+            FfiConverterSequenceTypeRecipientKeyEnvelope.allocationSize(value.`readerEnvelopes`)
+    )
+
+    override fun write(value: EncryptedShiftField, buf: ByteBuffer) {
+            FfiConverterString.write(value.`encryptedContent`, buf)
+            FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`readerEnvelopes`, buf)
     }
 }
 
@@ -2903,6 +2966,50 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
     }
 
 }
+
+
+
+/**
+ * What a shift ciphertext is. The only choice a caller makes — it names the
+ * field being sealed, never how. A UniFFI enum on mobile.
+ */
+
+enum class ShiftFieldPurpose {
+    
+    /**
+     * A volunteer's reason for an availability block.
+     */
+    AVAILABILITY_REASON,
+    /**
+     * The note on a shift override.
+     */
+    OVERRIDE_NOTE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeShiftFieldPurpose: FfiConverterRustBuffer<ShiftFieldPurpose> {
+    override fun read(buf: ByteBuffer) = try {
+        ShiftFieldPurpose.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ShiftFieldPurpose) = 4UL
+
+    override fun write(value: ShiftFieldPurpose, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -4101,6 +4208,21 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Open a shift field as this device from all of its envelopes; Rust picks the
+         * one addressed to this device's X25519 key.
+         */
+    @Throws(CryptoException::class) fun `mobileOpenShiftField`(`purpose`: ShiftFieldPurpose, `encryptedContent`: kotlin.String, `envelopes`: List<RecipientKeyEnvelope>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_shift_field(
+    
+        FfiConverterTypeShiftFieldPurpose.lower(`purpose`),FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Create the initial PUK (generation 1), wrapped to the device's X25519 pubkey.
          * Returns JSON: { pukState, seedHex, envelope }
          */
@@ -4185,6 +4307,25 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_seal_case(
     
         FfiConverterTypeCasePurpose.lower(`purpose`),FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal an availability reason or a shift override note as this device, for
+         * this device plus `reader_pubkeys` (X25519, hex).
+         *
+         * No label and no AAD argument: `crate::shift_record` derives both from
+         * `purpose`. The result maps onto `encryptedReason`/`reasonEnvelopes` and
+         * `encryptedNote`/`noteEnvelopes` unchanged.
+         */
+    @Throws(CryptoException::class) fun `mobileSealShiftField`(`purpose`: ShiftFieldPurpose, `plaintext`: kotlin.String, `readerPubkeys`: List<kotlin.String>): EncryptedShiftField {
+            return FfiConverterTypeEncryptedShiftField.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_seal_shift_field(
+    
+        FfiConverterTypeShiftFieldPurpose.lower(`purpose`),FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
 }
     )
     }
