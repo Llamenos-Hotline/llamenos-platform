@@ -72,7 +72,7 @@ export const hubKeyRecipientsResponseSchema = z.object({
 
 /** `PUT /api/hubs/:hubId/key` response: the envelope set's new generation. */
 export const hubKeySetResponseSchema = z.object({
-  ok: z.literal(true),
+  ok: z.boolean(),
   generation: z.number().int().min(1),
 })
 
