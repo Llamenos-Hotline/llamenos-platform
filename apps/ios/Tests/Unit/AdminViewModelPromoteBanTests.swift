@@ -37,7 +37,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
                 let element = Self.lastJSON()?["blindedElement"] as? String ?? ""
                 return (200, Data(#"{"evaluations":[{"evaluatedElement":"\#(element)"},{"hubId":"hub-1","evaluatedElement":"\#(element)"}]}"#.utf8))
             case "/api/admin/bans":
-                return (200, Data(#"{"bans":[],"total":0}"#.utf8))
+                return (200, Data(#"{"bans":[],"reentries":[],"total":0}"#.utf8))
             default:
                 return (200, Data(#"{"ok":true}"#.utf8))
             }
@@ -74,7 +74,7 @@ final class AdminViewModelPromoteBanTests: XCTestCase {
                 let echoed = elements.map { "\"\($0)\"" }.joined(separator: ",")
                 return (200, Data(#"{"evaluatedElements":[\#(echoed)]}"#.utf8))
             case ("GET", "/api/admin/bans"):
-                return (200, Data(#"{"bans":[],"total":0}"#.utf8))
+                return (200, Data(#"{"bans":[],"reentries":[],"total":0}"#.utf8))
             default:
                 return (200, Data(#"{"ok":true}"#.utf8))
             }
