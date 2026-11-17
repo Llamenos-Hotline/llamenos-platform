@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRepublishOnlyEvent, REVIEW_REPUBLISH_ACTIONS } from '../../orchestrator/src/ci'
+import { isRepublishOnlyEvent, REVIEW_GATE_STANDING, REVIEW_REPUBLISH_ACTIONS, reviewGateFailsClosed } from '../../orchestrator/src/ci'
 import { parse as parseYaml } from 'yaml'
 import {
   analyseCarrierUniqueness, analyseRequiredContextCreation, concurrencyGroupOn, HEAD_EVENTS, jobNameOn,
@@ -187,6 +187,19 @@ describe('one carrier per (head, required context) — #2813', () => {
     for (const action of ['opened', 'reopened', 'synchronize', 'review_requested', 'labeled', 'edited']) {
       const carrier = jobNameOn('fleet-review.yml', 'fleet-review', j, { event: 'pull_request', action }) === 'fleet/review'
       expect(carrier, action).toBe(isRepublishOnlyEvent({ eventName: 'pull_request', action }))
+    }
+  })
+
+  it('fail-closed is preserved: re-running a carrier for a PR that never earned a review is still red', () => {
+    // A carrier is republish-only (above), so its re-run reaches
+    // `decideReviewGate`'s republish branch, never `run-engine`. With nothing
+    // cached for the tree and no verdict ever earned that branch is
+    // `unreviewed` — and every republish outcome that is not a verdict for
+    // THIS tree fails the job. Refreshing a carrier therefore cannot turn a
+    // refusal green; only a cached verdict for this exact tree can.
+    for (const kind of ['unreviewed', 'tree-changed', 'carry-unreadable', 'not-requested'] as const) {
+      expect(REVIEW_GATE_STANDING[kind], kind).toBe('no-verdict')
+      expect(reviewGateFailsClosed(kind), kind).toBe(true)
     }
   })
 

@@ -2741,9 +2741,10 @@ jobs:
   # channel configuration": an unset secret is detected inside `run:` — an
   # unset secret interpolates as "" — and skipped loudly, never fatally.)
   #
-  # A SEPARATE, GitHub-hosted job on purpose. It is the only thing in this
-  # file with write access; it checks out nothing, installs nothing and runs
-  # no repository code at all. Keeping it out of `fleet-review` is what lets
+  # A SEPARATE, GitHub-hosted job on purpose. It and `refresh-carrier`
+  # (#2813, `actions: write` only) are the only things in this file with
+  # write access; it checks out nothing, installs nothing and runs no
+  # repository code at all. Keeping it out of `fleet-review` is what lets
   # that job — the one that runs a model next to the operator's logged-in
   # `claude` session — stay read-only.
   #

@@ -1473,8 +1473,11 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   }
 
   it('finds fleet-verify (fleet-verify.yml) and fleet-review (fleet-review.yml) as real jobs — the parser must not pass vacuously', () => {
-    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain('name: fleet/verify')
-    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain('name: fleet/review')
+    // #2813: the carrier name is a literal inside a per-event `name:`
+    // expression (tests/orchestrator/required-context-creation.test.ts
+    // evaluates it per event).
+    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain("&& 'fleet/verify' ||")
+    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain("&& 'fleet/review' ||")
   })
 
   // The load-bearing assertion of this whole rail, in its post-#844-fail-open

@@ -391,9 +391,16 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     expect(on['merge_group']).toEqual({ types: ['checks_requested'] })
   })
 
-  it('the publishing job is separate, GitHub-hosted, and the ONLY writer', () => {
+  it('the publishing job is separate, GitHub-hosted, and with the carrier refresh the ONLY writers', () => {
     const jobs = (parseYaml(reviewYml) as { jobs: Record<string, { 'runs-on': unknown; permissions?: Record<string, string>; needs?: unknown }> }).jobs
-    expect(Object.keys(jobs)).toEqual(['fleet-review', 'publish-reviews'])
+    expect(Object.keys(jobs)).toEqual(['fleet-review', 'publish-reviews', 'refresh-carrier'])
+    // #2813: the carrier refresh re-runs the head's one `fleet/review`
+    // carrier after a review request. GitHub-hosted, after the review, and
+    // its only write is `actions` — it runs no repository code.
+    const refresh = jobs['refresh-carrier']
+    expect(refresh?.['runs-on']).toBe('ubuntu-latest')
+    expect(refresh?.needs).toEqual(['fleet-review'])
+    expect(refresh?.permissions).toEqual({ actions: 'write', checks: 'read' })
     // The job that runs a model next to the review key stays read-only.
     // `checks: read` (#1187) is the merge-queue arm's only new grant: it
     // reads the `fleet/review` check run already recorded on the queued PR's
