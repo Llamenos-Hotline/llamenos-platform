@@ -1099,6 +1099,22 @@ class CryptoService @Inject constructor() {
         }
 
     /**
+     * Blind-index case triage [values] for [fieldLabel] (`HMAC_CASE_STATUS` or
+     * `HMAC_CASE_SEVERITY`) under the Rust-held key of [hubId] — one hex token
+     * per value, in order (#2779). The hub key never enters JVM memory. Throws
+     * when the hub key is not loaded: a status is never written as plaintext.
+     */
+    suspend fun blindIndexTokens(hubId: String, fieldLabel: String, values: List<String>): List<String> =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.mobileBlindIndexTokens(hubId, fieldLabel, values)
+            } catch (e: org.llamenos.core.CryptoException) {
+                throw CryptoException("Blind index failed for hub $hubId: ${e.message}", e)
+            }
+        }
+
+    /**
      * Decrypt a hub event using the Rust-stored hub key.
      * Returns decrypted JSON string or null if decryption fails.
      */

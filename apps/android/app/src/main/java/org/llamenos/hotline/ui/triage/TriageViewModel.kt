@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.ui.cases.TriageTokens
 import org.llamenos.hotline.api.HubMembershipPendingException
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
@@ -62,6 +64,7 @@ data class TriageUiState(
 @HiltViewModel
 class TriageViewModel @Inject constructor(
     private val apiService: ApiService,
+    private val cryptoService: CryptoService,
     private val activeHubState: ActiveHubState,
 ) : ViewModel() {
 
@@ -187,9 +190,16 @@ class TriageViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isConverting = true, error = null) }
             try {
+                // The new case's status is the type's default, written as its
+                // hub-keyed blind index — the server cannot compute it (#2779).
+                val hubId = activeHubState.activeHubId.value ?: throw NoActiveHubException()
+                val defaultStatus = _uiState.value.entityTypes.firstOrNull { it.id == entityTypeId }?.defaultStatus
+                    ?.takeIf { it.isNotBlank() }
+                    ?: throw IllegalStateException("Entity type $entityTypeId has no default status")
                 val body = ConvertFromReportBody(
                     reportID = report.id,
                     entityTypeID = entityTypeId,
+                    statusHash = TriageTokens.statusToken(cryptoService, hubId, defaultStatus),
                     additionalFields = JsonObject(emptyMap()),
                 )
                 val response = apiService.request<ConvertFromReportResponse>(

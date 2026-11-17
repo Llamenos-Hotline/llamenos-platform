@@ -71,7 +71,8 @@ export const callerIdentifyResponseSchema = z.object({
   recentCases: z.array(z.object({
     id: z.string(),
     caseNumber: z.string().optional(),
-    status: z.string(),
+    /** The case's status as its hub-keyed blind index (#2779); the client maps it to a status. */
+    statusHash: z.string(),
   })),
 })
 

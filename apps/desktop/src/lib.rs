@@ -235,6 +235,7 @@ pub fn run() {
             crypto::decrypt_server_event,
             crypto::encrypt_hub_field,
             crypto::decrypt_hub_field,
+            crypto::blind_index_tokens,
             // Device-local sealing (drafts, offline queue) — key derived from the device seed
             crypto::seal_device_local_from_state,
             crypto::open_device_local_from_state,

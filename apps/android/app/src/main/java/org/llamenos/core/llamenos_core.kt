@@ -681,6 +681,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_blind_index_tokens(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_build_auth_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key(
@@ -861,6 +863,8 @@ external fun uniffi_llamenos_core_fn_func_generate_ephemeral_keypair_mobile(unif
 external fun uniffi_llamenos_core_fn_func_get_public_key(`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(`b64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_blind_index_tokens(`hubId`: RustBuffer.ByValue,`fieldLabel`: RustBuffer.ByValue,`values`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_build_auth_message(`pubkeyHex`: RustBuffer.ByValue,`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`nonce`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1170,6 +1174,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_blind_index_tokens() != 45248.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360.toShort()) {
@@ -3401,6 +3408,25 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(
     
         FfiConverterString.lower(`b64`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Blind-index `values` for a case triage field under the stored hub key of
+         * `hub_id`, one hex token per value, in order (#2779). `field_label` must be
+         * one of `blind_index::BLIND_INDEX_FIELDS` (`HMAC_CASE_STATUS`,
+         * `HMAC_CASE_SEVERITY`). The client writes these tokens as `statusHash` /
+         * `severityHash`, and maps a token it reads back to a status by computing the
+         * tokens of its entity type's vocabulary. The hub key never leaves Rust.
+         */
+    @Throws(CryptoException::class) fun `mobileBlindIndexTokens`(`hubId`: kotlin.String, `fieldLabel`: kotlin.String, `values`: List<kotlin.String>): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_blind_index_tokens(
+    
+        FfiConverterString.lower(`hubId`),FfiConverterString.lower(`fieldLabel`),FfiConverterSequenceString.lower(`values`),_status)
 }
     )
     }

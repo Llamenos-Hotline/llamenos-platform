@@ -194,6 +194,7 @@ fun CaseDetailScreen(
                     CaseDetailHeader(
                         record = record,
                         entityType = entityType,
+                        triage = uiState.triage,
                         isNewCase = isNewCase,
                         decryptedSummary = uiState.decryptedSummary,
                         onStatusClick = { showStatusSheet = true },
@@ -297,9 +298,9 @@ fun CaseDetailScreen(
     if (showStatusSheet && record != null && entityType != null) {
         QuickStatusSheet(
             entityType = entityType,
-            currentStatusHash = record.statusHash,
-            onStatusSelected = { statusHash ->
-                viewModel.updateStatus(record.id, statusHash)
+            currentStatus = uiState.triage.statusValue(record.entityTypeID, record.statusHash),
+            onStatusSelected = { status ->
+                viewModel.updateStatus(record.id, status)
                 showStatusSheet = false
             },
             onDismiss = { showStatusSheet = false },
@@ -325,14 +326,17 @@ fun CaseDetailScreen(
 private fun CaseDetailHeader(
     record: Record?,
     entityType: EntityTypeDefinition?,
+    triage: TriageTokens,
     isNewCase: Boolean = false,
     decryptedSummary: DecryptedSummary? = null,
     onStatusClick: () -> Unit,
 ) {
+    // statusHash is a hub-keyed blind index (#2779); an unknown token shows no label.
     val statusOption = record?.let { r ->
-        entityType?.statuses?.find { it.value == r.statusHash }
+        val value = triage.statusValue(r.entityTypeID, r.statusHash)
+        entityType?.statuses?.find { it.value == value }
     }
-    val statusLabel = statusOption?.label ?: record?.statusHash ?: if (isNewCase) "New" else "---"
+    val statusLabel = statusOption?.label ?: if (isNewCase) "New" else "---"
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     Column(
@@ -422,8 +426,8 @@ private fun CaseDetailHeader(
 
         // Severity + assignment info
         if (record != null) {
-            val severityOption = record.severityHash?.let { hash ->
-                entityType?.severities?.find { it.value == hash }
+            val severityOption = triage.severityValue(record.entityTypeID, record.severityHash)?.let { value ->
+                entityType?.severities?.find { it.value == value }
             }
             if (severityOption != null || record.assignedTo.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))

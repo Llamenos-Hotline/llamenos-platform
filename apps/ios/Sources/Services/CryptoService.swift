@@ -220,6 +220,10 @@ private func ffiMobileEncryptHubField(plaintext: String, hubId: String, label: S
     try mobileEncryptHubField(plaintext: plaintext, hubId: hubId, label: label)
 }
 
+private func ffiMobileBlindIndexTokens(hubId: String, fieldLabel: String, values: [String]) throws -> [String] {
+    try mobileBlindIndexTokens(hubId: hubId, fieldLabel: fieldLabel, values: values)
+}
+
 private func ffiMobileDecryptHubField(packedHex: String, hubId: String, label: String) throws -> String {
     try mobileDecryptHubField(packedHex: packedHex, hubId: hubId, label: label)
 }
@@ -568,6 +572,14 @@ final class CryptoService: @unchecked Sendable {
     /// Returns `hex(nonce_12 || ciphertext || tag_16)` — the desktop wire format.
     func encryptHubField(plaintext: String, hubId: String, label: String) throws -> String {
         try ffiMobileEncryptHubField(plaintext: plaintext, hubId: hubId, label: label)
+    }
+
+    /// Blind-index case triage `values` for `fieldLabel` (`HMAC_CASE_STATUS` or
+    /// `HMAC_CASE_SEVERITY`) under the Rust-held key of `hubId` — one hex token
+    /// per value, in order (#2779). The crate owns the construction; Swift never
+    /// re-implements it. Throws when the hub key is not loaded.
+    func blindIndexTokens(hubId: String, fieldLabel: String, values: [String]) throws -> [String] {
+        try ffiMobileBlindIndexTokens(hubId: hubId, fieldLabel: fieldLabel, values: values)
     }
 
     /// Open a hub-scoped field. Returns nil on any failure (no key for the hub,

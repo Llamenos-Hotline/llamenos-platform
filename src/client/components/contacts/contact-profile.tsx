@@ -19,6 +19,8 @@ import { ContactMergeDialog } from '@/components/contact-merge-dialog'
 import { TagBadge } from '@/components/tag-badge'
 import { TagInput } from '@/components/tag-input'
 import { useTags } from '@/lib/queries/tags'
+import { useTriageTokens } from '@/lib/triage-tokens'
+import { listEntityTypes, type EntityTypeDefinition } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -271,6 +273,13 @@ function CasesTab({ contactId }: { contactId: string }) {
   const { toast } = useToast()
   const [cases, setCases] = useState<ContactCaseLink[]>([])
   const [loading, setLoading] = useState(true)
+  // Each link's status is a hub-keyed blind index (#2779): it is mapped to a
+  // status through the case's entity type, never shown raw.
+  const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
+  const triage = useTriageTokens(entityTypes)
+  useEffect(() => {
+    listEntityTypes().then(({ entityTypes: types }) => setEntityTypes(types)).catch(() => {})
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -313,7 +322,7 @@ function CasesTab({ contactId }: { contactId: string }) {
                 <Badge variant="outline" className="text-[10px]">{caseLink.entityTypeLabel}</Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                {t('contactDirectory.caseStatus', { defaultValue: 'Status' })}: {caseLink.status}
+                {t('contactDirectory.caseStatus', { defaultValue: 'Status' })}: {triage?.statusFor(entityTypes.find(et => et.id === caseLink.entityTypeId), caseLink.statusHash)?.label ?? ''}
               </p>
             </div>
             <Badge data-testid="contact-case-role" variant="secondary" className="text-[10px]">{caseLink.role}</Badge>

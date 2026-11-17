@@ -90,7 +90,7 @@ interface CmsState {
   // Report
   lastReportId?: string
   // Contact cases tab (#797)
-  contactCases?: Array<{ recordId: string; caseNumber?: string; entityTypeLabel: string; role: string; status: string; createdAt: string }>
+  contactCases?: Array<{ recordId: string; caseNumber?: string; entityTypeId: string | null; entityTypeLabel: string; role: string; statusHash: string; createdAt: string }>
   otherHubContact?: Record<string, unknown>
   // Volunteer for permission tests
   volunteerDeviceKey?: string
@@ -498,7 +498,11 @@ Then("the contact's case list should include the linked record with role {string
   expect(link, 'linked record should be listed').toBeDefined()
   expect(link!.role).toBe(role)
   expect(link!.entityTypeLabel).not.toBe('')
-  expect(link!.status).not.toBe('')
+  // The status is the blind index the client wrote, passed through untouched:
+  // the server never resolves it to a label (#2779).
+  expect(link!.statusHash).toBe(getCmsState(world).lastRecord!.statusHash as string)
+  expect(link!.entityTypeId).toBe(getCmsState(world).lastRecord!.entityTypeId as string)
+  expect(link).not.toHaveProperty('status')
   expect(Number.isNaN(Date.parse(link!.createdAt))).toBe(false)
 })
 

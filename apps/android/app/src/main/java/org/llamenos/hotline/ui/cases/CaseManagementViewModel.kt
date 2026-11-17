@@ -100,7 +100,11 @@ data class CaseUiState(
 
     // Filters
     val selectedEntityTypeId: String? = null,
-    val selectedStatusHash: String? = null,
+    /** The status VALUE filtered on; only its blind index is sent (#2779). */
+    val selectedStatus: String? = null,
+
+    /** Token → value lookups for [entityTypes] under the active hub's key (#2779). */
+    val triage: TriageTokens = TriageTokens.EMPTY,
 
     // EP06-A4: display mode and cross-hub
     val displayType: CaseDisplayType = CaseDisplayType.TABLE,
@@ -235,6 +239,7 @@ class CaseManagementViewModel @Inject constructor(
                         isLoadingEntityTypes = false,
                     )
                 }
+                loadTriageTokens(response.entityTypes)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -246,18 +251,36 @@ class CaseManagementViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Compute the status/severity token lookups for [types] under the active
+     * hub's key. Without the hub key there is nothing to map a token to, so
+     * views show no status — never the token, never a plaintext fallback.
+     */
+    private suspend fun loadTriageTokens(types: List<EntityTypeDefinition>) {
+        val hubId = activeHubState.activeHubId.value ?: return
+        val triage = try {
+            TriageTokens.compute(cryptoService, hubId, types)
+        } catch (_: Exception) {
+            TriageTokens.EMPTY
+        }
+        _uiState.update { it.copy(triage = triage) }
+    }
+
+    private fun activeHubIdOrThrow(): String =
+        activeHubState.activeHubId.value ?: throw NoActiveHubException()
+
     // ---- Records ----
 
     /**
      * Load case records from GET /api/records with optional filters.
      *
      * @param entityTypeId Filter by entity type (null for all types)
-     * @param statusHash Filter by status blind index (null for all statuses)
+     * @param status Filter by status value (null for all statuses); only its blind index is sent
      * @param page Page number for pagination
      */
     fun loadRecords(
         entityTypeId: String? = _uiState.value.selectedEntityTypeId,
-        statusHash: String? = _uiState.value.selectedStatusHash,
+        status: String? = _uiState.value.selectedStatus,
         page: Int = 1,
     ) {
         viewModelScope.launch {
@@ -269,6 +292,7 @@ class CaseManagementViewModel @Inject constructor(
                 )
             }
             try {
+                val statusHash = status?.let { TriageTokens.statusToken(cryptoService, activeHubIdOrThrow(), it) }
                 val query = buildString {
                     append(apiService.activeHubPath("/api/records"))
                     append("?limit=20&page=$page")
@@ -316,16 +340,16 @@ class CaseManagementViewModel @Inject constructor(
      * @param entityTypeId The entity type ID, or null for "All"
      */
     fun setEntityTypeFilter(entityTypeId: String?) {
-        _uiState.update { it.copy(selectedEntityTypeId = entityTypeId, selectedStatusHash = null) }
-        loadRecords(entityTypeId = entityTypeId, statusHash = null)
+        _uiState.update { it.copy(selectedEntityTypeId = entityTypeId, selectedStatus = null) }
+        loadRecords(entityTypeId = entityTypeId, status = null)
     }
 
     /**
      * Set the status filter for record listing.
      */
-    fun setStatusFilter(statusHash: String?) {
-        _uiState.update { it.copy(selectedStatusHash = statusHash) }
-        loadRecords(statusHash = statusHash)
+    fun setStatusFilter(status: String?) {
+        _uiState.update { it.copy(selectedStatus = status) }
+        loadRecords(status = status)
     }
 
     // ---- Record Detail ----
@@ -381,12 +405,13 @@ class CaseManagementViewModel @Inject constructor(
      * Update the status of a record via PATCH /api/records/:id.
      *
      * @param recordId The record ID
-     * @param statusHash The new status blind index
+     * @param status The new status VALUE; only its blind index is sent (#2779)
      */
-    fun updateStatus(recordId: String, statusHash: String) {
+    fun updateStatus(recordId: String, status: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
+                val statusHash = TriageTokens.statusToken(cryptoService, activeHubIdOrThrow(), status)
                 val request = UpdateRecordRequest(statusHash = statusHash)
                 val updated = apiService.request<CaseRecord>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
                 _uiState.update {

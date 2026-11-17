@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
+import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.hotline.ui.cases.TriageTokens
 import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.EntityTypeDefinition
@@ -30,6 +32,8 @@ import javax.inject.Inject
 data class EventsUiState(
     // Entity types
     val entityTypes: List<EntityTypeDefinition> = emptyList(),
+    /** Token → value lookups for [entityTypes] under the active hub's key (#2779). */
+    val triage: TriageTokens = TriageTokens.EMPTY,
     val isLoadingEntityTypes: Boolean = false,
 
     // Event records
@@ -111,6 +115,7 @@ data class EventsUiState(
 @HiltViewModel
 class EventsViewModel @Inject constructor(
     private val apiService: ApiService,
+    private val cryptoService: CryptoService,
     private val activeHubState: ActiveHubState,
 ) : ViewModel() {
 
@@ -193,9 +198,19 @@ class EventsViewModel @Inject constructor(
             }
             return
         }
+        // statusHash is a hub-keyed blind index (#2779). Without the hub key there
+        // is nothing to map a token to, so events show no status — never the token.
+        val triage = activeHubState.activeHubId.value?.let { hubId ->
+            try {
+                TriageTokens.compute(cryptoService, hubId, response.entityTypes)
+            } catch (_: Exception) {
+                TriageTokens.EMPTY
+            }
+        } ?: TriageTokens.EMPTY
         _uiState.update {
             it.copy(
                 entityTypes = response.entityTypes,
+                triage = triage,
                 isLoadingEntityTypes = false,
             )
         }
@@ -329,10 +344,12 @@ class EventsViewModel @Inject constructor(
     /**
      * Update the status of an event record.
      */
-    fun updateStatus(recordId: String, statusHash: String) {
+    fun updateStatus(recordId: String, status: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isUpdatingStatus = true, actionError = null) }
             try {
+                val hubId = activeHubState.activeHubId.value ?: throw NoActiveHubException()
+                val statusHash = TriageTokens.statusToken(cryptoService, hubId, status)
                 val request = UpdateRecordRequest(statusHash = statusHash)
                 apiService.request<Record>("PATCH", apiService.activeHubPath("/api/records/$recordId"), request)
                 _uiState.update {
@@ -371,6 +388,8 @@ class EventsViewModel @Inject constructor(
                 // Use the entity type's default status
                 val entityType = _uiState.value.entityTypes.find { it.id == entityTypeId }
                 val defaultStatus = entityType?.defaultStatus ?: "active"
+                val hubId = activeHubState.activeHubId.value ?: throw NoActiveHubException()
+                val statusHash = TriageTokens.statusToken(cryptoService, hubId, defaultStatus)
 
                 // For now, store title/description as plaintext summary
                 // Full E2EE encryption requires CryptoService integration
@@ -379,7 +398,7 @@ class EventsViewModel @Inject constructor(
                 apiService.requestNoContent(
                     "POST",
                     apiService.activeHubPath("/api/records"),
-                    CreateBody(entityTypeId, defaultStatus, summaryJson, emptyList()),
+                    CreateBody(entityTypeId, statusHash, summaryJson, emptyList()),
                 )
                 loadEvents()
                 onSuccess()

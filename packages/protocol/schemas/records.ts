@@ -217,6 +217,12 @@ export const recordsByContactResponseSchema = z.object({
 export const convertFromReportBodySchema = z.object({
   reportId: z.string().uuid(),
   entityTypeId: z.string().uuid(),
+  /**
+   * The entity type's default status as its hub-keyed blind index, computed by
+   * the client (#2779). The server cannot compute it and never substitutes the
+   * plaintext default.
+   */
+  statusHash: z.string().min(1),
   additionalFields: z.record(z.string(), z.unknown()).optional().default({}),
 })
 

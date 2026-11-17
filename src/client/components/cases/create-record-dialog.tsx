@@ -17,6 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Lock, Loader2, Plus } from 'lucide-react'
+import { severityToken, statusToken } from '@/lib/triage-tokens'
 import { SchemaForm, type SchemaFieldValues } from './schema-form'
 
 interface CreateRecordDialogProps {
@@ -140,14 +141,17 @@ export function CreateRecordDialog({
         encryptedFields = await sealCase('fields', fieldsPayload, readers.fields)
       }
 
-      // Build the blind index status hash (use the default status value as a simple hash for now)
-      // In production, this would use HMAC with the hub key for blind indexing
-      const statusHash = selectedType.defaultStatus
+      // Status and severity go on the wire as hub-keyed blind indexes (#2779):
+      // the server filters by them but cannot tell which value a token is.
+      const statusHash = await statusToken(selectedType.defaultStatus)
+      const severityHash = selectedType.defaultSeverity
+        ? await severityToken(selectedType.defaultSeverity)
+        : undefined
 
       const body: CreateRecordBody = {
         entityTypeId: selectedType.id,
         statusHash,
-        severityHash: selectedType.defaultSeverity,
+        severityHash,
         encryptedSummary: encryptedSummary.encryptedContent,
         summaryEnvelopes: encryptedSummary.readerEnvelopes,
         ...(encryptedFields && {

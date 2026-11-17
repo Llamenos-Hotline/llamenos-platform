@@ -96,8 +96,7 @@ struct CaseDetailView: View {
                     .clipShape(Capsule())
 
                 // Severity badge
-                if let sevHash = record.severityHash,
-                   let sev = entityType.severities?.first(where: { $0.value == sevHash }) {
+                if let sev = viewModel.severityDef(for: record) {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 9))
@@ -177,7 +176,8 @@ struct CaseDetailView: View {
     // MARK: - Status Pill
 
     private var statusPill: some View {
-        let statusDef = entityType.statuses.first { $0.value == record.statusHash }
+        // statusHash is a hub-keyed blind index (#2779); an unknown token shows no label.
+        let statusDef = viewModel.statusDef(for: record)
         let canEdit = appState.hasPermission("cases:update")
 
         return Button {
@@ -189,7 +189,7 @@ struct CaseDetailView: View {
                 Circle()
                     .fill((Color(hex: statusDef?.color ?? "#6b7280") ?? .gray))
                     .frame(width: 6, height: 6)
-                Text(statusDef?.label ?? record.statusHash)
+                Text(statusDef?.label ?? "")
                     .font(.brand(.caption))
                     .fontWeight(.medium)
                 if canEdit {
@@ -209,7 +209,7 @@ struct CaseDetailView: View {
             set: { viewModel.showStatusSheet = $0 }
         )) {
             QuickStatusSheet(
-                currentStatus: record.statusHash,
+                currentStatus: statusDef?.value ?? "",
                 statuses: entityType.statuses,
                 onSelect: { newStatus in
                     Task {

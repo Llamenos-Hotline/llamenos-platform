@@ -74,6 +74,7 @@ export type TauriIpcCommand =
   | 'decrypt_server_event'
   | 'encrypt_hub_field'
   | 'decrypt_hub_field'
+  | 'blind_index_tokens'
   | 'seal_device_local_from_state'
   | 'open_device_local_from_state'
   | 'derive_sas'
@@ -624,6 +625,20 @@ export async function encryptHubField(plaintext: string, label: string): Promise
     return tauriInvoke<string>('encrypt_hub_field', { plaintext, label })
   }
   throw new Error('WASM encrypt_hub_field not yet implemented')
+}
+
+/**
+ * Blind-index `values` for a case triage field under the hub key held in Rust
+ * (#2779). `fieldLabel` is `HMAC_CASE_STATUS` or `HMAC_CASE_SEVERITY`; the
+ * crate refuses any other. Returns one 64-hex token per value, in order. The
+ * hub key never enters the webview — only the tokens do. Throws when no hub
+ * key is loaded: a status must never fall back to its plaintext value.
+ */
+export async function blindIndexTokens(fieldLabel: string, values: string[]): Promise<string[]> {
+  if (useTauri) {
+    return tauriInvoke<string[]>('blind_index_tokens', { fieldLabel, values })
+  }
+  throw new Error('WASM blind_index_tokens not yet implemented')
 }
 
 /**

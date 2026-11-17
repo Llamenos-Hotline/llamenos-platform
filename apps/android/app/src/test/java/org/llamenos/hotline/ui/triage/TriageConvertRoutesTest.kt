@@ -10,6 +10,8 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import io.mockk.coEvery
+import io.mockk.mockk
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,6 +22,8 @@ import org.llamenos.hotline.MountedRoutes
 import org.llamenos.hotline.MountedRoutes.Companion.json
 import org.llamenos.hotline.MountedRoutes.Route
 import org.llamenos.hotline.MountedServer
+import org.llamenos.hotline.crypto.CryptoService
+import org.llamenos.protocol.CryptoLabels
 
 /**
  * Converting a triage report to a case (#1730). Android called
@@ -41,6 +45,15 @@ class TriageConvertRoutesTest {
     private lateinit var routes: MountedRoutes
     private val converted = mutableListOf<String>()
 
+    // The crate computes the token; the test only proves the view model sends it.
+    private val crypto = mockk<CryptoService> {
+        coEvery { blindIndexTokens("hub-a", CryptoLabels.HMAC_CASE_STATUS, listOf("open")) } returns listOf(STATUS_TOKEN)
+    }
+
+    private companion object {
+        val STATUS_TOKEN = "ab".repeat(32)
+    }
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -55,7 +68,7 @@ class TriageConvertRoutesTest {
             Route("GET", "/api/hubs/:hubId/settings/cms/entity-types") {
                 json(
                     """{"entityTypes":[
-                    |{"id":"$caseTypeId","name":"arrest","label":"Arrest","isArchived":false},
+                    |{"id":"$caseTypeId","name":"arrest","label":"Arrest","isArchived":false,"defaultStatus":"open"},
                     |{"id":"$archivedTypeId","name":"old","label":"Old","isArchived":true}
                     |]}""".trimMargin(),
                 )
@@ -88,7 +101,7 @@ class TriageConvertRoutesTest {
     @Test
     fun `the picker offers the hub's live case types and not the archived ones`() =
         runTest(UnconfinedTestDispatcher()) {
-            val vm = TriageViewModel(server.apiService, server.activeHubState)
+            val vm = TriageViewModel(server.apiService, crypto, server.activeHubState)
             advanceUntilIdle()
 
             assertTrue(
@@ -102,7 +115,7 @@ class TriageConvertRoutesTest {
     @Test
     fun `converting posts the report and the chosen case type to the route the server mounts`() =
         runTest(UnconfinedTestDispatcher()) {
-            val vm = TriageViewModel(server.apiService, server.activeHubState)
+            val vm = TriageViewModel(server.apiService, crypto, server.activeHubState)
             advanceUntilIdle()
             val report = vm.uiState.value.reports.single()
 
@@ -122,6 +135,8 @@ class TriageConvertRoutesTest {
             ).jsonObject
             assertEquals(reportId, sent.getValue("reportId").jsonPrimitive.content)
             assertEquals(caseTypeId, sent.getValue("entityTypeId").jsonPrimitive.content)
+            // The default status goes out as the crate's token, never the plaintext value (#2779).
+            assertEquals(STATUS_TOKEN, sent.getValue("statusHash").jsonPrimitive.content)
             assertNull(vm.uiState.value.error)
             // The server created the record and the screen holds the id it returned.
             assertEquals(listOf(reportId), converted)

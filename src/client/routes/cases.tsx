@@ -45,6 +45,7 @@ import { EntityCalendarView } from '@/components/entity-calendar-view'
 import { EntityTimelineView } from '@/components/entity-timeline-view'
 import { listEntitiesCrossHub } from '@/lib/api'
 import { useHubOwned } from '@/lib/hub-owned'
+import { statusToken, useTriageTokens, type TriageTokens } from '@/lib/triage-tokens'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 
 export const Route = createFileRoute('/cases')({
@@ -85,6 +86,7 @@ function CasesPage() {
     () => new Map(entityTypes.map(et => [et.id, et])),
     [entityTypes],
   )
+  const triage = useTriageTokens(entityTypes)
 
 
   // --- Load entity types + CMS status + auto-assignment ---
@@ -103,7 +105,7 @@ function CasesPage() {
   }, [])
 
   // --- Fetch records ---
-  const loadRecords = useCallback((): Promise<RecordsPage> => {
+  const loadRecords = useCallback(async (): Promise<RecordsPage> => {
     const params: {
       entityTypeId?: string
       statusHash?: string
@@ -112,7 +114,8 @@ function CasesPage() {
     } = { page, limit: pageSize }
 
     if (entityTypeFilter !== 'all') params.entityTypeId = entityTypeFilter
-    if (statusFilter !== 'all') params.statusHash = statusFilter
+    // The filter is a status value; the server only ever sees its blind index (#2779).
+    if (statusFilter !== 'all') params.statusHash = await statusToken(statusFilter)
 
     return crossHub
       ? listEntitiesCrossHub({ ...params, crossHub: true }).then(({ records: recs, total: tot }) => ({ records: recs as CaseRecord[], total: tot }))
@@ -146,9 +149,10 @@ function CasesPage() {
 
   const handleStatusChange = useCallback(async (recordId: string, newStatusValue: string) => {
     try {
-      await updateRecord(recordId, { statusHash: newStatusValue })
+      const statusHash = await statusToken(newStatusValue)
+      await updateRecord(recordId, { statusHash })
       setRecords(prev =>
-        prev.map(r => r.id === recordId ? { ...r, statusHash: newStatusValue, updatedAt: new Date().toISOString() } : r),
+        prev.map(r => r.id === recordId ? { ...r, statusHash, updatedAt: new Date().toISOString() } : r),
       )
       toast(t('cases.statusUpdated', { defaultValue: 'Status updated' }))
     } catch {
@@ -477,6 +481,7 @@ function CasesPage() {
                       key={record.id}
                       record={record}
                       entityType={entityTypeMap.get(record.entityTypeId)}
+                      triage={triage}
                       isSelected={selectedId === record.id}
                       onSelect={setSelectedId}
                       hasDeviceKey={hasDeviceKey}
@@ -526,6 +531,7 @@ function CasesPage() {
               <RecordDetail
                 record={selectedRecord}
                 entityType={selectedEntityType}
+                triage={triage}
                 hasPermission={hasPermission}
                 publicKey={publicKey}
                 hasDeviceKey={hasDeviceKey}
@@ -588,12 +594,14 @@ function CasesPage() {
 function RecordCard({
   record,
   entityType,
+  triage,
   isSelected,
   onSelect,
   hasDeviceKey,
 }: {
   record: CaseRecord
   entityType: EntityTypeDefinition | undefined
+  triage: TriageTokens | undefined
   isSelected: boolean
   onSelect: (id: string) => void
   hasDeviceKey: boolean
@@ -616,13 +624,12 @@ function RecordCard({
     return () => { cancelled = true }
   }, [record.id, record.encryptedSummary, hasDeviceKey])
 
-  const statusDef = entityType?.statuses.find(s => s.value === record.statusHash)
+  // A token that is none of this type's statuses shows no label, never the token.
+  const statusDef = triage?.statusFor(entityType, record.statusHash)
   const statusColor = statusDef?.color ?? '#6b7280'
-  const statusLabel = statusDef?.label ?? record.statusHash
+  const statusLabel = statusDef?.label ?? ''
 
-  const severityDef = record.severityHash
-    ? entityType?.severities?.find(s => s.value === record.severityHash)
-    : undefined
+  const severityDef = triage?.severityFor(entityType, record.severityHash)
 
   const relativeTime = formatRelativeTime(record.updatedAt, t)
 
@@ -711,6 +718,7 @@ type DetailTab = 'details' | 'timeline' | 'contacts' | 'evidence' | 'related'
 function RecordDetail({
   record,
   entityType,
+  triage,
   hasPermission,
   publicKey,
   hasDeviceKey,
@@ -724,6 +732,7 @@ function RecordDetail({
 }: {
   record: CaseRecord
   entityType: EntityTypeDefinition
+  triage: TriageTokens | undefined
   hasPermission: (p: string) => boolean
   publicKey: string | null
   hasDeviceKey: boolean
@@ -767,10 +776,8 @@ function RecordDetail({
     return () => { cancelled = true }
   }, [record.id, record.encryptedSummary, hasDeviceKey])
 
-  // Derive severity info
-  const severityDef = record.severityHash
-    ? entityType.severities?.find(s => s.value === record.severityHash)
-    : undefined
+  // Derive severity info from its blind index (#2779)
+  const severityDef = triage?.severityFor(entityType, record.severityHash)
 
   const isAssigned = publicKey ? record.assignedTo.includes(publicKey) : false
 
@@ -817,7 +824,7 @@ function RecordDetail({
                 </span>
               )}
               <StatusPill
-                currentStatus={record.statusHash}
+                currentStatus={triage?.statusFor(entityType, record.statusHash)?.value ?? ''}
                 statuses={entityType.statuses}
                 onStatusChange={
                   (hasPermission('cases:update') || (hasPermission('cases:update-own') && isAssigned))

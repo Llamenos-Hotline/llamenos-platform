@@ -592,6 +592,8 @@ describe('Calls Routes', () => {
       expect(body.contact.id).toBe('contact-1')
       expect(body.activeCaseCount).toBe(2)
       expect(body.recentCases).toHaveLength(2)
+      // The status is passed through as its blind index, never resolved or renamed (#2779).
+      expect(body.recentCases[0]).toEqual({ id: 'case-1', caseNumber: 'C001', statusHash: 'hash-open' })
       expect(contactsSvc.lookupByIdentifierHash).toHaveBeenCalledWith('hub-1', 'abc123')
     })
 

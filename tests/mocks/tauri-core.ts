@@ -26,6 +26,7 @@ import type { TauriIpcCommand } from '@/lib/platform'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
+import { hmac } from '@noble/hashes/hmac.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { randomBytes } from '@noble/hashes/utils.js'
@@ -1426,6 +1427,32 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const cipher = gcm(mockHubKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
     return new TextDecoder().decode(plaintext)
+  },
+
+  // Mirrors llamenos_core::blind_index::field_blind_indexes (#2779): a field's
+  // key is HKDF(salt LABEL_BLIND_INDEX_KEY, ikm hub key, info
+  // LABEL_BLIND_INDEX_FIELD ‖ field label), the token is hex HMAC-SHA256 of the
+  // canonicalised value. Known answer: hub key 0x42×32, HMAC_CASE_STATUS, "open"
+  // → 1d4ac0e1…894d74 (blind_index.rs `field_blind_index_known_answer`).
+  blind_index_tokens: (a) => {
+    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const fieldLabel = a.fieldLabel as string
+    const values = a.values as string[]
+    if (fieldLabel !== cryptoLabels.HMAC_CASE_STATUS && fieldLabel !== cryptoLabels.HMAC_CASE_SEVERITY) {
+      throw new Error(`not a blind-index field: ${fieldLabel}`)
+    }
+    const fieldKey = hkdf(
+      sha256,
+      mockHubKey,
+      utf8ToBytes(cryptoLabels.LABEL_BLIND_INDEX_KEY),
+      utf8ToBytes(cryptoLabels.LABEL_BLIND_INDEX_FIELD + fieldLabel),
+      32,
+    )
+    return values.map((value) => {
+      const canonical = value.trim().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      if (canonical === '') throw new Error('cannot blind-index an empty value')
+      return bytesToHex(hmac(sha256, fieldKey, utf8ToBytes(canonical)))
+    })
   },
 
   seal_device_local_from_state: (a) => {

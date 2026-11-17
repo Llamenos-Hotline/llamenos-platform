@@ -149,9 +149,14 @@ export type DirectoryContact = z.infer<typeof directoryContactSchema>
 export const contactCaseLinkSchema = z.object({
   recordId: z.string(),
   caseNumber: z.string().optional(),
+  entityTypeId: z.string().nullable(),
   entityTypeLabel: z.string(),
   role: z.string(),
-  status: z.string(),
+  /**
+   * The case's status as its hub-keyed blind index (#2779). The server cannot
+   * read it; the client maps it to a status through its entity type.
+   */
+  statusHash: z.string(),
   createdAt: z.string(),
 })
 export type ContactCaseLink = z.infer<typeof contactCaseLinkSchema>

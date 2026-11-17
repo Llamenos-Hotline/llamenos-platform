@@ -35,6 +35,8 @@ final class EventsViewModel {
 
     /// All entity types (for reference).
     var allEntityTypes: [EntityType] = []
+    /// Token → value lookups for `allEntityTypes` under the active hub's key (#2779).
+    var triage: TriageTokens = .empty
 
     /// Where the screen is in establishing what it can show. Starts `.loading`, and
     /// `loadInitial()` always settles it on one of the other three — a failed request
@@ -83,7 +85,8 @@ final class EventsViewModel {
     }
 
     func statusDef(for event: EventListResponseEvent) -> SharedStatus? {
-        entityType(for: event.entityTypeID)?.statuses.first { $0.value == event.statusHash }
+        let value = triage.statusValue(entityTypeId: event.entityTypeID, token: event.statusHash)
+        return entityType(for: event.entityTypeID)?.statuses.first { $0.value == value }
     }
 
     func decryptedTitle(for eventId: String) -> String? {
@@ -138,6 +141,13 @@ final class EventsViewModel {
         do {
             let response = try await typesRequest
             allEntityTypes = response.entityTypes.filter { !$0.isArchived }
+            // Without the hub key there is nothing to map a token to, so events
+            // show no status — never the token.
+            if let hubId = apiService.activeHubId {
+                triage = (try? TriageTokens.compute(cryptoService, hubId: hubId, types: allEntityTypes)) ?? .empty
+            } else {
+                triage = .empty
+            }
             eventEntityTypes = allEntityTypes.filter { $0.category == .event }
         } catch {
             guard !Task.isCancelled else { return }
@@ -371,8 +381,16 @@ final class EventsViewModel {
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime]
 
-        // The server requires eventTypeHash/statusHash; both are the entity
-        // type's identifiers (createEventBodySchema).
+        // The server requires eventTypeHash/statusHash (createEventBodySchema).
+        // The status is the type's default as its hub-keyed blind index (#2779).
+        let statusHash: String
+        do {
+            guard let hubId = apiService.activeHubId else { throw APIError.noActiveHub }
+            statusHash = try TriageTokens.statusToken(cryptoService, hubId: hubId, value: entityType.defaultStatus)
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
         let body = CreateEventBody(
             blindIndexes: [:],
             detailEnvelopes: envelopes,
@@ -384,7 +402,7 @@ final class EventsViewModel {
             locationPrecision: location != nil ? .neighborhood : .none,
             parentEventID: nil,
             startDate: isoFormatter.string(from: startDate),
-            statusHash: entityType.defaultStatus
+            statusHash: statusHash
         )
 
         do {

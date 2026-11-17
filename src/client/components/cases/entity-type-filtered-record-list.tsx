@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Plus, Loader2 } from 'lucide-react'
 import { useHubOwned } from '@/lib/hub-owned'
+import { statusToken } from '@/lib/triage-tokens'
 import { NoActiveHubNotice } from '@/components/no-active-hub-notice'
 
 interface EntityTypeFilteredRecordListProps {
@@ -102,9 +103,10 @@ export function EntityTypeFilteredRecordList({
 
   const handleStatusChange = useCallback(async (recordId: string, newStatusValue: string) => {
     try {
-      await updateRecord(recordId, { statusHash: newStatusValue })
+      const statusHash = await statusToken(newStatusValue)
+      await updateRecord(recordId, { statusHash })
       setRecords(prev =>
-        prev.map(r => r.id === recordId ? { ...r, statusHash: newStatusValue, updatedAt: new Date().toISOString() } : r),
+        prev.map(r => r.id === recordId ? { ...r, statusHash, updatedAt: new Date().toISOString() } : r),
       )
       toast(t('cases.statusUpdated', { defaultValue: 'Status updated' }), 'success')
     } catch {

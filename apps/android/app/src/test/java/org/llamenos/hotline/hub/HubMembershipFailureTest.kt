@@ -200,7 +200,7 @@ class HubMembershipFailureTest {
             contacts.loadContacts()
             assertNotNull("contacts", contacts.uiState.value.error)
 
-            val triage = TriageViewModel(apiService, activeHubState)
+            val triage = TriageViewModel(apiService, mockk<CryptoService>(relaxed = true), activeHubState)
             triage.loadTriageQueue()
             assertNotNull("triage", triage.uiState.value.error)
         }

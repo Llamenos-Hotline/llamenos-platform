@@ -300,7 +300,7 @@ class HubScopedViewModelReloadTest {
     fun `EventsViewModel triggers a new load on each hub change`() =
         runTest(UnconfinedTestDispatcher()) {
             val (activeHubState, hubFlow) = mockActiveHubState()
-            val vm = EventsViewModel(makeApiService(activeHubState), activeHubState)
+            val vm = EventsViewModel(makeApiService(activeHubState), mockk<CryptoService>(relaxed = true), activeHubState)
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "EventsViewModel")
         }
@@ -311,7 +311,7 @@ class HubScopedViewModelReloadTest {
     fun `TriageViewModel triggers a new load on each hub change`() =
         runTest(UnconfinedTestDispatcher()) {
             val (activeHubState, hubFlow) = mockActiveHubState()
-            val vm = TriageViewModel(makeApiService(activeHubState), activeHubState)
+            val vm = TriageViewModel(makeApiService(activeHubState), mockk<CryptoService>(relaxed = true), activeHubState)
             val getCount = countEmissionsInBackground(vm.uiState)
             assertTwoHubChangesProduceTwoLoadCycles(hubFlow, getCount, "TriageViewModel")
         }

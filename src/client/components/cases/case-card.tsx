@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '@/lib/format'
 import { Badge } from '@/components/ui/badge'
 import { Clock } from 'lucide-react'
+import { useTriageTokens } from '@/lib/triage-tokens'
 import type { CaseRecord, EntityTypeDefinition } from '@/lib/api'
 
 interface CaseCardProps {
@@ -13,9 +14,12 @@ interface CaseCardProps {
 
 export function CaseCard({ record, entityType, isSelected, onSelect }: CaseCardProps) {
   const { t } = useTranslation()
-  const statusDef = entityType?.statuses.find(s => s.value === record.statusHash)
+  // The status arrives as a hub-keyed blind index (#2779); a token that is none
+  // of this type's statuses shows no label, never the token.
+  const triage = useTriageTokens(entityType ? [entityType] : [])
+  const statusDef = triage?.statusFor(entityType, record.statusHash)
   const statusColor = statusDef?.color ?? '#6b7280'
-  const statusLabel = statusDef?.label ?? record.statusHash
+  const statusLabel = statusDef?.label ?? ''
   const relativeTime = formatRelativeTime(record.updatedAt, t)
 
   return (

@@ -579,20 +579,21 @@ contactsV2.get('/:id/cases',
 
     const links = await services.cases.listLinksForContact(contactId, hubId)
 
-    // Entity types resolve the human-readable label; status is stored as the
-    // raw status value, which the type maps to a label.
+    // Entity types resolve the type's label. The status is a hub-keyed blind
+    // index the server cannot read (#2779): it is passed through for the
+    // client to map, never resolved here.
     const { entityTypes } = await services.settings.getEntityTypes(hubId)
     const typeById = new Map(entityTypes.map((et) => [et.id, et]))
 
     const cases = links.map((l) => {
       const entityType = l.entityTypeId ? typeById.get(l.entityTypeId) : undefined
-      const statusLabel = entityType?.statuses.find((s) => s.value === l.statusHash)?.label
       return {
         recordId: l.recordId,
         ...(l.caseNumber ? { caseNumber: l.caseNumber } : {}),
+        entityTypeId: l.entityTypeId,
         entityTypeLabel: entityType?.label || entityType?.name || '',
         role: l.role ?? '',
-        status: statusLabel ?? l.statusHash,
+        statusHash: l.statusHash,
         createdAt: l.createdAt.toISOString(),
       }
     })

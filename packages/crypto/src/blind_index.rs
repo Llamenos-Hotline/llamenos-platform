@@ -14,7 +14,10 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::labels::{LABEL_BLIND_INDEX_FIELD, LABEL_BLIND_INDEX_KEY};
+use crate::errors::CryptoError;
+use crate::labels::{
+    HMAC_CASE_SEVERITY, HMAC_CASE_STATUS, LABEL_BLIND_INDEX_FIELD, LABEL_BLIND_INDEX_KEY,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -37,6 +40,50 @@ pub fn blind_index(hub_key: &[u8; 32], field_name: &str, value: &str) -> String 
     let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC key error");
     mac.update(canonical.as_bytes());
     hex::encode(mac.finalize().into_bytes())
+}
+
+/// The fields a client may blind-index through the exported surface, each named
+/// by its registered domain-separation label.
+///
+/// This is the one canonical scheme (#2779): the label is the `field_name` fed
+/// into [`derive_blind_index_key`], so a field's key is
+/// `HKDF(salt = LABEL_BLIND_INDEX_KEY, ikm = hub key, info = LABEL_BLIND_INDEX_FIELD ‖ label)`.
+/// The `HMAC_*` labels name the field; they are not a second, parallel HMAC key.
+///
+/// The set is closed: a client cannot invent a field name, so two platforms
+/// cannot drift onto different keys for the same column.
+///
+/// What a token over these fields hides, and what it does not: the key is the
+/// 256-bit hub key, which the server never holds, so the small vocabulary does
+/// not let the server enumerate tokens. Equality is the point of a blind
+/// index, though, so the server still sees which rows share a status and how
+/// often each token occurs.
+pub const BLIND_INDEX_FIELDS: &[&str] = &[HMAC_CASE_STATUS, HMAC_CASE_SEVERITY];
+
+/// Blind-index each of `values` for `field_label`, one token per value, in
+/// order. `field_label` must be one of [`BLIND_INDEX_FIELDS`]; an empty value
+/// (after canonicalisation) is refused rather than given a token of its own.
+pub fn field_blind_indexes(
+    hub_key: &[u8; 32],
+    field_label: &str,
+    values: &[String],
+) -> Result<Vec<String>, CryptoError> {
+    if !BLIND_INDEX_FIELDS.contains(&field_label) {
+        return Err(CryptoError::InvalidInput(format!(
+            "not a blind-index field: {field_label}"
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            if canonicalize(value).is_empty() {
+                return Err(CryptoError::InvalidInput(
+                    "cannot blind-index an empty value".into(),
+                ));
+            }
+            Ok(blind_index(hub_key, field_label, value))
+        })
+        .collect()
 }
 
 /// Compute date-bucketed blind indexes at day/week/month granularity.
@@ -248,6 +295,63 @@ mod tests {
         let tokens = name_trigram_indexes(&key, "name", "aaa");
         assert_eq!(tokens.len(), 1);
     }
+
+    #[test]
+    fn field_blind_indexes_use_the_label_as_the_field_name() {
+        let key = test_key();
+        let tokens = field_blind_indexes(
+            &key,
+            HMAC_CASE_STATUS,
+            &["open".to_string(), "closed".to_string()],
+        )
+        .unwrap();
+        assert_eq!(tokens[0], blind_index(&key, HMAC_CASE_STATUS, "open"));
+        assert_eq!(tokens[1], blind_index(&key, HMAC_CASE_STATUS, "closed"));
+        assert_eq!(tokens[0].len(), 64);
+        // A token is never the value it stands for.
+        assert_ne!(tokens[0], "open");
+    }
+
+    #[test]
+    fn field_blind_indexes_separate_status_from_severity() {
+        let key = test_key();
+        let v = vec!["high".to_string()];
+        let status = field_blind_indexes(&key, HMAC_CASE_STATUS, &v).unwrap();
+        let severity = field_blind_indexes(&key, HMAC_CASE_SEVERITY, &v).unwrap();
+        assert_ne!(status, severity);
+    }
+
+    #[test]
+    fn field_blind_indexes_refuse_an_unregistered_field() {
+        let key = test_key();
+        let v = vec!["open".to_string()];
+        assert!(field_blind_indexes(&key, "status", &v).is_err());
+        assert!(field_blind_indexes(&key, "llamenos:case-category", &v).is_err());
+    }
+
+    #[test]
+    fn field_blind_indexes_refuse_an_empty_value() {
+        let key = test_key();
+        assert!(field_blind_indexes(&key, HMAC_CASE_STATUS, &["  ".to_string()]).is_err());
+    }
+
+    /// Known answer shared with the desktop IPC mock
+    /// (`tests/mocks/crypto-impl.ts`) and the mobile FFI tests, so every
+    /// implementation that must agree on a token is checked against one value.
+    #[test]
+    fn field_blind_index_known_answer() {
+        let key = [0x42u8; 32];
+        let tokens = field_blind_indexes(&key, HMAC_CASE_STATUS, &["open".to_string()]).unwrap();
+        let severity =
+            field_blind_indexes(&key, HMAC_CASE_SEVERITY, &["high".to_string()]).unwrap();
+        assert_eq!(tokens[0], KAT_STATUS_OPEN);
+        assert_eq!(severity[0], KAT_SEVERITY_HIGH);
+    }
+
+    const KAT_STATUS_OPEN: &str =
+        "1d4ac0e1a18dd11314d37d71f7286964d04e74c25927b6c5c29a174adc894d74";
+    const KAT_SEVERITY_HIGH: &str =
+        "15a7a8fa68968c0c64a0c1562b90cce6e773625ab8fc88ed10ccd4c08b855090";
 
     #[test]
     fn test_iso_week_string() {

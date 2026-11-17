@@ -189,7 +189,7 @@ class NoActiveHubListTest {
     @Test
     fun `triage settles empty without an error when no hub is active`() = runTest(UnconfinedTestDispatcher()) {
         val hubs = activeHubState(null)
-        val vm = TriageViewModel(apiService(hubs), hubs)
+        val vm = TriageViewModel(apiService(hubs), mockk<CryptoService>(relaxed = true), hubs)
 
         vm.loadTriageQueue()
 
