@@ -150,3 +150,5 @@ export const searchBansResponseSchema = z.object({
 export type BanLookup = z.infer<typeof banLookupSchema>
 export type BanDigestEvaluateResponse = z.infer<typeof banDigestEvaluateResponseSchema>
 export type SearchBansEvaluateResponse = z.infer<typeof searchBansEvaluateResponseSchema>
+export type SearchBansResponse = z.infer<typeof searchBansResponseSchema>
+export type BulkBanResponse = z.infer<typeof bulkBanResponseSchema>

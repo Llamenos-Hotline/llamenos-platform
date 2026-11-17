@@ -6,7 +6,10 @@ import {
   type BanLookup,
   type BanDigestEvaluateResponse,
   type SearchBansEvaluateResponse,
+  type SearchBansResponse,
+  type BulkBanResponse,
 } from '@protocol/schemas/bans'
+import type { OkResponse } from '@protocol/schemas/common'
 import type {
   ErasureRequest,
   MyErasureRequestResponse,
@@ -148,9 +151,21 @@ export async function banLookups(phone: string): Promise<BanLookup[]> {
   )
 }
 
-export async function createPlatformBan(data: { phone: string; reason: string }) {
+/** What an admin enters for a platform ban. The number stays on the device; only its digest is sent. */
+export interface PlatformBanEntry {
+  phone: string
+  reason: string
+}
+
+/** What an admin enters for a bulk platform-ban import. */
+export interface PlatformBanBulkEntry {
+  phones: string[]
+  reason: string
+}
+
+export async function createPlatformBan(data: PlatformBanEntry) {
   const [phoneHash] = await platformBanDigests([data.phone])
-  return request<{ ok: true }>('/admin/bans', {
+  return request<OkResponse>('/admin/bans', {
     method: 'POST',
     body: JSON.stringify({ phoneHash, reason: data.reason }),
   })
@@ -162,20 +177,20 @@ export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed
   return request<{ ok: true }>(`/admin/bans/${id}`, { method: 'DELETE' })
 }
 
-export async function bulkImportPlatformBans(data: { phones: string[]; reason: string }) {
+export async function bulkImportPlatformBans(data: PlatformBanBulkEntry) {
   const phoneHashes = await platformBanDigests(data.phones)
-  return request<{ count: number }>('/admin/bans/bulk', {
+  return request<BulkBanResponse>('/admin/bans/bulk', {
     method: 'POST',
     body: JSON.stringify({ phoneHashes, reason: data.reason }),
   })
 }
 
 /** A search result: a ban on any hub (`hubId`) or on the platform (`hubId` null). */
-export type BanSearchResult = Omit<PlatformBan, 'id'> & { id: string; hubId: string | null }
+export type BanSearchResult = SearchBansResponse['bans'][number]
 
 /** Search every hub's and the platform's ban list for a typed number, by its per-scope digests. */
 export async function searchPlatformBans(phone: string) {
-  return request<{ bans: BanSearchResult[] }>('/admin/bans/search', {
+  return request<SearchBansResponse>('/admin/bans/search', {
     method: 'POST',
     body: JSON.stringify({ lookups: await banLookups(phone) }),
   })
@@ -191,7 +206,7 @@ export async function promoteHubBan(banId: string, sourceHubId: string, phone: s
   const source = lookups.find((l) => l.hubId === sourceHubId)
   const platform = lookups.find((l) => l.hubId === undefined)
   if (!source || !platform) throw new Error('No ban key for the source hub or the platform')
-  return request<{ ok: true }>('/admin/bans/promote', {
+  return request<OkResponse>('/admin/bans/promote', {
     method: 'POST',
     body: JSON.stringify({ banId, sourcePhoneHash: source.phoneHash, phoneHash: platform.phoneHash }),
   })
