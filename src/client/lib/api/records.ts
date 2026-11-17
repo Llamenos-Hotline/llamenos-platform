@@ -133,6 +133,8 @@ export async function setAutoAssignment(enabled: boolean) {
 export interface ConvertFromReportParams {
   reportId: string
   entityTypeId: string
+  /** The type's default status as its hub-keyed blind index (#2779). */
+  statusHash: string
   additionalFields?: Record<string, unknown>
 }
 
@@ -151,6 +153,7 @@ export async function convertReportToEntity(params: ConvertFromReportParams): Pr
     body: JSON.stringify({
       reportId: params.reportId,
       entityTypeId: params.entityTypeId,
+      statusHash: params.statusHash,
       additionalFields: params.additionalFields ?? {},
     }),
   })

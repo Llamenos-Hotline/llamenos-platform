@@ -397,12 +397,11 @@ records.post('/convert-from-report',
 
     const hubId = pathHubId(c)
 
-    // Entity type for numbering, default status, and autoAssign. It must be
+    // Entity type for numbering and autoAssign. It must be
     // one of THIS hub's: a type that is another hub's, or does not exist, is a
     // 404 — never "proceed with defaults", which would also have applied the
     // wrong hub's configuration when the lookup was not hub-bound (#2605).
     const entityType = await services.settings.getEntityTypeById(body.entityTypeId, hubId)
-    const defaultStatusHash = entityType.defaultStatus || 'pending'
     const autoAssign = entityType.autoAssign === true
     const requiredSpecializations = entityType.requiredSpecializations ?? []
     let caseNumber: string | undefined
@@ -419,7 +418,6 @@ records.post('/convert-from-report',
       hubId,
       createdBy: pubkey,
       caseNumber,
-      defaultStatusHash,
     })
 
     // Auto-assign if entity type has autoAssign enabled

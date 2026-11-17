@@ -420,7 +420,7 @@ describe('the service enforces the binding without the router', () => {
     }).returning()
     await expect(
       svc.cases.convertFromReport({
-        reportId: fresh.id, entityTypeId: typeB, additionalFields: {}, hubId: HUB_A, createdBy: ADMIN_A.pubkey,
+        reportId: fresh.id, entityTypeId: typeB, statusHash: 'f'.repeat(64), additionalFields: {}, hubId: HUB_A, createdBy: ADMIN_A.pubkey,
       }),
     ).rejects.toMatchObject({ status: 404 })
     const [after] = await db.select().from(conversations).where(eq(conversations.id, fresh.id))

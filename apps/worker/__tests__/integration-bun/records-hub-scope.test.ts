@@ -271,8 +271,8 @@ describe('POST /convert-from-report', () => {
 
   it("a hub A admin cannot convert hub B's report: 404, identical to a missing id, nothing written", async () => {
     const before = await reportRow(data.B.reportId)
-    const cross = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.B.reportId, entityTypeId: hubAType })
-    const missing = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: MISSING_ID, entityTypeId: hubAType })
+    const cross = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.B.reportId, entityTypeId: hubAType, statusHash: 'f'.repeat(64) })
+    const missing = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: MISSING_ID, entityTypeId: hubAType, statusHash: 'f'.repeat(64) })
 
     expect(cross.status).toBe(404)
     expect(missing.status).toBe(404)
@@ -290,7 +290,7 @@ describe('POST /convert-from-report', () => {
   })
 
   it("converts a report of the path hub into a case of that hub", async () => {
-    const res = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.A.reportId, entityTypeId: hubAType })
+    const res = await call(ADMIN_A, HUB_A, 'POST', '/convert-from-report', { reportId: data.A.reportId, entityTypeId: hubAType, statusHash: 'f'.repeat(64) })
     expect(res.status).toBe(201)
     const [created] = await db.select().from(caseRecords).where(eq(caseRecords.id, res.json.recordId as string))
     expect(created.hubId).toBe(HUB_A)

@@ -126,12 +126,13 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
   }, [selectedType, title, fieldValues, hasDeviceKey, publicKey, adminDecryptionPubkey, reportId, toast, t, onCaseCreated])
 
   const handleAtomicConvert = useCallback(async () => {
-    if (!selectedTypeId) return
+    if (!selectedTypeId || !selectedType) return
     setConverting(true)
     try {
       const result = await convertReportToEntity({
         reportId,
         entityTypeId: selectedTypeId,
+        statusHash: await statusToken(selectedType.defaultStatus),
       })
       toast(t('triage.converted', { defaultValue: 'Converted to entity' }), 'success')
       onCaseCreated(result.recordId)
@@ -140,7 +141,7 @@ export function TriageCaseCreationPanel({ reportId, onCaseCreated }: TriageCaseC
     } finally {
       setConverting(false)
     }
-  }, [selectedTypeId, reportId, toast, t, onCaseCreated])
+  }, [selectedTypeId, selectedType, reportId, toast, t, onCaseCreated])
 
   return (
     <div data-testid="triage-create-case-panel" className="space-y-4 rounded-lg border border-border bg-card p-4">

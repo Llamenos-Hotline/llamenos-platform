@@ -1896,9 +1896,10 @@ export class CasesService {
     hubId: string
     createdBy: string
     caseNumber?: string
-    defaultStatusHash?: string
+    /** The client-computed blind index of the type's default status (#2779). */
+    statusHash: string
   }): Promise<ConvertFromReportResponse> {
-    const { reportId, entityTypeId, hubId, createdBy, caseNumber, defaultStatusHash } = params
+    const { reportId, entityTypeId, hubId, createdBy, caseNumber, statusHash } = params
 
     await this.assertEntityTypeInHub(hubId, entityTypeId)
 
@@ -1923,7 +1924,7 @@ export class CasesService {
           hubId,
           entityTypeId,
           caseNumber: caseNumber ?? null,
-          statusHash: defaultStatusHash ?? 'pending',
+          statusHash,
           assignedTo: [],
           blindIndexes: {},
           summaryEnvelopes: [],

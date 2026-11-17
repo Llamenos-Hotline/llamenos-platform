@@ -351,6 +351,8 @@ When('the admin converts the report to an entity using the atomic endpoint', asy
     {
       reportId: state.reportId,
       entityTypeId: state.entityTypeId,
+      // Opaque to the server: a client computes it under the hub key (#2779).
+      statusHash: 'f'.repeat(64),
       additionalFields: {},
     },
   )
