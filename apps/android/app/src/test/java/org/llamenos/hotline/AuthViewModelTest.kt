@@ -624,7 +624,7 @@ class AuthViewModelTest {
         val ks = lockoutTrackingKeystore()
         val vm = AuthViewModel(
             cryptoService, ks, biometricKeyStore, inviteRepository,
-            deviceRegistrationManager, pushRegistrationManager,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
         )
 
         vm.unlockWithPin("123456")
@@ -651,7 +651,7 @@ class AuthViewModelTest {
             org.llamenos.hotline.crypto.CryptoException("Decryption failed: incorrect PIN")
         val vm = AuthViewModel(
             mockCrypto, ks, biometricKeyStore, inviteRepository,
-            deviceRegistrationManager, pushRegistrationManager,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
         )
 
         vm.unlockWithPin("000000")
