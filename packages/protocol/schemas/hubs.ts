@@ -229,15 +229,22 @@ export type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
  *   `to`. The server refuses the rotation if any value is missing or changed
  *   since — otherwise it would be left sealed under a key nobody holds any more.
  */
+export const hubResealedTagSchema = z.object({ from: hubSealedTagSchema, to: hubSealedTagSchema })
+export const hubResealedTeamSchema = z.object({ from: hubSealedTeamSchema, to: hubSealedTeamSchema })
+export const hubResealedRoleSchema = z.object({ from: hubSealedRoleSchema, to: hubSealedRoleSchema })
+
+/** Every value a hub holds sealed under its key, re-sealed under the new one, by table. */
+export const hubResealedValuesSchema = z.object({
+  tags: z.array(hubResealedTagSchema),
+  teams: z.array(hubResealedTeamSchema),
+  roles: z.array(hubResealedRoleSchema),
+})
+
 export const hubKeyRotateBodySchema = z.object({
   expectedGeneration: z.number().int().min(0),
-  envelopes: hubKeyEnvelopesBodySchema.shape.envelopes,
+  envelopes: z.array(recipientEnvelopeSchema).min(1, 'At least one envelope required'),
   rotation: hubKeyRotationStatementSchema,
-  resealed: z.object({
-    tags: z.array(z.object({ from: hubSealedTagSchema, to: hubSealedTagSchema })),
-    teams: z.array(z.object({ from: hubSealedTeamSchema, to: hubSealedTeamSchema })),
-    roles: z.array(z.object({ from: hubSealedRoleSchema, to: hubSealedRoleSchema })),
-  }),
+  resealed: hubResealedValuesSchema,
 })
 
 export type HubKeyRotateBody = z.infer<typeof hubKeyRotateBodySchema>

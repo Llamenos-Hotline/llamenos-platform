@@ -201,6 +201,18 @@ const REFERENCED_BY_NAME = new Set([
   // identical `CallHistoryAccess`, and a bare `Access` is a Swift-module collision waiting.
   'CallHistoryAccess',
   'CallHistoryAccessScope',
+  // Hub key rotation (PROTOCOL.md §2.7) — `sealed` / `resealed` hold `tags`, `teams` and
+  // `roles` arrays, and an inline `tags` item beside the tag list's renamed iOS's `Tag` to
+  // `TagListResponseTag`. Each item is referenced by its own schema's name instead.
+  'HubSealedTag',
+  'HubSealedTeam',
+  'HubSealedRole',
+  'HubSealedValues',
+  'HubResealedTag',
+  'HubResealedTeam',
+  'HubResealedRole',
+  'HubResealedValues',
+  'HubKeyRotationStatement',
 ])
 
 /**
