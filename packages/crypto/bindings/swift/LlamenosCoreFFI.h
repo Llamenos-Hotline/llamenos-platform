@@ -361,6 +361,11 @@ RustBuffer uniffi_llamenos_core_fn_func_get_public_key(RustBuffer secret_key_hex
 RustBuffer uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(RustBuffer b64, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BLIND_INDEX_TOKENS
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BLIND_INDEX_TOKENS
+RustBuffer uniffi_llamenos_core_fn_func_mobile_blind_index_tokens(RustBuffer hub_id, RustBuffer field_label, RustBuffer values, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_BUILD_AUTH_MESSAGE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_build_auth_message(RustBuffer pubkey_hex, uint64_t timestamp, RustBuffer method, RustBuffer path, RustBuffer nonce, RustCallStatus *_Nonnull out_status
@@ -1075,6 +1080,12 @@ uint16_t uniffi_llamenos_core_checksum_func_get_public_key(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BASE64URL_TO_HEX
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BASE64URL_TO_HEX
 uint16_t uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BLIND_INDEX_TOKENS
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_BLIND_INDEX_TOKENS
+uint16_t uniffi_llamenos_core_checksum_func_mobile_blind_index_tokens(void
     
 );
 #endif

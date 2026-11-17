@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
 import org.llamenos.hotline.model.EntityTypeDefinition
+import org.llamenos.hotline.ui.cases.TriageTokens
 import org.llamenos.hotline.ui.cases.parseHexColor
 import org.llamenos.hotline.ui.components.EmptyState
 import org.llamenos.hotline.util.DateFormatUtils
@@ -231,6 +232,7 @@ fun EventListScreen(
                                 EventCard(
                                     event = event,
                                     entityType = uiState.entityTypeMap[event.entityTypeID],
+                                    triage = uiState.triage,
                                     onClick = { onNavigateToEventDetail(event.id) },
                                 )
                             }
@@ -250,11 +252,14 @@ fun EventListScreen(
 private fun EventCard(
     event: Record,
     entityType: EntityTypeDefinition?,
+    triage: TriageTokens,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val statusOption = entityType?.statuses?.find { it.value == event.statusHash }
-    val statusLabel = statusOption?.label ?: event.statusHash
+    // statusHash is a hub-keyed blind index (#2779); an unknown token shows no label.
+    val statusValue = triage.statusValue(event.entityTypeID, event.statusHash)
+    val statusOption = entityType?.statuses?.find { it.value == statusValue }
+    val statusLabel = statusOption?.label ?: ""
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     Card(

@@ -2766,6 +2766,23 @@ public func mobileBase64urlToHex(b64: String)throws  -> String  {
 })
 }
 /**
+ * Blind-index `values` for a case triage field under the stored hub key of
+ * `hub_id`, one hex token per value, in order (#2779). `field_label` must be
+ * one of `blind_index::BLIND_INDEX_FIELDS` (`HMAC_CASE_STATUS`,
+ * `HMAC_CASE_SEVERITY`). The client writes these tokens as `statusHash` /
+ * `severityHash`, and maps a token it reads back to a status by computing the
+ * tokens of its entity type's vocabulary. The hub key never leaves Rust.
+ */
+public func mobileBlindIndexTokens(hubId: String, fieldLabel: String, values: [String])throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_blind_index_tokens(
+        FfiConverterString.lower(hubId),
+        FfiConverterString.lower(fieldLabel),
+        FfiConverterSequenceString.lower(values),$0
+    )
+})
+}
+/**
  * Build the canonical auth message bytes — the one construction path, exposed
  * so platform code never hand-builds the signed string.
  *
@@ -3621,6 +3638,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_blind_index_tokens() != 45248) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360) {

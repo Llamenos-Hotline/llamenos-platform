@@ -44,7 +44,8 @@ import org.llamenos.hotline.model.EntityTypeDefinitionStatus
 @Composable
 fun QuickStatusSheet(
     entityType: EntityTypeDefinition,
-    currentStatusHash: String,
+    /** The record's current status VALUE, resolved from its blind index (#2779). */
+    currentStatus: String?,
     onStatusSelected: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -77,7 +78,7 @@ fun QuickStatusSheet(
             openStatuses.forEach { status ->
                 StatusOptionRow(
                     status = status,
-                    isSelected = status.value == currentStatusHash,
+                    isSelected = status.value == currentStatus,
                     onClick = { onStatusSelected(status.value) },
                 )
             }
@@ -96,7 +97,7 @@ fun QuickStatusSheet(
                 closedStatuses.forEach { status ->
                     StatusOptionRow(
                         status = status,
-                        isSelected = status.value == currentStatusHash,
+                        isSelected = status.value == currentStatus,
                         onClick = { onStatusSelected(status.value) },
                     )
                 }

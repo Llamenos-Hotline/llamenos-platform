@@ -184,7 +184,7 @@ fun CaseListScreen(
                 ) {
                     item {
                         FilterChip(
-                            selected = uiState.selectedStatusHash == null,
+                            selected = uiState.selectedStatus == null,
                             onClick = { viewModel.setStatusFilter(null) },
                             label = { Text("All") },
                             modifier = Modifier.testTag("case-status-all"),
@@ -193,10 +193,10 @@ fun CaseListScreen(
                     items(statusOptions) { status ->
                         val statusColor = status.color?.let { parseHexColor(it) }
                         FilterChip(
-                            selected = uiState.selectedStatusHash == status.value,
+                            selected = uiState.selectedStatus == status.value,
                             onClick = {
                                 viewModel.setStatusFilter(
-                                    if (uiState.selectedStatusHash == status.value) null
+                                    if (uiState.selectedStatus == status.value) null
                                     else status.value,
                                 )
                             },
@@ -317,6 +317,7 @@ fun CaseListScreen(
                                     CaseCard(
                                         record = record,
                                         entityType = uiState.entityTypes.find { it.id == record.entityTypeID },
+                                        triage = uiState.triage,
                                         decryptedTitle = uiState.decryptedRecordTitles[record.id],
                                         onClick = { onNavigateToCaseDetail(record.id) },
                                         modifier = Modifier.testTag("case-card-${record.id}"),
@@ -341,17 +342,22 @@ fun CaseListScreen(
 private fun CaseCard(
     record: Record,
     entityType: EntityTypeDefinition?,
+    triage: TriageTokens,
     decryptedTitle: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val statusOption = entityType?.statuses?.find { it.value == record.statusHash }
-    val statusLabel = statusOption?.label ?: record.statusHash
+    // statusHash / severityHash are hub-keyed blind indexes (#2779): resolve them
+    // through this type's vocabulary; an unknown token shows no label.
+    val statusValue = triage.statusValue(record.entityTypeID, record.statusHash)
+    val statusOption = entityType?.statuses?.find { it.value == statusValue }
+    val statusLabel = statusOption?.label ?: ""
     val statusColor = statusOption?.color?.let { parseHexColor(it) }
 
     // Severity info
-    val severityOption = record.severityHash?.let { hash ->
-        entityType?.severities?.find { it.value == hash }
+    val severityValue = triage.severityValue(record.entityTypeID, record.severityHash)
+    val severityOption = severityValue?.let { value ->
+        entityType?.severities?.find { it.value == value }
     }
 
     Card(
