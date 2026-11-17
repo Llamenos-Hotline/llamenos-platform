@@ -16,6 +16,7 @@ import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-c
 import { claimDigest } from '../../orchestrator/src/review.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
 import { gitThreeWayMerge } from '../../orchestrator/src/merge-sim.js'
+import { MERGE_HOLD_LABEL, MERGE_QUEUE_BOT_LOGIN, type QueueHistory } from '../../orchestrator/src/merge-hold.js'
 
 const TREE = 'a'.repeat(40)
 const OTHER_TREE = 'c'.repeat(40)
@@ -76,7 +77,8 @@ function mkDeps(overrides: Partial<QueueFeedDeps> = {}): QueueFeedDeps {
     readHeadFirstSeen: async () => undefined,
     listPrComments: async () => [],
     postPrComment: async () => {},
-    lastQueueEvent: async () => 'none',
+    readQueueHistory: async () => ({ last: null, holdClearedAt: undefined }),
+    addHoldLabel: async () => {},
     addQueueClearedLabel: async () => {},
     removeQueueClearedLabel: async () => {},
     enableAutoMerge: async () => {},
@@ -908,13 +910,21 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
     lastQueueEvent?: 'added' | 'removed' | 'none' | undefined
     overrides?: Partial<QueueFeedDeps>
   }
+  /** The scenario's last queue event as GitHub reports it. `removed` is the
+   *  merge queue's OWN ejection (its bot is the actor) — a person's removal
+   *  is a hold, tested separately below. */
+  function historyFor(kind: Scenario['lastQueueEvent']): QueueHistory | undefined {
+    if (kind === undefined) return undefined
+    if (kind === 'none') return { last: null, holdClearedAt: undefined }
+    return { last: { kind, actorType: 'Bot', actorLogin: MERGE_QUEUE_BOT_LOGIN, at: '2026-11-16T09:00:00Z' }, holdClearedAt: undefined }
+  }
   function deepQueue(sc: Scenario = {}) {
     const armed: string[] = []
     const labelled: number[] = []
     const unlabelled: number[] = []
     const order: string[] = []
     const logs: string[] = []
-    const lastQueueEvent = vi.fn(async () => ('lastQueueEvent' in sc ? sc.lastQueueEvent : 'removed'))
+    const readQueueHistory = vi.fn(async () => historyFor('lastQueueEvent' in sc ? sc.lastQueueEvent : 'removed'))
     const readPrFiles = vi.fn(async (n: number) => [`apps/worker/routes/file-${n}.ts`])
     const deps = mkDeps({
       listOpenPrNumbers: async () => [{ number: 100, baseRefName: 'main' }],
@@ -922,14 +932,14 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
       readPr: async () => mkPr(sc.pr),
       readPrFiles,
       verdictArtifactState: async (name) => (name.includes('-pass-') ? 'present' : 'absent'),
-      lastQueueEvent,
+      readQueueHistory,
       addQueueClearedLabel: async (n) => { labelled.push(n); order.push('label') },
       removeQueueClearedLabel: async (n) => { unlabelled.push(n) },
       enableAutoMerge: async (p) => { armed.push(p); order.push('arm') },
       log: (m) => { logs.push(m) },
       ...sc.overrides,
     })
-    return { deps, armed, labelled, unlabelled, order, logs, lastQueueEvent, readPrFiles }
+    return { deps, armed, labelled, unlabelled, order, logs, readQueueHistory, readPrFiles }
   }
 
   it('RE-ARMS a green, mergeable PR the queue dropped, though the queue is already full', async () => {
@@ -943,7 +953,7 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
   })
 
   it('does NOT add a PR the queue never admitted — that is what the depth bound is for', async () => {
-    for (const lastQueueEvent of ['none', 'added', undefined] as const) {
+    for (const lastQueueEvent of ['none', 'added'] as const) {
       const t = deepQueue({ lastQueueEvent })
       const result = await runQueueFeedWith(t.deps)
       expect(t.armed, `history ${String(lastQueueEvent)}`).toEqual([])
@@ -952,11 +962,67 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
     }
   })
 
-  it('an unreadable queue history is a new addition, never an ejection', async () => {
+  it('an unreadable queue history is never an ejection, and never "nobody dequeued it" — not armed (#2814)', async () => {
     const t = deepQueue({ lastQueueEvent: undefined })
-    await runQueueFeedWith(t.deps)
+    const result = await runQueueFeedWith(t.deps)
     expect(t.logs.join('\n')).toMatch(/merge-queue history could not be read/)
     expect(t.armed).toEqual([])
+    expect(result.branches[0]?.skipped[0]?.reason).toMatch(/deliberately dequeued \(a hold\) is unknown/)
+  })
+
+  describe('a deliberate dequeue is a HOLD the next pass cannot undo (#2814)', () => {
+    /** #2788 at 09:19:44: green, reviewed, mergeable — and dequeued by a person. */
+    const DEQUEUED_BY_A_PERSON: QueueHistory = {
+      last: { kind: 'removed', actorType: 'User', actorLogin: 'rhonda-rodododo', at: '2026-11-16T09:19:44Z' },
+      holdClearedAt: undefined,
+    }
+
+    it('does NOT re-queue a PR a person dequeued — it labels it merge-hold and says why on the PR', async () => {
+      const holds: number[] = []
+      const comments: string[] = []
+      const t = deepQueue({
+        pr: { number: 2788, headRefName: 'fleet/roles/2780' },
+        overrides: {
+          readQueueHistory: async () => DEQUEUED_BY_A_PERSON,
+          addHoldLabel: async (n) => { holds.push(n) },
+          postPrComment: async (_n, body) => { comments.push(body) },
+        },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
+      expect(t.labelled).toEqual([]) // never cleared for the queue either
+      expect(holds).toEqual([2788])
+      expect(comments).toHaveLength(1)
+      expect(comments[0]).toMatch(/rhonda-rodododo/)
+      expect(result.branches[0]?.skipped).toEqual([{ pr: 2788, reason: expect.stringMatching(/held: removed from the merge queue by rhonda-rodododo/) }])
+      expect(renderQueueFeed(result)).toMatch(/held: removed from the merge queue/)
+    })
+
+    it('a PR carrying merge-hold is skipped before its history is even read', async () => {
+      const t = deepQueue({ pr: { labels: [MERGE_HOLD_LABEL] } })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
+      expect(t.readQueueHistory).not.toHaveBeenCalled()
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/carries the `merge-hold` label/)
+    })
+
+    it('is re-queued once the label is removed AFTER the dequeue — an explicit release', async () => {
+      const t = deepQueue({ overrides: { readQueueHistory: async () => ({ ...DEQUEUED_BY_A_PERSON, holdClearedAt: '2026-11-16T09:40:00Z' }) } })
+      await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual(['100'])
+    })
+
+    it('a hold the arming point finds is reported as a hold, not an arm failure, and the clearance is handed back', async () => {
+      const { MergeHeldError } = await import('../../orchestrator/src/merge-hold.js')
+      const t = deepQueue({
+        pr: { headRefName: 'fleet/roles/2780' },
+        overrides: { enableAutoMerge: async (p) => { throw new MergeHeldError(p, { held: true, source: 'label' }) } },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(result.branches[0]?.armFailed).toEqual([])
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/merge-hold/)
+      expect(t.unlabelled).toEqual([100])
+    })
   })
 
   it('arms nothing it cannot show green and mergeable: BLOCKED, DRAFT, already armed, or still queued are left alone', async () => {

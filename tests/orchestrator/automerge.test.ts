@@ -76,6 +76,10 @@ describe('armAutoMergeWithQueueClearance — every arm clears a fleet PR for the
     const calls: string[] = []
     const deps: ArmAutoMergeDeps = {
       readPr: async () => ({ headRefName: opts.headRefName, labels: opts.labels ?? [] }),
+      readQueueHistory: async () => ({ last: null, holdClearedAt: undefined }),
+      addHoldLabel: async (pr) => { calls.push(`hold ${pr}`) },
+      postPrComment: async (pr) => { calls.push(`comment ${pr}`) },
+      log: () => {},
       addQueueClearedLabel: async (pr) => {
         calls.push(`label+ ${pr}`)
         if (opts.labelFails) throw new Error('label denied')

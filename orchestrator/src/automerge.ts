@@ -1,5 +1,6 @@
 import { isKnopeReleasePr } from './roles/release.js'
 import { laneIdFromBranch, QUEUE_CLEARED_LABEL } from './ci.js'
+import { decideHold, recordHold, MergeHeldError, type QueueHistory } from './merge-hold.js'
 
 /**
  * Where this fleet does NOT arm auto-merge, and why (#2732).
@@ -44,12 +45,19 @@ export function isFleetOwnedBranch(headRefName: string): boolean {
 export interface ArmAutoMergeDeps {
   /** The PR's head branch and current labels, read fresh from GitHub. */
   readPr(pr: string): Promise<{ headRefName: string; labels: readonly string[] }>
+  /** The PR's merge-queue history (merge-hold.ts). `undefined` = unreadable. */
+  readQueueHistory(pr: number): Promise<QueueHistory | undefined>
+  /** Applies the `merge-hold` label. THROWS on failure. */
+  addHoldLabel(pr: number): Promise<void>
+  /** Posts a PR comment. THROWS on failure. */
+  postPrComment(pr: number, body: string): Promise<void>
   /** Applies the supervisor's `queue-cleared` admission label. THROWS on failure. */
   addQueueClearedLabel(pr: string): Promise<void>
   /** Hands the label back. Best-effort: must not throw. */
   removeQueueClearedLabel(pr: string): Promise<void>
   /** The one literal `gh pr merge <pr> --auto --squash` (guards.test.ts pins that there is exactly one). */
   requestAutoMerge(pr: string): Promise<void>
+  log(msg: string): void
 }
 
 /**
@@ -67,6 +75,15 @@ export interface ArmAutoMergeDeps {
  * (the tick's post-review arm, and the since-removed arm-at-open) unlabelled —
  * which is why this wraps the arm itself rather than one caller.
  *
+ * HELD FIRST (#2814): before anything is written, the PR's hold is decided
+ * (`decideHold`, merge-hold.ts) — the `merge-hold` label, or a dequeue by
+ * anyone but the merge queue itself that no one has released. A held PR is
+ * NOT armed: a dequeue hold is written onto the PR (label + one comment) and
+ * `MergeHeldError` is thrown; an unreadable queue history throws too, since
+ * "could not ask" is not "nobody dequeued it". Because every arm path goes
+ * through here, no path can undo a hold — the defect was a feeder re-arming
+ * #2788 three minutes after a supervisor dequeued it.
+ *
  * Fail-closed: if the label cannot be applied the PR is NOT armed (it would
  * only be ejected later); the error propagates so each caller reports it the
  * way it already reports a failed arm. If the arm fails after this call added
@@ -75,6 +92,15 @@ export interface ArmAutoMergeDeps {
  */
 export async function armAutoMergeWithQueueClearance(pr: string, deps: ArmAutoMergeDeps): Promise<void> {
   const { headRefName, labels } = await deps.readPr(pr)
+  const history = await deps.readQueueHistory(Number(pr))
+  if (history === undefined) {
+    throw new Error(`PR ${pr}'s merge-queue history could not be read — whether a person dequeued it (a hold) is unknown, so it is not armed`)
+  }
+  const hold = decideHold(labels, history)
+  if (hold.held) {
+    await recordHold(Number(pr), hold, deps)
+    throw new MergeHeldError(pr, hold)
+  }
   const needsLabel = laneIdFromBranch(headRefName) !== undefined && !labels.includes(QUEUE_CLEARED_LABEL)
   if (needsLabel) await deps.addQueueClearedLabel(pr)
   try {
