@@ -86,3 +86,38 @@ GHSA-ch52-4w7c-c8xp  # added 2026-10-06 by rhonda-rodododo, re-justified 2026-10
 # request or any untrusted source, and braces is absent from the worker's
 # production closure and from every shipped client bundle.
 GHSA-vfj7-8cjw-p6xm  # added 2026-10-06 by rhonda-rodododo, re-justified 2026-10-21 (#2066; npm latest is still 3.0.3, last published 2024-05-21) — braces (chokidar via @tanstack/router-plugin/wdio/mocha; micromatch via shadcn/playwright-bdd/jest-message-util; astro) — no upstream fix exists (npm latest 3.0.3 is itself in range); build/dev/test-time glob patterns from this repo only — tracked in #1580 [expires 2026-11-21]
+
+# --- picomatch: vite / vitest / astro / wdio / shadcn build+test tooling — NO UPSTREAM FIX ---
+# GHSA-fc5q-39xc-vjpf (ReDoS via single-branch repeated extglobs, e.g. `+(*a)`)
+# covers `picomatch` <= 4.0.7 with first_patched_version = null, and npm `latest`
+# IS 4.0.7 — the newest release is the vulnerable one, so no `overrides` floor
+# can be written and no parent upgrade escapes it (every parent resolves the same
+# single picomatch@4.0.4 in bun.lockb). Do NOT git-pin or fork unreleased
+# upstream code to silence the audit.
+# Assessed (#2836, 2026-11-17, llamenos-auto): the flaw is in how a glob PATTERN
+# compiles to a regex; the attacker must supply the pattern, not the matched
+# string. Evidence:
+#   - absent from the worker's production closure: replaying the Dockerfile's
+#     `bun install --frozen-lockfile --production --ignore-scripts --filter
+#     '!llamenos-site'` leaves no picomatch (nor vite/vitest/tinyglobby/micromatch)
+#     in node_modules; the same holds for signal-notifier (its picomatch is
+#     vite/vitest, devDependencies only) and sip-bridge (no picomatch at all);
+#   - absent from every shipped client bundle: `vite build` output (the desktop
+#     webview's dist/client, 281 files) and the astro marketing-site output
+#     (site/dist, 1634 files) contain no picomatch code; mobile apps have no JS
+#     toolchain;
+#   - every consumer is build-/dev-/test-time globbing over patterns committed to
+#     this repo (vite/vitest/playwright(-bdd)/wdio config, astro content `glob()`
+#     loaders, shadcn, TanStack route watching); the repo imports no glob library
+#     directly and has no `import.meta.glob`; test-selection scripts pass operator
+#     input to `grep`/`--grep`/`-t` (regex/substring), never to a picomatch pattern.
+# Exit condition: a picomatch release newer than 4.0.7 that fixes this advisory
+# (upstream: the advisory's own reference micromatch/picomatch#194, and #254
+# "flatten single-branch wildcard repetition to avoid ReDoS", which is the open PR
+# that actually names this GHSA). When `bun audit` stops reporting it, DELETE this
+# entry and upgrade — do not renew it. If any consumer ever starts passing a
+# caller-, hub-admin-, webhook- or upload-influenced string as a pattern, or
+# picomatch lands in the production closure or a bundle, this entry is invalid.
+# Expiry is two weeks, not months: the entry exists only because upstream has not
+# shipped, so it is re-checked against upstream on a short fuse.
+GHSA-fc5q-39xc-vjpf  # added 2026-11-17 by llamenos-auto (#2836) — picomatch (vitest, vite, astro, @wdio/*, shadcn, playwright-bdd, @tanstack/router-plugin, typescript-eslint, jest-util) — no upstream fix exists (npm latest 4.0.7 is itself in range); build/dev/test-time glob patterns from this repo only, absent from the production closure and all shipped bundles — exit: upstream fix released (micromatch/picomatch#194 / #254), then delete — tracked in #2836 [expires 2026-12-01]
