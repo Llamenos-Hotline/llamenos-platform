@@ -43,8 +43,6 @@ interface HubKeyState {
   currentEnvelopes: Map<string, string>
   /** Fetch results per member */
   fetchResults: Map<string, { status: number; envelope?: string }>
-  /** Number of entries in the latest PUT */
-  lastEnvelopeCount?: number
 }
 
 const HUB_KEY_LIFECYCLE_KEY = 'hub_key_lifecycle'
@@ -242,7 +240,6 @@ When(
 
     const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
-    getHubKeyState(world).lastEnvelopeCount = envelopes.length
   },
 )
 
@@ -267,44 +264,116 @@ Then(
 
 // ── Key Rotation ──────────────────────────────────────────────────
 
-When(
-  'a new hub key is generated and wrapped for remaining members only',
-  async ({ request, world }) => {
-    expect(getHubKeyState(world).hubId).toBeTruthy()
+/** The seed whose device key a hub member registered: a scenario member's, or the instance admin's. */
+function seedOf(world: Record<string, unknown>, pubkey: string): string {
+  for (const member of getHubKeyState(world).members.values()) {
+    if (member.pubkey === pubkey) return member.seedHex
+  }
+  if (pubkey === seedHexToPubkey(ADMIN_SEED)) return ADMIN_SEED
+  throw new Error(`no seed for hub member ${pubkey}`)
+}
 
-    const envelopes: EnvelopeEntry[] = []
-    for (const [name, member] of getHubKeyState(world).members) {
-      // Only wrap for members still tracked in currentEnvelopes (non-removed)
-      if (getHubKeyState(world).currentEnvelopes.has(name)) {
-        const entry = await generateRealEnvelopeEntry(member.pubkey, member.seedHex)
-        envelopes.push(entry)
-        getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
-      }
-    }
+/**
+ * A rotation body as a client builds it (PROTOCOL.md §2.7 "Key Rotation"):
+ * a fresh key wrapped for `pubkeys`, every sealed value carried. The server
+ * never sees the key, so the statement and re-seals are opaque to it.
+ */
+async function rotationBody(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  pubkeys: (members: HubKeyRecipientsResponse['members']) => string[],
+) {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.status).toBe(200)
+  expect(read.data.sealed).toBeDefined()
+  const sealed = read.data.sealed!
+  const hubKey = generateContentKey()
+  const envelopes: EnvelopeEntry[] = []
+  for (const pubkey of pubkeys(read.data.members)) {
+    const recipient = hpkeRecipientForSeed(seedOf(world, pubkey))
+    const wrapped = await wrapKeyForRecipient(hubKey, recipient.pubkeyHex, recipient.skHex, LABEL_HUB_KEY_WRAP)
+    envelopes.push({ pubkey, ...wrapped })
+  }
+  return {
+    expectedGeneration: read.data.generation,
+    envelopes,
+    rotation: { proof: 'ab'.repeat(40), check: 'cd'.repeat(40) },
+    resealed: {
+      tags: sealed.tags.map(from => ({ from, to: from })),
+      teams: sealed.teams.map(from => ({ from, to: from })),
+      roles: sealed.roles.map(from => ({ from, to: from })),
+    },
+  }
+}
 
-    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
-    expect(res.status).toBe(200)
-    getHubKeyState(world).lastEnvelopeCount = envelopes.length
+/** Every member the server lists with a device key. */
+const addressable = (members: HubKeyRecipientsResponse['members']) =>
+  members.filter(m => m.encryptionPubkey !== null).map(m => m.pubkey)
+
+When('{string} leaves the hub', async ({ request, world }, name: string) => {
+  const res = await apiDelete(request, `/hubs/${hubIdOf(world)}/members/${memberOf(world, name).pubkey}`)
+  expect(res.status).toBe(200)
+})
+
+Then('the hub key should be due a rotation', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.rotationRequired).toBe(true)
+})
+
+Then('the hub key should not be due a rotation', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.rotationRequired).toBe(false)
+  expect(read.data.sealed).toBeUndefined()
+})
+
+Then(
+  'a rotation that also wraps the new key for {string} should be refused with {int}',
+  async ({ request, world }, name: string, status: number) => {
+    const leaver = memberOf(world, name).pubkey
+    const body = await rotationBody(request, world, members => [...addressable(members), leaver])
+    const res = await apiPost(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+    expect(res.status).toBe(status)
   },
 )
 
 Then(
-  "{string}'s new envelope should differ from the original",
-  async ({ world }, name: string) => {
-    const original = getHubKeyState(world).originalEnvelopes.get(name)
-    const current = getHubKeyState(world).currentEnvelopes.get(name)
-    expect(original).toBeTruthy()
-    expect(current).toBeTruthy()
-    expect(current).not.toBe(original)
+  'a rotation that leaves {string} out should be refused with {int}',
+  async ({ request, world }, name: string, status: number) => {
+    const left = memberOf(world, name).pubkey
+    const body = await rotationBody(request, world, members => addressable(members).filter(pk => pk !== left))
+    const res = await apiPost(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+    expect(res.status).toBe(status)
   },
 )
 
-Then(
-  'the new envelopes should contain exactly {int} entries',
-  async ({ world }, count: number) => {
-    expect(getHubKeyState(world).lastEnvelopeCount).toBe(count)
-  },
-)
+When('the admin rotates the hub key for the remaining members', async ({ request, world }) => {
+  const body = await rotationBody(request, world, addressable)
+  const res = await apiPost<{ generation: number; epoch: number }>(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+  expect(res.status).toBe(200)
+  for (const [name, member] of getHubKeyState(world).members) {
+    const wrap = body.envelopes.find(e => e.pubkey === member.pubkey)
+    if (wrap) getHubKeyState(world).currentEnvelopes.set(name, wrap.ct)
+    else getHubKeyState(world).currentEnvelopes.delete(name)
+  }
+})
+
+Then('the hub key epoch should be {int}', async ({ request, world }, epoch: number) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.epoch).toBe(epoch)
+  const rotation = await apiGet<{ epoch: number }>(request, `/hubs/${hubIdOf(world)}/key/rotation`)
+  expect(rotation.status).toBe(200)
+  expect(rotation.data.epoch).toBe(epoch)
+})
+
+Then('every hub key wrap should be of the rotated key', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  const held = new Map(read.data.envelopes.map(e => [e.pubkey, e.ct]))
+  for (const [name, member] of getHubKeyState(world).members) {
+    const rotated = getHubKeyState(world).currentEnvelopes.get(name)
+    expect(held.get(member.pubkey)).toBe(rotated)
+    if (rotated !== undefined) expect(rotated).not.toBe(getHubKeyState(world).originalEnvelopes.get(name))
+  }
+})
 
 // ── Auth Guards ────────────────────────────────────────────────────
 

@@ -1136,7 +1136,7 @@ The server has never held a hub key, so it cannot write a `proof` that opens und
 
 **What rotation does not do.** It cannot take back what a departed member already copied: values they read before leaving, and anything they kept under the old key. It removes their access to everything stored or sealed after it. Until a manager's device runs it, the old key stays current -- the removing admin's device rotates at once, but a departure by an instance admin with no role in the hub (D1) waits for a hub admin's device to come online. And the trust caveat above applies here too: a server that lists a device key it holds for a member is given the new key, and a departed member who colluded with the server could write a `proof` (they know the old key); neither gives the server anything the device-registry trust does not already.
 
-**Not yet on mobile.** iOS and Android load the current key at unlock and do not adopt a rotation within a session: a mobile device that was unlocked across a rotation cannot open re-sealed values until its next unlock, and an iOS tag written in that window is sealed under the old key.
+**Not yet on mobile (#2831).** iOS and Android load the current key at unlock and do not adopt a rotation within a session: a mobile device that was unlocked across a rotation cannot open re-sealed values until its next unlock, and an iOS tag written in that window is sealed under the old key. Android's hub-switch refresh also replaces a held key with whatever wrap the server returns, without the verification above.
 
 ### 2.8 WebSocket Event Encryption
 
