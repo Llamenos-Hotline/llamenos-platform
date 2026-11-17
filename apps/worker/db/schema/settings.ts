@@ -94,14 +94,15 @@ export const hubs = pgTable('hubs', {
    */
   hubKeyEpoch: integer('hub_key_epoch').notNull().default(0),
   /**
-   * The rotation statement that introduced the current epoch: sealed by the
-   * rotating device under the PREVIOUS key (`LABEL_HUB_KEY_ROTATION`), and
-   * naming the hub, the new epoch and a check value sealed under the new key.
-   * A member whose device holds the previous key opens it before adopting the
-   * new one — that is how a device knows the new key came from a holder of the
-   * old one and not from the server. Null until the first rotation.
+   * The rotation statement that introduced the current epoch
+   * (`hubKeyRotationStatementSchema`, PROTOCOL.md §2.7): `proof` sealed by the
+   * rotating device under the PREVIOUS key, `check` under the new one, both
+   * under `LABEL_HUB_KEY_ROTATION`. A member's device adopts the new key only
+   * once `proof` opens under the key it already holds — so a key the server
+   * chose is never adopted. Both null until the first rotation.
    */
-  hubKeyRotation: text('hub_key_rotation'),
+  hubKeyRotationProof: text('hub_key_rotation_proof'),
+  hubKeyRotationCheck: text('hub_key_rotation_check'),
   /**
    * Set, in the same transaction, whenever someone who held a wrap of the
    * current key stops holding one — a member leaves the hub, is erased, or a

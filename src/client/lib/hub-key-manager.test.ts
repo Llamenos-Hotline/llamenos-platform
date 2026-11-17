@@ -3,7 +3,12 @@ import type {
   HubKeyEnvelopeResponse,
   HubKeyEnvelopesBody,
   HubKeyRecipientsResponse,
+  HubKeyRotateBody,
+  HubKeyRotateResponse,
+  HubKeyRotationResponse,
+  HubKeyRotationStatement,
   HubKeySetResponse,
+  HubSealedValues,
   RoleDefinition,
 } from '@protocol/schemas'
 
@@ -17,8 +22,9 @@ import type {
  * Tauri IPC mock (tests/mocks/tauri-core.ts, the JS mirror of
  * apps/desktop/src/crypto.rs) — for several devices at once, each a separate
  * module graph with its own CryptoState. The server is an in-memory model of
- * the three hub-key routes with the same compare-and-set as
- * `SettingsService.setHubKeyEnvelopes`.
+ * the hub-key routes with the same compare-and-set as
+ * `SettingsService.setHubKeyEnvelopes`, and the same refusals as
+ * `rotateHubKey` (apps/worker/lib/hub-key.ts) for a rotation.
  */
 
 type Invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>
@@ -29,40 +35,94 @@ interface DeviceState { signingPubkeyHex: string; encryptionPubkeyHex: string }
 
 interface Member { pubkey: string; encryptionPubkey: string | null; manager: boolean }
 
-/** In-memory model of GET /key, GET /key/recipients and PUT /key. */
+type ApiErrorCtor = new (s: number, b: string) => Error
+
+/** In-memory model of GET /key, GET /key/recipients, PUT /key, GET /key/rotation and POST /key/rotate. */
 class FakeHubKeyServer {
   generation = 0
+  epoch = 0
+  rotation: HubKeyRotationStatement | null = null
+  rotationDue = false
   wraps = new Map<string, { enc: string; ct: string }>()
   members = new Map<string, Member>()
+  /** The hub's sealed values — role names only here; tags and teams go the same way. */
+  roles = new Map<string, string>()
   puts = 0
+  rotations = 0
 
   join(member: Member) {
     this.members.set(member.pubkey, member)
   }
 
-  getEnvelope(caller: string, ApiError: new (s: number, b: string) => Error): HubKeyEnvelopeResponse {
+  /** `IdentityService.removeHubRole`: the wrap goes, and the key is due a rotation. */
+  remove(pubkey: string) {
+    this.members.delete(pubkey)
+    if (this.wraps.delete(pubkey)) this.rotationDue = true
+  }
+
+  getEnvelope(caller: string, ApiError: ApiErrorCtor): HubKeyEnvelopeResponse {
     if (!this.members.has(caller)) throw new ApiError(403, '{"error":"Access denied"}')
     const wrap = this.wraps.get(caller)
     if (!wrap) throw new ApiError(404, '{"error":"No key envelope for this user"}')
     return { envelope: { pubkey: caller, ...wrap } }
   }
 
-  recipients(caller: string, ApiError: new (s: number, b: string) => Error): HubKeyRecipientsResponse {
-    if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
+  sealed(): HubSealedValues {
     return {
-      generation: this.generation,
-      envelopes: [...this.wraps].filter(([pk]) => this.members.has(pk)).map(([pubkey, w]) => ({ pubkey, ...w })),
-      members: [...this.members.values()].map(m => ({ pubkey: m.pubkey, encryptionPubkey: m.encryptionPubkey })),
+      tags: [],
+      teams: [],
+      roles: [...this.roles].map(([id, encryptedName]) => ({ id, encryptedName, encryptedDescription: null })),
     }
   }
 
-  put(caller: string, body: HubKeyEnvelopesBody, ApiError: new (s: number, b: string) => Error): HubKeySetResponse {
+  recipients(caller: string, ApiError: ApiErrorCtor): HubKeyRecipientsResponse {
+    if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
+    const rotationRequired = this.rotationDue && this.wraps.size > 0
+    return {
+      generation: this.generation,
+      epoch: this.epoch,
+      envelopes: [...this.wraps].filter(([pk]) => this.members.has(pk)).map(([pubkey, w]) => ({ pubkey, ...w })),
+      members: [...this.members.values()].map(m => ({ pubkey: m.pubkey, encryptionPubkey: m.encryptionPubkey })),
+      rotationRequired,
+      ...(rotationRequired ? { sealed: this.sealed() } : {}),
+    }
+  }
+
+  put(caller: string, body: HubKeyEnvelopesBody, ApiError: ApiErrorCtor): HubKeySetResponse {
     if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
     if (body.expectedGeneration !== this.generation) throw new ApiError(409, '{"error":"Hub key generation mismatch"}')
     this.puts++
     this.generation++
     this.wraps = new Map(body.envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
     return { ok: true, generation: this.generation }
+  }
+
+  getRotation(caller: string, ApiError: ApiErrorCtor): HubKeyRotationResponse {
+    if (!this.members.has(caller)) throw new ApiError(403, '{"error":"Access denied"}')
+    return { epoch: this.epoch, rotation: this.rotation }
+  }
+
+  rotate(caller: string, body: HubKeyRotateBody, ApiError: ApiErrorCtor): HubKeyRotateResponse {
+    if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
+    if (body.expectedGeneration !== this.generation) throw new ApiError(409, '{"error":"Hub key generation mismatch"}')
+    const wrapped = new Set(body.envelopes.map(e => e.pubkey))
+    if ([...wrapped].some(pk => !this.members.has(pk))) throw new ApiError(403, '{"error":"wrap for a non-member"}')
+    const addressable = [...this.members.values()].filter(m => m.encryptionPubkey !== null).map(m => m.pubkey)
+    if (wrapped.size !== addressable.length || addressable.some(pk => !wrapped.has(pk))) {
+      throw new ApiError(409, '{"error":"wrap every member"}')
+    }
+    if (body.resealed.roles.length !== this.roles.size
+      || body.resealed.roles.some(r => this.roles.get(r.from.id) !== r.from.encryptedName)) {
+      throw new ApiError(409, '{"error":"re-seal every value"}')
+    }
+    for (const { to } of body.resealed.roles) this.roles.set(to.id, to.encryptedName)
+    this.wraps = new Map(body.envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
+    this.generation++
+    this.epoch++
+    this.rotation = body.rotation
+    this.rotationDue = false
+    this.rotations++
+    return { generation: this.generation, epoch: this.epoch }
   }
 }
 
@@ -83,6 +143,8 @@ async function device(name: string, opts: { manager: boolean; registered?: boole
     getHubKeyEnvelope: async () => server.getEnvelope(me, ApiError),
     getHubKeyRecipients: async () => server.recipients(me, ApiError),
     setHubKeyEnvelopes: async (_hubId: string, body: HubKeyEnvelopesBody) => server.put(me, body, ApiError),
+    getHubKeyRotation: async () => server.getRotation(me, ApiError),
+    rotateHubKey: async (_hubId: string, body: HubKeyRotateBody) => server.rotate(me, body, ApiError),
   }))
   const keyManager = await import('./key-manager')
   keyManager.markUnlocked(me)
@@ -93,7 +155,7 @@ async function device(name: string, opts: { manager: boolean; registered?: boole
   const hubKeys = await import('./hub-key-manager')
   const roles = await import('./role-vocabulary')
   server.join({ pubkey: me, encryptionPubkey: opts.registered === false ? null : state.encryptionPubkeyHex, manager: opts.manager })
-  return { invoke, me, encryptionPubkey: state.encryptionPubkeyHex, hubKeys, roles, ApiError }
+  return { invoke, me, encryptionPubkey: state.encryptionPubkeyHex, hubKeys, roles, platform, ApiError }
 }
 
 function hubRole(id: string, encryptedName: string): RoleDefinition {
@@ -204,5 +266,126 @@ describe('hub key lifecycle', () => {
     await admin.hubKeys.ensureHubKey(HUB)
     expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(0)
     expect([...server.wraps.keys()]).toEqual([admin.me])
+  })
+
+  // ── Rotation on departure (PROTOCOL.md §2.7 "Key Rotation") ──────────────
+
+  /** An admin and two volunteers sharing the hub key, and one sealed role name on the server. */
+  async function hubWithSharedKey() {
+    const admin = await device('admin', { manager: true })
+    const staying = await device('staying', { manager: false })
+    const departing = await device('departing', { manager: false })
+    const sealed = await admin.roles.sealHubRoleField(HUB, 'Legal observer')
+    server.roles.set('role-a', sealed)
+    // The first key was wrapped for every member with a device key.
+    expect([...server.wraps.keys()].sort()).toEqual([admin.me, staying.me, departing.me].sort())
+    // Both volunteers' devices load the key, as they would on their next sync.
+    expect(await staying.hubKeys.ensureHubKey(HUB)).toBe(true)
+    expect(await departing.hubKeys.ensureHubKey(HUB)).toBe(true)
+    return { admin, staying, departing, sealed }
+  }
+
+  it('a departure rotates the key: the leaver is not wrapped, and what the hub holds no longer opens for them', { timeout: 60_000 }, async () => {
+    const { admin, staying, departing, sealed } = await hubWithSharedKey()
+
+    server.remove(departing.me)
+    expect(await admin.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(true)
+
+    expect(server.rotations).toBe(1)
+    expect(server.epoch).toBe(1)
+    expect(server.rotationDue).toBe(false)
+    expect([...server.wraps.keys()].sort()).toEqual([admin.me, staying.me].sort())
+    // The role name was re-sealed — and under a key the departed member's
+    // device, which kept the OLD key in its CryptoState, cannot open.
+    const resealed = server.roles.get('role-a')!
+    expect(resealed).not.toBe(sealed)
+    expect(await departing.platform.hasHubKey(HUB)).toBe(true)
+    expect(await departing.platform.decryptHubField(HUB, resealed, 'llamenos:hub-role-encrypt:v1')).toBeNull()
+    expect(await departing.platform.decryptHubField(HUB, sealed, 'llamenos:hub-role-encrypt:v1')).toBe('Legal observer')
+
+    // The rotating admin holds the new key and reads the re-sealed name.
+    const [adminView] = await admin.roles.readableRoles([hubRole('role-a', resealed)])
+    expect(adminView).toMatchObject({ readable: true, displayName: 'Legal observer' })
+
+    // A staying member's device, still on the old key, adopts the new one the
+    // moment it meets a value sealed under it — and verifies it first.
+    const [stayingView] = await staying.roles.readableRoles([hubRole('role-a', resealed)])
+    expect(stayingView).toMatchObject({ readable: true, displayName: 'Legal observer' })
+    expect(await staying.hubKeys.adoptHubKeyRotation(HUB)).toBe('current')
+
+    // What anyone seals from now on is out of the departed member's reach.
+    const later = await admin.roles.sealHubRoleField(HUB, 'Jail support coordinator')
+    expect(await departing.platform.decryptHubField(HUB, later, 'llamenos:hub-role-encrypt:v1')).toBeNull()
+
+    // And the departed member's own device drops the key once it asks: it is
+    // no longer a member, so it has no key to hold.
+    expect(await departing.hubKeys.adoptHubKeyRotation(HUB)).toBe('not-held')
+    expect(await departing.platform.hasHubKey(HUB)).toBe(false)
+  })
+
+  it('without a departure there is nothing to rotate', { timeout: 60_000 }, async () => {
+    const { admin } = await hubWithSharedKey()
+    expect(await admin.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(false)
+    expect(server.rotations).toBe(0)
+    expect(server.epoch).toBe(0)
+  })
+
+  it('a rotation the server fabricates is never adopted', { timeout: 60_000 }, async () => {
+    const { staying, sealed } = await hubWithSharedKey()
+
+    // The server "rotates" on its own: a key IT chose, wrapped to the member's
+    // public key, and a statement it can only make up — it never held the old key.
+    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
+    const { keyWrapAad } = await import('@shared/envelope-aad')
+    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
+    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
+    const forged = await hpkeSealMock(randomBytes(32), staying.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
+    server.wraps.set(staying.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+    server.epoch = 1
+    server.rotation = { proof: bytesToHex(randomBytes(64)), check: bytesToHex(randomBytes(64)) }
+
+    expect(await staying.hubKeys.adoptHubKeyRotation(HUB)).toBe('unverifiable')
+    // The member keeps the hub's real key.
+    const [view] = await staying.roles.readableRoles([hubRole('role-a', sealed)])
+    expect(view).toMatchObject({ readable: true, displayName: 'Legal observer' })
+  })
+
+  it('a genuine statement paired with a server-chosen wrap is not adopted either', { timeout: 60_000 }, async () => {
+    const { admin, staying, departing, sealed } = await hubWithSharedKey()
+    server.remove(departing.me)
+    expect(await admin.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(true)
+
+    // The proof opens under the member's old key, but the server hands the
+    // member a wrap of a key of its own instead of the rotated-in one.
+    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
+    const { keyWrapAad } = await import('@shared/envelope-aad')
+    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
+    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
+    const forged = await hpkeSealMock(randomBytes(32), staying.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
+    server.wraps.set(staying.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+
+    expect(await staying.hubKeys.adoptHubKeyRotation(HUB)).toBe('unverifiable')
+    expect(await staying.platform.decryptHubField(HUB, sealed, 'llamenos:hub-role-encrypt:v1')).toBe('Legal observer')
+  })
+
+  it('a rotation that loses a race re-reads and completes', { timeout: 60_000 }, async () => {
+    const { admin, departing } = await hubWithSharedKey()
+    server.remove(departing.me)
+
+    // Between the admin's read and its write, another member edits the role
+    // name: the server refuses the stale re-seal, and the admin re-reads.
+    const realRotate = server.rotate.bind(server)
+    let first = true
+    server.rotate = (caller, body, ApiError) => {
+      if (first) {
+        first = false
+        server.roles.set('role-a', 'edited-meanwhile')
+      }
+      return realRotate(caller, body, ApiError)
+    }
+    expect(await admin.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(true)
+    expect(server.rotations).toBe(1)
+    // The value that could not be opened under the old key is carried, not dropped.
+    expect(server.roles.get('role-a')).toBe('edited-meanwhile')
   })
 })

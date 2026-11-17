@@ -4,6 +4,9 @@ import type {
   HubKeyEnvelopeResponse,
   HubKeyEnvelopesBody,
   HubKeyRecipientsResponse,
+  HubKeyRotateBody,
+  HubKeyRotateResponse,
+  HubKeyRotationResponse,
   HubKeySetResponse,
   ServiceStatus,
   SystemHealth,
@@ -63,6 +66,23 @@ export async function getHubKeyEnvelope(hubId: string) {
 /** What a key manager needs to distribute `hubId`'s key. 403 without `hubs:manage-keys` in that hub. */
 export async function getHubKeyRecipients(hubId: string) {
   return request<HubKeyRecipientsResponse>(`/hubs/${hubId}/key/recipients`)
+}
+
+/** The hub key's epoch and the rotation statement that introduced it (any member). */
+export async function getHubKeyRotation(hubId: string) {
+  return request<HubKeyRotationResponse>(`/hubs/${hubId}/key/rotation`)
+}
+
+/**
+ * Install a rotated hub key: new wraps for exactly the current members, every
+ * hub-sealed value re-sealed. 409 when anything moved on since the recipients
+ * read (re-read and retry).
+ */
+export async function rotateHubKey(hubId: string, body: HubKeyRotateBody) {
+  return request<HubKeyRotateResponse>(`/hubs/${hubId}/key/rotate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 /** Replace `hubId`'s key envelopes; 409 when `expectedGeneration` is no longer current. */

@@ -1,5 +1,5 @@
 {
-  "id": "9c8eac83-68ec-4012-8445-1c7658a3df6c",
+  "id": "ec7c37c3-21e9-49ca-ac5a-f99d9cfa9d1a",
   "prevId": "6c38b85b-658b-4b0a-b9b8-cf9cc89a3707",
   "prevIds": [
     "6c38b85b-658b-4b0a-b9b8-cf9cc89a3707"
@@ -2386,8 +2386,14 @@
           "notNull": true,
           "default": 0
         },
-        "hub_key_rotation": {
-          "name": "hub_key_rotation",
+        "hub_key_rotation_proof": {
+          "name": "hub_key_rotation_proof",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "hub_key_rotation_check": {
+          "name": "hub_key_rotation_check",
           "type": "text",
           "primaryKey": false,
           "notNull": false

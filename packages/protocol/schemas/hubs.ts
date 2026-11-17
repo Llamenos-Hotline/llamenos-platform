@@ -119,15 +119,30 @@ export const hubKeyRecipientsResponseSchema = z.object({
 })
 
 /**
+ * The statement a rotation leaves behind (PROTOCOL.md §2.7 "Key Rotation"),
+ * both parts sealed with the hub-field cipher under `LABEL_HUB_KEY_ROTATION`:
+ *
+ * - `check`: `{ hubId, epoch }` sealed under the NEW key. A device whose held
+ *   key opens it holds the current key.
+ * - `proof`: `{ hubId, epoch, check }` sealed under the PREVIOUS key. A device
+ *   holding the previous key opens it, and only then adopts the new key — and
+ *   only if its new wrap opens to a key that opens `check`. The server cannot
+ *   write a proof that opens: it has never held a hub key.
+ */
+export const hubKeyRotationStatementSchema = z.object({
+  proof: z.string().min(1).max(4096),
+  check: z.string().min(1).max(4096),
+})
+
+export type HubKeyRotationStatement = z.infer<typeof hubKeyRotationStatementSchema>
+
+/**
  * `GET /api/hubs/:hubId/key/rotation` (any member) — the key epoch and the
- * statement that introduced it. A device holding the previous epoch's key opens
- * `rotation` with that key (`LABEL_HUB_KEY_ROTATION`) before it adopts the new
- * one; the server cannot write a statement that opens, because it has never
- * held a hub key.
+ * statement that introduced it; `rotation` is null until the first rotation.
  */
 export const hubKeyRotationResponseSchema = z.object({
   epoch: z.number().int().min(0),
-  rotation: z.string().nullable(),
+  rotation: hubKeyRotationStatementSchema.nullable(),
 })
 
 export type HubKeyRotationResponse = z.infer<typeof hubKeyRotationResponseSchema>
@@ -200,8 +215,8 @@ export type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
  * - `envelopes`: a wrap of the NEW key for exactly the hub's current members
  *   that have a device key — no one else (a departed member is refused), and
  *   no one missing (so no admin's access is dropped).
- * - `rotation`: the statement sealed under the OLD key that lets members'
- *   devices accept the new one (see `hubKeyRotationResponseSchema`).
+ * - `rotation`: the statement that lets members' devices accept the new key
+ *   (`hubKeyRotationStatementSchema`).
  * - `resealed`: for every value the hub holds sealed under its key, the value
  *   `from` the recipients read and the same plaintext sealed under the new key
  *   `to`. The server refuses the rotation if any value is missing or changed
@@ -210,7 +225,7 @@ export type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
 export const hubKeyRotateBodySchema = z.object({
   expectedGeneration: z.number().int().min(0),
   envelopes: hubKeyEnvelopesBodySchema.shape.envelopes,
-  rotation: z.string().min(1).max(8192),
+  rotation: hubKeyRotationStatementSchema,
   resealed: z.object({
     tags: z.array(z.object({ from: hubSealedTagSchema, to: hubSealedTagSchema })),
     teams: z.array(z.object({ from: hubSealedTeamSchema, to: hubSealedTeamSchema })),

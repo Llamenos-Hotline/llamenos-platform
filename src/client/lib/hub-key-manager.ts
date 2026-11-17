@@ -18,24 +18,42 @@
  *   - **Distribute** (`distributeHubKey`, manager holding the key): add a wrap
  *     for every member who lacks one. Existing wraps are re-sent unchanged, so
  *     distributing never replaces anyone's access.
+ *   - **Rotate** (`rotateHubKeyIfRequired`, manager holding the key): when the
+ *     server reports that someone who held the current key has left
+ *     (`rotationRequired` — set by the departure itself), generate a FRESH key,
+ *     wrap it for exactly the current members, re-seal every hub-sealed value
+ *     under it, and install all of that in one compare-and-set write. The
+ *     departed member is not among the new wraps (the server refuses one for a
+ *     non-member), so nothing sealed from then on opens for them.
+ *   - **Adopt** (`adoptHubKeyRotation`, every member): a device whose held key
+ *     was rotated out takes the new one — but only once the rotation's `proof`
+ *     opens under the key it holds, and the new wrap opens to a key that opens
+ *     the rotation's `check`. The server has never held a hub key, so it cannot
+ *     write a proof that opens: a key it chose is never adopted.
+ *   - **Forget**: when this user stops being a member of a hub, its key is
+ *     dropped from CryptoState.
  *
- * `useHubKeys` runs load + distribute for every member hub on mount, on a
- * membership change and on every relay (re)connect; `encryptForHub` /
- * `decryptFromHub` load on demand, so a consumer never depends on the hook
- * having run first.
+ * `useHubKeys` runs load + adopt (+ rotate + distribute, for a manager) for
+ * every member hub on mount, on a membership change and on every relay
+ * (re)connect; `resyncHubKeys` runs it on demand, after an admin action that
+ * may have made someone leave a hub. `encryptForHub` / `decryptFromHub` load
+ * on demand, and a value that does not open under the held key prompts an
+ * adopt, so a consumer never depends on the hook having run first.
  *
  * Trust, stated plainly: the device keys wrapped to come from the server's
  * device registry, as for every other envelope this client seals (PROTOCOL.md
  * §2.4.1). Nothing here can verify them independently until the user sigchain
  * is wired; a server that lists a key it holds for a member gets the hub key.
  * What the client does refuse is a key SUBSTITUTION after first load: a key it
- * holds is never replaced by one the server hands back (`distributeHubKey`).
+ * holds is never replaced by one the server hands back (`distributeHubKey`),
+ * and is replaced on rotation only by a key whose `proof` opens under it.
  *
- * Not here: rotation on departure (#1030, M2). The server deletes a departed
- * member's wrap; it does not re-key, so a departed member who kept the key can
- * still open what was sealed under it.
+ * What rotation does not do: take back what a departed member already has. A
+ * member who kept the old key can still open values sealed under it that they
+ * copied before the rotation; the rotation re-seals the hub's stored values,
+ * so what the server holds afterwards no longer opens for them.
  */
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   hpkeUnwrapAndSetHubKey,
   generateHubKeyInState,
@@ -48,8 +66,20 @@ import {
 } from './platform'
 import type { HubKeyWrap, RecipientEnvelope } from './platform'
 import { ApiError, NetworkError } from './api/client'
-import { getHubKeyEnvelope, getHubKeyRecipients, setHubKeyEnvelopes } from './api/hubs'
-import type { HubKeyRecipientsResponse } from '@protocol/schemas'
+import {
+  getHubKeyEnvelope,
+  getHubKeyRecipients,
+  getHubKeyRotation,
+  rotateHubKey,
+  setHubKeyEnvelopes,
+} from './api/hubs'
+import type { HubKeyRecipientsResponse, HubKeyRotateBody, HubKeyRotationStatement, HubSealedValues } from '@protocol/schemas'
+import {
+  LABEL_HUB_KEY_ROTATION,
+  LABEL_HUB_ROLE_ENCRYPT,
+  LABEL_TAG_ENCRYPT,
+  LABEL_TEAM_ENCRYPT,
+} from '@shared/crypto-labels'
 import { HUB_ADMIN_PERMISSIONS } from '@shared/permissions'
 import { useAuth } from './auth'
 import { useMemberHubIds } from './member-hubs'
@@ -230,6 +260,232 @@ export async function distributeHubKey(hubId: string): Promise<number> {
   return 0
 }
 
+// ── Rotation (PROTOCOL.md §2.7 "Key Rotation") ──────────────────────────────
+
+/**
+ * The CryptoState slot that holds a NEW key for `hubId` while the device still
+ * holds the old one under the hub's own id — so a rotating device can open
+ * values under the old key and re-seal them under the new one, and an adopting
+ * device can test the new key before it lets go of the old. Both keys stay in
+ * Rust throughout; only envelopes and ciphertext reach this module. A hub id
+ * never contains `#`, so this slot never names a real hub.
+ */
+function stagingSlot(hubId: string): string {
+  return `${hubId}#rotation`
+}
+
+function parseJson(text: string | null): unknown {
+  if (text === null) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/** `value` is the `{ hubId, epoch }` claim a rotation statement carries. */
+function claims(value: unknown, hubId: string, epoch: number): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+    && (value as Record<string, unknown>).hubId === hubId
+    && (value as Record<string, unknown>).epoch === epoch
+}
+
+/** Whether the key held in `slot` is the one the rotation to `epoch` installed. */
+async function opensCheck(slot: string, hubId: string, epoch: number, statement: HubKeyRotationStatement): Promise<boolean> {
+  return claims(parseJson(await decryptHubField(slot, statement.check, LABEL_HUB_KEY_ROTATION)), hubId, epoch)
+}
+
+/** Whether the key held in `slot` is the one the rotation to `epoch` replaced, and vouches for its `check`. */
+async function opensProof(slot: string, hubId: string, epoch: number, statement: HubKeyRotationStatement): Promise<boolean> {
+  const proof = parseJson(await decryptHubField(slot, statement.proof, LABEL_HUB_KEY_ROTATION))
+  return claims(proof, hubId, epoch) && proof.check === statement.check
+}
+
+/**
+ * What `adoptHubKeyRotation` found:
+ * - `current`: the held key is the hub's current one (or the hub never rotated).
+ * - `adopted`: the held key was rotated out; the new one is verified and held.
+ * - `unverifiable`: the held key is neither the current one nor the one the
+ *   latest rotation replaced — or the new wrap does not open to the key the
+ *   rotation vouches for. The held key is kept and nothing is adopted: taking
+ *   an unverified key is exactly the substitution this module refuses.
+ * - `not-held`: this device holds no key for the hub.
+ */
+export type HubKeyAdoptOutcome = 'current' | 'adopted' | 'unverifiable' | 'not-held'
+
+async function adoptRotation(hubId: string): Promise<HubKeyAdoptOutcome> {
+  if (!(await hasHubKey(hubId))) return 'not-held'
+  let state: Awaited<ReturnType<typeof getHubKeyRotation>>
+  try {
+    state = await getHubKeyRotation(hubId)
+  } catch (err) {
+    // 403: no longer a member. 409: shredded. Either way there is no key to have.
+    if (isStatus(err, 403, 409)) {
+      await forgetHubKey(hubId)
+      return 'not-held'
+    }
+    throw err
+  }
+  const statement = state.rotation
+  if (state.epoch === 0 || statement === null) return 'current'
+  if (await opensCheck(hubId, hubId, state.epoch, statement)) return 'current'
+  if (!(await opensProof(hubId, hubId, state.epoch, statement))) {
+    console.error(`[hub-key] hub ${hubId}: the key this device holds is not the one rotation ${state.epoch} replaced — not adopting`)
+    return 'unverifiable'
+  }
+
+  // The held key is the one the rotation replaced, and it vouches for `check`.
+  let envelope: HubKeyWrap
+  try {
+    envelope = (await getHubKeyEnvelope(hubId)).envelope
+  } catch (err) {
+    if (isStatus(err, 403)) {
+      await forgetHubKey(hubId)
+      return 'not-held'
+    }
+    // 404: the rotation wrapped the new key for no device of this user.
+    if (isStatus(err, 404)) return 'unverifiable'
+    throw err
+  }
+  const staging = stagingSlot(hubId)
+  try {
+    await unwrapHubKey(staging, envelope)
+    if (!(await opensCheck(staging, hubId, state.epoch, statement))) {
+      console.error(`[hub-key] hub ${hubId}: this device's new wrap is not of the key rotation ${state.epoch} installed — not adopting`)
+      return 'unverifiable'
+    }
+    // The same wrap, now known to open to the rotated-in key.
+    await unwrapHubKey(hubId, envelope)
+    return 'adopted'
+  } finally {
+    await forgetHubKey(staging)
+  }
+}
+
+const adopting = new Map<string, Promise<HubKeyAdoptOutcome>>()
+
+/**
+ * Bring this device's key for `hubId` up to the hub's current one: if a
+ * rotation replaced the held key, adopt the new key — only once the rotation's
+ * `proof` opens under the key held now, and the new wrap opens to a key that
+ * opens its `check`. At most one at a time per hub.
+ */
+export function adoptHubKeyRotation(hubId: string): Promise<HubKeyAdoptOutcome> {
+  const running = adopting.get(hubId)
+  if (running) return running
+  const run = adoptRotation(hubId).finally(() => adopting.delete(hubId))
+  adopting.set(hubId, run)
+  return run
+}
+
+/** One sealed value under the new key: what it opens to under the old key, sealed again. */
+async function resealValue(hubId: string, staging: string, ciphertext: string, label: string): Promise<string> {
+  const plaintext = await decryptHubField(hubId, ciphertext, label)
+  // A value that does not open under the current key opens for nobody. Carried
+  // unchanged it stays exactly as unreadable as it is; the rotation must still
+  // name it, or the server refuses the rotation as incomplete.
+  return plaintext === null ? ciphertext : encryptHubField(staging, plaintext, label)
+}
+
+async function resealOptional(hubId: string, staging: string, ciphertext: string | null, label: string): Promise<string | null> {
+  return ciphertext === null ? null : resealValue(hubId, staging, ciphertext, label)
+}
+
+/** Every value in `sealed`, from what the hub holds to the same plaintext under the key in `staging`. */
+async function resealAll(hubId: string, staging: string, sealed: HubSealedValues): Promise<HubKeyRotateBody['resealed']> {
+  return {
+    tags: await Promise.all(sealed.tags.map(async from => ({
+      from,
+      to: {
+        id: from.id,
+        encryptedLabel: await resealValue(hubId, staging, from.encryptedLabel, LABEL_TAG_ENCRYPT),
+        encryptedCategory: await resealOptional(hubId, staging, from.encryptedCategory, LABEL_TAG_ENCRYPT),
+      },
+    }))),
+    teams: await Promise.all(sealed.teams.map(async from => ({
+      from,
+      to: {
+        id: from.id,
+        encryptedName: await resealValue(hubId, staging, from.encryptedName, LABEL_TEAM_ENCRYPT),
+        encryptedDescription: await resealOptional(hubId, staging, from.encryptedDescription, LABEL_TEAM_ENCRYPT),
+      },
+    }))),
+    roles: await Promise.all(sealed.roles.map(async from => ({
+      from,
+      to: {
+        id: from.id,
+        encryptedName: await resealValue(hubId, staging, from.encryptedName, LABEL_HUB_ROLE_ENCRYPT),
+        encryptedDescription: await resealOptional(hubId, staging, from.encryptedDescription, LABEL_HUB_ROLE_ENCRYPT),
+      },
+    }))),
+  }
+}
+
+/**
+ * Rotate `hubId`'s key if someone who held it has left (`rotationRequired`).
+ * Run by a manager whose device holds the current key; returns whether this
+ * device installed a new key.
+ *
+ * The new key is generated on this device, fresh — never derived from the old
+ * one or from any identity key — and wrapped for exactly the members the
+ * server lists now, so the departed member is not among them. Every value the
+ * hub holds sealed under the old key is re-sealed under the new one in the
+ * same write, and the server refuses the write unless every one is (and none
+ * changed since it was read). The rotation statement's `proof` is sealed under
+ * the old key, so every member's device can verify the new key came from a
+ * holder of the old one.
+ */
+export async function rotateHubKeyIfRequired(hubId: string): Promise<boolean> {
+  if (!(await hasHubKey(hubId))) return false
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let recipients: HubKeyRecipientsResponse
+    try {
+      recipients = await getHubKeyRecipients(hubId)
+    } catch (err) {
+      if (isStatus(err, 403, 409)) return false
+      throw err
+    }
+    if (!recipients.rotationRequired || !recipients.sealed) return false
+
+    const me = await myKeys()
+    const targets = wrapTargets(recipients, me.pubkey, me.encryptionPubkey)
+    if (!me.pubkey || !targets.some(t => t.pubkey === me.pubkey)) return false
+
+    const epoch = recipients.epoch + 1
+    const staging = stagingSlot(hubId)
+    await generateHubKeyInState(staging)
+    let body: HubKeyRotateBody
+    try {
+      const envelopes = await Promise.all(
+        targets.map(t => wrapHubKeyForMember(staging, t.pubkey, t.encryptionPubkey)),
+      )
+      const resealed = await resealAll(hubId, staging, recipients.sealed)
+      const check = await encryptHubField(staging, JSON.stringify({ hubId, epoch }), LABEL_HUB_KEY_ROTATION)
+      const proof = await encryptHubField(hubId, JSON.stringify({ hubId, epoch, check }), LABEL_HUB_KEY_ROTATION)
+      body = { expectedGeneration: recipients.generation, envelopes, rotation: { proof, check }, resealed }
+      await rotateHubKey(hubId, body)
+    } catch (err) {
+      // Not installed: the new key is sealed under nowhere the hub can read.
+      await forgetHubKey(staging)
+      // Another write got in between (a distribution, another manager's
+      // rotation, a membership change, an edited value): re-read and retry.
+      if (isStatus(err, 409)) continue
+      throw err
+    }
+
+    // Installed. Hold the new key under the hub's own slot by opening this
+    // device's own new wrap, and drop the staging copy.
+    const own = body.envelopes.find(e => e.pubkey === me.pubkey)
+    try {
+      if (own) await unwrapHubKey(hubId, own)
+    } finally {
+      await forgetHubKey(staging)
+    }
+    return true
+  }
+  return false
+}
+
 /**
  * Seal `plaintext` under `hubId`'s key with `label` as AAD, loading the key
  * first if this device does not hold it yet. Throws `HubKeyUnavailableError`
@@ -252,6 +508,17 @@ export async function decryptFromHub(hubId: string, packed: string, label: strin
     console.error(`[hub-key] hub ${hubId}: ${describe(err)}`)
     return null
   }
+  const plaintext = await decryptHubField(hubId, packed, label)
+  if (plaintext !== null) return plaintext
+  // A value that does not open under the held key may be sealed under a key a
+  // rotation installed since this device loaded its own: adopt it (verified)
+  // and try once more.
+  try {
+    if ((await adoptHubKeyRotation(hubId)) !== 'adopted') return null
+  } catch (err) {
+    console.error(`[hub-key] hub ${hubId}: ${describe(err)}`)
+    return null
+  }
   return decryptHubField(hubId, packed, label)
 }
 
@@ -259,16 +526,27 @@ function describe(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err)
 }
 
-/** Load, and where this user manages the hub, distribute — for one hub. */
+/**
+ * For one hub: load the key; adopt a rotation that replaced it; and where this
+ * user manages the hub, rotate it if someone who held it has left, then share
+ * it with members who lack it. Rotation runs before distribution, so a new
+ * member is never handed a key a departed one still holds.
+ */
 async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
   try {
     const held = await ensureHubKey(hubId)
-    if (held && mayManage) {
-      const added = await distributeHubKey(hubId)
-      if (added > 0) console.info(`[hub-key] shared hub ${hubId}'s key with ${added} member(s)`)
-    } else if (!held) {
+    if (!held) {
       console.info(`[hub-key] hub ${hubId}: waiting for a hub admin's device to share the key`)
+      return
     }
+    const adopted = await adoptHubKeyRotation(hubId)
+    if (adopted === 'adopted') console.info(`[hub-key] hub ${hubId}: adopted the rotated key`)
+    if (!mayManage || adopted === 'unverifiable' || adopted === 'not-held') return
+    if (await rotateHubKeyIfRequired(hubId)) {
+      console.info(`[hub-key] rotated hub ${hubId}'s key: a member who held it had left`)
+    }
+    const added = await distributeHubKey(hubId)
+    if (added > 0) console.info(`[hub-key] shared hub ${hubId}'s key with ${added} member(s)`)
   } catch (err) {
     // Offline: the next relay reconnect syncs again.
     if (err instanceof NetworkError) {
@@ -279,12 +557,30 @@ async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
   }
 }
 
+/** What the mounted `useHubKeys` last synced, for `resyncHubKeys`. */
+let mounted: { hubIds: readonly string[]; mayManage: boolean } | null = null
+
+/**
+ * Sync every member hub now — load, adopt, and for a manager rotate and
+ * distribute. Call after an admin action that may have made someone leave a
+ * hub (removal, deactivation, deletion, a role change): the departure marks
+ * the hub's key for rotation, and this is what rotates it without waiting for
+ * the next reconnect. A no-op before `useHubKeys` has mounted.
+ */
+export async function resyncHubKeys(): Promise<void> {
+  const current = mounted
+  if (!current) return
+  for (const hubId of current.hubIds) await syncHub(hubId, current.mayManage)
+}
+
 /**
  * Keep this device's hub keys loaded for EVERY member hub (multi-hub axiom —
- * never only the active one), and, where the user manages a hub, share its key
- * with members who lack it. Mounted once, in the authenticated layout.
+ * never only the active one), and, where the user manages a hub, rotate its key
+ * after a departure and share it with members who lack it. Drop the key of a
+ * hub this user is no longer a member of. Mounted once, in the authenticated
+ * layout.
  *
- * Who may distribute is the server's call (`assertMayManageHubKey`:
+ * Who may distribute or rotate is the server's call (`assertMayManageHubKey`:
  * `hubs:manage-keys` or hub admin, from the hub's own roles). The permissions
  * here are account-wide and only decide whether to TRY; the server answers 403
  * in a hub where the user's roles there grant neither.
@@ -295,16 +591,28 @@ export function useHubKeys(): void {
   const relayConnected = useRelayState() === 'connected'
   const mayManage = hasPermission('hubs:manage-keys') || HUB_ADMIN_PERMISSIONS.every(p => hasPermission(p))
   const hubIdsKey = memberHubIds.join(',')
+  const previousHubIds = useRef<readonly string[]>([])
 
   useEffect(() => {
-    if (!isAuthenticated || !hubIdsKey) return
+    if (!isAuthenticated) return
+    const hubIds = hubIdsKey ? hubIdsKey.split(',') : []
+    // A hub this user has left: its key must not stay in CryptoState.
+    const left = previousHubIds.current.filter(id => !hubIds.includes(id))
+    previousHubIds.current = hubIds
+    mounted = { hubIds, mayManage }
     let cancelled = false
     void (async () => {
-      for (const hubId of hubIdsKey.split(',')) {
+      for (const hubId of left) {
+        await forgetHubKey(hubId).catch(err => console.error(`[hub-key] hub ${hubId}: ${describe(err)}`))
+      }
+      for (const hubId of hubIds) {
         if (cancelled) return
         await syncHub(hubId, mayManage)
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      mounted = null
+    }
   }, [isAuthenticated, hubIdsKey, mayManage, relayConnected])
 }

@@ -209,12 +209,20 @@ export async function getHubKeyRecipients(
 /** `GET /hubs/:hubId/key/rotation`: the current key epoch and the statement that introduced it. */
 export async function getHubKeyRotation(db: Database, hubId: string): Promise<HubKeyRotationResponse> {
   const [hub] = await db
-    .select({ epoch: hubs.hubKeyEpoch, rotation: hubs.hubKeyRotation, status: hubs.status })
+    .select({
+      epoch: hubs.hubKeyEpoch,
+      proof: hubs.hubKeyRotationProof,
+      check: hubs.hubKeyRotationCheck,
+      status: hubs.status,
+    })
     .from(hubs)
     .where(eq(hubs.id, hubId))
   if (!hub) throw new ServiceError(404, 'Hub not found')
   if (hub.status === 'shredded') throw new ServiceError(409, 'Hub is shredded — its key is destroyed')
-  return { epoch: hub.epoch, rotation: hub.rotation }
+  return {
+    epoch: hub.epoch,
+    rotation: hub.proof !== null && hub.check !== null ? { proof: hub.proof, check: hub.check } : null,
+  }
 }
 
 function sameSet(a: Iterable<string>, b: Iterable<string>): boolean {
@@ -336,7 +344,8 @@ export async function rotateHubKey(
       .set({
         hubKeyGeneration: sql`${hubs.hubKeyGeneration} + 1`,
         hubKeyEpoch: sql`${hubs.hubKeyEpoch} + 1`,
-        hubKeyRotation: body.rotation,
+        hubKeyRotationProof: body.rotation.proof,
+        hubKeyRotationCheck: body.rotation.check,
         hubKeyRotationDue: false,
       })
       .where(eq(hubs.id, hubId))
