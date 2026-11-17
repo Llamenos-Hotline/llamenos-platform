@@ -210,6 +210,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.16 (2026-11-17)
+
+### Features
+
+- volunteers read their own call history inside a hub access window (#1342) (#2807)
+
+### Fixes
+
+- seal hub role names under the hub key; no plaintext role vocabulary server-side (#2780) (#2788)
+- deploy.yml run on its own refuses to place secrets on an unencrypted host (#2616)
+- seal the offline write queue under a device-local key so queued writes survive a restart (#2797)
+- delete GET /api/config/pins — pins are compiled into clients (#2708) (#2749)
+
 ## 0.21.15 (2026-11-16)
 
 ### Fixes
