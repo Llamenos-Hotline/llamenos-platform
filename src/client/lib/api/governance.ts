@@ -17,7 +17,6 @@ import type {
   ReEncryptionJob,
   RetentionSetting,
   RetentionPlatformFloor,
-  PlatformBan,
   PlatformBanListResponse,
   PlatformSettings,
 } from '@protocol/schemas'

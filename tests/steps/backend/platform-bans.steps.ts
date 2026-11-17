@@ -73,6 +73,7 @@ interface SearchBanEntry {
 After(async ({ request, world }) => {
   const s = getS(world)
   if (!s || s.platformPhones.size === 0) return
+  const actor = getActingAdmin(world)
   for (const phone of s.platformPhones) {
     try {
       const { status, data } = await searchBans(request, world, phone)
