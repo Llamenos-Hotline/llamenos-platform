@@ -933,6 +933,109 @@ pub extern "C" fn ffi_recovery_liveness_verify(
     }
 }
 
+// ── Ban digest (RFC 9497 OPRF, `crate::ban_digest`) ────────────────────
+
+/// Read the 32-byte BAN_HASH_KEY, a UTF-8 scope string, and a UTF-8 phone/element argument.
+fn ban_key_and_scope(
+    key: *const u8,
+    key_len: usize,
+    scope: *const u8,
+    scope_len: usize,
+) -> Result<([u8; 32], String), i32> {
+    if key_len != 32 {
+        set_error("BAN_HASH_KEY must be 32 bytes");
+        return Err(-5);
+    }
+    let mut k = [0u8; 32];
+    k.copy_from_slice(unsafe { std::slice::from_raw_parts(key, 32) });
+    let scope_slice = unsafe { std::slice::from_raw_parts(scope, scope_len) };
+    match std::str::from_utf8(scope_slice) {
+        Ok(s) => Ok((k, s.to_owned())),
+        Err(_) => {
+            k.zeroize();
+            set_error("ban scope must be valid UTF-8");
+            Err(-5)
+        }
+    }
+}
+
+/// The ban digest (64 bytes) of a caller identifier the server already holds, under one scope's key.
+/// See `crate::ban_digest::evaluate`.
+#[no_mangle]
+pub extern "C" fn ffi_ban_digest_evaluate(
+    key: *const u8,
+    key_len: usize,
+    scope: *const u8,
+    scope_len: usize,
+    identifier: *const u8,
+    identifier_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(key, scope, identifier, out);
+    check_input_size!(scope_len, identifier_len);
+    check_output_size!(out_len, crate::ban_digest::DIGEST_LEN);
+    let (mut k, scope) = match ban_key_and_scope(key, key_len, scope, scope_len) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let identifier_slice = unsafe { std::slice::from_raw_parts(identifier, identifier_len) };
+    let result = match std::str::from_utf8(identifier_slice) {
+        Ok(id) => crate::ban_digest::evaluate(&k, &scope, id),
+        Err(_) => Err(crate::errors::CryptoError::InvalidInput(
+            "caller identifier must be UTF-8".into(),
+        )),
+    };
+    k.zeroize();
+    match result {
+        Ok(digest) => {
+            unsafe { std::slice::from_raw_parts_mut(out, digest.len()) }.copy_from_slice(&digest);
+            0
+        }
+        Err(e) => {
+            set_error(&format!("ban digest failed: {e}"));
+            -5
+        }
+    }
+}
+
+/// Evaluate a client's 32-byte blinded element under one scope's key (32-byte output).
+/// See `crate::ban_digest::blind_evaluate`.
+#[no_mangle]
+pub extern "C" fn ffi_ban_digest_blind_evaluate(
+    key: *const u8,
+    key_len: usize,
+    scope: *const u8,
+    scope_len: usize,
+    blinded: *const u8,
+    blinded_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(key, scope, blinded, out);
+    check_input_size!(scope_len, blinded_len);
+    check_output_size!(out_len, crate::ban_digest::ELEMENT_LEN);
+    let (mut k, scope) = match ban_key_and_scope(key, key_len, scope, scope_len) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let blinded_slice = unsafe { std::slice::from_raw_parts(blinded, blinded_len) };
+    let result = crate::ban_digest::blind_evaluate(&k, &scope, blinded_slice);
+    k.zeroize();
+    match result {
+        Ok(element) => {
+            unsafe { std::slice::from_raw_parts_mut(out, element.len()) }.copy_from_slice(&element);
+            0
+        }
+        Err(e) => {
+            set_error(&format!("ban digest evaluation failed: {e}"));
+            -5
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

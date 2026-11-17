@@ -7,8 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { createHmac, hkdfSync } from 'node:crypto'
-import { x25519 } from '@noble/curves/ed25519.js'
+import { x25519, ristretto255_oprf } from '@noble/curves/ed25519.js'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_CALL_META, LABEL_MESSAGE, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
@@ -17,6 +16,7 @@ import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 import {
   hashPhone,
   banHash,
+  banBlindEvaluate,
   callBanLookup,
   callerRateLimitDigest,
   sealCallerNumber,
@@ -538,7 +538,7 @@ describe('banHash', () => {
 
   it('is deterministic for one number, scope and key', () => {
     expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(banHash(NUMBER, hubScope('hub-1'), KEY))
-    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toMatch(/^[0-9a-f]{64}$/)
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toMatch(/^[0-9a-f]{128}$/)
   })
 
   it('differs per scope, so one hub, another hub and the platform cannot be compared', () => {
@@ -566,13 +566,42 @@ describe('banHash', () => {
     ])
   })
 
-  it('keeps the key derivation it had before the scope was named, so no stored ban hash changes (#2463)', () => {
-    const reference = (keyScope: string) => {
-      const scopeKey = Buffer.from(hkdfSync('sha256', Buffer.from(KEY, 'hex'), Buffer.alloc(0), `${LABEL_BAN_KEY_DERIVE}:${keyScope}`, 32))
-      return createHmac('sha256', scopeKey).update(`${HMAC_BAN_PREFIX}${NUMBER}`).digest('hex')
-    }
-    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(reference('hub-1'))
-    expect(banHash(NUMBER, PLATFORM_SCOPE, KEY)).toBe(reference('platform'))
+  // An independent RFC 9497 implementation (@noble/curves) is the reference: if the crate and
+  // it agree, every platform that follows the RFC interoperates with the server.
+  const reference = ristretto255_oprf.oprf
+  const scopeKey = (keyScope: string) =>
+    reference.deriveKeyPair(hexToBytes(KEY), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${keyScope}`)).secretKey
+  const input = utf8ToBytes(`${HMAC_BAN_PREFIX}${NUMBER}`)
+
+  it('is RFC 9497 OPRF Evaluate under DeriveKeyPair(BAN_HASH_KEY, LABEL_BAN_KEY_DERIVE:scope)', () => {
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(bytesToHex(reference.evaluate(scopeKey('hub-1'), input)))
+    expect(banHash(NUMBER, PLATFORM_SCOPE, KEY)).toBe(bytesToHex(reference.evaluate(scopeKey('platform'), input)))
+  })
+
+  it('a client that blinds the number gets the digest the server computes, without the server seeing it', () => {
+    const { blind, blinded } = reference.blind(input)
+    const evaluated = banBlindEvaluate(bytesToHex(blinded), PLATFORM_SCOPE, KEY)
+    const digest = bytesToHex(reference.finalize(input, blind, hexToBytes(evaluated)))
+    expect(digest).toBe(banHash(NUMBER, PLATFORM_SCOPE, KEY))
+    // The element the server saw is uniformly random: blinding the same number again sends another.
+    expect(bytesToHex(reference.blind(input).blinded)).not.toBe(bytesToHex(blinded))
+  })
+
+  it('evaluates blindly under the requested scope only', () => {
+    const { blind, blinded } = reference.blind(input)
+    const underHub = banBlindEvaluate(bytesToHex(blinded), hubScope('hub-1'), KEY)
+    expect(bytesToHex(reference.finalize(input, blind, hexToBytes(underHub)))).toBe(banHash(NUMBER, hubScope('hub-1'), KEY))
+    expect(bytesToHex(reference.finalize(input, blind, hexToBytes(underHub)))).not.toBe(banHash(NUMBER, PLATFORM_SCOPE, KEY))
+  })
+
+  it('refuses a blinded element that is not a valid group element', () => {
+    expect(() => banBlindEvaluate('00'.repeat(32), PLATFORM_SCOPE, KEY)).toThrow()
+    expect(() => banBlindEvaluate('ff'.repeat(32), PLATFORM_SCOPE, KEY)).toThrow()
+    expect(() => banBlindEvaluate('ab', PLATFORM_SCOPE, KEY)).toThrow()
+  })
+
+  it('still digests a caller the provider presents without an E.164 number, so it can be checked and banned', () => {
+    expect(banHash('anonymous', hubScope('hub-1'), KEY)).toMatch(/^[0-9a-f]{128}$/)
   })
 
   it('refuses a hub scope with no hub id rather than hashing under the hub-\'\' key', () => {

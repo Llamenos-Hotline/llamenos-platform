@@ -631,3 +631,40 @@ pub fn mobile_recovery_group_split_private_key(
     let shares = crate::shamir::split(&secret, total, threshold)?;
     Ok(shares.into_iter().map(|s| s.to_shamir_share()).collect())
 }
+
+// ── Ban digest (RFC 9497 OPRF, `crate::ban_digest`, #2759) ─────────────
+
+/// The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+/// server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+#[derive(uniffi::Record)]
+pub struct BanDigestBlind {
+    pub blind_hex: String,
+    pub blinded_element_hex: String,
+}
+
+/// Blind an E.164 phone number for a ban digest. The server never sees the number.
+#[uniffi::export]
+pub fn ban_digest_blind(phone: &str) -> Result<BanDigestBlind, CryptoError> {
+    let b = crate::ban_digest::blind(phone)?;
+    Ok(BanDigestBlind {
+        blind_hex: hex::encode(b.blind),
+        blinded_element_hex: hex::encode(b.blinded_element),
+    })
+}
+
+/// Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+/// the `phoneHash` a platform-ban request carries.
+#[uniffi::export]
+pub fn ban_digest_finalize(
+    phone: &str,
+    blind_hex: &str,
+    evaluated_element_hex: &str,
+) -> Result<String, CryptoError> {
+    let mut blind: [u8; 32] = hex::decode(blind_hex)?
+        .try_into()
+        .map_err(|_| CryptoError::InvalidInput("blind must be 32 bytes".into()))?;
+    let evaluated = hex::decode(evaluated_element_hex)?;
+    let digest = crate::ban_digest::finalize(phone, &blind, &evaluated);
+    blind.zeroize();
+    Ok(hex::encode(digest?))
+}
