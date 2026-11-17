@@ -355,6 +355,8 @@ final class AdminViewModel {
 
     /// Whether the add platform ban sheet is showing.
     var showAddPlatformBanSheet: Bool = false
+    /// The number an admin types for a platform ban. Only its ban digest is ever sent (#2759).
+    var newPlatformBanPhone: String = ""
 
     /// Search query for cross-hub ban search.
     var platformBanSearchQuery: String = ""
@@ -1338,11 +1340,57 @@ final class AdminViewModel {
         isLoadingPlatformBans = false
     }
 
-    /// Create a platform-scoped ban.
+    /// The server's evaluation did not cover what was asked: an element per number, a hub and the platform.
+    enum PlatformBanDigestError: LocalizedError {
+        case incompleteEvaluation
+
+        var errorDescription: String? {
+            NSLocalizedString("error_boundary_title", comment: "Something went wrong")
+        }
+    }
+
+    // A platform ban never carries the number (#2759). The number is blinded in the crate, the
+    // server evaluates the blinded element under the scope's ban key without learning it, and
+    // the crate finalizes the answer into the number's ban digest — the value the server
+    // matches an inbound call against (`packages/crypto/src/ban_digest.rs`).
+
+    /// The platform ban digest of one typed E.164 number.
+    private func platformBanDigest(phone: String) async throws -> String {
+        let blind = try cryptoService.banDigestBlind(phone: phone)
+        let response: BanDigestEvaluateResponse = try await apiService.request(
+            method: "POST",
+            path: "/api/admin/bans/evaluate",
+            wireBody: BanDigestEvaluateBody(blindedElements: [blind.blindedElementHex])
+        )
+        guard response.evaluatedElements.count == 1, let evaluated = response.evaluatedElements.first else {
+            throw PlatformBanDigestError.incompleteEvaluation
+        }
+        return try cryptoService.banDigestFinalize(
+            phone: phone, blindHex: blind.blindHex, evaluatedElementHex: evaluated
+        )
+    }
+
+    /// A typed number's ban digest under every scope (`hubID == nil` = the platform).
+    private func banLookups(phone: String) async throws -> [BanLookup] {
+        let blind = try cryptoService.banDigestBlind(phone: phone)
+        let response: SearchBansEvaluateResponse = try await apiService.request(
+            method: "POST",
+            path: "/api/admin/bans/search/evaluate",
+            wireBody: SearchBansEvaluateBody(blindedElement: blind.blindedElementHex)
+        )
+        return try response.evaluations.map { evaluation in
+            let phoneHash = try cryptoService.banDigestFinalize(
+                phone: phone, blindHex: blind.blindHex, evaluatedElementHex: evaluation.evaluatedElement
+            )
+            return BanLookup(hubID: evaluation.hubID, phoneHash: phoneHash)
+        }
+    }
+
+    /// Create a platform-scoped ban from a typed number, sending only its digest.
     func addPlatformBan() async {
-        let hash = newBanIdentifierHash.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !hash.isEmpty else {
-            errorMessage = NSLocalizedString("admin_ban_hash_required", comment: "Identifier hash is required")
+        let phone = newPlatformBanPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard phone.range(of: #"^\+\d{7,15}$"#, options: .regularExpression) != nil else {
+            errorMessage = NSLocalizedString("users_invalid_phone", comment: "Invalid phone number. Use E.164 format")
             return
         }
 
@@ -1351,20 +1399,18 @@ final class AdminViewModel {
 
         do {
             let reason = newBanReason.trimmingCharacters(in: .whitespacesAndNewlines)
-            let request = CreateBanRequest(
-                identifierHash: hash,
-                reason: reason.isEmpty ? nil : reason
-            )
+            let phoneHash = try await platformBanDigest(phone: phone)
+            let body = CreatePlatformBanBody(phoneHash: phoneHash, reason: reason.isEmpty ? nil : reason)
             try await apiService.request(
                 method: "POST",
                 path: "/api/admin/bans",
-                body: request
+                wireBody: body
             )
 
             let generator = UINotificationFeedbackGenerator()
             generator.notificationOccurred(.success)
 
-            newBanIdentifierHash = ""
+            newPlatformBanPhone = ""
             newBanReason = ""
             showAddPlatformBanSheet = false
             successMessage = NSLocalizedString("admin_ban_added", comment: "Ban entry added")
@@ -1395,17 +1441,19 @@ final class AdminViewModel {
         }
     }
 
-    /// Search bans across all hubs by phone hash.
+    /// Search every hub's and the platform's bans for a typed number, by its per-scope digests.
     func searchPlatformBans() async {
-        let query = platformBanSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
+        let phone = platformBanSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phone.isEmpty else { return }
 
         errorMessage = nil
 
         do {
+            let lookups = try await banLookups(phone: phone)
             let response: SearchBansResponse = try await apiService.request(
-                method: "GET",
-                path: "/api/admin/bans/search?q=\(query)"
+                method: "POST",
+                path: "/api/admin/bans/search",
+                wireBody: SearchBansBody(lookups: lookups)
             )
             platformBanSearchResults = response.bans
         } catch {
@@ -1415,23 +1463,30 @@ final class AdminViewModel {
 
     /// Promote a hub-scoped ban to platform scope.
     ///
-    /// `POST /api/admin/bans/promote` needs the number again: a hub's ban hash is
-    /// keyed to that hub (`apps/worker/lib/crypto.ts` `banHash`), so the server cannot
-    /// re-key it to the platform list on its own. It checks the number against the
-    /// hub ban before adding the platform ban. Body is the generated `PromoteBanBody`.
+    /// The number is entered again and digested under both the source hub's key and the
+    /// platform's (`banLookups`): `POST /api/admin/bans/promote` checks the hub digest against
+    /// the stored hub ban, so a mistyped number cannot ban someone else, and stores the
+    /// platform digest. The number itself is never sent. Body is the generated `PromoteBanBody`.
     ///
-    /// `GET /api/hubs/{id}/bans` does not return a ban `id`, so the id comes from a platform
-    /// search result for the number the caller just typed (`SearchBansResponseBan`),
+    /// `GET /api/hubs/{id}/bans` does not return a ban `id`, so the id and its hub come from a
+    /// platform search result for the number the admin just typed (`SearchBansResponseBan`),
     /// and the same number is passed here. Covered by `AdminViewModelPromoteBanTests`.
-    func promoteBanToPlatform(banId: String, phone: String) async {
+    func promoteBanToPlatform(banId: String, sourceHubId: String, phone: String) async {
         errorMessage = nil
         successMessage = nil
 
         do {
+            let lookups = try await banLookups(phone: phone.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard let source = lookups.first(where: { $0.hubID == sourceHubId }),
+                  let platform = lookups.first(where: { $0.hubID == nil }) else {
+                throw PlatformBanDigestError.incompleteEvaluation
+            }
             try await apiService.request(
                 method: "POST",
                 path: "/api/admin/bans/promote",
-                wireBody: PromoteBanBody(banID: banId, phone: phone)
+                wireBody: PromoteBanBody(
+                    banID: banId, phoneHash: platform.phoneHash, sourcePhoneHash: source.phoneHash
+                )
             )
 
             let generator = UINotificationFeedbackGenerator()

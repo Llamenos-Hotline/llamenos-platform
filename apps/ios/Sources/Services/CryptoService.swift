@@ -191,6 +191,15 @@ private func ffiMobileRecoveryShareLivenessProof(
     try mobileRecoveryShareLivenessProof(shareEnvelope: shareEnvelope, hubId: hubId, challengeHex: challengeHex)
 }
 
+// Ban digest (#2759) — stateless RFC 9497 OPRF client half (packages/crypto/src/ban_digest.rs)
+private func ffiBanDigestBlind(phone: String) throws -> BanDigestBlind {
+    try banDigestBlind(phone: phone)
+}
+
+private func ffiBanDigestFinalize(phone: String, blindHex: String, evaluatedElementHex: String) throws -> String {
+    try banDigestFinalize(phone: phone, blindHex: blindHex, evaluatedElementHex: evaluatedElementHex)
+}
+
 // V3 Recovery group keypair generation (stateless — produces X25519 keypair)
 private func ffiMobileRecoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
     mobileRecoveryGroupGenerateKeypair()
@@ -670,6 +679,20 @@ final class CryptoService: @unchecked Sendable {
 
     func shamirVerify(share: ShamirShare, commitment: String) throws -> Bool {
         try ffiMobileShamirVerify(share: share, commitmentHex: commitment)
+    }
+
+    // MARK: - Ban Digest (#2759)
+
+    /// Blind an E.164 number for a ban digest. Send `blindedElementHex` to the server's evaluate
+    /// endpoint and keep `blindHex` for `banDigestFinalize`: the number never leaves the device.
+    /// Throws for anything that is not E.164.
+    func banDigestBlind(phone: String) throws -> BanDigestBlind {
+        try ffiBanDigestBlind(phone: phone)
+    }
+
+    /// Finalize the server's evaluated element into the number's ban digest (128 hex chars).
+    func banDigestFinalize(phone: String, blindHex: String, evaluatedElementHex: String) throws -> String {
+        try ffiBanDigestFinalize(phone: phone, blindHex: blindHex, evaluatedElementHex: evaluatedElementHex)
     }
 
     // MARK: - General HPKE Operations
