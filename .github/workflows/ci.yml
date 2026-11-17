@@ -2548,7 +2548,7 @@ jobs:
         id: avd-create
         if: steps.avd-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2566,7 +2566,7 @@ jobs:
         id: avd-create-retry1
         if: steps.avd-create.outcome == 'failure'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2580,7 +2580,7 @@ jobs:
         id: avd-create-retry2
         if: steps.avd-create-retry1.outcome == 'failure'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2699,7 +2699,7 @@ jobs:
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }})
         id: e2e-run
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2755,7 +2755,7 @@ jobs:
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
         id: e2e-retry
         if: steps.e2e-classify.outputs.retry == 'true'
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
