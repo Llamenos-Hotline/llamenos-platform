@@ -2105,7 +2105,10 @@ mod tests {
             vec!["open".into()],
         )
         .is_err());
-        assert!(mobile_blind_index_tokens("bi-hub".into(), "status".into(), vec!["open".into()]).is_err());
+        assert!(
+            mobile_blind_index_tokens("bi-hub".into(), "status".into(), vec!["open".into()])
+                .is_err()
+        );
     }
 
     #[test]

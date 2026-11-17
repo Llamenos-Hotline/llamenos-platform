@@ -15,7 +15,9 @@ use sha2::Sha256;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::errors::CryptoError;
-use crate::labels::{HMAC_CASE_SEVERITY, HMAC_CASE_STATUS, LABEL_BLIND_INDEX_FIELD, LABEL_BLIND_INDEX_KEY};
+use crate::labels::{
+    HMAC_CASE_SEVERITY, HMAC_CASE_STATUS, LABEL_BLIND_INDEX_FIELD, LABEL_BLIND_INDEX_KEY,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -339,19 +341,17 @@ mod tests {
     #[test]
     fn field_blind_index_known_answer() {
         let key = [0x42u8; 32];
-        let tokens = field_blind_indexes(
-            &key,
-            HMAC_CASE_STATUS,
-            &["open".to_string()],
-        )
-        .unwrap();
-        let severity = field_blind_indexes(&key, HMAC_CASE_SEVERITY, &["high".to_string()]).unwrap();
+        let tokens = field_blind_indexes(&key, HMAC_CASE_STATUS, &["open".to_string()]).unwrap();
+        let severity =
+            field_blind_indexes(&key, HMAC_CASE_SEVERITY, &["high".to_string()]).unwrap();
         assert_eq!(tokens[0], KAT_STATUS_OPEN);
         assert_eq!(severity[0], KAT_SEVERITY_HIGH);
     }
 
-    const KAT_STATUS_OPEN: &str = "1d4ac0e1a18dd11314d37d71f7286964d04e74c25927b6c5c29a174adc894d74";
-    const KAT_SEVERITY_HIGH: &str = "15a7a8fa68968c0c64a0c1562b90cce6e773625ab8fc88ed10ccd4c08b855090";
+    const KAT_STATUS_OPEN: &str =
+        "1d4ac0e1a18dd11314d37d71f7286964d04e74c25927b6c5c29a174adc894d74";
+    const KAT_SEVERITY_HIGH: &str =
+        "15a7a8fa68968c0c64a0c1562b90cce6e773625ab8fc88ed10ccd4c08b855090";
 
     #[test]
     fn test_iso_week_string() {
