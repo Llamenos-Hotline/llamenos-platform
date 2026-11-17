@@ -115,6 +115,65 @@ export const bans = pgTable(
 )
 
 // ---------------------------------------------------------------------------
+// ban_reentries
+// ---------------------------------------------------------------------------
+
+/**
+ * A ban that no longer enforces and has to be entered again (#2829).
+ *
+ * A ban's digest is an OPRF output under a key only the server holds, and the server
+ * never holds the number it digested, so when the digest scheme changes or the key is
+ * replaced the old digests cannot be recomputed: nobody can carry the ban across. The row
+ * is therefore MOVED here from `bans` — never left in `bans` as something that reads as
+ * enforced and matches nothing — and the admin's ban list shows it until they re-enter the
+ * number and dismiss it.
+ *
+ * Only the non-identifying context survives: when, by whom, the admin's note. The old
+ * digest is dropped with the key it was made under (it is enumerable if the scheme was the
+ * keyed-HMAC one), so this table can say nothing about which number the ban was for.
+ * Scope is the same `hub_id` | NULL (platform) split as `bans`.
+ */
+export const banReentries = pgTable(
+  'ban_reentries',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    hubId: text('hub_id'),
+    reason: text('reason'),
+    bannedBy: text('banned_by'),
+    bannedAt: timestamp('banned_at', { withTimezone: true }).notNull(),
+    // Why the ban stopped enforcing: 'digest-scheme' (the digest function changed) or
+    // 'key-replaced' (BAN_HASH_KEY is not the key the ban was digested under).
+    cause: text('cause').notNull(),
+    retiredAt: timestamp('retired_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index('ban_reentries_hub_id_idx').on(table.hubId)],
+)
+
+// ---------------------------------------------------------------------------
+// ban_key_check
+// ---------------------------------------------------------------------------
+
+/**
+ * The fingerprint of the BAN_HASH_KEY the stored ban digests were made under (#2829).
+ * One row (`id = 'ban'`). The server compares it with the key it was handed at every boot,
+ * so a key that was lost and regenerated, or restored from the wrong backup, is caught
+ * instead of quietly matching no ban. The fingerprint is a public OPRF output of a fixed
+ * string under a key derived for this one purpose; it reveals nothing about the key or any
+ * ban.
+ */
+export const banKeyCheck = pgTable('ban_key_check', {
+  id: text('id').primaryKey(),
+  fingerprint: text('fingerprint').notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+})
+
+// ---------------------------------------------------------------------------
 // contact_metadata
 // ---------------------------------------------------------------------------
 

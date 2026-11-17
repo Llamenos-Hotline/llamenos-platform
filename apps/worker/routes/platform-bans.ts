@@ -114,7 +114,11 @@ platformBans.get(
     const limit = Math.max(1, Math.min(Number(c.req.query('limit') ?? 50) || 50, 200))
     const offset = Math.max(0, Number(c.req.query('offset') ?? 0) || 0)
 
-    const { bans: rows, total } = await services.records.listPlatformBans(limit, offset)
+    const [{ bans: rows, total }, reentries] = await Promise.all([
+      services.records.listPlatformBans(limit, offset),
+      // Bans that stopped enforcing and must be entered again (#2829) — shown, never silent.
+      services.records.listBanReentries(PLATFORM_SCOPE),
+    ])
 
     return c.json({
       bans: rows.map((b) => ({
@@ -125,6 +129,7 @@ platformBans.get(
         bannedAt: b.bannedAt?.toISOString() ?? '',
       })),
       total,
+      reentries,
     })
   },
 )
@@ -203,6 +208,33 @@ platformBans.post(
       count: phoneHashes.length,
     }, undefined, null)
     return c.json({ ok: true, count: added })
+  },
+)
+
+platformBans.delete(
+  '/reentries/:id',
+  describeRoute({
+    tags: ['Platform Bans'],
+    summary: 'Dismiss a platform ban that had to be re-entered, once the number is banned again',
+    responses: {
+      200: {
+        description: 'Reminder dismissed',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('bans:delete-platform'),
+  async (c) => {
+    const dismissed = await c.get('services').records.dismissBanReentry(PLATFORM_SCOPE, c.req.param('id'))
+    if (!dismissed) {
+      return c.json({ error: 'Re-entry not found' }, 404)
+    }
+    return c.json({ ok: true })
   },
 )
 

@@ -86,6 +86,16 @@ export function banBlindEvaluate(blindedElementHex: string, scope: OwnerScope, b
   return bytesToHex(banDigestBlindEvaluate(hexToBytes(banHashKey), banKeyScope(scope), hexToBytes(blindedElementHex)))
 }
 
+/**
+ * A fingerprint of BAN_HASH_KEY, stored beside the ban digests so a boot can tell the key it
+ * was handed is the key they were made under (#2829). It is the digest of a fixed public
+ * string under a key derived for this purpose alone — a scope no hub id or ban uses — so it
+ * says nothing about the key or about any ban, and it is not a digest of any number.
+ */
+export function banKeyFingerprint(banHashKey: string): string {
+  return bytesToHex(banDigestEvaluate(hexToBytes(banHashKey), 'ban-key-fingerprint', 'llamenos:ban-key-fingerprint:v1'))
+}
+
 /** One ban-list lookup: a number hashed under one scope's key, matched only against that scope's rows. */
 export interface ScopedBanHash {
   scope: OwnerScope

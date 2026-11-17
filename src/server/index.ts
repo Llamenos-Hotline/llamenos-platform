@@ -16,6 +16,7 @@ import { IncidentDelivery } from '../../apps/worker/services/incidents-delivery'
 import { createBlobStorage } from '../../apps/worker/lib/blob-storage'
 import { createTranscriptionService } from '../../apps/worker/lib/transcription-client'
 import { validateConfig, readSecretFile } from '../../apps/worker/lib/config'
+import { banKeyFingerprint } from '../../apps/worker/lib/crypto'
 import { getHubTelephonyFromService, getMessagingAdapterFromService } from '../../apps/worker/lib/service-factories'
 import { publishEvent, setEventOutbox, drainOutbox, cleanupOutbox } from '../../apps/worker/lib/ws-events'
 import {
@@ -119,6 +120,25 @@ console.log('[llamenos] Services initialized')
 await services.settings.ensureInit()
 await services.identity.ensurePlatformAdmin()
 console.log('[llamenos] Default settings, roles and platform admin ensured')
+
+// --- Ban list vs ban key (#2829) ---
+// Ban digests are keyed by BAN_HASH_KEY and cannot be recomputed from anything the server
+// keeps. A replaced key (or a changed digest scheme) therefore makes every stored ban match
+// no caller. Refuse to serve on a key that is not the one the bans were made under, unless
+// the operator names the new key's fingerprint to say the replacement is deliberate; bans
+// that stop enforcing are moved to the re-entry list the admin sees, never left looking live.
+{
+  const banKey = await services.records.reconcileBanKey(
+    banKeyFingerprint(banHashKey),
+    process.env.BAN_KEY_REPLACED_ACK?.trim() || undefined,
+  )
+  if (banKey.outcome === 'retired') {
+    console.error(
+      `[llamenos] SECURITY: ${banKey.count} stored ban(s) no longer enforce (${banKey.cause}). ` +
+        'They were moved to the ban lists\' re-entry section: an admin must ban those numbers again.',
+    )
+  }
+}
 
 // --- Startup: warn if any plaintext (un-encrypted) contacts exist ---
 try {

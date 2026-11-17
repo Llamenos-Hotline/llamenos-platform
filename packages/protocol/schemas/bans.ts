@@ -16,8 +16,27 @@ export type BanEntry = z.infer<typeof banResponseSchema>
 
 // --- List/wrapper response schemas ---
 
+/**
+ * A ban that stopped enforcing and has to be entered again (#2829): the digest scheme changed
+ * or the server's ban key was replaced, and the server cannot recompute a digest from a number
+ * it never kept. It carries no number and no digest — only when it was banned, by whom, and
+ * the admin's note, so re-entering it is deliberate. `id` dismisses it once it is re-entered.
+ */
+export const banReentryResponseSchema = z.object({
+  id: z.string(),
+  reason: z.string().nullable(),
+  bannedBy: z.string().nullable(),
+  bannedAt: z.string(),
+  cause: z.enum(['digest-scheme', 'key-replaced']),
+  retiredAt: z.string(),
+})
+
+export type BanReentry = z.infer<typeof banReentryResponseSchema>
+
 export const banListResponseSchema = z.object({
   bans: z.array(banResponseSchema),
+  /** Bans that no longer enforce and must be re-entered. Empty when every ban in `bans` enforces. */
+  reentries: z.array(banReentryResponseSchema).optional().default([]),
 })
 
 /** `POST /bans` answers with the ban it created — the desktop reads it back from `ban`. */
@@ -54,6 +73,8 @@ export type PlatformBan = z.infer<typeof platformBanResponseSchema>
 export const platformBanListResponseSchema = z.object({
   bans: z.array(platformBanResponseSchema),
   total: z.number(),
+  /** Platform bans that no longer enforce and must be re-entered (see `banReentryResponseSchema`). */
+  reentries: z.array(banReentryResponseSchema).optional().default([]),
 })
 
 // --- Ban digests (#2759) ---

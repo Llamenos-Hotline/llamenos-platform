@@ -10,6 +10,8 @@ import {
   notes,
   noteReplies,
   bans,
+  banReentries,
+  banKeyCheck,
   contactMetadata,
 } from '../db/schema'
 import type { AuditService } from './audit'
@@ -80,6 +82,37 @@ export interface AddBanInput {
   reason: string
   bannedBy: string
 }
+
+/** Why a ban stopped enforcing and has to be entered again (`ban_reentries.cause`). */
+export type BanReentryCause = 'digest-scheme' | 'key-replaced'
+
+/** What boot-time reconciliation of the ban key with the stored digests did. */
+export type BanKeyReconciliation =
+  | { outcome: 'recorded' }
+  | { outcome: 'unchanged' }
+  | { outcome: 'retired'; cause: BanReentryCause; count: number }
+
+/**
+ * The server was handed a BAN_HASH_KEY other than the one the stored ban digests were made
+ * under. Every stored ban would silently match no caller, so the server refuses to serve
+ * rather than run with its ban list switched off (#2829).
+ */
+export class BanKeyReplacedError extends Error {
+  constructor(readonly fingerprint: string) {
+    super(
+      `[llamenos] BAN_HASH_KEY is not the key the stored bans were made under. Every stored ban ` +
+      `would stop matching callers. Restore the original ban-hash-key secret. If the key was ` +
+      `replaced on purpose and every ban must be re-entered, boot once with ` +
+      `BAN_KEY_REPLACED_ACK=${fingerprint} to move the stored bans to the re-entry list.`,
+    )
+    this.name = 'BanKeyReplacedError'
+  }
+}
+
+/** Serialises boot-time reconciliation across the pods Helm starts together. Never changes. */
+const BAN_KEY_LOCK = 7_742_010_914_552
+
+const BAN_KEY_CHECK_ID = 'ban'
 
 // Infer row types from the schema
 type NoteRow = typeof notes.$inferSelect
@@ -355,6 +388,80 @@ export class RecordsService {
     }
   }
 
+  /**
+   * Make the stored bans and the ban key agree, at every boot (#2829).
+   *
+   * A ban is a digest under a key only the server holds, of a number it never kept, so a
+   * digest made under another key or another scheme can neither be recomputed nor matched.
+   * Rather than leave such rows in `bans`, where they read as enforced and match nothing,
+   * they are moved to `ban_reentries` — the admin's ban list shows them — and the new key's
+   * fingerprint is recorded. Cases:
+   *   - no fingerprint yet: the first boot of a database that has never recorded one. Any bans
+   *     already stored were made by an earlier digest scheme, so they are retired;
+   *   - fingerprint equal: nothing to do;
+   *   - fingerprint differs: the key was lost and regenerated, or restored wrongly. This throws
+   *     {@link BanKeyReplacedError} unless `acknowledgedFingerprint` names the new key, which
+   *     is the operator saying the replacement is deliberate and the bans must be re-entered.
+   */
+  async reconcileBanKey(fingerprint: string, acknowledgedFingerprint?: string): Promise<BanKeyReconciliation> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BAN_KEY_LOCK})`)
+      const [stored] = await tx.select().from(banKeyCheck).where(eq(banKeyCheck.id, BAN_KEY_CHECK_ID))
+      if (stored?.fingerprint === fingerprint) return { outcome: 'unchanged' }
+      if (stored && acknowledgedFingerprint !== fingerprint) throw new BanKeyReplacedError(fingerprint)
+
+      const cause: BanReentryCause = stored ? 'key-replaced' : 'digest-scheme'
+      const retired = await tx.execute(sql`
+        INSERT INTO ban_reentries (id, hub_id, reason, banned_by, banned_at, cause)
+        SELECT gen_random_uuid()::text, hub_id, reason, banned_by, banned_at, ${cause} FROM bans
+        RETURNING id
+      `)
+      await tx.delete(bans)
+      await tx
+        .insert(banKeyCheck)
+        .values({ id: BAN_KEY_CHECK_ID, fingerprint })
+        .onConflictDoUpdate({ target: banKeyCheck.id, set: { fingerprint, recordedAt: new Date() } })
+      const count = retired.length
+      return count > 0 ? { outcome: 'retired', cause, count } : { outcome: 'recorded' }
+    })
+  }
+
+  /**
+   * The bans of one scope that no longer enforce and must be entered again. They carry no
+   * number and no digest: when it was banned, by whom, and the admin's note.
+   */
+  async listBanReentries(scope: OwnerScope): Promise<Array<{
+    id: string
+    reason: string | null
+    bannedBy: string | null
+    bannedAt: Date
+    cause: BanReentryCause
+    retiredAt: Date
+  }>> {
+    const rows = await this.db
+      .select()
+      .from(banReentries)
+      .where(scopeWhere(banReentries.hubId, scope))
+      .orderBy(desc(banReentries.bannedAt))
+    return rows.map(r => ({
+      id: r.id,
+      reason: r.reason,
+      bannedBy: r.bannedBy,
+      bannedAt: r.bannedAt,
+      cause: r.cause as BanReentryCause,
+      retiredAt: r.retiredAt,
+    }))
+  }
+
+  /** The admin has re-entered the number (or decided not to): drop the reminder. */
+  async dismissBanReentry(scope: OwnerScope, id: string): Promise<boolean> {
+    const dismissed = await this.db
+      .delete(banReentries)
+      .where(and(eq(banReentries.id, id), scopeWhere(banReentries.hubId, scope)))
+      .returning({ id: banReentries.id })
+    return dismissed.length > 0
+  }
+
   async bulkAddBans(
     scope: OwnerScope,
     phoneHashes: string[],
@@ -489,6 +596,7 @@ export class RecordsService {
     await this.db.delete(noteReplies)
     await this.db.delete(notes)
     await this.db.delete(bans)
+    await this.db.delete(banReentries)
     await this.db.delete(contactMetadata)
   }
 

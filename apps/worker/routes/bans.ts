@@ -39,7 +39,14 @@ bans.get('/',
   requirePermission('bans:read'),
   async (c) => {
     const services = c.get('services')
-    return c.json(await services.records.listBans(hubScope(pathHubId(c))))
+    const scope = hubScope(pathHubId(c))
+    // `reentries` are bans that stopped enforcing and must be entered again (#2829):
+    // the list shows them so a defence that went quiet is never invisible to the admin.
+    const [list, reentries] = await Promise.all([
+      services.records.listBans(scope),
+      services.records.listBanReentries(scope),
+    ])
+    return c.json({ ...list, reentries })
   },
 )
 
@@ -116,6 +123,34 @@ bans.post('/bulk',
     const added = await services.records.bulkAddBans(scope, phoneHashes, body.reason ?? '', pubkey)
     await audit(services.audit, 'numberBanned', pubkey, { count: body.phones.length, bulk: true }, undefined, hubId)
     return c.json({ count: added })
+  },
+)
+
+bans.delete('/reentries/:id',
+  describeRoute({
+    tags: ['Bans'],
+    summary: 'Dismiss a ban that had to be re-entered, once the number is banned again',
+    responses: {
+      200: {
+        description: 'Reminder dismissed',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('bans:delete'),
+  async (c) => {
+    const services = c.get('services')
+    const dismissed = await services.records.dismissBanReentry(hubScope(pathHubId(c)), c.req.param('id'))
+    if (!dismissed) {
+      return c.json({ error: 'Re-entry not found' }, 404)
+    }
+    return c.json({ ok: true })
   },
 )
 
