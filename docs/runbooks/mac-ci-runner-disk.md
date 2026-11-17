@@ -9,10 +9,20 @@ The Mac mini that hosts the self-hosted `ios-e2e` runners (`mac-mini-ios-1`,
 | `/Volumes/CIScratch` (external SABRENT RTL9210B, USB, `disk7s1`) | 1.8 TiB, ~1.8 TiB free | **out-of-CI builds started over ssh**, migrated caches and worktrees, and the file that backs the CI work volume |
 | `/Volumes/CIWork` (a 300 GiB **sparsebundle** hosted on CIScratch, APFS, `disk9s1`) | 300 GiB cap, occupies only what is written | **what CI jobs write**: each runner's `_work` and the CoreSimulator device set |
 
-The internal volume rests at 18-21 GiB free. Every iOS job refuses to start
-below **12 GiB** on any volume it writes to (`scripts/ci/mac-runner-disk-guard.sh`,
-#1665). That floor is unchanged. What changed on 2026-11-14 is *where jobs write*,
-so the floor is no longer crossed by a few concurrent shards.
+The internal volume rested at 18-21 GiB free on 2026-11-14 and at 11 GiB on
+2026-11-16 (95% full, almost all of it the operator's and other accounts' data).
+Every iOS job refuses to start when a volume it writes to is below **that
+volume's floor**: the sum of what two concurrent jobs put on it, plus 2 GiB for
+the agent's `_diag` where that lives (`scripts/ci/mac-runner-disk-guard.sh`,
+"THE THRESHOLD"; #1665):
+
+| layout | internal floor | CI work volume floor |
+|---|---|---|
+| everything on the internal disk (before 2026-11-14) | 12 GiB (2 x 5 GiB per shard + 2) | not measured |
+| `_work` and the device set on CIWork (now) | **5 GiB** (2 x 1.5 GiB swap + 2) | **7 GiB** (2 x 2.5 device data + 2 x 1.0 build products) |
+
+Until 2026-11-16 the guard held every volume to 12 GiB, so after the cutover it
+refused jobs on the internal disk's number for bytes that no longer land there.
 
 ## The layout, and how it got there
 
@@ -92,9 +102,11 @@ trade is one more thing that must be attached.
   (mac)` and `ci.yml`'s `ios-build-test`. It resolves `RUNNER_TEMP` (DerivedData,
   build products), `RUNNER_WORKSPACE` (the checkout), the runner's `_diag` (the
   write that crashed the agent in #1665) and the CoreSimulator device set, **follows
-  symlinks**, and holds each distinct volume to the 12 GiB floor. The internal
-  volume is always one of them (swap, `_diag` and the CoreSimulator caches are
-  there). The refusal names which volume is short
+  symlinks**, and holds each distinct volume to its own floor (above): what the
+  paths landing on it cost, never one number for all. The internal volume is
+  always one of them (swap, `_diag` and the CoreSimulator caches are there). The
+  hang fallback in `ios-e2e.yml` is the same computation (`guard.sh gate`: df
+  only, nothing walked). The refusal names which volume is short
   (`disk-guard-verdict: refused ... volume=/Volumes/CIWork`). Nothing assumes the
   layout above: a job whose `RUNNER_TEMP` is on the internal disk is measured on
   the internal disk.
@@ -241,13 +253,23 @@ device data 2.06 GiB, build products, results, the checkout, plus the swap. What
 shards cost the CI work volume: ~4 GiB each. The remainder of that 5 GiB is now on
 a 300 GiB disk image whose backing store has 1.8 TiB.
 
-The refusal condition moves accordingly. Per volume, the guard refuses when that
-volume has less than 12 GiB:
+The refusal condition moves accordingly. Per volume, since 2026-11-16, the guard
+refuses when that volume has less than its own floor:
 
-| volume | refuses when | with today's numbers |
+| volume | refuses when | with the numbers of 2026-11-16 |
 |---|---|---|
-| internal | idle free < 12 GiB + ~0.7 GiB (measured; 1.5 GiB if you budget the older swap estimate) per **sibling** job running | 20.9 GiB idle: two siblings need 13.4-15 GiB, so it never refuses; five siblings still pass on the conservative figure |
-| CI work volume | free < 12 GiB of 300 GiB | ~4 GiB per shard: refuses only after ~70 concurrent shards |
+| internal | free < 5 GiB (2 x 1.5 GiB swap, the conservative figure; 0.7 measured, + 2 GiB `_diag`) | 11 GiB free: passes, with ~6 GiB to spare |
+| CI work volume | free < 7 GiB of 300 GiB | 286 GiB free: ~4 GiB per shard, refuses only after ~70 concurrent shards |
+
+What else CI still writes on the internal disk, measured 2026-11-16 (`df` for
+the volume, `du` for a directory, informational): `~/Library/Developer/Xcode/
+DerivedData` 0.9 GiB idle since 2026-11-07 (not CI's: every Mac xcodebuild passes
+`-derivedDataPath` under `RUNNER_TEMP`, and `mac-runner-disk-guard.test.ts` fails
+on one that does not), the SwiftPM cache in `~/Library/Caches` 0.28 GiB unchanged
+since 2026-11-02 (warm, the size of the dependency set), the user `TMPDIR` 12 MiB,
+`~/Library/Developer/CoreSimulator/Caches` 0 (reclaimed every job) and
+`/private/var/tmp` 7 MiB (the #2644 sweep, and every teardown now uses
+`delete-sim`). None grows per job, so none is moved and none is in a floor.
 
 ### Verified with a real job (2026-11-14)
 
