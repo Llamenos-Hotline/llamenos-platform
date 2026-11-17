@@ -5,8 +5,12 @@
  * 0m for every run and hid a 31-48 minute queue (#2648). Also lists queued runs
  * older than a day, which are stuck rather than queueing.
  *
- *   bun run scripts/fleet-review-wait.ts            # last 40 Fleet Review runs
+ *   bun run scripts/fleet-review-wait.ts            # last 40 runs of each review workflow
  *   bun run scripts/fleet-review-wait.ts --limit 100
+ *
+ * Two workflows run the review job (#2815): fleet-review-re-evaluate.yml for
+ * every review request — the self-hosted engine runs, the waits that matter —
+ * and fleet-review.yml for the carriers, the merge-queue arm and dispatches.
  *
  * Read-only: it cancels and deletes nothing.
  */
@@ -14,6 +18,13 @@ import { gh, describeGhFailure, REPO } from '../orchestrator/src/gh.js'
 import { isZombie, runnerWait, summarizeWaits, type RunJobSample, type RunnerWait } from '../orchestrator/src/review-runner-wait.js'
 
 interface RunRow { id: number; event: string; head_branch: string; created_at: string; status: string }
+
+/** Each workflow that runs the review job, and the check-run name it has there
+ *  (a called workflow's job is named `<caller job> / <job>`). */
+const REVIEW_JOBS: ReadonlyArray<{ workflow: string; job: string }> = [
+  { workflow: 'fleet-review-re-evaluate.yml', job: 're-evaluate / fleet/review/re-evaluate' },
+  { workflow: 'fleet-review.yml', job: 'fleet/review' },
+]
 interface JobRow { name: string; status: string; started_at: string | null; runner_name: string | null }
 
 async function main(): Promise<number> {
@@ -24,13 +35,15 @@ async function main(): Promise<number> {
     return 2
   }
   const now = new Date()
-  let runs: RunRow[]
-  try {
-    const out = await gh(['api', `repos/${REPO}/actions/workflows/fleet-review.yml/runs?per_page=${Math.min(limit, 100)}`, '--jq', '.workflow_runs'])
-    runs = JSON.parse(out) as RunRow[]
-  } catch (e) {
-    console.error(`could not list Fleet Review runs — ${describeGhFailure(e)}`)
-    return 1
+  const runs: Array<RunRow & { job: string }> = []
+  for (const { workflow, job } of REVIEW_JOBS) {
+    try {
+      const out = await gh(['api', `repos/${REPO}/actions/workflows/${workflow}/runs?per_page=${Math.min(limit, 100)}`, '--jq', '.workflow_runs'])
+      runs.push(...(JSON.parse(out) as RunRow[]).map((r) => ({ ...r, job })))
+    } catch (e) {
+      console.error(`could not list ${workflow} runs — ${describeGhFailure(e)}`)
+      return 1
+    }
   }
   const waits: RunnerWait[] = []
   const zombies: RunRow[] = []
@@ -39,7 +52,7 @@ async function main(): Promise<number> {
     if (isZombie(r.created_at, r.status, now)) zombies.push(r)
     try {
       const out = await gh(['api', `repos/${REPO}/actions/runs/${r.id}/jobs`, '--jq', '.jobs'])
-      const job = (JSON.parse(out) as JobRow[]).find((j) => j.name === 'fleet/review')
+      const job = (JSON.parse(out) as JobRow[]).find((j) => j.name === r.job)
       if (job === undefined) continue
       const sample: RunJobSample = {
         runId: r.id, event: r.event, branch: r.head_branch, runCreatedAt: r.created_at,

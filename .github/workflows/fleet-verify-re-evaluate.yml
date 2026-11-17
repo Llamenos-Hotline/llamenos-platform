@@ -1,0 +1,39 @@
+# Fleet Verify — re-evaluation (#2815)
+#
+# The `review_requested` arm of fleet-verify.yml, in a workflow of its own —
+# the same reasoning as fleet-review-re-evaluate.yml, whose header explains
+# it. In short: admission reads only the NEWEST check suite per workflow on
+# a head, so a `review_requested` run of fleet-verify.yml itself shadowed
+# the head's `fleet/verify` carrier and admission reported the context as
+# `expected` with every check green. This file only CALLS fleet-verify.yml;
+# its `fleet-verify/refresh-carrier` job then re-runs the head's one carrier
+# in place, which re-reads the PR's live labels (a `scope:<lane>` grant,
+# #1124) and concludes on them.
+name: Fleet Verify Re-evaluate
+
+on:
+  pull_request:
+    types: [review_requested]
+
+# Per PR, and a newer request cancels an older one: a re-evaluation carries
+# no required name, and the newest request's refresh re-runs the carrier.
+# Distinct from every group fleet-verify.yml evaluates (`fleet-verify-…`).
+concurrency:
+  group: ${{ format('fleet-verify-re-evaluate-pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+permissions: {}  # deny-all; the calling job grants the ceiling below
+
+jobs:
+  re-evaluate:
+    # The CEILING for fleet-verify.yml's jobs, each of which sets its own,
+    # narrower `permissions:`: `fleet/verify` keeps `contents`/
+    # `pull-requests: read`, `fleet-verify/refresh-carrier` `actions: write`
+    # + `checks: read`.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+      checks: read
+    # No `secrets:` — fleet-verify.yml reads none.
+    uses: ./.github/workflows/fleet-verify.yml

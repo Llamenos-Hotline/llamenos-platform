@@ -65,10 +65,22 @@ on:
   # and it is precisely the trap `review_requested` avoids by needing no
   # filtering at all. Do not add a job-level `if:` here to filter events.
   #
-  # None of these four is in CodeQL's cache-write-event list above, so the
-  # isolation this whole file exists to provide is unaffected.
+  # #2815: `review_requested` reaches this file ONLY through `workflow_call`,
+  # from fleet-verify-re-evaluate.yml — never as a `pull_request` type here.
+  # GitHub's admission reads, per workflow, only the NEWEST check suite on a
+  # head; a `review_requested` run of this file was a newer suite than the
+  # head's `fleet/verify` carrier, held only `fleet/verify/re-evaluate`, and
+  # admission reported `fleet/verify` as `expected` with every check green
+  # (see fleet-review-re-evaluate.yml's header for the measurement). A
+  # called workflow's `github` context is the caller's, so every expression
+  # below still sees `pull_request` + `review_requested` on that arm.
+  #
+  # None of these is in CodeQL's cache-write-event list above (the caller is
+  # a `pull_request` workflow), so the isolation this whole file exists to
+  # provide is unaffected.
   pull_request:
-    types: [opened, synchronize, reopened, review_requested]
+    types: [opened, synchronize, reopened]
+  workflow_call:
   merge_group:
     types: [checks_requested]
 
@@ -77,12 +89,28 @@ concurrency:
   # concurrency groups are scoped to the whole repository by default, not
   # per workflow file, so reusing ci.yml's names here would cancel or queue
   # against unrelated ci.yml runs sharing the same PR ref/SHA.
-  group: ${{ github.event_name == 'pull_request' && format('fleet-verify-pr-{0}', github.ref) || format('fleet-verify-mg-{0}', github.sha) }}
-  # Never cancelled: same reasoning as ci.yml's own `concurrency:` block — a
-  # merge_group check that gets cancelled mid-run leaves its required check
-  # permanently missing, which stalls the queue rather than failing it
-  # loudly.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  #
+  # A head's CARRIER (`opened`/`reopened`/`synchronize`) groups by PR ref AND
+  # head sha, and is never cancelled (#2813). Its only possible group-mates
+  # are its own re-run attempts. Before #2813 every `pull_request` run of a
+  # PR shared one per-ref group with `cancel-in-progress`, so the
+  # `review_requested` that GitHub fires beside `opened` cancelled the
+  # carrier, and the head kept a `cancelled` `fleet/verify` that admission
+  # reported as `expected` forever (#2616, #2797, #2811). A per-head group
+  # also means `fleet-verify/refresh-carrier` re-running an OLD head's
+  # carrier can never cancel the current head's. The price is that a push no
+  # longer cancels the previous head's verify — it runs to completion on a
+  # hosted runner, bounded by `timeout-minutes`.
+  #
+  # A RE-EVALUATION (`review_requested`) groups per PR ref and IS cancelled
+  # by a newer one: it carries no required name, and the newest request's
+  # refresh re-runs the carrier.
+  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) && format('fleet-verify-pr-{0}-head-{1}', github.ref, github.event.pull_request.head.sha) || format('fleet-verify-pr-{0}-re-evaluate', github.ref)) || format('fleet-verify-mg-{0}', github.sha) }}
+  # Never cancelled outside a re-evaluation: same reasoning as ci.yml's own
+  # `concurrency:` block — a merge_group check that gets cancelled mid-run
+  # leaves its required check permanently missing, which stalls the queue
+  # rather than failing it loudly — and a cancelled PR carrier is #2813.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) }}
 
 permissions: {}  # deny-all; the job below sets its own
 
@@ -91,7 +119,14 @@ env:
 
 jobs:
   fleet-verify:
-    name: fleet/verify
+    # ONE carrier per head (#2813) — the same model as fleet-review.yml's
+    # `fleet-review` job, whose comment explains it. `opened`/`reopened`/
+    # `synchronize` (and `merge_group`) carry `fleet/verify`; a
+    # `review_requested` run lands on a head that already carries it, so it
+    # is named `fleet/verify/re-evaluate` and `fleet-verify/refresh-carrier`
+    # re-runs the one carrier in place. Evaluated per event by
+    # tests/orchestrator/required-context-creation.test.ts.
+    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) && 'fleet/verify' || 'fleet/verify/re-evaluate' }}
     # `merge_group` alongside `pull_request`: cheap and mechanical, so it runs
     # at PR-open time for fast feedback AND again on the queue ref right
     # before the commit lands, satisfying it as a required check there too
@@ -423,3 +458,94 @@ jobs:
           FLEET_CI_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           FLEET_CI_BASE_SHA: ${{ steps.ctx.outputs.base_sha }}
         run: bun orchestrator/src/cli.ts verify-ci
+
+  # #2813: see the matching job in fleet-review.yml. A `review_requested`
+  # run re-evaluates the PR (a `scope:<lane>` grant applied since the head
+  # was judged, #1124) under `fleet/verify/re-evaluate`; this job then
+  # re-runs the head's one `fleet/verify` carrier in place, which re-reads
+  # the PR's live labels and concludes on them. Before #2813 the review
+  # request published a second `fleet/verify` and cancelled the first
+  # through the shared concurrency group — a `cancelled` carrier admission
+  # then reported as `expected` forever (#2616).
+  refresh-carrier:
+    name: fleet-verify/refresh-carrier
+    needs: [fleet-verify]
+    # A job-level `if:` is safe here: this name is not a required context, so
+    # skipping it satisfies nothing. `!cancelled()`, not `always()`: a
+    # re-evaluation superseded by a newer one leaves the refresh to that one.
+    # A fork PR's token cannot re-run anything, so it is not attempted there.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.action == 'review_requested' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      actions: write   # read the carrier's workflow run and re-run it
+      checks: read     # find the carrier among the head's check runs
+    steps:
+      - name: Re-run the head's fleet/verify carrier in place
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CONTEXT: fleet/verify
+          WORKFLOW_PATH: .github/workflows/fleet-verify.yml
+          POLL_SECONDS: '20'
+          MAX_WAIT_SECONDS: '1800'
+        run: |
+          set -euo pipefail
+          # Re-run the head's ONE carrier of $CONTEXT in place (#2813). A re-run is
+          # a new attempt inside the SAME check suite, so the head keeps exactly one
+          # $CONTEXT check run and it now reflects this re-evaluation; publishing a
+          # second carrier instead is what left #2616/#2797/#2811 green and
+          # unmergeable. Never makes anything green by itself: the carrier re-judges
+          # the head on its own terms.
+          fail() {
+            echo "::error::refresh-carrier FAILED: $1 — the $CONTEXT carrier on $HEAD_SHA was NOT re-run, so it still shows its earlier conclusion. Re-run that workflow run by hand, or re-request the review."
+            exit 1
+          }
+          api() {
+            local out
+            if ! out="$(gh api "$@" 2>&1)"; then
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+            printf '%s' "$out"
+          }
+          ctx_q="$(jq -rn --arg s "$CONTEXT" '$s|@uri')"
+          carriers="$(api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=$ctx_q&filter=latest&per_page=100" \
+            --jq '.check_runs[] | select(.app.slug == "github-actions") | .id')" \
+            || fail "could not list the $CONTEXT check runs on the head"
+          runs=""
+          for job in $carriers; do
+            run="$(api "repos/$REPO/actions/jobs/$job" --jq '.run_id')" || fail "could not resolve check run $job to its workflow run"
+            meta="$(api "repos/$REPO/actions/runs/$run" --jq '[.path, .event] | @tsv')" || fail "could not read workflow run $run"
+            path="$(printf '%s' "$meta" | cut -f1)"
+            event="$(printf '%s' "$meta" | cut -f2)"
+            if { [ "$path" != "$WORKFLOW_PATH" ] && [[ "$path" != "$WORKFLOW_PATH@"* ]]; } || [ "$event" != "pull_request" ]; then
+              echo "not a carrier: check run $job belongs to run $run ($path, $event), not to this workflow's pull_request carrier"
+              continue
+            fi
+            case " $runs " in *" $run "*) ;; *) runs="$runs $run" ;; esac
+          done
+          if [ -z "${runs// /}" ]; then
+            echo "::notice::no $CONTEXT carrier on $HEAD_SHA yet — the run that creates it has not started, and it reads this re-evaluation when it does; nothing to re-run"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
+          for run in $runs; do
+            while :; do
+              status="$(api "repos/$REPO/actions/runs/$run" --jq '.status')" || fail "could not read the status of carrier run $run"
+              if [ "$status" = "completed" ]; then
+                if refused="$(gh api -X POST "repos/$REPO/actions/runs/$run/rerun" 2>&1)"; then
+                  echo "re-ran $CONTEXT carrier run $run on $HEAD_SHA in place — the same check suite, so the head still carries exactly one $CONTEXT"
+                  break
+                fi
+                echo "::warning::re-running carrier run $run was refused ($(printf '%s' "$refused" | tr '\n' ' ')) — another re-run may have just started; waiting for it to finish"
+              else
+                echo "carrier run $run is $status — waiting for it to finish, so that its re-run starts after this re-evaluation"
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                fail "carrier run $run was still not re-runnable after ${MAX_WAIT_SECONDS}s"
+              fi
+              sleep "$POLL_SECONDS"
+            done
+          done

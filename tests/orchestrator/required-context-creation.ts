@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { evalTemplate, type ExprValue } from './helpers/github-expr'
 
 /**
  * Who CREATES each required status context, on each event that puts a new
@@ -90,7 +91,11 @@ interface Job {
   name?: unknown
   if?: unknown
   needs?: unknown
-  steps?: Array<{ uses?: unknown; with?: Record<string, unknown> }>
+  strategy?: unknown
+  permissions?: unknown
+  /** A job that calls a reusable workflow (`./.github/workflows/<file>`). */
+  uses?: unknown
+  steps?: Array<{ uses?: unknown; run?: unknown; with?: Record<string, unknown> }>
 }
 
 interface Trigger {
@@ -208,17 +213,22 @@ export function analyseRequiredContextCreation(
   for (const context of required) {
     const byEvent = new Map<string, string[]>()
     creators.set(context, byEvent)
-    const named = parsed.flatMap(({ file, doc }) =>
+    // A job's name can be an expression (#2813: a re-evaluation event names
+    // its run apart from the head's carrier), so "is this job the carrier?"
+    // is asked per event, of the name GitHub would actually evaluate.
+    const namedOn = (e: RunEvent) => parsed.flatMap(({ file, doc }) =>
       Object.entries(jobsOf(doc))
-        .filter(([key, job]) => String(job.name ?? key) === context)
+        .filter(([key, job]) => jobNameOn(file, key, job, e) === context)
         .map(([key]) => ({ file, key, on: doc?.on })))
-    if (named.length === 0) {
+    if (HEAD_EVENTS.every((e) => namedOn(e).length === 0)) {
       violations.push(`\`${context}\`: no workflow job is named \`${context}\`, so nothing ever creates this required context`)
       continue
     }
     for (const e of HEAD_EVENTS) {
       const gaps: string[] = []
       const ok: string[] = []
+      const named = namedOn(e)
+      if (named.length === 0) gaps.push(`no job is named \`${context}\` on this event`)
       for (const c of named) {
         const gap = triggerGap(c.on, e)
         if (gap === null) ok.push(`${c.file}#${c.key}`)
@@ -261,4 +271,345 @@ export function analyseRequiredContextCreation(
   }
 
   return { violations, creators }
+}
+
+// ─── #2813: ONE carrier per (head, required context) ─────────────────────
+
+/**
+ * An event as a rail feeds it to the expression evaluator: which event, which
+ * `pull_request` action, and which head the run is for. Two runs on the same
+ * `pr` + `headSha` are two runs on ONE head — exactly the situation in which
+ * a second carrier is created.
+ */
+export interface RunEvent {
+  event: string
+  action?: string
+  pr?: number
+  headSha?: string
+  /** Distinguishes two runs of one event (`github.run_id`). */
+  runId?: number
+}
+
+export const SAMPLE_PR = 4242
+export const SAMPLE_HEAD = 'a'.repeat(40)
+export const SAMPLE_OTHER_HEAD = 'b'.repeat(40)
+const SAMPLE_QUEUE_SHA = 'c'.repeat(40)
+const SAMPLE_BASE_SHA = 'e'.repeat(40)
+const SAMPLE_REPO = 'Llamenos-Hotline/llamenos-platform'
+const SAMPLE_BRANCH = 'fleet/infra/sample'
+
+/** The `github` (and sibling) contexts GitHub would expose to `name:`,
+ *  `concurrency:` and `runs-on:` for `e`. Only what those keys may read. */
+export function expressionContext(e: RunEvent): Record<string, ExprValue> {
+  const pr = e.pr ?? SAMPLE_PR
+  const head = e.headSha ?? SAMPLE_HEAD
+  const runId = e.runId ?? 1
+  let event: Record<string, ExprValue> = {}
+  let ref = `refs/heads/${SAMPLE_BRANCH}`
+  let sha = head
+  let headRef = ''
+  if (e.event === 'pull_request') {
+    event = {
+      action: e.action ?? '',
+      number: pr,
+      pull_request: {
+        number: pr,
+        head: { sha: head, ref: SAMPLE_BRANCH, repo: { full_name: SAMPLE_REPO } },
+        base: { sha: SAMPLE_BASE_SHA, ref: PROTECTED_BRANCH, repo: { full_name: SAMPLE_REPO } },
+        user: { login: 'llamenos-auto' },
+      },
+      requested_reviewer: e.action === 'review_requested' ? { login: 'llamenos-auto' } : null,
+    }
+    ref = `refs/pull/${pr}/merge`
+    // `github.sha` on a pull_request is the MERGE commit, which differs per
+    // head; derive one so two heads never collide by accident.
+    sha = `${head.slice(0, 39)}m`
+    headRef = SAMPLE_BRANCH
+  } else if (e.event === 'merge_group') {
+    event = {
+      action: 'checks_requested',
+      merge_group: { head_sha: SAMPLE_QUEUE_SHA, base_sha: SAMPLE_BASE_SHA, head_ref: `refs/heads/gh-readonly-queue/main/pr-${pr}-${SAMPLE_BASE_SHA}` },
+    }
+    ref = `refs/heads/gh-readonly-queue/main/pr-${pr}-${SAMPLE_BASE_SHA}`
+    sha = SAMPLE_QUEUE_SHA
+  } else if (e.event === 'workflow_dispatch') {
+    event = { inputs: { pr_number: String(pr) } }
+  }
+  return {
+    github: {
+      event_name: e.event, event, ref, sha, head_ref: headRef, repository: SAMPLE_REPO,
+      run_id: runId, run_attempt: 1, workflow: 'sample',
+    },
+    inputs: e.event === 'workflow_dispatch' ? { pr_number: String(pr) } : {},
+    matrix: {}, needs: {}, strategy: {}, vars: {},
+  }
+}
+
+/** The check-run name job `key` would carry on `e` — the job key when it has
+ *  no `name:`, the evaluated expression otherwise. */
+export function jobNameOn(file: string, key: string, job: { name?: unknown }, e: RunEvent): string {
+  if (job.name === undefined || job.name === null) return key
+  try {
+    const v = evalTemplate(String(job.name), expressionContext(e))
+    return v === null || v === undefined ? '' : String(v)
+  } catch (err) {
+    throw new Error(`${file}#${key}: cannot evaluate name ${JSON.stringify(job.name)}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/** The concurrency group a run of `doc` joins on `e`, `null` when none. */
+export function concurrencyGroupOn(file: string, doc: Record<string, unknown> | null, e: RunEvent): string | null {
+  const c = doc?.concurrency
+  if (c === undefined || c === null) return null
+  const raw = typeof c === 'object' ? (c as { group?: unknown }).group : c
+  if (raw === undefined || raw === null) return null
+  try {
+    return String(evalTemplate(String(raw), expressionContext(e)) ?? '')
+  } catch (err) {
+    throw new Error(`${file}: cannot evaluate concurrency.group: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+/**
+ * `pull_request` actions that put a new head in front of the gate, and so are
+ * the ONLY ones allowed to create a carrier. `reopened` is here because a PR
+ * reopened after its branch moved has a head nothing has judged (#2806); on a
+ * PR reopened over an UNCHANGED head it is one extra carrier, the one residual
+ * of this model, and the reason it is named rather than hidden.
+ */
+export const HEAD_ACTIONS: readonly string[] = ['opened', 'synchronize', 'reopened']
+
+/**
+ * Every `pull_request` action a workflow triggers on that does NOT move the
+ * head — a review request, a label, an edit. A run on one of these lands on a
+ * head that already carries every required context, so a job named after one
+ * of them would be a SECOND carrier (#2813).
+ *
+ * Out of scope here, and why: `workflow_dispatch` suites are not associated
+ * with the pull request, so the PR's admission never reads them (#1471,
+ * measured on #1372/#1378/#1184); a `push` to a non-protected branch reaches a
+ * PR head only for ci.yml's `desktop` push, and only if a PR is ever opened
+ * from `desktop` itself.
+ */
+export function reevaluationActions(on: unknown): string[] {
+  const t = triggerFor(on, 'pull_request')
+  if (t === null) return []
+  const types = t.types === undefined ? DEFAULT_TYPES.pull_request : asStrings(t.types)
+  return types.filter((a) => !HEAD_ACTIONS.includes(a))
+}
+
+export interface UniquenessReport {
+  violations: string[]
+  /** `file` → the re-evaluation actions it triggers on, for sanity checks. */
+  reevaluators: Map<string, string[]>
+  /** re-evaluating caller `file` → the carrier workflow files it calls. */
+  reevaluates: Map<string, string[]>
+}
+
+/** The local workflow file a calling job runs (`uses: ./.github/workflows/x.yml`),
+ *  or `null` for a steps job or a remote reusable workflow. */
+export function calledWorkflow(job: Job): string | null {
+  if (typeof job.uses !== 'string') return null
+  const m = /^\.\/\.github\/workflows\/([^/@]+\.ya?ml)$/.exec(job.uses.trim())
+  return m?.[1] ?? null
+}
+
+/**
+ * The #2813 invariant, derived from the workflow files:
+ *
+ *  1. No run on a re-evaluation action carries a required name. A gate that
+ *     re-judges a head must refresh the head's ONE carrier, not publish
+ *     another — GitHub's admission then judges whichever carrier it pleases,
+ *     and on #2811 it judged the stale `NO-VERDICT:unreviewed` refusal over a
+ *     later real PASS.
+ *  2. On each head event exactly one Actions job, across every workflow,
+ *     carries each required context — never two workflows, never a matrix.
+ *  3. No run of any OTHER event, and no run on another head, can share the
+ *     carrier's concurrency group. A group-mate is what cancels a carrier (a
+ *     `cancel-in-progress` group) or replaces it while pending (any group) —
+ *     #2616/#2797/#2811's `cancelled` `fleet/verify`, which admission then
+ *     reported as `expected` forever.
+ *  4. A re-evaluation of a carrier workflow has a job that re-runs the
+ *     carrier in place (`actions: write`, `POST …/actions/runs/{id}/rerun`) —
+ *     so the re-evaluation still reaches the required context, as #1124's
+ *     scope grants need it to — and the calling job grants that write.
+ *  5. (#2815) A workflow that carries a required context on a head event
+ *     triggers on NO `pull_request` action that leaves the head where it
+ *     is. Every run of a workflow is a check suite of that workflow, and
+ *     admission reads only the NEWEST suite per workflow on a head: a
+ *     re-evaluation run in the carrier's own workflow shadows the carrier —
+ *     even one carrying no required name at all, which `enqueuePullRequest`
+ *     then reports as `N of 5 required status checks are expected` while
+ *     every check reads green (measured on #2815's own heads). A
+ *     re-evaluation therefore runs in a workflow of its own that CALLS the
+ *     carrier workflow (`uses:`), whose check runs are named
+ *     `<caller job> / <job>` and whose suites are its own.
+ */
+export function analyseCarrierUniqueness(
+  workflows: readonly Workflow[],
+  required: readonly string[] = RULESET_REQUIRED_CONTEXTS,
+): UniquenessReport {
+  const parsed = workflows.map((w) => ({ file: w.file, doc: parseYaml(w.text) as Record<string, unknown> | null }))
+  const violations: string[] = []
+  const reevaluators = new Map<string, string[]>()
+  const reevaluates = new Map<string, string[]>()
+  const docOf = (file: string) => parsed.find((p) => p.file === file)?.doc ?? null
+
+  /** Every job a run of `file` instantiates, a called workflow's jobs
+   *  included under the name GitHub gives them: `<caller job> / <job>`. */
+  const expandedJobs = (file: string, doc: Record<string, unknown> | null, e: RunEvent) =>
+    Object.entries(jobsOf(doc)).flatMap(([key, job]) => {
+      const callerName = jobNameOn(file, key, job, e)
+      const called = calledWorkflow(job)
+      if (called === null) return [{ key, job, name: callerName, from: file }]
+      const calledDoc = docOf(called)
+      if (calledDoc === null) {
+        violations.push(`${file}#${key}: calls ${called}, which is not a workflow in this repository`)
+        return []
+      }
+      return Object.entries(jobsOf(calledDoc)).map(([k, j]) => ({
+        key: `${key}/${k}`, job: j, name: `${callerName} / ${jobNameOn(called, k, j, e)}`, from: called,
+      }))
+    })
+
+  const carriersOn = (e: RunEvent) => parsed.flatMap(({ file, doc }) => {
+    if (e.event === 'pull_request' ? triggerGap(doc?.on, { event: 'pull_request', action: e.action as 'opened' }) !== null
+      : triggerFor(doc?.on, e.event) === null) return []
+    return Object.entries(jobsOf(doc))
+      .map(([key, job]) => ({ file, doc, key, job, name: jobNameOn(file, key, job, e) }))
+      .filter((c) => required.includes(c.name))
+  })
+
+  // 1. Re-evaluation actions never carry a required name.
+  for (const { file, doc } of parsed) {
+    const actions = reevaluationActions(doc?.on)
+    if (actions.length === 0) continue
+    reevaluators.set(file, actions)
+    for (const action of actions) {
+      for (const { key, name } of expandedJobs(file, doc, { event: 'pull_request', action })) {
+        if (!required.includes(name)) continue
+        violations.push(
+          `\`${name}\` on pull_request.${action}: ${file}#${key} carries the required name on an event that does not ` +
+            `move the head — a SECOND \`${name}\` carrier on a head that already has one, and admission judges ` +
+            'whichever it pleases (#2813)',
+        )
+      }
+    }
+  }
+
+  // 2. Exactly one Actions carrier per head event.
+  const headEvents: RunEvent[] = [
+    ...HEAD_ACTIONS.map((action) => ({ event: 'pull_request', action })),
+    { event: 'merge_group', action: 'checks_requested' },
+  ]
+  for (const e of headEvents) {
+    const carriers = carriersOn(e)
+    for (const context of required) {
+      const mine = carriers.filter((c) => c.name === context)
+      if (mine.length > 1) {
+        violations.push(`\`${context}\` on ${e.event}.${e.action}: ${mine.length} jobs carry it (${mine.map((c) => `${c.file}#${c.key}`).join(', ')}) — one head, one carrier`)
+      }
+      for (const c of mine) {
+        if (c.job.strategy !== undefined) {
+          violations.push(`\`${context}\` on ${e.event}.${e.action}: ${c.file}#${c.key} is a matrix job — every leg is a carrier`)
+        }
+      }
+    }
+  }
+
+  // 5. A carrier's workflow never re-evaluates (#2815) — and the callers
+  //    that do re-evaluate it, for rules 3 and 4.
+  const carrierFiles = new Set(headEvents.flatMap((e) => carriersOn(e).map((c) => c.file)))
+  for (const file of carrierFiles) {
+    const actions = reevaluators.get(file) ?? []
+    if (actions.length === 0) continue
+    const carried = [...new Set(headEvents.flatMap((e) => carriersOn(e).filter((c) => c.file === file).map((c) => `\`${c.name}\``)))]
+    violations.push(
+      `${file} carries ${carried.join(', ')} and also runs on pull_request.${actions.join('/')}, which does not move the head — ` +
+        'that run is a NEWER check suite of the same workflow on the same head, and admission reads only the newest suite ' +
+        'per workflow, so it shadows the carrier (#2815: `N of 5 required status checks are expected`, every check green). ' +
+        'Re-evaluate from a workflow of its own that calls this one (`uses:`).',
+    )
+  }
+  const callers = new Map<string, Array<{ file: string; key: string; job: Job; doc: Record<string, unknown> | null; actions: string[] }>>()
+  for (const { file, doc } of parsed) {
+    const actions = reevaluationActions(doc?.on)
+    if (actions.length === 0) continue
+    for (const [key, job] of Object.entries(jobsOf(doc))) {
+      const called = calledWorkflow(job)
+      if (called === null || !carrierFiles.has(called)) continue
+      callers.set(called, [...(callers.get(called) ?? []), { file, key, job, doc, actions }])
+      reevaluates.set(file, [...(reevaluates.get(file) ?? []), called])
+    }
+  }
+
+  // 3. A carrier's concurrency group is its own.
+  for (const action of HEAD_ACTIONS) {
+    const carrierEvent: RunEvent = { event: 'pull_request', action, headSha: SAMPLE_HEAD, runId: 1 }
+    for (const c of carriersOn(carrierEvent)) {
+      const group = concurrencyGroupOn(c.file, c.doc, carrierEvent)
+      if (group === null) continue
+      const mates: Array<{ label: string; e: RunEvent; groupOf: (e: RunEvent) => string | null }> = [
+        ...reevaluationActions(c.doc?.on).map((a) => ({
+          label: `pull_request.${a} on the same head`, e: { event: 'pull_request', action: a, headSha: SAMPLE_HEAD, runId: 2 },
+          groupOf: (e: RunEvent) => concurrencyGroupOn(c.file, c.doc, e),
+        })),
+      ]
+      // A re-evaluation through a caller (rule 5) can meet the carrier in
+      // EITHER group: the called file's own (evaluated on the caller's event)
+      // or the caller's.
+      for (const caller of callers.get(c.file) ?? []) {
+        for (const a of caller.actions) {
+          const e: RunEvent = { event: 'pull_request', action: a, headSha: SAMPLE_HEAD, runId: 2 }
+          mates.push({ label: `${caller.file}'s pull_request.${a} on the same head`, e, groupOf: (x) => concurrencyGroupOn(c.file, c.doc, x) })
+          mates.push({ label: `${caller.file}'s pull_request.${a} on the same head`, e, groupOf: (x) => concurrencyGroupOn(caller.file, caller.doc, x) })
+        }
+      }
+      // A workflow that re-runs its carrier later (rule 4) re-enters this
+      // group with an OLD head after the PR moved on — so the group must not
+      // be shared across heads either, or that re-run cancels or displaces
+      // the current head's carrier.
+      if ((reevaluators.get(c.file) ?? []).length > 0 || (callers.get(c.file) ?? []).length > 0) {
+        mates.push({
+          label: 'a carrier for another head of the same PR', e: { event: 'pull_request', action: 'synchronize', headSha: SAMPLE_OTHER_HEAD, runId: 3 },
+          groupOf: (e: RunEvent) => concurrencyGroupOn(c.file, c.doc, e),
+        })
+      }
+      for (const m of mates) {
+        if (m.groupOf(m.e) === group) {
+          violations.push(
+            `\`${c.name}\` on pull_request.${action}: ${c.file}'s carrier shares concurrency group \`${group}\` with ` +
+              `${m.label} — a group-mate cancels it or displaces it while pending, leaving a \`cancelled\` carrier (#2813)`,
+          )
+        }
+      }
+    }
+  }
+
+  // 4. Re-evaluation refreshes the carrier in place.
+  const refresherIn = (doc: Record<string, unknown> | null) => Object.entries(jobsOf(doc)).find(([, job]) => {
+    const perms = job.permissions as Record<string, unknown> | undefined
+    return perms?.actions === 'write' &&
+      (job.steps ?? []).some((st) => typeof st.run === 'string' && /actions\/runs\/[^\s"']*\/rerun/.test(st.run))
+  })
+  for (const file of carrierFiles) {
+    for (const caller of callers.get(file) ?? []) {
+      const where = `${caller.file}#${caller.key}`
+      if (refresherIn(docOf(file)) === undefined) {
+        violations.push(
+          `${where}: re-evaluates ${file} on pull_request.${caller.actions.join('/')} but ${file} has no job that ` +
+            're-runs the head\'s carrier in place (actions: write + POST …/rerun) — the re-evaluation never reaches the required context',
+        )
+      }
+      const ceiling = caller.job.permissions as Record<string, unknown> | undefined
+      if (ceiling?.actions !== 'write') {
+        violations.push(
+          `${where}: calls ${file} without granting \`actions: write\` — a called workflow can only LOWER its caller's ` +
+            'token, so the carrier refresh is refused and the re-evaluation never reaches the required context',
+        )
+      }
+    }
+  }
+
+  return { violations, reevaluators, reevaluates }
 }

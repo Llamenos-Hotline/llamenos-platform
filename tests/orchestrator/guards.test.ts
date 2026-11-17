@@ -1473,8 +1473,11 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   }
 
   it('finds fleet-verify (fleet-verify.yml) and fleet-review (fleet-review.yml) as real jobs — the parser must not pass vacuously', () => {
-    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain('name: fleet/verify')
-    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain('name: fleet/review')
+    // #2813: the carrier name is a literal inside a per-event `name:`
+    // expression (tests/orchestrator/required-context-creation.test.ts
+    // evaluates it per event).
+    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain("&& 'fleet/verify' ||")
+    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain("&& 'fleet/review' ||")
   })
 
   // The load-bearing assertion of this whole rail, in its post-#844-fail-open
@@ -1525,7 +1528,15 @@ describe('rail: fleet/review runs once per review request, not on every push', (
    * `review_requested` along with the explicitness.
    */
   it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+    // #2815: the request reaches it through fleet-verify-re-evaluate.yml,
+    // which triggers on exactly that and calls this file — never as one of
+    // this file's own `pull_request` types (see required-context-creation.test.ts).
+    const caller = workflowYaml('fleet-verify-re-evaluate.yml')
+    const callerOn = caller.split(/\njobs:\n/)[0] ?? ''
+    expect(callerOn).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]\n/)
+    expect(caller).toMatch(/\n {4}uses: \.\/\.github\/workflows\/fleet-verify\.yml\n/)
     const onBlock = fleetVerifyYaml().split(/\njobs:\n/)[0] ?? ''
+    expect(onBlock, 'fleet-verify.yml must be callable, or the re-evaluation cannot reach it').toMatch(/\n {2}workflow_call:/)
     // Scoped to the literal `pull_request:` trigger sub-block, not the whole
     // pre-`jobs:` text: this file's `on:` block carries prose comments that
     // legitimately name these events while explaining them, and a
@@ -1534,9 +1545,10 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
     expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
       .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
-    for (const type of ['opened', 'synchronize', 'reopened', 'review_requested']) {
+    for (const type of ['opened', 'synchronize', 'reopened']) {
       expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
     }
+    expect(pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? '', 'review_requested in fleet-verify.yml\'s own types shadows its carrier (#2815)').not.toContain('review_requested')
   })
 
   // The load-bearing assertion for fleet-review.yml's own trigger list:
@@ -1573,10 +1585,20 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // with no `fleet/review` check run at all because of it.
   // required-context-creation.test.ts is the rail that fails if a head event
   // stops creating the context.
-  it('fleet-review.yml triggers on pull_request (review_requested + the republish-only actions), workflow_dispatch AND merge_group, and NEVER push', () => {
+  it('fleet-review.yml triggers on pull_request (the republish-only actions), workflow_call (review_requested, #2815), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
+    // The review request arrives through the caller, and ONLY a review
+    // request: never a label, an edit or a push (the every-label and
+    // every-push bugs), and never a carrier action (that is this file's).
+    expect(onBlock).toMatch(/\n {2}workflow_call:/)
+    const caller = workflowYaml('fleet-review-re-evaluate.yml')
+    const callerOn = caller.split(/\njobs:\n/)[0] ?? ''
+    expect(callerOn).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]\n/)
+    expect(callerOn, 'fleet-review-re-evaluate.yml must never trigger on "push"').not.toMatch(/\n {2}(push|workflow_dispatch|merge_group|pull_request_target):/)
+    expect(caller).toMatch(/\n {4}uses: \.\/\.github\/workflows\/fleet-review\.yml\n/)
+    expect(caller, 'pass the review\'s secrets by name — `secrets: inherit` hands it every secret in the repo').not.toMatch(/\n\s+secrets:\s*inherit\s*\n/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
     // whole pre-`jobs:` text — the file's own prose comments above `on:`
@@ -1596,7 +1618,7 @@ describe('rail: fleet/review runs once per review request, not on every push', (
         .not.toContain(forbiddenType)
     }
     const types = (typesLine.match(/\[([^\]]*)\]/)?.[1] ?? '').split(',').map((t) => t.trim()).filter((t) => t.length > 0)
-    expect(types.filter((t) => t !== 'review_requested'), 'every non-request trigger must be republish-only')
+    expect(types, 'every pull_request trigger of the carrier\'s own workflow must be republish-only')
       .toEqual([...REVIEW_REPUBLISH_ACTIONS])
     expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
       .not.toMatch(/\n {2}push:/)
