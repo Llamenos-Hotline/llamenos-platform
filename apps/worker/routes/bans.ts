@@ -4,7 +4,7 @@ import type { AppEnv } from '../types'
 import { isValidE164 } from '../lib/helpers'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
-import { createBanBodySchema, createBanResponseSchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema } from '@protocol/schemas/bans'
+import { createBanBodySchema, createBanResponseSchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema, banDigestSchema } from '@protocol/schemas/bans'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { banHash } from '../lib/crypto'
@@ -143,8 +143,8 @@ bans.delete('/:phoneHash',
     const hubId = pathHubId(c)
     const phoneHash = c.req.param('phoneHash')
     // Only the opaque handle from the ban list: a raw number in the path would land in
-    // access logs and proxy logs, and the client has no key to compute a hash itself.
-    if (!/^[0-9a-f]{64}$/i.test(phoneHash)) {
+    // access logs and proxy logs. The handle is the ban digest (`banDigestSchema`, #2759).
+    if (!banDigestSchema.safeParse(phoneHash).success) {
       return c.json({ error: 'Invalid ban handle' }, 400)
     }
     // Lifting a ban re-admits a caller the hub deliberately excluded, so the audit entry
