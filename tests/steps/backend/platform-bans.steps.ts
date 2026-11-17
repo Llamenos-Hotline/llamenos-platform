@@ -21,7 +21,6 @@ import {
   getActingAdmin,
 } from './shared-state'
 import {
-  apiGet,
   apiPost,
   apiDelete,
   createUserViaApi,
@@ -29,6 +28,7 @@ import {
   uniquePhone,
 } from '../../api-helpers'
 import { simulateIncomingCallResponse } from '../../simulation-helpers'
+import { banDigestBlind, banDigestFinalize } from '../../mocks/ban-digest-mock'
 
 // ── State ──────────────────────────────────────────────────────────
 
@@ -73,14 +73,9 @@ interface SearchBanEntry {
 After(async ({ request, world }) => {
   const s = getS(world)
   if (!s || s.platformPhones.size === 0) return
-  const actor = getActingAdmin(world)
   for (const phone of s.platformPhones) {
     try {
-      const { status, data } = await apiGet<{ bans: SearchBanEntry[] }>(
-        request,
-        `/admin/bans/search?phone=${encodeURIComponent(phone)}`,
-        actor?.deviceKey,
-      )
+      const { status, data } = await searchBans(request, world, phone)
       if (status !== 200) continue
       const platformEntries = data.bans.filter((b) => !b.hubId)
       for (const entry of platformEntries) {
@@ -94,15 +89,68 @@ After(async ({ request, world }) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+type Request = Parameters<typeof apiPost>[0]
+
+/**
+ * The platform ban digests of typed numbers, computed the way every client does (#2759):
+ * blind each number, have the server evaluate the blinded elements, finalize. The number
+ * itself never goes over the wire.
+ */
+async function platformDigests(request: Request, world: Record<string, unknown>, phones: string[]): Promise<string[]> {
+  const actor = getActingAdmin(world)
+  const blinds = phones.map((phone) => banDigestBlind(phone))
+  const res = await apiPost<{ evaluatedElements: string[] }>(
+    request,
+    '/admin/bans/evaluate',
+    { blindedElements: blinds.map((b) => b.blindedElementHex) },
+    actor?.deviceKey,
+  )
+  expect(res.status, `evaluate failed: ${JSON.stringify(res.data)}`).toBe(200)
+  return phones.map((phone, i) => banDigestFinalize(phone, blinds[i].blindHex, res.data.evaluatedElements[i]))
+}
+
+interface ScopedLookup {
+  hubId: string | null
+  phoneHash: string
+}
+
+/** A number's digest under every scope, for search and promote — again without sending it. */
+async function searchLookups(request: Request, world: Record<string, unknown>, phone: string): Promise<ScopedLookup[]> {
+  const actor = getActingAdmin(world)
+  const blind = banDigestBlind(phone)
+  const res = await apiPost<{ evaluations: { hubId: string | null; evaluatedElement: string }[] }>(
+    request,
+    '/admin/bans/search/evaluate',
+    { blindedElement: blind.blindedElementHex },
+    actor?.deviceKey,
+  )
+  expect(res.status, `search evaluate failed: ${JSON.stringify(res.data)}`).toBe(200)
+  return res.data.evaluations.map(({ hubId, evaluatedElement }) => ({
+    hubId,
+    phoneHash: banDigestFinalize(phone, blind.blindHex, evaluatedElement),
+  }))
+}
+
+async function searchBans(request: Request, world: Record<string, unknown>, phone: string) {
+  const actor = getActingAdmin(world)
+  return apiPost<{ bans: SearchBanEntry[] }>(
+    request,
+    '/admin/bans/search',
+    { lookups: await searchLookups(request, world, phone) },
+    actor?.deviceKey,
+  )
+}
+
 /** Create a platform-scoped ban as this scenario's acting admin, tracking it for cleanup. */
 async function createPlatformBan(
-  request: Parameters<typeof apiPost>[0],
+  request: Request,
   world: Record<string, unknown>,
   phone: string,
   reason: string,
 ): Promise<void> {
   const actor = getActingAdmin(world)
-  const res = await apiPost(request, '/admin/bans', { phone, reason }, actor?.deviceKey)
+  const [phoneHash] = await platformDigests(request, world, [phone])
+  const res = await apiPost(request, '/admin/bans', { phoneHash, reason }, actor?.deviceKey)
   expect(res.status, `failed to create platform ban for ${phone}: ${JSON.stringify(res.data)}`).toBe(200)
   const s = getS(world)
   s.platformPhones.add(phone)
@@ -117,17 +165,12 @@ async function createPlatformBan(
  * "search then promote/delete by id" workflow (see routes/platform-bans.ts).
  */
 async function resolveBanId(
-  request: Parameters<typeof apiGet>[0],
+  request: Request,
   world: Record<string, unknown>,
   phone: string,
   hubId?: string,
 ): Promise<string> {
-  const actor = getActingAdmin(world)
-  const { status, data } = await apiGet<{ bans: SearchBanEntry[] }>(
-    request,
-    `/admin/bans/search?phone=${encodeURIComponent(phone)}`,
-    actor?.deviceKey,
-  )
+  const { status, data } = await searchBans(request, world, phone)
   expect(status).toBe(200)
   const entry = data.bans.find((b) => (hubId ? b.hubId === hubId : !b.hubId))
   expect(entry, `no ${hubId ? 'hub-scoped' : 'platform-scoped'} ban found for ${phone}`).toBeTruthy()
@@ -210,7 +253,8 @@ When(
   'the admin POSTs to {string} with phone {string} and reason {string}',
   async ({ request, world }, path: string, phone: string, reason: string) => {
     const actor = getActingAdmin(world)
-    const res = await apiPost(request, path, { phone, reason }, actor?.deviceKey)
+    const [phoneHash] = await platformDigests(request, world, [phone])
+    const res = await apiPost(request, path, { phoneHash, reason }, actor?.deviceKey)
     setLastResponse(world, res)
     if (res.status === 200) {
       const s = getS(world)
@@ -223,7 +267,8 @@ When(
 When('the admin POSTs to {string} with {int} phone numbers', async ({ request, world }, path: string, count: number) => {
   const actor = getActingAdmin(world)
   const phones = Array.from({ length: count }, () => uniquePhone())
-  const res = await apiPost(request, path, { phones, reason: 'BDD bulk import' }, actor?.deviceKey)
+  const phoneHashes = await platformDigests(request, world, phones)
+  const res = await apiPost(request, path, { phoneHashes, reason: 'BDD bulk import' }, actor?.deviceKey)
   setLastResponse(world, res)
   if (res.status === 200) {
     const s = getS(world)
@@ -231,18 +276,64 @@ When('the admin POSTs to {string} with {int} phone numbers', async ({ request, w
   }
 })
 
-When('the admin POSTs to {string} with an invalid phone number', async ({ request, world }, path: string) => {
+When('the admin POSTs to {string} with an entry that is not a ban digest', async ({ request, world }, path: string) => {
   const actor = getActingAdmin(world)
-  const res = await apiPost(request, path, { phones: ['not-a-real-phone'], reason: 'invalid' }, actor?.deviceKey)
+  const res = await apiPost(request, path, { phoneHashes: ['not-a-ban-digest'], reason: 'invalid' }, actor?.deviceKey)
   setLastResponse(world, res)
 })
 
-When('the admin POSTs to {string} with banId {string}', async ({ request, world }, path: string, label: string) => {
+When('the admin POSTs a plaintext phone number {string} to {string}', async ({ request, world }, phone: string, path: string) => {
+  const actor = getActingAdmin(world)
+  const body = path.endsWith('/bulk') ? { phones: [phone], reason: 'plaintext' } : { phone, reason: 'plaintext' }
+  setLastResponse(world, await apiPost(request, path, body, actor?.deviceKey))
+})
+
+When('the admin asks {string} to evaluate an element that is not a group element', async ({ request, world }, path: string) => {
+  const actor = getActingAdmin(world)
+  const body = path.endsWith('/search/evaluate')
+    ? { blindedElement: '00'.repeat(32) }
+    : { blindedElements: ['00'.repeat(32)] }
+  setLastResponse(world, await apiPost(request, path, body, actor?.deviceKey))
+})
+
+When('the admin searches all bans for {string}', async ({ request, world }, phone: string) => {
+  setLastResponse(world, await searchBans(request, world, phone))
+})
+
+When('the hub admin asks {string} to evaluate a blinded number', async ({ request, world }, path: string) => {
+  const actor = getActingAdmin(world)
+  const { blindedElementHex } = banDigestBlind(uniquePhone())
+  const body = path.endsWith('/search/evaluate')
+    ? { blindedElement: blindedElementHex }
+    : { blindedElements: [blindedElementHex] }
+  setLastResponse(world, await apiPost(request, path, body, actor?.deviceKey))
+})
+
+/**
+ * Promote as every client does: re-enter the number, digest it under every scope, and send
+ * the source hub's digest (checked against the stored hub ban) with the platform digest.
+ */
+async function promoteBody(
+  request: Request,
+  world: Record<string, unknown>,
+  banId: string,
+  phone: string,
+  sourceHubId: string,
+) {
+  const lookups = await searchLookups(request, world, phone)
+  const source = lookups.find((l) => l.hubId === sourceHubId)
+  const platform = lookups.find((l) => l.hubId === null)
+  expect(source, `no evaluation for hub ${sourceHubId}`).toBeTruthy()
+  expect(platform, 'no evaluation for the platform').toBeTruthy()
+  return { banId, sourcePhoneHash: source!.phoneHash, phoneHash: platform!.phoneHash }
+}
+
+When('the admin POSTs to {string} with banId {string}', async ({ request, world, workerHub }, path: string, label: string) => {
   const actor = getActingAdmin(world)
   const s = getS(world)
   const banId = s.banLabels[label] ?? label
-  // Promotion needs the banned number again: a hub's ban hash is keyed to that hub.
-  const res = await apiPost(request, path, { banId, phone: s.lastPhone }, actor?.deviceKey)
+  // Promotion needs the banned number again: a hub's ban digest is keyed to that hub.
+  const res = await apiPost(request, path, await promoteBody(request, world, banId, s.lastPhone!, workerHub), actor?.deviceKey)
   setLastResponse(world, res)
   // A successful promote inserts a NEW platform-scoped row for the source ban's
   // phone — track it so the After hook cleans it up too.
@@ -257,10 +348,10 @@ When('the admin POSTs to {string} with banId {string} and no phone number', asyn
   setLastResponse(world, await apiPost(request, path, { banId }, actor?.deviceKey))
 })
 
-When('the admin POSTs to {string} with banId {string} and a different phone number', async ({ request, world }, path: string, label: string) => {
+When('the admin POSTs to {string} with banId {string} and a different phone number', async ({ request, world, workerHub }, path: string, label: string) => {
   const actor = getActingAdmin(world)
   const banId = getS(world).banLabels[label] ?? label
-  setLastResponse(world, await apiPost(request, path, { banId, phone: uniquePhone() }, actor?.deviceKey))
+  setLastResponse(world, await apiPost(request, path, await promoteBody(request, world, banId, uniquePhone(), workerHub), actor?.deviceKey))
 })
 
 When('the admin DELETEs {string}', async ({ request, world }, pathTemplate: string) => {

@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import type { AppEnv } from '../types'
-import { isValidE164 } from '../lib/helpers'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
 import {
@@ -10,14 +9,70 @@ import {
   platformBanListResponseSchema,
   searchBansResponseSchema,
   promoteBanBodySchema,
+  banDigestEvaluateBodySchema,
+  banDigestEvaluateResponseSchema,
+  searchBansEvaluateBodySchema,
+  searchBansEvaluateResponseSchema,
+  searchBansBodySchema,
 } from '@protocol/schemas/bans'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { banHash, banLookup } from '../lib/crypto'
+import { banBlindEvaluate } from '../lib/crypto'
 import { scopeOfRow } from '../lib/owner-scope'
 import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 
+/**
+ * Platform bans never see a number (#2759). Every body here carries ban digests that an
+ * admin's client computed from the number it was given, by blinding it and asking
+ * `/evaluate` (or `/search/evaluate`) to evaluate the blinded element under the scope's key —
+ * RFC 9497 OPRF, `packages/crypto/src/ban_digest.rs`. The server holds the key, so it matches an
+ * inbound caller's number against the same digest; no client holds it, so no one with the
+ * stored column but not BAN_HASH_KEY can enumerate the numbers behind it.
+ */
 const platformBans = new Hono<AppEnv>()
+
+/**
+ * A blinded element that is not a valid ristretto255 encoding fails evaluation. That is the
+ * client's malformed input, not a server fault, so it answers 400.
+ */
+function evaluateOrNull(evaluate: () => string): string | null {
+  try {
+    return evaluate()
+  } catch {
+    return null
+  }
+}
+
+platformBans.post(
+  '/evaluate',
+  describeRoute({
+    tags: ['Platform Bans'],
+    summary: 'Evaluate blinded numbers under the platform ban key (oblivious; the number is never sent)',
+    responses: {
+      200: {
+        description: 'Evaluated elements, in request order',
+        content: {
+          'application/json': {
+            schema: resolver(banDigestEvaluateResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('bans:create-platform'),
+  validator('json', banDigestEvaluateBodySchema),
+  async (c) => {
+    const body = c.req.valid('json')
+    const evaluatedElements: string[] = []
+    for (const blinded of body.blindedElements) {
+      const evaluated = evaluateOrNull(() => banBlindEvaluate(blinded, PLATFORM_SCOPE, c.env.BAN_HASH_KEY))
+      if (evaluated === null) return c.json({ error: 'Invalid blinded element' }, 400)
+      evaluatedElements.push(evaluated)
+    }
+    return c.json({ evaluatedElements })
+  },
+)
 
 platformBans.get(
   '/',
@@ -80,14 +135,7 @@ platformBans.post(
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
-    if (!isValidE164(body.phone)) {
-      return c.json(
-        { error: 'Invalid phone number. Use E.164 format (e.g. +12125551234)' },
-        400,
-      )
-    }
-    // Never store the number or any digits of it: only the platform-keyed hash that ban matching needs.
-    const phoneHash = banHash(body.phone, PLATFORM_SCOPE, c.env.BAN_HASH_KEY)
+    const phoneHash = body.phoneHash
     await services.records.addBan({
       scope: PLATFORM_SCOPE,
       phoneHash,
@@ -127,16 +175,7 @@ platformBans.post(
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
-    const invalidPhones = body.phones.filter((p: string) => !isValidE164(p))
-    if (invalidPhones.length > 0) {
-      return c.json(
-        {
-          error: `Invalid phone number(s): ${invalidPhones[0]}. Use E.164 format`,
-        },
-        400,
-      )
-    }
-    const phoneHashes = body.phones.map((p: string) => banHash(p, PLATFORM_SCOPE, c.env.BAN_HASH_KEY))
+    const phoneHashes = body.phoneHashes
     const added = await services.records.bulkAddBans(
       PLATFORM_SCOPE,
       phoneHashes,
@@ -144,7 +183,7 @@ platformBans.post(
       pubkey,
     )
     await audit(services.audit, 'platformBanBulkImport', pubkey, {
-      count: body.phones.length,
+      count: phoneHashes.length,
     }, undefined, null)
     return c.json({ ok: true, count: added })
   },
@@ -185,11 +224,50 @@ platformBans.delete(
   },
 )
 
-platformBans.get(
+platformBans.post(
+  '/search/evaluate',
+  describeRoute({
+    tags: ['Platform Bans'],
+    summary: 'Evaluate one blinded number under every scope\'s ban key, for a search',
+    responses: {
+      200: {
+        description: 'One evaluation per scope (hubId null = platform)',
+        content: {
+          'application/json': {
+            schema: resolver(searchBansEvaluateResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('bans:read-platform'),
+  validator('json', searchBansEvaluateBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const { blindedElement } = c.req.valid('json')
+    // Every scope has its own key, so the number is evaluated once per hub and once for the
+    // platform. The client finalizes each into that scope's digest and searches with them.
+    const { hubs } = await services.settings.getHubs()
+    const scopes = [
+      { hubId: null, scope: PLATFORM_SCOPE },
+      ...hubs.map((hub) => ({ hubId: hub.id, scope: hubScope(hub.id) })),
+    ]
+    const evaluations: { hubId: string | null; evaluatedElement: string }[] = []
+    for (const { hubId, scope } of scopes) {
+      const evaluatedElement = evaluateOrNull(() => banBlindEvaluate(blindedElement, scope, c.env.BAN_HASH_KEY))
+      if (evaluatedElement === null) return c.json({ error: 'Invalid blinded element' }, 400)
+      evaluations.push({ hubId, evaluatedElement })
+    }
+    return c.json({ evaluations })
+  },
+)
+
+platformBans.post(
   '/search',
   describeRoute({
     tags: ['Platform Bans'],
-    summary: 'Search all bans by phone number',
+    summary: 'Search all bans by a number\'s per-scope ban digests',
     responses: {
       200: {
         description: 'Search results',
@@ -203,21 +281,16 @@ platformBans.get(
     },
   }),
   requirePermission('bans:read-platform'),
+  validator('json', searchBansBodySchema),
   async (c) => {
     const services = c.get('services')
-    const phone = c.req.query('phone')
-    if (!phone || !isValidE164(phone)) {
-      return c.json(
-        { error: 'Invalid phone parameter. Use E.164 format.' },
-        400,
-      )
-    }
-
-    // Every scope has its own key, so the number is hashed once per hub and once for
-    // the platform. Nothing is stored: the digests only select rows that match.
-    const { hubs } = await services.settings.getHubs()
+    const { lookups } = c.req.valid('json')
+    // Each digest only selects rows of its own scope. Nothing is stored.
     const rows = await services.records.searchBans(
-      banLookup(phone, [PLATFORM_SCOPE, ...hubs.map((hub) => hubScope(hub.id))], c.env.BAN_HASH_KEY),
+      lookups.map(({ hubId, phoneHash }) => ({
+        scope: hubId === null ? PLATFORM_SCOPE : hubScope(hubId),
+        phoneHash,
+      })),
     )
 
     return c.json({
@@ -267,19 +340,18 @@ platformBans.post(
       return c.json({ error: 'Ban is already platform-scoped' }, 409)
     }
 
-    // The hub's hash is keyed to that hub, so it cannot be turned into a platform hash:
-    // the number has to be entered again. It must be the number that hub banned, which
-    // the stored hash proves, so a mistyped number cannot ban someone else.
-    if (!isValidE164(body.phone)) {
-      return c.json({ error: 'Invalid phone number. Use E.164 format (e.g. +12125551234)' }, 400)
-    }
-    if (banHash(body.phone, source, c.env.BAN_HASH_KEY) !== sourceBan.phone) {
+    // The hub's digest is keyed to that hub, so it cannot be turned into a platform digest:
+    // the client re-enters the number and digests it under both keys. The hub digest must be
+    // the one that hub stored, so a mistyped number cannot ban someone else. (The server
+    // cannot tell whether the two digests share a number — that unlinkability is the point —
+    // so the client derives both from one entry.)
+    if (body.sourcePhoneHash !== sourceBan.phone) {
       return c.json({ error: 'Phone number does not match the ban being promoted' }, 400)
     }
 
     await services.records.addBan({
       scope: PLATFORM_SCOPE,
-      phoneHash: banHash(body.phone, PLATFORM_SCOPE, c.env.BAN_HASH_KEY),
+      phoneHash: body.phoneHash,
       reason: sourceBan.reason ?? '',
       bannedBy: pubkey,
     })

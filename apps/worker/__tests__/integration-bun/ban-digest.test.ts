@@ -19,6 +19,12 @@ import { banBlindEvaluate, banHash, callBanLookup } from '../../lib/crypto'
 import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 
 const reference = ristretto255_oprf.oprf
+
+/** RFC 9497 Evaluate, spelled as the interactive protocol it equals (noble types only the latter). */
+function oprfEvaluate(secretKey: Uint8Array, input: Uint8Array): Uint8Array {
+  const { blind, blinded } = ristretto255_oprf.oprf.blind(input)
+  return ristretto255_oprf.oprf.finalize(input, blind, ristretto255_oprf.oprf.blindEvaluate(secretKey, blinded))
+}
 const KEY = 'b'.repeat(64) // gitleaks:allow
 const NUMBER = '+15551234567'
 const input = utf8ToBytes(`${HMAC_BAN_PREFIX}${NUMBER}`)
@@ -29,7 +35,7 @@ describe('ban digest — crate (bun:ffi) against an independent RFC 9497 impleme
   it('the reference itself reproduces RFC 9497 A.1.1', () => {
     const sk = reference.deriveKeyPair(hexToBytes('a3'.repeat(32)), hexToBytes('74657374206b6579')).secretKey
     expect(bytesToHex(sk)).toBe('5ebcea5ee37023ccb9fc2d2019f9d7737be85591ae8652ffa9ef0f4d37063b0e')
-    expect(bytesToHex(reference.evaluate(sk, hexToBytes('00')))).toBe(
+    expect(bytesToHex(oprfEvaluate(sk, hexToBytes('00')))).toBe(
       '527759c3d9366f277d8c6020418d96bb393ba2afb20ff90df23fb7708264e2f3ab9135e3bd69955851de4b1f9fe8a0973396719b7912ba9ee8aa7d0b5e24bcf6',
     )
   })
@@ -37,7 +43,7 @@ describe('ban digest — crate (bun:ffi) against an independent RFC 9497 impleme
   it('Evaluate: the crate digest of a held number equals the reference, per scope', () => {
     for (const scope of ['platform', 'hub-1', 'hub-2']) {
       expect(bytesToHex(banDigestEvaluate(hexToBytes(KEY), scope, NUMBER))).toBe(
-        bytesToHex(reference.evaluate(scopeKey(scope), input)),
+        bytesToHex(oprfEvaluate(scopeKey(scope), input)),
       )
     }
   })
@@ -52,8 +58,8 @@ describe('ban digest — crate (bun:ffi) against an independent RFC 9497 impleme
   it('a call is checked against its hub and the platform, each under its own key', () => {
     const lookups = callBanLookup(NUMBER, 'hub-1', KEY)
     expect(lookups).toEqual([
-      { scope: hubScope('hub-1'), phoneHash: bytesToHex(reference.evaluate(scopeKey('hub-1'), input)) },
-      { scope: PLATFORM_SCOPE, phoneHash: bytesToHex(reference.evaluate(scopeKey('platform'), input)) },
+      { scope: hubScope('hub-1'), phoneHash: bytesToHex(oprfEvaluate(scopeKey('hub-1'), input)) },
+      { scope: PLATFORM_SCOPE, phoneHash: bytesToHex(oprfEvaluate(scopeKey('platform'), input)) },
     ])
   })
 
@@ -61,5 +67,4 @@ describe('ban digest — crate (bun:ffi) against an independent RFC 9497 impleme
     expect(() => banDigestBlindEvaluate(hexToBytes(KEY), 'platform', new Uint8Array(32))).toThrow()
     expect(() => banDigestBlindEvaluate(hexToBytes(KEY), 'platform', new Uint8Array(32).fill(0xff))).toThrow()
   })
-
 })

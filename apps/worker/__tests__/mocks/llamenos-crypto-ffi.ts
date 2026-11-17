@@ -199,6 +199,12 @@ export function caseOpen(purpose: CasePurpose, secretKey: Uint8Array, sealed: En
 // and both are pinned to its test vectors; the real library's agreement with this one is
 // asserted under bun:ffi in `__tests__/integration-bun/ban-digest.test.ts`.
 
+/** RFC 9497 Evaluate, spelled as the interactive protocol it equals (noble types only the latter). */
+function oprfEvaluate(secretKey: Uint8Array, input: Uint8Array): Uint8Array {
+  const { blind, blinded } = ristretto255_oprf.oprf.blind(input)
+  return ristretto255_oprf.oprf.finalize(input, blind, ristretto255_oprf.oprf.blindEvaluate(secretKey, blinded))
+}
+
 function banScopeKey(banHashKey: Uint8Array, scope: string): Uint8Array {
   if (banHashKey.length !== 32) throw new Error('BAN_HASH_KEY must be 32 bytes')
   if (!scope) throw new Error('ban scope must not be empty')
@@ -207,7 +213,7 @@ function banScopeKey(banHashKey: Uint8Array, scope: string): Uint8Array {
 
 export function banDigestEvaluate(banHashKey: Uint8Array, scope: string, identifier: string): Uint8Array {
   if (!identifier) throw new Error('caller identifier must not be empty')
-  return ristretto255_oprf.oprf.evaluate(banScopeKey(banHashKey, scope), new TextEncoder().encode(`${HMAC_BAN_PREFIX}${identifier}`))
+  return oprfEvaluate(banScopeKey(banHashKey, scope), new TextEncoder().encode(`${HMAC_BAN_PREFIX}${identifier}`))
 }
 
 export function banDigestBlindEvaluate(banHashKey: Uint8Array, scope: string, blinded: Uint8Array): Uint8Array {

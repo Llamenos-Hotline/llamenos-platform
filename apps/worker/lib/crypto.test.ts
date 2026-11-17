@@ -42,6 +42,13 @@ import {
 
 const SECRET = 'a'.repeat(64) // 32 hex bytes = valid HMAC secret
 
+
+/** RFC 9497 Evaluate, spelled as the interactive protocol it equals (noble types only the latter). */
+function oprfEvaluate(secretKey: Uint8Array, input: Uint8Array): Uint8Array {
+  const { blind, blinded } = ristretto255_oprf.oprf.blind(input)
+  return ristretto255_oprf.oprf.finalize(input, blind, ristretto255_oprf.oprf.blindEvaluate(secretKey, blinded))
+}
+
 // ---------------------------------------------------------------------------
 // hashPhone
 // ---------------------------------------------------------------------------
@@ -574,8 +581,8 @@ describe('banHash', () => {
   const input = utf8ToBytes(`${HMAC_BAN_PREFIX}${NUMBER}`)
 
   it('is RFC 9497 OPRF Evaluate under DeriveKeyPair(BAN_HASH_KEY, LABEL_BAN_KEY_DERIVE:scope)', () => {
-    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(bytesToHex(reference.evaluate(scopeKey('hub-1'), input)))
-    expect(banHash(NUMBER, PLATFORM_SCOPE, KEY)).toBe(bytesToHex(reference.evaluate(scopeKey('platform'), input)))
+    expect(banHash(NUMBER, hubScope('hub-1'), KEY)).toBe(bytesToHex(oprfEvaluate(scopeKey('hub-1'), input)))
+    expect(banHash(NUMBER, PLATFORM_SCOPE, KEY)).toBe(bytesToHex(oprfEvaluate(scopeKey('platform'), input)))
   })
 
   it('a client that blinds the number gets the digest the server computes, without the server seeing it', () => {

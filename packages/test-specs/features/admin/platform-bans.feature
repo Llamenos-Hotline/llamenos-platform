@@ -59,10 +59,50 @@ Feature: Platform-Scoped Ban Management
     And the response should contain count 3
 
   @backend
-  Scenario: Bulk import rejects invalid E.164 numbers
+  Scenario: Bulk import rejects an entry that is not a ban digest
     Given a super admin user
-    When the admin POSTs to "/admin/bans/bulk" with an invalid phone number
+    When the admin POSTs to "/admin/bans/bulk" with an entry that is not a ban digest
     Then the response status should be 400
+
+  # ── Backend: The server never receives the number (#2759) ───────────
+  # Every client sends ban digests: it blinds the number, the server evaluates the
+  # blinded element under the scope's key (RFC 9497 OPRF), and the client finalizes.
+
+  @backend
+  Scenario: Creating a platform ban refuses a plaintext phone number
+    Given a super admin user
+    When the admin POSTs a plaintext phone number "+12125551234" to "/admin/bans"
+    Then the response status should be 400
+
+  @backend
+  Scenario: Bulk import refuses plaintext phone numbers
+    Given a super admin user
+    When the admin POSTs a plaintext phone number "+12125551234" to "/admin/bans/bulk"
+    Then the response status should be 400
+
+  @backend
+  Scenario: Ban evaluation refuses a malformed blinded element
+    Given a super admin user
+    When the admin asks "/admin/bans/evaluate" to evaluate an element that is not a group element
+    Then the response status should be 400
+
+  @backend
+  Scenario: Search evaluation refuses a malformed blinded element
+    Given a super admin user
+    When the admin asks "/admin/bans/search/evaluate" to evaluate an element that is not a group element
+    Then the response status should be 400
+
+  @backend
+  Scenario: A hub admin cannot use the platform ban key as an oracle
+    Given a hub admin user (without platform ban permission)
+    When the hub admin asks "/admin/bans/evaluate" to evaluate a blinded number
+    Then the response status should be 403
+
+  @backend
+  Scenario: A hub admin cannot evaluate numbers for a platform search
+    Given a hub admin user (without platform ban permission)
+    When the hub admin asks "/admin/bans/search/evaluate" to evaluate a blinded number
+    Then the response status should be 403
 
   # ── Backend: Search and promote ────────────────────────────────────
 
@@ -70,7 +110,7 @@ Feature: Platform-Scoped Ban Management
   Scenario: Search finds bans across hub and platform scope
     Given a super admin user
     And a hub ban and a platform ban exist for the same phone number
-    When the admin GETs "/admin/bans/search?phone=+12125551234"
+    When the admin searches all bans for "+12125551234"
     Then the response should contain 2 ban entries
 
   @backend
@@ -112,6 +152,8 @@ Feature: Platform-Scoped Ban Management
 
   # ── Backend: Platform ban enforced during call routing ──────────────
 
+  # The ban was created from a client-side digest; the call is matched by the server's own
+  # digest of the caller's number. This passing is the proof the two are the same function.
   @backend
   Scenario: Platform-banned caller is blocked on any hub
     Given a platform ban exists for "+12125551234"
