@@ -506,13 +506,30 @@ jobs:
 
       # Cache the XCFramework AND generated Swift bindings together.
       # Both must come from the same Rust build or checksums will mismatch.
+      #
+      # The paths are ABSOLUTE, under github.workspace, and must stay that way
+      # (pinned by scripts/ci/mac-ci-work-volume.test.ts). On the Mac `_work` is
+      # a symlink onto /Volumes/CIWork (mac-ci-work-volume.sh cutover), so a job
+      # has two names for its workspace: GITHUB_WORKSPACE is the link path, the
+      # process's cwd is the resolved one. actions/cache globs a RELATIVE path
+      # from the cwd and archives it relative to GITHUB_WORKSPACE, i.e. as
+      # `../../../../../../Volumes/CIWork/actions-runner-ios-<N>/...` — naming
+      # the runner that saved it. Restored on the OTHER runner, the files landed
+      # in the saver's workspace, the step still reported a hit, and the build
+      # was skipped with nothing in this one (run 43802220455 saved on ios-2,
+      # run 43821741537 restored on ios-1). A path under github.workspace is
+      # archived as `apps/ios/...` whichever name the cwd resolves to. The cost
+      # is that actions/cache versions an entry by its path STRINGS, so each
+      # runner now has its own entries (a miss on the other one rebuilds, ~6
+      # min) — and the entries saved with the old relative paths can never
+      # match again.
       - name: Cache crypto XCFramework + bindings
         id: xcframework-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            apps/ios/LlamenosCoreFFI.xcframework
-            packages/crypto/dist/ios/LlamenosCore.swift
+            ${{ github.workspace }}/apps/ios/LlamenosCoreFFI.xcframework
+            ${{ github.workspace }}/packages/crypto/dist/ios/LlamenosCore.swift
           key: xcframework-v2-ios-${{ runner.os }}-${{ hashFiles('packages/crypto/src/**/*.rs', 'packages/crypto/Cargo.toml', 'packages/crypto/Cargo.lock', 'packages/crypto/scripts/build-mobile.sh') }}
 
       # Needed on every run: the server crypto library (below) is built here
@@ -536,7 +553,21 @@ jobs:
           cp -r dist/ios/LlamenosCoreFFI.xcframework ../../apps/ios/
 
       - name: Copy UniFFI bindings (from build or cache)
-        run: cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
+        env:
+          CACHE_HIT: ${{ steps.xcframework-cache.outputs.cache-hit }}
+        run: |
+          # A cache hit that put nothing in THIS workspace skipped the build, so
+          # say which of the two happened instead of a bare `cp: No such file`.
+          for f in apps/ios/LlamenosCoreFFI.xcframework packages/crypto/dist/ios/LlamenosCore.swift; do
+            [ -e "$f" ] && continue
+            if [ "$CACHE_HIT" = "true" ]; then
+              echo "::error title=XCFramework cache restored outside this workspace::the cache reported a hit but $f is not in $GITHUB_WORKSPACE, so the build was skipped. The entry's archive paths do not resolve into this workspace (a relative cache path under the symlinked _work does exactly this)."
+            else
+              echo "::error title=XCFramework build produced no $f::the cache missed and the build ran, but $f is not in $GITHUB_WORKSPACE."
+            fi
+            exit 1
+          done
+          cp packages/crypto/dist/ios/LlamenosCore.swift apps/ios/Sources/Generated/LlamenosCore.swift
 
       # The backend's crypto goes through bun:ffi into this library
       # (packages/crypto/ffi.ts); the shards run the server natively.

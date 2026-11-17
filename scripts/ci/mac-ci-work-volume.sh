@@ -39,6 +39,18 @@
 # attached`. The attach agent (`install-agent`) re-attaches within a minute of
 # the SSD coming back, at login and every 60 seconds, with no ssh session.
 #
+# WHAT THE LINK COSTS A WORKFLOW
+# ------------------------------
+# A job's workspace now has two names: GITHUB_WORKSPACE is the link path
+# (~/actions-runner-ios-<N>/_work/...), a step's cwd is the resolved one
+# (/Volumes/CIWork/actions-runner-ios-<N>/_work/...). Anything that resolves a
+# relative path from the cwd and then relativises it against GITHUB_WORKSPACE
+# gets `../../../../../../Volumes/CIWork/actions-runner-ios-<N>/...`, naming
+# THIS runner. actions/cache does exactly that, so an entry saved on one runner
+# restored into the other runner's workspace (#2785's ejection, 2026-11-16).
+# Mac jobs therefore give actions/cache absolute paths under github.workspace;
+# mac-ci-work-volume.test.ts fails any workflow that does not.
+#
 # USAGE (run on the Mac, from an ssh session; no sudo anywhere)
 #   mac-ci-work-volume.sh status           what exists, what is attached, where each link points
 #   mac-ci-work-volume.sh create           create the sparsebundle on the SSD (once)
