@@ -5313,6 +5313,45 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
       const v = android(opts)
       expect(v.kind, v.detail).toBe('genuine')
     })
+
+    // Run 43823933518, android-e2e (0): Maven Central throttled dependency
+    // resolution, no test ever ran, and the classifier called it genuine.
+    const repoRefused = (status: string) => `> Task :app:checkDebugDuplicateClasses FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:checkDebugDuplicateClasses'.
+> Could not resolve all files for configuration ':app:debugRuntimeClasspath'.
+   > Failed to transform kotlin-parcelize-runtime-1.9.22.jar (org.jetbrains.kotlin:kotlin-parcelize-runtime:1.9.22) to match attributes {artifactType=enumerated-runtime-classes}.
+      > Could not download kotlin-parcelize-runtime-1.9.22.jar (org.jetbrains.kotlin:kotlin-parcelize-runtime:1.9.22): Repository MavenRepo is disabled due to earlier error below:
+         > Could not download org.jetbrains.kotlin.plugin.compose.gradle.plugin-2.3.0.jar (org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.3.0)
+            > Could not get resource 'https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/plugin/compose/org.jetbrains.kotlin.plugin.compose.gradle.plugin/2.3.0/org.jetbrains.kotlin.plugin.compose.gradle.plugin-2.3.0.jar'.
+               > Could not HEAD 'https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/plugin/compose/org.jetbrains.kotlin.plugin.compose.gradle.plugin/2.3.0/org.jetbrains.kotlin.plugin.compose.gradle.plugin-2.3.0.jar'. ${status}
+> There are 4 more failures with identical causes.
+
+BUILD FAILED in 39s
+`
+
+    it.each([
+      ['Received status code 429 from server: Too Many Requests'],
+      ['Received status code 503 from server: Service Unavailable'],
+      ['Received status code 502 from server: Bad Gateway'],
+    ])('a dependency repository answering "%s" while Gradle resolves, with no failing test, is infrastructure', (status) => {
+      const v = android({ marker: true, log: repoRefused(status) })
+      expect(v).toMatchObject({ kind: 'infra' })
+      expect(v.signatures).toContain('dependency-repo-unavailable')
+    })
+
+    it.each([
+      ['a 404: the artifact does not exist (a bad version bump is the build\'s fault)', { marker: true, log: repoRefused('Received status code 404 from server: Not Found') }],
+      ['a 403 from the repository', { marker: true, log: repoRefused('Received status code 403 from server: Forbidden') }],
+      ['a repository 429 alongside a failing scenario', { marker: true, log: `${repoRefused('Received status code 429 from server: Too Many Requests')}${GENUINE_FAILURE}` }],
+      ['a 429 the code under test reported, not Gradle\'s resolver', { marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nHTTP 429 Too Many Requests from /api/calls\n' }],
+    ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
+      const v = android(opts)
+      expect(v.kind, v.detail).toBe('genuine')
+    })
   })
 })
 
