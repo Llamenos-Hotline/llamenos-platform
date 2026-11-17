@@ -24,6 +24,13 @@
  * `decryptFromHub` load on demand, so a consumer never depends on the hook
  * having run first.
  *
+ * Trust, stated plainly: the device keys wrapped to come from the server's
+ * device registry, as for every other envelope this client seals (PROTOCOL.md
+ * §2.4.1). Nothing here can verify them independently until the user sigchain
+ * is wired; a server that lists a key it holds for a member gets the hub key.
+ * What the client does refuse is a key SUBSTITUTION after first load: a key it
+ * holds is never replaced by one the server hands back (`distributeHubKey`).
+ *
  * Not here: rotation on departure (#1030, M2). The server deletes a departed
  * member's wrap; it does not re-key, so a departed member who kept the key can
  * still open what was sealed under it.
@@ -186,10 +193,14 @@ export function ensureHubKey(hubId: string): Promise<boolean> {
  * whose device holds the key; returns the number of wraps added (0 when this
  * user does not manage the hub, does not hold its key, or nobody is missing).
  *
- * The key wrapped is re-opened from this user's own wrap in the same snapshot,
- * so it is the hub's CURRENT key at `generation` — never a stale copy.
+ * What is wrapped is the key this device ALREADY holds — never one re-opened
+ * from what the server returns now. Anyone can seal a key to this device's
+ * public X25519 key, so re-opening the server's copy each time would let a
+ * server swap in a key it chose and have this device hand it to every member.
+ * A held key is never replaced (`loadOrGenerate` returns early on one).
  */
 export async function distributeHubKey(hubId: string): Promise<number> {
+  if (!(await hasHubKey(hubId))) return 0
   for (let attempt = 0; attempt < 3; attempt++) {
     let recipients: HubKeyRecipientsResponse
     try {
@@ -199,14 +210,10 @@ export async function distributeHubKey(hubId: string): Promise<number> {
       throw err
     }
     const me = await myKeys()
-    const mine = recipients.envelopes.find(e => e.pubkey === me.pubkey)
-    if (!mine) return 0
-
     const wrapped = new Set(recipients.envelopes.map(e => e.pubkey))
     const missing = wrapTargets(recipients, me.pubkey, me.encryptionPubkey).filter(t => !wrapped.has(t.pubkey))
     if (missing.length === 0) return 0
 
-    await unwrapHubKey(hubId, mine)
     const added = await Promise.all(missing.map(t => wrapHubKeyForMember(hubId, t.pubkey, t.encryptionPubkey)))
     try {
       await setHubKeyEnvelopes(hubId, {

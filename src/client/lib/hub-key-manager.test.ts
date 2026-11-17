@@ -25,6 +25,8 @@ type Invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Prom
 
 const HUB = 'hub-1'
 
+interface DeviceState { signingPubkeyHex: string; encryptionPubkeyHex: string }
+
 interface Member { pubkey: string; encryptionPubkey: string | null; manager: boolean }
 
 /** In-memory model of GET /key, GET /key/recipients and PUT /key. */
@@ -71,7 +73,7 @@ async function device(name: string, opts: { manager: boolean; registered?: boole
   vi.resetModules()
   vi.doMock('@tauri-apps/api/core', async () => await import('../../../tests/mocks/tauri-core'))
   const { invoke } = (await import('@tauri-apps/api/core')) as unknown as { invoke: Invoke }
-  const { state } = await invoke<{ state: { signingPubkeyHex: string; encryptionPubkeyHex: string } }>(
+  const { state } = await invoke<{ state: DeviceState }>(
     'device_generate_and_load', { pin: '12345678', deviceId: name },
   )
   const me = state.signingPubkeyHex
@@ -91,7 +93,7 @@ async function device(name: string, opts: { manager: boolean; registered?: boole
   const hubKeys = await import('./hub-key-manager')
   const roles = await import('./role-vocabulary')
   server.join({ pubkey: me, encryptionPubkey: opts.registered === false ? null : state.encryptionPubkeyHex, manager: opts.manager })
-  return { invoke, me, hubKeys, roles, ApiError }
+  return { invoke, me, encryptionPubkey: state.encryptionPubkeyHex, hubKeys, roles, ApiError }
 }
 
 function hubRole(id: string, encryptedName: string): RoleDefinition {
@@ -173,6 +175,27 @@ describe('hub key lifecycle', () => {
     expect(await late.hubKeys.ensureHubKey(HUB)).toBe(false)
     expect(server.generation).toBe(1)
     expect([...server.wraps.keys()]).toEqual([first.me])
+  })
+
+  it('a key the server swaps in after load is never the one handed to members', { timeout: 60_000 }, async () => {
+    const admin = await device('admin', { manager: true })
+    const sealed = await admin.roles.sealHubRoleField(HUB, 'Legal observer')
+
+    // The server replaces the admin's wrap with one of a key IT chose — anyone
+    // can seal to the admin's public X25519 key.
+    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
+    const { keyWrapAad } = await import('@shared/envelope-aad')
+    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
+    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
+    const forged = await hpkeSealMock(randomBytes(32), admin.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
+    server.wraps.set(admin.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+
+    const volunteer = await device('volunteer', { manager: false })
+    expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(1)
+    // The volunteer received the hub's REAL key: what the admin sealed before
+    // the swap opens for them.
+    const [readable] = await volunteer.roles.readableRoles([hubRole('role-a', sealed)])
+    expect(readable).toMatchObject({ readable: true, displayName: 'Legal observer' })
   })
 
   it('a member with no registered device key is skipped, not sealed to some other key', { timeout: 60_000 }, async () => {
