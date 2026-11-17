@@ -8,7 +8,11 @@ import { throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
-import { CATCH_ALL_PATTERNS, codeownersMatcher, codeownersRules, namedCodeownersMatcher, trackedFiles, trackedFilesUnder } from './codeowners.js'
+import {
+  catchAllViolations, codeownersMatcher, codeownersMatcherOf, codeownersRules, isCatchAllPattern, namedCodeownersMatcher,
+  namedCodeownersMatcherOf, trackedFiles, trackedFilesUnder,
+} from './codeowners.js'
+import { codeOwnersOf, parseCodeOwners } from '../../orchestrator/src/board.js'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
@@ -242,10 +246,61 @@ describe('rail: the fleet cannot merge its own changes', () => {
   // would change nothing visible, which is exactly how it would survive
   // until the day a second owner appears. First, exactly once, with an owner.
   it('the catch-all is the FIRST rule, appears once, and names an owner — so every named entry still wins', () => {
-    const rules = codeownersRules()
-    const catchAlls = rules.map((r, i) => ({ ...r, i })).filter((r) => CATCH_ALL_PATTERNS.includes(r.pattern))
-    expect(catchAlls.map((r) => r.i), 'CODEOWNERS must have exactly one catch-all, as its first rule').toEqual([0])
-    expect(catchAlls[0]?.owners.length ?? 0, 'the catch-all names no owner, so it owns nothing').toBeGreaterThan(0)
+    expect(catchAllViolations(codeownersRules())).toEqual([])
+  })
+
+  // The all-path spellings the matcher (the `ignore` package, gitignore
+  // semantics — the one board.ts resolves ownership with) treats as matching
+  // EVERY path. Enumerated here so a change of matcher semantics shows up as
+  // a diff; the detector itself does not read this list, it asks the matcher.
+  const ALL_PATH_SPELLINGS = [
+    '*', '**', '/**', '**/*', '/**/*', '/*', '**/**', '/**/**', '**/**/*', '***', '/***', '?*', '[!/]*',
+  ]
+  // Look like catch-alls and are not: each misses root-level files (a trailing
+  // `/` means directories only) or is narrower than every path. Recognising
+  // one as a catch-all would reject a legitimate named entry.
+  const NOT_ALL_PATH_SPELLINGS = [
+    '*/', '**/', '/**/', '*/**', '/*/**', '*/*', '**/*/', '**/*.*', '*.*', '**/.*', '**/*.pem', 'apps/', '/CODEOWNERS',
+  ]
+
+  it.each(ALL_PATH_SPELLINGS)('%s is recognised as a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(true)
+  })
+
+  it.each(NOT_ALL_PATH_SPELLINGS)('%s is not mistaken for a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(false)
+  })
+
+  // The reviewer's scenario (#2826): the catch-all re-added at the BOTTOM,
+  // where last-match-wins lets it override every named entry. Run against the
+  // real file's rules for every spelling and every position but the first —
+  // the guard must fail, and the override must be real (the secret-shaped
+  // glob's owner really does change), so this proves the failure is a
+  // control failing rather than a hypothetical.
+  describe.each(ALL_PATH_SPELLINGS)('a `%s` rule anywhere but first', (spelling) => {
+    const real = codeownersRules()
+    const [intruder] = parseCodeOwners(`${spelling} @intruder`)
+    if (intruder === undefined) throw new Error(`${spelling} did not parse as a rule`)
+    const positions = [1, Math.floor(real.length / 2), real.length]
+
+    it.each(positions)('at index %i fails the placement guard', (at) => {
+      const rules = [...real.slice(0, at), intruder, ...real.slice(at)]
+      expect(catchAllViolations(rules).length, 'a displaced catch-all passed the guard').toBeGreaterThan(0)
+    })
+
+    it('overrides every named entry under last-match-wins — the hazard is real', () => {
+      const rules = [...real, intruder]
+      const secret = 'apps/worker/.env'
+      expect(codeownersMatcherOf(real).owns(secret)).toBe(true)
+      expect(codeOwnersOf(rules, secret)).toEqual(['intruder'])
+      expect(codeOwnersOf(real, secret)).not.toContain('intruder')
+    })
+
+    it('does not leave the named matcher vacuous: it still excludes the intruder and keeps named entries', () => {
+      const named = namedCodeownersMatcherOf([...real, intruder])
+      expect(named.owns('apps/worker/.env'), 'named entries were lost').toBe(true)
+      expect(named.owns('README.md'), 'the intruder was treated as a named entry').toBe(false)
+    })
   })
 
   // The named-entry rails above use `namedCodeownersMatcher`, which drops
