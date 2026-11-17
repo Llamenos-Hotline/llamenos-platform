@@ -420,4 +420,17 @@ describe('hub key lifecycle', () => {
     const [view] = await late.roles.readableRoles([hubRole('role-a', server.roles.get('role-a')!)])
     expect(view).toMatchObject({ readable: true, displayName: 'Legal observer' })
   })
+
+  it('a member still on the rotated-out key seals a new value under the NEW key, never the old one', { timeout: 60_000 }, async () => {
+    const { admin, staying, departing } = await hubWithSharedKey()
+    server.remove(departing.me)
+    expect(await admin.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(true)
+
+    // The staying member's device has not synced since: it still holds the
+    // key the departed member kept. Writing must not seal under it.
+    const written = await staying.roles.sealHubRoleField(HUB, 'Street medic')
+    expect(await departing.platform.decryptHubField(HUB, written, 'llamenos:hub-role-encrypt:v1')).toBeNull()
+    const [view] = await admin.roles.readableRoles([hubRole('role-b', written)])
+    expect(view).toMatchObject({ readable: true, displayName: 'Street medic' })
+  })
 })

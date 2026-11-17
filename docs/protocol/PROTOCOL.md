@@ -1053,13 +1053,17 @@ An envelope is **sealed to** the member's device X25519 key and **filed under** 
 
 ```
 { generation: int,              // hubs.hub_key_generation, the envelope set's version
+  epoch:      int,              // hubs.hub_key_epoch: which KEY the wraps hold (0, +1 per rotation)
+  rotation:   { proof, check } | null,   // the statement that introduced `epoch` (Key Rotation)
   envelopes:  RecipientEnvelope[],   // every wrap held, for current members
-  members:    [{ pubkey, encryptionPubkey | null }] }   // device key to wrap for
+  members:    [{ pubkey, encryptionPubkey | null }],   // device key to wrap for
+  rotationRequired: bool,       // someone who held the current key has left
+  sealed?:    { tags, teams, roles } }   // present iff rotationRequired: every hub-sealed value
 ```
 
 `PUT /api/hubs/:hubId/key` -- `{ envelopes, expectedGeneration }`, same authority. A **compare-and-set**: it succeeds only if the hub is still at `expectedGeneration`, replaces the set, and moves the generation forward by one in the same statement; otherwise **409**. So of two managers who each generated a first key at once, exactly one key is installed, and the loser drops its key and loads the winner's. A shred also moves the generation, so a replayed write cannot re-install a destroyed key. Hub-key writes are never queued for offline replay.
 
-A distributor re-sends the existing `envelopes` unchanged and adds wraps only for members who lack one, so distributing never takes anyone's access away. It wraps the key **it already holds**, never one re-opened from what the server returns at that moment: anyone can seal a key to a device's public key, so re-opening the server's copy would let a server swap in a key it chose. A held key is never replaced.
+A distributor re-sends the existing `envelopes` unchanged and adds wraps only for members who lack one, so distributing never takes anyone's access away. It wraps the key **it already holds**, never one re-opened from what the server returns at that moment: anyone can seal a key to a device's public key, so re-opening the server's copy would let a server swap in a key it chose. A held key is never replaced -- except by a rotation the device has verified (Key Rotation, below). A distributor first confirms that the key it holds opens the current `rotation.check` (it holds this epoch's key), and distributes nothing while `rotationRequired`: the key a departed member still knows is not handed to anyone new.
 
 Members fetch their wrap from `GET /api/hubs/:hubId/key` (404 when none) and open it:
 
@@ -1072,7 +1076,7 @@ unwrap(envelope, device_x25519_secret_key[32]):
   // hub_key: 32 bytes, held in Rust under the hub id
 ```
 
-**Desktop lifecycle** (`src/client/lib/hub-key-manager.ts`): for every member hub, on sign-in, on a membership change and on every relay (re)connect -- load; if nobody holds a key and this user manages the hub, generate and wrap for every member with a device key; if this user manages the hub, add wraps for members who lack one. Creating a hub generates its key at once. Sealing a hub field loads the key on demand and refuses (`HubKeyUnavailableError`) rather than write anything the hub cannot read -- there is no plaintext fallback. A member who joins while no manager's device is online cannot read hub-sealed data until one comes online; that is inherent to a zero-knowledge distribution.
+**Desktop lifecycle** (`src/client/lib/hub-key-manager.ts`): for every member hub, on sign-in, on a membership change and on every relay (re)connect -- load; if nobody holds a key and this user manages the hub, generate and wrap for every member with a device key; adopt a rotation that replaced the held key; if this user manages the hub, rotate the key if `rotationRequired`, then add wraps for members who lack one. The same sync runs right after an admin action that can make someone leave a hub (a role change, deactivation, deletion). A hub this user is no longer a member of has its key dropped from CryptoState. Creating a hub generates its key at once. Sealing a hub field loads the key on demand and refuses (`HubKeyUnavailableError`) rather than write anything the hub cannot read -- there is no plaintext fallback. A member who joins while no manager's device is online cannot read hub-sealed data until one comes online; that is inherent to a zero-knowledge distribution.
 
 **Trust.** The device keys a distributor wraps for come from the server's device registry, as for every envelope in §2.4.1. Until the user sigchain is wired, a client cannot verify them independently: a server that lists a key it holds for a member receives the hub key.
 
@@ -1091,7 +1095,48 @@ decryptFromHub(packed_hex, hub_key[32], label):
 
 #### Key Rotation
 
-**Not implemented** (#1030, M2). On departure the server deletes the departed member's wrap; nothing re-keys, so a departed member who kept the key can still open what was sealed under it. Rotation will be: generate a new key, wrap it for the remaining members, `PUT` it at the current generation, and re-seal the hub-scoped data under it.
+When someone who held a hub's key leaves, the key is replaced with a fresh one that is wrapped for the remaining members only, and everything the hub holds sealed under the old key is re-sealed under the new one. The departed member is not among the new wraps, so nothing sealed afterwards -- and nothing the server holds afterwards -- opens for them.
+
+**Trigger (server).** Every path that takes a wrap away from someone who held one sets `hubs.hub_key_rotation_due` in the same transaction: removal from the hub (`IdentityService.removeHubRole`), erasure (`ErasureService`), and a `PUT /key` whose new set drops a previous holder. With the wrap deleted, the flag is the only record that the departure happened. `rotationRequired` in `GET /key/recipients` is that flag **or** a wrap still held by someone who is no longer an actionable member (deactivated, deleted, signing key revoked) -- either way someone outside the hub knows the current key.
+
+**Rotation (a manager's device).** A manager whose device holds the current key, on seeing `rotationRequired`:
+
+```
+new_key   = random(32)                         // in Rust, a staging CryptoState slot; never derived
+envelopes = [ wrap(new_key, m.encryptionPubkey) for m in members if m.encryptionPubkey ]
+resealed  = for each value v in `sealed`:  { from: v, to: encryptForHub(decryptFromHub(v, old_key, L), new_key, L) }
+                                           // L = the value's own label; a value that does not open
+                                           // under old_key is carried unchanged
+check     = encryptForHub(JSON{ hubId, epoch: epoch + 1 },        new_key, LABEL_HUB_KEY_ROTATION)
+proof     = encryptForHub(JSON{ hubId, epoch: epoch + 1, check }, old_key, LABEL_HUB_KEY_ROTATION)
+POST /api/hubs/:hubId/key/rotate { expectedGeneration, envelopes, rotation: { proof, check }, resealed }
+```
+
+`POST /api/hubs/:hubId/key/rotate` -- same authority as `PUT /key`, one transaction, refusing with no trace left:
+
+- **409** unless the hub is still at `expectedGeneration` (the same compare-and-set as `PUT /key`), and not shredded.
+- **403** for a wrap addressed to anyone who is not a current member -- the departed member above all.
+- **409** unless the wraps address **exactly** the current members that have a device key. A rotation cannot drop anyone, so it cannot orphan the hub's content from an admin.
+- **409** unless `resealed` names every tag, team and hub-role value the hub holds (locked for the transaction), each `from` identical to what is stored -- otherwise a value would be left under a key nobody holds.
+
+On success it replaces the wraps and the values, moves the generation and `hubs.hub_key_epoch` on by one, stores `{ proof, check }`, clears the flag, and audits `hubKeyRotated`. The client never distributes while a rotation is due, and rotates before it distributes.
+
+**Adoption (every member's device).** `GET /api/hubs/:hubId/key/rotation` (any member) returns `{ epoch, rotation: { proof, check } | null }`. A device holding a key:
+
+```
+if epoch == 0 or rotation == null:          held key is current
+elif open(check, held_key) == {hubId, epoch}: held key is current
+elif open(proof, held_key) == {hubId, epoch, check}:
+    open this device's wrap (GET /key) into a staging slot
+    adopt it only if open(check, staged_key) == {hubId, epoch}
+else:                                         unverifiable -- keep the held key, adopt nothing
+```
+
+The server has never held a hub key, so it cannot write a `proof` that opens under the old key, nor a `check` that opens under a key of its own choosing: a device never adopts a key the server picked. A device that is two or more rotations behind cannot verify the chain and keeps its key until its next unlock, when it loads its wrap exactly as on first load. A value that does not open under the held key prompts an adoption, and a device confirms its key is current before it seals anything new (`encryptForHub` refuses to seal under a rotated-out key).
+
+**What rotation does not do.** It cannot take back what a departed member already copied: values they read before leaving, and anything they kept under the old key. It removes their access to everything stored or sealed after it. Until a manager's device runs it, the old key stays current -- the removing admin's device rotates at once, but a departure by an instance admin with no role in the hub (D1) waits for a hub admin's device to come online. And the trust caveat above applies here too: a server that lists a device key it holds for a member is given the new key, and a departed member who colluded with the server could write a `proof` (they know the old key); neither gives the server anything the device-registry trust does not already.
+
+**Not yet on mobile.** iOS and Android load the current key at unlock and do not adopt a rotation within a session: a mobile device that was unlocked across a rotation cannot open re-sealed values until its next unlock, and an iOS tag written in that window is sealed under the old key.
 
 ### 2.8 WebSocket Event Encryption
 
@@ -2821,7 +2866,9 @@ Response: { "envelope": RecipientKeyEnvelope }
 
 GET /api/hubs/:hubId/key/recipients
 Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB (a global super-admin's `*` does not count)
-Response: { "generation": int, "envelopes": RecipientKeyEnvelope[], "members": [{ "pubkey", "encryptionPubkey": hex64 | null }] }
+Response: { "generation": int, "epoch": int, "rotation": { "proof", "check" } | null,
+            "envelopes": RecipientKeyEnvelope[], "members": [{ "pubkey", "encryptionPubkey": hex64 | null }],
+            "rotationRequired": bool, "sealed"?: { "tags": [...], "teams": [...], "roles": [...] } }
 // HubKeyRecipientsResponse, read in one snapshot (§2.7). 409 for a shredded hub.
 
 PUT /api/hubs/:hubId/key
@@ -2829,6 +2876,19 @@ Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB
 Body: { "envelopes": RecipientKeyEnvelope[], "expectedGeneration": int }
 Response: { "ok": true, "generation": int }  // HubKeySetResponse
 // Compare-and-set (§2.7): 409 when the hub is no longer at expectedGeneration, or is shredded.
+
+GET /api/hubs/:hubId/key/rotation
+Auth: Required (hub member)
+Response: { "epoch": int, "rotation": { "proof": hex, "check": hex } | null }  // HubKeyRotationResponse
+// The statement a device verifies under the key it holds before adopting a rotated key (§2.7 Key Rotation).
+
+POST /api/hubs/:hubId/key/rotate
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB
+Body: { "expectedGeneration": int, "envelopes": RecipientEnvelope[], "rotation": { "proof", "check" },
+        "resealed": { "tags": [{ from, to }], "teams": [{ from, to }], "roles": [{ from, to }] } }
+Response: { "generation": int, "epoch": int }  // HubKeyRotateResponse
+// One transaction (§2.7 Key Rotation): 409 on a stale generation, a member left out, a value not
+// re-sealed or changed since the read, or a shredded hub; 403 for a wrap addressed to a non-member.
 
 GET /api/hubs/:hubId/readers?purpose=admin|call-history
 Auth: Required (hub member)

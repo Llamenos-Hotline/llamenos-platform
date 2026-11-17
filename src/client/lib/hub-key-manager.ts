@@ -541,15 +541,18 @@ async function rotate(hubId: string): Promise<boolean> {
 }
 
 /**
- * Seal `plaintext` under `hubId`'s key with `label` as AAD, loading the key
- * first if this device does not hold it yet. Throws `HubKeyUnavailableError`
- * when the key cannot be loaded, so a caller never writes a value its hub
- * cannot read — and never writes it in the clear.
+ * Seal `plaintext` under `hubId`'s CURRENT key with `label` as AAD, loading the
+ * key first if this device does not hold it yet, and adopting a rotation that
+ * replaced it. Throws `HubKeyUnavailableError` when the current key cannot be
+ * held, so a caller never writes a value its hub cannot read — never in the
+ * clear, and never under a key a rotation took away from the hub (which a
+ * departed member may still hold).
  */
 export async function encryptForHub(hubId: string, plaintext: string, label: string): Promise<string> {
   if (!(await ensureHubKey(hubId))) throw new HubKeyUnavailableError(hubId)
-  // Never seal under a key a rotation or adoption on this device is replacing.
-  await hubLocks.get(hubId)
+  // Waits for any rotation or adoption running for the hub on this device.
+  const outcome = await adoptHubKeyRotation(hubId)
+  if (outcome === 'unverifiable' || outcome === 'not-held') throw new HubKeyUnavailableError(hubId)
   return encryptHubField(hubId, plaintext, label)
 }
 
