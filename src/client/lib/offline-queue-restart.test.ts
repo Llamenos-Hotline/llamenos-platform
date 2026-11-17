@@ -53,7 +53,7 @@ describe('offline queue across a restart, with no hub key', () => {
 
     // The state every desktop client is in: no hub key at all.
     await expect(
-      first.invoke('encrypt_hub_field', { plaintext: 'x', label: 'llamenos:drafts' }),
+      first.invoke('encrypt_hub_field', { hubId: 'hub-1', plaintext: 'x', label: 'llamenos:drafts' }),
     ).rejects.toThrow('Hub key not loaded')
 
     const ids = [

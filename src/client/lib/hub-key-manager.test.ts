@@ -1,139 +1,185 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-
-// Mock platform.ts — hub key crypto now delegates to Rust IPC
-vi.mock('./platform', () => {
-  // In-memory mock hub key for roundtrip testing
-  let storedHubKey: Uint8Array | null = null
-
-  return {
-    hpkeUnwrapAndSetHubKey: vi.fn(async () => {
-      storedHubKey = new Uint8Array(32)
-      crypto.getRandomValues(storedHubKey)
-    }),
-    generateHubKeyInState: vi.fn(async () => {
-      storedHubKey = new Uint8Array(32)
-      crypto.getRandomValues(storedHubKey)
-    }),
-    wrapHubKeyForMember: vi.fn(async () => ({
-      v: 3,
-      labelId: 3,
-      enc: 'mock-enc',
-      ct: 'mock-ct',
-    })),
-    encryptHubField: vi.fn(async (plaintext: string, _label: string) => {
-      // Simple mock: base64-encode for roundtrip testing
-      return btoa(plaintext)
-    }),
-    decryptHubField: vi.fn(async (ciphertextHex: string, _label: string) => {
-      try {
-        return atob(ciphertextHex)
-      } catch {
-        return null
-      }
-    }),
-  }
-})
-
-import { generateHubKey, encryptForHub, decryptFromHub, wrapHubKeyForMember, wrapHubKeyForMembers, rotateHubKey, unwrapHubKey } from './hub-key-manager'
-import { generateHubKeyInState, wrapHubKeyForMember as platformWrap, hpkeUnwrapAndSetHubKey as platformUnwrap } from './platform'
-import { keyWrapAadHex } from '@shared/envelope-aad'
-import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
-
-/** PROTOCOL.md §2.7: aad = UTF-8("llamenos:hub-key-wrap:key-wrap"). */
-const COMPOSITE_AAD_HEX = keyWrapAadHex(LABEL_HUB_KEY_WRAP)
-
-beforeEach(() => {
-  vi.clearAllMocks()
-})
-
-describe('generateHubKey', () => {
-  it('delegates to Rust CryptoState', async () => {
-    await generateHubKey()
-    expect(generateHubKeyInState).toHaveBeenCalledOnce()
-  })
-})
-
-describe('encryptForHub / decryptFromHub', () => {
-  it('delegates encryption and decryption to Rust IPC', async () => {
-    const plaintext = 'Hello, hub world!'
-    const label = 'llamenos:hub-event'
-    const encrypted = await encryptForHub(plaintext, label)
-    expect(encrypted).toBeTruthy()
-    const decrypted = await decryptFromHub(encrypted, label)
-    expect(decrypted).toBe(plaintext)
-  })
-})
-
-describe('wrapHubKeyForMember', () => {
-  it('returns a RecipientEnvelope with pubkey', async () => {
-    const pubkey = 'aa'.repeat(32)
-    const envelope = await wrapHubKeyForMember(pubkey)
-    expect(envelope.pubkey).toBe(pubkey)
-    expect(platformWrap).toHaveBeenCalledWith(pubkey, LABEL_HUB_KEY_WRAP, COMPOSITE_AAD_HEX)
-  })
-})
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type {
+  HubKeyEnvelopeResponse,
+  HubKeyEnvelopesBody,
+  HubKeyRecipientsResponse,
+  HubKeySetResponse,
+  RoleDefinition,
+} from '@protocol/schemas'
 
 /**
- * The AAD the hub-key envelope binds (#1631).
+ * The hub key lifecycle, end to end on the client (#1042, #2788).
  *
- * The hub key is the one envelope family where the desktop, iOS and Android
- * all passed an EMPTY AAD — agreeing with each other while PROTOCOL.md §2.7,
- * Rust's `hpke_wrap_key`/`hpke_unwrap_key` pair, the interop vectors and the
- * BDD seeder had all bound `UTF-8("llamenos:hub-key-wrap:key-wrap")` from the
- * start. The operator adjudicated that the code moves to the spec, so this
- * asserts the composite AAD positively *and* asserts the empty AAD is gone:
- * the pre-fix expectation was literally `''`, so a revert fails here.
- *
- * `platform.ts` is mocked, which makes the AAD argument each IPC command
- * receives the contract under test — the same technique as
- * `envelope-aad-call-sites.test.ts` for file envelopes.
+ * #2788 sealed hub role names under the hub key while no client generated,
+ * distributed or loaded one, so on `main` a desktop admin could not create a
+ * hub role at all (`Hub key not loaded`) and nobody could read one. These drive
+ * the real modules — hub-key-manager, role-vocabulary, platform.ts and the
+ * Tauri IPC mock (tests/mocks/tauri-core.ts, the JS mirror of
+ * apps/desktop/src/crypto.rs) — for several devices at once, each a separate
+ * module graph with its own CryptoState. The server is an in-memory model of
+ * the three hub-key routes with the same compare-and-set as
+ * `SettingsService.setHubKeyEnvelopes`.
  */
-describe('hub key envelopes bind the §2.7 composite AAD', () => {
-  it('spells the AAD exactly as §2.7 does', () => {
-    const utf8 = new TextEncoder().encode('llamenos:hub-key-wrap:key-wrap')
-    const expected = Array.from(utf8, b => b.toString(16).padStart(2, '0')).join('')
-    expect(COMPOSITE_AAD_HEX).toBe(expected)
-  })
 
-  it('the wrap binds it, and not an empty AAD', async () => {
-    await wrapHubKeyForMember('aa'.repeat(32))
-    const aadHex = vi.mocked(platformWrap).mock.calls[0][2]
-    expect(aadHex).toBe(COMPOSITE_AAD_HEX)
-    expect(aadHex).not.toBe('')
-  })
+type Invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 
-  it('the unwrap binds the same value the wrap sealed under', async () => {
-    const envelope = { v: 3, labelId: 3, enc: 'mock-enc', ct: 'mock-ct' }
-    await unwrapHubKey(envelope)
-    expect(platformUnwrap).toHaveBeenCalledWith(envelope, LABEL_HUB_KEY_WRAP, COMPOSITE_AAD_HEX)
-    expect(vi.mocked(platformUnwrap).mock.calls[0][2]).not.toBe('')
-  })
+const HUB = 'hub-1'
 
-  it('every member of a rotation gets the same AAD', async () => {
-    await rotateHubKey(['aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32)])
-    const calls = vi.mocked(platformWrap).mock.calls
-    expect(calls).toHaveLength(3)
-    for (const call of calls) {
-      expect(call[2]).toBe(COMPOSITE_AAD_HEX)
+interface Member { pubkey: string; encryptionPubkey: string | null; manager: boolean }
+
+/** In-memory model of GET /key, GET /key/recipients and PUT /key. */
+class FakeHubKeyServer {
+  generation = 0
+  wraps = new Map<string, { enc: string; ct: string }>()
+  members = new Map<string, Member>()
+  puts = 0
+
+  join(member: Member) {
+    this.members.set(member.pubkey, member)
+  }
+
+  getEnvelope(caller: string, ApiError: new (s: number, b: string) => Error): HubKeyEnvelopeResponse {
+    if (!this.members.has(caller)) throw new ApiError(403, '{"error":"Access denied"}')
+    const wrap = this.wraps.get(caller)
+    if (!wrap) throw new ApiError(404, '{"error":"No key envelope for this user"}')
+    return { envelope: { pubkey: caller, ...wrap } }
+  }
+
+  recipients(caller: string, ApiError: new (s: number, b: string) => Error): HubKeyRecipientsResponse {
+    if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
+    return {
+      generation: this.generation,
+      envelopes: [...this.wraps].filter(([pk]) => this.members.has(pk)).map(([pubkey, w]) => ({ pubkey, ...w })),
+      members: [...this.members.values()].map(m => ({ pubkey: m.pubkey, encryptionPubkey: m.encryptionPubkey })),
     }
-  })
-})
+  }
 
-describe('wrapHubKeyForMembers', () => {
-  it('wraps for each member', async () => {
-    const pubkeys = ['aa'.repeat(32), 'bb'.repeat(32)]
-    const envelopes = await wrapHubKeyForMembers(pubkeys)
-    expect(envelopes).toHaveLength(2)
-    expect(envelopes[0].pubkey).toBe(pubkeys[0])
-    expect(envelopes[1].pubkey).toBe(pubkeys[1])
-  })
-})
+  put(caller: string, body: HubKeyEnvelopesBody, ApiError: new (s: number, b: string) => Error): HubKeySetResponse {
+    if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
+    if (body.expectedGeneration !== this.generation) throw new ApiError(409, '{"error":"Hub key generation mismatch"}')
+    this.puts++
+    this.generation++
+    this.wraps = new Map(body.envelopes.map(e => [e.pubkey, { enc: e.enc, ct: e.ct }]))
+    return { ok: true, generation: this.generation }
+  }
+}
 
-describe('rotateHubKey', () => {
-  it('generates new key and wraps for all members', async () => {
-    const pubkeys = ['aa'.repeat(32), 'bb'.repeat(32)]
-    const result = await rotateHubKey(pubkeys)
-    expect(generateHubKeyInState).toHaveBeenCalledOnce()
-    expect(result.envelopes).toHaveLength(2)
+let server: FakeHubKeyServer
+
+/** A device: fresh webview modules and a fresh CryptoState, talking to `server` as itself. */
+async function device(name: string, opts: { manager: boolean; registered?: boolean }) {
+  vi.resetModules()
+  vi.doMock('@tauri-apps/api/core', async () => await import('../../../tests/mocks/tauri-core'))
+  const { invoke } = (await import('@tauri-apps/api/core')) as unknown as { invoke: Invoke }
+  const { state } = await invoke<{ state: { signingPubkeyHex: string; encryptionPubkeyHex: string } }>(
+    'device_generate_and_load', { pin: '12345678', deviceId: name },
+  )
+  const me = state.signingPubkeyHex
+  const { ApiError } = await import('./api/client')
+  // Each request is answered as THIS device's user.
+  vi.doMock('./api/hubs', () => ({
+    getHubKeyEnvelope: async () => server.getEnvelope(me, ApiError),
+    getHubKeyRecipients: async () => server.recipients(me, ApiError),
+    setHubKeyEnvelopes: async (_hubId: string, body: HubKeyEnvelopesBody) => server.put(me, body, ApiError),
+  }))
+  const keyManager = await import('./key-manager')
+  keyManager.markUnlocked(me)
+  // Bind this device's platform.ts to ITS CryptoState before the next device
+  // registers its own (platform.ts resolves the IPC bridge once, on first use).
+  const platform = await import('./platform')
+  expect((await platform.getDevicePubkeys())?.signingPubkeyHex).toBe(me)
+  const hubKeys = await import('./hub-key-manager')
+  const roles = await import('./role-vocabulary')
+  server.join({ pubkey: me, encryptionPubkey: opts.registered === false ? null : state.encryptionPubkeyHex, manager: opts.manager })
+  return { invoke, me, hubKeys, roles, ApiError }
+}
+
+function hubRole(id: string, encryptedName: string): RoleDefinition {
+  return {
+    id, name: null, hubId: HUB, slug: id, permissions: ['notes:read-own'],
+    isDefault: false, isSystem: false, description: '', encryptedName,
+    createdAt: '2026-11-16T00:00:00Z', updatedAt: '2026-11-16T00:00:00Z',
+  }
+}
+
+describe('hub key lifecycle', () => {
+  beforeEach(() => {
+    vi.stubEnv('PLAYWRIGHT_TEST', 'true')
+    server = new FakeHubKeyServer()
+  })
+
+  afterEach(() => {
+    vi.doUnmock('@tauri-apps/api/core')
+    vi.doUnmock('./api/hubs')
+    vi.unstubAllEnvs()
+  })
+
+  it('a hub admin can create a hub role and read its name back (the #2788 regression)', { timeout: 60_000 }, async () => {
+    const admin = await device('admin', { manager: true })
+
+    const encryptedName = await admin.roles.sealHubRoleField(HUB, 'Legal observer')
+    expect(encryptedName).not.toContain('Legal')
+    expect(server.generation).toBe(1)
+    expect([...server.wraps.keys()]).toEqual([admin.me])
+
+    const [readable] = await admin.roles.readableRoles([hubRole('role-a', encryptedName)])
+    expect(readable).toMatchObject({ displayName: 'Legal observer', readable: true })
+  })
+
+  it('a member reads the role once a manager has shared the key', { timeout: 60_000 }, async () => {
+    const admin = await device('admin', { manager: true })
+    const encryptedName = await admin.roles.sealHubRoleField(HUB, 'Jail support coordinator')
+
+    const volunteer = await device('volunteer', { manager: false })
+    // Not shared yet: the name is not readable, and nothing is guessed.
+    const [before] = await volunteer.roles.readableRoles([hubRole('role-a', encryptedName)])
+    expect(before).toMatchObject({ readable: false, displayName: 'role-a' })
+    await expect(volunteer.hubKeys.encryptForHub(HUB, 'x', 'llamenos:hub-role-encrypt:v1'))
+      .rejects.toBeInstanceOf(volunteer.hubKeys.HubKeyUnavailableError)
+    expect(server.generation).toBe(1) // a non-manager never installs a key
+
+    const adminWrap = server.wraps.get(admin.me)
+    expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(1)
+    // Distributing adds; it never replaces an existing wrap.
+    expect(server.wraps.get(admin.me)).toEqual(adminWrap)
+    expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(0)
+
+    const [after] = await volunteer.roles.readableRoles([hubRole('role-a', encryptedName)])
+    expect(after).toMatchObject({ readable: true, displayName: 'Jail support coordinator' })
+
+  })
+
+  it('two managers bootstrapping at once end up on ONE key', { timeout: 60_000 }, async () => {
+    const a = await device('admin-a', { manager: true })
+    const b = await device('admin-b', { manager: true })
+
+    const [heldA, heldB] = await Promise.all([a.hubKeys.ensureHubKey(HUB), b.hubKeys.ensureHubKey(HUB)])
+    // At most one of them installed; the other either loaded the winner's key or
+    // is waiting for it to be shared — never holding a key of its own.
+    expect(server.puts).toBe(1)
+    expect(heldA || heldB).toBe(true)
+
+    await (heldA ? a : b).hubKeys.distributeHubKey(HUB)
+    const sealed = await a.roles.sealHubRoleField(HUB, 'Legal observer')
+    const [readable] = await b.roles.readableRoles([hubRole('role-a', sealed)])
+    expect(readable).toMatchObject({ readable: true, displayName: 'Legal observer' })
+  })
+
+  it('a manager who lacks a wrap of an EXISTING key does not replace it', { timeout: 60_000 }, async () => {
+    const first = await device('admin-first', { manager: true })
+    await first.hubKeys.ensureHubKey(HUB)
+    const late = await device('admin-late', { manager: true })
+
+    expect(await late.hubKeys.ensureHubKey(HUB)).toBe(false)
+    expect(server.generation).toBe(1)
+    expect([...server.wraps.keys()]).toEqual([first.me])
+  })
+
+  it('a member with no registered device key is skipped, not sealed to some other key', { timeout: 60_000 }, async () => {
+    const admin = await device('admin', { manager: true })
+    await device('unregistered', { manager: false, registered: false })
+    await admin.hubKeys.ensureHubKey(HUB)
+    expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(0)
+    expect([...server.wraps.keys()]).toEqual([admin.me])
   })
 })

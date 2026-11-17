@@ -60,16 +60,19 @@ export async function listHubRoles(hubId?: string) {
   return request<RoleListResponse>(path)
 }
 
-/** Create a role the active hub owns. Seal the name first — see `sealHubRoleField`. */
-export async function createHubRole(data: CreateHubRoleBody) {
-  return request<RoleDefinition>(activeHubPath('/settings/roles'), {
+/**
+ * Create a role `hubId` owns. Seal the name under that same hub's key first —
+ * see `sealHubRoleField` — so the hub named here is the one that can read it.
+ */
+export async function createHubRole(hubId: string, data: CreateHubRoleBody) {
+  return request<RoleDefinition>(hubPath(hubId, '/settings/roles'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
 }
 
-export async function updateHubRole(id: string, data: UpdateHubRoleBody) {
-  return request<RoleDefinition>(activeHubPath(`/settings/roles/${id}`), {
+export async function updateHubRole(hubId: string, id: string, data: UpdateHubRoleBody) {
+  return request<RoleDefinition>(hubPath(hubId, `/settings/roles/${id}`), {
     method: 'PATCH',
     body: JSON.stringify(data),
   })

@@ -19,7 +19,7 @@ use llamenos_core::{
     encryption::RecipientKeyEnvelope,
     hpke_envelope,
     labels::{
-        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_MESSAGE, LABEL_NOTE_KEY,
+        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_KEY_WRAP, LABEL_MESSAGE, LABEL_NOTE_KEY,
         LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
         LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
     },
@@ -211,6 +211,27 @@ impl CryptoState {
 
     fn encryption_secret_hex(&self) -> Result<String, String> {
         self.with_secrets(|s| Ok(hex::encode(s.encryption_seed)))
+    }
+
+    /// Open a wire-form (hex) wrap of `hub_id`'s key with this device's X25519
+    /// secret and hold the key. See `hpke_unwrap_and_set_hub_key`.
+    fn load_hub_key_wrap(&self, hub_id: &str, wrap: encryption::KeyEnvelope) -> Result<(), String> {
+        let slot = hub_slot(hub_id)?;
+        let secret_hex = self.encryption_secret_hex()?;
+        let key = encryption::hpke_unwrap_key(&wrap, &secret_hex, LABEL_HUB_KEY_WRAP)
+            .map_err(err_str)?;
+        lock_mutex(&self.hub_keys)?.insert(slot, key);
+        Ok(())
+    }
+
+    /// Wrap `hub_id`'s held key for `recipient_pubkey_hex`, wire form (hex).
+    fn wrap_hub_key_hex(
+        &self,
+        hub_id: &str,
+        recipient_pubkey_hex: &str,
+    ) -> Result<encryption::KeyEnvelope, String> {
+        let key = hub_key_array(self, hub_id)?;
+        encryption::hpke_wrap_key(&key, recipient_pubkey_hex, LABEL_HUB_KEY_WRAP).map_err(err_str)
     }
 
     /// HPKE-open a sealed 32-byte key with the device X25519 secret — the inner
@@ -851,23 +872,21 @@ fn hub_slot(hub_id: &str) -> Result<String, String> {
     Ok(id.to_string())
 }
 
-/// Unwrap an HPKE envelope containing `hub_id`'s key and store it in CryptoState.
-/// The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
+/// Open this device's wrap of `hub_id`'s key and store the key in CryptoState.
+///
+/// Takes the wrap exactly as the server stores it (`enc`/`ct`, hex — the one
+/// wire encoding, PROTOCOL.md §2.7). The label (`LABEL_HUB_KEY_WRAP`), the
+/// envelope's registry `labelId` and the key-wrap AAD are all fixed by the
+/// crate's `encryption::hpke_unwrap_key` — the same function the mobile loader
+/// uses — so no client chooses them. The hub key NEVER enters JavaScript.
 #[tauri::command]
 pub fn hpke_unwrap_and_set_hub_key(
     state: tauri::State<'_, CryptoState>,
     hub_id: String,
-    envelope: hpke_envelope::HpkeEnvelope,
-    expected_label: String,
-    aad_hex: String,
+    enc: String,
+    ct: String,
 ) -> Result<(), String> {
-    let slot = hub_slot(&hub_id)?;
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let secret_hex = state.encryption_secret_hex()?;
-    let key = hpke_envelope::hpke_open_key(&envelope, &secret_hex, &expected_label, &aad)
-        .map_err(err_str)?;
-    lock_mutex(&state.hub_keys)?.insert(slot, key);
-    Ok(())
+    state.load_hub_key_wrap(&hub_id, encryption::KeyEnvelope { enc, ct })
 }
 
 /// Generate a random 32-byte key for `hub_id` and store it in CryptoState,
@@ -900,21 +919,17 @@ pub fn forget_hub_key(state: tauri::State<'_, CryptoState>, hub_id: String) -> R
     Ok(())
 }
 
-/// HPKE-seal `hub_id`'s key, stored in CryptoState, for a recipient.
-/// The key NEVER enters JavaScript — it goes from state directly to HPKE encryption.
+/// Wrap `hub_id`'s key, stored in CryptoState, for one member device's X25519
+/// key. Returns the wire form `{ enc, ct }` (hex). Label and AAD are the crate's
+/// (`encryption::hpke_wrap_key` under `LABEL_HUB_KEY_WRAP`), never the caller's.
+/// The key NEVER enters JavaScript.
 #[tauri::command]
 pub fn wrap_hub_key_for_member(
     state: tauri::State<'_, CryptoState>,
     hub_id: String,
     recipient_pubkey_hex: String,
-    label: String,
-    aad_hex: String,
-) -> Result<serde_json::Value, String> {
-    let key = hub_key_array(&state, &hub_id)?;
-    let aad = hex::decode(&aad_hex).map_err(err_str)?;
-    let envelope = hpke_envelope::hpke_seal_key(&key, &recipient_pubkey_hex, &label, &aad)
-        .map_err(err_str)?;
-    serde_json::to_value(&envelope).map_err(err_str)
+) -> Result<encryption::KeyEnvelope, String> {
+    state.wrap_hub_key_hex(&hub_id, &recipient_pubkey_hex)
 }
 
 /// Store server event keys (current + previous epoch) in CryptoState.
@@ -2606,6 +2621,49 @@ mod ipc_surface_tests {
         state.lock();
         assert!(hub_key_array(&state, "hub-a").is_err());
         assert!(hub_key_array(&state, "hub-b").is_err());
+    }
+
+    /// A wrap travels as hex `enc`/`ct` (the schema refuses anything else), and
+    /// what one device wraps another opens into the same per-hub slot — the
+    /// path a hub key takes from a manager's device to a member's.
+    #[test]
+    fn hub_key_wrap_round_trips_in_the_wire_encoding() {
+        let manager = device();
+        let member = device();
+        manager
+            .state
+            .hub_keys
+            .lock()
+            .unwrap()
+            .insert("hub-a".to_string(), zeroize::Zeroizing::new(random_key()));
+
+        let wrap = manager
+            .state
+            .wrap_hub_key_hex("hub-a", &member.encryption_pubkey_hex)
+            .unwrap();
+        for part in [&wrap.enc, &wrap.ct] {
+            assert!(part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
+        assert_eq!(wrap.enc.len(), 64);
+
+        // The manager's own device is not the recipient.
+        assert!(manager.state.load_hub_key_wrap("hub-a2", wrap.clone()).is_err());
+
+        member.state.load_hub_key_wrap("hub-a", wrap).unwrap();
+        let label = llamenos_core::labels::LABEL_TAG_ENCRYPT;
+        let sealed = encryption::encrypt_hub_field(
+            "night shift",
+            &hub_key_array(&manager.state, "hub-a").unwrap(),
+            label,
+        )
+        .unwrap();
+        assert_eq!(
+            encryption::decrypt_hub_field(&sealed, &hub_key_array(&member.state, "hub-a").unwrap(), label)
+                .unwrap(),
+            "night shift"
+        );
+        // Held under the hub it was loaded for, and no other.
+        assert!(hub_key_array(&member.state, "hub-b").is_err());
     }
 
     // ── Provisioning: the signed claim, not a bare pubkey (#2765, #1865) ───
