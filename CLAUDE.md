@@ -18,7 +18,7 @@ Monorepo containing all platforms, shared crypto, and protocol definitions:
 | `apps/worker/` | Bun HTTP server (Hono + PostgreSQL; directory name retained — rename is separate epic) |
 | `apps/ios/` | Native SwiftUI iOS client |
 | `apps/android/` | Native Kotlin/Compose Android client |
-| `packages/crypto/` | Shared Rust crypto crate (native + WASM + UniFFI) |
+| `packages/crypto/` | Shared Rust crypto crate (native + UniFFI + C-ABI `server` cdylib; no WASM) |
 | `packages/shared/` | Cross-boundary TypeScript types and config |
 | `packages/protocol/` | JSON Schema definitions + codegen (TS/Swift/Kotlin) |
 | `packages/i18n/` | Localization files + iOS/Android string codegen |
@@ -34,7 +34,7 @@ All platforms implement the same protocol: `docs/protocol/PROTOCOL.md`
 - **Android**: Native Kotlin 2.3/Compose (minSdk 26, Material 3, Hilt DI + KSP, AGP 9.1, Gradle 9.4)
 - **Backend**: Bun HTTP server (Hono + PostgreSQL, self-hosted), Cloudflare Workers (marketing site only)
 - **SIP Bridge**: Protocol-agnostic SIP bridge (`sip-bridge/`), PBX_TYPE selects ARI/ESL/Kamailio backend
-- **Shared Crypto**: `packages/crypto/` Rust crate — single auditable implementation for all platforms (native, WASM, UniFFI)
+- **Shared Crypto**: `packages/crypto/` Rust crate — single auditable implementation for all platforms (native for Tauri, UniFFI for iOS/Android, a C-ABI `server` cdylib for the Bun backend via `bun:ffi`; there is no WASM build)
 - **Protocol**: `packages/protocol/` JSON Schema → codegen (TypeScript, Swift, Kotlin via quicktype-core)
 - **Telephony**: 8 providers via `TelephonyAdapter` interface (Twilio, SignalWire, Vonage, Plivo, Telnyx, Bandwidth, Asterisk, FreeSWITCH). `SipBridgeAdapter` base class for ARI/ESL/Kamailio backends. `PBX_TYPE` env var selects backend for `sip-bridge/`.
 - **Auth**: Ed25519/X25519 per-device keys for E2EE + WebAuthn session tokens for multi-device support
@@ -90,8 +90,8 @@ apps/
 sip-bridge/           # Protocol-agnostic SIP bridge (replaces asterisk-bridge/); PBX_TYPE selects ARI/ESL/Kamailio
 signal-notifier/      # Zero-knowledge Signal notification sidecar (port 3100; HMAC-hashed contact resolution)
 packages/
-  crypto/             # Shared Rust crypto crate (native + WASM + UniFFI)
-    src/              # Rust source (HPKE/X25519-HKDF-SHA256-AES256-GCM, Ed25519/Schnorr, PBKDF2, HKDF, XChaCha20-Poly1305, SFrame, MLS)
+  crypto/             # Shared Rust crypto crate (native + UniFFI + C-ABI server cdylib)
+    src/              # Rust source (HPKE/X25519-HKDF-SHA256-AES256-GCM, Ed25519, Argon2id, HKDF, AES-256-GCM, Shamir, SFrame, MLS behind the `mls` feature)
     scripts/          # Build scripts (build-mobile.sh for iOS/Android)
     Cargo.toml        # Crate config
   shared/             # Cross-boundary TypeScript types and config
@@ -140,13 +140,13 @@ docs/
 - **MessagingAdapter**: Abstract interface for text messaging channels (SMS, WhatsApp, Signal, Telegram, RCS/Google RBM). Signal adapter is complete (receipts, reactions, typing, registration, retry queue, identity trust, failover). Inbound webhooks route to the conversation service.
 - **Parallel ringing**: All on-shift, non-busy volunteers ring simultaneously. First pickup terminates other calls.
 - **Shift routing**: Automated, recurring schedule with ring groups. Fallback group if no schedule is defined.
-- **E2EE notes**: Per-note forward secrecy — unique random key per note, HPKE-wrapped for each reader via PUK (Per-User Key). PUK → items_key → per-note content key (cascading lazy key rotation). Dual-encrypted: one copy for volunteer, one for each admin (multi-admin envelopes).
+- **E2EE notes**: Per-note forward secrecy — a unique random 32-byte key per note; the payload is encrypted with AES-256-GCM and the key is HPKE-wrapped directly for each reader's device encryption pubkey (`encrypt_note` / `seal_multi_reader` in `packages/crypto/src/encryption.rs`). Dual-encrypted: one envelope for the author, one for each admin (multi-admin envelopes). **Planned, not built:** a PUK → items_key → per-note-key cascade with cascading lazy key rotation. Today only the PUK level exists (`packages/crypto/src/puk.rs`: subkey derivation and CLKR chain links, exposed over UniFFI/IPC and the `/api/puk/envelopes` routes) and note encryption does not use it. `LABEL_ITEMS_KEY_EXPORT` and `LABEL_NOTE_EPOCH_KEY` are reserved in the registry but have no code behind them.
 - **E2EE messaging**: Per-message envelope encryption — random symmetric key, HPKE-wrapped for assigned volunteer + each admin. Server encrypts inbound on webhook receipt, discards plaintext immediately.
 - **HPKE crypto**: RFC 9180 X25519-HKDF-SHA256-AES256-GCM replaces secp256k1 ECIES everywhere. Ed25519/X25519 per-device keys (no more single nsec per user). Label enforcement at decrypt (Albrecht defense — domain separation labels defined in `packages/protocol/crypto-labels.json`).
 - **User sigchain**: Append-only hash-chained, Ed25519-signed device authorization records. PUK (Per-User Key) with Cascading Lazy Key Rotation. MLS via OpenMLS (behind `mls` feature flag) for hub state.
 - **SFrame voice E2EE**: Key derivation integrated into `packages/crypto` for encrypted voice channel media.
 - **Platform abstraction**: `src/client/lib/platform.ts` is Tauri-only — all crypto calls route through Rust via IPC. Device private keys NEVER enter the webview. Always import from `platform.ts`, never from `@tauri-apps/*` directly.
-- **packages/crypto**: Shared Rust crypto crate (formerly separate `llamenos-core` repo). All crypto operations (HPKE, Ed25519/Schnorr, PBKDF2, HKDF, XChaCha20-Poly1305, SFrame, MLS) implemented once in Rust, compiled to native (Tauri), WASM (browser), and UniFFI (mobile). Desktop links via `apps/desktop/Cargo.toml` path dep to `../../packages/crypto`.
+- **packages/crypto**: Shared Rust crypto crate (formerly separate `llamenos-core` repo). All crypto operations (HPKE, Ed25519, Argon2id, HKDF, AES-256-GCM, Shamir, SFrame, MLS behind the default-off `mls` feature) implemented once in Rust, compiled to native (Tauri), UniFFI (iOS/Android) and a C-ABI `server` cdylib loaded by `packages/crypto/ffi.ts` via `bun:ffi` (Bun backend). **There is no WASM build** (no `wasm-bindgen` dependency, no build script; `packages/crypto/rust-toolchain.toml` still lists the `wasm32-unknown-unknown` target, which nothing builds). XChaCha20-Poly1305 and Schnorr were removed from the crate — see `packages/crypto/CLAUDE.md` for the current module list. Desktop links via `apps/desktop/Cargo.toml` path dep to `../../packages/crypto`.
 - **Signal notification sidecar**: `signal-notifier/` at port 3100. Zero-knowledge: resolves contacts via HMAC-hashed identifiers, never stores plaintext phone numbers. Shared `SIGNAL_NOTIFIER_BEARER_TOKEN` between app and sidecar.
 - **Firehose inference agent**: LLM-powered message extraction using OpenAI-compatible SDK. Processes incoming message streams for structured data extraction.
 - **Blast/Broadcast service**: PostgreSQL-backed delivery queue with per-channel rate limiting. Manages batched delivery of bulk messages (SMS/WhatsApp/Signal/Telegram/RCS) with per-recipient status tracking and retry logic.
@@ -160,16 +160,6 @@ docs/
 - **Reproducible builds**: `Dockerfile.build` with `SOURCE_DATE_EPOCH`, content-hashed filenames. `CHECKSUMS.txt` in GitHub Releases. SLSA provenance + SBOM + cosign. knope manages release PRs automatically — never manually bump versions. Verification via `scripts/verify-build.sh`.
 - **Hash-chained audit log**: SHA-256 chain with `previousEntryHash` + `entryHash` for tamper detection (Epic 77).
 - **Domain separation**: All crypto context constants defined in `packages/protocol/crypto-labels.json` (source of truth for the label **strings**; see file for current count), generated to TS/Swift/Kotlin via codegen. NEVER use raw string literals for crypto contexts. Label enforced at decrypt (Albrecht defense). The numeric `labelId` on the wire comes from a different source of truth — `LABEL_REGISTRY` in `packages/crypto/src/labels.rs`, whose order the JSON does not follow (see Gotchas).
-- **Blast/Broadcast service**: PostgreSQL-backed delivery queue with per-channel rate limiting. Manages batched delivery of bulk messages (SMS/WhatsApp/Signal/Telegram/RCS) with per-recipient status tracking and retry logic.
-- **Key management**: PIN-encrypted per-device Ed25519/X25519 keys stored in Tauri Store (desktop), iOS Keychain, or Android Keystore (EncryptedSharedPreferences). Rust CryptoState holds device private key; UI only sees pubkey. Device linking via ephemeral ECDH provisioning rooms. User sigchain authorizes new devices.
-- **Tauri IPC mock for tests**: Playwright tests run in a regular browser. `PLAYWRIGHT_TEST=true` triggers Vite aliases that route `@tauri-apps/api/core` and `@tauri-apps/plugin-store` to JS mock implementations in `tests/mocks/`. The mock maintains a CryptoState that mirrors the Rust side.
-- **Mobile crypto**: iOS uses UniFFI XCFramework from `packages/crypto/`, Android uses JNI `.so` files. Both wrap CryptoService as a singleton — device private key is private and never leaves the service layer.
-- **Hub key distribution**: Random 32 bytes (`crypto.getRandomValues`), HPKE-wrapped individually per member via `LABEL_HUB_KEY_WRAP`. Rotation on member departure excludes departed member.
-- **Client-side transcription**: WASM Whisper via `@huggingface/transformers` ONNX runtime. AudioWorklet ring buffer → Web Worker isolation. Audio never leaves the browser.
-- **Reproducible builds**: `Dockerfile.build` with `SOURCE_DATE_EPOCH`, content-hashed filenames. `CHECKSUMS.txt` in GitHub Releases. SLSA provenance + SBOM + cosign. knope manages release PRs automatically — never manually bump versions. Verification via `scripts/verify-build.sh`.
-- **Hash-chained audit log**: SHA-256 chain with `previousEntryHash` + `entryHash` for tamper detection (Epic 77).
-- **Domain separation**: All crypto context constants defined in `packages/protocol/crypto-labels.json` (source of truth for the label **strings**; see file for current count), generated to TS/Swift/Kotlin via codegen. NEVER use raw string literals for crypto contexts. Label enforced at decrypt (Albrecht defense). The numeric `labelId` on the wire comes from a different source of truth — `LABEL_REGISTRY` in `packages/crypto/src/labels.rs`, whose order the JSON does not follow (see Gotchas).
-- **Blast/Broadcast service**: PostgreSQL-backed delivery queue with per-channel rate limiting. Manages batched delivery of bulk messages (SMS/WhatsApp/Signal/Telegram/RCS) with per-recipient status tracking and retry logic.
 
 ## Gotchas
 
@@ -179,7 +169,7 @@ docs/
 - **`asterisk-bridge/` no longer exists** — replaced by `sip-bridge/`. Use `PBX_TYPE` env var to select ARI/ESL/Kamailio backend.
 - **HPKE replaces ECIES**: All new key-wrapping code must use HPKE (RFC 9180 X25519-HKDF-SHA256-AES256-GCM). No secp256k1 ECIES for new features.
 - **Per-device keys, not nsec**: Users have Ed25519/X25519 device keys authorized via sigchain. `nsec` is no longer the identity primitive.
-- **`crypto-labels.json` is NOT the `labelId` authority**: two different sources of truth, and conflating them corrupts the wire format. The HPKE envelope's numeric `labelId` is the **array index in `LABEL_REGISTRY`** (`packages/crypto/src/labels.rs:413`; the comment above it says "the index IS the labelId", and index 53 is a permanent `""` TOMBSTONE for a removed label). `packages/protocol/crypto-labels.json` is the source of truth for the label **strings**, and feeds codegen to TS/Swift/Kotlin. Its `labels` member is a JSON **object**, and its key order does NOT match the registry: key position 52 is `LABEL_NOTE_EPOCH_KEY` while `LABEL_REGISTRY[52]` is `LABEL_MLS_PROVISION`. The file's own `description` claims the orders match — it is wrong, and the CI guards in `labels.rs` (`label_registry_matches_json`, `label_count_matches_json`) only check set membership and count, never order, so nothing catches the drift. **Never read a labelId out of the JSON.** Appending a label is a wire-format change: add it to the registry END (never reorder, never reuse a tombstone), and each platform needs its own PR.
+- **`crypto-labels.json` is NOT the `labelId` authority**: two different sources of truth, and conflating them corrupts the wire format. The HPKE envelope's numeric `labelId` is the **array index in `LABEL_REGISTRY`** (`packages/crypto/src/labels.rs`; the comment above it says "the index IS the labelId", and index 53 is a permanent `""` TOMBSTONE for a removed label). `packages/protocol/crypto-labels.json` is the source of truth for the label **strings**, and feeds codegen to TS/Swift/Kotlin. Its `labels` member is a JSON **object** whose key order is incidental and does NOT match the registry (key position 52 is `LABEL_NOTE_EPOCH_KEY`; `LABEL_REGISTRY[52]` is `LABEL_MLS_PROVISION`) — its `description` says so. **Never read a labelId out of the JSON.** CI pins the indices: `label_registry_matches_json` / `label_count_matches_json` check membership and count, and `label_registry_indices_are_append_only` (#1646) checks every index against `packages/crypto/label-registry.wire.snapshot`, failing on insertion, reordering, removal or tombstone reuse. Appending a label is a wire-format change: add it to the registry END (never reorder, never reuse a tombstone), regenerate the snapshot (the diff must be additions at the end only), and each platform needs its own PR.
 - **Signal notifier auth**: `SIGNAL_NOTIFIER_BEARER_TOKEN` must match between app config and `signal-notifier/` sidecar config.
 - **knope manages versions**: Never manually bump `package.json`, `Cargo.toml`, or platform version files. knope auto-maintains release PRs with changelogs.
 - **Tauri-only desktop**: No browser/PWA fallback. `platform.ts` always routes through Tauri IPC. Use `PLAYWRIGHT_TEST=true` for test builds that mock the IPC layer.
