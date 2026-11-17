@@ -26,11 +26,21 @@
 // device set that is a SYMLINK is still swept, because plain `find` on a link
 // matches nothing (the control case reproduces that trap).
 //
+// And the break-it for per-volume floors (2026-11-16): each volume is held to what a
+// job puts on IT. With `_work` and the device set on the CI work volume, the internal
+// disk carries only swap + the agent's _diag (5 GiB floor), the work volume device
+// data + build products (7 GiB), and a host with everything on one disk still gets
+// the #1665 12 GiB. The selftest drives check_write_paths + gate over stand-in
+// volumes in both directions: a genuinely short volume refuses and is named, a
+// short volume nothing writes to is never measured, the healthy internal disk the
+// cutover left (11 GiB) passes, and - the control - the old one-number rule
+// refuses that same healthy host.
+//
 // And the break-it for #2760: macOS df prints a header per OPERAND, so a two-operand
 // `df a b | awk 'NR>1 ...'` reads the second header as data and reports 0 GiB free.
-// The hang fallback now asks one df per path (`min-free-kib`); the selftest feeds it
-// BSD-shaped output, and the sweep below fails on any parsed multi-operand df left
-// anywhere in CI scripts or workflows.
+// The hang fallback is now the guard's own `gate` mode (one df per path), and the
+// sweep below fails on any parsed multi-operand df left anywhere in CI scripts or
+// workflows.
 //
 // And the break-it for the hourly timer: its wrapper refreshes the script it runs
 // from origin/main, never adopts one that does not parse, and says STALE when it
@@ -42,8 +52,12 @@ import { join, relative } from 'node:path'
 
 const SCRIPT = join(import.meta.dir, 'mac-runner-disk-guard.sh')
 
+// The floors under test are the script's DEFAULTS, so no operator override may
+// leak in from the environment running the suite.
+const selftestEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('MAC_DISK_')))
+
 describe('mac-runner-disk-guard.sh selftest', () => {
-  const run = spawnSync('bash', [SCRIPT, 'selftest'], { encoding: 'utf8', timeout: 120_000 })
+  const run = spawnSync('bash', [SCRIPT, 'selftest'], { encoding: 'utf8', timeout: 120_000, env: selftestEnv })
   const out = `${run.stdout}${run.stderr}`
 
   test('passes with no failing case', () => {
@@ -88,9 +102,14 @@ describe('mac-runner-disk-guard.sh selftest', () => {
     'a short work volume refuses the job even though the host volume has room, and names it',
     'the refusal does not depend on which volume is listed first',
     'every measured volume above the floor passes, each reported',
-    'two operands on BSD-shaped df give the smaller real figure, not 0',
-    'two healthy operands on BSD-shaped df report the real free space (not 0)',
-    'paths df cannot read yield no figure (unknown), never a fabricated one',
+    "cut over: 11 GiB on the internal disk passes its 5 GiB floor (swap + _diag), the work volume is held to 7",
+    'a short volume no write path is on is never measured, so it cannot refuse a job',
+    "(control) the old one-floor-for-all rule refuses that same healthy host on the internal disk's number",
+    'cut over: an internal disk genuinely short of swap + _diag refuses, and names it',
+    'cut over: a work volume genuinely short of device data + build products refuses, the healthy internal disk does not',
+    'everything on the internal disk: it is held to the full 12 GiB (#1665), and an idle work volume is not measured',
+    'everything on the internal disk with 13 GiB free passes its 12 GiB floor',
+    "a consumer is counted once per volume, however many runners' paths land there",
     '(control) a plain find on a symlinked device set matches nothing - the trap',
     'the idle device under a symlinked device set is found, the young one is not',
     'timer: first run fetches main and pins its guard',
@@ -158,8 +177,68 @@ describe('no CI script parses a multi-operand df', () => {
     expect(offenders).toEqual([])
   })
 
-  test('the workflow hang fallback measures through min-free-kib', () => {
+  test("the workflow hang fallback is the guard's own per-volume gate, not a second floor", () => {
     const wf = readFileSync(join(REPO, '.github/workflows/ios-e2e.yml'), 'utf8')
-    expect(wf).toContain('mac-runner-disk-guard.sh min-free-kib "$volume" "$RUNNER_TEMP"')
+    expect(wf).toContain('bash scripts/ci/mac-runner-disk-guard.sh gate >"$fallback_log"')
+    // A uniform floor exported by the workflow would override every derived
+    // per-volume floor and put the internal disk back on 12 GiB.
+    expect(wf).not.toMatch(/MAC_DISK_MIN_FREE_GIB|DISK_MIN_FREE_GIB/)
+  })
+})
+
+// The internal disk's floor leaves Xcode's shared DerivedData root out of the
+// budget because CI never writes it: every xcodebuild that can run on the
+// self-hosted Mac puts its DerivedData under RUNNER_TEMP (on the CI work volume,
+// and removed by the runner after the job). One that did not would write the
+// build's GiBs to the internal disk behind the guard's back, so it fails here.
+describe('every self-hosted Mac xcodebuild keeps DerivedData under RUNNER_TEMP', () => {
+  const WORKFLOWS = join(import.meta.dir, '..', '..', '.github', 'workflows')
+  interface Step { name?: string; run?: string }
+  interface Job { 'runs-on'?: unknown; steps?: Step[] }
+  const ACTION = /\s(build|test|build-for-testing|test-without-building|archive|analyze)(\s|$)/
+  const XCODEBUILD_COMMAND = /(?:^|&&|\|\||;|\$\()\s*(?:(?:if|then|do|!|exec|time)\s+)*xcodebuild\s/
+  const UNDER_RUNNER_TEMP = /\s-derivedDataPath\s+"?(\$RUNNER_TEMP|\$\{\{\s*runner\.temp\s*\}\})\//
+
+  const invocations: { where: string; command: string }[] = []
+  for (const file of readdirSync(WORKFLOWS).sort()) {
+    if (!/\.ya?ml$/.test(file)) continue
+    const wf = Bun.YAML.parse(readFileSync(join(WORKFLOWS, file), 'utf8')) as { jobs?: Record<string, Job> }
+    for (const [id, job] of Object.entries(wf.jobs ?? {})) {
+      const runsOn = JSON.stringify(job['runs-on'] ?? '')
+      if (!/self-hosted/.test(runsOn) || !/macOS/i.test(runsOn)) continue
+      for (const step of job.steps ?? []) {
+        // One logical command per backslash-continued line.
+        for (const command of (step.run ?? '').replace(/\\\n/g, ' ').split('\n')) {
+          if (/^\s*#/.test(command)) continue
+          // xcodebuild as a COMMAND (line start, after `if !`, `&&`, `;`,
+          // `$(`), never the word inside an echo'd message.
+          if (XCODEBUILD_COMMAND.test(command) && ACTION.test(command)) {
+            invocations.push({ where: `${file}:${id}:${step.name ?? '?'}`, command: command.trim() })
+          }
+        }
+      }
+    }
+  }
+
+  test('the sweep finds the build, ui and ios-build-test invocations (it cannot pass on nothing)', () => {
+    const where = invocations.map((i) => i.where).join('\n')
+    expect(where).toContain('ios-e2e.yml:build:')
+    expect(where).toContain('ios-e2e.yml:ui:')
+    expect(where).toContain('ci.yml:ios-build-test:')
+  })
+
+  test('the pattern tells an in-RUNNER_TEMP DerivedData from the shared root', () => {
+    expect(UNDER_RUNNER_TEMP.test(' -derivedDataPath "$RUNNER_TEMP/llamenos-build"')).toBe(true)
+    expect(UNDER_RUNNER_TEMP.test(' -derivedDataPath ${{ runner.temp }}/llamenos-build')).toBe(true)
+    expect(UNDER_RUNNER_TEMP.test(' -derivedDataPath "$HOME/Library/Developer/Xcode/DerivedData"')).toBe(false)
+    expect(UNDER_RUNNER_TEMP.test('xcodebuild test -scheme X')).toBe(false)
+    expect(XCODEBUILD_COMMAND.test('          if ! xcodebuild build-for-testing \\')).toBe(true)
+    expect(XCODEBUILD_COMMAND.test('  xcodebuild test -project P')).toBe(true)
+    expect(XCODEBUILD_COMMAND.test('echo "::error::shard failed (xcodebuild exit $rc)"')).toBe(false)
+  })
+
+  test('none writes the shared DerivedData root', () => {
+    const offenders = invocations.filter((i) => !UNDER_RUNNER_TEMP.test(i.command)).map((i) => `${i.where}: ${i.command}`)
+    expect(offenders).toEqual([])
   })
 })
