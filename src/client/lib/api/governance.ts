@@ -1,7 +1,12 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { banDigestBlind, banDigestFinalize } from '@/lib/platform'
 import { request, hp } from './client'
-import { BAN_DIGEST_EVALUATE_BATCH_MAX } from '@protocol/schemas/bans'
+import {
+  BAN_DIGEST_EVALUATE_BATCH_MAX,
+  type BanLookup,
+  type BanDigestEvaluateResponse,
+  type SearchBansEvaluateResponse,
+} from '@protocol/schemas/bans'
 import type {
   ErasureRequest,
   MyErasureRequestResponse,
@@ -112,7 +117,7 @@ export async function platformBanDigests(phones: string[]): Promise<string[]> {
   for (let i = 0; i < phones.length; i += BAN_DIGEST_EVALUATE_BATCH_MAX) {
     const chunk = phones.slice(i, i + BAN_DIGEST_EVALUATE_BATCH_MAX)
     const blinds = await Promise.all(chunk.map((phone) => banDigestBlind(phone)))
-    const { evaluatedElements } = await request<{ evaluatedElements: string[] }>('/admin/bans/evaluate', {
+    const { evaluatedElements } = await request<BanDigestEvaluateResponse>('/admin/bans/evaluate', {
       method: 'POST',
       body: JSON.stringify({ blindedElements: blinds.map((b) => b.blindedElementHex) }),
     })
@@ -126,24 +131,20 @@ export async function platformBanDigests(phones: string[]): Promise<string[]> {
   return digests
 }
 
-/** One number's digest under one scope: `hubId` names a hub, `null` the platform. */
-export interface BanLookup {
-  hubId: string | null
-  phoneHash: string
-}
+export type { BanLookup }
 
-/** A typed number's ban digest under every scope, for search and promote. */
+/** A typed number's ban digest under every scope (no `hubId` = the platform), for search and promote. */
 export async function banLookups(phone: string): Promise<BanLookup[]> {
   const blind = await banDigestBlind(phone)
-  const { evaluations } = await request<{ evaluations: { hubId: string | null; evaluatedElement: string }[] }>(
+  const { evaluations } = await request<SearchBansEvaluateResponse>(
     '/admin/bans/search/evaluate',
     { method: 'POST', body: JSON.stringify({ blindedElement: blind.blindedElementHex }) },
   )
   return Promise.all(
-    evaluations.map(async ({ hubId, evaluatedElement }) => ({
-      hubId,
-      phoneHash: await banDigestFinalize(phone, blind.blindHex, evaluatedElement),
-    })),
+    evaluations.map(async ({ hubId, evaluatedElement }) => {
+      const phoneHash = await banDigestFinalize(phone, blind.blindHex, evaluatedElement)
+      return hubId === undefined ? { phoneHash } : { hubId, phoneHash }
+    }),
   )
 }
 
@@ -188,7 +189,7 @@ export async function searchPlatformBans(phone: string) {
 export async function promoteHubBan(banId: string, sourceHubId: string, phone: string) {
   const lookups = await banLookups(phone)
   const source = lookups.find((l) => l.hubId === sourceHubId)
-  const platform = lookups.find((l) => l.hubId === null)
+  const platform = lookups.find((l) => l.hubId === undefined)
   if (!source || !platform) throw new Error('No ban key for the source hub or the platform')
   return request<{ ok: true }>('/admin/bans/promote', {
     method: 'POST',

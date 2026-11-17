@@ -112,27 +112,26 @@ export const searchBansEvaluateBodySchema = z.object({
   blindedElement: banDigestElementSchema,
 })
 
+/** A number evaluated under one scope's key. `hubId` names a hub; it is absent for the platform. */
+export const banScopeEvaluationSchema = z.object({
+  hubId: z.string().min(1).optional(),
+  evaluatedElement: banDigestElementSchema,
+})
+
 export const searchBansEvaluateResponseSchema = z.object({
-  /** One evaluation per scope: `hubId` names a hub, `null` the platform. */
-  evaluations: z.array(
-    z.object({
-      hubId: z.string().nullable(),
-      evaluatedElement: banDigestElementSchema,
-    }),
-  ),
+  /** One evaluation per scope: the platform's and every hub's. */
+  evaluations: z.array(banScopeEvaluationSchema),
+})
+
+/** A number's digest under one scope. `hubId` names a hub; it is absent for the platform. */
+export const banLookupSchema = z.object({
+  hubId: z.string().min(1).optional(),
+  phoneHash: banDigestSchema,
 })
 
 /** `POST /admin/bans/search`: the number's digest per scope, from the finalized evaluations. */
 export const searchBansBodySchema = z.object({
-  lookups: z
-    .array(
-      z.object({
-        hubId: z.string().min(1).nullable(),
-        phoneHash: banDigestSchema,
-      }),
-    )
-    .min(1)
-    .max(1000),
+  lookups: z.array(banLookupSchema).min(1).max(1000),
 })
 
 export const searchBansResponseSchema = z.object({
@@ -147,3 +146,7 @@ export const searchBansResponseSchema = z.object({
     }),
   ),
 })
+
+export type BanLookup = z.infer<typeof banLookupSchema>
+export type BanDigestEvaluateResponse = z.infer<typeof banDigestEvaluateResponseSchema>
+export type SearchBansEvaluateResponse = z.infer<typeof searchBansEvaluateResponseSchema>

@@ -110,8 +110,9 @@ async function platformDigests(request: Request, world: Record<string, unknown>,
   return phones.map((phone, i) => banDigestFinalize(phone, blinds[i].blindHex, res.data.evaluatedElements[i]))
 }
 
+/** A number's digest under one scope; no `hubId` = the platform. */
 interface ScopedLookup {
-  hubId: string | null
+  hubId?: string
   phoneHash: string
 }
 
@@ -119,17 +120,17 @@ interface ScopedLookup {
 async function searchLookups(request: Request, world: Record<string, unknown>, phone: string): Promise<ScopedLookup[]> {
   const actor = getActingAdmin(world)
   const blind = banDigestBlind(phone)
-  const res = await apiPost<{ evaluations: { hubId: string | null; evaluatedElement: string }[] }>(
+  const res = await apiPost<{ evaluations: { hubId?: string; evaluatedElement: string }[] }>(
     request,
     '/admin/bans/search/evaluate',
     { blindedElement: blind.blindedElementHex },
     actor?.deviceKey,
   )
   expect(res.status, `search evaluate failed: ${JSON.stringify(res.data)}`).toBe(200)
-  return res.data.evaluations.map(({ hubId, evaluatedElement }) => ({
-    hubId,
-    phoneHash: banDigestFinalize(phone, blind.blindHex, evaluatedElement),
-  }))
+  return res.data.evaluations.map(({ hubId, evaluatedElement }) => {
+    const phoneHash = banDigestFinalize(phone, blind.blindHex, evaluatedElement)
+    return hubId === undefined ? { phoneHash } : { hubId, phoneHash }
+  })
 }
 
 async function searchBans(request: Request, world: Record<string, unknown>, phone: string) {
@@ -323,7 +324,7 @@ async function promoteBody(
 ) {
   const lookups = await searchLookups(request, world, phone)
   const source = lookups.find((l) => l.hubId === sourceHubId)
-  const platform = lookups.find((l) => l.hubId === null)
+  const platform = lookups.find((l) => l.hubId === undefined)
   expect(source, `no evaluation for hub ${sourceHubId}`).toBeTruthy()
   expect(platform, 'no evaluation for the platform').toBeTruthy()
   return { banId, sourcePhoneHash: source!.phoneHash, phoneHash: platform!.phoneHash }

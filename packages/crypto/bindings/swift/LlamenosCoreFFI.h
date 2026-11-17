@@ -273,6 +273,16 @@ RustBuffer uniffi_llamenos_core_fn_func_encrypt_with_pin(RustBuffer key_material
 int8_t uniffi_llamenos_core_fn_func_is_valid_pin(RustBuffer pin, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_BLIND
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_BLIND
+RustBuffer uniffi_llamenos_core_fn_func_ban_digest_blind(RustBuffer phone, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_FINALIZE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_FINALIZE
+RustBuffer uniffi_llamenos_core_fn_func_ban_digest_finalize(RustBuffer phone, RustBuffer blind_hex, RustBuffer evaluated_element_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_COMPUTE_SAS_CODE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_COMPUTE_SAS_CODE
 RustBuffer uniffi_llamenos_core_fn_func_compute_sas_code(RustBuffer shared_x_hex, RustCallStatus *_Nonnull out_status
@@ -993,6 +1003,18 @@ uint16_t uniffi_llamenos_core_checksum_func_encrypt_with_pin(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_IS_VALID_PIN
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_IS_VALID_PIN
 uint16_t uniffi_llamenos_core_checksum_func_is_valid_pin(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_BLIND
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_BLIND
+uint16_t uniffi_llamenos_core_checksum_func_ban_digest_blind(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_FINALIZE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_FINALIZE
+uint16_t uniffi_llamenos_core_checksum_func_ban_digest_finalize(void
     
 );
 #endif

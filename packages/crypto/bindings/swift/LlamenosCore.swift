@@ -620,6 +620,64 @@ public func FfiConverterTypeAuthToken_lower(_ value: AuthToken) -> RustBuffer {
 
 
 /**
+ * The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+ * server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+ */
+public struct BanDigestBlind: Equatable, Hashable {
+    public let blindHex: String
+    public let blindedElementHex: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(blindHex: String, blindedElementHex: String) {
+        self.blindHex = blindHex
+        self.blindedElementHex = blindedElementHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BanDigestBlind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBanDigestBlind: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BanDigestBlind {
+        return
+            try BanDigestBlind(
+                blindHex: FfiConverterString.read(from: &buf), 
+                blindedElementHex: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BanDigestBlind, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.blindHex, into: &buf)
+        FfiConverterString.write(value.blindedElementHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBanDigestBlind_lift(_ buf: RustBuffer) throws -> BanDigestBlind {
+    return try FfiConverterTypeBanDigestBlind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBanDigestBlind_lower(_ value: BanDigestBlind) -> RustBuffer {
+    return FfiConverterTypeBanDigestBlind.lower(value)
+}
+
+
+/**
  * Device key state exposed to callers (no secret material).
  */
 public struct DeviceKeyState: Equatable, Hashable {
@@ -2692,6 +2750,29 @@ public func isValidPin(pin: String) -> Bool  {
 })
 }
 /**
+ * Blind an E.164 phone number for a ban digest. The server never sees the number.
+ */
+public func banDigestBlind(phone: String)throws  -> BanDigestBlind  {
+    return try  FfiConverterTypeBanDigestBlind_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_ban_digest_blind(
+        FfiConverterString.lower(phone),$0
+    )
+})
+}
+/**
+ * Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+ * the `phoneHash` a platform-ban request carries.
+ */
+public func banDigestFinalize(phone: String, blindHex: String, evaluatedElementHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_ban_digest_finalize(
+        FfiConverterString.lower(phone),
+        FfiConverterString.lower(blindHex),
+        FfiConverterString.lower(evaluatedElementHex),$0
+    )
+})
+}
+/**
  * Derive a 6-digit SAS code from an ECDH shared secret.
  */
 public func computeSasCode(sharedXHex: String)throws  -> String  {
@@ -3781,6 +3862,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_is_valid_pin() != 51720) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_ban_digest_blind() != 43517) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_ban_digest_finalize() != 8758) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_compute_sas_code() != 62033) {

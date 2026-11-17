@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.admin
 
+import org.llamenos.hotline.crypto.CryptoService
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -106,7 +107,7 @@ class AdminDeletionConfirmationTest {
         server.shutdown()
     }
 
-    private fun viewModel() = AdminViewModel(server.apiService, SavedStateHandle())
+    private fun viewModel() = AdminViewModel(server.apiService, SavedStateHandle(), CryptoService())
 
     private fun deletesSent() = routes.seen().filter { it.startsWith("DELETE ") || it.startsWith("PUT ") }
 
@@ -328,7 +329,7 @@ class AdminDeletionConfirmationTest {
     @Test
     fun `one tap on delete category leaves the category in place and asks first`() {
         seedReportTypes()
-        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")))
+        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")), CryptoService())
         setReportCategories(vm)
 
         composeRule.onNodeWithTag("delete-category-rt-1").performClick()
@@ -341,7 +342,7 @@ class AdminDeletionConfirmationTest {
     @Test
     fun `cancelling the delete category dialog keeps the category`() {
         seedReportTypes()
-        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")))
+        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")), CryptoService())
         setReportCategories(vm)
 
         composeRule.onNodeWithTag("delete-category-rt-1").performClick()
@@ -355,7 +356,7 @@ class AdminDeletionConfirmationTest {
     @Test
     fun `confirming the delete category dialog archives it and the list drops it`() {
         seedReportTypes()
-        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")))
+        val vm = AdminViewModel(server.apiService, SavedStateHandle(mapOf(AdminViewModel.SECTION_ARG to "report-types")), CryptoService())
         setReportCategories(vm)
 
         composeRule.onNodeWithTag("delete-category-rt-1").performClick()

@@ -647,6 +647,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_is_valid_pin(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_ban_digest_blind(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_ban_digest_finalize(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_sas_code(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_shared_x_hex(
@@ -836,6 +840,10 @@ external fun uniffi_llamenos_core_fn_func_encrypt_with_pin(`keyMaterial`: RustBu
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_is_valid_pin(`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+external fun uniffi_llamenos_core_fn_func_ban_digest_blind(`phone`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_ban_digest_finalize(`phone`: RustBuffer.ByValue,`blindHex`: RustBuffer.ByValue,`evaluatedElementHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_sas_code(`sharedXHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_shared_x_hex(`ourSecretHex`: RustBuffer.ByValue,`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1135,6 +1143,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_is_valid_pin() != 51720.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_ban_digest_blind() != 43517.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_ban_digest_finalize() != 8758.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_compute_sas_code() != 62033.toShort()) {
@@ -1695,6 +1709,48 @@ public object FfiConverterTypeAuthToken: FfiConverterRustBuffer<AuthToken> {
             FfiConverterULong.write(value.`timestamp`, buf)
             FfiConverterString.write(value.`token`, buf)
             FfiConverterOptionalString.write(value.`nonce`, buf)
+    }
+}
+
+
+
+/**
+ * The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+ * server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+ */
+data class BanDigestBlind (
+    val `blindHex`: kotlin.String
+    , 
+    val `blindedElementHex`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBanDigestBlind: FfiConverterRustBuffer<BanDigestBlind> {
+    override fun read(buf: ByteBuffer): BanDigestBlind {
+        return BanDigestBlind(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BanDigestBlind) = (
+            FfiConverterString.allocationSize(value.`blindHex`) +
+            FfiConverterString.allocationSize(value.`blindedElementHex`)
+    )
+
+    override fun write(value: BanDigestBlind, buf: ByteBuffer) {
+            FfiConverterString.write(value.`blindHex`, buf)
+            FfiConverterString.write(value.`blindedElementHex`, buf)
     }
 }
 
@@ -3247,6 +3303,35 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_is_valid_pin(
     
         FfiConverterString.lower(`pin`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Blind an E.164 phone number for a ban digest. The server never sees the number.
+         */
+    @Throws(CryptoException::class) fun `banDigestBlind`(`phone`: kotlin.String): BanDigestBlind {
+            return FfiConverterTypeBanDigestBlind.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_ban_digest_blind(
+    
+        FfiConverterString.lower(`phone`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+         * the `phoneHash` a platform-ban request carries.
+         */
+    @Throws(CryptoException::class) fun `banDigestFinalize`(`phone`: kotlin.String, `blindHex`: kotlin.String, `evaluatedElementHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_ban_digest_finalize(
+    
+        FfiConverterString.lower(`phone`),FfiConverterString.lower(`blindHex`),FfiConverterString.lower(`evaluatedElementHex`),_status)
 }
     )
     }

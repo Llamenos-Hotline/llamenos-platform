@@ -20,7 +20,7 @@ import { audit } from '../services/audit'
 import { banBlindEvaluate } from '../lib/crypto'
 import { scopeOfRow } from '../lib/owner-scope'
 import { checkRateLimit } from '../lib/helpers'
-import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
+import { hubScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'
 
 /**
  * Platform bans never see a number (#2759). Every body here carries ban digests that an
@@ -248,7 +248,7 @@ platformBans.post(
     summary: 'Evaluate one blinded number under every scope\'s ban key, for a search',
     responses: {
       200: {
-        description: 'One evaluation per scope (hubId null = platform)',
+        description: 'One evaluation per scope (no hubId = the platform)',
         content: {
           'application/json': {
             schema: resolver(searchBansEvaluateResponseSchema),
@@ -270,15 +270,15 @@ platformBans.post(
     // Every scope has its own key, so the number is evaluated once per hub and once for the
     // platform. The client finalizes each into that scope's digest and searches with them.
     const { hubs } = await services.settings.getHubs()
-    const scopes = [
-      { hubId: null, scope: PLATFORM_SCOPE },
+    const scopes: { hubId?: string; scope: OwnerScope }[] = [
+      { scope: PLATFORM_SCOPE },
       ...hubs.map((hub) => ({ hubId: hub.id, scope: hubScope(hub.id) })),
     ]
-    const evaluations: { hubId: string | null; evaluatedElement: string }[] = []
+    const evaluations: { hubId?: string; evaluatedElement: string }[] = []
     for (const { hubId, scope } of scopes) {
       const evaluatedElement = evaluateOrNull(() => banBlindEvaluate(blindedElement, scope, c.env.BAN_HASH_KEY))
       if (evaluatedElement === null) return c.json({ error: 'Invalid blinded element' }, 400)
-      evaluations.push({ hubId, evaluatedElement })
+      evaluations.push(hubId === undefined ? { evaluatedElement } : { hubId, evaluatedElement })
     }
     await audit(services.audit, 'platformBanSearchEvaluated', pubkey, {
       scopes: evaluations.length,
@@ -312,7 +312,7 @@ platformBans.post(
     // Each digest only selects rows of its own scope. Nothing is stored.
     const rows = await services.records.searchBans(
       lookups.map(({ hubId, phoneHash }) => ({
-        scope: hubId === null ? PLATFORM_SCOPE : hubScope(hubId),
+        scope: hubId === undefined ? PLATFORM_SCOPE : hubScope(hubId),
         phoneHash,
       })),
     )
