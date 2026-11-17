@@ -1033,27 +1033,52 @@ describe('hubs routes', () => {
   // -------------------------------------------------------------------------
 
   describe('PUT /hubs/:hubId/key', () => {
-    it('sets hub key envelopes', async () => {
-      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue(undefined)
+    const body = {
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      expectedGeneration: 0,
+    }
+    const put = (app: Hono<AppEnv>) => app.request('/hubs/hub-1/key', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    it('sets hub key envelopes and returns the new generation', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
       const { app } = createTestApp({
         permissions: ['hubs:manage-keys'],
         serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
 
-      const res = await app.request('/hubs/hub-1/key', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          envelopes: [
-            { pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' },
-          ],
-        }),
-      })
+      const res = await put(app)
 
       expect(res.status).toBe(200)
-      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', {
-        envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      expect(await res.json()).toEqual({ ok: true, generation: 1 })
+      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', body)
+    })
+
+    it('answers 409 when the generation moved on, so the writer re-reads', async () => {
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: {
+          settings: {
+            setHubKeyEnvelopes: vi.fn().mockRejectedValue(new ServiceError(409, 'Hub key generation mismatch: expected 0, current 1')),
+          },
+        },
       })
+      const res = await put(app)
+      expect(res.status).toBe(409)
+    })
+
+    it('refuses a super-admin with no role in the hub (D1: super-admins read no hub)', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['*'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+      const res = await put(app)
+      expect(res.status).toBe(403)
+      expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
     })
 
     it('returns 403 without hubs:manage-keys permission', async () => {
@@ -1063,6 +1088,36 @@ describe('hubs routes', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ envelopes: [] }),
       })
+      expect(res.status).toBe(403)
+    })
+  })
+
+  describe('GET /hubs/:hubId/key/recipients', () => {
+    const answer = { generation: 2, envelopes: [], members: [{ pubkey: 'f'.repeat(64), encryptionPubkey: null }] }
+
+    it('answers a manager in the hub', async () => {
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { identity: { getHubKeyRecipients: spy } },
+      })
+      const res = await app.request('/hubs/hub-1/key/recipients')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual(answer)
+      expect(spy).toHaveBeenCalledWith('hub-1')
+    })
+
+    it('refuses a super-admin with no role in the hub', async () => {
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({ permissions: ['*'], serviceMock: { identity: { getHubKeyRecipients: spy } } })
+      const res = await app.request('/hubs/hub-1/key/recipients')
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('refuses a member without hubs:manage-keys', async () => {
+      const { app } = createTestApp({ permissions: ['hubs:read'] })
+      const res = await app.request('/hubs/hub-1/key/recipients')
       expect(res.status).toBe(403)
     })
   })

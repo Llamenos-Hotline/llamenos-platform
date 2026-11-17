@@ -57,3 +57,28 @@ Feature: Hub Key Lifecycle
     And a volunteer "Bob" is added to the hub but has no envelope
     When "Bob" requests the hub key envelope
     Then the hub key response status should be 404
+
+  # ── Distribution contract (#1042) ────────────────────────────────
+  # The client lifecycle (src/client/lib/hub-key-manager.ts) relies on these:
+  # a key write names the generation it read, so two managers cannot each
+  # install a key; and a distributor learns every member's DEVICE key and the
+  # wraps that already exist, so it adds without replacing anyone's access.
+
+  Scenario: A hub key write that names a stale generation is refused and changes nothing
+    Given a hub with 3 members: "Alice", "Bob", and "Carol"
+    When the admin sets hub key envelopes for all 3 members
+    Then the hub key generation should be 1
+    And a hub key write at generation 0 should be refused with 409
+    And "Alice" should be able to fetch their hub key envelope
+
+  Scenario: A key distributor sees every member's device key and the wraps already held
+    Given a hub with 3 members: "Alice", "Bob", and "Carol"
+    When the admin updates hub key envelopes for "Alice" and "Bob" only
+    Then the key recipients should list every member with their device key
+    And the key recipients should hold a wrap for exactly "Alice" and "Bob"
+
+  Scenario: An instance admin with no role in the hub cannot install or read its key distribution
+    Given a hub with 3 members: "Alice", "Bob", and "Carol"
+    When "Alice" becomes the hub's admin and the instance admin leaves it
+    Then the instance admin cannot read or write the hub's key distribution
+    And "Alice" can read the hub's key distribution

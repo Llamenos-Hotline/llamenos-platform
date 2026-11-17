@@ -266,6 +266,14 @@ describe('hubs route validation', () => {
       expect(res.status).toBe(400)
     })
 
+    it('rejects envelopes without the generation they were read at', async () => {
+      const app = createApp()
+      const res = await sendJSON(app, '/hubs/hub-1/key', {
+        envelopes: [{ pubkey: VALID_PUBKEY, enc: VALID_PUBKEY_2, ct: 'deadbeef' }],
+      }, 'PUT')
+      expect(res.status).toBe(400)
+    })
+
     it('accepts valid hub key envelopes', async () => {
       const app = createApp()
       const res = await sendJSON(app, '/hubs/hub-1/key', {
@@ -274,6 +282,7 @@ describe('hubs route validation', () => {
           enc: VALID_PUBKEY_2,
           ct: 'deadbeef',
         }],
+        expectedGeneration: 0,
       }, 'PUT')
       expect(res.status).not.toBe(400)
     })
