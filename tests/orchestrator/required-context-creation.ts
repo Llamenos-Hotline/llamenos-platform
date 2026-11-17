@@ -93,6 +93,8 @@ interface Job {
   needs?: unknown
   strategy?: unknown
   permissions?: unknown
+  /** A job that calls a reusable workflow (`./.github/workflows/<file>`). */
+  uses?: unknown
   steps?: Array<{ uses?: unknown; run?: unknown; with?: Record<string, unknown> }>
 }
 
@@ -400,6 +402,16 @@ export interface UniquenessReport {
   violations: string[]
   /** `file` → the re-evaluation actions it triggers on, for sanity checks. */
   reevaluators: Map<string, string[]>
+  /** re-evaluating caller `file` → the carrier workflow files it calls. */
+  reevaluates: Map<string, string[]>
+}
+
+/** The local workflow file a calling job runs (`uses: ./.github/workflows/x.yml`),
+ *  or `null` for a steps job or a remote reusable workflow. */
+export function calledWorkflow(job: Job): string | null {
+  if (typeof job.uses !== 'string') return null
+  const m = /^\.\/\.github\/workflows\/([^/@]+\.ya?ml)$/.exec(job.uses.trim())
+  return m?.[1] ?? null
 }
 
 /**
@@ -417,10 +429,21 @@ export interface UniquenessReport {
  *     `cancel-in-progress` group) or replaces it while pending (any group) —
  *     #2616/#2797/#2811's `cancelled` `fleet/verify`, which admission then
  *     reported as `expected` forever.
- *  4. A workflow that re-evaluates heads has a job that re-runs the carrier
- *     in place (`actions: write`, `POST …/actions/runs/{id}/rerun`) — so the
- *     re-evaluation still reaches the required context, as #1124's scope
- *     grants need it to.
+ *  4. A re-evaluation of a carrier workflow has a job that re-runs the
+ *     carrier in place (`actions: write`, `POST …/actions/runs/{id}/rerun`) —
+ *     so the re-evaluation still reaches the required context, as #1124's
+ *     scope grants need it to — and the calling job grants that write.
+ *  5. (#2815) A workflow that carries a required context on a head event
+ *     triggers on NO `pull_request` action that leaves the head where it
+ *     is. Every run of a workflow is a check suite of that workflow, and
+ *     admission reads only the NEWEST suite per workflow on a head: a
+ *     re-evaluation run in the carrier's own workflow shadows the carrier —
+ *     even one carrying no required name at all, which `enqueuePullRequest`
+ *     then reports as `N of 5 required status checks are expected` while
+ *     every check reads green (measured on #2815's own heads). A
+ *     re-evaluation therefore runs in a workflow of its own that CALLS the
+ *     carrier workflow (`uses:`), whose check runs are named
+ *     `<caller job> / <job>` and whose suites are its own.
  */
 export function analyseCarrierUniqueness(
   workflows: readonly Workflow[],
@@ -429,6 +452,25 @@ export function analyseCarrierUniqueness(
   const parsed = workflows.map((w) => ({ file: w.file, doc: parseYaml(w.text) as Record<string, unknown> | null }))
   const violations: string[] = []
   const reevaluators = new Map<string, string[]>()
+  const reevaluates = new Map<string, string[]>()
+  const docOf = (file: string) => parsed.find((p) => p.file === file)?.doc ?? null
+
+  /** Every job a run of `file` instantiates, a called workflow's jobs
+   *  included under the name GitHub gives them: `<caller job> / <job>`. */
+  const expandedJobs = (file: string, doc: Record<string, unknown> | null, e: RunEvent) =>
+    Object.entries(jobsOf(doc)).flatMap(([key, job]) => {
+      const callerName = jobNameOn(file, key, job, e)
+      const called = calledWorkflow(job)
+      if (called === null) return [{ key, job, name: callerName, from: file }]
+      const calledDoc = docOf(called)
+      if (calledDoc === null) {
+        violations.push(`${file}#${key}: calls ${called}, which is not a workflow in this repository`)
+        return []
+      }
+      return Object.entries(jobsOf(calledDoc)).map(([k, j]) => ({
+        key: `${key}/${k}`, job: j, name: `${callerName} / ${jobNameOn(called, k, j, e)}`, from: called,
+      }))
+    })
 
   const carriersOn = (e: RunEvent) => parsed.flatMap(({ file, doc }) => {
     if (e.event === 'pull_request' ? triggerGap(doc?.on, { event: 'pull_request', action: e.action as 'opened' }) !== null
@@ -444,8 +486,7 @@ export function analyseCarrierUniqueness(
     if (actions.length === 0) continue
     reevaluators.set(file, actions)
     for (const action of actions) {
-      for (const [key, job] of Object.entries(jobsOf(doc))) {
-        const name = jobNameOn(file, key, job, { event: 'pull_request', action })
+      for (const { key, name } of expandedJobs(file, doc, { event: 'pull_request', action })) {
         if (!required.includes(name)) continue
         violations.push(
           `\`${name}\` on pull_request.${action}: ${file}#${key} carries the required name on an event that does not ` +
@@ -476,24 +517,66 @@ export function analyseCarrierUniqueness(
     }
   }
 
+  // 5. A carrier's workflow never re-evaluates (#2815) — and the callers
+  //    that do re-evaluate it, for rules 3 and 4.
+  const carrierFiles = new Set(headEvents.flatMap((e) => carriersOn(e).map((c) => c.file)))
+  for (const file of carrierFiles) {
+    const actions = reevaluators.get(file) ?? []
+    if (actions.length === 0) continue
+    const carried = [...new Set(headEvents.flatMap((e) => carriersOn(e).filter((c) => c.file === file).map((c) => `\`${c.name}\``)))]
+    violations.push(
+      `${file} carries ${carried.join(', ')} and also runs on pull_request.${actions.join('/')}, which does not move the head — ` +
+        'that run is a NEWER check suite of the same workflow on the same head, and admission reads only the newest suite ' +
+        'per workflow, so it shadows the carrier (#2815: `N of 5 required status checks are expected`, every check green). ' +
+        'Re-evaluate from a workflow of its own that calls this one (`uses:`).',
+    )
+  }
+  const callers = new Map<string, Array<{ file: string; key: string; job: Job; doc: Record<string, unknown> | null; actions: string[] }>>()
+  for (const { file, doc } of parsed) {
+    const actions = reevaluationActions(doc?.on)
+    if (actions.length === 0) continue
+    for (const [key, job] of Object.entries(jobsOf(doc))) {
+      const called = calledWorkflow(job)
+      if (called === null || !carrierFiles.has(called)) continue
+      callers.set(called, [...(callers.get(called) ?? []), { file, key, job, doc, actions }])
+      reevaluates.set(file, [...(reevaluates.get(file) ?? []), called])
+    }
+  }
+
   // 3. A carrier's concurrency group is its own.
   for (const action of HEAD_ACTIONS) {
     const carrierEvent: RunEvent = { event: 'pull_request', action, headSha: SAMPLE_HEAD, runId: 1 }
     for (const c of carriersOn(carrierEvent)) {
       const group = concurrencyGroupOn(c.file, c.doc, carrierEvent)
       if (group === null) continue
-      const mates: Array<{ label: string; e: RunEvent }> = [
-        ...reevaluationActions(c.doc?.on).map((a) => ({ label: `pull_request.${a} on the same head`, e: { event: 'pull_request', action: a, headSha: SAMPLE_HEAD, runId: 2 } })),
+      const mates: Array<{ label: string; e: RunEvent; groupOf: (e: RunEvent) => string | null }> = [
+        ...reevaluationActions(c.doc?.on).map((a) => ({
+          label: `pull_request.${a} on the same head`, e: { event: 'pull_request', action: a, headSha: SAMPLE_HEAD, runId: 2 },
+          groupOf: (e: RunEvent) => concurrencyGroupOn(c.file, c.doc, e),
+        })),
       ]
+      // A re-evaluation through a caller (rule 5) can meet the carrier in
+      // EITHER group: the called file's own (evaluated on the caller's event)
+      // or the caller's.
+      for (const caller of callers.get(c.file) ?? []) {
+        for (const a of caller.actions) {
+          const e: RunEvent = { event: 'pull_request', action: a, headSha: SAMPLE_HEAD, runId: 2 }
+          mates.push({ label: `${caller.file}'s pull_request.${a} on the same head`, e, groupOf: (x) => concurrencyGroupOn(c.file, c.doc, x) })
+          mates.push({ label: `${caller.file}'s pull_request.${a} on the same head`, e, groupOf: (x) => concurrencyGroupOn(caller.file, caller.doc, x) })
+        }
+      }
       // A workflow that re-runs its carrier later (rule 4) re-enters this
       // group with an OLD head after the PR moved on — so the group must not
       // be shared across heads either, or that re-run cancels or displaces
       // the current head's carrier.
-      if ((reevaluators.get(c.file) ?? []).length > 0) {
-        mates.push({ label: 'a carrier for another head of the same PR', e: { event: 'pull_request', action: 'synchronize', headSha: SAMPLE_OTHER_HEAD, runId: 3 } })
+      if ((reevaluators.get(c.file) ?? []).length > 0 || (callers.get(c.file) ?? []).length > 0) {
+        mates.push({
+          label: 'a carrier for another head of the same PR', e: { event: 'pull_request', action: 'synchronize', headSha: SAMPLE_OTHER_HEAD, runId: 3 },
+          groupOf: (e: RunEvent) => concurrencyGroupOn(c.file, c.doc, e),
+        })
       }
       for (const m of mates) {
-        if (concurrencyGroupOn(c.file, c.doc, m.e) === group) {
+        if (m.groupOf(m.e) === group) {
           violations.push(
             `\`${c.name}\` on pull_request.${action}: ${c.file}'s carrier shares concurrency group \`${group}\` with ` +
               `${m.label} — a group-mate cancels it or displaces it while pending, leaving a \`cancelled\` carrier (#2813)`,
@@ -504,22 +587,29 @@ export function analyseCarrierUniqueness(
   }
 
   // 4. Re-evaluation refreshes the carrier in place.
-  for (const { file, doc } of parsed) {
-    if ((reevaluators.get(file) ?? []).length === 0) continue
-    const carries = headEvents.some((e) => carriersOn(e).some((c) => c.file === file))
-    if (!carries) continue
-    const refresher = Object.entries(jobsOf(doc)).find(([, job]) => {
-      const perms = job.permissions as Record<string, unknown> | undefined
-      return perms?.actions === 'write' &&
-        (job.steps ?? []).some((s) => typeof s.run === 'string' && /actions\/runs\/[^\s"']*\/rerun/.test(s.run))
-    })
-    if (refresher === undefined) {
-      violations.push(
-        `${file}: re-evaluates heads on pull_request.${(reevaluators.get(file) ?? []).join('/')} but has no job that ` +
-          're-runs the head\'s carrier in place (actions: write + POST …/rerun) — the re-evaluation never reaches the required context',
-      )
+  const refresherIn = (doc: Record<string, unknown> | null) => Object.entries(jobsOf(doc)).find(([, job]) => {
+    const perms = job.permissions as Record<string, unknown> | undefined
+    return perms?.actions === 'write' &&
+      (job.steps ?? []).some((st) => typeof st.run === 'string' && /actions\/runs\/[^\s"']*\/rerun/.test(st.run))
+  })
+  for (const file of carrierFiles) {
+    for (const caller of callers.get(file) ?? []) {
+      const where = `${caller.file}#${caller.key}`
+      if (refresherIn(docOf(file)) === undefined) {
+        violations.push(
+          `${where}: re-evaluates ${file} on pull_request.${caller.actions.join('/')} but ${file} has no job that ` +
+            're-runs the head\'s carrier in place (actions: write + POST …/rerun) — the re-evaluation never reaches the required context',
+        )
+      }
+      const ceiling = caller.job.permissions as Record<string, unknown> | undefined
+      if (ceiling?.actions !== 'write') {
+        violations.push(
+          `${where}: calls ${file} without granting \`actions: write\` — a called workflow can only LOWER its caller's ` +
+            'token, so the carrier refresh is refused and the re-evaluation never reaches the required context',
+        )
+      }
     }
   }
 
-  return { violations, reevaluators }
+  return { violations, reevaluators, reevaluates }
 }

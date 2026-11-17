@@ -359,7 +359,7 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     expect(COMMANDS).toContain('review-gate')
   })
 
-  it('fleet-review.yml never triggers on a label, and only `synchronize` joins review_requested', () => {
+  it('fleet-review.yml never triggers on a label; its pull_request types are exactly the republish-only actions', () => {
     const on = (parseYaml(reviewYml) as { on: Record<string, unknown> }).on
     // What this rail is for: #1158 retired `labeled` as the trigger, and
     // `labeled` must never come back (see feedback: labels are nouns, not
@@ -377,7 +377,13 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     // #2806 added `opened` and `reopened`, republish-only on the same terms
     // (`REVIEW_REPUBLISH_ACTIONS`), so a PR no CODEOWNERS entry requests a
     // review on still gets a `fleet/review` check run.
-    expect(on['pull_request']).toEqual({ types: ['review_requested', 'opened', 'reopened', 'synchronize'] })
+    //
+    // #2815 moved `review_requested` out of this file's own types into
+    // fleet-review-re-evaluate.yml, which calls it: a run of THIS workflow on
+    // a review request was a newer suite that shadowed the head's carrier.
+    expect(on['pull_request']).toEqual({ types: ['opened', 'reopened', 'synchronize'] })
+    const caller = parseYaml(readFileSync(join(workflowDir, 'fleet-review-re-evaluate.yml'), 'utf8')) as { on: Record<string, unknown> }
+    expect(caller.on).toEqual({ pull_request: { types: ['review_requested'] } })
     for (const forbiddenType of ['labeled', 'unlabeled', 'edited', 'ready_for_review']) {
       expect((on['pull_request'] as { types: string[] }).types, forbiddenType).not.toContain(forbiddenType)
     }

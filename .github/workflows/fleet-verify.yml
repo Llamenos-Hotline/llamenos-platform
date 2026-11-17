@@ -65,10 +65,22 @@ on:
   # and it is precisely the trap `review_requested` avoids by needing no
   # filtering at all. Do not add a job-level `if:` here to filter events.
   #
-  # None of these four is in CodeQL's cache-write-event list above, so the
-  # isolation this whole file exists to provide is unaffected.
+  # #2815: `review_requested` reaches this file ONLY through `workflow_call`,
+  # from fleet-verify-re-evaluate.yml — never as a `pull_request` type here.
+  # GitHub's admission reads, per workflow, only the NEWEST check suite on a
+  # head; a `review_requested` run of this file was a newer suite than the
+  # head's `fleet/verify` carrier, held only `fleet/verify/re-evaluate`, and
+  # admission reported `fleet/verify` as `expected` with every check green
+  # (see fleet-review-re-evaluate.yml's header for the measurement). A
+  # called workflow's `github` context is the caller's, so every expression
+  # below still sees `pull_request` + `review_requested` on that arm.
+  #
+  # None of these is in CodeQL's cache-write-event list above (the caller is
+  # a `pull_request` workflow), so the isolation this whole file exists to
+  # provide is unaffected.
   pull_request:
-    types: [opened, synchronize, reopened, review_requested]
+    types: [opened, synchronize, reopened]
+  workflow_call:
   merge_group:
     types: [checks_requested]
 

@@ -377,6 +377,24 @@ on:
   # `rhonda-rodododo` where `llamenos-auto` cannot be asked). It fires on
   # both the first request and every re-request, which is the whole signal.
   #
+  # It reaches this file ONLY through `workflow_call`, from
+  # fleet-review-re-evaluate.yml — never as a `pull_request` type here
+  # (#2815). GitHub's admission reads, per WORKFLOW, only the NEWEST check
+  # suite on a head. A `review_requested` run of THIS file is a newer suite
+  # than the head's carrier, so admission read it instead of the carrier:
+  # named `fleet/review/re-evaluate`, it held no `fleet/review` at all and
+  # `enqueuePullRequest` refused `2 of 5 required status checks are
+  # expected` with every check green (measured on #2815's own heads: CLEAN
+  # before the review request, refused after it; re-running the carrier in
+  # place WITHOUT a review request stayed CLEAN). Named `fleet/review`, as
+  # before #2813, it was judged in place of the carrier the other way round
+  # (#2811). So this file's only `pull_request` runs are carriers — exactly
+  # one suite per head — and a re-evaluation runs in a workflow of its own,
+  # whose suites admission never confuses with this one.
+  # tests/orchestrator/required-context-creation.test.ts fails if a workflow
+  # carrying a required context triggers on any action that does not move
+  # the head.
+  #
   # `opened`/`reopened` (#2806) exist so the required context EXISTS on a
   # head nobody requested a review for. They are republish-only exactly like
   # `synchronize` (`REVIEW_REPUBLISH_ACTIONS`, ci.ts). Without them the first
@@ -402,7 +420,22 @@ on:
   # on every review request and the gate step decides; it must never become
   # a job-level `if:` (invariant 1).
   pull_request:
-    types: [review_requested, opened, reopened, synchronize]
+    types: [opened, reopened, synchronize]
+  # The re-evaluation arm (#2815, see above): fleet-review-re-evaluate.yml
+  # calls this file on `pull_request.review_requested`. The `github` context
+  # of a called workflow is the CALLER's, so every expression below still
+  # sees `event_name == 'pull_request'` and `action == 'review_requested'`
+  # and behaves exactly as it did when that action triggered this file
+  # directly; only the check suite it lands in moved. No inputs. The two
+  # secrets this file reads are declared and passed by name — never
+  # `secrets: inherit` — and optional, exactly as on the other arms: an unset
+  # one interpolates as "" and is detected, loudly, where it is used.
+  workflow_call:
+    secrets:
+      FLEET_REVIEW_API_KEY:
+        required: false
+      FLEET_REVIEW_COMMENT_TOKEN:
+        required: false
   # The ESCAPE HATCH — and a real one, which is the whole of #1471. It runs
   # the full review set, reaches `run-engine` like any review request, and
   # can return FAIL. It is write-access-gated (a `workflow_dispatch` cannot
@@ -531,15 +564,18 @@ jobs:
     # `workflow_dispatch`, whose suite is not PR-associated, #1471).
     #
     # A `review_requested` run lands on a head that ALREADY has that carrier.
-    # Before #2813 it published a second `fleet/review` there, and GitHub's
-    # admission judged whichever carrier it pleased: on #2811 the head held
-    # the opened-run's `NO-VERDICT:unreviewed` refusal (09:42) and the review
-    # request's real PASS (09:45), and `enqueuePullRequest` refused on the
-    # refusal — the PR read green and was unmergeable. So a re-evaluation is
-    # named `fleet/review/re-evaluate`, does the review it was asked for, and
-    # then `fleet-review/refresh-carrier` RE-RUNS the head's one carrier in
-    # place. A re-run is the same check suite, so the carrier is updated, not
-    # duplicated; and since every carrier event is republish-only
+    # Before #2813 it published a second `fleet/review` there, and admission
+    # — which reads only the NEWEST check suite of this workflow on a head
+    # (#2815) — judged whichever suite was created last: on #2811 that was
+    # the opened-run's `NO-VERDICT:unreviewed` refusal (run created 09:42:10,
+    # one second after the CODEOWNERS request's run that went on to PASS),
+    # and `enqueuePullRequest` refused on it — green and unmergeable. So a
+    # re-evaluation runs in fleet-review-re-evaluate.yml (calling this file;
+    # see `on:`), named `fleet/review/re-evaluate`, does the review it was
+    # asked for, and then `fleet-review/refresh-carrier` RE-RUNS the head's
+    # one carrier in place. A re-run is the same check suite, so the carrier
+    # is updated, not duplicated, and this workflow's newest suite on the
+    # head is still the carrier's; and since every carrier event is republish-only
     # (`REVIEW_REPUBLISH_ACTIONS`, ci.ts — a rail pins that the two lists are
     # the same), the re-run can never call the model: it republishes the
     # verdict the re-evaluation just cached for this tree (`cache-hit`), or

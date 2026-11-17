@@ -134,11 +134,16 @@ describe('rail: fleet/review reports on the merge queue (#1187)', () => {
   // tests/orchestrator/guards.test.ts, so loosening it here does not loosen
   // it anywhere — what this rail is about is that `review_requested`, the
   // one action that STARTS a review, is still present at all.
-  it('still triggers on pull_request review_requested as well — the queue arm is an addition, not a replacement', () => {
+  it('a review request still reaches fleet-review.yml — the queue arm is an addition, not a replacement', () => {
     const on = doc(FLEET_REVIEW_YML).on ?? {}
     const types = (on['pull_request'] as { types?: string[] } | undefined)?.types
     expect(types, 'fleet-review.yml lost its pull_request trigger entirely').toBeDefined()
-    expect(types).toContain('review_requested')
+    // #2815: through its own caller workflow, never as a type of this file's
+    // (see required-context-creation.test.ts for why).
+    expect(on['workflow_call'], 'fleet-review.yml is no longer callable, so no review request can reach it').toBeDefined()
+    const caller = doc(join(WORKFLOW_DIR, 'fleet-review-re-evaluate.yml')) as WorkflowDoc & { jobs?: Record<string, { uses?: string }> }
+    expect((caller.on?.['pull_request'] as { types?: string[] } | undefined)?.types).toEqual(['review_requested'])
+    expect(Object.values(caller.jobs ?? {}).map((j) => j.uses)).toEqual(['./.github/workflows/fleet-review.yml'])
   })
 
   it('every workflow producing a ruleset-required context declares merge_group — fleet-review.yml was the last one that did not', () => {
