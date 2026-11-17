@@ -263,12 +263,12 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `ring_groups[].encryptedName` | **E2EE** | Indefinite | Hub-key encrypted (label: `LABEL_RING_GROUP_NAME`) |
 | `ring_group_members[].userPubkey` | Plaintext | Indefinite | Member pubkey |
 | `ring_group_members[].addedBy` | Plaintext | Indefinite | Admin pubkey who added |
-| `shift_overrides[].encryptedNote` | **E2EE** | Indefinite | Hub-key encrypted admin note (label: `LABEL_SHIFT_OVERRIDE_NOTE`) |
+| `shift_overrides[].encryptedNote` | **E2EE** | Indefinite | Admin note, HPKE-sealed per reader (`admin` + `shift-overrides` reader sets) under `LABEL_SHIFT_OVERRIDE_NOTE` by `shift_record.rs`; stored as `encrypted_note` + `note_envelopes` (PROTOCOL §2.19). Plaintext until #2778 |
 | `shift_overrides[].type` | Plaintext | Indefinite | `cancel` or `substitute` |
 | `shift_overrides[].date` | Plaintext | Indefinite | YYYY-MM-DD |
 | `active_shifts[].pubkey` | Plaintext | Session | Clocked-in user pubkey |
 | `active_shifts[].lastHeartbeat` | Plaintext | Session | Liveness timestamp (30s interval) |
-| `availability_blocks[].encryptedReason` | **E2EE** | Indefinite | Hub-key encrypted (label: `LABEL_AVAILABILITY_REASON`) |
+| `availability_blocks[].encryptedReason` | **E2EE** | Indefinite | Volunteer's reason, HPKE-sealed to the author and the hub's `admin` reader set under `LABEL_AVAILABILITY_REASON` by `shift_record.rs`; stored as `encrypted_reason` + `reason_envelopes` (PROTOCOL §2.19). Plaintext until #2777 |
 | `availability_blocks[].startDate` | Plaintext | Indefinite | Date range start |
 | `availability_blocks[].endDate` | Plaintext | Indefinite | Date range end |
 | `shift_requests[].type` | Plaintext | Indefinite | `join` or `leave` |

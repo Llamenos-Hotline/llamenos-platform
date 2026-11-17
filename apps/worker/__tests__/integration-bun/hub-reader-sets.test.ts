@@ -35,7 +35,7 @@ import { assertMayManageHubEscrow, HUB_ESCROW_MANAGE_PERMISSIONS } from '../../l
 import hubsRoutes from '../../routes/hubs'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, READER_PURPOSE_PERMISSIONS, resolvePermissions, type Role } from '@shared/permissions'
-import { hubReadersResponseSchema } from '@protocol/schemas/hubs'
+import { hubReadersResponseSchema, type ReaderPurpose } from '@protocol/schemas/hubs'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -104,7 +104,7 @@ async function refusal(fn: () => Promise<unknown> | unknown): Promise<ServiceErr
 }
 
 /** The reader set as plain strings, so fixtures' unbranded keys compare against it. */
-const readersOf = async (hubId: string, purpose: 'admin' | 'call-history'): Promise<string[]> => identity.readersFor(hubId, purpose)
+const readersOf = async (hubId: string, purpose: ReaderPurpose): Promise<string[]> => identity.readersFor(hubId, purpose)
 
 const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
 
@@ -159,6 +159,22 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     const admins = await readersOf(hubId, 'admin')
     expect(admins).toContain(customAdmin.deviceKey)
     expect(admins).not.toContain(analyst.deviceKey)
+  })
+
+  it('shift-overrides = holders of shifts:manage-overrides, who need not be admins (#2778)', async () => {
+    const founder = await makePerson('rs-so-founder')
+    const hubId = await makeHub('rs-so', founder)
+    const coordinatorRole = await makeRole([...READER_PURPOSE_PERMISSIONS['shift-overrides']])
+    const coordinator = await makePerson('rs-so-coord', { hubRoles: [{ hubId, roleIds: [coordinatorRole] }] })
+    const volunteer = await makePerson('rs-so-vol', { hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
+
+    const overrides = await readersOf(hubId, 'shift-overrides')
+    expect(overrides).toContain(coordinator.deviceKey)
+    expect(overrides).toContain(founder.deviceKey) // role-hub-admin grants shifts:*
+    expect(overrides).not.toContain(volunteer.deviceKey)
+    // A coordinator is not an admin: a note sealed only to this set could miss
+    // every admin, so clients seal to `admin` as well and the write guard checks it.
+    expect(await readersOf(hubId, 'admin')).not.toContain(coordinator.deviceKey)
   })
 
   it('holds a role only for the hub it is held in', async () => {
