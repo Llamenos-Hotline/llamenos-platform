@@ -625,6 +625,10 @@ describe('Bans Routes — response conformance', () => {
     ]
     const mockRecords = {
       listBans: vi.fn().mockResolvedValue({ bans: mockBans }),
+      // The service returns Dates; the wire shape is what the schema checks (#2829).
+      listBanReentries: vi.fn().mockResolvedValue([
+        { id: 'r1', reason: 'Threats', bannedBy: MOCK_PUBKEY, bannedAt: new Date(), cause: 'digest-scheme', retiredAt: new Date() },
+      ]),
     }
 
     const { app, env } = buildApp('/bans', bansRoutes, {
@@ -635,6 +639,7 @@ describe('Bans Routes — response conformance', () => {
     const result = await assertConformsToSchema(app, 'GET', '/bans', banListResponseSchema, { env })
     expect(Array.isArray(result.parsed.bans)).toBe(true)
     expect(result.parsed.bans[0]).not.toHaveProperty('phone')
+    expect(result.parsed.reentries).toHaveLength(1)
   })
 })
 

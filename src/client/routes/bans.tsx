@@ -2,7 +2,9 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
 import { useEffect, useState } from 'react'
-import { listBans, addBan, removeBan, bulkAddBans, type BanEntry } from '@/lib/api'
+import { listBans, addBan, removeBan, bulkAddBans, dismissBanReentry, type BanEntry } from '@/lib/api'
+import type { BanReentry } from '@protocol/schemas'
+import { BanReentryList } from '@/components/ban-reentry-list'
 import { useToast } from '@/lib/toast'
 import { ShieldBan, Plus, Upload, Trash2 } from 'lucide-react'
 import { DeletionConfirmed } from '@/lib/admin-deletion'
@@ -21,13 +23,14 @@ export function BansPage() {
   const { isAdmin } = useAuth()
   const { toast } = useToast()
   const [bans, setBans] = useState<BanEntry[]>([])
+  const [reentries, setReentries] = useState<BanReentry[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
 
   useEffect(() => {
     listBans()
-      .then(r => setBans(r.bans))
+      .then(r => { setBans(r.bans); setReentries(r.reentries) })
       .catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
   }, [])
@@ -68,12 +71,18 @@ export function BansPage() {
       {showBulk && (
         <BulkImportForm
           onImported={() => {
-            listBans().then(r => setBans(r.bans))
+            listBans().then(r => { setBans(r.bans); setReentries(r.reentries) })
             setShowBulk(false)
           }}
           onCancel={() => setShowBulk(false)}
         />
       )}
+
+      <BanReentryList
+        reentries={reentries}
+        onDismiss={dismissBanReentry}
+        onDismissed={(id) => setReentries(prev => prev.filter(r => r.id !== id))}
+      />
 
       <Card>
         <CardContent className="p-0">

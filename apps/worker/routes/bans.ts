@@ -146,10 +146,13 @@ bans.delete('/reentries/:id',
   requirePermission('bans:delete'),
   async (c) => {
     const services = c.get('services')
-    const dismissed = await services.records.dismissBanReentry(hubScope(pathHubId(c)), c.req.param('id'))
+    const hubId = pathHubId(c)
+    const id = c.req.param('id')
+    const dismissed = await services.records.dismissBanReentry(hubScope(hubId), id)
     if (!dismissed) {
       return c.json({ error: 'Re-entry not found' }, 404)
     }
+    await audit(services.audit, 'banReentryDismissed', c.get('pubkey'), { reentryId: id }, undefined, hubId)
     return c.json({ ok: true })
   },
 )

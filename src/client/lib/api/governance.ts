@@ -18,6 +18,7 @@ import type {
   RetentionSetting,
   RetentionPlatformFloor,
   PlatformBan,
+  PlatformBanListResponse,
   PlatformSettings,
 } from '@protocol/schemas'
 
@@ -106,7 +107,7 @@ export async function listPlatformBans(params?: { page?: number; limit?: number 
   if (params?.page) qs.set('page', String(params.page))
   if (params?.limit) qs.set('limit', String(params.limit))
   const query = qs.toString()
-  return request<{ bans: PlatformBan[]; total: number }>(`/admin/bans${query ? `?${query}` : ''}`)
+  return request<PlatformBanListResponse>(`/admin/bans${query ? `?${query}` : ''}`)
 }
 
 // A platform ban never carries the number (#2759). The number is blinded in Rust, the server
@@ -175,6 +176,11 @@ export async function createPlatformBan(data: PlatformBanEntry) {
 export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed) {
   DeletionConfirmed.require(confirmed, 'platformBan', id)
   return request<{ ok: true }>(`/admin/bans/${id}`, { method: 'DELETE' })
+}
+
+/** Dismiss a platform ban that had to be re-entered, once its number is banned again (#2829). */
+export async function dismissPlatformBanReentry(id: string) {
+  return request<{ ok: true }>(`/admin/bans/reentries/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export async function bulkImportPlatformBans(data: PlatformBanBulkEntry) {

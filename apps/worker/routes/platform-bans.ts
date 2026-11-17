@@ -230,10 +230,13 @@ platformBans.delete(
   }),
   requirePermission('bans:delete-platform'),
   async (c) => {
-    const dismissed = await c.get('services').records.dismissBanReentry(PLATFORM_SCOPE, c.req.param('id'))
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const dismissed = await services.records.dismissBanReentry(PLATFORM_SCOPE, id)
     if (!dismissed) {
       return c.json({ error: 'Re-entry not found' }, 404)
     }
+    await audit(services.audit, 'banReentryDismissed', c.get('pubkey'), { reentryId: id }, undefined, null)
     return c.json({ ok: true })
   },
 )

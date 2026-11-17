@@ -39,6 +39,8 @@ export const banListResponseSchema = z.object({
   reentries: z.array(banReentryResponseSchema).optional().default([]),
 })
 
+export type BanListResponse = z.infer<typeof banListResponseSchema>
+
 /** `POST /bans` answers with the ban it created — the desktop reads it back from `ban`. */
 export const createBanResponseSchema = z.object({
   ban: banResponseSchema,
@@ -76,6 +78,8 @@ export const platformBanListResponseSchema = z.object({
   /** Platform bans that no longer enforce and must be re-entered (see `banReentryResponseSchema`). */
   reentries: z.array(banReentryResponseSchema).optional().default([]),
 })
+
+export type PlatformBanListResponse = z.infer<typeof platformBanListResponseSchema>
 
 // --- Ban digests (#2759) ---
 //

@@ -1,6 +1,6 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath, hubPath } from './client'
-import type { BanEntry } from '@protocol/schemas'
+import type { BanEntry, BanListResponse } from '@protocol/schemas'
 
 export type { BanEntry }
 
@@ -11,7 +11,7 @@ export type { BanEntry }
 // a different resource, `/admin/bans` (lib/api/governance.ts).
 
 export async function listBans() {
-  return request<{ bans: BanEntry[] }>(activeHubPath('/bans'))
+  return request<BanListResponse>(activeHubPath('/bans'))
 }
 
 export async function addBan(data: { phone: string; reason: string }) {
@@ -39,4 +39,9 @@ export async function bulkAddBans(data: { phones: string[]; reason: string }) {
     method: 'POST',
     body: JSON.stringify(data),
   })
+}
+
+/** Dismiss a ban that had to be re-entered, once its number is banned again (#2829). */
+export async function dismissBanReentry(id: string) {
+  return request<{ ok: true }>(activeHubPath(`/bans/reentries/${encodeURIComponent(id)}`), { method: 'DELETE' })
 }

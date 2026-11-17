@@ -14,12 +14,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Loader2, Shield, Search, Upload, Trash2 } from 'lucide-react'
 import {
   createPlatformBan,
+  dismissPlatformBanReentry,
   deletePlatformBan,
   bulkImportPlatformBans,
   searchPlatformBans,
   type BanSearchResult,
 } from '@/lib/api'
-import type { PlatformBan } from '@protocol/schemas/bans'
+import type { BanReentry, PlatformBan } from '@protocol/schemas/bans'
+import { BanReentryList } from '@/components/ban-reentry-list'
 import { DeletionConfirmed } from '@/lib/admin-deletion'
 
 /** E.164, as the crate requires: a number typed any other way digests to something no call matches. */
@@ -28,13 +30,15 @@ const E164 = /^\+\d{7,15}$/
 interface Props {
   bans: PlatformBan[]
   total: number
+  /** Platform bans that no longer enforce and must be entered again (#2829). */
+  reentries: readonly BanReentry[]
   onRefresh: () => void
   expanded: boolean
   onToggle: (open: boolean) => void
   statusSummary?: string
 }
 
-export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle, statusSummary }: Props) {
+export function PlatformBansSection({ bans, total, reentries, onRefresh, expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
 
@@ -141,6 +145,8 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
       statusSummary={statusSummary}
     >
       <SectionDescription>{t('platformBans.description')}</SectionDescription>
+
+      <BanReentryList reentries={reentries} onDismiss={dismissPlatformBanReentry} onDismissed={onRefresh} />
 
       {/* Search bar */}
       <div className="flex items-center gap-2 mb-4">

@@ -1262,6 +1262,15 @@ client, for a typed number (refused unless E.164 `^\+\d{7,15}$`; never normalise
 
 `phoneHash` is the one name of this value on every platform and in every body and response. A hub's digest cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again, digested under both scopes (§4.47). Neither the ban store nor any ban request or response carries digits of the number.
 
+**Key continuity and re-entry (#2829).** A stored digest is valid only under the `BAN_HASH_KEY` it was made with, and it can never be recomputed: the server did not keep the number, and that is the point of the OPRF. Two things therefore end a ban's enforcement, and neither may happen silently:
+
+- the digest scheme changed (the HMAC → OPRF switch), or
+- `BAN_HASH_KEY` is not the key the stored digests were made under (a key file lost and regenerated, or restored wrongly).
+
+The server records `banKeyFingerprint(key) = hex(OPRF.Evaluate(DeriveKeyPair(seed, "LABEL_BAN_KEY_DERIVE:ban-key-fingerprint"), "llamenos:ban-key-fingerprint:v1"))` in `ban_key_check` and compares it at every boot (`RecordsService.reconcileBanKey`). A different key makes the server **refuse to boot**, naming the operator's way out: restore the original key, or — when the replacement is deliberate — boot once with `BAN_KEY_REPLACED_ACK=<the new key's fingerprint>`. A first boot with no recorded fingerprint and bans already stored is the scheme change. In both acknowledged cases every ban is **moved** from `bans` to `ban_reentries` in one transaction: its digest is dropped, and only the non-identifying context (when, by whom, the admin's note, the cause) is kept. No migration re-digests a ban and no row is left in `bans` that reads as enforced and matches nothing; keeping the old HMAC column to match on either is not an option, as it is the enumerable value the OPRF replaces.
+
+The retired bans reach the admin through the list they already read: `GET /hubs/:hubId/bans` and `GET /admin/bans` carry `reentries[]` (`banReentryResponseSchema`: `id`, `reason`, `bannedBy`, `bannedAt`, `cause` = `digest-scheme` | `key-replaced`, `retiredAt`), and `DELETE …/bans/reentries/:id` (`bans:delete` / `bans:delete-platform`, audited `banReentryDismissed`) removes one once its number is banned again.
+
 #### Messaging Thread Hashing
 
 A messaging conversation is identified by a per-hub keyed hash of the sender's identifier (`conversations.contact_identifier_hash`). `MESSAGING_HASH_KEY` is a file-only secret (`/run/secrets/messaging-hash-key`; never in the database, `.env` or a config backup) and is a key of its own: the only other value hashed under it is the blast subscriber's `identifier_hash` (below), which is the same hash by design. No ban or audit hash of the same number can be compared with a thread hash.
