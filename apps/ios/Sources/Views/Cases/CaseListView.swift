@@ -202,6 +202,7 @@ struct CaseListView: View {
                             record: record,
                             entityType: vm.entityType(for: record.entityTypeID),
                             statusDef: vm.statusDef(for: record),
+                            severityDef: vm.severityDef(for: record),
                             decryptedTitle: vm.decryptedTitle(for: record.id)
                         )
                         .accessibilityIdentifier("case-list-row-\(record.id)")
@@ -392,6 +393,8 @@ private struct CaseCardRow: View {
     let record: SharedRecordListResponseRecord
     let entityType: EntityType?
     let statusDef: SharedStatus?
+    /// Resolved from the record's severity blind index (#2779).
+    let severityDef: SharedStatus?
     let decryptedTitle: String?
 
     var body: some View {
@@ -444,8 +447,7 @@ private struct CaseCardRow: View {
                 }
 
                 // Severity badge
-                if let sevHash = record.severityHash,
-                   let sev = entityType?.severities?.first(where: { $0.value == sevHash }) {
+                if let sev = severityDef {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 8))
@@ -716,10 +718,14 @@ private struct CreateCaseSheet: View {
                 ["pubkey": env.pubkey, "enc": env.enc, "ct": env.ct]
             }
 
+            // The status goes on the wire as its hub-keyed blind index (#2779).
+            guard let hubId = appState.apiService.activeHubId else { throw APIError.noActiveHub }
+            let statusHash = try TriageTokens.statusToken(cryptoService, hubId: hubId, value: entityType.defaultStatus)
+
             // Build the request body
             let body: [String: Any] = [
                 "entityTypeId": entityType.id,
-                "statusHash": entityType.defaultStatus,
+                "statusHash": statusHash,
                 "encryptedSummary": encrypted.encryptedContent,
                 "summaryEnvelopes": summaryEnvelopes,
                 "assignedTo": [encPubkey],

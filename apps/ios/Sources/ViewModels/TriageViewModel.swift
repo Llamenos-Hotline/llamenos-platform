@@ -140,10 +140,21 @@ final class TriageViewModel {
         errorMessage = nil
 
         do {
+            // The new case's status is the type's default, written as its
+            // hub-keyed blind index — the server cannot compute it (#2779).
+            guard let hubId = apiService.activeHubId else { throw APIError.noActiveHub }
+            let types: EntityTypeListResponse = try await apiService.request(
+                method: "GET", path: apiService.hp("/api/settings/cms/entity-types")
+            )
+            guard let entityType = types.entityTypes.first(where: { $0.id == entityTypeId }),
+                  !entityType.defaultStatus.isEmpty else {
+                throw TriageConvertError.unknownEntityType(entityTypeId)
+            }
             let body = ConvertFromReportBody(
                 additionalFields: [:],
                 entityTypeID: entityTypeId,
-                reportID: report.id
+                reportID: report.id,
+                statusHash: try TriageTokens.statusToken(cryptoService, hubId: hubId, value: entityType.defaultStatus)
             )
             let _: ConvertFromReportResponse = try await apiService.request(
                 method: "POST",
@@ -171,3 +182,15 @@ final class TriageViewModel {
 // MARK: - Request/Response Types
 // Convert-from-report uses the generated `ConvertFromReportBody` /
 // `ConvertFromReportResponse` (packages/protocol/schemas/records.ts).
+
+/// Why a report could not be converted before any request was made.
+enum TriageConvertError: LocalizedError {
+    /// The chosen entity type is not one of the hub's, or has no default status.
+    case unknownEntityType(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unknownEntityType: return NSLocalizedString("common_error", comment: "")
+        }
+    }
+}

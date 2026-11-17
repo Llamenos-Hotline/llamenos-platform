@@ -32,6 +32,8 @@ final class CaseManagementViewModel {
 
     /// Entity type definitions from the template.
     var entityTypes: [EntityType] = []
+    /// Token → value lookups for `entityTypes` under the active hub's key (#2779).
+    var triage: TriageTokens = .empty
 
     /// Why the last records fetch failed, while there are no records to show instead.
     /// Cleared by the next successful fetch.
@@ -189,7 +191,14 @@ final class CaseManagementViewModel {
 
     /// Status definition for a record.
     func statusDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
-        entityType(for: record.entityTypeID)?.statuses.first { $0.value == record.statusHash }
+        let value = triage.statusValue(entityTypeId: record.entityTypeID, token: record.statusHash)
+        return entityType(for: record.entityTypeID)?.statuses.first { $0.value == value }
+    }
+
+    /// Severity definition for a record, resolved from its blind index (#2779).
+    func severityDef(for record: SharedRecordListResponseRecord) -> SharedStatus? {
+        guard let value = triage.severityValue(entityTypeId: record.entityTypeID, token: record.severityHash) else { return nil }
+        return entityType(for: record.entityTypeID)?.severities?.first { $0.value == value }
     }
 
     /// Decrypted title for a record, if available.
@@ -261,6 +270,13 @@ final class CaseManagementViewModel {
             let response = try await typesRequest
             guard isCurrentInitialLoad(epoch) else { return }
             entityTypes = response.entityTypes.filter { !$0.isArchived }
+            // Without the hub key there is nothing to map a token to, so views
+            // show no status — never the token, never a plaintext fallback.
+            if let hubId = apiService.activeHubId {
+                triage = (try? TriageTokens.compute(cryptoService, hubId: hubId, types: entityTypes)) ?? .empty
+            } else {
+                triage = .empty
+            }
         } catch {
             guard isCurrentInitialLoad(epoch) else { return }
             loadState = .failed(error.localizedDescription)
@@ -296,8 +312,10 @@ final class CaseManagementViewModel {
         if let etFilter = entityTypeFilter {
             path += "&entityTypeId=\(etFilter)"
         }
-        if let sFilter = statusFilter {
-            path += "&statusHash=\(sFilter)"
+        // The filter is a status value; the server only ever sees its blind index (#2779).
+        if let sFilter = statusFilter, let hubId = apiService.activeHubId,
+           let token = try? TriageTokens.statusToken(cryptoService, hubId: hubId, value: sFilter) {
+            path += "&statusHash=\(token)"
         }
         if crossHubEnabled {
             path += "&crossHub=true"
@@ -485,9 +503,11 @@ final class CaseManagementViewModel {
         defer { isActionInProgress = false }
 
         do {
+            guard let hubId = apiService.activeHubId else { throw APIError.noActiveHub }
+            let statusHash = try TriageTokens.statusToken(cryptoService, hubId: hubId, value: newStatus)
             let _: SharedRecordListResponseRecord = try await apiService.request(
                 method: "PATCH", path: try apiService.activeHubPath("/api/records/\(recordId)"),
-                body: UpdateRecordRequest(statusHash: newStatus, severityHash: nil)
+                body: UpdateRecordRequest(statusHash: statusHash, severityHash: nil)
             )
             await loadRecords()
             if selectedRecord?.id == recordId {
