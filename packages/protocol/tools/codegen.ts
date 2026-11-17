@@ -213,6 +213,11 @@ const REFERENCED_BY_NAME = new Set([
   'HubResealedRole',
   'HubResealedValues',
   'HubKeyRotationStatement',
+  // #2777 / #2778 — the sealed availability reason and override note are one shape.
+  // Deduplicated, it was named after whichever property sorted first
+  // (`SharedEncryptedReason`, even on the override's `encryptedNote`). It is
+  // `SealedShiftField` — its own schema's name — wherever it appears.
+  'SealedShiftField',
 ])
 
 /**

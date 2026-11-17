@@ -524,6 +524,7 @@ export function rolesGrantAll(roleIds: readonly string[], required: readonly str
 export const READER_PURPOSE_PERMISSIONS = {
   admin: HUB_ADMIN_PERMISSIONS,
   'call-history': ['calls:read-history'],
+  'shift-overrides': ['shifts:manage-overrides'],
 } as const satisfies Record<ReaderPurpose, readonly Permission[]>
 
 /**

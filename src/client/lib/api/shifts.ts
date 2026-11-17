@@ -2,6 +2,8 @@ import { DeletionConfirmed } from '@/lib/admin-deletion'
 import { request, activeHubPath } from './client'
 import type { CreateShiftBody, FallbackGroup } from '@protocol/schemas/shifts'
 import type { Shift, ShiftStatus } from '@protocol/schemas'
+import type { CreateShiftOverrideBody, ShiftOverride, ShiftOverrideListResponse } from '@protocol/schemas/shift-override'
+import type { AvailabilityBlock, AvailabilityBlockListResponse, CreateAvailabilityBlockBody } from '@protocol/schemas/shift-availability'
 
 export type { Shift, ShiftStatus }
 
@@ -69,13 +71,13 @@ export async function listActiveShifts() {
 // --- Shift Overrides ---
 
 export async function listShiftOverrides(from: string, to: string) {
-  return request<{ overrides: Array<{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }> }>(
+  return request<ShiftOverrideListResponse>(
     activeHubPath(`/shifts/overrides?from=${from}&to=${to}`)
   )
 }
 
-export async function createShiftOverride(data: { id: string; shiftId?: string | null; date: string; type: 'cancel' | 'substitute'; userPubkeys?: string[] | null; encryptedNote?: string | null }) {
-  return request<{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }>(activeHubPath('/shifts/overrides'), {
+export async function createShiftOverride(data: CreateShiftOverrideBody) {
+  return request<ShiftOverride>(activeHubPath('/shifts/overrides'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -90,17 +92,17 @@ export async function deleteShiftOverride(id: string, confirmed: DeletionConfirm
 // --- Availability Blocks ---
 
 export async function listAvailabilityBlocks(from: string, to: string) {
-  return request<{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }>(
+  return request<AvailabilityBlockListResponse>(
     activeHubPath(`/shifts/availability?from=${from}&to=${to}`)
   )
 }
 
 export async function listMyAvailabilityBlocks() {
-  return request<{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }>(activeHubPath('/shifts/availability/my'))
+  return request<AvailabilityBlockListResponse>(activeHubPath('/shifts/availability/my'))
 }
 
-export async function createAvailabilityBlock(data: { id: string; startDate: string; endDate: string; encryptedReason?: string | null }) {
-  return request<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }>(activeHubPath('/shifts/availability'), {
+export async function createAvailabilityBlock(data: CreateAvailabilityBlockBody) {
+  return request<AvailabilityBlock>(activeHubPath('/shifts/availability'), {
     method: 'POST',
     body: JSON.stringify(data),
   })

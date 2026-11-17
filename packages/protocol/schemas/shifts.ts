@@ -1,5 +1,29 @@
 import { z } from 'zod'
-import { pubkeySchema } from './common'
+import { pubkeySchema, recipientEnvelopeSchema } from './common'
+
+// --- Sealed free-text shift fields (#2777, #2778) ---
+
+/**
+ * A free-text shift field sealed on the client: an availability block's
+ * reason, or a shift override's note. The server never sees the text.
+ *
+ * `encryptedContent` is `hex(iv(12) || AES-256-GCM(content key) || tag(16))`
+ * and `envelopes` wrap the content key for each reader, exactly as
+ * `packages/crypto/src/shift_record.rs` produces them (PROTOCOL §2.19): the
+ * label (`LABEL_AVAILABILITY_REASON` / `LABEL_SHIFT_OVERRIDE_NOTE`) and the AAD
+ * are fixed by the purpose, never by a client. A bare string is refused — that
+ * is how both columns came to hold the typed text.
+ *
+ * At least one envelope must be addressed to an admin of the hub; the server
+ * refuses the write otherwise (`assertAdminCanRead`).
+ */
+export const sealedShiftFieldSchema = z.object({
+  // 56 hex = iv + tag over an empty plaintext; 8192 hex ≈ 4 KB of text.
+  encryptedContent: z.string().regex(/^[0-9a-f]+$/, 'Must be lowercase hex').min(56).max(8192),
+  envelopes: z.array(recipientEnvelopeSchema).min(1),
+})
+
+export type SealedShiftField = z.infer<typeof sealedShiftFieldSchema>
 
 // --- Response schemas ---
 
