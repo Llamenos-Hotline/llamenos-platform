@@ -1,25 +1,53 @@
 # CODEOWNERS
-# Each line is a file pattern followed by one or more owners.
+# Each line is a file pattern followed by one or more owners. GitHub resolves
+# a path by the LAST matching line, so the catch-all comes first and every
+# named entry below it still decides the paths it names.
 #
-# Policy (from PR #615, which this file is based on and supersedes): routine
-# PRs — dependency bumps, i18n, docs, app-code features — merge unattended
-# once required status checks are green. Only the paths listed below require
-# human code-owner review before merge; everything else is intentionally left
-# uncovered so it keeps auto-merging. There is deliberately NO catch-all `*`
-# rule: adding one would gate every PR again and defeat the fleet entirely.
+# Policy (#2825, superseding #615's "only these paths need review"): EVERY
+# path has an owner. A path no rule matches gets no auto-requested reviewer,
+# and on a PR `llamenos-auto` authors — the intended model, with
+# `rhonda-rodododo` reviewing as code owner — that auto-request is the ONLY
+# thing that starts `fleet/review` (`reviewTriggerLogins`,
+# orchestrator/src/ci.ts: GitHub refuses to request a PR's own author). The
+# context was still created on such a PR (#2806) and could then never go
+# green: #2805 (`deploy/docker/`) and #2824 (root `CLAUDE.md`, zero pending
+# reviewers) sat BLOCKED that way. #615's opposite rule — "no catch-all, or
+# every PR is gated again" — dates from when PRs merged on green checks alone;
+# under the code-owner model every PR is reviewed anyway, and an unowned path
+# was simply one that could not be.
 #
-# This file is now LOAD-BEARING, not advisory. It is the whole of the fleet's
+# What the catch-all does NOT do: make anything optional. `fleet/review`
+# still judges every PR (a Tier 0/1 diff still concludes `low-tier` on its
+# own terms), and a code-owner approval is now required for every path, not
+# only the named ones. The consequence is for PRs `rhonda-rodododo` authors
+# herself: GitHub forbids self-approval and she is the only owner, so such a
+# PR is mergeable only through her ruleset bypass. That was already true of
+# any of her PRs touching a named path below, which is nearly all of them.
+#
+# The named entries are NOT redundant with the catch-all, even with one owner
+# today. Each states why its path needs a human, and each survives the
+# catch-all ever being narrowed or handed to someone else.
+# tests/orchestrator/guards.test.ts asserts them with the catch-all REMOVED
+# (`namedCodeownersMatcher`), so deleting a named entry still fails the suite.
+#
+# This file is LOAD-BEARING, not advisory. It is the whole of the fleet's
 # "this needs a human" gate. The orchestrator used to make that call itself
 # (`classifyImpact` + `mayAutoMerge`), on the operator's laptop, before the PR
 # existed — so GitHub never knew, and anyone could merge past it. Every path
-# in `HIGH_IMPACT_PATHS` (orchestrator/src/impact.ts) is therefore owned here,
-# and tests/orchestrator/guards.test.ts fails if one of them ever stops being
-# covered. Requires the ruleset's `required_code_owner_review` to be on; until
-# that is enabled these lines request review but do not block.
+# in `HIGH_IMPACT_PATHS` (orchestrator/src/impact.ts) is therefore owned here
+# by name, and tests/orchestrator/guards.test.ts fails if one of them ever
+# stops being covered. The ruleset's `require_code_owner_review` is on.
 #
 # Consequence worth calling out, inherited from #615: GitHub Actions
 # dependency bumps (Dependabot PRs touching .github/workflows/) require
 # review, because a compromised or malicious action is a supply-chain vector.
+# Under the catch-all every Dependabot PR needs a code-owner approval:
+# dependabot-auto-approve.yml approves as `llamenos-auto`, which owns nothing.
+
+# ─── Every path ────────────────────────────────────────────────────────
+# MUST stay the first rule (last match wins — anywhere else it would override
+# every named entry below). guards.test.ts pins first, once, with an owner.
+*                                   @rhonda-rodododo
 
 # ─── Crypto, protocol, and the key boundaries around them ──────────────
 # Every pattern below is a REAL path. CODEOWNERS is gitignore syntax, so a
