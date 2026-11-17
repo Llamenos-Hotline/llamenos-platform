@@ -1049,7 +1049,7 @@ wrap(hub_key[32], member_device_x25519_pubkey_hex):
 
 An envelope is **sealed to** the member's device X25519 key and **filed under** the member's Ed25519 user pubkey -- `{ pubkey: <user pubkey>, enc, ct }` -- because that is the identity the server authenticates and `GET /key` looks the wrap up by. (Sealing to the Ed25519 key "works" and opens for nobody, #1021.) One wrap per user: a user with several devices can open it on one of them, which is the single-device pilot's model.
 
-`GET /api/hubs/:hubId/key/recipients` -- requires `hubs:manage-keys` **in the hub's own roles**, so an instance super-admin with no role in the hub is refused (D1). Read in one snapshot:
+`GET /api/hubs/:hubId/key/recipients` -- requires `hubs:manage-keys` **or hub admin, in the hub's own roles**. A super-admin with no role in the hub is refused (D1). Hub admin counts because the invariant guarantees every hub one, and nothing guarantees a `hubs:manage-keys` holder: a new hub's founder gets the smallest role that confers hub-admin. Read in one snapshot:
 
 ```
 { generation: int,              // hubs.hub_key_generation, the envelope set's version
@@ -2820,12 +2820,12 @@ Response: { "envelope": RecipientKeyEnvelope }
 // Returns only the requesting user's envelope; 404 when the hub holds none for them (§2.7)
 
 GET /api/hubs/:hubId/key/recipients
-Authority: hubs:manage-keys held through roles IN THIS HUB (a global super-admin's `*` does not count)
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB (a global super-admin's `*` does not count)
 Response: { "generation": int, "envelopes": RecipientKeyEnvelope[], "members": [{ "pubkey", "encryptionPubkey": hex64 | null }] }
 // HubKeyRecipientsResponse, read in one snapshot (§2.7). 409 for a shredded hub.
 
 PUT /api/hubs/:hubId/key
-Authority: hubs:manage-keys held through roles IN THIS HUB
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB
 Body: { "envelopes": RecipientKeyEnvelope[], "expectedGeneration": int }
 Response: { "ok": true, "generation": int }  // HubKeySetResponse
 // Compare-and-set (§2.7): 409 when the hub is no longer at expectedGeneration, or is shredded.

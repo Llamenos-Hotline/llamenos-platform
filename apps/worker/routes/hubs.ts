@@ -511,7 +511,6 @@ routes.get('/:hubId/key/recipients',
     },
   }),
   hubContext,
-  requirePermission('hubs:manage-keys'),
   async (c) => {
     const hubId = c.req.param('hubId')
     try {
@@ -546,7 +545,6 @@ routes.put('/:hubId/key',
     },
   }),
   hubContext,
-  requirePermission('hubs:manage-keys'),
   validator('json', hubKeyEnvelopesBodySchema),
   async (c) => {
     const hubId = c.req.param('hubId')

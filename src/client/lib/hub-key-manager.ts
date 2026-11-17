@@ -50,6 +50,7 @@ import type { HubKeyWrap, RecipientEnvelope } from './platform'
 import { ApiError, NetworkError } from './api/client'
 import { getHubKeyEnvelope, getHubKeyRecipients, setHubKeyEnvelopes } from './api/hubs'
 import type { HubKeyRecipientsResponse } from '@protocol/schemas'
+import { HUB_ADMIN_PERMISSIONS } from '@shared/permissions'
 import { useAuth } from './auth'
 import { useMemberHubIds } from './member-hubs'
 import { useRelayState } from './relay/context'
@@ -283,15 +284,16 @@ async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
  * never only the active one), and, where the user manages a hub, share its key
  * with members who lack it. Mounted once, in the authenticated layout.
  *
- * `hubs:manage-keys` here is account-wide and only decides whether to TRY
- * distributing; the server answers 403 in a hub where the user's own roles
- * there do not grant it.
+ * Who may distribute is the server's call (`assertMayManageHubKey`:
+ * `hubs:manage-keys` or hub admin, from the hub's own roles). The permissions
+ * here are account-wide and only decide whether to TRY; the server answers 403
+ * in a hub where the user's roles there grant neither.
  */
 export function useHubKeys(): void {
   const { hasPermission, isAuthenticated } = useAuth()
   const memberHubIds = useMemberHubIds()
   const relayConnected = useRelayState() === 'connected'
-  const mayManage = hasPermission('hubs:manage-keys')
+  const mayManage = hasPermission('hubs:manage-keys') || HUB_ADMIN_PERMISSIONS.every(p => hasPermission(p))
   const hubIdsKey = memberHubIds.join(',')
 
   useEffect(() => {

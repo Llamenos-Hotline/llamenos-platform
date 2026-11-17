@@ -13,16 +13,23 @@ import { devices, hubKeys, hubs } from '../db/schema'
 import type { RoleCatalog } from '@shared/permissions'
 import type { HubKeyRecipientsResponse } from '@protocol/schemas/hubs'
 import { ServiceError } from '../services/settings'
-import { adminStateOf, holdsInHub, listHolderPubkeys } from './hub-admin'
+import { adminStateOf, administersHub, holdsInHub, listHolderPubkeys } from './hub-admin'
 
-/** What distributing (and generating) a hub's key requires, in that hub's own roles. */
+/** The explicit grant for distributing (and generating) a hub's key. */
 export const HUB_KEY_MANAGE_PERMISSIONS: readonly string[] = ['hubs:manage-keys']
 
 const X25519_HEX = /^[0-9a-f]{64}$/
 
 /**
- * Refuse hub-key distribution by anyone who does not hold
- * {@link HUB_KEY_MANAGE_PERMISSIONS} in the hub's OWN role assignments.
+ * Refuse hub-key distribution by anyone who, in the hub's OWN role
+ * assignments, neither holds {@link HUB_KEY_MANAGE_PERMISSIONS} nor is an admin
+ * of the hub (`administersHub`).
+ *
+ * Admins count because the invariant guarantees one per hub, and nothing
+ * guarantees a `hubs:manage-keys` holder: a new hub's founder gets the smallest
+ * deployment-wide role that confers hub-admin, which need not carry it. Without
+ * this a hub could exist that no one may give a key, and none of its tags,
+ * teams or role names could ever be written.
  *
  * Not `requirePermission`: that resolves a global super-admin to `*` in every
  * hub, and whoever installs the hub key reads every tag, team and role name the
@@ -39,10 +46,10 @@ export function assertMayManageHubKey(
     status: actor.status ?? 'active',
     hubRoles: actor.hubRoles ?? [],
   })
-  if (!holdsInHub(state, hubId, HUB_KEY_MANAGE_PERMISSIONS, catalog)) {
+  if (!holdsInHub(state, hubId, HUB_KEY_MANAGE_PERMISSIONS, catalog) && !administersHub(state, hubId, catalog)) {
     throw new ServiceError(
       403,
-      `Distributing a hub's key requires ${HUB_KEY_MANAGE_PERMISSIONS.join(', ')} from roles in that hub`,
+      `Distributing a hub's key requires ${HUB_KEY_MANAGE_PERMISSIONS.join(', ')} or hub admin, from roles in that hub`,
     )
   }
 }

@@ -1070,6 +1070,17 @@ describe('hubs routes', () => {
       expect(res.status).toBe(409)
     })
 
+    it('lets a hub admin whose role lacks hubs:manage-keys distribute (every hub has one)', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
+      const { app } = createTestApp({
+        permissions: ['settings:manage', 'notes:read-all'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+      const res = await put(app)
+      expect(res.status).toBe(200)
+      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', body)
+    })
+
     it('refuses a super-admin with no role in the hub (D1: super-admins read no hub)', async () => {
       const setHubKeyEnvelopesSpy = vi.fn()
       const { app } = createTestApp({
@@ -1081,14 +1092,15 @@ describe('hubs routes', () => {
       expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
     })
 
-    it('returns 403 without hubs:manage-keys permission', async () => {
-      const { app } = createTestApp({ permissions: ['hubs:read'] })
-      const res = await app.request('/hubs/hub-1/key', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envelopes: [] }),
+    it('returns 403 to a member who neither manages keys nor administers the hub', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['hubs:read'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
+      const res = await put(app)
       expect(res.status).toBe(403)
+      expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
     })
   })
 
