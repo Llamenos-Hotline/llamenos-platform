@@ -50,6 +50,7 @@ import {
 import * as cryptoLabels from '@shared/crypto-labels'
 import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { shamirCommitment } from './shamir-mock'
+import { banDigestBlind, banDigestFinalize } from './ban-digest-mock'
 import { decryptProvisioningBundle, newDeviceProvisioningSas } from './provisioning-mock'
 import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
 import { livenessPublicKey, signLivenessProof } from '../helpers/recovery-liveness'
@@ -1067,6 +1068,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   // shamir_split and shamir_combine are internal — NOT exposed to prevent
   // secrets from passing through the JS bridge.
 
+  // Ban digest (#2759) — stateless RFC 9497 client half, see ban-digest-mock.ts
+  ban_digest_blind: (a) => banDigestBlind(a.phone as string),
+  ban_digest_finalize: (a) => banDigestFinalize(a.phone as string, a.blindHex as string, a.evaluatedElementHex as string),
   shamir_commit: (a) => {
     const x = a.x as number
     const yHex = a.yHex as string

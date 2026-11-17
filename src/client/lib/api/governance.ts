@@ -1,5 +1,7 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
+import { banDigestBlind, banDigestFinalize } from '@/lib/platform'
 import { request, hp } from './client'
+import { BAN_DIGEST_EVALUATE_BATCH_MAX } from '@protocol/schemas/bans'
 import type {
   ErasureRequest,
   MyErasureRequestResponse,
@@ -99,10 +101,57 @@ export async function listPlatformBans(params?: { page?: number; limit?: number 
   return request<{ bans: PlatformBan[]; total: number }>(`/admin/bans${query ? `?${query}` : ''}`)
 }
 
-export async function createPlatformBan(data: { phoneHash: string; reason: string }) {
-  return request<{ ban: PlatformBan }>('/admin/bans', {
+// A platform ban never carries the number (#2759). The number is blinded in Rust, the server
+// evaluates the blinded element under the platform's ban key without learning the number, and
+// the result is finalized here into the number's ban digest — the value the server matches an
+// inbound call against. See `packages/crypto/src/ban_digest.rs`.
+
+/** The platform ban digests of typed E.164 numbers, in order. The numbers never leave the device. */
+export async function platformBanDigests(phones: string[]): Promise<string[]> {
+  const digests: string[] = []
+  for (let i = 0; i < phones.length; i += BAN_DIGEST_EVALUATE_BATCH_MAX) {
+    const chunk = phones.slice(i, i + BAN_DIGEST_EVALUATE_BATCH_MAX)
+    const blinds = await Promise.all(chunk.map((phone) => banDigestBlind(phone)))
+    const { evaluatedElements } = await request<{ evaluatedElements: string[] }>('/admin/bans/evaluate', {
+      method: 'POST',
+      body: JSON.stringify({ blindedElements: blinds.map((b) => b.blindedElementHex) }),
+    })
+    if (evaluatedElements.length !== chunk.length) {
+      throw new Error('Ban evaluation returned a different number of elements than were sent')
+    }
+    digests.push(
+      ...(await Promise.all(chunk.map((phone, j) => banDigestFinalize(phone, blinds[j].blindHex, evaluatedElements[j])))),
+    )
+  }
+  return digests
+}
+
+/** One number's digest under one scope: `hubId` names a hub, `null` the platform. */
+export interface BanLookup {
+  hubId: string | null
+  phoneHash: string
+}
+
+/** A typed number's ban digest under every scope, for search and promote. */
+export async function banLookups(phone: string): Promise<BanLookup[]> {
+  const blind = await banDigestBlind(phone)
+  const { evaluations } = await request<{ evaluations: { hubId: string | null; evaluatedElement: string }[] }>(
+    '/admin/bans/search/evaluate',
+    { method: 'POST', body: JSON.stringify({ blindedElement: blind.blindedElementHex }) },
+  )
+  return Promise.all(
+    evaluations.map(async ({ hubId, evaluatedElement }) => ({
+      hubId,
+      phoneHash: await banDigestFinalize(phone, blind.blindHex, evaluatedElement),
+    })),
+  )
+}
+
+export async function createPlatformBan(data: { phone: string; reason: string }) {
+  const [phoneHash] = await platformBanDigests([data.phone])
+  return request<{ ok: true }>('/admin/bans', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ phoneHash, reason: data.reason }),
   })
 }
 
@@ -112,24 +161,38 @@ export async function deletePlatformBan(id: string, confirmed: DeletionConfirmed
   return request<{ ok: true }>(`/admin/bans/${id}`, { method: 'DELETE' })
 }
 
-export async function bulkImportPlatformBans(data: { phoneHashes: string[]; reason: string }) {
+export async function bulkImportPlatformBans(data: { phones: string[]; reason: string }) {
+  const phoneHashes = await platformBanDigests(data.phones)
   return request<{ count: number }>('/admin/bans/bulk', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({ phoneHashes, reason: data.reason }),
   })
 }
 
-export async function searchPlatformBans(phoneHash: string) {
-  return request<{ bans: (PlatformBan & { scope: 'hub' | 'platform' })[] }>(
-    `/admin/bans/search?phoneHash=${encodeURIComponent(phoneHash)}`
-  )
+/** A search result: a ban on any hub (`hubId`) or on the platform (`hubId` null). */
+export type BanSearchResult = Omit<PlatformBan, 'id'> & { id: string; hubId: string | null }
+
+/** Search every hub's and the platform's ban list for a typed number, by its per-scope digests. */
+export async function searchPlatformBans(phone: string) {
+  return request<{ bans: BanSearchResult[] }>('/admin/bans/search', {
+    method: 'POST',
+    body: JSON.stringify({ lookups: await banLookups(phone) }),
+  })
 }
 
-/** Promote a hub ban to platform scope. The number is re-entered: a hub's ban hash cannot be re-keyed without it. */
-export async function promoteHubBan(banId: string, phone: string) {
+/**
+ * Promote a hub ban to platform scope. The number is re-entered and digested under both the
+ * source hub's key and the platform's: the server checks the hub digest against the stored ban,
+ * so a mistyped number cannot ban someone else, and stores the platform digest.
+ */
+export async function promoteHubBan(banId: string, sourceHubId: string, phone: string) {
+  const lookups = await banLookups(phone)
+  const source = lookups.find((l) => l.hubId === sourceHubId)
+  const platform = lookups.find((l) => l.hubId === null)
+  if (!source || !platform) throw new Error('No ban key for the source hub or the platform')
   return request<{ ok: true }>('/admin/bans/promote', {
     method: 'POST',
-    body: JSON.stringify({ banId, phone }),
+    body: JSON.stringify({ banId, sourcePhoneHash: source.phoneHash, phoneHash: platform.phoneHash }),
   })
 }
 

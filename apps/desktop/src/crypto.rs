@@ -1104,6 +1104,45 @@ pub fn shamir_verify(x: u8, y_hex: String, commitment_hex: String) -> Result<boo
     Ok(shamir::verify(&share, &expected))
 }
 
+// ── Ban digest (#2759): an admin's number becomes a ban digest without the server seeing it ──
+
+/// The client half of one blinded ban-digest evaluation, as the webview receives it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BanDigestBlindIpc {
+    /// Kept by the caller until `ban_digest_finalize`; never sent to the server.
+    pub blind_hex: String,
+    /// Sent to `POST /api/admin/bans/evaluate`.
+    pub blinded_element_hex: String,
+}
+
+/// Blind an E.164 number (`llamenos_core::ban_digest::blind`). Refuses anything not E.164.
+#[tauri::command]
+pub fn ban_digest_blind(phone: String) -> Result<BanDigestBlindIpc, String> {
+    let b = llamenos_core::ban_digest::blind(&phone).map_err(err_str)?;
+    Ok(BanDigestBlindIpc {
+        blind_hex: hex::encode(b.blind),
+        blinded_element_hex: hex::encode(b.blinded_element),
+    })
+}
+
+/// Finalize the server's evaluated element into the number's ban digest (128 hex chars).
+#[tauri::command]
+pub fn ban_digest_finalize(
+    phone: String,
+    blind_hex: String,
+    evaluated_element_hex: String,
+) -> Result<String, String> {
+    let blind: [u8; 32] = hex::decode(&blind_hex)
+        .map_err(err_str)?
+        .try_into()
+        .map_err(|_| "blind must be 32 bytes".to_string())?;
+    let evaluated = hex::decode(&evaluated_element_hex).map_err(err_str)?;
+    let digest =
+        llamenos_core::ban_digest::finalize(&phone, &blind, &evaluated).map_err(err_str)?;
+    Ok(hex::encode(digest))
+}
+
 // ── H16: Recovery group key isolation — combine+decrypt in Rust only ──
 
 /// Generate an X25519 recovery group keypair, Shamir-split the private key, and

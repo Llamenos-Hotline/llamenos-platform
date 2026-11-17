@@ -95,6 +95,9 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // Shamir verification (split/combine are internal-only — secrets never enter JS)
     'shamir_commit',
     'shamir_verify',
+    // Ban digest (#2759) — blind/finalize a typed number; the key never leaves the server
+    'ban_digest_blind',
+    'ban_digest_finalize',
     // H16: Recovery group key isolation — private key AND plaintext shares never enter JS
     'recovery_group_create',
     'recovery_share_contribute_from_state',

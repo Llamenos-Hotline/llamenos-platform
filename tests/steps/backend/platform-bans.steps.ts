@@ -106,6 +106,7 @@ async function platformDigests(request: Request, world: Record<string, unknown>,
     actor?.deviceKey,
   )
   expect(res.status, `evaluate failed: ${JSON.stringify(res.data)}`).toBe(200)
+  expect(res.data.evaluatedElements).toHaveLength(phones.length)
   return phones.map((phone, i) => banDigestFinalize(phone, blinds[i].blindHex, res.data.evaluatedElements[i]))
 }
 

@@ -72,9 +72,12 @@ export const banDigestSchema = z.string().regex(/^[0-9a-f]{128}$/, 'Must be a 12
 /** One ristretto255 group element (a blinded or an evaluated element), 32 bytes as hex. */
 export const banDigestElementSchema = z.string().regex(/^[0-9a-f]{64}$/, 'Must be a 64-hex-char group element')
 
+/** The most blinded numbers one evaluate request may carry; clients send larger sets in chunks. */
+export const BAN_DIGEST_EVALUATE_BATCH_MAX = 100
+
 /** `POST /admin/bans/evaluate`: blinded numbers to evaluate under the platform's ban key. */
 export const banDigestEvaluateBodySchema = z.object({
-  blindedElements: z.array(banDigestElementSchema).min(1).max(500),
+  blindedElements: z.array(banDigestElementSchema).min(1).max(BAN_DIGEST_EVALUATE_BATCH_MAX),
 })
 
 /** The evaluated elements, in request order. */

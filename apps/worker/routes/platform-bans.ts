@@ -19,6 +19,7 @@ import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { banBlindEvaluate } from '../lib/crypto'
 import { scopeOfRow } from '../lib/owner-scope'
+import { checkRateLimit } from '../lib/helpers'
 import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
 
 /**
@@ -30,6 +31,14 @@ import { hubScope, PLATFORM_SCOPE } from '@shared/owner-scope'
  * stored column but not BAN_HASH_KEY can enumerate the numbers behind it.
  */
 const platformBans = new Hono<AppEnv>()
+
+/**
+ * The evaluate endpoints are the one way to learn a number's digest, so they are what stands
+ * between an admin account and an enumeration of the ban list: one online request per batch,
+ * per admin, rate-limited and audited. Offline enumeration needs BAN_HASH_KEY, which no client
+ * ever holds. `BAN_EVALUATIONS_PER_MINUTE` x 100 elements bounds what one account can test.
+ */
+const BAN_EVALUATIONS_PER_MINUTE = 10
 
 /**
  * A blinded element that is not a valid ristretto255 encoding fails evaluation. That is the
@@ -63,13 +72,21 @@ platformBans.post(
   requirePermission('bans:create-platform'),
   validator('json', banDigestEvaluateBodySchema),
   async (c) => {
+    const services = c.get('services')
+    const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+    if (await checkRateLimit(services.settings, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
+      return c.json({ error: 'Too many ban evaluations. Try again in a minute.' }, 429)
+    }
     const evaluatedElements: string[] = []
     for (const blinded of body.blindedElements) {
       const evaluated = evaluateOrNull(() => banBlindEvaluate(blinded, PLATFORM_SCOPE, c.env.BAN_HASH_KEY))
       if (evaluated === null) return c.json({ error: 'Invalid blinded element' }, 400)
       evaluatedElements.push(evaluated)
     }
+    await audit(services.audit, 'platformBanDigestsEvaluated', pubkey, {
+      count: evaluatedElements.length,
+    }, undefined, null)
     return c.json({ evaluatedElements })
   },
 )
@@ -245,7 +262,11 @@ platformBans.post(
   validator('json', searchBansEvaluateBodySchema),
   async (c) => {
     const services = c.get('services')
+    const pubkey = c.get('pubkey')
     const { blindedElement } = c.req.valid('json')
+    if (await checkRateLimit(services.settings, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
+      return c.json({ error: 'Too many ban evaluations. Try again in a minute.' }, 429)
+    }
     // Every scope has its own key, so the number is evaluated once per hub and once for the
     // platform. The client finalizes each into that scope's digest and searches with them.
     const { hubs } = await services.settings.getHubs()
@@ -259,6 +280,9 @@ platformBans.post(
       if (evaluatedElement === null) return c.json({ error: 'Invalid blinded element' }, 400)
       evaluations.push({ hubId, evaluatedElement })
     }
+    await audit(services.audit, 'platformBanSearchEvaluated', pubkey, {
+      scopes: evaluations.length,
+    }, undefined, null)
     return c.json({ evaluations })
   },
 )
