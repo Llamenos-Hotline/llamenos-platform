@@ -7,8 +7,9 @@ import type { AppEnv, Env } from '../types'
 import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
-import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
+import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubKeyRecipientsResponseSchema, hubKeySetResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
 import { assertMayManageHubEscrow } from '../lib/readers'
+import { assertMayManageHubKey } from '../lib/hub-key'
 import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -492,20 +493,54 @@ routes.get('/:hubId/key',
   },
 )
 
-// Set hub key envelopes (admin only — distributes wrapped hub key to all members)
+// What a key holder needs to distribute the hub key: every member, the device
+// key to wrap for, and who already holds a wrap (PROTOCOL.md §2.7). Authority is
+// the hub's OWN roles (assertMayManageHubKey): a super-admin with no role here
+// must not be able to install a key and so read the hub (D1).
+routes.get('/:hubId/key/recipients',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'List the members a hub key is distributed to',
+    responses: {
+      200: {
+        description: 'Generation, the current wraps, and every member with their device key',
+        content: { 'application/json': { schema: resolver(hubKeyRecipientsResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  requirePermission('hubs:manage-keys'),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    try {
+      assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
+      return c.json(await c.get('services').identity.getHubKeyRecipients(hubId))
+    } catch (err) {
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+      }
+      throw err
+    }
+  },
+)
+
+// Replace the hub key envelopes — compare-and-set on `expectedGeneration`.
 routes.put('/:hubId/key',
   describeRoute({
     tags: ['Hubs'],
     summary: 'Set hub key envelopes for all members',
     responses: {
       200: {
-        description: 'Hub key envelopes set',
+        description: 'Hub key envelopes set; the envelope set\'s new generation',
         content: {
           'application/json': {
-            schema: resolver(okResponseSchema),
+            schema: resolver(hubKeySetResponseSchema),
           },
         },
       },
+      409: { description: 'The generation moved on since it was read (re-read and retry), or the hub is shredded' },
       ...authErrors,
       ...notFoundError,
     },
@@ -519,12 +554,14 @@ routes.put('/:hubId/key',
     const body = c.req.valid('json')
 
     try {
-      await services.settings.setHubKeyEnvelopes(hubId, body)
-      return c.json({ ok: true })
+      assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
+      return c.json(await services.settings.setHubKeyEnvelopes(hubId, body))
     } catch (err) {
-      const status = (err as { status?: number }).status ?? 500
-      const message = err instanceof Error ? err.message : 'Failed to set hub key'
-      return c.json({ error: message }, status as 404 | 500)
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+      }
+      logger.error('Failed to set hub key envelopes', err, { hubId })
+      return c.json({ error: 'Failed to set hub key' }, 500)
     }
   },
 )

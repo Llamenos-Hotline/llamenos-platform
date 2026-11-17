@@ -9,6 +9,8 @@ import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
+import { getHubKeyRecipients } from '../lib/hub-key'
+import type { HubKeyRecipientsResponse } from '@protocol/schemas/hubs'
 import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor } from '../lib/readers'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
@@ -408,6 +410,11 @@ export class IdentityService {
    */
   async readersFor(hubId: string, purpose: ReaderPurpose): Promise<HpkeRecipientPubkey[]> {
     return readersFor(this.db, hubId, purpose)
+  }
+
+  /** What a key holder needs to distribute `hubId`'s key. See `lib/hub-key.ts`. */
+  async getHubKeyRecipients(hubId: string): Promise<HubKeyRecipientsResponse> {
+    return getHubKeyRecipients(this.db, hubId)
   }
 
   /** The hub's escrow key, or `undefined` when it has none (404 for an unknown hub). */

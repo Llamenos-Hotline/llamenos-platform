@@ -44,6 +44,42 @@ export const hubKeyEnvelopeResponseSchema = z.object({
   envelope: recipientEnvelopeSchema,
 })
 
+/**
+ * `GET /api/hubs/:hubId/key/recipients` — what a key holder needs to distribute
+ * the hub key (PROTOCOL.md §2.7), read in one snapshot:
+ *
+ * - `generation`: the envelope set's version (`hubs.hub_key_generation`). A
+ *   `PUT /key` must name it as `expectedGeneration`.
+ * - `envelopes`: every wrap the hub holds, for current members. A distributor
+ *   re-sends them unchanged and adds wraps only for members who lack one, so
+ *   distributing never replaces anyone's access. The caller's own is among them,
+ *   which is how it confirms the key it holds is the hub's current one. Empty
+ *   means no member holds the key — the one state in which a manager may
+ *   generate a new key without taking anyone's access away.
+ * - `members`: every member, with the X25519 device key to wrap for (null until
+ *   they register one).
+ */
+export const hubKeyRecipientsResponseSchema = z.object({
+  generation: z.number().int().min(0),
+  envelopes: z.array(recipientEnvelopeSchema),
+  members: z.array(z.object({
+    /** The member's Ed25519 user pubkey — the `pubkey` of their envelope. */
+    pubkey: pubkeySchema,
+    /** The X25519 key of the member's device to wrap for; null until they register one. */
+    encryptionPubkey: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  })),
+})
+
+/** `PUT /api/hubs/:hubId/key` response: the envelope set's new generation. */
+export const hubKeySetResponseSchema = z.object({
+  ok: z.literal(true),
+  generation: z.number().int().min(1),
+})
+
+export type HubKeyEnvelopeResponse = z.infer<typeof hubKeyEnvelopeResponseSchema>
+export type HubKeyRecipientsResponse = z.infer<typeof hubKeyRecipientsResponseSchema>
+export type HubKeySetResponse = z.infer<typeof hubKeySetResponseSchema>
+
 // --- Input schemas ---
 
 export const createHubBodySchema = z.object({
@@ -76,13 +112,24 @@ export const addHubMemberBodySchema = z.object({
   roleIds: z.array(z.string()).min(1, 'At least one role required'),
 })
 
+/**
+ * Replace a hub's key envelopes. `expectedGeneration` is required: it is the
+ * generation the writer read (from `GET /key/recipients`), and the write is
+ * refused with 409 if the set moved on since — another manager installed a key
+ * or re-wrapped, or the hub was shredded. Without it two managers generating a
+ * first key at once would each install their own, and the loser's members
+ * would be left holding a key nothing else is sealed under.
+ */
 export const hubKeyEnvelopesBodySchema = z.object({
   envelopes: z.array(z.object({
     pubkey: pubkeySchema,
     enc: z.string().min(1),
     ct: z.string().min(1),
   })).min(1, 'At least one envelope required'),
+  expectedGeneration: z.number().int().min(0),
 })
+
+export type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
 
 // --- Reader sets (PROTOCOL §2.4.2; operator decisions D1, D2, A7) ---
 
