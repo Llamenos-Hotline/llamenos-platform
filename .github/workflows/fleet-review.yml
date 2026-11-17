@@ -464,17 +464,34 @@ concurrency:
   # Distinct group names from ci.yml's and fleet-verify.yml's own groups —
   # concurrency groups are repo-scoped, not per-file, so reusing either of
   # their names here would cancel or queue against unrelated runs sharing the
-  # same SHA/run id. `pull_request` groups by PR NUMBER, so a second event on
-  # the same PR while a run is still in flight queues behind it instead of
-  # racing two runs to publish the same context — which is exactly what
-  # #1284's `synchronize` arm needs, since a push and a review request on one
-  # PR are now two events that both conclude `fleet/review`;
-  # `workflow_dispatch` groups by `run_id`
-  # because two manual dispatches can target two different PRs at once and
-  # must never collide.
+  # same SHA/run id.
+  #
+  # TWO kinds of `pull_request` run, in two kinds of group (#2813):
+  #
+  #   - The head's CARRIER (`opened`/`reopened`/`synchronize` — see the job's
+  #     `name:`) groups by PR AND HEAD SHA. Nothing else ever joins that
+  #     group: not a review request on the same head, and not a carrier for
+  #     another head. Its only group-mates are its own re-run attempts. That
+  #     is what keeps a carrier from ever being cancelled or displaced while
+  #     pending — before #2813 a push, a review request and the CODEOWNERS
+  #     request on `opened` all queued in ONE per-PR group, and a pending run
+  #     displaced by a newer one is concluded `cancelled` — and it is what
+  #     lets `fleet-review/refresh-carrier` re-run an OLD head's carrier
+  #     after the PR has moved on without cancelling the current head's.
+  #     The rail in tests/orchestrator/required-context-creation.test.ts
+  #     evaluates this expression and fails if either kind of group-mate can
+  #     ever appear.
+  #   - A RE-EVALUATION (`review_requested`) groups by PR NUMBER, as every
+  #     `pull_request` run did before: two review requests on one PR queue
+  #     rather than race two engine runs on `llamenos-review-box`. They no
+  #     longer race to publish the same context either — a re-evaluation
+  #     publishes `fleet/review/re-evaluate`, never the required name.
+  #
+  # `workflow_dispatch` groups by `run_id` because two manual dispatches can
+  # target two different PRs at once and must never collide.
   # `merge_group` groups by the queue commit: two entries in the queue are
   # two different commits and must never cancel or queue behind each other.
-  group: ${{ github.event_name == 'pull_request' && format('fleet-review-pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('fleet-review-mg-{0}', github.sha) || format('fleet-review-wd-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) && format('fleet-review-pr-{0}-head-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || format('fleet-review-pr-{0}', github.event.pull_request.number)) || github.event_name == 'merge_group' && format('fleet-review-mg-{0}', github.sha) || format('fleet-review-wd-{0}', github.run_id) }}
   # Never cancelled: a required check that gets cancelled mid-run leaves its
   # context permanently missing rather than failing loudly (same reasoning as
   # ci.yml's and fleet-verify.yml's own `concurrency:` blocks) — which on a
@@ -507,7 +524,31 @@ jobs:
   # makes CodeQL treat it as "privileged", which that specific query excludes
   # by design.
   fleet-review:
-    name: fleet/review
+    # ONE carrier per head (#2813). The required `fleet/review` context is
+    # carried by exactly one run per head: the one created by the event that
+    # PUT the head there — `opened`, `reopened` or `synchronize` — plus
+    # `merge_group` on the queue commit (and the operator's
+    # `workflow_dispatch`, whose suite is not PR-associated, #1471).
+    #
+    # A `review_requested` run lands on a head that ALREADY has that carrier.
+    # Before #2813 it published a second `fleet/review` there, and GitHub's
+    # admission judged whichever carrier it pleased: on #2811 the head held
+    # the opened-run's `NO-VERDICT:unreviewed` refusal (09:42) and the review
+    # request's real PASS (09:45), and `enqueuePullRequest` refused on the
+    # refusal — the PR read green and was unmergeable. So a re-evaluation is
+    # named `fleet/review/re-evaluate`, does the review it was asked for, and
+    # then `fleet-review/refresh-carrier` RE-RUNS the head's one carrier in
+    # place. A re-run is the same check suite, so the carrier is updated, not
+    # duplicated; and since every carrier event is republish-only
+    # (`REVIEW_REPUBLISH_ACTIONS`, ci.ts — a rail pins that the two lists are
+    # the same), the re-run can never call the model: it republishes the
+    # verdict the re-evaluation just cached for this tree (`cache-hit`), or
+    # fails closed exactly as before (`unreviewed`, `tree-changed`, …).
+    #
+    # The expression must agree with `runs-on` below and with the group in
+    # `concurrency:` above; tests/orchestrator/required-context-creation.test.ts
+    # evaluates all of them per event.
+    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) && 'fleet/review' || 'fleet/review/re-evaluate' }}
     # NO job-level `if:` here — deliberately, and never again (invariant 1 in
     # the file header). GitHub cannot filter a `pull_request` trigger by WHO
     # a review was requested from, only by `types:`, so this job IS
@@ -2937,4 +2978,100 @@ jobs:
             else
               echo "::warning::could not remove '$label' from PR #$PR (already gone?) — the review still passed"
             fi
+          done
+
+  # #2813: what makes a review request reach the required context without
+  # creating a second one. A `review_requested` run is named
+  # `fleet/review/re-evaluate` (see the `fleet-review` job's `name:`); this
+  # job then RE-RUNS the head's one `fleet/review` carrier — the run created
+  # by `opened`/`reopened`/`synchronize` — once that run is not in progress.
+  # The carrier is republish-only, so its re-run reads the verdict the
+  # re-evaluation just cached for this tree and concludes on it (`cache-hit`),
+  # or fails closed exactly as it would have (`unreviewed`, `tree-changed`,
+  # `carried`): a refusal is never made green here, and no context is ever
+  # left absent. Skipped when the request was not for the fleet reviewer
+  # (`not-requested`): nothing new was earned, so the carrier's conclusion
+  # stands. Runs no repository code; tests/orchestrator/carrier-refresh.test.ts
+  # drives this exact script against a fake `gh`.
+  refresh-carrier:
+    name: fleet-review/refresh-carrier
+    needs: [fleet-review]
+    # A job-level `if:` is safe here: this name is not a required context, so
+    # skipping it satisfies nothing. `!cancelled()`, not `always()`: a
+    # re-evaluation superseded by a newer one leaves the refresh to that one.
+    # A fork PR's token cannot re-run anything, so it is not attempted there.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.action == 'review_requested' && github.event.pull_request.head.repo.full_name == github.repository && needs.fleet-review.outputs.outcome != 'not-requested' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      actions: write   # read the carrier's workflow run and re-run it
+      checks: read     # find the carrier among the head's check runs
+    steps:
+      - name: Re-run the head's fleet/review carrier in place
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CONTEXT: fleet/review
+          WORKFLOW_PATH: .github/workflows/fleet-review.yml
+          POLL_SECONDS: '20'
+          MAX_WAIT_SECONDS: '1800'
+        run: |
+          set -euo pipefail
+          # Re-run the head's ONE carrier of $CONTEXT in place (#2813). A re-run is
+          # a new attempt inside the SAME check suite, so the head keeps exactly one
+          # $CONTEXT check run and it now reflects this re-evaluation; publishing a
+          # second carrier instead is what left #2616/#2797/#2811 green and
+          # unmergeable. Never makes anything green by itself: the carrier re-judges
+          # the head on its own terms.
+          fail() {
+            echo "::error::refresh-carrier FAILED: $1 — the $CONTEXT carrier on $HEAD_SHA was NOT re-run, so it still shows its earlier conclusion. Re-run that workflow run by hand, or re-request the review."
+            exit 1
+          }
+          api() {
+            local out
+            if ! out="$(gh api "$@" 2>&1)"; then
+              printf '%s\n' "$out" >&2
+              return 1
+            fi
+            printf '%s' "$out"
+          }
+          ctx_q="$(jq -rn --arg s "$CONTEXT" '$s|@uri')"
+          carriers="$(api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=$ctx_q&filter=latest&per_page=100" \
+            --jq '.check_runs[] | select(.app.slug == "github-actions") | .id')" \
+            || fail "could not list the $CONTEXT check runs on the head"
+          runs=""
+          for job in $carriers; do
+            run="$(api "repos/$REPO/actions/jobs/$job" --jq '.run_id')" || fail "could not resolve check run $job to its workflow run"
+            meta="$(api "repos/$REPO/actions/runs/$run" --jq '[.path, .event] | @tsv')" || fail "could not read workflow run $run"
+            path="$(printf '%s' "$meta" | cut -f1)"
+            event="$(printf '%s' "$meta" | cut -f2)"
+            if { [ "$path" != "$WORKFLOW_PATH" ] && [[ "$path" != "$WORKFLOW_PATH@"* ]]; } || [ "$event" != "pull_request" ]; then
+              echo "not a carrier: check run $job belongs to run $run ($path, $event), not to this workflow's pull_request carrier"
+              continue
+            fi
+            case " $runs " in *" $run "*) ;; *) runs="$runs $run" ;; esac
+          done
+          if [ -z "${runs// /}" ]; then
+            echo "::notice::no $CONTEXT carrier on $HEAD_SHA yet — the run that creates it has not started, and it reads this re-evaluation when it does; nothing to re-run"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
+          for run in $runs; do
+            while :; do
+              status="$(api "repos/$REPO/actions/runs/$run" --jq '.status')" || fail "could not read the status of carrier run $run"
+              if [ "$status" = "completed" ]; then
+                if refused="$(gh api -X POST "repos/$REPO/actions/runs/$run/rerun" 2>&1)"; then
+                  echo "re-ran $CONTEXT carrier run $run on $HEAD_SHA in place — the same check suite, so the head still carries exactly one $CONTEXT"
+                  break
+                fi
+                echo "::warning::re-running carrier run $run was refused ($(printf '%s' "$refused" | tr '\n' ' ')) — another re-run may have just started; waiting for it to finish"
+              else
+                echo "carrier run $run is $status — waiting for it to finish, so that its re-run starts after this re-evaluation"
+              fi
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                fail "carrier run $run was still not re-runnable after ${MAX_WAIT_SECONDS}s"
+              fi
+              sleep "$POLL_SECONDS"
+            done
           done
