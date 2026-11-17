@@ -171,6 +171,19 @@ A PR is queued only if **all** of:
    `ci.yml` edit outside the iOS jobs schedule the gate but cannot change its
    verdict, and are batched like any other PR. A read that cannot be made
    isolates.
+5. It is **not held** (#2814, `src/merge-hold.ts`). A PR carrying the
+   `merge-hold` label is never armed. Neither is one whose last merge-queue
+   event is a removal by anyone **other than the merge queue itself**
+   (`github-merge-queue`, whose removals are ejections and merges): a person
+   dequeuing a PR is a decision, not a transient — #2788 was dequeued for a
+   recorded regression and re-queued by this feed 3m19s later. The feed writes
+   that hold onto the PR as the `merge-hold` label plus one comment naming who
+   held it, so it is visible and survives the queue. **To release a hold,
+   remove the `merge-hold` label**; a dequeue hold is released only by a label
+   removal *after* the dequeue (a new push does not release it). An unreadable
+   queue history is not armed. The check lives at the single arming point
+   (`armAutoMergeWithQueueClearance`), so the tick's arm refuses a held PR too;
+   queue-feed asks first only so its summary reports the skip as a hold.
 
 The **not-a-retry guard**: a PR whose latest queue attempt (a `merge_group`
 run whose branch names it) failed on a shard its own diff schedules is a

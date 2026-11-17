@@ -80,6 +80,7 @@ import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult }
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
 import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 import { armAutoMergeWithQueueClearance } from './automerge.js'
+import { MERGE_HOLD_LABEL, readQueueHistory } from './merge-hold.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -951,6 +952,9 @@ async function enableAutoMerge(pr: string): Promise<void> {
       }
       return { headRefName: raw.headRefName, labels: raw.labels.flatMap((l) => (typeof l.name === 'string' ? [l.name] : [])) }
     },
+    readQueueHistory: (n) => readQueueHistory(n, log),
+    addHoldLabel: async (n) => { await gh(['pr', 'edit', String(n), '--add-label', MERGE_HOLD_LABEL]) },
+    postPrComment: async (n, body) => { await gh(['pr', 'comment', String(n), '--body', body]) },
     addQueueClearedLabel: async (n) => { await gh(['pr', 'edit', n, '--add-label', QUEUE_CLEARED_LABEL]) },
     removeQueueClearedLabel: async (n) => {
       try {
@@ -960,6 +964,7 @@ async function enableAutoMerge(pr: string): Promise<void> {
       }
     },
     requestAutoMerge: async (n) => { await gh(['pr', 'merge', n, '--auto', '--squash']) },
+    log,
   })
 }
 

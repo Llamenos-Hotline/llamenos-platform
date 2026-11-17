@@ -14,6 +14,10 @@ import { releasePrShape } from './release-shape.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import { resolveReviewerLabel, AGENT_REGISTRY_DIR, type ReviewerResolution } from './specialist.js'
 import { checkHalt } from './killswitch.js'
+import {
+  MERGE_HOLD_LABEL, decideHold, holdReason, recordHold, readQueueHistory, MergeHeldError,
+  type QueueHistory,
+} from './merge-hold.js'
 import { iosIsolationFor, isContentCheckedPath, type IosIsolation, type IosIsolationReads } from './ios-isolation.js'
 import {
   sharedFilesMerge, newMergeSimCache, gitThreeWayMerge,
@@ -116,6 +120,17 @@ import {
  *     re-arm path would then repeat forever. The label is applied only after
  *     every readiness proof, a label that cannot be applied means the PR is not
  *     armed, and it is handed back if the arm does not happen.
+ *
+ *     A HELD PR is never armed (#2814, merge-hold.ts): one carrying the
+ *     `merge-hold` label, or one whose last queue event is a removal by
+ *     anyone but the merge queue itself — a person's dequeue is a decision,
+ *     not an ejection, and re-arming it three minutes later is how #2788
+ *     merged with a recorded regression. Such a PR is labelled `merge-hold`
+ *     with one comment saying who held it and how to release it (remove the
+ *     label), and skipped, before any other read. A history that cannot be
+ *     read is skipped too. The arming point enforces the same decision for
+ *     every arm path; this pass asks first only so the skip is reported as a
+ *     hold.
  *
  *  5. Arms each selected PR through the ONE existing arming call
  *     (`enableAutoMerge`, cli.ts — `gh pr merge --auto --squash`, no bypass
@@ -331,11 +346,13 @@ export interface QueueFeedDeps {
    *  branch HAS no merge queue; `undefined` when the read failed (cannot
    *  decide). */
   listQueueEntries(branch: string): Promise<{ queue: true; prs: number[] } | { queue: false } | undefined>
-  /** The most recent merge-queue timeline event on the PR: `removed` when its
-   *  last queue event was a removal (ejected, or dequeued), `added` when it
-   *  was an entry, `none` when it has never been queued. `undefined` on any
-   *  failure — an unreadable history is never "ejected". */
-  lastQueueEvent(pr: number): Promise<'added' | 'removed' | 'none' | undefined>
+  /** The PR's merge-queue history (merge-hold.ts): its most recent queue
+   *  event with its actor, and when the hold label was last removed.
+   *  `undefined` on any failure — an unreadable history is never "ejected",
+   *  and never "nobody dequeued it". */
+  readQueueHistory(pr: number): Promise<QueueHistory | undefined>
+  /** Applies the `merge-hold` label (a dequeue hold made visible). THROWS on failure. */
+  addHoldLabel(pr: number): Promise<void>
   /** The base branch's LIVE ruleset. THROWS on failure — a failed read is
    *  never an empty rule list (missing-checks.ts's contract). */
   fetchBranchRules(branch: string): Promise<unknown>
@@ -758,17 +775,37 @@ async function feedBranch(
     // are never CLEAN; an armed PR is en route on GitHub's own schedule.
     if (!isEjectedOrNeverArmed(pr, queued)) continue
 
+    // A hold outranks everything (#2814). The label is read off the PR this
+    // pass already has; the dequeue hold needs the queue history, read next.
+    if (pr.labels.includes(MERGE_HOLD_LABEL)) {
+      result.skipped.push({ pr: pr.number, reason: holdReason({ held: true, source: 'label' }) })
+      continue
+    }
+
     // Ejected-and-restorable, or never admitted? `autoMergeRequest` reads null
     // for both (and for a PR legitimately in the queue), so it cannot say. The
     // PR's merge-queue timeline can: its LAST queue event is a removal only
-    // when the queue admitted it and then dropped it. A history that cannot be
-    // read, or that ends in an entry the queue listing does not show, is not
-    // evidence of an ejection — the PR is judged as a new addition.
-    const lastEvent = await deps.lastQueueEvent(pr.number)
-    if (lastEvent === undefined) {
-      deps.log(`queue-feed: pr ${pr.number}: its merge-queue history could not be read — judged as a new addition, not as an ejected entry`)
+    // when the queue admitted it and then dropped it — and WHO removed it says
+    // whether that was an ejection or a person's decision (a hold). A history
+    // that cannot be read answers neither, so the PR is not armed.
+    const history = await deps.readQueueHistory(pr.number)
+    if (history === undefined) {
+      const reason = 'its merge-queue history could not be read — whether it was ejected or deliberately dequeued (a hold) is unknown, so it is not armed'
+      deps.log(`queue-feed: pr ${pr.number}: ${reason}`)
+      result.skipped.push({ pr: pr.number, reason })
+      continue
     }
-    const ejected = lastEvent === 'removed'
+    const hold = decideHold(pr.labels, history)
+    if (hold.held) {
+      await recordHold(pr.number, hold, deps)
+      const reason = holdReason(hold)
+      deps.log(`queue-feed: pr ${pr.number}: NOT re-queued — ${reason}`)
+      result.skipped.push({ pr: pr.number, reason })
+      continue
+    }
+    // Not held, so a removal here is the queue's own ejection, or a dequeue a
+    // person has since released.
+    const ejected = history.last?.kind === 'removed'
     if (!ejected && result.armed.length >= newBudget) {
       heldBack += 1
       continue
@@ -943,6 +980,15 @@ async function feedBranch(
       deps.log(`queue-feed: ${ejected ? 'RE-ARMED ejected' : 'armed'} pr ${pr.number} (${pr.headRefName}) for the ${branch} merge queue — ${coverage.via}`)
       if (isolation?.isolate === true) break // an iOS-gate-risk PR is the whole group — stop the pass here
     } catch (e) {
+      // A hold the arming point found that this pass's own read did not (the
+      // label landed, or a dequeue happened, in between) is a hold, not an
+      // arm failure.
+      if (e instanceof MergeHeldError) {
+        result.skipped.push({ pr: pr.number, reason: holdReason(e.decision) })
+        deps.log(`queue-feed: pr ${pr.number}: NOT armed — ${e.message}`)
+        await revokeClearance()
+        continue
+      }
       // Fail-closed: nothing merges, which is the safe direction; the PR
       // simply stays where it was. Counted separately from skips so a
       // systemic arming failure is visible in the summary.
@@ -1011,23 +1057,6 @@ query($owner: String!, $repo: String!, $branch: String!) {
 
 /** The PR's most recent merge-queue event. `last: 1` over the two event types
  *  only, so a long timeline costs one small node, not a paginated walk. */
-const LAST_QUEUE_EVENT_QUERY = `
-query($owner: String!, $repo: String!, $pr: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
-        nodes { __typename }
-      }
-    }
-  }
-}
-`.trim()
-
-interface LastQueueEventResponse {
-  data?: { repository?: { pullRequest?: { timelineItems?: { nodes?: ({ __typename?: string } | null)[] | null } | null } | null } | null } | null
-  errors?: unknown
-}
-
 interface MergeQueueResponse {
   data?: { repository?: { mergeQueue?: { entries?: { totalCount?: number; nodes?: { position?: number; pullRequest?: { number?: number } | null }[] | null } } | null } | null } | null
   errors?: unknown
@@ -1155,22 +1184,8 @@ export function defaultQueueFeedDeps(
       }
       return { queue: true, prs: placed.sort((a, b) => a.position - b.position).map((e) => e.pr) }
     },
-    lastQueueEvent: async (pr) => {
-      const raw = await ghJson<LastQueueEventResponse>([
-        'api', 'graphql',
-        '-f', `query=${LAST_QUEUE_EVENT_QUERY}`,
-        '-f', `owner=${owner ?? ''}`,
-        '-f', `repo=${repoName ?? ''}`,
-        '-F', `pr=${pr}`,
-      ], 60_000, (d) => log(`queue-feed: reading PR #${pr}'s merge-queue history failed: ${d}`))
-      const nodes = raw?.data?.repository?.pullRequest?.timelineItems?.nodes
-      if (raw === undefined || raw.errors !== undefined || !Array.isArray(nodes)) return undefined
-      const type = nodes[0]?.__typename
-      if (nodes.length === 0) return 'none'
-      if (type === 'RemovedFromMergeQueueEvent') return 'removed'
-      if (type === 'AddedToMergeQueueEvent') return 'added'
-      return undefined
-    },
+    readQueueHistory: (pr) => readQueueHistory(pr, (m) => log(`queue-feed: ${m}`)),
+    addHoldLabel: async (pr) => { await gh(['pr', 'edit', String(pr), '--add-label', MERGE_HOLD_LABEL], 30_000) },
     fetchBranchRules: async (branch) => {
       const pages = JSON.parse(await gh([
         'api', '--paginate', '--slurp', `repos/${REPO}/rules/branches/${encodeURIComponent(branch)}?per_page=100`,
