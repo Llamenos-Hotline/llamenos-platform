@@ -4105,7 +4105,7 @@
     "clockOutMessage": "Vous ne recevrez plus d'appels entrants.",
     "deleteConfirmTitle": "Supprimer cette garde ?",
     "deleteConfirmMessage": "Les bénévoles de cette garde cesseront de recevoir des appels pendant ses horaires. Sauf si une autre garde couvre ces heures, les appels iront au groupe de secours, ou resteront sans réponse s'il n'y en a pas. Cette action est irréversible.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Impossible d’enregistrer ce texte : aucun administrateur de ce hub n’a d’appareil enregistré, donc aucun administrateur ne pourrait jamais le lire. Demandez à un administrateur du hub de se connecter sur un appareil."
   },
   "shortcuts": {
     "answerCall": "Répondre à l'appel",

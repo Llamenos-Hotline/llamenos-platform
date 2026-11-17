@@ -1574,7 +1574,7 @@
     "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки.",
     "deleteConfirmTitle": "Видалити цю зміну?",
     "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Неможливо зберегти цей текст: жоден адміністратор цього хабу не має зареєстрованого пристрою, тож жоден адміністратор ніколи не зможе його прочитати. Попросіть адміністратора хабу увійти на пристрої."
   },
   "shortcuts": {
     "answerCall": "Відповісти на дзвінок",

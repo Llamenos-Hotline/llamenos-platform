@@ -8,7 +8,7 @@ export const availabilityBlockResponseSchema = z.object({
   startDate: z.string(),
   endDate: z.string(),
   /** The volunteer's reason, sealed to them, the hub's admins and its `shifts:manage` holders. */
-  encryptedReason: sealedShiftFieldSchema.nullable(),
+  encryptedReason: z.nullable(sealedShiftFieldSchema),
   createdAt: z.string(),
 })
 
@@ -20,7 +20,7 @@ export const createAvailabilityBlockBodySchema = z.object({
   id: z.string().uuid(),
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  encryptedReason: sealedShiftFieldSchema.nullable().optional().default(null),
+  encryptedReason: z.optional(z.nullable(sealedShiftFieldSchema)).default(null),
 })
 
 export type AvailabilityBlock = z.infer<typeof availabilityBlockResponseSchema>

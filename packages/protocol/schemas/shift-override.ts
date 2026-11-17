@@ -12,7 +12,7 @@ export const shiftOverrideResponseSchema = z.object({
   type: overrideTypeSchema,
   userPubkeys: z.array(z.string()).nullable(),
   /** The override note, sealed to the hub's admins and its `shifts:manage-overrides` holders. */
-  encryptedNote: sealedShiftFieldSchema.nullable(),
+  encryptedNote: z.nullable(sealedShiftFieldSchema),
   createdBy: z.string(),
   createdAt: z.string(),
 })
@@ -27,7 +27,7 @@ export const createShiftOverrideBodySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   type: overrideTypeSchema,
   userPubkeys: z.array(pubkeySchema).nullable().optional().default(null),
-  encryptedNote: sealedShiftFieldSchema.nullable().optional().default(null),
+  encryptedNote: z.optional(z.nullable(sealedShiftFieldSchema)).default(null),
 })
 
 export const overrideQuerySchema = z.object({

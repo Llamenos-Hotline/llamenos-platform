@@ -1574,7 +1574,7 @@
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "¿Tiyuj re samaj re'?",
     "deleteConfirmMessage": "Ri aj samajela' pa re samaj re' man kekoj ta chik oyonem chupam ri q'ij re'. We man k'o jun chik samaj kakoj chupam ri q'ij, ri oyonem kebe pa Molaj rech K'ayewal, o man k'o ta jun kataqe we man k'o. Man kakiq'ax ta chik wa'.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Tik'ulux oyonik",

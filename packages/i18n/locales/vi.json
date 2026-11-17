@@ -4105,7 +4105,7 @@
     "clockOutMessage": "Bạn sẽ ngừng nhận cuộc gọi đến.",
     "deleteConfirmTitle": "Xóa ca trực này?",
     "deleteConfirmMessage": "Các tình nguyện viên trong ca này sẽ không nhận cuộc gọi trong giờ của ca. Nếu không có ca nào khác phủ các giờ đó, cuộc gọi sẽ chuyển đến nhóm dự phòng, hoặc không được trả lời nếu chưa đặt nhóm nào. Không thể hoàn tác.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Không thể lưu văn bản này: không quản trị viên nào của hub này có thiết bị đã đăng ký, nên không quản trị viên nào có thể đọc được. Hãy nhờ một quản trị viên hub đăng nhập trên một thiết bị."
   },
   "shortcuts": {
     "answerCall": "Trả lời cuộc gọi",

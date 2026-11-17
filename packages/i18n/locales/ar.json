@@ -4105,7 +4105,7 @@
     "clockOutMessage": "ستتوقف عن تلقي المكالمات الواردة.",
     "deleteConfirmTitle": "هل تريد حذف هذه المناوبة؟",
     "deleteConfirmMessage": "سيتوقف المتطوعون في هذه المناوبة عن تلقي المكالمات خلال ساعاتها. وما لم تغطِّ مناوبة أخرى هذه الساعات، ستذهب المكالمات إلى المجموعة الاحتياطية أو تبقى دون رد إن لم تُحدَّد مجموعة. لا يمكن التراجع عن هذا الإجراء.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "يتعذّر حفظ هذا النص: لا يملك أي مشرف في هذا المركز جهازًا مسجّلًا، لذلك لن يتمكن أي مشرف من قراءته أبدًا. اطلب من مشرف المركز تسجيل الدخول على جهاز."
   },
   "shortcuts": {
     "answerCall": "الرد على المكالمة",

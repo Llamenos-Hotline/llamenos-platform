@@ -4105,7 +4105,7 @@
     "clockOutMessage": "Você deixará de receber chamadas.",
     "deleteConfirmTitle": "Excluir este turno?",
     "deleteConfirmMessage": "Os voluntários deste turno deixarão de receber chamadas durante o seu horário. Se nenhum outro turno cobrir essas horas, as chamadas vão para o grupo de reserva ou ficam sem resposta se não houver nenhum. Esta ação não pode ser desfeita.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Não é possível guardar este texto: nenhum administrador deste hub tem um dispositivo registado, por isso nenhum administrador poderia lê-lo. Peça a um administrador do hub que inicie sessão num dispositivo."
   },
   "shortcuts": {
     "answerCall": "Atender chamada",

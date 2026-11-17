@@ -4105,7 +4105,7 @@
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Diese Schicht löschen?",
     "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Dieser Text kann nicht gespeichert werden: Kein Administrator dieses Hubs hat ein registriertes Gerät, daher könnte ihn nie ein Administrator lesen. Bitten Sie einen Hub-Administrator, sich auf einem Gerät anzumelden."
   },
   "shortcuts": {
     "answerCall": "Anruf annehmen",

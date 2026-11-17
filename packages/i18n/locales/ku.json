@@ -1574,7 +1574,7 @@
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Ev şift were jêbirin?",
     "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin.",
-    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
+    "noAdminReader": "Ev nivîs nayê tomarkirin: tu rêveberê vî hubê amûrek tomarkirî nîne, ji ber vê yekê tu rêveber nikare wê bixwîne. Ji rêveberekî hubê bixwazin ku li ser amûrekê têkeve."
   },
   "shortcuts": {
     "answerCall": "Bangê bersiv bide",
