@@ -91,7 +91,8 @@ export const bans = pgTable(
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
     hubId: text('hub_id'),
-    // HMAC(HKDF(BAN_HASH_KEY, hubId | 'platform'), number) — see `banHash`. Rows exist
+    // The number's ban digest under its scope's key: RFC 9497 OPRF keyed by
+    // DeriveKeyPair(BAN_HASH_KEY, hubId | 'platform') — see `banHash` (#2759). Rows exist
     // only for banned numbers; no digits of the number are stored beside it.
     phone: text('phone_hash').notNull(),
     reason: text('reason'),

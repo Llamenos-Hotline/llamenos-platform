@@ -103,8 +103,8 @@ pub const AUTH_PREFIX: &str = "llamenos:auth:";
 /// Phone number hashing prefix
 pub const HMAC_PHONE_PREFIX: &str = "llamenos:phone:";
 
-/// Ban-list hashing prefix — message prefix of HMAC(HKDF(BAN_HASH_KEY, scope), prefix || E.164).
-/// Distinct from `HMAC_PHONE_PREFIX` so a ban hash can never equal a contact/thread hash.
+/// Ban-digest input prefix — the RFC 9497 OPRF input is `prefix || identifier` (`ban_digest`).
+/// Distinct from `HMAC_PHONE_PREFIX` so a ban digest can never equal a contact/thread hash.
 pub const HMAC_BAN_PREFIX: &str = "llamenos:ban:";
 
 /// Messaging-thread hashing prefix — message prefix of
@@ -318,9 +318,9 @@ pub const LABEL_AUDIT_USER_KEY_WRAP: &str = "llamenos:audit-user-key-wrap:v1";
 /// encrypted_key`); registered so the label set stays closed across platforms.
 pub const LABEL_AUDIT_USER_KEY_SERVER_SEAL: &str = "llamenos:audit-user-key-server-seal:v1";
 
-/// Per-scope ban-key derivation — HKDF info = `label:scope`, where scope is a hub id or
-/// `platform`. Derives the HMAC key behind a ban hash from the file-only BAN_HASH_KEY, so a
-/// hub's ban hashes cannot be compared with another hub's or with the platform's.
+/// Per-scope ban-key derivation — OPRF `DeriveKeyPair` info = `label:scope`, where scope is a
+/// hub id or `platform` (`ban_digest`). Derives the OPRF key behind a ban digest from the
+/// file-only BAN_HASH_KEY, so a hub's digests cannot be compared with another hub's or the platform's.
 pub const LABEL_BAN_KEY_DERIVE: &str = "llamenos:ban-key-derive:v1";
 
 /// Per-hub messaging-thread key derivation — HKDF info = `label:hubId` (or `label:global` for
