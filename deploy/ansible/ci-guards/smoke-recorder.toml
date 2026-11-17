@@ -1,0 +1,18 @@
+name = "Check the smoke recorder's three states"
+run = '''
+cd deploy/ansible
+ansible-playbook playbooks/check-record-smoke-result.yml \
+  -i localhost, -c local -e ansible_become=false
+'''
+why = """
+Proves the shared recorder records SKIPPED for a probe that did not run, PASS
+only when the measurement holds, and FAIL when a probe reports itself fine while
+measuring the wrong thing. Runs the real recorder against synthesized probe
+results in ~1s, no services needed.
+
+The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the whole
+smoke suite against stub binaries and real sockets in a private network
+namespace. Like scripts/check-disk-tier-guards.py it is run by hand rather than
+in CI; `--compare-old <ref>` replays identical fixtures against an older
+playbook and prints the verdicts side by side.
+"""

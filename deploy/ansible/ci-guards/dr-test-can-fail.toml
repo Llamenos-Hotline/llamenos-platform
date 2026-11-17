@@ -1,0 +1,9 @@
+name = "Check the DR drill can fail"
+run = "python3 deploy/ansible/scripts/check-dr-test-can-fail.py"
+why = """
+dr-test.yml was a "recovery drill" that ran on the control node, looked for
+backup files that no longer exist, started an image that does not exist and
+printed PASS from ignore_errors checks -- so it could never fail, and a test
+that cannot fail reads as coverage. CI cannot run the drill (it needs the
+deployed app image and real backups); this keeps its shape honest.
+"""
