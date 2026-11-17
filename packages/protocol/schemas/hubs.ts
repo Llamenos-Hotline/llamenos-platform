@@ -46,26 +46,28 @@ export const hubKeyEnvelopeResponseSchema = z.object({
 
 /** One hub-sealed value — `hex(nonce ‖ ct ‖ tag)` under the hub key (PROTOCOL.md §2.7). */
 const hubSealedFieldSchema = z.string().min(1).max(65536)
+/** A hub-sealed column that may be empty (a tag with no category, a team or role with no description). */
+const hubSealedNullableFieldSchema = hubSealedFieldSchema.nullable()
 
 /** A tag's sealed columns. */
 export const hubSealedTagSchema = z.object({
   id: z.string().min(1),
   encryptedLabel: hubSealedFieldSchema,
-  encryptedCategory: hubSealedFieldSchema.nullable(),
+  encryptedCategory: hubSealedNullableFieldSchema,
 })
 
 /** A team's sealed columns. */
 export const hubSealedTeamSchema = z.object({
   id: z.string().min(1),
   encryptedName: hubSealedFieldSchema,
-  encryptedDescription: hubSealedFieldSchema.nullable(),
+  encryptedDescription: hubSealedNullableFieldSchema,
 })
 
 /** A hub role's sealed columns (#2780). */
 export const hubSealedRoleSchema = z.object({
   id: z.string().min(1),
   encryptedName: hubSealedFieldSchema,
-  encryptedDescription: hubSealedFieldSchema.nullable(),
+  encryptedDescription: hubSealedNullableFieldSchema,
 })
 
 /** Every value a hub holds sealed under its key, by table. */
