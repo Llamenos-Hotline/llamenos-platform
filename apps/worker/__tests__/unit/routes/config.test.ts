@@ -329,66 +329,14 @@ describe('config route', () => {
       expect(body.trustAnchor).toBeDefined()
     })
   })
-
+  // Certificate pins are compiled into each client; the server never hands them
+  // out (#2708). A pin set served by the host it protects against is self-defeating.
   describe('GET /pins', () => {
-    it('returns default Let\'s Encrypt pin hashes with signature', async () => {
-      const deriveSpy = vi.spyOn(serverIdentity, 'deriveServerKeypair').mockReturnValue({
-        secretKey: new Uint8Array(32),
-        pubkeyHex: 'testpubkeyhex123',
-      })
+    it('is not served', async () => {
       const app = createTestApp({ env: { SERVER_SECRET: 'a'.repeat(64) } })
 
       const res = await app.request('/pins')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-
-      // Should contain exactly 2 default pins (ISRG Root X1 + X2)
-      expect(body.pins).toHaveLength(2)
-      expect(body.pins[0].algorithm).toBe('sha256')
-      expect(body.pins[0].hash).toBe('C5+lpZ7tcVwmwQIMcRtPbsQtWLABXhQzejna0wHFr8M=')
-      expect(body.pins[0].label).toContain('ISRG Root X1')
-      expect(body.pins[1].hash).toBe('diGVwiVYbubAI3RW4hB9xU8e/CH2GnkuvVFZE8zmgzI=')
-      expect(body.pins[1].label).toContain('ISRG Root X2')
-
-      // Should have timestamps for rotation
-      expect(body.notBefore).toBeDefined()
-      expect(body.notAfter).toBeDefined()
-      const notBefore = new Date(body.notBefore)
-      const notAfter = new Date(body.notAfter)
-      expect(notAfter.getTime()).toBeGreaterThan(notBefore.getTime())
-
-      // Should have a signature (even if from mock key)
-      expect(body.signature).toBeDefined()
-      expect(typeof body.signature).toBe('string')
-
-      deriveSpy.mockRestore()
-    })
-
-    it('uses custom CERT_PIN_HASHES from env when provided', async () => {
-      const customHash1 = 'customHash1Base64AAAAAAAAAAAAAAAAAAAAAA=='
-      const customHash2 = 'customHash2Base64BBBBBBBBBBBBBBBBBBBBBB=='
-      const app = createTestApp({
-        env: { CERT_PIN_HASHES: `${customHash1},${customHash2}` },
-      })
-
-      const res = await app.request('/pins')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-
-      expect(body.pins).toHaveLength(2)
-      expect(body.pins[0].hash).toBe(customHash1)
-      expect(body.pins[1].hash).toBe(customHash2)
-    })
-
-    it('returns empty signature when SERVER_SECRET is not configured', async () => {
-      const app = createTestApp({ env: { SERVER_SECRET: undefined } })
-
-      const res = await app.request('/pins')
-      expect(res.status).toBe(200)
-      const body = await res.json()
-
-      expect(body.pins).toHaveLength(2)
-      expect(body.signature).toBe('')
+      expect(res.status).toBe(404)
     })
   })
 })
