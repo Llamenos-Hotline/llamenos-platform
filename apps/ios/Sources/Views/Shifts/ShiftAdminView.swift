@@ -74,7 +74,7 @@ struct ShiftAdminView: View {
         if let vm = viewModelBox.value {
             return vm
         }
-        let vm = ShiftAdminViewModel(apiService: appState.apiService, hubContext: hubContext)
+        let vm = ShiftAdminViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService, hubContext: hubContext)
         viewModelBox.value = vm
         return vm
     }

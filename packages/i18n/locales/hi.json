@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "आपको आने वाली कॉल मिलना बंद हो जाएगा।",
     "deleteConfirmTitle": "यह शिफ़्ट हटाएँ?",
-    "deleteConfirmMessage": "इस शिफ़्ट के स्वयंसेवकों को इसके समय के दौरान कॉल मिलना बंद हो जाएगा। यदि कोई और शिफ़्ट उन घंटों को कवर नहीं करती, तो कॉल बैकअप समूह को जाएँगी, या समूह न होने पर अनुत्तरित रहेंगी। इसे पूर्ववत नहीं किया जा सकता।"
+    "deleteConfirmMessage": "इस शिफ़्ट के स्वयंसेवकों को इसके समय के दौरान कॉल मिलना बंद हो जाएगा। यदि कोई और शिफ़्ट उन घंटों को कवर नहीं करती, तो कॉल बैकअप समूह को जाएँगी, या समूह न होने पर अनुत्तरित रहेंगी। इसे पूर्ववत नहीं किया जा सकता।",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "कॉल का उत्तर दें",

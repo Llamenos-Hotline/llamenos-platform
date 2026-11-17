@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "ဤအလှည့်ကို ဖျက်မလား?",
-    "deleteConfirmMessage": "ဤအလှည့်ရှိ စေတနာ့ဝန်ထမ်းများသည် ၎င်း၏ အချိန်များအတွင်း ဖုန်းခေါ်ဆိုမှုများ လက်ခံရရှိတော့မည် မဟုတ်ပါ။ အခြားအလှည့်တစ်ခုက ထိုအချိန်များကို မဖုံးအုပ်ပါက ခေါ်ဆိုမှုများသည် အရန်အဖွဲ့ထံ သွားမည်ဖြစ်ပြီး အရန်အဖွဲ့ မသတ်မှတ်ထားပါက ဖြေကြားမည့်သူ မရှိဘဲ ကျန်ခဲ့မည်။ ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍ မရပါ။"
+    "deleteConfirmMessage": "ဤအလှည့်ရှိ စေတနာ့ဝန်ထမ်းများသည် ၎င်း၏ အချိန်များအတွင်း ဖုန်းခေါ်ဆိုမှုများ လက်ခံရရှိတော့မည် မဟုတ်ပါ။ အခြားအလှည့်တစ်ခုက ထိုအချိန်များကို မဖုံးအုပ်ပါက ခေါ်ဆိုမှုများသည် အရန်အဖွဲ့ထံ သွားမည်ဖြစ်ပြီး အရန်အဖွဲ့ မသတ်မှတ်ထားပါက ဖြေကြားမည့်သူ မရှိဘဲ ကျန်ခဲ့မည်။ ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍ မရပါ။",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "ခေါ်ဆိုမှု ဖြေမည်",

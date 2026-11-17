@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Gelen aramaları almayı bırakacaksınız.",
     "deleteConfirmTitle": "Bu vardiya silinsin mi?",
-    "deleteConfirmMessage": "Bu vardiyadaki gönüllüler, vardiya saatleri boyunca arama almayı bırakacak. Bu saatleri başka bir vardiya kapsamıyorsa aramalar yedek gruba gider; yedek grup yoksa yanıtsız kalır. Bu işlem geri alınamaz."
+    "deleteConfirmMessage": "Bu vardiyadaki gönüllüler, vardiya saatleri boyunca arama almayı bırakacak. Bu saatleri başka bir vardiya kapsamıyorsa aramalar yedek gruba gider; yedek grup yoksa yanıtsız kalır. Bu işlem geri alınamaz.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Aramayı cevapla",

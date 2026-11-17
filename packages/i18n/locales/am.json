@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "ይህ ፈረቃ ይሰረዝ?",
-    "deleteConfirmMessage": "በዚህ ፈረቃ ላይ ያሉ ፈቃደኞች በፈረቃው ሰዓታት ጥሪ መቀበል ያቆማሉ። ሌላ ፈረቃ እነዚያን ሰዓታት ካልሸፈነ፣ ጥሪዎች ወደ ተተኪ ቡድን ይሄዳሉ፤ ተተኪ ቡድን ካልተመደበ ደግሞ ያለ መልስ ይቀራሉ። ይህ ሊመለስ አይችልም።"
+    "deleteConfirmMessage": "በዚህ ፈረቃ ላይ ያሉ ፈቃደኞች በፈረቃው ሰዓታት ጥሪ መቀበል ያቆማሉ። ሌላ ፈረቃ እነዚያን ሰዓታት ካልሸፈነ፣ ጥሪዎች ወደ ተተኪ ቡድን ይሄዳሉ፤ ተተኪ ቡድን ካልተመደበ ደግሞ ያለ መልስ ይቀራሉ። ይህ ሊመለስ አይችልም።",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "ጥሪ መልስ",

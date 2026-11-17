@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Burahin ang shift na ito?",
-    "deleteConfirmMessage": "Titigil sa pagtanggap ng tawag ang mga boluntaryo sa shift na ito sa oras nito. Kung walang ibang shift na sasalo sa mga oras na iyon, mapupunta ang mga tawag sa fallback group, o hindi masasagot kung walang itinakda. Hindi na ito maibabalik."
+    "deleteConfirmMessage": "Titigil sa pagtanggap ng tawag ang mga boluntaryo sa shift na ito sa oras nito. Kung walang ibang shift na sasalo sa mga oras na iyon, mapupunta ang mga tawag sa fallback group, o hindi masasagot kung walang itinakda. Hindi na ito maibabalik.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Sagutin ang tawag",

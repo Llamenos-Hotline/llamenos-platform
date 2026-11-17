@@ -3949,7 +3949,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Delete this shift?",
-    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
+    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Answer call",

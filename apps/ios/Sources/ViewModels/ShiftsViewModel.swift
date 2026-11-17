@@ -22,6 +22,7 @@ import UIKit
 @Observable
 final class ShiftsViewModel {
     private let apiService: APIService
+    private let cryptoService: CryptoService
     private let hubContext: HubContext
     private let linphoneService: any LinphoneServiceProtocol
     private let shiftClockService: ShiftClockService
@@ -64,6 +65,10 @@ final class ShiftsViewModel {
 
     /// My availability blocks (dates I cannot take calls), from `GET /shifts/availability/my`.
     var myAvailabilityBlocks: [Block] = []
+
+    /// Each block's reason, opened on this device (#2777). Keyed by block id;
+    /// a block with no reason has no entry.
+    private(set) var openedReasons: [String: OpenedShiftField] = [:]
 
     /// Whether the availability blocks are loading.
     var isLoadingAvailability: Bool = false
@@ -113,11 +118,13 @@ final class ShiftsViewModel {
 
     init(
         apiService: APIService,
+        cryptoService: CryptoService,
         hubContext: HubContext,
         linphoneService: any LinphoneServiceProtocol,
         shiftClockService: ShiftClockService
     ) {
         self.apiService = apiService
+        self.cryptoService = cryptoService
         self.hubContext = hubContext
         self.linphoneService = linphoneService
         self.shiftClockService = shiftClockService
@@ -292,6 +299,9 @@ final class ShiftsViewModel {
                 path: try apiService.activeHubPath("/api/shifts/availability/my")
             )
             myAvailabilityBlocks = response.blocks.sorted { $0.startDate < $1.startDate }
+            openedReasons = myAvailabilityBlocks.reduce(into: [:]) { opened, block in
+                opened[block.id] = OpenedShiftField.open(block.encryptedReason, as: .availabilityReason, with: cryptoService)
+            }
         } catch {
             if APIError.isNoHub(error) {
                 // No hub configured or selected — no blocks to show (#2461)
@@ -299,6 +309,7 @@ final class ShiftsViewModel {
                 errorMessage = error.localizedDescription
             }
             myAvailabilityBlocks = []
+            openedReasons = [:]
         }
         isLoadingAvailability = false
     }
@@ -306,6 +317,9 @@ final class ShiftsViewModel {
     /// Mark myself unavailable for a date range (inclusive), with an optional
     /// reason. The routing pipeline excludes blocked volunteers from that day's
     /// ring set, so a created block takes effect on the next call.
+    ///
+    /// The reason is sealed in Rust to this device and the hub's admins before
+    /// it leaves the phone (#2777); the server only ever sees ciphertext.
     func createAvailabilityBlock(startDate: Date, endDate: Date, reason: String) async -> Bool {
         guard endDate >= startDate else {
             errorMessage = NSLocalizedString("shifts_availability_invalid_range", comment: "End date must be on or after the start date")
@@ -317,8 +331,17 @@ final class ShiftsViewModel {
 
         do {
             let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            var sealedReason: SealedShiftField?
+            if !trimmedReason.isEmpty {
+                let readers = try await ShiftFieldReaders.readers(for: .availabilityReason, apiService: apiService)
+                sealedReason = try cryptoService.sealShiftField(
+                    purpose: .availabilityReason,
+                    plaintext: trimmedReason,
+                    readerPubkeys: readers
+                )
+            }
             let body = CreateAvailabilityBlockBody(
-                encryptedReason: trimmedReason.isEmpty ? nil : trimmedReason,
+                encryptedReason: sealedReason,
                 endDate: DateFormatting.wireDateString(from: endDate),
                 id: UUID().uuidString,
                 startDate: DateFormatting.wireDateString(from: startDate)

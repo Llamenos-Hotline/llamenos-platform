@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Вы перестанете получать входящие звонки.",
     "deleteConfirmTitle": "Удалить эту смену?",
-    "deleteConfirmMessage": "Волонтёры этой смены перестанут получать звонки в её часы. Если эти часы не покрывает другая смена, звонки пойдут в резервную группу или останутся без ответа, если она не задана. Это действие нельзя отменить."
+    "deleteConfirmMessage": "Волонтёры этой смены перестанут получать звонки в её часы. Если эти часы не покрывает другая смена, звонки пойдут в резервную группу или останутся без ответа, если она не задана. Это действие нельзя отменить.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Ответить на звонок",

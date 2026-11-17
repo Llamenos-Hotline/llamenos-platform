@@ -395,4 +395,55 @@ final class ShiftAdminUITests: BaseUITest {
             }
         }
     }
+
+    /// #2777: a typed reason reaches the server only as ciphertext with reader
+    /// envelopes, and the author's own device still reads it back.
+    func testAvailabilityReasonIsSealedOnServerAndReadableInApp() {
+        let reason = "court date \(UUID().uuidString.prefix(8))"
+        var appPubkey = ""
+
+        given("I am an admin on the Shifts tab") {
+            appPubkey = launchAsAdminReturningPubkey()
+            navigateToShifts()
+        }
+        when("I mark myself unavailable today with a reason") {
+            let addButton = scrollToFind("availability-add-button", maxSwipes: 8)
+            XCTAssertTrue(addButton.exists, "Add Availability Block button should exist")
+            addButton.tap()
+            let reasonField = find("availability-reason-input")
+            XCTAssertTrue(reasonField.waitForExistence(timeout: 5))
+            reasonField.tap()
+            reasonField.typeText(reason)
+            let saveButton = find("availability-save-button")
+            XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+            saveButton.tap()
+        }
+        then("the server holds a sealed reason that does not contain the text") {
+            waitForServerState {
+                // TestAdminAPI is not the app user, so read the hub-wide list.
+                let blocks = self.jsonObject(
+                    TestAdminAPI.send(
+                        "GET",
+                        "/api/hubs/\(self.testHubId)/shifts/availability?from=2000-01-01&to=2100-12-31",
+                        baseURL: self.testHubURL
+                    ),
+                    "blocks"
+                )
+                return blocks.contains { block in
+                    guard block["userPubkey"] as? String == appPubkey,
+                          let sealed = block["encryptedReason"] as? [String: Any],
+                          let ciphertext = sealed["encryptedContent"] as? String,
+                          let envelopes = sealed["envelopes"] as? [[String: Any]] else { return false }
+                    let raw = (try? JSONSerialization.data(withJSONObject: block)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    return !envelopes.isEmpty && !ciphertext.isEmpty && !raw.contains(reason)
+                }
+            }
+        }
+        and("the app shows the reason it typed") {
+            XCTAssertTrue(
+                app.staticTexts[reason].waitForExistence(timeout: 10),
+                "The author's device should open its own sealed reason"
+            )
+        }
+    }
 }

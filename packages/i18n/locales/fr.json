@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Vous ne recevrez plus d'appels entrants.",
     "deleteConfirmTitle": "Supprimer cette garde ?",
-    "deleteConfirmMessage": "Les bénévoles de cette garde cesseront de recevoir des appels pendant ses horaires. Sauf si une autre garde couvre ces heures, les appels iront au groupe de secours, ou resteront sans réponse s'il n'y en a pas. Cette action est irréversible."
+    "deleteConfirmMessage": "Les bénévoles de cette garde cesseront de recevoir des appels pendant ses horaires. Sauf si une autre garde couvre ces heures, les appels iront au groupe de secours, ou resteront sans réponse s'il n'y en a pas. Cette action est irréversible.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Répondre à l'appel",

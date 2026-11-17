@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Bạn sẽ ngừng nhận cuộc gọi đến.",
     "deleteConfirmTitle": "Xóa ca trực này?",
-    "deleteConfirmMessage": "Các tình nguyện viên trong ca này sẽ không nhận cuộc gọi trong giờ của ca. Nếu không có ca nào khác phủ các giờ đó, cuộc gọi sẽ chuyển đến nhóm dự phòng, hoặc không được trả lời nếu chưa đặt nhóm nào. Không thể hoàn tác."
+    "deleteConfirmMessage": "Các tình nguyện viên trong ca này sẽ không nhận cuộc gọi trong giờ của ca. Nếu không có ca nào khác phủ các giờ đó, cuộc gọi sẽ chuyển đến nhóm dự phòng, hoặc không được trả lời nếu chưa đặt nhóm nào. Không thể hoàn tác.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Trả lời cuộc gọi",

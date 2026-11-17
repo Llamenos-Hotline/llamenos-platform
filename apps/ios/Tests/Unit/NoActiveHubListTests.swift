@@ -146,7 +146,7 @@ final class NoActiveHubListTests: XCTestCase {
     }
 
     func testRingGroupsSettleEmptyWithoutAnError() async throws {
-        let viewModel = ShiftAdminViewModel(apiService: try makeAPI(), hubContext: HubContext())
+        let viewModel = ShiftAdminViewModel(apiService: try makeAPI(), cryptoService: CryptoService(), hubContext: HubContext())
 
         await viewModel.loadRingGroups()
 
@@ -222,7 +222,7 @@ final class HubOwnedRowsClearTests: XCTestCase {
             sessionConfiguration: configuration
         )
         try api.configure(hubURLString: "https://\(HubAStubURLProtocol.host)")
-        return (ShiftAdminViewModel(apiService: api, hubContext: hubContext), hubContext)
+        return (ShiftAdminViewModel(apiService: api, cryptoService: CryptoService(), hubContext: hubContext), hubContext)
     }
 
     override func tearDown() {
@@ -298,6 +298,7 @@ final class MembershipUnavailableListTests: XCTestCase {
     private func makeShifts(_ api: APIService, _ hubContext: HubContext) -> ShiftsViewModel {
         ShiftsViewModel(
             apiService: api,
+            cryptoService: CryptoService(),
             hubContext: hubContext,
             linphoneService: MockLinphoneService(),
             shiftClockService: ShiftClockService(apiService: api)

@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "您将不再接收来电。",
     "deleteConfirmTitle": "删除此班次？",
-    "deleteConfirmMessage": "此班次的志愿者在班次时段内将不再接到来电。如果没有其他班次覆盖这些时段，来电将转到备用组；若未设置备用组，则无人接听。此操作无法撤销。"
+    "deleteConfirmMessage": "此班次的志愿者在班次时段内将不再接到来电。如果没有其他班次覆盖这些时段，来电将转到备用组；若未设置备用组，则无人接听。此操作无法撤销。",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "接听电话",

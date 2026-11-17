@@ -31,7 +31,10 @@ import {
   createShiftViaApi,
   createUserViaApi,
   generateTestKeypair,
+  encryptForTest,
 } from '../../api-helpers'
+import { decryptContent, hpkeRecipientForSeed, unwrapKey } from '../../crypto-helpers'
+import { LABEL_AVAILABILITY_REASON, LABEL_SHIFT_OVERRIDE_NOTE } from '@shared/crypto-labels'
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -304,6 +307,55 @@ Given('I have an availability block', async ({ request, world, workerHub }) => {
 Given('a volunteer has an availability block in {string} to {string}', async ({ request, workerHub }, from: string, to: string) => {
   const vol = await createUserViaApi(request, { name: 'availability-vol' })
   await apiPost(request, `/hubs/${workerHub}/shifts/availability`, { id: crypto.randomUUID(), startDate: from, endDate: to }, vol.seedHex)
+})
+
+// ── Sealed free text (#2777, #2778) ───────────────────────────────────────────
+// A reason or note goes on the wire as `{ encryptedContent, envelopes }` in the
+// shift_record.rs format (label-bound content AAD, `label:key-wrap` wrap AAD) —
+// the canonical construction encryptForTest builds for any label.
+
+const SEALED_FIELD = {
+  reason: { label: LABEL_AVAILABILITY_REASON, key: 'encryptedReason', path: 'availability' },
+  note: { label: LABEL_SHIFT_OVERRIDE_NOTE, key: 'encryptedNote', path: 'overrides' },
+} as const
+type SealedKind = keyof typeof SEALED_FIELD
+
+function sealedBody(kind: SealedKind, extra: Record<string, unknown>, sealed: unknown): Record<string, unknown> {
+  const base = kind === 'reason'
+    ? { id: crypto.randomUUID(), startDate: '2026-08-01', endDate: '2026-08-05' }
+    : { id: crypto.randomUUID(), date: '2026-08-01', type: 'cancel' }
+  return { ...base, ...extra, [SEALED_FIELD[kind].key]: sealed }
+}
+
+When('I save a {word} {string} sealed to myself and the hub admins', async ({ request, world, workerHub }, kind: SealedKind, text: string) => {
+  const sealed = await encryptForTest(text, [...new Set([getActorSeed(world), ADMIN_SEED])], SEALED_FIELD[kind].label)
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts/${SEALED_FIELD[kind].path}`, sealedBody(kind, {}, sealed), getActorSeed(world)))
+})
+
+When('I save a {word} {string} sealed only to myself', async ({ request, world, workerHub }, kind: SealedKind, text: string) => {
+  const sealed = await encryptForTest(text, [getActorSeed(world)], SEALED_FIELD[kind].label)
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts/${SEALED_FIELD[kind].path}`, sealedBody(kind, {}, sealed), getActorSeed(world)))
+})
+
+When('I save a {word} {string} as plain text', async ({ request, world, workerHub }, kind: SealedKind, text: string) => {
+  setLastResponse(world, await apiPost(request, `/hubs/${workerHub}/shifts/${SEALED_FIELD[kind].path}`, sealedBody(kind, {}, text), getActorSeed(world)))
+})
+
+Then('the stored {word} is ciphertext an admin opens as {string}', async ({ world }, kind: SealedKind, text: string) => {
+  const data = getSharedState(world).lastResponse?.data as Record<string, unknown> | null
+  const sealed = data?.[SEALED_FIELD[kind].key] as { encryptedContent?: unknown; envelopes?: unknown } | null | undefined
+  expect(sealed, `response ${SEALED_FIELD[kind].key} should be a sealed object`).toBeTruthy()
+  const ciphertext = String(sealed?.encryptedContent)
+  const hexOfText = Buffer.from(text, 'utf8').toString('hex')
+  expect(JSON.stringify(data)).not.toContain(text)
+  expect(ciphertext).not.toContain(hexOfText)
+
+  const admin = hpkeRecipientForSeed(ADMIN_SEED)
+  const envelopes = (sealed?.envelopes ?? []) as Array<{ pubkey: string; ct: string; enc: string }>
+  const mine = envelopes.find(e => e.pubkey === admin.pubkeyHex)
+  expect(mine, 'one envelope must be addressed to the admin').toBeTruthy()
+  const contentKey = await unwrapKey(mine!.ct, mine!.enc, admin.skHex, SEALED_FIELD[kind].label)
+  expect(decryptContent(ciphertext, contentKey, SEALED_FIELD[kind].label)).toBe(text)
 })
 
 // ── Request Givens ────────────────────────────────────────────────────────────

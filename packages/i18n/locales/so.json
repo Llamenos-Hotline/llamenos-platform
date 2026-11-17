@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya.",
     "deleteConfirmTitle": "Wareeggan ma tirtiraa?",
-    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo."
+    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Ka jawaab wicitaanka",

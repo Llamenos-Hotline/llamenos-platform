@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Ou p ap resevwa apèl k ap antre ankò.",
     "deleteConfirmTitle": "Efase ekip travay sa a?",
-    "deleteConfirmMessage": "Volontè nan ekip travay sa a pap resevwa apèl ankò pandan lè li yo. Sof si yon lòt ekip kouvri lè sa yo, apèl yo ap ale nan gwoup ranplasman an, oswa yo pap jwenn repons si pa gen okenn. Pa gen fason pou defèt sa."
+    "deleteConfirmMessage": "Volontè nan ekip travay sa a pap resevwa apèl ankò pandan lè li yo. Sof si yon lòt ekip kouvri lè sa yo, apèl yo ap ale nan gwoup ranplasman an, oswa yo pap jwenn repons si pa gen okenn. Pa gen fason pou defèt sa.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Reponn apèl",

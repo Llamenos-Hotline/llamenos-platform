@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "¿Xíta turno yóꞌo?",
-    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer."
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Nakuiin llamada",
