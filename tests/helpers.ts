@@ -8,6 +8,7 @@ import type {
   callPresenceResponseSchema,
 } from '@protocol/schemas/calls'
 import type { ConversationListResponse } from '@protocol/schemas/conversations'
+import type { HubKeyRecipientsResponse } from '@protocol/schemas/hubs'
 import type { HubIncidentListResponse } from '@protocol/schemas/incidents'
 import type { ShiftStatus, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import type { UserListResponse } from '@protocol/schemas/users'
@@ -565,8 +566,8 @@ export async function resetTestState(request: APIRequestContext) {
 /**
  * The hub-scoped reads the app makes on its own, on a timer, from every page —
  * whatever the spec is about: the dashboard's live-call poll and presence list,
- * the shift status and schedule, the volunteer roster, open incidents and the
- * active conversation list.
+ * the shift status and schedule, the volunteer roster, open incidents, the
+ * active conversation list and the hub-key recipients.
  *
  * A spec that pins a SYNTHETIC hub (`mockConfigWithHub`) names a hub the real
  * backend has never heard of, so these reads 404 on every poll for the whole
@@ -584,6 +585,12 @@ type BackgroundHubReads = {
   readonly users: UserListResponse
   readonly incidents: HubIncidentListResponse
   readonly conversations: ConversationListResponse
+  /**
+   * The hub-key lifecycle (`useHubKeys`, mounted at the root) asks who a hub's key
+   * is shared with. A hub with no members has nobody to wrap for, so the device
+   * generates and installs nothing and just waits, quietly.
+   */
+  readonly 'key/recipients': HubKeyRecipientsResponse
 }
 
 const BACKGROUND_HUB_READS: BackgroundHubReads = {
@@ -594,6 +601,9 @@ const BACKGROUND_HUB_READS: BackgroundHubReads = {
   users: { users: [] },
   incidents: { incidents: [] },
   conversations: { conversations: [], total: 0, page: 1, limit: 200 },
+  'key/recipients': {
+    generation: 0, envelopes: [], members: [], epoch: 0, rotation: null, rotationRequired: false,
+  },
 }
 
 /**

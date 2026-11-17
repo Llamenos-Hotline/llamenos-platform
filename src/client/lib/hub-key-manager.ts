@@ -169,6 +169,9 @@ async function generateAndInstall(hubId: string, recipients: HubKeyRecipientsRes
   }
 }
 
+/** What the mounted `useHubKeys` last synced, for `resyncHubKeys`. */
+let mounted: { hubIds: readonly string[]; mayManage: boolean } | null = null
+
 /**
  * Where a load of `hubId`'s key ended: `held`; `waiting` for a manager's device
  * to share it; or `not-served` — the server has no such hub for this account
@@ -179,12 +182,14 @@ type KeyLoad = 'held' | 'waiting' | 'not-served'
 
 /**
  * Load this device's copy of `hubId`'s key, generating the hub's first key if
- * this user manages the hub and nobody holds one. Never throws for an answer
+ * `mayGenerate` (this user manages hubs) and nobody holds one. Only a manager can
+ * read who the key is shared with, so a member who cannot manage keys does not
+ * ask — it would be refused 403 on every sync. Never throws for an answer
  * the server legitimately gives; it does throw for a wrap addressed to this
  * device that will not open — that is a defect (wrong key or AAD at write
  * time), not a state.
  */
-async function loadOrGenerate(hubId: string): Promise<KeyLoad> {
+async function loadOrGenerate(hubId: string, mayGenerate: boolean): Promise<KeyLoad> {
   if (await hasHubKey(hubId)) return 'held'
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -197,6 +202,8 @@ async function loadOrGenerate(hubId: string): Promise<KeyLoad> {
       if (isStatus(err, 403)) return 'waiting'
       if (!isStatus(err, 404)) throw err
     }
+
+    if (!mayGenerate) return 'waiting'
 
     let recipients: HubKeyRecipientsResponse
     try {
@@ -221,11 +228,15 @@ async function loadOrGenerate(hubId: string): Promise<KeyLoad> {
 
 const inFlight = new Map<string, Promise<KeyLoad>>()
 
-/** `loadOrGenerate`, at most one at a time per hub. */
-function loadHubKey(hubId: string): Promise<KeyLoad> {
+/**
+ * `loadOrGenerate`, at most one at a time per hub. `mayGenerate` defaults to
+ * what the mounted `useHubKeys` knows of this user; the server's per-hub answer
+ * still decides.
+ */
+function loadHubKey(hubId: string, mayGenerate = mounted?.mayManage ?? true): Promise<KeyLoad> {
   const running = inFlight.get(hubId)
   if (running) return running
-  const run = loadOrGenerate(hubId).finally(() => inFlight.delete(hubId))
+  const run = loadOrGenerate(hubId, mayGenerate).finally(() => inFlight.delete(hubId))
   inFlight.set(hubId, run)
   return run
 }
@@ -626,7 +637,7 @@ function reportUnavailable(hubId: string, state: Exclude<KeyLoad, 'held'>): void
  */
 async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
   try {
-    const loaded = await loadHubKey(hubId)
+    const loaded = await loadHubKey(hubId, mayManage)
     if (loaded !== 'held') {
       reportUnavailable(hubId, loaded)
       return
@@ -657,9 +668,6 @@ async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
     console.error(`[hub-key] hub ${hubId} failed — ${describe(err)}`)
   }
 }
-
-/** What the mounted `useHubKeys` last synced, for `resyncHubKeys`. */
-let mounted: { hubIds: readonly string[]; mayManage: boolean } | null = null
 
 /**
  * Sync every member hub now — load, adopt, and for a manager rotate and

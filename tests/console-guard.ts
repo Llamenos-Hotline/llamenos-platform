@@ -68,6 +68,28 @@ export const EXPECTED_CONSOLE_ERRORS: readonly ExpectedConsoleError[] = [
     reason: 'no A2P registration is a 404 by contract; the client maps it to null',
   },
   {
+    // Chromium logs every non-2xx response, whether or not the app handles it.
+    // `GET /api/hubs/:id/key` is 404 until a manager's device has wrapped the hub
+    // key for this user (apps/worker/routes/hubs.ts: "No key envelope for this
+    // user"), which is every member's first sight of a hub. useHubKeys is mounted
+    // at the root and `loadOrGenerate` (src/client/lib/hub-key-manager.ts) turns
+    // that 404 into "not held yet" — then loads, generates or waits.
+    message: /^Failed to load resource: the server responded with a status of 404 \(Not Found\)$/,
+    source: /\/api\/hubs\/[^/]+\/key$/,
+    reason: 'no wrap of the hub key for this user yet is a 404 by contract; the key manager maps it to "not held"',
+  },
+  {
+    // Chromium logs every non-2xx response, whether or not the app handles it.
+    // `PUT /api/hubs/:id/key` is a compare-and-set on the key generation: two
+    // manager devices bootstrapping a hub at once both read generation 0, one
+    // wins, the other gets 409 (`SettingsService.setHubKeyEnvelopes`) and
+    // `generateAndInstall` (src/client/lib/hub-key-manager.ts) drops its own key
+    // and loads the winner's.
+    message: /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    source: /\/api\/hubs\/[^/]+\/key$/,
+    reason: 'losing the hub-key compare-and-set is a 409 by contract; the key manager loads the winner\'s key',
+  },
+  {
     // Chromium aborts in-flight requests with this when ANY host network
     // interface changes (a container starting, a VPN reconnecting). It says
     // nothing about the page, and a load that genuinely needed the resource

@@ -50,6 +50,7 @@ class FakeHubKeyServer {
   roles = new Map<string, string>()
   puts = 0
   rotations = 0
+  recipientReads = 0
   /** The hub is not there for this server (deleted elsewhere): every key route answers 404 "Hub not found". */
   gone = false
 
@@ -84,6 +85,7 @@ class FakeHubKeyServer {
   }
 
   recipients(caller: string, ApiError: ApiErrorCtor): HubKeyRecipientsResponse {
+    this.recipientReads++
     this.served(ApiError)
     if (!this.members.get(caller)?.manager) throw new ApiError(403, '{"error":"Forbidden"}')
     const rotationRequired = this.rotationDue && this.wraps.size > 0
@@ -294,6 +296,26 @@ describe('hub key lifecycle', () => {
       expect(warnings.mock.calls[0]?.[0]).toContain(`hub ${HUB}`)
       expect(errors).not.toHaveBeenCalled()
     })
+  })
+
+  it('a member who cannot manage keys never asks who the key is shared with (a read only a manager is allowed)', { timeout: 60_000 }, async () => {
+    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => false }) }))
+    vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
+    vi.doMock('./relay/context', () => ({ useRelayState: () => 'connected' }))
+    try {
+      const volunteer = await device('volunteer', { manager: false })
+
+      const mounted = renderHook(() => volunteer.hubKeys.useHubKeys())
+      await volunteer.hubKeys.resyncHubKeys()
+      mounted.unmount()
+
+      expect(server.recipientReads).toBe(0)
+      expect(await volunteer.hubKeys.ensureHubKey(HUB)).toBe(false)
+    } finally {
+      vi.doUnmock('./auth')
+      vi.doUnmock('./member-hubs')
+      vi.doUnmock('./relay/context')
+    }
   })
 
   it('a manager who lacks a wrap of an EXISTING key does not replace it', { timeout: 60_000 }, async () => {
