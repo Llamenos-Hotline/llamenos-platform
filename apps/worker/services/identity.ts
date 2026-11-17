@@ -9,8 +9,8 @@ import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
-import { getHubKeyRecipients } from '../lib/hub-key'
-import type { HubKeyRecipientsResponse } from '@protocol/schemas/hubs'
+import { getHubKeyRecipients, getHubKeyRotation, markHubKeyRotationDue, rotateHubKey } from '../lib/hub-key'
+import type { HubKeyRecipientsResponse, HubKeyRotateBody, HubKeyRotateResponse, HubKeyRotationResponse } from '@protocol/schemas/hubs'
 import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor } from '../lib/readers'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
@@ -415,6 +415,16 @@ export class IdentityService {
   /** What a key holder needs to distribute `hubId`'s key. See `lib/hub-key.ts`. */
   async getHubKeyRecipients(hubId: string): Promise<HubKeyRecipientsResponse> {
     return getHubKeyRecipients(this.db, hubId)
+  }
+
+  /** The hub's key epoch and the statement that introduced it. See `lib/hub-key.ts`. */
+  async getHubKeyRotation(hubId: string): Promise<HubKeyRotationResponse> {
+    return getHubKeyRotation(this.db, hubId)
+  }
+
+  /** Replace the hub's key with a fresh one, re-sealing everything. See `lib/hub-key.ts`. */
+  async rotateHubKey(hubId: string, body: HubKeyRotateBody): Promise<HubKeyRotateResponse> {
+    return rotateHubKey(this.db, hubId, body)
   }
 
   /** The hub's escrow key, or `undefined` when it has none (404 for an unknown hub). */
@@ -955,6 +965,11 @@ export class IdentityService {
           and(eq(hubKeys.hubId, data.hubId), eq(hubKeys.recipientPubkey, data.pubkey)),
         )
         .returning({ recipientPubkey: hubKeys.recipientPubkey })
+
+      // The departed member may have kept the key the wrap held: the hub's key
+      // must be rotated, and with the wrap gone this flag is the only record of
+      // that (PROTOCOL.md §2.7 "Key Rotation").
+      if (revokedWraps.length > 0) await markHubKeyRotationDue(tx, [data.hubId])
 
       const wasMember =
         priorRoles.length !== hubRoles.length || revokedWraps.length > 0

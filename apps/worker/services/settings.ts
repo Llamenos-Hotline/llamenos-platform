@@ -120,6 +120,7 @@ import {
   resolveTTL,
 } from '../lib/ttl'
 import { createLogger } from '../lib/logger'
+import { markHubKeyRotationDue } from '../lib/hub-key'
 import type { ProviderMediaEraser } from './provider-recordings'
 import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { withRetry, isRetryableDbError } from '../lib/retry'
@@ -3127,7 +3128,10 @@ export class SettingsService {
         )
       }
 
-      await tx.delete(hubKeys).where(eq(hubKeys.hubId, hubId))
+      const replaced = await tx
+        .delete(hubKeys)
+        .where(eq(hubKeys.hubId, hubId))
+        .returning({ recipientPubkey: hubKeys.recipientPubkey })
       if (data.envelopes.length > 0) {
         await tx.insert(hubKeys).values(data.envelopes.map(envelope => ({
           hubId,
@@ -3135,6 +3139,12 @@ export class SettingsService {
           enc: envelope.enc,
           ct: envelope.ct,
         })))
+      }
+      // Someone who held a wrap and is not in the new set still knows the key
+      // this set wraps: record that it has to be rotated (PROTOCOL.md §2.7).
+      const kept = new Set(data.envelopes.map(e => e.pubkey))
+      if (replaced.some(w => !kept.has(w.recipientPubkey))) {
+        await markHubKeyRotationDue(tx, [hubId])
       }
       return { ok: true as const, generation: bumped.generation }
     })

@@ -44,6 +44,39 @@ export const hubKeyEnvelopeResponseSchema = z.object({
   envelope: recipientEnvelopeSchema,
 })
 
+/** One hub-sealed value — `hex(nonce ‖ ct ‖ tag)` under the hub key (PROTOCOL.md §2.7). */
+const hubSealedFieldSchema = z.string().min(1).max(65536)
+
+/** A tag's sealed columns. */
+export const hubSealedTagSchema = z.object({
+  id: z.string().min(1),
+  encryptedLabel: hubSealedFieldSchema,
+  encryptedCategory: hubSealedFieldSchema.nullable(),
+})
+
+/** A team's sealed columns. */
+export const hubSealedTeamSchema = z.object({
+  id: z.string().min(1),
+  encryptedName: hubSealedFieldSchema,
+  encryptedDescription: hubSealedFieldSchema.nullable(),
+})
+
+/** A hub role's sealed columns (#2780). */
+export const hubSealedRoleSchema = z.object({
+  id: z.string().min(1),
+  encryptedName: hubSealedFieldSchema,
+  encryptedDescription: hubSealedFieldSchema.nullable(),
+})
+
+/** Every value a hub holds sealed under its key, by table. */
+export const hubSealedValuesSchema = z.object({
+  tags: z.array(hubSealedTagSchema),
+  teams: z.array(hubSealedTeamSchema),
+  roles: z.array(hubSealedRoleSchema),
+})
+
+export type HubSealedValues = z.infer<typeof hubSealedValuesSchema>
+
 /**
  * `GET /api/hubs/:hubId/key/recipients` — what a key holder needs to distribute
  * the hub key (PROTOCOL.md §2.7), read in one snapshot:
@@ -68,7 +101,36 @@ export const hubKeyRecipientsResponseSchema = z.object({
     /** The X25519 key of the member's device to wrap for; null until they register one. */
     encryptionPubkey: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   })),
+  /** Which key the wraps hold (`hubs.hub_key_epoch`): 0 for the first key, +1 per rotation. */
+  epoch: z.number().int().min(0),
+  /**
+   * True when someone who held the current key has since left — departed the
+   * hub, was erased, deactivated, or lost their signing key. The key must be
+   * rotated (`POST /key/rotate`) before anything else is sealed under it.
+   */
+  rotationRequired: z.boolean(),
+  /**
+   * Present exactly when `rotationRequired`: every value the hub holds sealed
+   * under its key, which a rotation must re-seal under the new one (the
+   * rotation is refused unless it re-seals all of them, unchanged since this
+   * read).
+   */
+  sealed: hubSealedValuesSchema.optional(),
 })
+
+/**
+ * `GET /api/hubs/:hubId/key/rotation` (any member) — the key epoch and the
+ * statement that introduced it. A device holding the previous epoch's key opens
+ * `rotation` with that key (`LABEL_HUB_KEY_ROTATION`) before it adopts the new
+ * one; the server cannot write a statement that opens, because it has never
+ * held a hub key.
+ */
+export const hubKeyRotationResponseSchema = z.object({
+  epoch: z.number().int().min(0),
+  rotation: z.string().nullable(),
+})
+
+export type HubKeyRotationResponse = z.infer<typeof hubKeyRotationResponseSchema>
 
 /** `PUT /api/hubs/:hubId/key` response: the envelope set's new generation. */
 export const hubKeySetResponseSchema = z.object({
@@ -130,6 +192,41 @@ export const hubKeyEnvelopesBodySchema = z.object({
 })
 
 export type HubKeyEnvelopesBody = z.infer<typeof hubKeyEnvelopesBodySchema>
+
+/**
+ * `POST /api/hubs/:hubId/key/rotate` — replace the hub's key with a fresh one
+ * (PROTOCOL.md §2.7 "Key Rotation"). Atomic with:
+ *
+ * - `envelopes`: a wrap of the NEW key for exactly the hub's current members
+ *   that have a device key — no one else (a departed member is refused), and
+ *   no one missing (so no admin's access is dropped).
+ * - `rotation`: the statement sealed under the OLD key that lets members'
+ *   devices accept the new one (see `hubKeyRotationResponseSchema`).
+ * - `resealed`: for every value the hub holds sealed under its key, the value
+ *   `from` the recipients read and the same plaintext sealed under the new key
+ *   `to`. The server refuses the rotation if any value is missing or changed
+ *   since — otherwise it would be left sealed under a key nobody holds any more.
+ */
+export const hubKeyRotateBodySchema = z.object({
+  expectedGeneration: z.number().int().min(0),
+  envelopes: hubKeyEnvelopesBodySchema.shape.envelopes,
+  rotation: z.string().min(1).max(8192),
+  resealed: z.object({
+    tags: z.array(z.object({ from: hubSealedTagSchema, to: hubSealedTagSchema })),
+    teams: z.array(z.object({ from: hubSealedTeamSchema, to: hubSealedTeamSchema })),
+    roles: z.array(z.object({ from: hubSealedRoleSchema, to: hubSealedRoleSchema })),
+  }),
+})
+
+export type HubKeyRotateBody = z.infer<typeof hubKeyRotateBodySchema>
+
+/** `POST /api/hubs/:hubId/key/rotate` response. */
+export const hubKeyRotateResponseSchema = z.object({
+  generation: z.number().int().min(1),
+  epoch: z.number().int().min(1),
+})
+
+export type HubKeyRotateResponse = z.infer<typeof hubKeyRotateResponseSchema>
 
 // --- Reader sets (PROTOCOL §2.4.2; operator decisions D1, D2, A7) ---
 
