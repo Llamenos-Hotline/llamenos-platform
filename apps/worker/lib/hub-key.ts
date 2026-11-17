@@ -82,6 +82,7 @@ type HubKeyState = {
   generation: number
   epoch: number
   rotationDue: boolean
+  rotation: HubKeyRotationResponse['rotation']
 }
 
 /** The hub's key bookkeeping. 404 for no such hub, 409 for a shredded one. */
@@ -91,6 +92,8 @@ async function readHubKeyState(tx: Tx, hubId: string, lock: boolean): Promise<Hu
       generation: hubs.hubKeyGeneration,
       epoch: hubs.hubKeyEpoch,
       rotationDue: hubs.hubKeyRotationDue,
+      proof: hubs.hubKeyRotationProof,
+      check: hubs.hubKeyRotationCheck,
       status: hubs.status,
     })
     .from(hubs)
@@ -98,7 +101,16 @@ async function readHubKeyState(tx: Tx, hubId: string, lock: boolean): Promise<Hu
   const [hub] = lock ? await query.for('update') : await query
   if (!hub) throw new ServiceError(404, 'Hub not found')
   if (hub.status === 'shredded') throw new ServiceError(409, 'Hub is shredded — its key is destroyed')
-  return { generation: hub.generation, epoch: hub.epoch, rotationDue: hub.rotationDue }
+  return {
+    generation: hub.generation,
+    epoch: hub.epoch,
+    rotationDue: hub.rotationDue,
+    rotation: statementOf(hub.proof, hub.check),
+  }
+}
+
+function statementOf(proof: string | null, check: string | null): HubKeyRotationResponse['rotation'] {
+  return proof !== null && check !== null ? { proof, check } : null
 }
 
 /**
@@ -198,6 +210,7 @@ export async function getHubKeyRecipients(
     return {
       generation: state.generation,
       epoch: state.epoch,
+      rotation: state.rotation,
       envelopes: wraps.map(w => ({ pubkey: w.recipientPubkey, enc: w.enc, ct: w.ct })),
       members,
       rotationRequired,
@@ -219,10 +232,7 @@ export async function getHubKeyRotation(db: Database, hubId: string): Promise<Hu
     .where(eq(hubs.id, hubId))
   if (!hub) throw new ServiceError(404, 'Hub not found')
   if (hub.status === 'shredded') throw new ServiceError(409, 'Hub is shredded — its key is destroyed')
-  return {
-    epoch: hub.epoch,
-    rotation: hub.proof !== null && hub.check !== null ? { proof: hub.proof, check: hub.check } : null,
-  }
+  return { epoch: hub.epoch, rotation: statementOf(hub.proof, hub.check) }
 }
 
 function sameSet(a: Iterable<string>, b: Iterable<string>): boolean {

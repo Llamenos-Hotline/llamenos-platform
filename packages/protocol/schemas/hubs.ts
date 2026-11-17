@@ -78,6 +78,24 @@ export const hubSealedValuesSchema = z.object({
 export type HubSealedValues = z.infer<typeof hubSealedValuesSchema>
 
 /**
+ * The statement a rotation leaves behind (PROTOCOL.md §2.7 "Key Rotation"),
+ * both parts sealed with the hub-field cipher under `LABEL_HUB_KEY_ROTATION`:
+ *
+ * - `check`: `{ hubId, epoch }` sealed under the NEW key. A device whose held
+ *   key opens it holds the current key.
+ * - `proof`: `{ hubId, epoch, check }` sealed under the PREVIOUS key. A device
+ *   holding the previous key opens it, and only then adopts the new key — and
+ *   only if its new wrap opens to a key that opens `check`. The server cannot
+ *   write a proof that opens: it has never held a hub key.
+ */
+export const hubKeyRotationStatementSchema = z.object({
+  proof: z.string().min(1).max(4096),
+  check: z.string().min(1).max(4096),
+})
+
+export type HubKeyRotationStatement = z.infer<typeof hubKeyRotationStatementSchema>
+
+/**
  * `GET /api/hubs/:hubId/key/recipients` — what a key holder needs to distribute
  * the hub key (PROTOCOL.md §2.7), read in one snapshot:
  *
@@ -104,6 +122,13 @@ export const hubKeyRecipientsResponseSchema = z.object({
   /** Which key the wraps hold (`hubs.hub_key_epoch`): 0 for the first key, +1 per rotation. */
   epoch: z.number().int().min(0),
   /**
+   * The statement that introduced `epoch` (null before the first rotation). A
+   * distributor or rotator first confirms the key it holds opens its `check`
+   * — that it holds THIS epoch's key — so it never hands out, or re-seals
+   * from, a key a rotation already replaced.
+   */
+  rotation: hubKeyRotationStatementSchema.nullable(),
+  /**
    * True when someone who held the current key has since left — departed the
    * hub, was erased, deactivated, or lost their signing key. The key must be
    * rotated (`POST /key/rotate`) before anything else is sealed under it.
@@ -117,24 +142,6 @@ export const hubKeyRecipientsResponseSchema = z.object({
    */
   sealed: hubSealedValuesSchema.optional(),
 })
-
-/**
- * The statement a rotation leaves behind (PROTOCOL.md §2.7 "Key Rotation"),
- * both parts sealed with the hub-field cipher under `LABEL_HUB_KEY_ROTATION`:
- *
- * - `check`: `{ hubId, epoch }` sealed under the NEW key. A device whose held
- *   key opens it holds the current key.
- * - `proof`: `{ hubId, epoch, check }` sealed under the PREVIOUS key. A device
- *   holding the previous key opens it, and only then adopts the new key — and
- *   only if its new wrap opens to a key that opens `check`. The server cannot
- *   write a proof that opens: it has never held a hub key.
- */
-export const hubKeyRotationStatementSchema = z.object({
-  proof: z.string().min(1).max(4096),
-  check: z.string().min(1).max(4096),
-})
-
-export type HubKeyRotationStatement = z.infer<typeof hubKeyRotationStatementSchema>
 
 /**
  * `GET /api/hubs/:hubId/key/rotation` (any member) — the key epoch and the

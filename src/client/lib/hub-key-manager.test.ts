@@ -81,6 +81,7 @@ class FakeHubKeyServer {
     return {
       generation: this.generation,
       epoch: this.epoch,
+      rotation: this.rotation,
       envelopes: [...this.wraps].filter(([pk]) => this.members.has(pk)).map(([pubkey, w]) => ({ pubkey, ...w })),
       members: [...this.members.values()].map(m => ({ pubkey: m.pubkey, encryptionPubkey: m.encryptionPubkey })),
       rotationRequired,
@@ -387,5 +388,36 @@ describe('hub key lifecycle', () => {
     expect(server.rotations).toBe(1)
     // The value that could not be opened under the old key is carried, not dropped.
     expect(server.roles.get('role-a')).toBe('edited-meanwhile')
+  })
+
+  it('a manager still holding a rotated-out key hands it to no one until it adopts the new one', { timeout: 60_000 }, async () => {
+    const adminA = await device('admin-a', { manager: true })
+    const adminB = await device('admin-b', { manager: true })
+    const departing = await device('departing', { manager: false })
+    server.roles.set('role-a', await adminA.roles.sealHubRoleField(HUB, 'Legal observer'))
+    expect(await adminB.hubKeys.ensureHubKey(HUB)).toBe(true)
+    expect(await departing.hubKeys.ensureHubKey(HUB)).toBe(true)
+
+    server.remove(departing.me)
+    // Nothing is distributed while the rotation is due — not even by the
+    // manager who will rotate.
+    const newcomer = await device('newcomer', { manager: false })
+    expect(await adminA.hubKeys.distributeHubKey(HUB)).toBe(0)
+    // The rotation wraps everyone who is a member now, the newcomer included.
+    expect(await adminA.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(true)
+    expect([...server.wraps.keys()].sort()).toEqual([adminA.me, adminB.me, newcomer.me].sort())
+
+    const late = await device('late', { manager: false })
+    // adminB's device still holds the key the departed member knows: it must
+    // not wrap that key for the late joiner.
+    expect(await adminB.hubKeys.distributeHubKey(HUB)).toBe(0)
+    expect(server.wraps.has(late.me)).toBe(false)
+    expect(await adminB.hubKeys.rotateHubKeyIfRequired(HUB)).toBe(false)
+    expect(server.rotations).toBe(1)
+
+    expect(await adminB.hubKeys.adoptHubKeyRotation(HUB)).toBe('adopted')
+    expect(await adminB.hubKeys.distributeHubKey(HUB)).toBe(1)
+    const [view] = await late.roles.readableRoles([hubRole('role-a', server.roles.get('role-a')!)])
+    expect(view).toMatchObject({ readable: true, displayName: 'Legal observer' })
   })
 })
