@@ -16,7 +16,7 @@ import { Timeouts } from '../../helpers'
 // every later step on the page title; now a call that cannot be established
 // fails the scenario, and every step asserts the call UI it names.
 
-Given('I have an active call', async ({ page, backendRequest, workerHub }) => {
+Given('I have an active call', async ({ page, backendRequest, workerHub, callsWorld }) => {
   const { simulateIncomingCall, simulateAnswerCall } = await import('../../simulation-helpers')
   // In the hub the page is pinned to: a call belongs to a hub (#2460), and the
   // client lists active calls per member hub.
@@ -27,9 +27,7 @@ Given('I have an active call', async ({ page, backendRequest, workerHub }) => {
     return (await p.getDevicePubkeys()).signingPubkeyHex
   })
   await simulateAnswerCall(backendRequest, callResult.callId, pubkey)
-  await page.evaluate((id) => {
-    (window as unknown as Record<string, unknown>).__test_active_call_id = id
-  }, callResult.callId)
+  callsWorld.activeCallId = callResult.callId
 })
 
 // ── When ───────────────────────────────────────────────────────────
@@ -58,11 +56,9 @@ When('I confirm the ban', async ({ page }) => {
   await confirmBtn.click()
 })
 
-When('the call ends', async ({ page, backendRequest }) => {
+When('the call ends', async ({ backendRequest, callsWorld }) => {
   const { simulateEndCall } = await import('../../simulation-helpers')
-  const callId = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_active_call_id as string | undefined,
-  )
+  const callId = callsWorld.activeCallId
   expect(callId, 'an active call must have been established').toBeTruthy()
   await simulateEndCall(backendRequest, callId as string)
 })

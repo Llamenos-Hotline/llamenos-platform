@@ -13,11 +13,11 @@ When('I press Escape three times quickly', async ({ page }) => {
   // scenarios. Use the test-only direct trigger when available; fall back to
   // real keyboard events in non-PLAYWRIGHT_TEST environments.
   const hasTrigger = await page.evaluate(
-    () => typeof (window as unknown as Record<string, unknown>).__test__triggerPanicWipe === 'function',
+    () => typeof (window as unknown as Record<string, unknown>).__TEST_TRIGGER_PANIC_WIPE__ === 'function',
   )
   if (hasTrigger) {
     await page.evaluate(() => {
-      ;((window as unknown as Record<string, unknown>).__test__triggerPanicWipe as () => void)()
+      ;((window as unknown as Record<string, unknown>).__TEST_TRIGGER_PANIC_WIPE__ as () => void)()
     })
   } else {
     await page.keyboard.press('Escape')

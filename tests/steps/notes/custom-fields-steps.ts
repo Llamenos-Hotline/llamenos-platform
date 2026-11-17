@@ -133,7 +133,7 @@ Then('I should not see the original text', async ({ page }) => {
   expect(cardCount).toBeGreaterThan(0)
 })
 
-When('I create a note with a specific call ID', async ({ page, backendRequest: request, workerHub }) => {
+When('I create a note with a specific call ID', async ({ page, backendRequest: request, workerHub, callsWorld }) => {
   await Navigation.goToNotes(page)
   await page.getByTestId(TestIds.NOTE_NEW_BTN).click()
   await expect(page.getByTestId(TestIds.NOTE_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -145,15 +145,13 @@ When('I create a note with a specific call ID', async ({ page, backendRequest: r
   await saveBtn.click()
   // Wait for note to appear in list
   await expect(page.getByTestId(TestIds.NOTE_FORM)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
-  await page.evaluate((id) => {
-    (window as unknown as Record<string, unknown>).__test_call_id = id
-  }, callId)
+  callsWorld.noteCallId = callId
 })
 
-Then('the note card header should show a truncated call ID', async ({ page }) => {
-  const callId = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_call_id)) as string
+Then('the note card header should show a truncated call ID', async ({ page, callsWorld }) => {
+  const callId = callsWorld.noteCallId
   expect(callId).toBeTruthy()
-  const truncated = callId.slice(0, 8)
+  const truncated = (callId as string).slice(0, 8)
   // Call ID appears in the note-group Card header, not inside the note-card div
   const noteGroup = page.getByTestId('note-group').filter({ hasText: truncated })
   await expect(noteGroup.first()).toBeVisible({ timeout: Timeouts.ELEMENT })

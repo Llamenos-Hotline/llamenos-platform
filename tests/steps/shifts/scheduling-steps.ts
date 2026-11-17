@@ -27,12 +27,10 @@ Then("the shift form should state the hub's time zone", async ({ page, backendRe
   await expect(page.getByTestId(TestIds.SHIFT_TIMEZONE_NOTE)).toContainText(data.hub.timezone, { timeout: Timeouts.ELEMENT })
 })
 
-When('I fill in the shift name with a unique name', async ({ page }) => {
+When('I fill in the shift name with a unique name', async ({ page, shiftsWorld }) => {
   const name = `TestShift ${Date.now()}`
   await page.getByTestId(TestIds.SHIFT_NAME_INPUT).fill(name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
 })
 
 When('I set the start time to {string}', async ({ page }, time: string) => {
@@ -43,8 +41,8 @@ When('I set the end time to {string}', async ({ page }, time: string) => {
   await page.getByTestId(TestIds.SHIFT_END_TIME).fill(time)
 })
 
-Then('the shift should appear in the schedule', async ({ page }) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the shift should appear in the schedule', async ({ page, shiftsWorld }) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
 
   // UI verification: shift card with name visible
@@ -52,8 +50,8 @@ Then('the shift should appear in the schedule', async ({ page }) => {
   await expect(card.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the shift should show {string}', async ({ page }, text: string) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the shift should show {string}', async ({ page, shiftsWorld }, text: string) => {
+  const name = shiftsWorld.shiftName
   if (name) {
     // Scoped assertion: verify the text within the specific shift card
     const card = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: name })
@@ -65,25 +63,23 @@ Then('the shift should show {string}', async ({ page }, text: string) => {
   }
 })
 
-Given('a shift exists', async ({ page }) => {
+Given('a shift exists', async ({ page, shiftsWorld }) => {
   // Create via UI for reliability — the app handles hub scoping automatically
   await ShiftPage.openCreateForm(page)
   const name = `EditShift ${Date.now()}`
   await ShiftPage.createShift(page, name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
 
   // Verify the card appears (UI confirmation is sufficient for a Given step)
   const card = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: name })
   await expect(card.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I click {string} on the shift', async ({ page }, buttonText: string) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+When('I click {string} on the shift', async ({ page, shiftsWorld }, buttonText: string) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
 
-  const card = ShiftPage.getCard(page, name)
+  const card = ShiftPage.getCard(page, name!)
   const lowerText = buttonText.toLowerCase()
   if (lowerText === 'edit') {
     await card.getByTestId(TestIds.SHIFT_EDIT_BTN).click()
@@ -97,17 +93,15 @@ When('I click {string} on the shift', async ({ page }, buttonText: string) => {
   }
 })
 
-When('I change the shift name', async ({ page }) => {
+When('I change the shift name', async ({ page, shiftsWorld }) => {
   const newName = `Updated ${Date.now()}`
   await page.getByTestId(TestIds.SHIFT_NAME_INPUT).clear()
   await page.getByTestId(TestIds.SHIFT_NAME_INPUT).fill(newName)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, newName)
+  shiftsWorld.shiftName = newName
 })
 
-Then('the updated shift name should be visible', async ({ page }) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the updated shift name should be visible', async ({ page, shiftsWorld }) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
 
   // UI verification
@@ -115,8 +109,8 @@ Then('the updated shift name should be visible', async ({ page }) => {
   await expect(card.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the shift should no longer be visible', async ({ page }) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the shift should no longer be visible', async ({ page, shiftsWorld }) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
 
   // UI verification
@@ -136,22 +130,20 @@ Then('the edit form should be visible', async ({ page }) => {
   await expect(page.getByTestId(TestIds.SHIFT_FORM)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the original shift name should still be visible', async ({ page }) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the original shift name should still be visible', async ({ page, shiftsWorld }) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
   const card = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: name })
   await expect(card.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I create a shift and assign the volunteer', async ({ page }) => {
+When('I create a shift and assign the volunteer', async ({ page, shiftsWorld }) => {
   // Navigate to Shifts page — previous step (Given a volunteer exists) may leave us on Volunteers
   await Navigation.goToShifts(page)
   await ShiftPage.openCreateForm(page)
   const name = `AssignShift ${Date.now()}`
   await page.getByTestId(TestIds.SHIFT_NAME_INPUT).fill(name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
   // Assign volunteer via UserMultiSelect combobox
   const form = page.getByTestId(TestIds.SHIFT_FORM)
   const combobox = form.getByRole('combobox')
@@ -187,43 +179,37 @@ Then('the volunteer badge should appear in the fallback group', async ({ page })
   await expect(badges.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I create a shift without assigning volunteers', async ({ page }) => {
+When('I create a shift without assigning volunteers', async ({ page, shiftsWorld }) => {
   await ShiftPage.openCreateForm(page)
   const name = `EmptyShift ${Date.now()}`
   await ShiftPage.createShift(page, name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
 })
 
 // --- Persistence scenarios ---
 
-Given('I create a shift with name {string}', async ({ page }, shiftName: string) => {
+Given('I create a shift with name {string}', async ({ page, shiftsWorld }, shiftName: string) => {
   await ShiftPage.openCreateForm(page)
   const name = `${shiftName} ${Date.now()}`
   await ShiftPage.createShift(page, name)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
 })
 
-Given('a shift exists with time {string}', async ({ page }, timeRange: string) => {
+Given('a shift exists with time {string}', async ({ page, shiftsWorld }, timeRange: string) => {
   const [start, end] = timeRange.split(' - ')
   const name = `TimeShift ${Date.now()}`
   await ShiftPage.openCreateForm(page)
   await ShiftPage.createShift(page, name, { startTime: start, endTime: end })
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_shift_name = n
-  }, name)
+  shiftsWorld.shiftName = name
 
   const card = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: name })
   await expect(card.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I edit the shift time to {string}', async ({ page }, timeRange: string) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+When('I edit the shift time to {string}', async ({ page, shiftsWorld }, timeRange: string) => {
+  const name = shiftsWorld.shiftName
   expect(name).toBeTruthy()
-  const card = ShiftPage.getCard(page, name)
+  const card = ShiftPage.getCard(page, name as string)
   await card.getByTestId(TestIds.SHIFT_EDIT_BTN).click()
   const [start, end] = timeRange.split(' - ')
   await page.getByTestId(TestIds.SHIFT_START_TIME).fill(start)
@@ -231,8 +217,8 @@ When('I edit the shift time to {string}', async ({ page }, timeRange: string) =>
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
 })
 
-Then('the shift should not show {string}', async ({ page }, text: string) => {
-  const name = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_shift_name)) as string
+Then('the shift should not show {string}', async ({ page, shiftsWorld }, text: string) => {
+  const name = shiftsWorld.shiftName
   if (name) {
     const card = page.getByTestId(TestIds.SHIFT_CARD).filter({ hasText: name })
     await expect(card.first()).not.toContainText(text, { timeout: 3000 })

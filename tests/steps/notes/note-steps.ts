@@ -315,9 +315,6 @@ Then('I should see the full notes list', async ({ page, backendRequest: request,
 
 When('I fill in the call ID with {string}', async ({ page }, callId: string) => {
   await fillCallId(page, callId)
-  await page.evaluate((id) => {
-    (window as unknown as Record<string, unknown>).__test_note_call_id = id
-  }, callId)
 })
 
 Then('I should see {string} in the notes list', async ({ page }, text: string) => {

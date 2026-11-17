@@ -4,7 +4,7 @@
  * Matches packages/test-specs/features/platform/desktop/calls/multi-hub-incoming-calls.feature.
  * The volunteer + second hub come from the shared step
  * "a volunteer assigned to multiple hubs" (tests/steps/hub/hub-steps.ts), which
- * records the second hub id and the volunteer pubkey on `window`.
+ * records them on the scenario-scoped hubsWorld fixture.
  *
  * The call is created with the real simulation API on the SECOND hub while the
  * worker hub is active in the UI; the UI is then driven with testid selectors only.
@@ -19,7 +19,7 @@
  * pickup on a hub with no way to connect the volunteer (#2168), and a bare test hub has none.
  */
 import { expect } from '@playwright/test'
-import { When, Then } from '../fixtures'
+import { When, Then, type HubsWorld } from '../fixtures'
 import { TestIds, Timeouts } from '../../helpers'
 import { rowTestId } from '../../test-ids'
 import { apiGet, enableMockTelephonyViaApi, setFallbackGroupViaApi } from '../../api-helpers'
@@ -32,28 +32,18 @@ import { simulateIncomingCall, uniqueCallerNumber } from '../../simulation-helpe
  */
 const RING_TIMEOUT = 30_000
 
-interface MultiHubCallWindow {
-  __test_second_hub_id?: string
-  __test_multi_hub_volunteer_pubkey?: string
-  __test_multi_hub_call_id?: string
+function recordedIds(hubsWorld: HubsWorld) {
+  return {
+    hubId: hubsWorld.secondHubId,
+    volunteerPubkey: hubsWorld.multiHubVolunteerPubkey,
+    callId: hubsWorld.multiHubCallId,
+  }
 }
 
-async function recordedIds(page: import('@playwright/test').Page) {
-  const ids = await page.evaluate(() => {
-    const w = window as unknown as MultiHubCallWindow
-    return {
-      hubId: w.__test_second_hub_id,
-      volunteerPubkey: w.__test_multi_hub_volunteer_pubkey,
-      callId: w.__test_multi_hub_call_id,
-    }
-  })
-  return ids
-}
-
-When('a call comes in on the volunteer\'s second hub while the first hub is active', async ({ page, backendRequest, $test }) => {
+When('a call comes in on the volunteer\'s second hub while the first hub is active', async ({ backendRequest, hubsWorld, $test }) => {
   // Ringing is bounded by the 15s poll fallback, on top of login: budget for it explicitly.
   $test.slow()
-  const { hubId, volunteerPubkey } = await recordedIds(page)
+  const { hubId, volunteerPubkey } = recordedIds(hubsWorld)
   if (!hubId) throw new Error('the multi-hub Given step must record the second hub id')
   if (!volunteerPubkey) throw new Error('the multi-hub Given step must record the volunteer pubkey')
 
@@ -71,13 +61,11 @@ When('a call comes in on the volunteer\'s second hub while the first hub is acti
     checkVolunteers: true,
   })
   expect(status).toBe('ringing')
-  await page.evaluate((id) => {
-    ;(window as unknown as MultiHubCallWindow).__test_multi_hub_call_id = id
-  }, callId)
+  hubsWorld.multiHubCallId = callId
 })
 
-Then('the volunteer should see that call ringing', async ({ page }) => {
-  const { callId } = await recordedIds(page)
+Then('the volunteer should see that call ringing', async ({ page, hubsWorld }) => {
+  const { callId } = recordedIds(hubsWorld)
   expect(callId, 'the call step must record the call id').toBeTruthy()
   await expect(page.getByTestId(rowTestId(TestIds.INCOMING_CALL_ROW, callId!))).toBeVisible({ timeout: RING_TIMEOUT })
 })
@@ -93,13 +81,13 @@ Then('the ring should be announced to assistive technology', async ({ page }) =>
   expect(spoken).not.toMatch(/\d/)
 })
 
-When('the volunteer answers that call', async ({ page }) => {
-  const { callId } = await recordedIds(page)
+When('the volunteer answers that call', async ({ page, hubsWorld }) => {
+  const { callId } = recordedIds(hubsWorld)
   await page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!)).click()
 })
 
-When('the volunteer answers that call with the keyboard alone', async ({ page }) => {
-  const { callId } = await recordedIds(page)
+When('the volunteer answers that call with the keyboard alone', async ({ page, hubsWorld }) => {
+  const { callId } = recordedIds(hubsWorld)
   // Focus is offered to Answer when the ring arrives; Enter on a native button is all it takes.
   await expect(page.getByTestId(rowTestId(TestIds.ANSWER_CALL_BTN, callId!))).toBeFocused({ timeout: Timeouts.ELEMENT })
   await page.keyboard.press('Enter')
@@ -114,8 +102,8 @@ Then('the volunteer should be on an active call', async ({ page }) => {
   await expect(page.getByTestId(TestIds.ACTIVE_CALL_PANEL)).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('that call should be answered on the second hub', async ({ page, backendRequest }) => {
-  const { hubId, callId } = await recordedIds(page)
+Then('that call should be answered on the second hub', async ({ backendRequest, hubsWorld }) => {
+  const { hubId, callId } = recordedIds(hubsWorld)
   // The server is the authority: the answer must have landed on the call's own hub.
   await expect.poll(async () => {
     const { status, data } = await apiGet<{ calls: CallRecord[] }>(
@@ -134,8 +122,8 @@ When('the volunteer writes a note on the active call panel', async ({ page }) =>
   await page.getByTestId(TestIds.ACTIVE_CALL_NOTE_SAVE_BTN).click()
 })
 
-When('the volunteer writes a note about that call through the note sheet', async ({ page }) => {
-  const { callId } = await recordedIds(page)
+When('the volunteer writes a note about that call through the note sheet', async ({ page, hubsWorld }) => {
+  const { callId } = recordedIds(hubsWorld)
   expect(callId, 'the call step must record the call id').toBeTruthy()
   const text = `sheet-note-${Date.now()}`
   // Alt+N opens the note sheet; focus must not be inside an input for the shortcut to fire.
@@ -147,8 +135,8 @@ When('the volunteer writes a note about that call through the note sheet', async
   await expect(page.getByTestId(TestIds.NOTE_SHEET)).toBeHidden({ timeout: Timeouts.ELEMENT })
 })
 
-Then('that note should be filed under the second hub and not the first', async ({ page, backendRequest, workerHub }) => {
-  const { hubId, callId } = await recordedIds(page)
+Then('that note should be filed under the second hub and not the first', async ({ backendRequest, workerHub, hubsWorld }) => {
+  const { hubId, callId } = recordedIds(hubsWorld)
   expect(hubId).toBeTruthy()
   expect(workerHub).not.toBe(hubId)
   // Server-side truth: the note must exist under the call's own hub and never under the active one.

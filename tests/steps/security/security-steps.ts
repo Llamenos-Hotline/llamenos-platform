@@ -69,7 +69,6 @@ When('a QR code with relay URL {string} is scanned', async ({ page }, relayUrl: 
   // Simulate QR scan result by injecting it into the device link flow
   // The actual QR scanning requires camera access — mock the result
   await page.evaluate((url) => {
-    (window as unknown as { __test_scanned_relay_url?: string }).__test_scanned_relay_url = url
     // Dispatch a custom event that the link-device page can listen to
     window.dispatchEvent(new CustomEvent('test-qr-scan', { detail: { relayUrl: url } }))
   }, relayUrl)

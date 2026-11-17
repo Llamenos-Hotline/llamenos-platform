@@ -103,7 +103,7 @@ async function navigateInApp(page: Page, to: string, search: Record<string, stri
  * synchronous: it settles in the microtask checkpoint right after the handler,
  * long before the reloaded document commits.
  */
-const UNLOAD_SNAPSHOT_KEY = '__test_state_at_unload'
+const UNLOAD_SNAPSHOT_KEY = '__TEST_STATE_AT_UNLOAD__'
 
 async function recordStateAtUnload(page: Page): Promise<void> {
   await page.evaluate(({ tokenKey, snapshotKey }) => {

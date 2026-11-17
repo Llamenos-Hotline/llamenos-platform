@@ -438,7 +438,7 @@ test.describe('Epic C - Key Isolation & Wipe Completeness', () => {
         }
       }
       // Filter out test infrastructure keys (lockout state)
-      const deviceKeys = llamenosKeys.filter(k => !k.includes('__test_'))
+      const deviceKeys = llamenosKeys.filter(k => !k.includes('__TEST_'))
       return { deviceKeyCount: deviceKeys.length, keys: deviceKeys }
     })
 

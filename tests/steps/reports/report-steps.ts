@@ -270,7 +270,7 @@ Then('the report type selector should list template-defined types', async ({ pag
   await page.keyboard.press('Escape')
 })
 
-When('I select the first template report type', async ({ page }) => {
+When('I select the first template report type', async ({ page, reportsWorld }) => {
   // Was: probe the dropdown with a 3s timeout, fall back to a `report-type-option`
   // testid that does not exist anywhere in the app (dead code — always a silent no-op),
   // and even on the happy path select `options.nth(1)` — the SECOND type — whenever more
@@ -279,10 +279,7 @@ When('I select the first template report type', async ({ page }) => {
   const selector = page.getByTestId('report-type-select')
   await expect(selector).toBeVisible({ timeout: Timeouts.ELEMENT })
   // Record how many form controls exist before the type contributes its fields.
-  const before = await formControls(page).count()
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_report_controls_before = n
-  }, before)
+  reportsWorld.controlsBefore = await formControls(page).count()
   await selector.click()
   const firstOption = page.locator('[role="option"]').first()
   await expect(firstOption).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -294,12 +291,10 @@ function formControls(page: Page) {
   return page.locator('input:visible, textarea:visible, [role="combobox"]:visible')
 }
 
-Then('the report form should show dynamic schema fields', async ({ page }) => {
+Then('the report form should show dynamic schema fields', async ({ page, reportsWorld }) => {
   // The template's fields render as extra controls once its type is selected.
   // The old step accepted the body input, which every report form has.
-  const before = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_report_controls_before as number | undefined,
-  )
+  const before = reportsWorld.controlsBefore
   expect(before, 'the type-selection step must record the control count').toBeGreaterThan(0)
   await expect.poll(() => formControls(page).count(), { timeout: Timeouts.ELEMENT }).toBeGreaterThan(before as number)
 })

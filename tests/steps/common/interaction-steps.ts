@@ -235,10 +235,10 @@ When('I fill in reason with {string}', async ({ page }, reason: string) => {
   await page.getByLabel(/reason/i).fill(reason)
 })
 
-When('I fill in the reason with {string}', async ({ page }, reason: string) => {
+When('I fill in the reason with {string}', async ({ page, banWorld }, reason: string) => {
   await page.getByLabel(/reason/i).fill(reason)
   // The ban list shows a ban by its reason (it holds no number), so ban steps find the row by it.
-  await page.evaluate((r) => { (window as unknown as Record<string, unknown>).__test_ban_reason = r }, reason)
+  banWorld.reason = reason
 })
 
 // --- Section expand/collapse ---
