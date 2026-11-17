@@ -1020,81 +1020,78 @@ decryptStoredKey(pin):
 
 ### 2.7 Hub Key Management
 
-Each hub has a random symmetric key used for hub-wide broadcast encryption. The hub key is NOT derived from any identity key -- it is pure random bytes.
+Each hub has a random symmetric key. It seals the hub's tag and team labels, the names of the hub's own roles (`LABEL_HUB_ROLE_ENCRYPT`; §4 "Roles (PBAC)") and note exports, and is the key `decrypt_hub_event` uses. The hub key is NOT derived from any identity key -- it is pure random bytes.
+
+A device holds **one key per hub it belongs to**, keyed by hub id (desktop `CryptoState::hub_keys`, mobile `hub_keys` in the crate's FFI state). Never a single "current" key: a user can be a member of several hubs at once, and a single slot would seal one hub's data under whichever hub's key was loaded last.
 
 #### Key Generation
 
 ```
-hub_key = crypto.getRandomValues(new Uint8Array(32))
-// 32 random bytes
+hub_key = random(32)   // in Rust, on a manager's device; never leaves Rust
 ```
+
+A manager generates a hub's key only when the hub holds **no wrap for anyone** (`GET /api/hubs/:hubId/key/recipients` returns `envelopes: []`). Generating while a key exists would replace the key every other member holds.
 
 #### Distribution
 
-The hub key is wrapped individually for each hub member using HPKE. Clients compute envelopes and upload them via `PUT /api/hubs/:hubId/key`:
+Wraps are HPKE (§2.2) under `LABEL_HUB_KEY_WRAP`, in the wire encoding (hex `enc`/`ct`). The label, its registry `labelId` and the AAD are fixed by the crate -- `encryption::hpke_wrap_key` / `hpke_unwrap_key` -- which every platform calls; no client passes them:
 
 ```
-wrapHubKeyForMembers(hub_key[32], member_x25519_pubkey_hexes[]):
-
-  envelopes = []
-  for each member_x25519_pubkey_hex in member_x25519_pubkey_hexes:
-    sealed = HPKE.Seal(
-      recipientPk = hex_to_bytes(member_x25519_pubkey_hex),
-      plaintext   = hub_key,
-      info        = UTF-8("llamenos:hub-key-wrap"),
-      aad         = UTF-8("llamenos:hub-key-wrap:key-wrap")
-    )
-    envelopes.push({
-      pubkey: member_x25519_pubkey_hex,   // 64 hex chars
-      enc:    hex(sealed[0..32]),
-      ct:     hex(sealed[32..])
-    })
-  return envelopes
-```
-
-Members fetch their envelope from `GET /api/hubs/:hubId/key` and unwrap:
-
-```
-unwrapHubKey(envelope: RecipientEnvelope, device_x25519_secret_key[32]):
-  enc_bytes = hex_to_bytes(envelope.enc)
-  ct_bytes  = hex_to_bytes(envelope.ct)
-  return HPKE.Open(
-    recipientSk = device_x25519_secret_key,
-    enc         = enc_bytes,
-    ciphertext  = ct_bytes,
+wrap(hub_key[32], member_device_x25519_pubkey_hex):
+  sealed = HPKE.Seal(
+    recipientPk = hex_to_bytes(member_device_x25519_pubkey_hex),
+    plaintext   = hub_key,
     info        = UTF-8("llamenos:hub-key-wrap"),
     aad         = UTF-8("llamenos:hub-key-wrap:key-wrap")
   )
-  // Returns hub_key: 32 bytes
+  return { enc: hex(sealed.enc), ct: hex(sealed.ct) }
 ```
+
+An envelope is **sealed to** the member's device X25519 key and **filed under** the member's Ed25519 user pubkey -- `{ pubkey: <user pubkey>, enc, ct }` -- because that is the identity the server authenticates and `GET /key` looks the wrap up by. (Sealing to the Ed25519 key "works" and opens for nobody, #1021.) One wrap per user: a user with several devices can open it on one of them, which is the single-device pilot's model.
+
+`GET /api/hubs/:hubId/key/recipients` -- requires `hubs:manage-keys` **in the hub's own roles**, so an instance super-admin with no role in the hub is refused (D1). Read in one snapshot:
+
+```
+{ generation: int,              // hubs.hub_key_generation, the envelope set's version
+  envelopes:  RecipientEnvelope[],   // every wrap held, for current members
+  members:    [{ pubkey, encryptionPubkey | null }] }   // device key to wrap for
+```
+
+`PUT /api/hubs/:hubId/key` -- `{ envelopes, expectedGeneration }`, same authority. A **compare-and-set**: it succeeds only if the hub is still at `expectedGeneration`, replaces the set, and moves the generation forward by one in the same statement; otherwise **409**. So of two managers who each generated a first key at once, exactly one key is installed, and the loser drops its key and loads the winner's. A shred also moves the generation, so a replayed write cannot re-install a destroyed key. Hub-key writes are never queued for offline replay.
+
+A distributor re-sends the existing `envelopes` unchanged and adds wraps only for members who lack one, so distributing never takes anyone's access away. It wraps the key **it already holds**, never one re-opened from what the server returns at that moment: anyone can seal a key to a device's public key, so re-opening the server's copy would let a server swap in a key it chose. A held key is never replaced.
+
+Members fetch their wrap from `GET /api/hubs/:hubId/key` (404 when none) and open it:
+
+```
+unwrap(envelope, device_x25519_secret_key[32]):
+  return HPKE.Open(recipientSk = device_x25519_secret_key,
+                   enc = hex_to_bytes(envelope.enc), ciphertext = hex_to_bytes(envelope.ct),
+                   info = UTF-8("llamenos:hub-key-wrap"),
+                   aad  = UTF-8("llamenos:hub-key-wrap:key-wrap"))
+  // hub_key: 32 bytes, held in Rust under the hub id
+```
+
+**Desktop lifecycle** (`src/client/lib/hub-key-manager.ts`): for every member hub, on sign-in, on a membership change and on every relay (re)connect -- load; if nobody holds a key and this user manages the hub, generate and wrap for every member with a device key; if this user manages the hub, add wraps for members who lack one. Creating a hub generates its key at once. Sealing a hub field loads the key on demand and refuses (`HubKeyUnavailableError`) rather than write anything the hub cannot read -- there is no plaintext fallback. A member who joins while no manager's device is online cannot read hub-sealed data until one comes online; that is inherent to a zero-knowledge distribution.
+
+**Trust.** The device keys a distributor wraps for come from the server's device registry, as for every envelope in §2.4.1. Until the user sigchain is wired, a client cannot verify them independently: a server that lists a key it holds for a member receives the hub key.
 
 #### Hub-Wide Encryption / Decryption
 
 ```
-encryptForHub(plaintext_string, hub_key[32]):
+encryptForHub(plaintext_string, hub_key[32], label):
   nonce = random(12)
-  cipher = AES-256-GCM(hub_key, nonce)
-  ciphertext = cipher.encrypt(UTF-8(plaintext_string))
+  ciphertext = AES-256-GCM(hub_key, nonce, aad = UTF-8(label)).encrypt(UTF-8(plaintext_string))
   return hex(nonce || ciphertext)
 
-decryptFromHub(packed_hex, hub_key[32]):
+decryptFromHub(packed_hex, hub_key[32], label):
   data = hex_to_bytes(packed_hex)
-  nonce = data[0..12]
-  ciphertext = data[12..]
-  cipher = AES-256-GCM(hub_key, nonce)
-  plaintext = cipher.decrypt(ciphertext)
-  return UTF-8_decode(plaintext)
+  return UTF-8_decode(AES-256-GCM(hub_key, data[0..12], aad = UTF-8(label)).decrypt(data[12..]))
 ```
 
 #### Key Rotation
 
-On member departure:
-
-1. Generate a new random hub key.
-2. Wrap it for all **remaining** members (excluding the departed member).
-3. Store new envelopes via `PUT /api/hubs/:hubId/key`.
-4. Re-encrypt any hub-scoped data with the new key.
-5. Distribute via `GET /api/hubs/:hubId/key`.
+**Not implemented** (#1030, M2). On departure the server deletes the departed member's wrap; nothing re-keys, so a departed member who kept the key can still open what was sealed under it. Rotation will be: generate a new key, wrap it for the remaining members, `PUT` it at the current generation, and re-seal the hub-scoped data under it.
 
 ### 2.8 WebSocket Event Encryption
 
@@ -2820,12 +2817,18 @@ Response: { "ok": true }
 GET /api/hubs/:hubId/key
 Auth: Required (hub member)
 Response: { "envelope": RecipientKeyEnvelope }
-// Returns only the requesting user's envelope
+// Returns only the requesting user's envelope; 404 when the hub holds none for them (§2.7)
+
+GET /api/hubs/:hubId/key/recipients
+Authority: hubs:manage-keys held through roles IN THIS HUB (a global super-admin's `*` does not count)
+Response: { "generation": int, "envelopes": RecipientKeyEnvelope[], "members": [{ "pubkey", "encryptionPubkey": hex64 | null }] }
+// HubKeyRecipientsResponse, read in one snapshot (§2.7). 409 for a shredded hub.
 
 PUT /api/hubs/:hubId/key
-Permission: system:manage-hubs
-Body: { "envelopes": RecipientKeyEnvelope[] }
-Response: { "ok": true }
+Authority: hubs:manage-keys held through roles IN THIS HUB
+Body: { "envelopes": RecipientKeyEnvelope[], "expectedGeneration": int }
+Response: { "ok": true, "generation": int }  // HubKeySetResponse
+// Compare-and-set (§2.7): 409 when the hub is no longer at expectedGeneration, or is shredded.
 
 GET /api/hubs/:hubId/readers?purpose=admin|call-history
 Auth: Required (hub member)

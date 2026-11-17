@@ -74,6 +74,20 @@ async function generateRealEnvelopeEntry(pubkey: string, memberSeedHex: string):
   return { pubkey, ct: envelope.ct, enc: envelope.enc }
 }
 
+/** The scenario's hub id; fails the step if no hub was created. */
+function hubIdOf(world: Record<string, unknown>): string {
+  const hubId = getHubKeyState(world).hubId
+  if (!hubId) throw new Error('no hub in this scenario')
+  return hubId
+}
+
+/** A scenario member by name; fails the step if there is none. */
+function memberOf(world: Record<string, unknown>, name: string): HubMember {
+  const member = getHubKeyState(world).members.get(name)
+  if (!member) throw new Error(`no member "${name}" in this scenario`)
+  return member
+}
+
 /** The hub's key-distribution view, as its admin sees it. */
 async function keyRecipients(
   request: import('@playwright/test').APIRequestContext,
@@ -149,7 +163,7 @@ When(
       getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
     }
 
-    const res = await putHubKeyEnvelopes(request, getHubKeyState(world).hubId!, envelopes)
+    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
   },
 )
@@ -165,7 +179,7 @@ Given('hub key envelopes are set for all {int} members', async ({ request, world
     getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
   }
 
-  const res = await putHubKeyEnvelopes(request, getHubKeyState(world).hubId!, envelopes)
+  const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
   expect(res.status).toBe(200)
 })
 
@@ -226,7 +240,7 @@ When(
       getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
     }
 
-    const res = await putHubKeyEnvelopes(request, getHubKeyState(world).hubId!, envelopes)
+    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
     getHubKeyState(world).lastEnvelopeCount = envelopes.length
   },
@@ -268,7 +282,7 @@ When(
       }
     }
 
-    const res = await putHubKeyEnvelopes(request, getHubKeyState(world).hubId!, envelopes)
+    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
     getHubKeyState(world).lastEnvelopeCount = envelopes.length
   },
@@ -339,7 +353,7 @@ Given('hub key envelopes are set for {string}', async ({ request, world }, name:
   expect(member).toBeTruthy()
 
   const entry = await generateRealEnvelopeEntry(member!.pubkey, member!.seedHex)
-  const res = await putHubKeyEnvelopes(request, hubId!, [entry])
+  const res = await putHubKeyEnvelopes(request, hubIdOf(world), [entry])
   expect(res.status).toBe(200)
   getHubKeyState(world).originalEnvelopes.set(name, entry.ct)
   getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
@@ -403,7 +417,7 @@ Then('the hub key response status should be {int}', async ({ world }, expectedSt
 // ── Distribution contract (#1042) ──────────────────────────────────
 
 Then('the hub key generation should be {int}', async ({ request, world }, generation: number) => {
-  const read = await keyRecipients(request, getHubKeyState(world).hubId!)
+  const read = await keyRecipients(request, hubIdOf(world))
   expect(read.status).toBe(200)
   expect(read.data.generation).toBe(generation)
 })
@@ -411,8 +425,8 @@ Then('the hub key generation should be {int}', async ({ request, world }, genera
 Then(
   'a hub key write at generation {int} should be refused with {int}',
   async ({ request, world }, generation: number, status: number) => {
-    const hubId = getHubKeyState(world).hubId!
-    const alice = getHubKeyState(world).members.get('Alice')!
+    const hubId = hubIdOf(world)
+    const alice = memberOf(world, 'Alice')
     const before = await keyRecipients(request, hubId)
     const entry = await generateRealEnvelopeEntry(alice.pubkey, alice.seedHex)
     const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry], expectedGeneration: generation })
@@ -427,7 +441,7 @@ Then(
 Then(
   'the key recipients should list every member with their device key',
   async ({ request, world }) => {
-    const read = await keyRecipients(request, getHubKeyState(world).hubId!)
+    const read = await keyRecipients(request, hubIdOf(world))
     expect(read.status).toBe(200)
     const byPubkey = new Map(read.data.members.map(m => [m.pubkey, m.encryptionPubkey]))
     for (const member of getHubKeyState(world).members.values()) {
@@ -441,15 +455,15 @@ Then(
 Then(
   'the key recipients should hold a wrap for exactly {string} and {string}',
   async ({ request, world }, name1: string, name2: string) => {
-    const read = await keyRecipients(request, getHubKeyState(world).hubId!)
-    const expected = [name1, name2].map(n => getHubKeyState(world).members.get(n)!.pubkey).sort()
+    const read = await keyRecipients(request, hubIdOf(world))
+    const expected = [name1, name2].map(n => memberOf(world, n).pubkey).sort()
     expect(read.data.envelopes.map(e => e.pubkey).sort()).toEqual(expected)
   },
 )
 
 When('{string} becomes the hub\'s admin and the instance admin leaves it', async ({ request, world }, name: string) => {
-  const hubId = getHubKeyState(world).hubId!
-  const member = getHubKeyState(world).members.get(name)!
+  const hubId = hubIdOf(world)
+  const member = memberOf(world, name)
   const promoted = await apiPost(request, `/hubs/${hubId}/members`, { pubkey: member.pubkey, roleIds: ['role-hub-admin'] })
   expect([200, 201]).toContain(promoted.status)
   const left = await apiDelete(request, `/hubs/${hubId}/members/${seedHexToPubkey(ADMIN_SEED)}`)
@@ -457,15 +471,15 @@ When('{string} becomes the hub\'s admin and the instance admin leaves it', async
 })
 
 Then('the instance admin cannot read or write the hub\'s key distribution', async ({ request, world }) => {
-  const hubId = getHubKeyState(world).hubId!
+  const hubId = hubIdOf(world)
   expect((await keyRecipients(request, hubId)).status).toBe(403)
-  const alice = getHubKeyState(world).members.get('Alice')!
+  const alice = memberOf(world, 'Alice')
   const entry = await generateRealEnvelopeEntry(alice.pubkey, alice.seedHex)
   const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry], expectedGeneration: 0 })
   expect(res.status).toBe(403)
 })
 
 Then('{string} can read the hub\'s key distribution', async ({ request, world }, name: string) => {
-  const member = getHubKeyState(world).members.get(name)!
-  expect((await keyRecipients(request, getHubKeyState(world).hubId!, member.seedHex)).status).toBe(200)
+  const member = memberOf(world, name)
+  expect((await keyRecipients(request, hubIdOf(world), member.seedHex)).status).toBe(200)
 })

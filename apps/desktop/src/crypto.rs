@@ -19,8 +19,8 @@ use llamenos_core::{
     encryption::RecipientKeyEnvelope,
     hpke_envelope,
     labels::{
-        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_KEY_WRAP, LABEL_MESSAGE, LABEL_NOTE_KEY,
-        LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
+        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_KEY_WRAP, LABEL_MESSAGE,
+        LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
         LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
     },
     puk, sas, shamir, sigchain,
@@ -218,8 +218,8 @@ impl CryptoState {
     fn load_hub_key_wrap(&self, hub_id: &str, wrap: encryption::KeyEnvelope) -> Result<(), String> {
         let slot = hub_slot(hub_id)?;
         let secret_hex = self.encryption_secret_hex()?;
-        let key = encryption::hpke_unwrap_key(&wrap, &secret_hex, LABEL_HUB_KEY_WRAP)
-            .map_err(err_str)?;
+        let key =
+            encryption::hpke_unwrap_key(&wrap, &secret_hex, LABEL_HUB_KEY_WRAP).map_err(err_str)?;
         lock_mutex(&self.hub_keys)?.insert(slot, key);
         Ok(())
     }
@@ -956,7 +956,10 @@ pub fn set_server_event_keys(
 
 /// `hub_id`'s key held in `CryptoState`, as the fixed-size key the crate's
 /// AES-GCM helpers take. The copy is zeroized when it drops.
-fn hub_key_array(state: &CryptoState, hub_id: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
+fn hub_key_array(
+    state: &CryptoState,
+    hub_id: &str,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
     let slot = hub_slot(hub_id)?;
     let guard = lock_mutex(&state.hub_keys)?;
     let key = guard.get(&slot).ok_or("Hub key not loaded")?;
@@ -2642,12 +2645,20 @@ mod ipc_surface_tests {
             .wrap_hub_key_hex("hub-a", &member.encryption_pubkey_hex)
             .unwrap();
         for part in [&wrap.enc, &wrap.ct] {
-            assert!(part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert!(
+                part.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            );
         }
         assert_eq!(wrap.enc.len(), 64);
 
         // The manager's own device is not the recipient.
-        assert!(manager.state.load_hub_key_wrap("hub-a2", wrap.clone()).is_err());
+        assert!(
+            manager
+                .state
+                .load_hub_key_wrap("hub-a2", wrap.clone())
+                .is_err()
+        );
 
         member.state.load_hub_key_wrap("hub-a", wrap).unwrap();
         let label = llamenos_core::labels::LABEL_TAG_ENCRYPT;
@@ -2658,8 +2669,12 @@ mod ipc_surface_tests {
         )
         .unwrap();
         assert_eq!(
-            encryption::decrypt_hub_field(&sealed, &hub_key_array(&member.state, "hub-a").unwrap(), label)
-                .unwrap(),
+            encryption::decrypt_hub_field(
+                &sealed,
+                &hub_key_array(&member.state, "hub-a").unwrap(),
+                label
+            )
+            .unwrap(),
             "night shift"
         );
         // Held under the hub it was loaded for, and no other.

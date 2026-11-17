@@ -1968,9 +1968,8 @@ mod tests {
         // Sealed with an explicit AAD (to prove it binds), then put in the
         // wire encoding the server stores and `mobile_load_hub_key` reads: hex.
         let seal = |aad: &[u8]| {
-            let env =
-                hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad)
-                    .unwrap();
+            let env = hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad)
+                .unwrap();
             crate::encryption::KeyEnvelope {
                 enc: mobile_base64url_to_hex(env.enc).unwrap(),
                 ct: mobile_base64url_to_hex(env.ct).unwrap(),
