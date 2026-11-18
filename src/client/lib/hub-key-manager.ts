@@ -65,7 +65,7 @@ import {
   getDevicePubkeys,
 } from './platform'
 import type { HubKeyWrap, RecipientEnvelope } from './platform'
-import { ApiError, NetworkError } from './api/client'
+import { ApiError, NetworkError, NoSessionError, holdsSession } from './api/client'
 import {
   getHubKeyEnvelope,
   getHubKeyRecipients,
@@ -654,6 +654,12 @@ async function syncHub(hubId: string, mayManage: boolean): Promise<void> {
       if (added > 0) console.info(`[hub-key] shared hub ${hubId}'s key with ${added} member(s)`)
     })
   } catch (err) {
+    // The session ended under a sync already under way (sign-out, the first-run
+    // screen, a server switch): whatever it failed with, it failed because of that —
+    // a request that was never sent, a device key that locked mid-step, a token the
+    // old server no longer honours. The next session's mount of `useHubKeys` syncs
+    // again.
+    if (err instanceof NoSessionError || !holdsSession()) return
     // The hub went away between the load and a later read: the same state as
     // `not-served`, not a failure.
     if (isStatus(err, 404)) {

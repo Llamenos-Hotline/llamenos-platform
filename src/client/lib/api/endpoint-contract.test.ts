@@ -25,6 +25,8 @@ let calls: RecordedCall[]
 let respond: () => Response
 
 beforeEach(() => {
+  // Hub-scoped requests are only made under a session (#2851).
+  sessionStorage.setItem('llamenos-session-token', 'test-session')
   calls = []
   respond = () => new Response('{}', { status: 200 })
   vi.stubGlobal(
@@ -38,6 +40,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  sessionStorage.clear()
   vi.unstubAllGlobals()
   setActiveHub(null)
 })

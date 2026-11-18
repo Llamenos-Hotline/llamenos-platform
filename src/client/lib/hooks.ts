@@ -15,6 +15,7 @@ import {
   type HubCall,
   type ShiftStatus,
   type HubConversation,
+  NoSessionError,
 } from './api'
 import {
   KIND_CALL_RING,
@@ -167,12 +168,17 @@ export function useCallFeed() {
           if (!mounted) return
           const polledCalls: HubCall[] = []
           const failedHubs = new Set<string>()
+          const unreachedHubs = new Set<string>()
           results.forEach((result, i) => {
             if (result.status === 'fulfilled') polledCalls.push(...result.value.calls)
-            else failedHubs.add(hubIds[i])
+            else {
+              failedHubs.add(hubIds[i])
+              // No session means no request was made, which is not a failure to report.
+              if (!(result.reason instanceof NoSessionError)) unreachedHubs.add(hubIds[i])
+            }
           })
-          if (failedHubs.size > 0) {
-            console.error('[calls] Background call polling failed for hubs:', [...failedHubs].join(','))
+          if (unreachedHubs.size > 0) {
+            console.error('[calls] Background call polling failed for hubs:', [...unreachedHubs].join(','))
           }
           // A hub whose poll failed keeps its known calls — one unreachable hub must
           // not make another hub's ringing call vanish (and vice versa).
@@ -335,12 +341,17 @@ export function useConversations() {
           if (!mounted) return
           const polled: HubConversation[] = []
           const failedHubs = new Set<string>()
+          const unreachedHubs = new Set<string>()
           results.forEach((result, i) => {
             if (result.status === 'fulfilled') polled.push(...result.value.conversations)
-            else failedHubs.add(hubIds[i])
+            else {
+              failedHubs.add(hubIds[i])
+              // No session means no request was made, which is not a failure to report.
+              if (!(result.reason instanceof NoSessionError)) unreachedHubs.add(hubIds[i])
+            }
           })
-          if (failedHubs.size > 0) {
-            console.error('[conversations] Background conversation polling failed for hubs:', [...failedHubs].join(','))
+          if (unreachedHubs.size > 0) {
+            console.error('[conversations] Background conversation polling failed for hubs:', [...unreachedHubs].join(','))
           }
           // A hub whose poll failed keeps its known conversations — one unreachable hub
           // must not make another hub's conversations vanish.
