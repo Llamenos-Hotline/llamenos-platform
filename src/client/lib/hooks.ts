@@ -120,8 +120,10 @@ export function useCallFeed() {
       }
       case 'call:update': {
         const update = content as LlamenosEvent & { callId: string; status: HubCall['status']; answeredBy?: string }
+        // `unanswered` is terminal too: the caller left the queue for voicemail (#2753).
+        const ended = update.status === 'completed' || update.status === 'unanswered'
         setCalls(prev => {
-          if (update.status === 'completed') {
+          if (ended) {
             return prev.filter(c => c.id !== update.callId)
           }
           return prev.map(c =>
@@ -130,12 +132,12 @@ export function useCallFeed() {
               : c,
           )
         })
-        if (update.status === 'in-progress' || update.status === 'completed') {
+        if (update.status === 'in-progress' || ended) {
           stopRinging()
         }
         // Update current call tracking
         if (currentCallRef.current?.id === update.callId) {
-          if (update.status === 'completed') {
+          if (ended) {
             endCurrentCall(currentCallRef.current)
           } else {
             setCurrentCall(prev => prev ? { ...prev, status: update.status, answeredBy: update.answeredBy ?? prev.answeredBy } : prev)

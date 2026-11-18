@@ -100,6 +100,21 @@ Feature: A call routed by the provider's own signed webhooks
     Then the provider is told to take a voicemail
     And the provider was told to stop every leg it dialled
 
+  Scenario: A caller sent to voicemail can no longer be picked up
+    Given 2 volunteers are on shift
+    When a caller dials the hotline and chooses a language
+    And the provider was asked to dial one leg to each of volunteers "1 and 2"
+    And the caller's queue wait ends without an answer
+    Then the provider is told to take a voicemail
+    And the call is no longer ringing and nobody is on it
+    And the hub's active calls do not list the call
+    When volunteer 1 picks up their leg
+    Then volunteer 1's leg is hung up
+    And the call is no longer ringing and nobody is on it
+    And the hub audit log does not record the call being answered
+    When the caller finishes leaving a voicemail
+    Then the call history records the call as "unanswered"
+
   Scenario: A caller who hangs up in the queue is a missed call, and nobody can pick it up after
     Given 2 volunteers are on shift
     When a caller dials the hotline and chooses a language
