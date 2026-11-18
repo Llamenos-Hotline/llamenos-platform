@@ -37,8 +37,9 @@ yanked = "warn"
 #
 # Vulnerabilities (rustls, quick-xml, rkyv) are deliberately NOT listed: they
 # are fixed by upgrading, not by ignoring. The only vulnerabilities listed are
-# RUSTSEC-2026-0387 (crypto-bigint) and the four zip advisories at the end, for
-# which no patched version is reachable.
+# RUSTSEC-2026-0387 (crypto-bigint), for which no patched version is reachable.
+# (The zip advisories were removed, not renewed: libsodium-sys-stable >= 1.24.4
+# moved to `zip ^9`, so zip 8.x is gone from apps/desktop/Cargo.lock.)
 #
 # Every other entry is an UNMAINTAINED (not vulnerable) crate in apps/desktop's
 # Tauri-side dependency graph. Removing them needs an upstream release of
@@ -64,25 +65,6 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant 5.9.2 unmaintained (merged into zbus 6); via zbus 5 <- notify-rust and tauri-plugin-single-instance, no vulnerability, no upstream release on zbus 6 yet, tracked in #1956 [expires 2026-12-31]" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.1 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.9.2 unmaintained; same zbus 5 path as RUSTSEC-2026-0370, tracked in #1956 [expires 2026-12-31]" },
-  # zip: every advisory below is fixed only in >=9.0.0 (tracked in #1956).
-  #   * zip 4.6.1 <- tauri-plugin-updater is GONE: tauri-plugin-updater 2.14.1
-  #     (2026-10-28) moved to `zip ^9`, so the updater now builds against zip 9.3.0.
-  #     That release needs tauri ^2.12 and Rust 1.90 (hence the Tauri 2.12.4 and
-  #     apps/desktop/rust-toolchain.toml 1.90.0 bumps that landed with it).
-  #   * zip 8.6.0 <- libsodium-sys-stable build script REMAINS (latest 1.24.3 still
-  #     requires `zip ^8.6`), via stronghold-runtime <- iota_stronghold <-
-  #     tauri-plugin-stronghold. `[patch]` cannot lift a `^8.6` requirement to 9.
-  # All four advisories concern `extract()` on an ATTACKER-SUPPLIED archive. The
-  # remaining call site never sees one: libsodium-sys-stable's build script only
-  # extracts the precompiled MSVC libsodium zip, after `retrieve_and_verify_archive`
-  # has minisign-verified it against libsodium's pinned key (build.rs). Forging it
-  # needs that signing key, which would already allow arbitrary code execution
-  # without any zip bug. Build-time and MSVC-target only; absent from the binary.
-  { id = "RUSTSEC-2026-0367", reason = "zip 8.6.0 (<9.0.0) keeps SUID/SGID bits on extract; only via the libsodium-sys-stable build script, which extracts a minisign-verified archive only, no release on zip 9, tracked in #1956 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2026-0368", reason = "zip 8.6.0 (<9.0.0) extract() follows attacker symlinks; same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
-  { id = "RUSTSEC-2026-0369", reason = "zip 8.6.0 (<9.0.0) applies Unix permissions through symlinks on extract(); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, tracked in #1956 [expires 2026-12-31]" },
-  # Operator decision 2026-11-04: a dated exception, like its three siblings.
-  { id = "RUSTSEC-2026-0429", reason = "zip 8.6.0 (<9.0.0) extract() aborts the process on a symlink entry with a large declared size (DoS); same minisign-verified-only libsodium-sys-stable build-script call site as RUSTSEC-2026-0367, worst case a failed MSVC build, tracked in #1956 [expires 2026-12-31]" },
 ]
 
 # ── Licenses ────────────────────────────────────────────────────────────────
