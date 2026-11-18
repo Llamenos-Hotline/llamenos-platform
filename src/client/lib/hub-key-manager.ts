@@ -65,7 +65,7 @@ import {
   getDevicePubkeys,
 } from './platform'
 import type { HubKeyWrap, RecipientEnvelope } from './platform'
-import { ApiError, NetworkError, NoSessionError, holdsSession } from './api/client'
+import { ApiError, NetworkError, NoSessionError, holdsSession, isHubNotFound } from './api/client'
 import {
   getHubKeyEnvelope,
   getHubKeyRecipients,
@@ -172,6 +172,31 @@ async function generateAndInstall(hubId: string, recipients: HubKeyRecipientsRes
 /** What the mounted `useHubKeys` last synced, for `resyncHubKeys`. */
 let mounted: { hubIds: readonly string[]; mayManage: boolean } | null = null
 
+/** The walk over every member hub that `useHubKeys` is running now, if one is. */
+let walking: Promise<void> | null = null
+const settledWaiters = new Set<() => void>()
+
+function releaseSettledWaiters(): void {
+  if (!mounted || walking) return
+  for (const release of settledWaiters) release()
+  settledWaiters.clear()
+}
+
+/**
+ * Resolves once `useHubKeys` is mounted and no walk over the member hubs is
+ * running. A walk is a chain of requests (`/key`, `/key/recipients`, …) per hub
+ * that goes on for as long as the hub list is long; a caller that is about to
+ * end or replace the session — a test that swaps the session token, say — waits
+ * for it here, so that nothing is launched under a token it is about to change.
+ * Exposed to the E2E harness as `__TEST_HUB_KEYS_SETTLED`.
+ */
+export function hubKeysSettled(): Promise<void> {
+  return new Promise(resolve => {
+    settledWaiters.add(resolve)
+    releaseSettledWaiters()
+  })
+}
+
 /**
  * Where a load of `hubId`'s key ended: `held`; `waiting` for a manager's device
  * to share it; or `not-served` — the server has no such hub for this account
@@ -197,8 +222,11 @@ async function loadOrGenerate(hubId: string, mayGenerate: boolean): Promise<KeyL
       await unwrapHubKey(hubId, envelope)
       return 'held'
     } catch (err) {
-      // 404: no wrap for this user (yet) — or no such hub, which only the
-      // recipients read below can tell apart. 403: not a member of this hub.
+      // The hub itself is gone (deleted elsewhere, the membership list ahead of
+      // the server): the answer is complete, and asking the recipients route to
+      // confirm it would only add a second 404 for the same hub.
+      if (isHubNotFound(err)) return 'not-served'
+      // 404: no wrap for this user (yet). 403: not a member of this hub.
       if (isStatus(err, 403)) return 'waiting'
       if (!isStatus(err, 404)) throw err
     }
@@ -716,7 +744,7 @@ export function useHubKeys(): void {
     previousHubIds.current = hubIds
     mounted = { hubIds, mayManage }
     let cancelled = false
-    void (async () => {
+    const walk = (async () => {
       for (const hubId of left) {
         reportedUnavailable.delete(hubId)
         await forgetHubKey(hubId).catch(err => console.error(`[hub-key] hub ${hubId}: ${describe(err)}`))
@@ -726,6 +754,13 @@ export function useHubKeys(): void {
         await syncHub(hubId, mayManage)
       }
     })()
+    walking = walk
+    void walk.finally(() => {
+      // A walk replaced by a newer one leaves it the say on when the hubs are settled.
+      if (walking !== walk) return
+      walking = null
+      releaseSettledWaiters()
+    })
     return () => {
       cancelled = true
       mounted = null

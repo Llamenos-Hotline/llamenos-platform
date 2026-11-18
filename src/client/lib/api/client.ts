@@ -237,10 +237,31 @@ export async function request<T>(path: string, options: RequestInit & { retries?
   throw lastError ?? new Error('Request failed')
 }
 
+/**
+ * What a hub-scoped route answers, before it looks at anything else, when the hub
+ * does not exist (`hubContext`, apps/worker/middleware/hub.ts; pinned by
+ * hub-middleware.test.ts). Every other 404 under `/hubs/:id/…` is about a thing
+ * inside a hub that does exist.
+ */
+const HUB_NOT_FOUND_ERROR = 'Hub not found'
+
 export class ApiError extends Error {
   constructor(public status: number, public body: string) {
     super(`API error ${status}: ${body}`)
     this.name = 'ApiError'
+  }
+}
+
+/**
+ * Whether `err` is the server saying the hub itself does not exist — as opposed
+ * to a 404 for a resource inside it (a hub key this user has no wrap of, say).
+ */
+export function isHubNotFound(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 404) return false
+  try {
+    return (JSON.parse(err.body) as { error?: unknown }).error === HUB_NOT_FOUND_ERROR
+  } catch {
+    return false
   }
 }
 

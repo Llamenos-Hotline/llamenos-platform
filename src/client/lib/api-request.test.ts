@@ -6,6 +6,7 @@ import {
   NoSessionError,
   OfflineQueuedError,
   isNetworkError,
+  isHubNotFound,
   getAuthHeadersForReplay,
   setOnAuthExpired,
   setOnApiActivity,
@@ -33,6 +34,22 @@ describe('ApiError', () => {
     expect(err.body).toBe('Not found')
     expect(err.message).toBe('API error 404: Not found')
     expect(err.name).toBe('ApiError')
+  })
+})
+
+describe('isHubNotFound', () => {
+  it('is the server saying the hub is not there', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(true)
+  })
+
+  it('is not a 404 for something inside a hub that does exist', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'No key envelope for this user' })))).toBe(false)
+  })
+
+  it('is not an answer other than 404, an unreadable body, or something that is not an API error', () => {
+    expect(isHubNotFound(new ApiError(403, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
+    expect(isHubNotFound(new ApiError(404, 'Hub not found'))).toBe(false)
+    expect(isHubNotFound(new Error('Hub not found'))).toBe(false)
   })
 })
 

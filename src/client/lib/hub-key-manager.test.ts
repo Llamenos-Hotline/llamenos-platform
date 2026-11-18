@@ -272,6 +272,16 @@ describe('hub key lifecycle', () => {
       expect(errors).not.toHaveBeenCalled()
     })
 
+    it('is learned from the key read alone: the recipients route is not asked to confirm it', { timeout: 60_000 }, async () => {
+      const admin = await device('admin', { manager: true })
+      server.gone = true
+
+      expect(await admin.hubKeys.ensureHubKey(HUB)).toBe(false)
+
+      // A second 404 for the same hub is a second console error for nothing.
+      expect(server.recipientReads).toBe(0)
+    })
+
     it('is reported once by the mounted lifecycle — across remounts and relay reconnects — and never as an error', { timeout: 60_000 }, async () => {
       let relay: 'connected' | 'disconnected' = 'connected'
       vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => true }) }))
@@ -296,6 +306,33 @@ describe('hub key lifecycle', () => {
       expect(warnings.mock.calls[0]?.[0]).toContain(`hub ${HUB}`)
       expect(errors).not.toHaveBeenCalled()
     })
+  })
+
+  it('says when the walk over the member hubs has ended — not before the hook is mounted, not while it runs', { timeout: 60_000 }, async () => {
+    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => true }) }))
+    vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
+    vi.doMock('./relay/context', () => ({ useRelayState: () => 'connected' }))
+    try {
+      const admin = await device('admin', { manager: true })
+      let settled = false
+      const waiting = admin.hubKeys.hubKeysSettled().then(() => { settled = true })
+
+      // Nothing has mounted: there is no walk to have ended.
+      await Promise.resolve()
+      expect(settled).toBe(false)
+
+      const mounted = renderHook(() => admin.hubKeys.useHubKeys())
+      await waiting
+
+      // The walk it waited for did all of its work: the hub's first key is installed.
+      expect(server.puts).toBe(1)
+      await admin.hubKeys.hubKeysSettled()
+      mounted.unmount()
+    } finally {
+      vi.doUnmock('./auth')
+      vi.doUnmock('./member-hubs')
+      vi.doUnmock('./relay/context')
+    }
   })
 
   it('a member who cannot manage keys never asks who the key is shared with (a read only a manager is allowed)', { timeout: 60_000 }, async () => {
