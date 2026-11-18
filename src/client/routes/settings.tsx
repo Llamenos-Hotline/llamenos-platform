@@ -13,6 +13,7 @@ import {
 } from '@/lib/api'
 import type { ErasureRequest } from '@protocol/schemas'
 import * as keyManager from '@/lib/key-manager'
+import { logoutAndRemoveKey } from '@/lib/logout'
 import { useToast } from '@/lib/toast'
 import { supportsInAppAudio } from '@/lib/in-app-audio'
 import { Settings2, Mic, Bell, User, Globe, Fingerprint, KeyRound, Trash2, Plus, Phone, Monitor, PhoneCall, Loader2, Bug, Send, MessageSquare, LogOut, Lock, AlertTriangle, Clock, Server } from 'lucide-react'
@@ -674,7 +675,9 @@ function SettingsPage() {
         confirmLabel={t('common.confirm', { defaultValue: 'Confirm' })}
         variant="destructive"
         onConfirm={async () => {
-          signOut()
+          // The dialog promises the encrypted keys leave this device, so end the
+          // session AND delete the vault — see logoutAndRemoveKey (#2110).
+          await logoutAndRemoveKey(signOut, () => toast(t('settings.logoutKeyRemovalFailed'), 'error'))
           await navigate({ to: '/login' })
         }}
       />
