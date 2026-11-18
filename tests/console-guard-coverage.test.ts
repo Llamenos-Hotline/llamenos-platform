@@ -1,3 +1,4 @@
+// @suite: repo
 // Every browser spec must run under the console-error guard (#1858).
 //
 // The guard (tests/console-guard.ts) only watches the specs that take their

@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * Rails for scripts/worktree-db.ts — the naming scheme and every condition the
  * sweep must satisfy before it may drop a database. The sweep runs on every

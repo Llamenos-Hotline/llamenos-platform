@@ -1,3 +1,4 @@
+// @suite: repo
 // Rail for the class of bug fixed alongside this test: a root `overrides` entry
 // that disagrees with a same-named direct `dependencies`/`devDependencies` entry.
 //

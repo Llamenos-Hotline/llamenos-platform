@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * `readJsonResponse` replaced `res.json().catch(() => null)` in the backend step files. The
  * point of the replacement is the non-JSON case, so that is what is pinned here: an HTML error

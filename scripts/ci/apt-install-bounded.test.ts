@@ -1,3 +1,4 @@
+// @suite: repo
 // scripts/ci/apt-install-bounded.sh (#2545) against a stub apt-get.
 //
 // The real `timeout` is used, so every stall below is a genuine wall-clock

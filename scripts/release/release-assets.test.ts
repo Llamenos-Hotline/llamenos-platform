@@ -1,3 +1,4 @@
+// @suite: repo
 // scripts/release/release-assets.sh, executed for real (bash + curl + jq)
 // against a local server standing in for the GitHub Releases API — one that
 // fails the way GitHub did when it stranded v0.21.4 and v0.21.9 as drafts:

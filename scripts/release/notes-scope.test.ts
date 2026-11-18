@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * Rails for scripts/release/notes-scope.ts and the knope.toml lists it reads:
  * user-facing release notes contain only end-user-relevant changes, by commit

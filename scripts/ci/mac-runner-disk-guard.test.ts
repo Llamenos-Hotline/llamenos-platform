@@ -1,3 +1,4 @@
+// @suite: repo
 // Runs the disk guard's own `selftest` (it works on Linux: selftest is dispatched
 // before the Darwin check) so the DerivedData ownership rules are enforced by CI
 // rather than by whoever remembers to run it by hand after editing the script.

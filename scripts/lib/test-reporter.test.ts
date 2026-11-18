@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * Rails for scripts/lib/test-reporter.sh (#2494): a step's reported result must
  * be derived from THAT step's own output, and a step with no result must never
