@@ -186,7 +186,9 @@ export class CallsService {
         (row.status === 'ringing' && age > RINGING_TTL_MS) ||
         // A spam-reported call stays in active_calls with its status changed; it
         // ages out like an in-progress one, so its sealed caller number cannot outlive it.
-        ((row.status === 'in-progress' || row.status === 'spam') && age > IN_PROGRESS_TTL_MS)
+        // So does a call parked on voicemail, whose end the provider normally reports
+        // but may not (the caller can hang up mid-message with no further callback).
+        ((row.status === 'in-progress' || row.status === 'spam' || row.status === 'voicemail') && age > IN_PROGRESS_TTL_MS)
       ) {
         stale.push(row)
       } else {
@@ -204,7 +206,7 @@ export class CallsService {
           const duration = call.duration ?? Math.floor(
             (new Date(endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000,
           )
-          const finalStatus = call.status === 'ringing' ? 'unanswered' : 'completed'
+          const finalStatus = call.status === 'ringing' || call.status === 'voicemail' ? 'unanswered' : 'completed'
           const sealed = this.sealCallMetadata(call, recipientsByCall.get(call.callId) ?? null)
 
           await tx.insert(callRecords).values({
@@ -454,6 +456,36 @@ export class CallsService {
     const existing = await this.getActiveCallById(hubId, callId)
     if (!existing) throw new ServiceError(404, 'Call not found')
     throw new ServiceError(409, 'Call already answered')
+  }
+
+  /**
+   * The caller has left the queue for voicemail: nobody can be bridged to them any
+   * more, so the call stops being answerable and stops being shown as ringing (#2753).
+   *
+   * `ringing` → `voicemail` is a single conditional UPDATE, the same shape as the
+   * answer claims above, so it and an answer race for the row and exactly one wins:
+   * an answer that lands first keeps the call (this returns false); one that lands
+   * after finds it no longer `ringing` and is refused. The row stays in
+   * `active_calls` until the recording (or the provider's status callback) ends it,
+   * and ends as `unanswered`. `voicemail` is internal — it never goes on the wire.
+   *
+   * Returns whether this call made the transition (false: already answered, already
+   * parked, ended, or unknown).
+   */
+  async markLeftQueue(hubId: string, callId: string): Promise<boolean> {
+    const rows = await this.db
+      .update(activeCalls)
+      .set({ status: 'voicemail' })
+      .where(
+        and(
+          eq(activeCalls.callId, callId),
+          eq(activeCalls.hubId, hubId),
+          eq(activeCalls.status, 'ringing'),
+          isNull(activeCalls.answeredBy),
+        ),
+      )
+      .returning({ callId: activeCalls.callId })
+    return rows.length > 0
   }
 
   /**

@@ -61,6 +61,7 @@ function makeServices() {
       endCall: vi.fn().mockResolvedValue(undefined),
       addCall: vi.fn().mockResolvedValue({ callId: CALL_SID }),
       markVoicemail: vi.fn().mockResolvedValue(undefined),
+      markLeftQueue: vi.fn().mockResolvedValue(true),
     },
     providerRecordings: { track: vi.fn().mockResolvedValue(undefined), trackUnaddressable: vi.fn().mockResolvedValue(undefined) },
     audit: { log: vi.fn().mockResolvedValue(undefined) },
