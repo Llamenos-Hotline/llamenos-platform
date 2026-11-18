@@ -12,6 +12,7 @@ import {
   updateContactBodySchema,
   listContactsQuerySchema,
   contactCaseLinkSchema,
+  contactEnvelopeRecipientsResponseSchema,
 } from '@protocol/schemas/contacts-v2'
 import {
   contactRelationshipSchema,
@@ -29,7 +30,8 @@ import {
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
+import { ServiceError } from '../services/settings'
+import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import {
   mergeContactsBodySchema,
   mergeContactsResponseSchema,
@@ -54,7 +56,7 @@ const contactsV2 = new Hono<AppEnv>()
 // segments share the contact id's position and are not resources.
 const contactInPathHub = resourceInPathHub({
   param: 'id',
-  skip: new Set(['lookup', 'search', 'groups', 'merge', 'bulk', 'bulk-create']),
+  skip: new Set(['lookup', 'search', 'envelope-recipients', 'groups', 'merge', 'bulk', 'bulk-create']),
   load: async (services, id, hubId) => assertInHub(await services.contacts.get(id), hubId, 'Contact not found'),
 })
 contactsV2.use('/:id/*', contactInPathHub)
@@ -148,6 +150,39 @@ contactsV2.get('/search',
 
     const contacts = await services.contacts.searchByTrigramTokens(hubId, tokenList)
     return c.json({ contacts })
+  },
+)
+
+// Who a contact write must be sealed to (#2741). Hub-only: the readers are THIS
+// hub's members, so an unscoped call has no hub to answer for — and a hub-only
+// member holds no global role, so only the hub-mounted path can serve them. The
+// caller needs a permission that writes or reads contacts; any member who can
+// write a contact must be able to ask, since the answer is what they seal to.
+// Registered before `/:id` so the literal segment is not read as a contact id.
+contactsV2.get('/envelope-recipients',
+  describeRoute({
+    tags: ['Contact Directory'],
+    summary: 'Get the envelope recipient keys a contact write must be sealed to',
+    responses: {
+      200: {
+        description: 'X25519 recipient keys per tier (summary, pii, admin)',
+        content: { 'application/json': { schema: resolver(contactEnvelopeRecipientsResponseSchema) } },
+      },
+      503: { description: 'The hub has no admin reader, so nothing can be sealed to a set that includes one' },
+      ...authErrors,
+    },
+  }),
+  hubOnly,
+  requireAnyPermission(
+    'contacts:view', 'contacts:create', 'contacts:edit', 'contacts:manage-relationships', 'contacts:manage-groups',
+  ),
+  async (c) => {
+    try {
+      return c.json(await c.get('services').identity.contactReadersFor(pathHubId(c)))
+    } catch (err) {
+      if (err instanceof ServiceError && err.status === 503) return c.json({ error: err.message }, 503)
+      throw err
+    }
   },
 )
 

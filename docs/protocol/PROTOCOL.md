@@ -3216,6 +3216,11 @@ Hub-only: there is no unscoped `/api/contacts` (#2395).
 E2EE contact directory with affinity groups and relationships. Mounted at `/api/directory`. Hub-scoped only.
 
 ```
+GET    /api/hubs/:hubId/directory/envelope-recipients
+Permission: contacts:view | contacts:create | contacts:edit | contacts:manage-relationships | contacts:manage-groups
+Response: { "summary": hex[], "pii": hex[], "admin": hex[] }
+Errors: 503 when the hub has no admin reader (no admin device registered and no escrow key)
+
 GET    /api/hubs/:hubId/directory
 Permission: contacts:view
 Query: ?page=&limit=&contactTypeHash=
@@ -3315,6 +3320,16 @@ GET    /api/hubs/:hubId/directory/groups/:groupId/members
 Permission: contacts:view
 Response: { "members": GroupMember[] }
 ```
+
+**Contact readers (#2741).** `GET /api/hubs/:hubId/directory/envelope-recipients` names the X25519 device keys a client seals a contact write to, per tier, so that no client guesses. Like every records recipients route it is hub-only: a hub-only member holds no global role, and a call outside `/hubs/:hubId` is `404` — there is no hubless reader set. Every entry is a registered device's X25519 key or the hub's escrow key, never an Ed25519 identity key, and the tiers are decided by the permissions a member holds IN THAT HUB (their hub role assignments only — a global super-admin's `*` is a reader of no hub), never by a role id or name:
+
+| Tier | Seals | Readers |
+|------|-------|---------|
+| `summary` | `encryptedSummary` | holders of `contacts:view` or `contacts:view-pii`, plus `admin` |
+| `pii` | `encryptedPII` | holders of `contacts:view-pii`, plus `admin` |
+| `admin` | payloads no member below an admin may read (affinity groups, relationships) | holders of the admin minimum (`settings:manage` + `notes:read-all`), plus the hub's escrow key |
+
+`contacts:search` alone is not a reader: it finds a contact, it does not read it. The hub's escrow key is a member of every tier (§2.4.2); setting it therefore requires holding `contacts:view` and `contacts:view-pii` in the hub as well. Contacts have no per-record assignment, so one answer serves create and edit. Every tier contains `admin`: when the hub has no admin reader the server answers `503` rather than name a set without one, and a client MUST refuse to seal to a set holding none. A failed lookup falls back to the sealing device plus the admin key and never to another key (the same contract as §4.31 records).
 
 ### 4.31 Records
 

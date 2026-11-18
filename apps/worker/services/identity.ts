@@ -11,7 +11,7 @@ import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
 import { getHubKeyRecipients, getHubKeyRotation, markHubKeyRotationDue, rotateHubKey } from '../lib/hub-key'
 import type { HubKeyRecipientsResponse, HubKeyRotateBody, HubKeyRotateResponse, HubKeyRotationResponse } from '@protocol/schemas/hubs'
-import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor } from '../lib/readers'
+import { clearHubEscrowKey, contactReadersFor, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor, type ContactReaders } from '../lib/readers'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import type { Database } from '../db'
@@ -410,6 +410,14 @@ export class IdentityService {
    */
   async readersFor(hubId: string, purpose: ReaderPurpose): Promise<HpkeRecipientPubkey[]> {
     return readersFor(this.db, hubId, purpose)
+  }
+
+  /**
+   * The readers of `hubId`'s contacts, per tier (PROTOCOL §4.30). 503 when the
+   * hub has no admin reader. See `lib/readers.ts`.
+   */
+  async contactReadersFor(hubId: string): Promise<ContactReaders> {
+    return contactReadersFor(this.db, hubId)
   }
 
   /** What a key holder needs to distribute `hubId`'s key. See `lib/hub-key.ts`. */
