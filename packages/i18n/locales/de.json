@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Überprüfung des Anteils fehlgeschlagen",
+    "liveness": {
+      "title": "Dein Wiederherstellungsanteil",
+      "description": "Weise nach, dass dieses Gerät deinen Wiederherstellungsanteil noch besitzt. Dein Anteil verlässt das Gerät nie; der Hub prüft nur eine damit erstellte Signatur.",
+      "prove": "Meinen Anteil überprüfen",
+      "proving": "Wird überprüft…",
+      "success": "Anteil überprüft. Admins sehen deinen Anteil als intakt an.",
+      "error": "Überprüfung des Anteils fehlgeschlagen"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

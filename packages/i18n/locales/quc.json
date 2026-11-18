@@ -4173,6 +4173,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Xsach ruchajixik le cholaj",
+    "liveness": {
+      "title": "Ri cholaj chi rij ri kajiloj",
+      "description": "Tanimaj chi re samajib’al re k’a k’o ri cholaj chi rij ri kajiloj. Ri cholaj man kel ta pa samajib’al; ri hub xa xe nuchajij jun tzij chi xb’an rik’in.",
+      "prove": "Nuchajij ri cholaj",
+      "proving": "Nchajix…",
+      "success": "Xchajix ri cholaj. Ri ajtijoxela’ kakilo chi utz ri cholaj.",
+      "error": "Xsach ruchajixik le cholaj"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

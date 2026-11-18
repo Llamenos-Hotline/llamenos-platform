@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import {
   getRecoverySessions,
+  getMyShareEnvelope,
   getActiveHub,
   type RecoverySessionInfo,
 } from '@/lib/api'
@@ -13,6 +14,7 @@ export function RecoveryRequestsAdminSection() {
   const { toast } = useToast()
   const hubId = getActiveHub()
   const [sessions, setSessions] = useState<RecoverySessionInfo[]>([])
+  const [myShareEnvelope, setMyShareEnvelope] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   async function loadSessions() {
@@ -27,6 +29,14 @@ export function RecoveryRequestsAdminSection() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!hubId) return
+    // null = this user holds no share in the hub (the server's single 403).
+    getMyShareEnvelope(hubId)
+      .then((mine) => setMyShareEnvelope(mine?.shareEnvelope ?? null))
+      .catch(() => toast(t('common.error'), 'error'))
+  }, [hubId])
 
   useEffect(() => {
     loadSessions()
@@ -44,9 +54,10 @@ export function RecoveryRequestsAdminSection() {
 
   return (
     <RecoveryRequestsSection
+      hubId={hubId}
       sessions={sessions}
       onSessionsChanged={loadSessions}
-      myShareEnvelope={null}
+      myShareEnvelope={myShareEnvelope}
       myShareCommitment={null}
     />
   )

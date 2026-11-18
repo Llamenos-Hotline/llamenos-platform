@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Falha na verificação da parte",
+    "liveness": {
+      "title": "Sua parte de recuperação",
+      "description": "Comprove que este dispositivo ainda guarda a sua parte de recuperação. Sua parte nunca sai do dispositivo; o hub apenas verifica uma assinatura feita com ela.",
+      "prove": "Verificar minha parte",
+      "proving": "Verificando…",
+      "success": "Parte verificada. Os administradores verão sua parte como íntegra.",
+      "error": "Falha na verificação da parte"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Не удалось проверить долю",
+    "liveness": {
+      "title": "Ваша доля восстановления",
+      "description": "Подтвердите, что это устройство по-прежнему хранит вашу долю восстановления. Доля никогда не покидает устройство; хаб проверяет только подпись, созданную с её помощью.",
+      "prove": "Проверить мою долю",
+      "proving": "Проверка…",
+      "success": "Доля проверена. Администраторы увидят, что ваша доля в порядке.",
+      "error": "Не удалось проверить долю"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

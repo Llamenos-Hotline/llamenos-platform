@@ -2,6 +2,13 @@ import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
 import { request, ApiError } from './client'
 import type { RecoveryGroupInfo } from '@protocol/schemas'
+import type {
+  MyShareEnvelopeResponse,
+  RecoveryGroupEnrollBody,
+  ShareLivenessChallengeResponse,
+  ShareLivenessProof,
+  ShareLivenessProofResponse,
+} from '@protocol/schemas/recovery-group'
 
 // ── Recovery Group ─────────────────────────────────────────────────────
 
@@ -32,20 +39,6 @@ export interface RecoverySessionInfo {
   }>
 }
 
-export interface RecoveryGroupEnrollBody {
-  hubId: string
-  threshold: number
-  totalShares: number
-  groupPublicKey: string
-  shareEnvelopes: Array<{ holderPubkey: string; envelope: string }>
-  shareCommitments: string[]
-  duressCommitments?: (string | null)[]
-  sigchainLinkHash: string
-  delayHours?: number
-  emergencyFloorHours?: number
-  rotate?: boolean
-}
-
 /**
  * The hub's recovery group, or `null` when none is enrolled (the server's 404).
  * Every other failure — wrong path, 403, 5xx, offline — propagates: collapsing
@@ -62,6 +55,38 @@ export async function getRecoveryGroup(hubId: string): Promise<RecoveryGroupInfo
 
 export async function enrollRecoveryGroup(body: RecoveryGroupEnrollBody): Promise<void> {
   await request('/recovery-group/enroll', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * The caller's own share envelope for `hubId`, or `null` when the caller holds no
+ * share there (the server's single 403 for "not a member / not a holder / no
+ * group"). Every other failure propagates.
+ */
+export async function getMyShareEnvelope(hubId: string): Promise<MyShareEnvelopeResponse | null> {
+  try {
+    return await request<MyShareEnvelopeResponse>(
+      `/recovery-group/shares/my?${new URLSearchParams({ hubId }).toString()}`,
+    )
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 403) return null
+    throw err
+  }
+}
+
+/** A fresh single-use challenge to prove possession of this hub's share against (#2782). */
+export async function requestLivenessChallenge(hubId: string): Promise<ShareLivenessChallengeResponse> {
+  return request<ShareLivenessChallengeResponse>('/recovery-group/shares/liveness/challenge', {
+    method: 'POST',
+    body: JSON.stringify({ hubId }),
+  })
+}
+
+/** Submit a liveness proof; the server verifies it against this holder's enrolled liveness key. */
+export async function submitLivenessProof(body: ShareLivenessProof): Promise<ShareLivenessProofResponse> {
+  return request<ShareLivenessProofResponse>('/recovery-group/shares/liveness', {
     method: 'POST',
     body: JSON.stringify(body),
   })

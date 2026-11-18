@@ -248,6 +248,7 @@ pub fn run() {
             // H16: Recovery group key isolation (combine+decrypt in Rust only)
             crypto::recovery_group_create,
             crypto::recovery_share_contribute_from_state,
+            crypto::recovery_share_liveness_proof_from_state,
             crypto::recovery_group_reconstruct_from_shares,
             crypto::recovery_group_decrypt,
             // C06: Missing IPC commands

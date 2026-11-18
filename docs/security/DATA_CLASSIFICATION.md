@@ -327,7 +327,7 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `recovery_contributions[].encryptedShareForDevice` | **E2EE** | Session lifetime | HPKE-sealed share for recovering user's new device (label: `LABEL_RECOVERY_SHARE_CONTRIBUTE`) |
 | `recovery_contributions[].signature` | Plaintext | Session lifetime | Ed25519 signature over (ciphertext + session ID) |
 | `recovery_contributions[].contributedAt` | Plaintext | Session lifetime | Contribution timestamp |
-| Liveness proofs | Plaintext | Configurable | Ed25519-signed proofs from share holders (`LABEL_RECOVERY_LIVENESS_PROOF`) |
+| Liveness proofs | Plaintext | Not stored | Ed25519 signature under a share-derived key over a single-use challenge (`LABEL_RECOVERY_LIVENESS_PROOF`). The server keeps only the outcome (`last_liveness_proof` / `last_liveness_failure` timestamps) and the per-share liveness public key, a one-way function of the share |
 
 **Important**: The Shamir secret (recovery group X25519 private key) is NEVER stored whole. It exists only transiently during the `split()` operation and is immediately zeroized after shares are distributed. Below-threshold shares reveal zero information about the secret (information-theoretic security).
 

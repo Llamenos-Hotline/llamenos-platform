@@ -83,6 +83,7 @@ export type TauriIpcCommand =
   | 'shamir_verify'
   | 'recovery_group_create'
   | 'recovery_share_contribute_from_state'
+  | 'recovery_share_liveness_proof_from_state'
   | 'recovery_group_reconstruct_from_shares'
   | 'recovery_group_decrypt'
   | 'device_import_and_load'
@@ -1611,6 +1612,8 @@ export interface RecoveryGroupCreateResult {
   /** One HPKE envelope per holder, in `holderEncryptionPubkeys` order. */
   shareEnvelopes: HpkeEnvelope[]
   commitments: string[]
+  /** One liveness verifying key per share, same order — sent to the server as each holder's `livenessPublicKey` (#2782). */
+  livenessPublicKeys: string[]
 }
 
 /**
@@ -1665,6 +1668,28 @@ export async function recoveryShareContribute(
     })
   }
   throw new Error('WASM recovery share contribute not yet implemented')
+}
+
+/**
+ * Prove this device still holds its recovery share (#2782): Rust opens the share,
+ * derives its liveness key and signs the server's challenge, bound to `hubId` and
+ * to this device's own signing pubkey. Returns the proof (hex) for
+ * `POST /recovery-group/shares/liveness`. Neither the share nor the derived key
+ * enters JavaScript.
+ */
+export async function recoveryShareLivenessProof(
+  envelope: HpkeEnvelope,
+  hubId: string,
+  challengeHex: string,
+): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('recovery_share_liveness_proof_from_state', {
+      envelope,
+      hubId,
+      challengeHex,
+    })
+  }
+  throw new Error('WASM recovery share liveness proof not yet implemented')
 }
 
 /** Encrypted share envelope for recovery group reconstruction. */

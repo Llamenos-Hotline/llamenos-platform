@@ -3673,6 +3673,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Piştrastkirina parçeyê têk çû",
+    "liveness": {
+      "title": "Parçeya te ya vegerandinê",
+      "description": "Îsbat bike ku ev amûr hê jî parçeya te ya vegerandinê dihebîne. Parçeya te qet ji amûrê dernakeve; hub tenê îmzeyekî ku pê hatiye çêkirin kontrol dike.",
+      "prove": "Parçeya min piştrast bike",
+      "proving": "Tê piştrastkirin…",
+      "success": "Parçe hat piştrastkirin. Rêveber dê parçeya te saxlem bibînin.",
+      "error": "Piştrastkirina parçeyê têk çû"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

@@ -568,6 +568,19 @@ pub fn mobile_shamir_verify(
     Ok(crate::shamir::verify(&share, &commitment))
 }
 
+/// The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+/// share (#2782). An enrolling client computes one per share and sends it beside
+/// the holder's share envelope; see `recovery_liveness`.
+#[uniffi::export]
+pub fn mobile_recovery_liveness_public_key(
+    share: &crate::shamir::ShamirShare,
+) -> Result<String, CryptoError> {
+    let share = share.to_share()?;
+    Ok(hex::encode(crate::recovery_liveness::liveness_public_key(
+        &share,
+    )?))
+}
+
 /// Generate an X25519 keypair for a recovery group.
 ///
 /// The private key is stored internally and never crosses the FFI boundary.

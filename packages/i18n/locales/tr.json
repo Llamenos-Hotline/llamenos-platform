@@ -4123,6 +4123,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Pay doğrulaması başarısız oldu",
+    "liveness": {
+      "title": "Kurtarma payınız",
+      "description": "Bu cihazın kurtarma payınızı hâlâ elinde tuttuğunu kanıtlayın. Payınız cihazdan asla çıkmaz; hub yalnızca onunla atılmış bir imzayı denetler.",
+      "prove": "Payımı doğrula",
+      "proving": "Doğrulanıyor…",
+      "success": "Pay doğrulandı. Yöneticiler payınızı sağlıklı olarak görecek.",
+      "error": "Pay doğrulaması başarısız oldu"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

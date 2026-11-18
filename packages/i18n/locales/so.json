@@ -4159,6 +4159,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Xaqiijinta qaybtu way fashilantay",
+    "liveness": {
+      "title": "Qaybtaada soo-celinta",
+      "description": "Caddee in qalabkani weli haysto qaybtaada soo-celinta. Qaybtaada weligeed qalabka kama baxdo; hab-ku-yaalku wuxuu hubiyaa oo kaliya saxiix lagu sameeyay.",
+      "prove": "Xaqiiji qaybtayda",
+      "proving": "Waa la xaqiijinayaa…",
+      "success": "Qaybta waa la xaqiijiyay. Maamuleyaashu waxay arki doonaan qaybtaada oo caafimaad qabta.",
+      "error": "Xaqiijinta qaybtu way fashilantay"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

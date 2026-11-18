@@ -4187,6 +4187,9 @@ Body: { hubId, threshold, totalShares, groupPublicKey, shareEnvelopes, shareComm
         rewrappedUserEnvelopes: [{ userPubkey, envelope }] }
 Response: { "ok": true }
 Atomic: replaces the group and re-wraps every user envelope in one transaction.
+Each shareEnvelopes entry (enroll and rotate) is
+  { holderPubkey, shareEnvelope, livenessPublicKey: hex64 }
+where livenessPublicKey is derived from that holder's share — see "Share liveness proofs".
 
 GET  /api/recovery-group/sessions?hubId=<uuid>
 Permission: recovery:view (and membership of the hub)
@@ -4220,10 +4223,15 @@ Auth: Required
 Body: { "hubId": uuid, "envelope": string }
 Response: { "ok": true }
 
+POST /api/recovery-group/shares/liveness/challenge
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid }
+Response: { "challenge": hex64, "expiresAt": iso8601 }   (single use, 5 minutes)
+
 POST /api/recovery-group/shares/liveness
-Permission: recovery:hold-share
-Body: { "hubId": uuid, "proof": string }
-Response: { "ok": true }
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid, "challenge": hex64, "proof": hex128 }
+Response: { "ok": true, "verifiedAt": iso8601 }
 
 GET  /api/recovery-group/shares/my?hubId=<uuid>
 Permission: recovery:hold-share (and current hub membership + enrollment)
@@ -4240,6 +4248,35 @@ longer a member of the hub, was never enrolled, or the hub has no recovery
 group, so the route cannot be used to probe enrollment. A holder cannot take part
 in recovery without this route: it is the only way to get the envelope they must
 open to produce a `contribute` payload.
+
+**Share liveness proofs** (#2782) let a holder demonstrate, before any recovery
+is needed, that they can still produce their share — without the share, or
+anything that narrows it, reaching the server. Defined in
+`packages/crypto/src/recovery_liveness.rs`:
+
+```
+seed      = HKDF-SHA256(ikm = x || y, salt = none, info = LABEL_RECOVERY_LIVENESS_PROOF, L = 32)
+(sk, pk)  = Ed25519 keypair from seed            // pk = the holder's livenessPublicKey
+message   = UTF-8(LABEL_RECOVERY_LIVENESS_PROOF) || 0x00
+            || u32be(len(hubId)) || UTF-8(hubId)
+            || u32be(len(holderPubkey)) || UTF-8(holderPubkey)
+            || challenge (32 bytes)
+proof     = Ed25519.sign(sk, message)
+```
+
+The enrolling client computes `livenessPublicKey` per share at split time (the
+share commitment cannot serve: a hash commitment is checkable only by a holder
+of the share). `holderPubkey` is the authenticated caller's signing pubkey. The
+server consumes the challenge atomically before verifying, so a challenge is
+single-use whatever the outcome. An unknown, expired, reused or other-hub
+challenge is `409` and changes nothing. A proof that does not verify is `403`:
+it clears the holder's `lastLivenessProof` and records `lastLivenessFailure`
+(both in `shareHolderLiveness`), so a holder who cannot produce their share
+never reads as healthy. A share row enrolled without a liveness key gets `409`
+from the challenge endpoint until the group is rotated. Clients sign inside
+Rust (`recovery_share_liveness_proof_from_state` on desktop,
+`mobile_recovery_share_liveness_proof` on iOS/Android): the share is opened
+and used without entering the webview, Swift or Kotlin.
 
 ### 4.51 Teams
 

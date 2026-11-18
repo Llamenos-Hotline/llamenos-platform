@@ -4033,6 +4033,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "تأیید سهم ناموفق بود",
+    "liveness": {
+      "title": "سهم بازیابی شما",
+      "description": "ثابت کنید این دستگاه هنوز سهم بازیابی شما را دارد. سهم شما هرگز از دستگاه خارج نمی‌شود؛ هاب فقط امضایی را که با آن ساخته شده بررسی می‌کند.",
+      "prove": "تأیید سهم من",
+      "proving": "در حال تأیید…",
+      "success": "سهم تأیید شد. مدیران سهم شما را سالم خواهند دید.",
+      "error": "تأیید سهم ناموفق بود"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

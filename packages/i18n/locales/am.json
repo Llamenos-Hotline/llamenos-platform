@@ -2485,6 +2485,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "የማጋራት ማረጋገጫ አልተሳካም",
+    "liveness": {
+      "title": "የእርስዎ የማገገሚያ ድርሻ",
+      "description": "ይህ መሣሪያ የማገገሚያ ድርሻዎን አሁንም እንደያዘ ያረጋግጡ። ድርሻዎ ከመሣሪያው ፈጽሞ አይወጣም፤ ማዕከሉ በእሱ የተፈረመውን ፊርማ ብቻ ይመረምራል።",
+      "prove": "ድርሻዬን አረጋግጥ",
+      "proving": "በማረጋገጥ ላይ…",
+      "success": "ድርሻው ተረጋግጧል። አስተዳዳሪዎች ድርሻዎን ጤናማ ሆኖ ያዩታል።",
+      "error": "የማጋራት ማረጋገጫ አልተሳካም"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

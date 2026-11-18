@@ -2820,6 +2820,18 @@ public func mobileRecoveryGroupSplitPrivateKey(handle: UInt64, total: UInt8, thr
 })
 }
 /**
+ * The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+ * share (#2782). An enrolling client computes one per share and sends it beside
+ * the holder's share envelope; see `recovery_liveness`.
+ */
+public func mobileRecoveryLivenessPublicKey(share: ShamirShare)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(
+        FfiConverterTypeShamirShare_lower(share),$0
+    )
+})
+}
+/**
  * Combine Shamir shares to reconstruct the secret.
  *
  * `threshold`: the minimum number of shares required (K from the original split).
@@ -3539,6 +3551,25 @@ public func mobileRandomBytesHex() -> String  {
 })
 }
 /**
+ * Prove this device still holds its recovery share (#2782).
+ *
+ * Opens `share_envelope` (sealed to this device under
+ * `LABEL_RECOVERY_GROUP_SHARE_WRAP`) with the device key in mobile state,
+ * derives the share's liveness key and signs the server's single-use
+ * `challenge_hex`, bound to `hub_id` and to this device's own signing pubkey —
+ * the identity the server authenticates the submission as. Returns the 64-byte
+ * proof as hex. Neither the share nor the derived key leaves Rust.
+ */
+public func mobileRecoveryShareLivenessProof(shareEnvelope: HpkeEnvelope, hubId: String, challengeHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(
+        FfiConverterTypeHpkeEnvelope_lower(shareEnvelope),
+        FfiConverterString.lower(hubId),
+        FfiConverterString.lower(challengeHex),$0
+    )
+})
+}
+/**
  * Seal a case ciphertext — a record's summary or fields, or a comment — as
  * this device, for this device plus `reader_pubkeys` (X25519, hex).
  *
@@ -3779,6 +3810,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key() != 15169) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key() != 23991) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_shamir_combine() != 20665) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3951,6 +3985,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {

@@ -4249,6 +4249,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "အစိတ်အပိုင်းအတည်ပြုခြင်း မအောင်မြင်ပါ",
+    "liveness": {
+      "title": "သင်၏ ပြန်လည်ရယူရေး အစိတ်အပိုင်း",
+      "description": "ဤစက်သည် သင်၏ ပြန်လည်ရယူရေး အစိတ်အပိုင်းကို ယခုထိ ကိုင်ဆောင်ထားကြောင်း သက်သေပြပါ။ သင့်အစိတ်အပိုင်းသည် စက်မှ ဘယ်သောအခါမှ မထွက်ပါ၊ ဟပ်သည် ၎င်းဖြင့်ပြုလုပ်သော လက်မှတ်ကိုသာ စစ်ဆေးသည်။",
+      "prove": "ကျွန်ုပ်၏ အစိတ်အပိုင်းကို အတည်ပြုရန်",
+      "proving": "အတည်ပြုနေသည်…",
+      "success": "အစိတ်အပိုင်းကို အတည်ပြုပြီးပါပြီ။ စီမံခန့်ခွဲသူများသည် သင့်အစိတ်အပိုင်းကို ကောင်းမွန်သည်ဟု မြင်ရပါမည်။",
+      "error": "အစိတ်အပိုင်းအတည်ပြုခြင်း မအောင်မြင်ပါ"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

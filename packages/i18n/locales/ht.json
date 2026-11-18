@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Verifikasyon pati a echwe",
+    "liveness": {
+      "title": "Pati rekiperasyon ou",
+      "description": "Montre aparèy sa a toujou gen pati rekiperasyon ou. Pati ou a pa janm kite aparèy la; hub la sèlman verifye yon siyati ki fèt avè l.",
+      "prove": "Verifye pati mwen",
+      "proving": "Y ap verifye…",
+      "success": "Pati a verifye. Administratè yo pral wè pati ou an nan bon eta.",
+      "error": "Verifikasyon pati a echwe"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

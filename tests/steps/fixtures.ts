@@ -241,7 +241,7 @@ export type CryptoWorld = {
   /** A key wrapped under a named label, with the original key hex for in-page comparison. */
   wrapped?: { env: unknown; keyHex: string }
   /** Shape summary of a recoveryGroupCreate result (share envelope included for refusal checks). */
-  recoveryGroup?: { keys: string[]; envelopes: number; commitments: number; envelope: unknown }
+  recoveryGroup?: { keys: string[]; envelopes: number; commitments: number; livenessPublicKeys: string[]; envelope: unknown }
   /** Claims the simulated primary signed (and the ones that must be refused), plus the code it derived. */
   sasClaims?: {
     claim: string
