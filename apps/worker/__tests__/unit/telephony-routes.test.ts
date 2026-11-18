@@ -95,6 +95,7 @@ function makeServices(): Services {
       endCall: vi.fn().mockResolvedValue(undefined),
       getHubIdForCall: vi.fn().mockResolvedValue('hub-1'),
       markVoicemail: vi.fn().mockResolvedValue(undefined),
+      markLeftQueue: vi.fn().mockResolvedValue(true),
       addCall: vi.fn().mockResolvedValue({ callId: 'CA-test' }),
       createCallToken: vi.fn().mockResolvedValue('token-abc'),
       takeRingLegs: vi.fn().mockResolvedValue([]),
@@ -1271,6 +1272,36 @@ describe('Telephony routes', () => {
           hubId: 'hub-1',
         }),
       )
+    })
+
+    it('takes the call off ringing before it cancels the legs and sends the voicemail (#2753)', async () => {
+      adapter.parseQueueExitWebhook = vi.fn().mockResolvedValue({ result: 'leave' })
+      const order: string[] = []
+      services.calls.markLeftQueue = vi.fn().mockImplementation(async () => { order.push('markLeftQueue'); return true })
+      services.calls.takeRingLegs = vi.fn().mockImplementation(async () => { order.push('takeRingLegs'); return [] })
+      const app = await createTestApp(adapter, services)
+      const res = await app.request('/api/telephony/queue-exit?hub=hub-1&callSid=CA-exit&lang=en', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'QueueResult=leave',
+      })
+      expect(res.status).toBe(200)
+      expect(services.calls.markLeftQueue).toHaveBeenCalledWith('hub-1', 'CA-exit')
+      expect(order).toEqual(['markLeftQueue', 'takeRingLegs'])
+      expect(adapter.handleVoicemail).toHaveBeenCalled()
+    })
+
+    it('does not mark a call that is not leaving for voicemail (#2753)', async () => {
+      for (const result of ['hangup', 'bridged'] as const) {
+        adapter.parseQueueExitWebhook = vi.fn().mockResolvedValue({ result })
+        const app = await createTestApp(adapter, services)
+        await app.request('/api/telephony/queue-exit?hub=hub-1&callSid=CA-exit&lang=en', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `QueueResult=${result}`,
+        })
+      }
+      expect(services.calls.markLeftQueue).not.toHaveBeenCalled()
     })
 
     it('returns voicemail prompt on queue-full result', async () => {

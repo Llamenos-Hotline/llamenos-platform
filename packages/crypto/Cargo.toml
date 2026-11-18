@@ -41,8 +41,11 @@ zeroize = { version = "1", features = ["derive"] }
 # Unicode normalization (for blind index canonicalization)
 unicode-normalization = "0.1"
 
-# Date/time (for blind index epoch bucketing)
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# NOTE: there is deliberately no date/time crate. Blind-index epoch bucketing
+# (blind_index.rs) parses `YYYY-MM-DD` and computes the ISO week itself, pinned
+# to the semantics of the `chrono` code it replaced (chrono is unmaintained,
+# RUSTSEC-2026-0543). Do not reintroduce one without re-running the golden
+# vectors in blind_index.rs.
 
 # Encoding
 hex = "0.4"

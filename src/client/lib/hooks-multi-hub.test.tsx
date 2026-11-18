@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { KIND_CALL_RING, KIND_MESSAGE_NEW } from '@shared/event-kinds'
+import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_MESSAGE_NEW } from '@shared/event-kinds'
 import type { RelayEventHandler } from './relay/types'
 
 const subscribed: { hubIds: readonly string[]; kinds: number[]; handler: RelayEventHandler }[] = []
@@ -106,6 +106,19 @@ describe('useCalls with the user in two hubs and hub A active', () => {
     requested.length = 0
     await act(async () => { await result.current.reportSpam('CA-on-hub-B') })
     expect(requested).toEqual([{ path: '/hubs/hub-B/calls/CA-on-hub-B/spam', method: 'POST' }])
+  })
+
+  it('stops showing and ringing a call whose caller left the queue for voicemail (#2753)', async () => {
+    const { result } = renderHook(() => useCalls(), { wrapper: CallsProvider })
+    await waitFor(() => expect(result.current.ringingCalls).toHaveLength(1))
+
+    await act(async () => {
+      latest(KIND_CALL_UPDATE).handler(KIND_CALL_UPDATE, { type: 'call:update', callId: 'CA-on-hub-B', status: 'unanswered' }, 'hub-B')
+    })
+
+    expect(result.current.calls.map(c => c.id)).not.toContain('CA-on-hub-B')
+    expect(result.current.ringingCalls).toHaveLength(0)
+    expect(ringing.stopRinging).toHaveBeenCalled()
   })
 
   it('is an empty, inert feed for a route that renders with no signed-in session around it', async () => {

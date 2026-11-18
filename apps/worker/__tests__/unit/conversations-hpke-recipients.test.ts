@@ -111,7 +111,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       senderIdentifier: '+15551110000',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash1', ADMIN_X25519, 'hub-1')
+    }, 'hash1', [ADMIN_X25519], 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     expect(msg).toBeDefined()
@@ -165,7 +165,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       senderIdentifier: '+15551110000',
       body: 'inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash2', ADMIN_X25519, 'hub-1')
+    }, 'hash2', [ADMIN_X25519], 'hub-1')
 
     const msg = insertedValues.find(v => v.direction === 'inbound')
     const recipients = (msg!.readerEnvelopes as Array<{ pubkey: string }>).map(e => e.pubkey)
@@ -215,7 +215,7 @@ describe('Ed25519 identity keys are not HPKE recipients', () => {
       senderIdentifier: '+15551110000',
       body: 'crisis inbound body',
       timestamp: new Date().toISOString(),
-    }, 'hash3', undefined, 'hub-1')
+    }, 'hash3', [], 'hub-1')
 
     expect(result.messageId).toBe('msg-3')
     const msg = insertedValues.find(v => v.direction === 'inbound')

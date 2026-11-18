@@ -49,7 +49,8 @@ export interface HubPresence {
 export async function getHubPresence(services: Services, hubId: string): Promise<HubPresence> {
   // getActiveCalls also reaps rows past their staleness TTL, so this is the
   // same view of "live" the dashboard's call list gets.
-  const active = await services.calls.getActiveCalls(hubId)
+  // A call whose caller left the queue for voicemail (#2753) is neither ringing nor on a volunteer.
+  const active = (await services.calls.getActiveCalls(hubId)).filter(c => c.status !== 'voicemail')
 
   const onCall = new Set(
     active

@@ -342,12 +342,12 @@ messaging.post('/:channel/webhook',
   }
 
   // Forward to ConversationsService for processing
-  // #1283: this passed ADMIN_PUBKEY — the admin's Ed25519 *signing* key — as the
-  // HPKE recipient every inbound message was sealed to. Both keys are 64 hex
-  // characters, so nothing objected, and the resulting envelopes could not be
-  // opened by the admin or anyone else. `transitionalInstanceRecipient` returns the X25519
-  // key or nothing, and the parameter's type now rejects the Ed25519 one.
-  //
+  // #1034: the admin copy is sealed to the HUB'S admin reader set — its admins'
+  // registered X25519 device keys and its escrow key — resolved here per message,
+  // not to an env var. A wizard-bootstrapped deployment has no ADMIN_DECRYPTION_PUBKEY
+  // at all, and ADMIN_PUBKEY (what this call once passed, #1283) is an Ed25519
+  // signing key that no X25519 secret can open. The instance key joins the set
+  // only while it is configured (transitional, never required).
   // #1140: `hubId` must be forwarded. It is read from `?hub=` above and used for
   // the relay event and the push below, but was omitted here — so every inbound
   // conversation was created with `hub_id = NULL`, and
@@ -355,7 +355,8 @@ messaging.post('/:channel/webhook',
   // The desktop client only ever calls that hub-scoped path, so inbound messages
   // were invisible on desktop. The dev simulation route forwards a hubId from its
   // request body, which is why every backend BDD messaging scenario passed.
-  const convResult = await services.conversations.handleIncoming(incoming, senderHash, transitionalInstanceRecipient(c.env), hubId)
+  const adminRecipients = await services.identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient(c.env), hubId)
+  const convResult = await services.conversations.handleIncoming(incoming, senderHash, adminRecipients, hubId)
 
   // Publish new inbound message event to the webhook's hub — clients subscribe per hub
   publishEvent(c.env, KIND_MESSAGE_NEW, {
