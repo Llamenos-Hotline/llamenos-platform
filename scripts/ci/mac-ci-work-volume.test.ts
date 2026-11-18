@@ -11,7 +11,11 @@
 //     some other install does not block it;
 //   * what moves is kept, a second cutover is a no-op, a link to somewhere else is
 //     never overwritten, a leftover from an earlier attempt stops it;
-//   * rollback refuses a detached volume rather than lose what is on it;
+//   * rollback refuses a detached volume rather than lose what is on it, and
+//     `rollback --discard-missing` recovers a PERMANENTLY lost volume only when every
+//     link target (and the image) is provably absent;
+//   * runner-start/health judge a runner by its Runner.Listener process, not by
+//     launchctl or svc.sh output;
 //   * the attach agent's wrapper does nothing when attached, attaches when not,
 //     and names the failure when the SSD is absent.
 //
@@ -62,6 +66,24 @@ describe('mac-ci-work-volume.sh selftest', () => {
     'the wrapper does nothing when the volume is already attached',
     'the wrapper attaches it when it is not',
     'the wrapper names the failure when the SSD is not there',
+    "discard-missing with no links is an idempotent no-op (rc=0)",
+    "discard-missing refuses when one link target is still present (rc=1)",
+    "discard-missing refuses while the image still exists (rc=1)",
+    "discard-missing refuses while a runner has a job (rc=1)",
+    "discard-missing proceeds when every target is absent (rc=0)",
+    "...and each discarded link is named in the report",
+    "a second discard-missing is an idempotent no-op (rc=0)",
+    "runner-health fails when no Runner.Listener is running (rc=1)",
+    "runner-health still fails when only one install has a Listener (rc=1)",
+    "runner-start FAILS when kickstart leaves no process, whatever launchctl printed (rc=1)",
+    "runner-start succeeds once the Listener exists (rc=0)",
+    "runner-start leaves a running install alone (rc=0)",
+    "the wrapper exits non-zero when it could not attach (rc=1)",
+    "...but logs only attempts 1, 2 and 4 (backoff), not one line per run",
+    "the fifth consecutive failure logs a loud ALERT naming the way out",
+    "status reports the attach agent as FAILING",
+    "the wrapper exits 0 once the volume attaches (rc=0)",
+    "...and clears the failure record",
   ])('asserts: %s', (label) => {
     // A case that silently stopped running would otherwise read as green.
     expect(out).toContain(`  ok    ${label}`)
