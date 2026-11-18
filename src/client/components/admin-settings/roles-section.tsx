@@ -9,6 +9,7 @@ import {
   deleteHubRole,
   getPermissionsCatalog,
 } from '@/lib/api'
+import { getActiveHub, NoActiveHubError } from '@/lib/api/client'
 import { readableRoles, sealHubRoleField, type ReadableRole } from '@/lib/role-vocabulary'
 import { SettingsSection } from '@/components/settings-section'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -172,28 +173,32 @@ export function RolesSection({ expanded, onToggle, statusSummary }: Props) {
     if (!name) return
     setSaving(true)
     try {
-      const encryptedName = await sealHubRoleField(name)
+      // The role is sealed under, and created in, the same hub.
+      const hubId = getActiveHub()
+      if (!hubId) throw new NoActiveHubError('/settings/roles')
+      const encryptedName = await sealHubRoleField(hubId, name)
       if (editingId === 'new') {
-        const created = await createHubRole({
+        const created = await createHubRole(hubId, {
           permissions: form.permissions,
           encryptedName,
-          ...(description ? { encryptedDescription: await sealHubRoleField(description) } : {}),
+          ...(description ? { encryptedDescription: await sealHubRoleField(hubId, description) } : {}),
         })
         const [readable] = await readableRoles([created])
         setRoles(prev => [...prev, readable])
         toast(t('common.success', { defaultValue: 'Success' }), 'success')
       } else if (editingId) {
-        const updated = await updateHubRole(editingId, {
+        const updated = await updateHubRole(hubId, editingId, {
           permissions: form.permissions,
           encryptedName,
-          encryptedDescription: description ? await sealHubRoleField(description) : null,
+          encryptedDescription: description ? await sealHubRoleField(hubId, description) : null,
         })
         const [readable] = await readableRoles([updated])
         setRoles(prev => prev.map(r => r.id === editingId ? readable : r))
         toast(t('common.success', { defaultValue: 'Success' }), 'success')
       }
       cancelEdit()
-    } catch {
+    } catch (err) {
+      console.error('[roles] saving the role failed', err)
       toast(t('common.error', { defaultValue: 'Error' }), 'error')
     } finally {
       setSaving(false)

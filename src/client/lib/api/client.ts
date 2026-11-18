@@ -78,6 +78,9 @@ const NON_QUEUEABLE_PATHS = [
   '/telephony/',
   '/uploads/', // Chunked uploads have their own retry logic
   '/files/',
+  // Hub-key writes are compare-and-set on a generation read moments earlier; a
+  // replay after reconnect can only be refused, so it is never queued.
+  '/key',
 ]
 
 function isQueueablePath(path: string): boolean {

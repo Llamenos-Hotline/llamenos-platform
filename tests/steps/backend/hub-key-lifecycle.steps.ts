@@ -7,12 +7,16 @@
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, getState, setState } from './fixtures'
 import {
+  ADMIN_SEED,
+  apiDelete,
   apiGet,
   apiPut,
   apiPost,
   createVolunteerViaApi,
+  seedHexToPubkey,
   uniqueName,
 } from '../../api-helpers'
+import type { HubKeyRecipientsResponse } from '@protocol/schemas'
 import { generateContentKey, wrapKeyForRecipient, hpkeRecipientForSeed } from '../../crypto-helpers'
 import { LABEL_HUB_KEY_WRAP } from '@shared/crypto-labels'
 
@@ -39,8 +43,6 @@ interface HubKeyState {
   currentEnvelopes: Map<string, string>
   /** Fetch results per member */
   fetchResults: Map<string, { status: number; envelope?: string }>
-  /** Number of entries in the latest PUT */
-  lastEnvelopeCount?: number
 }
 
 const HUB_KEY_LIFECYCLE_KEY = 'hub_key_lifecycle'
@@ -68,6 +70,43 @@ async function generateRealEnvelopeEntry(pubkey: string, memberSeedHex: string):
   const member = hpkeRecipientForSeed(memberSeedHex)
   const envelope = await wrapKeyForRecipient(hubKey, member.pubkeyHex, member.skHex, LABEL_HUB_KEY_WRAP)
   return { pubkey, ct: envelope.ct, enc: envelope.enc }
+}
+
+/** The scenario's hub id; fails the step if no hub was created. */
+function hubIdOf(world: Record<string, unknown>): string {
+  const hubId = getHubKeyState(world).hubId
+  if (!hubId) throw new Error('no hub in this scenario')
+  return hubId
+}
+
+/** A scenario member by name; fails the step if there is none. */
+function memberOf(world: Record<string, unknown>, name: string): HubMember {
+  const member = getHubKeyState(world).members.get(name)
+  if (!member) throw new Error(`no member "${name}" in this scenario`)
+  return member
+}
+
+/** The hub's key-distribution view, as its admin sees it. */
+async function keyRecipients(
+  request: import('@playwright/test').APIRequestContext,
+  hubId: string,
+  seedHex: string = ADMIN_SEED,
+): Promise<{ status: number; data: HubKeyRecipientsResponse }> {
+  return apiGet<HubKeyRecipientsResponse>(request, `/hubs/${hubId}/key/recipients`, seedHex)
+}
+
+/**
+ * Replace a hub's key envelopes the way a client must: name the generation the
+ * set was read at (a write without it is refused, #1042).
+ */
+async function putHubKeyEnvelopes(
+  request: import('@playwright/test').APIRequestContext,
+  hubId: string,
+  envelopes: EnvelopeEntry[],
+): Promise<{ status: number; data: unknown }> {
+  const read = await keyRecipients(request, hubId)
+  expect(read.status).toBe(200)
+  return apiPut(request, `/hubs/${hubId}/key`, { envelopes, expectedGeneration: read.data.generation })
 }
 
 async function createHub(request: import('@playwright/test').APIRequestContext): Promise<string> {
@@ -122,11 +161,7 @@ When(
       getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
     }
 
-    const res = await apiPut(
-      request,
-      `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
-    )
+    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
   },
 )
@@ -142,11 +177,7 @@ Given('hub key envelopes are set for all {int} members', async ({ request, world
     getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
   }
 
-  const res = await apiPut(
-    request,
-    `/hubs/${getHubKeyState(world).hubId}/key`,
-    { envelopes },
-  )
+  const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
   expect(res.status).toBe(200)
 })
 
@@ -207,13 +238,8 @@ When(
       getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
     }
 
-    const res = await apiPut(
-      request,
-      `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
-    )
+    const res = await putHubKeyEnvelopes(request, hubIdOf(world), envelopes)
     expect(res.status).toBe(200)
-    getHubKeyState(world).lastEnvelopeCount = envelopes.length
   },
 )
 
@@ -238,48 +264,116 @@ Then(
 
 // ── Key Rotation ──────────────────────────────────────────────────
 
-When(
-  'a new hub key is generated and wrapped for remaining members only',
-  async ({ request, world }) => {
-    expect(getHubKeyState(world).hubId).toBeTruthy()
+/** The seed whose device key a hub member registered: a scenario member's, or the instance admin's. */
+function seedOf(world: Record<string, unknown>, pubkey: string): string {
+  for (const member of getHubKeyState(world).members.values()) {
+    if (member.pubkey === pubkey) return member.seedHex
+  }
+  if (pubkey === seedHexToPubkey(ADMIN_SEED)) return ADMIN_SEED
+  throw new Error(`no seed for hub member ${pubkey}`)
+}
 
-    const envelopes: EnvelopeEntry[] = []
-    for (const [name, member] of getHubKeyState(world).members) {
-      // Only wrap for members still tracked in currentEnvelopes (non-removed)
-      if (getHubKeyState(world).currentEnvelopes.has(name)) {
-        const entry = await generateRealEnvelopeEntry(member.pubkey, member.seedHex)
-        envelopes.push(entry)
-        getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
-      }
-    }
+/**
+ * A rotation body as a client builds it (PROTOCOL.md §2.7 "Key Rotation"):
+ * a fresh key wrapped for `pubkeys`, every sealed value carried. The server
+ * never sees the key, so the statement and re-seals are opaque to it.
+ */
+async function rotationBody(
+  request: import('@playwright/test').APIRequestContext,
+  world: Record<string, unknown>,
+  pubkeys: (members: HubKeyRecipientsResponse['members']) => string[],
+) {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.status).toBe(200)
+  expect(read.data.sealed).toBeDefined()
+  const sealed = read.data.sealed!
+  const hubKey = generateContentKey()
+  const envelopes: EnvelopeEntry[] = []
+  for (const pubkey of pubkeys(read.data.members)) {
+    const recipient = hpkeRecipientForSeed(seedOf(world, pubkey))
+    const wrapped = await wrapKeyForRecipient(hubKey, recipient.pubkeyHex, recipient.skHex, LABEL_HUB_KEY_WRAP)
+    envelopes.push({ pubkey, ...wrapped })
+  }
+  return {
+    expectedGeneration: read.data.generation,
+    envelopes,
+    rotation: { proof: 'ab'.repeat(40), check: 'cd'.repeat(40) },
+    resealed: {
+      tags: sealed.tags.map(from => ({ from, to: from })),
+      teams: sealed.teams.map(from => ({ from, to: from })),
+      roles: sealed.roles.map(from => ({ from, to: from })),
+    },
+  }
+}
 
-    const res = await apiPut(
-      request,
-      `/hubs/${getHubKeyState(world).hubId}/key`,
-      { envelopes },
-    )
-    expect(res.status).toBe(200)
-    getHubKeyState(world).lastEnvelopeCount = envelopes.length
+/** Every member the server lists with a device key. */
+const addressable = (members: HubKeyRecipientsResponse['members']) =>
+  members.filter(m => m.encryptionPubkey !== null).map(m => m.pubkey)
+
+When('{string} leaves the hub', async ({ request, world }, name: string) => {
+  const res = await apiDelete(request, `/hubs/${hubIdOf(world)}/members/${memberOf(world, name).pubkey}`)
+  expect(res.status).toBe(200)
+})
+
+Then('the hub key should be due a rotation', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.rotationRequired).toBe(true)
+})
+
+Then('the hub key should not be due a rotation', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.rotationRequired).toBe(false)
+  expect(read.data.sealed).toBeUndefined()
+})
+
+Then(
+  'a rotation that also wraps the new key for {string} should be refused with {int}',
+  async ({ request, world }, name: string, status: number) => {
+    const leaver = memberOf(world, name).pubkey
+    const body = await rotationBody(request, world, members => [...addressable(members), leaver])
+    const res = await apiPost(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+    expect(res.status).toBe(status)
   },
 )
 
 Then(
-  "{string}'s new envelope should differ from the original",
-  async ({ world }, name: string) => {
-    const original = getHubKeyState(world).originalEnvelopes.get(name)
-    const current = getHubKeyState(world).currentEnvelopes.get(name)
-    expect(original).toBeTruthy()
-    expect(current).toBeTruthy()
-    expect(current).not.toBe(original)
+  'a rotation that leaves {string} out should be refused with {int}',
+  async ({ request, world }, name: string, status: number) => {
+    const left = memberOf(world, name).pubkey
+    const body = await rotationBody(request, world, members => addressable(members).filter(pk => pk !== left))
+    const res = await apiPost(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+    expect(res.status).toBe(status)
   },
 )
 
-Then(
-  'the new envelopes should contain exactly {int} entries',
-  async ({ world }, count: number) => {
-    expect(getHubKeyState(world).lastEnvelopeCount).toBe(count)
-  },
-)
+When('the admin rotates the hub key for the remaining members', async ({ request, world }) => {
+  const body = await rotationBody(request, world, addressable)
+  const res = await apiPost<{ generation: number; epoch: number }>(request, `/hubs/${hubIdOf(world)}/key/rotate`, body)
+  expect(res.status).toBe(200)
+  for (const [name, member] of getHubKeyState(world).members) {
+    const wrap = body.envelopes.find(e => e.pubkey === member.pubkey)
+    if (wrap) getHubKeyState(world).currentEnvelopes.set(name, wrap.ct)
+    else getHubKeyState(world).currentEnvelopes.delete(name)
+  }
+})
+
+Then('the hub key epoch should be {int}', async ({ request, world }, epoch: number) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.data.epoch).toBe(epoch)
+  const rotation = await apiGet<{ epoch: number }>(request, `/hubs/${hubIdOf(world)}/key/rotation`)
+  expect(rotation.status).toBe(200)
+  expect(rotation.data.epoch).toBe(epoch)
+})
+
+Then('every hub key wrap should be of the rotated key', async ({ request, world }) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  const held = new Map(read.data.envelopes.map(e => [e.pubkey, e.ct]))
+  for (const [name, member] of getHubKeyState(world).members) {
+    const rotated = getHubKeyState(world).currentEnvelopes.get(name)
+    expect(held.get(member.pubkey)).toBe(rotated)
+    if (rotated !== undefined) expect(rotated).not.toBe(getHubKeyState(world).originalEnvelopes.get(name))
+  }
+})
 
 // ── Auth Guards ────────────────────────────────────────────────────
 
@@ -328,7 +422,7 @@ Given('hub key envelopes are set for {string}', async ({ request, world }, name:
   expect(member).toBeTruthy()
 
   const entry = await generateRealEnvelopeEntry(member!.pubkey, member!.seedHex)
-  const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry] })
+  const res = await putHubKeyEnvelopes(request, hubIdOf(world), [entry])
   expect(res.status).toBe(200)
   getHubKeyState(world).originalEnvelopes.set(name, entry.ct)
   getHubKeyState(world).currentEnvelopes.set(name, entry.ct)
@@ -387,4 +481,74 @@ When('{string} requests the hub key envelope', async ({ request, world }, name: 
 
 Then('the hub key response status should be {int}', async ({ world }, expectedStatus: number) => {
   expect(getAuthGuardState(world).lastStatus).toBe(expectedStatus)
+})
+
+// ── Distribution contract (#1042) ──────────────────────────────────
+
+Then('the hub key generation should be {int}', async ({ request, world }, generation: number) => {
+  const read = await keyRecipients(request, hubIdOf(world))
+  expect(read.status).toBe(200)
+  expect(read.data.generation).toBe(generation)
+})
+
+Then(
+  'a hub key write at generation {int} should be refused with {int}',
+  async ({ request, world }, generation: number, status: number) => {
+    const hubId = hubIdOf(world)
+    const alice = memberOf(world, 'Alice')
+    const before = await keyRecipients(request, hubId)
+    const entry = await generateRealEnvelopeEntry(alice.pubkey, alice.seedHex)
+    const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry], expectedGeneration: generation })
+    expect(res.status).toBe(status)
+    // Refused means untouched: same generation, same wraps.
+    const after = await keyRecipients(request, hubId)
+    expect(after.data.generation).toBe(before.data.generation)
+    expect(after.data.envelopes).toEqual(before.data.envelopes)
+  },
+)
+
+Then(
+  'the key recipients should list every member with their device key',
+  async ({ request, world }) => {
+    const read = await keyRecipients(request, hubIdOf(world))
+    expect(read.status).toBe(200)
+    const byPubkey = new Map(read.data.members.map(m => [m.pubkey, m.encryptionPubkey]))
+    for (const member of getHubKeyState(world).members.values()) {
+      // The X25519 key their device registered — never their Ed25519 user key.
+      expect(byPubkey.get(member.pubkey)).toBe(hpkeRecipientForSeed(member.seedHex).pubkeyHex)
+      expect(byPubkey.get(member.pubkey)).not.toBe(member.pubkey)
+    }
+  },
+)
+
+Then(
+  'the key recipients should hold a wrap for exactly {string} and {string}',
+  async ({ request, world }, name1: string, name2: string) => {
+    const read = await keyRecipients(request, hubIdOf(world))
+    const expected = [name1, name2].map(n => memberOf(world, n).pubkey).sort()
+    expect(read.data.envelopes.map(e => e.pubkey).sort()).toEqual(expected)
+  },
+)
+
+When('{string} becomes the hub\'s admin and the instance admin leaves it', async ({ request, world }, name: string) => {
+  const hubId = hubIdOf(world)
+  const member = memberOf(world, name)
+  const promoted = await apiPost(request, `/hubs/${hubId}/members`, { pubkey: member.pubkey, roleIds: ['role-hub-admin'] })
+  expect([200, 201]).toContain(promoted.status)
+  const left = await apiDelete(request, `/hubs/${hubId}/members/${seedHexToPubkey(ADMIN_SEED)}`)
+  expect(left.status).toBe(200)
+})
+
+Then('the instance admin cannot read or write the hub\'s key distribution', async ({ request, world }) => {
+  const hubId = hubIdOf(world)
+  expect((await keyRecipients(request, hubId)).status).toBe(403)
+  const alice = memberOf(world, 'Alice')
+  const entry = await generateRealEnvelopeEntry(alice.pubkey, alice.seedHex)
+  const res = await apiPut(request, `/hubs/${hubId}/key`, { envelopes: [entry], expectedGeneration: 0 })
+  expect(res.status).toBe(403)
+})
+
+Then('{string} can read the hub\'s key distribution', async ({ request, world }, name: string) => {
+  const member = memberOf(world, name)
+  expect((await keyRecipients(request, hubIdOf(world), member.seedHex)).status).toBe(200)
 })

@@ -1294,35 +1294,26 @@ pub fn mobile_clear_ephemeral_key() {
 
 // ── A4: Hub key loading with Rust-side envelope construction ─────────
 
-/// Unwrap a hub key from server-provided HPKE envelope fields and store in state.
+/// Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
 ///
-/// The caller provides only `enc` and `ct` from the server response. The envelope
-/// version and label ID are constructed by Rust from the label registry — clients
-/// never need to hardcode protocol constants.
+/// `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
+/// **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
+/// envelope version, registry `labelId`, label and AAD are fixed here, by
+/// [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
+/// loader calls — so no client hardcodes a protocol constant.
 ///
-/// The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
-/// what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
-/// desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
-/// with the other two clients and with none of the spec, the crate's own
-/// wrap/unwrap pair, or the interop vectors.
+/// The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
+/// [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
+/// until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
+/// the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
+/// server ever stored could open on Android.
 #[uniffi::export]
 pub fn mobile_load_hub_key(hub_id: String, enc: String, ct: String) -> Result<(), CryptoError> {
-    let label_id = crate::labels::label_to_id(crate::labels::LABEL_HUB_KEY_WRAP)
-        .ok_or_else(|| CryptoError::InvalidInput("LABEL_HUB_KEY_WRAP not in registry".into()))?;
-
-    let envelope = HpkeEnvelope {
-        v: hpke_envelope::ENVELOPE_VERSION,
-        label_id,
-        enc,
-        ct,
-    };
-
     let secret_hex = encryption_secret_hex()?;
-    let key = hpke_envelope::hpke_open_key(
-        &envelope,
+    let key = crate::encryption::hpke_unwrap_key(
+        &crate::encryption::KeyEnvelope { enc, ct },
         &secret_hex,
         crate::labels::LABEL_HUB_KEY_WRAP,
-        &crate::envelope_aad::key_wrap_aad(crate::labels::LABEL_HUB_KEY_WRAP),
     )?;
 
     let mut guard = state().lock().unwrap();
@@ -1974,9 +1965,27 @@ mod tests {
         let mut hub_key = [0u8; 32];
         getrandom::getrandom(&mut hub_key).unwrap();
 
+        // Sealed with an explicit AAD (to prove it binds), then put in the
+        // wire encoding the server stores and `mobile_load_hub_key` reads: hex.
         let seal = |aad: &[u8]| {
-            hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad).unwrap()
+            let env = hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, aad)
+                .unwrap();
+            crate::encryption::KeyEnvelope {
+                enc: mobile_base64url_to_hex(env.enc).unwrap(),
+                ct: mobile_base64url_to_hex(env.ct).unwrap(),
+            }
         };
+
+        // 0. What a client actually stores — `hpke_wrap_key`'s hex — opens.
+        let wire =
+            crate::encryption::hpke_wrap_key(&hub_key, &ds.encryption_pubkey_hex, label).unwrap();
+        mobile_load_hub_key("hub-wire".into(), wire.enc.clone(), wire.ct.clone()).unwrap();
+        assert!(mobile_has_hub_key("hub-wire".into()));
+        // ...and the in-memory base64url form is not a wire form.
+        let b64 =
+            hpke_envelope::hpke_seal_key(&hub_key, &ds.encryption_pubkey_hex, label, &composite)
+                .unwrap();
+        assert!(mobile_load_hub_key("hub-b64".into(), b64.enc, b64.ct).is_err());
 
         // 1. Composite AAD round-trips.
         let good = seal(&composite);

@@ -1,5 +1,16 @@
 import { request } from './client'
-import type { Hub, ServiceStatus, SystemHealth } from '@protocol/schemas'
+import type {
+  Hub,
+  HubKeyEnvelopeResponse,
+  HubKeyEnvelopesBody,
+  HubKeyRecipientsResponse,
+  HubKeyRotateBody,
+  HubKeyRotateResponse,
+  HubKeyRotationResponse,
+  HubKeySetResponse,
+  ServiceStatus,
+  SystemHealth,
+} from '@protocol/schemas'
 
 export type { Hub }
 export type { ServiceStatus, SystemHealth }
@@ -43,6 +54,43 @@ export async function addHubMember(hubId: string, pubkey: string, roleIds: strin
 
 export async function removeHubMember(hubId: string, pubkey: string) {
   return request<{ ok: true }>(`/hubs/${hubId}/members/${pubkey}`, { method: 'DELETE' })
+}
+
+// --- Hub key (PROTOCOL.md §2.7; lifecycle in ../hub-key-manager.ts) ---
+
+/** This user's wrap of `hubId`'s key. 404 when the hub holds none for them. */
+export async function getHubKeyEnvelope(hubId: string) {
+  return request<HubKeyEnvelopeResponse>(`/hubs/${hubId}/key`)
+}
+
+/** What a key manager needs to distribute `hubId`'s key. 403 without `hubs:manage-keys` in that hub. */
+export async function getHubKeyRecipients(hubId: string) {
+  return request<HubKeyRecipientsResponse>(`/hubs/${hubId}/key/recipients`)
+}
+
+/** The hub key's epoch and the rotation statement that introduced it (any member). */
+export async function getHubKeyRotation(hubId: string) {
+  return request<HubKeyRotationResponse>(`/hubs/${hubId}/key/rotation`)
+}
+
+/**
+ * Install a rotated hub key: new wraps for exactly the current members, every
+ * hub-sealed value re-sealed. 409 when anything moved on since the recipients
+ * read (re-read and retry).
+ */
+export async function rotateHubKey(hubId: string, body: HubKeyRotateBody) {
+  return request<HubKeyRotateResponse>(`/hubs/${hubId}/key/rotate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/** Replace `hubId`'s key envelopes; 409 when `expectedGeneration` is no longer current. */
+export async function setHubKeyEnvelopes(hubId: string, body: HubKeyEnvelopesBody) {
+  return request<HubKeySetResponse>(`/hubs/${hubId}/key`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
 }
 
 // --- System Health (admin only) ---

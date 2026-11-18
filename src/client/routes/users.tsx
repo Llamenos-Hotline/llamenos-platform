@@ -14,6 +14,7 @@ import {
 } from '@/lib/api'
 import { rolesConferHubAdmin } from '@shared/permissions'
 import { loadReadableRoles, type ReadableRole } from '@/lib/role-vocabulary'
+import { resyncHubKeys } from '@/lib/hub-key-manager'
 import { getHubOrigin } from '@/lib/api-config'
 import { buildInviteLink } from '@/lib/invite-code'
 import { useToast } from '@/lib/toast'
@@ -330,6 +331,9 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
     try {
       const updated = await updateUser(user.pubkey, { roles: [newRoleId] })
       onUpdate(updated)
+      // A role change can take someone out of a hub, and a departure marks
+      // the hub's key for rotation: rotate it now (hub-key-manager.ts).
+      void resyncHubKeys()
     } catch {
       toast(t('common.error'), 'error')
     }
@@ -339,6 +343,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
     try {
       const updated = await updateUser(user.pubkey, { active: !user.active })
       onUpdate(updated)
+      if (user.active) void resyncHubKeys()
     } catch {
       toast(t('common.error'), 'error')
     }
@@ -348,6 +353,7 @@ function UserRow({ user, roles, onUpdate, onDelete }: {
     try {
       await deleteUser(user.pubkey)
       onDelete()
+      void resyncHubKeys()
     } catch {
       toast(t('common.error'), 'error')
     }

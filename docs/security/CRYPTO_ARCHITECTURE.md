@@ -89,8 +89,8 @@ flowchart TD
     PUK --- Clkr
     Clkr --- ClkrLink
 
-    HubKey["Hub Key (per-hub, random 32 bytes)"]
-    HubWrap["HPKE-wrapped per member (LABEL_HUB_KEY_WRAP)"]
+    HubKey["Hub Key (per-hub, random 32 bytes; rotated on member departure)"]
+    HubWrap["HPKE-wrapped per current member (LABEL_HUB_KEY_WRAP)"]
     HubEvent["Hub Event Key (HKDF from hub key, LABEL_HUB_EVENT) — WebSocket event encryption"]
     HubPtk["Hub PTK (derived via MLS export or HKDF, LABEL_HUB_PTK)"]
 
@@ -326,6 +326,12 @@ Derived from PUK via HKDF export (`LABEL_ITEMS_KEY_EXPORT`). Used as an intermed
 ### Per-Message Encryption
 
 Same pattern as notes but with label `LABEL_MESSAGE`. Server encrypts inbound webhook messages (SMS/WhatsApp/Signal) immediately on receipt, discards plaintext.
+
+### Hub Key Rotation on Member Departure
+
+The hub key is replaced when someone who held it leaves (PROTOCOL.md §2.7 "Key Rotation"). The departure itself — removal, erasure, a re-distribution that drops a holder — sets `hubs.hub_key_rotation_due` in the transaction that revokes the wrap; a deactivated or deleted member still holding a wrap counts too. A manager's device then generates a fresh random key (never derived from the old one or any identity key), wraps it under `LABEL_HUB_KEY_WRAP` for **exactly** the hub's current members with a device key, re-seals every hub-sealed value (tag labels/categories, team names/descriptions, hub role names/descriptions) under it, and installs all of it with one compare-and-set write (`POST /api/hubs/:hubId/key/rotate`). The server refuses a wrap for a non-member, a set that leaves a member out (so no admin can be orphaned), and a re-seal that misses or misstates any stored value.
+
+Each rotation leaves a two-part statement under `LABEL_HUB_KEY_ROTATION`: `check` = `{hubId, epoch}` sealed under the new key, and `proof` = `{hubId, epoch, check}` sealed under the old key. A member's device adopts a rotated key only if `proof` opens under the key it holds and its new wrap opens to a key that opens `check`. The server never holds a hub key, so it cannot make a device adopt a key it chose. What rotation cannot do is take back what a departed member already copied; it guarantees they cannot open anything stored or sealed after it. Mobile clients load the current key at unlock and do not yet adopt a rotation mid-session (#2831).
 
 ### Hub Event Encryption (Server-Published WebSocket Events)
 

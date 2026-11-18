@@ -402,28 +402,25 @@ fn hub_key_wrap_binds_the_composite_aad() {
         "the hub-key wrap AAD no longer matches PROTOCOL.md §2.7"
     );
 
-    // The desktop call site derives it rather than spelling it, and binds the
-    // same value on the wrap and the unwrap. Both passed `''` before #1631.
-    let ts = read("src/client/lib/hub-key-manager.ts");
-    assert!(
-        ts.contains("keyWrapAadHex(LABEL_HUB_KEY_WRAP)"),
-        "hub-key-manager.ts no longer derives its AAD from @shared/envelope-aad"
-    );
-    for call in ["platformWrapHubKeyForMember", "hpkeUnwrapAndSetHubKey"] {
-        // The invocation, not the import of the same name: match on the
-        // opening paren.
-        let invocation = format!("{call}(");
-        let after = ts
-            .split_once(&invocation)
-            .unwrap_or_else(|| panic!("hub-key-manager.ts no longer calls {call}"))
-            .1;
-        // The argument list, whether it is written on one line or several.
-        let args = after.split(')').next().unwrap_or_default();
+    // The desktop no longer chooses it at all: its Tauri commands open and seal
+    // hub-key wraps through the crate's `hpke_unwrap_key` / `hpke_wrap_key`,
+    // which derive `key_wrap_aad(label)` themselves, with the label fixed in
+    // Rust. The webview passes a hub id and the wire `enc`/`ct`, nothing else.
+    let desktop = read("apps/desktop/src/crypto.rs");
+    for call in [
+        "encryption::hpke_unwrap_key(&wrap, &secret_hex, LABEL_HUB_KEY_WRAP)",
+        "encryption::hpke_wrap_key(&key, recipient_pubkey_hex, LABEL_HUB_KEY_WRAP)",
+    ] {
         assert!(
-            args.contains("HUB_KEY_WRAP_AAD_HEX"),
-            "hub-key-manager.ts calls {call} without the composite AAD: {args:?}"
+            desktop.contains(call),
+            "apps/desktop/src/crypto.rs no longer opens/seals hub-key wraps via `{call}`"
         );
     }
+    let ts = read("src/client/lib/hub-key-manager.ts");
+    assert!(
+        !ts.contains("keyWrapAadHex") && !ts.contains("aadHex"),
+        "hub-key-manager.ts passes a hub-key wrap AAD again — the crate owns it"
+    );
 
     // iOS reaches the same derivation through UniFFI, and no longer has the
     // `noAad` constant that existed for this envelope alone.
@@ -446,7 +443,21 @@ fn hub_key_wrap_binds_the_composite_aad() {
         .1;
     let body = load.split("\n}\n").next().unwrap_or_default();
     assert!(
-        body.contains("key_wrap_aad(crate::labels::LABEL_HUB_KEY_WRAP)"),
-        "mobile_load_hub_key no longer binds key_wrap_aad(LABEL_HUB_KEY_WRAP)"
+        body.contains("crate::encryption::hpke_unwrap_key(")
+            && body.contains("crate::labels::LABEL_HUB_KEY_WRAP"),
+        "mobile_load_hub_key no longer opens through hpke_unwrap_key(.., LABEL_HUB_KEY_WRAP)"
+    );
+    // ...and that function is the one that binds the composite AAD.
+    let enc = read("packages/crypto/src/encryption.rs");
+    let unwrap = enc
+        .split_once("pub fn hpke_unwrap_key(")
+        .expect("encryption::hpke_unwrap_key is gone")
+        .1
+        .split("\n}\n")
+        .next()
+        .unwrap_or_default();
+    assert!(
+        unwrap.contains("crate::envelope_aad::key_wrap_aad(label)"),
+        "encryption::hpke_unwrap_key no longer binds key_wrap_aad(label)"
     );
 }
