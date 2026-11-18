@@ -1267,7 +1267,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
-    "logoutKeyRemovalFailed": "You were logged out, but your encrypted keys could not be removed from this device.",
+    "logoutKeyRemovalFailed": "Hûn derketin, lê mifteyên weyên şîfrekirî ji vê cihazê nehatin jêbirin.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",

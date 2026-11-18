@@ -3756,7 +3756,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
-    "logoutKeyRemovalFailed": "You were logged out, but your encrypted keys could not be removed from this device.",
+    "logoutKeyRemovalFailed": "تم تسجيل خروجك، لكن تعذّر حذف مفاتيحك المشفّرة من هذا الجهاز.",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",

@@ -1267,7 +1267,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
-    "logoutKeyRemovalFailed": "You were logged out, but your encrypted keys could not be removed from this device.",
+    "logoutKeyRemovalFailed": "Ви вийшли із системи, але не вдалося видалити ваші зашифровані ключі з цього пристрою.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Розблоковуйте за допомогою відбитка пальця або обличчя замість введення PIN-коду. Ваш PIN-код продовжує працювати і ніколи не вимикається.",

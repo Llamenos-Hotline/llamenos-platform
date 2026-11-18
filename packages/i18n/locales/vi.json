@@ -3756,7 +3756,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
-    "logoutKeyRemovalFailed": "You were logged out, but your encrypted keys could not be removed from this device.",
+    "logoutKeyRemovalFailed": "Bạn đã đăng xuất, nhưng không thể xóa các khóa mã hóa của bạn khỏi thiết bị này.",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",
