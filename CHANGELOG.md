@@ -210,6 +210,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.17 (2026-11-18)
+
+### Fixes
+
+- explain why New Note cannot save without a call reference (#2688)
+
 ## 0.21.16 (2026-11-17)
 
 ### Features
