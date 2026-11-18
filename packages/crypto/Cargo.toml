@@ -20,11 +20,16 @@ x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
 
 # AES-256-GCM (standalone symmetric operations — PIN encryption, items_key)
-aes-gcm = "0.10"
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+# aes-gcm's own `zeroize` feature only wipes the GHASH subkey. The expanded AES
+# key schedule (a full copy of the key) is wiped by the cipher crate's feature,
+# which cargo unifies onto the `aes` that aes-gcm builds on. Without this every
+# AEAD call leaves a copy of its key in the freed stack/heap (#1107).
+aes = { version = "0.8", features = ["zeroize"] }
 
 # Key derivation
 hkdf = "0.12"
-argon2 = "0.5"
+argon2 = { version = "0.5", features = ["zeroize"] }
 
 # Hashing
 sha2 = "0.10"

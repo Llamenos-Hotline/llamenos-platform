@@ -433,8 +433,11 @@ Values are canonicalized (lowercase + NFKD + strip diacritics) before indexing. 
 
 ### Zeroization
 
-- All secret key material uses `zeroize::Zeroizing<>` wrappers
-- `MobileState` zeroizes secrets on `mobile_lock()` call
+- Secret key material is held in `zeroize::Zeroizing<>` (or a `ZeroizeOnDrop` struct), never a bare `[u8; 32]`. A bare array is `Copy`: replacing a map entry, an early `?` return, or a plain drop leaves a duplicate in freed heap/stack, which a swap file, crash dump or hibernation image can capture. The wrapper wipes on **every** exit path; a trailing `key.zeroize()` after a fallible call does not (the wrong-PIN path of `decrypt_with_pin` / `unlock_device_keys` returned before it ran, leaving the Argon2id KEK behind).
+- Hex-encoded secrets are decoded through `encryption::secret_from_hex`, which wipes the intermediate `Vec` as well as the result.
+- `MobileState` holds hub keys, server-event keys, the ephemeral ECDH secret and the wake key as `Zeroizing`, and clears them on `mobile_lock()`. Replacing a hub key drops, and so wipes, the old one.
+- Library state: `aes` is built with its `zeroize` feature (wipes the expanded AES key schedule — a full copy of the key — of every AEAD call) and `argon2` with its `zeroize` feature (wipes the PIN-derived working memory). `tests/zeroize_key_material.rs` fails to compile if either is dropped.
+- Not wiped, by construction: `hmac`/`hkdf` internal key pads (no zeroize support in the pinned versions), and any secret returned across the UniFFI / `bun:ffi` boundary as a hex `String` (the caller owns that copy).
 - Desktop `CryptoState` zeroizes on session lock
 - WASM target cannot zeroize JS strings — acceptable for test builds only
 

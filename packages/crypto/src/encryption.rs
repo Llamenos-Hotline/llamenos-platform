@@ -14,7 +14,7 @@ use base64::Engine;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::ct_hex_eq;
 use crate::errors::CryptoError;
@@ -201,14 +201,13 @@ pub fn decrypt_note(
     envelope: &KeyEnvelope,
     secret_key_hex: &str,
 ) -> Result<String, CryptoError> {
-    let mut note_key = hpke_unwrap_key(envelope, secret_key_hex, LABEL_NOTE_KEY)?;
+    let note_key = hpke_unwrap_key(envelope, secret_key_hex, LABEL_NOTE_KEY)?;
     let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
     let plaintext = Zeroizing::new(aes256gcm_decrypt(
         &note_key,
         &data,
         LABEL_NOTE_KEY.as_bytes(),
     )?);
-    note_key.zeroize();
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -477,7 +476,10 @@ pub fn open_device_local(
     )?))
 }
 
-fn secret_from_hex(secret_key_hex: &str) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+/// Decode a hex-encoded 32-byte secret straight into zeroizing storage — the
+/// intermediate `Vec` is wiped too, so no un-zeroized copy of the key is left
+/// on the heap. Every caller that turns a hex key into bytes goes through here.
+pub(crate) fn secret_from_hex(secret_key_hex: &str) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let sk_bytes = Zeroizing::new(hex::decode(secret_key_hex).map_err(CryptoError::HexError)?);
     if sk_bytes.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
@@ -583,18 +585,11 @@ pub fn decrypt_server_event(
 
 /// Encrypt a JSON export blob. Returns base64-encoded ciphertext.
 pub fn encrypt_export(json_string: &str, secret_key_hex: &str) -> Result<String, CryptoError> {
-    let sk_bytes = Zeroizing::new(hex::decode(secret_key_hex).map_err(CryptoError::HexError)?);
-    if sk_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
-    let mut sk = [0u8; 32];
-    sk.copy_from_slice(&sk_bytes);
+    let sk = secret_from_hex(secret_key_hex)?;
 
-    let mut key = derive_encryption_key(&sk, HKDF_CONTEXT_EXPORT);
+    // `Zeroizing`: the `?` below must not skip the wipe.
+    let key = Zeroizing::new(derive_encryption_key(&sk, HKDF_CONTEXT_EXPORT));
     let packed = aes256gcm_encrypt(&key, json_string.as_bytes(), HKDF_CONTEXT_EXPORT.as_bytes())?;
-
-    key.zeroize();
-    sk.zeroize();
 
     use base64::engine::general_purpose::STANDARD;
     Ok(STANDARD.encode(&packed))
@@ -620,13 +615,13 @@ pub struct EncryptedKeyData {
 }
 
 /// Derive a 32-byte KEK from a credential using Argon2id.
-pub fn derive_kek_from_pin(credential: &str, salt: &[u8]) -> [u8; 32] {
-    let mut kek = [0u8; 32];
+pub fn derive_kek_from_pin(credential: &str, salt: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut kek = Zeroizing::new([0u8; 32]);
     let params = argon2::Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(32))
         .expect("valid argon2 params");
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     argon2
-        .hash_password_into(credential.as_bytes(), salt, &mut kek)
+        .hash_password_into(credential.as_bytes(), salt, &mut *kek)
         .expect("argon2id hash failed");
     kek
 }
@@ -645,13 +640,13 @@ pub fn encrypt_with_pin(
     let mut salt = [0u8; 32];
     getrandom::getrandom(&mut salt).expect("getrandom failed");
 
-    let mut kek = derive_kek_from_pin(pin, &salt);
+    let kek = derive_kek_from_pin(pin, &salt);
 
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
 
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let cipher = Aes256Gcm::new_from_slice(&kek)
+    let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let ciphertext = cipher
         .encrypt(nonce, key_material.as_bytes())
@@ -667,8 +662,6 @@ pub fn encrypt_with_pin(
         let full = hasher.finalize();
         hex::encode(&full[..8])
     };
-
-    kek.zeroize();
 
     Ok(EncryptedKeyData {
         salt: hex::encode(salt),
@@ -690,18 +683,18 @@ pub fn decrypt_with_pin(data: &EncryptedKeyData, pin: &str) -> Result<String, Cr
         return Err(CryptoError::InvalidNonce);
     }
 
-    let mut kek = derive_kek_from_pin(pin, &salt);
+    // `Zeroizing`: a wrong PIN exits through the `?` below, and must not leave
+    // the KEK in memory.
+    let kek = derive_kek_from_pin(pin, &salt);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(&kek)
+    let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let plaintext = Zeroizing::new(
         cipher
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(|_| CryptoError::WrongPin)?,
     );
-
-    kek.zeroize();
 
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::WrongPin)
 }
