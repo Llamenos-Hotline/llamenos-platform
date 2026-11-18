@@ -32,6 +32,7 @@ interface TestWindow {
   __TEST_PLATFORM: typeof import('../../src/client/lib/platform')
   __TEST_API_CONFIG: typeof import('../../src/client/lib/api-config')
   __TEST_GET_ACTIVE_HUB: () => string | null
+  __TEST_HUB_KEYS_SETTLED: () => Promise<void>
   __TEST_SIMULATE_PACKAGED_TAURI__?: boolean
 }
 
@@ -254,6 +255,11 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
     createdHubs.push(hubId)
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
+    // The app is still working through its hubs' keys (a chain of requests per hub
+    // that lasts as long as the hub list is long). The token set next is one the
+    // server rejects, so anything launched under it is a 401 that no part of the
+    // app could have avoided: it is put in place only once nothing is in flight.
+    await page.evaluate(() => (window as unknown as TestWindow).__TEST_HUB_KEYS_SETTLED())
     await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
     expect(await readLiveSession(page)).toEqual({ cryptoUnlocked: true, activeHub: hubId, sessionToken: 'passkey-session-issued-by-the-old-server' })
 
