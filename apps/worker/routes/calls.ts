@@ -46,7 +46,9 @@ function toActiveCallResponse(row: ActiveCallRow): CallRecord {
     hubId: row.hubId ?? undefined,
     answeredBy: row.answeredBy,
     startedAt: row.startedAt.toISOString(),
-    status: callRecordStatusSchema.parse(row.status),
+    // `voicemail` is internal: a call whose caller left the queue for voicemail (#2753)
+    // is told to clients as `unanswered`, the terminal status its `call:update` carried.
+    status: callRecordStatusSchema.parse(row.status === 'voicemail' ? 'unanswered' : row.status),
     hasTranscription: row.hasTranscription ?? false,
     hasVoicemail: row.hasVoicemail ?? false,
     hasRecording: row.hasRecording ?? false,
@@ -92,7 +94,9 @@ calls.get('/active',
     const services = c.get('services')
     const hubId = pathHubId(c)
     const rows = await services.calls.getActiveCalls(hubId)
-    return c.json({ calls: rows.map(toActiveCallResponse) })
+    // A call whose caller has left the queue for voicemail (#2753) is not a call a
+    // volunteer can take or is on, and `voicemail` is not a wire status.
+    return c.json({ calls: rows.filter(row => row.status !== 'voicemail').map(toActiveCallResponse) })
   },
 )
 

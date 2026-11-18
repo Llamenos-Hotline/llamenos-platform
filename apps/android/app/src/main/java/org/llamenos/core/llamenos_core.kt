@@ -1292,7 +1292,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 63290.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 48594.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647.toShort()) {
@@ -4033,17 +4033,19 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Unwrap a hub key from server-provided HPKE envelope fields and store in state.
+         * Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
          *
-         * The caller provides only `enc` and `ct` from the server response. The envelope
-         * version and label ID are constructed by Rust from the label registry — clients
-         * never need to hardcode protocol constants.
+         * `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
+         * **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
+         * envelope version, registry `labelId`, label and AAD are fixed here, by
+         * [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
+         * loader calls — so no client hardcodes a protocol constant.
          *
-         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
-         * what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
-         * desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
-         * with the other two clients and with none of the spec, the crate's own
-         * wrap/unwrap pair, or the interop vectors.
+         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
+         * [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
+         * until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
+         * the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
+         * server ever stored could open on Android.
          */
     @Throws(CryptoException::class) fun `mobileLoadHubKey`(`hubId`: kotlin.String, `enc`: kotlin.String, `ct`: kotlin.String)
         = 

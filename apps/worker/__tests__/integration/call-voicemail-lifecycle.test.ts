@@ -166,3 +166,53 @@ describe('voicemail on a call nobody could be rung for', () => {
     expect((await calls.getActiveCallById(HUB, 'CA-vm-3'))?.hasVoicemail).toBe(false)
   })
 })
+
+describe('a caller who left the queue for voicemail (#2753)', () => {
+  it('stops being answerable by either answer path, and still ends as unanswered', async () => {
+    await calls.addCall(HUB, { callId: 'CA-left-1', callerNumberSealed: null })
+    const token = await calls.createCallToken({ callSid: 'CA-left-1', volunteerPubkey: 'vol-a', hubId: HUB })
+
+    expect(await calls.markLeftQueue(HUB, 'CA-left-1')).toBe(true)
+
+    // The phone-leg claim (/user-answer) and the in-app claim both find nothing to take.
+    expect(await calls.answerCallWithToken(token)).toBeNull()
+    const inApp = await calls.answerCall(HUB, 'CA-left-1', 'vol-b').catch(e => e)
+    expect(inApp).toBeInstanceOf(ServiceError)
+    expect((inApp as ServiceError).status).toBe(409)
+
+    const live = await calls.getActiveCallById(HUB, 'CA-left-1')
+    expect(live).toMatchObject({ status: 'voicemail', answeredBy: null, answeredAt: null })
+
+    await calls.markVoicemail(HUB, 'CA-left-1')
+    await calls.endCall(HUB, 'CA-left-1')
+    const history = await calls.listCallHistory(HUB)
+    expect(history.calls[0]).toMatchObject({ callId: 'CA-left-1', status: 'unanswered', hasVoicemail: true, answeredBy: null })
+  })
+
+  it('does not take a call somebody already answered', async () => {
+    await calls.addCall(HUB, { callId: 'CA-left-2', callerNumberSealed: null })
+    await calls.answerCall(HUB, 'CA-left-2', 'vol-a')
+
+    expect(await calls.markLeftQueue(HUB, 'CA-left-2')).toBe(false)
+    expect(await calls.getActiveCallById(HUB, 'CA-left-2')).toMatchObject({ status: 'in-progress', answeredBy: 'vol-a' })
+  })
+
+  it('only moves a call once, in its own hub', async () => {
+    await calls.addCall(HUB, { callId: 'CA-left-3', callerNumberSealed: null })
+
+    expect(await calls.markLeftQueue('other-hub', 'CA-left-3')).toBe(false)
+    expect(await calls.markLeftQueue(HUB, 'CA-left-3')).toBe(true)
+    expect(await calls.markLeftQueue(HUB, 'CA-left-3')).toBe(false)
+    expect(await calls.markLeftQueue(HUB, 'CA-unknown')).toBe(false)
+  })
+
+  it('is reaped as unanswered when the provider never reports its end', async () => {
+    await calls.addCall(HUB, { callId: 'CA-left-4', callerNumberSealed: null })
+    await calls.markLeftQueue(HUB, 'CA-left-4')
+    await testSql`UPDATE active_calls SET started_at = NOW() - INTERVAL '3 hours' WHERE call_id = 'CA-left-4'`
+
+    expect(await calls.getActiveCalls(HUB)).toHaveLength(0)
+    const history = await calls.listCallHistory(HUB)
+    expect(history.calls[0]).toMatchObject({ callId: 'CA-left-4', status: 'unanswered', answeredBy: null })
+  })
+})

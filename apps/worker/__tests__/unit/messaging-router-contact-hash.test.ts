@@ -54,6 +54,7 @@ function adapterReturning(incoming: IncomingMessage): MessagingAdapter {
 function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
+    identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([]) },
     settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),

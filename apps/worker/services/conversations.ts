@@ -883,12 +883,15 @@ export class ConversationsService {
      */
     contactHash: string,
     /**
-     * The platform admin's X25519 HPKE recipient, or `undefined` when the
-     * deployment has none. Typed as a brand so an Ed25519 auth key — which is
-     * also 64 hex characters, and which the messaging router used to pass here
-     * — cannot be supplied by mistake (#1283).
+     * The X25519 HPKE recipients of the hub's admins
+     * (`IdentityService.listAdminEnvelopeRecipients`): every admin device the
+     * hub has registered, its escrow key, and the transitional instance key
+     * when configured. Empty when the hub has none — the message is then stored
+     * unreadable and flagged, never dropped (#1034). Typed as a brand so an
+     * Ed25519 auth key — also 64 hex characters, and what the messaging router
+     * used to pass here — cannot be supplied by mistake (#1283).
      */
-    adminDecryptionPubkey: HpkeRecipientPubkey | undefined,
+    adminRecipients: readonly HpkeRecipientPubkey[],
     /** The hub the webhook URL named; the router refuses a message that names none (#2395). */
     hubId: string,
   ): Promise<{
@@ -981,7 +984,7 @@ export class ConversationsService {
         conversationId: conv.id,
       })
     }
-    const readerPubkeys = messageReaders(adminDecryptionPubkey, assigneeRecipients)
+    const readerPubkeys = messageReaders(adminRecipients, assigneeRecipients)
 
     // An EMPTY reader list — no admin decryption key configured AND nobody
     // with a registered device — is a deployment-level failure, and the
@@ -994,7 +997,7 @@ export class ConversationsService {
     // log above is the operator's signal to fix the deployment.
     let encrypted: { encryptedContent: string; readerEnvelopes: RecipientEnvelope[] }
     if (readerPubkeys.length === 0) {
-      logger.error('no HPKE recipient for inbound message (no admin decryption key, no registered device) — storing an unreadable record rather than dropping it', {
+      logger.error('no HPKE recipient for inbound message (the hub has no admin device or escrow key, and no assignee device) — storing an unreadable record rather than dropping it', {
         conversationId: conv.id,
       })
       encrypted = { encryptedContent: '', readerEnvelopes: [] }

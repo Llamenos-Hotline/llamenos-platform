@@ -42,6 +42,7 @@ import {
   enableMessagingViaApi,
   uniquePhone,
 } from './api-helpers'
+import { EXPECTED_CONSOLE_ERRORS } from './console-guard'
 import { simulateIncomingMessage, uniqueCallerNumber } from './simulation-helpers'
 import { conversationLabel } from './conversation-seeding'
 
@@ -66,7 +67,13 @@ function watchConsole(page: Page): string[] {
     if (process.env.DEBUG_PAGE_CONSOLE) console.log(`[page] ${entry}`)
   }
   page.on('console', (msg: ConsoleMessage) => {
-    if (msg.type() === 'error') record(`console: ${msg.text()}`)
+    if (msg.type() !== 'error') return
+    // The same contract rows the suite's console guard tolerates (a 404 for a
+    // hub key not shared yet): this spec reports errors itself, not through it.
+    const expected = EXPECTED_CONSOLE_ERRORS.some(
+      (row) => row.message.test(msg.text()) && row.source.test(msg.location().url),
+    )
+    if (!expected) record(`console: ${msg.text()}`)
   })
   page.on('pageerror', (err) => record(`pageerror: ${err.message}`))
   return errors

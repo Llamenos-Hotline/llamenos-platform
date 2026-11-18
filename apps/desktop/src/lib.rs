@@ -229,6 +229,8 @@ pub fn run() {
             // Hub key management (key stays in Rust CryptoState)
             crypto::hpke_unwrap_and_set_hub_key,
             crypto::generate_hub_key_in_state,
+            crypto::has_hub_key,
+            crypto::forget_hub_key,
             crypto::wrap_hub_key_for_member,
             crypto::set_server_event_keys,
             crypto::decrypt_hub_event,

@@ -6,7 +6,9 @@ import { listNotes, createNote, updateNote, getActiveHub, listNoteReplies, creat
 import type { CustomFieldDefinition } from '@shared/types'
 import { fieldMatchesContext } from '@shared/types'
 import { adminHpkeRecipient } from '@/lib/admin-recipient'
-import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord, encryptExport } from '@/lib/platform'
+import { encryptNote, encryptMessage, decryptNote, decryptLegacyNote, decryptTranscription, decryptCallRecord } from '@/lib/platform'
+import { encryptForHub } from '@/lib/hub-key-manager'
+import { HKDF_CONTEXT_EXPORT } from '@shared/crypto-labels'
 import * as keyManager from '@/lib/key-manager'
 import { resolveCallHubId } from '@/lib/call-hubs'
 import { useToast } from '@/lib/toast'
@@ -310,7 +312,17 @@ function NotesPage() {
       isTranscription: n.isTranscription, createdAt: n.createdAt, updatedAt: n.updatedAt,
     }))
     const jsonString = JSON.stringify(rows, null, 2)
-    const ciphertextHex = await encryptExport(jsonString)
+    // The notes listed are the active hub's; the export is sealed under its key.
+    const hubId = getActiveHub()
+    if (!hubId) return
+    let ciphertextHex: string
+    try {
+      ciphertextHex = await encryptForHub(hubId, jsonString, HKDF_CONTEXT_EXPORT)
+    } catch (err) {
+      console.error('[notes] export could not be sealed', err)
+      toast(t('common.error'), 'error')
+      return
+    }
     const binary = new Uint8Array((ciphertextHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
     const blob = new Blob([binary.buffer as ArrayBuffer], { type: 'application/octet-stream' })
     const url = URL.createObjectURL(blob)

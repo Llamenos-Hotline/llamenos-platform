@@ -52,7 +52,7 @@ function createSmsServices() {
       addMessage,
       getContactIdentifier,
     },
-    identity: { getHpkeRecipients },
+    identity: { getHpkeRecipients, listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([]) },
     audit: { log: vi.fn().mockResolvedValue(undefined) },
   }
   return { services: services as never, addMessage, getContactIdentifier, getHpkeRecipients }

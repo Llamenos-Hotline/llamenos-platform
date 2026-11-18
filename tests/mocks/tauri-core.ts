@@ -13,8 +13,9 @@ if (!import.meta.env.PLAYWRIGHT_TEST) {
 }
 
 import { Store } from './tauri-store'
-import { hpkeSealMock, hpkeOpenMock, type MockHpkeEnvelope } from './hpke-mock'
+import { base64urlDecode, base64urlEncode, hpkeSealMock, hpkeOpenMock, labelToId, type MockHpkeEnvelope } from './hpke-mock'
 import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './pin-lockout'
+import { keyWrapAad } from '@shared/envelope-aad'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
@@ -36,6 +37,7 @@ import {
   HKDF_CONTEXT_DRAFTS,
   HKDF_SALT,
   LABEL_CALL_META,
+  LABEL_HUB_KEY_WRAP,
   LABEL_MESSAGE,
   LABEL_NOTE_KEY,
   LABEL_OFFLINE_QUEUE,
@@ -128,7 +130,18 @@ function deviceLocalKey(purpose: string): Uint8Array {
 let mockProvisioningEphemeral: Uint8Array | null = null
 
 // ── Hub key mock state ───────────────────────────────────────────────
-let mockHubKey: Uint8Array | null = null
+/**
+ * One key per hub, keyed by hub id — mirrors `CryptoState::hub_keys`. Never a
+ * single slot: that would seal one hub's data under another hub's key.
+ */
+const mockHubKeys = new Map<string, Uint8Array>()
+
+function requireHubKey(hubId: unknown): Uint8Array {
+  if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
+  const key = mockHubKeys.get(hubId.trim())
+  if (!key) throw new Error('Hub key not loaded')
+  return key
+}
 
 // ── Server event key(s) mock state (epoch-scoped relay event decryption) ──
 // Matches Rust `hub-event` (hub-key-encrypted) vs `hub-event-epoch` (relay
@@ -732,7 +745,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   lock_crypto: () => {
     mockSecrets = null
     mockDeviceState = null
-    mockHubKey = null
+    mockHubKeys.clear()
     mockServerEventKeys = []
     mockRecoveryGroupKey = null
     mockProvisioningEphemeral = null
@@ -1215,7 +1228,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     mockSecrets = null
     mockDeviceState = null
     mockEncryptedKeys = null
-    mockHubKey = null
+    mockHubKeys.clear()
     mockServerEventKeys = []
     mockPukSeed = null
     mockRecoveryGroupKey = null
@@ -1376,37 +1389,57 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
 
   // --- Hub key management (key stays in mock state, never enters JS) ---
 
+  // Mirrors CryptoState::load_hub_key_wrap / wrap_hub_key_hex, which go through
+  // the crate's encryption::hpke_unwrap_key / hpke_wrap_key: the wrap is the
+  // wire form (hex enc/ct), the label is LABEL_HUB_KEY_WRAP and the AAD
+  // key_wrap_aad(label) — fixed here as there, never taken from the caller.
   hpke_unwrap_and_set_hub_key: async (a) => {
+    const hubId = a.hubId
+    if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
     const secrets = requireSecrets()
-    const envelope = a.envelope as { v: number; labelId: number; enc: string; ct: string }
-    const expectedLabel = a.expectedLabel as string
-    const aad = hexToBytes(a.aadHex as string)
-    const secretHex = bytesToHex(secrets.encryptionSeed)
-    const key = await hpkeOpenMock(envelope, secretHex, expectedLabel, aad)
+    const envelope: MockHpkeEnvelope = {
+      v: 3,
+      labelId: labelToId(LABEL_HUB_KEY_WRAP),
+      enc: base64urlEncode(hexToBytes(a.enc as string)),
+      ct: base64urlEncode(hexToBytes(a.ct as string)),
+    }
+    const key = await hpkeOpenMock(envelope, bytesToHex(secrets.encryptionSeed), LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
     if (key.length !== 32) throw new Error('Hub key must be 32 bytes')
-    mockHubKey = key
+    mockHubKeys.set(hubId.trim(), key)
   },
 
-  generate_hub_key_in_state: () => {
-    mockHubKey = randomBytes(32)
+  generate_hub_key_in_state: (a) => {
+    const hubId = a.hubId
+    if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
+    mockHubKeys.set(hubId.trim(), randomBytes(32))
+  },
+
+  has_hub_key: (a) => {
+    const hubId = a.hubId
+    if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
+    return mockHubKeys.has(hubId.trim())
+  },
+
+  forget_hub_key: (a) => {
+    const hubId = a.hubId
+    if (typeof hubId !== 'string' || !hubId.trim()) throw new Error('Hub id required')
+    mockHubKeys.delete(hubId.trim())
   },
 
   wrap_hub_key_for_member: async (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
-    const recipientPubkeyHex = a.recipientPubkeyHex as string
-    const label = a.label as string
-    const aad = hexToBytes(a.aadHex as string)
-    return await hpkeSealMock(mockHubKey, recipientPubkeyHex, label, aad)
+    const key = requireHubKey(a.hubId)
+    const env = await hpkeSealMock(key, a.recipientPubkeyHex as string, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
+    return { enc: bytesToHex(base64urlDecode(env.enc)), ct: bytesToHex(base64urlDecode(env.ct)) }
   },
 
   encrypt_hub_field: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const hubKey = requireHubKey(a.hubId)
     const plaintext = a.plaintext as string
     const label = a.label as string
     requireRegisteredLabel(label)
     const nonce = randomBytes(12)
     const aad = utf8ToBytes(label)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(hubKey, nonce, aad)
     const ciphertext = cipher.encrypt(utf8ToBytes(plaintext))
     const packed = new Uint8Array(12 + ciphertext.length)
     packed.set(nonce)
@@ -1415,7 +1448,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   decrypt_hub_field: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const hubKey = requireHubKey(a.hubId)
     const ciphertextHex = a.ciphertextHex as string
     const label = a.label as string
     requireRegisteredLabel(label)
@@ -1424,7 +1457,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
     const aad = utf8ToBytes(label)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(hubKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
     return new TextDecoder().decode(plaintext)
   },
@@ -1455,14 +1488,14 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   // against LABEL_REGISTRY — this is a fixed AAD, not a wrappable label).
 
   decrypt_hub_event: (a) => {
-    if (!mockHubKey) throw new Error('Hub key not loaded')
+    const hubKey = requireHubKey(a.hubId)
     const ciphertextHex = a.ciphertextHex as string
     const data = hexToBytes(ciphertextHex)
     if (data.length < 28) throw new Error('Ciphertext too short (need at least 12-byte nonce + 16-byte tag)')
     const nonce = data.slice(0, 12)
     const ciphertext = data.slice(12)
     const aad = utf8ToBytes(LABEL_HUB_EVENT)
-    const cipher = gcm(mockHubKey, nonce, aad)
+    const cipher = gcm(hubKey, nonce, aad)
     const plaintext = cipher.decrypt(ciphertext)
     return new TextDecoder().decode(plaintext)
   },

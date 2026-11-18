@@ -143,8 +143,8 @@ describe('hub-owned roles', () => {
   it('reads and writes the active hub\'s roles under /hubs/:hubId/settings/roles', async () => {
     setActiveHub('hub-1')
     await listHubRoles()
-    await createHubRole({ permissions: [], encryptedName: 'ab'.repeat(28) })
-    await updateHubRole('role-x', { permissions: [] })
+    await createHubRole('hub-1', { permissions: [], encryptedName: 'ab'.repeat(28) })
+    await updateHubRole('hub-1', 'role-x', { permissions: [] })
     await deleteHubRole('role-x')
     expect(calls).toEqual([
       { method: 'GET', url: '/api/hubs/hub-1/settings/roles' },
