@@ -1,5 +1,7 @@
 import type { DeletionConfirmed } from '@/lib/admin-deletion'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { CreateShiftOverrideBody } from '@protocol/schemas/shift-override'
+import type { CreateAvailabilityBlockBody } from '@protocol/schemas/shift-availability'
 import {
   listShifts,
   createShift,
@@ -293,7 +295,7 @@ export function useClockOut() {
 export function useCreateShiftOverride() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { id: string; shiftId?: string | null; date: string; type: 'cancel' | 'substitute'; userPubkeys?: string[] | null; encryptedNote?: string | null }) =>
+    mutationFn: (data: CreateShiftOverrideBody) =>
       createShiftOverride(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.all })
@@ -314,7 +316,7 @@ export function useDeleteShiftOverride() {
 export function useCreateAvailabilityBlock() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { id: string; startDate: string; endDate: string; encryptedReason?: string | null }) =>
+    mutationFn: (data: CreateAvailabilityBlockBody) =>
       createAvailabilityBlock(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.myAvailability() })

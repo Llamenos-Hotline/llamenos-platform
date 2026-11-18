@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import { pubkeySchema } from './common'
+import { sealedShiftFieldSchema } from './shifts'
 
 const overrideTypeSchema = z.enum(['cancel', 'substitute'])
 
@@ -10,7 +11,8 @@ export const shiftOverrideResponseSchema = z.object({
   date: z.string(),
   type: overrideTypeSchema,
   userPubkeys: z.array(z.string()).nullable(),
-  encryptedNote: z.string().nullable(),
+  /** The override note, sealed to the hub's admins and its `shifts:manage-overrides` holders. */
+  encryptedNote: z.nullable(sealedShiftFieldSchema),
   createdBy: z.string(),
   createdAt: z.string(),
 })
@@ -25,10 +27,15 @@ export const createShiftOverrideBodySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   type: overrideTypeSchema,
   userPubkeys: z.array(pubkeySchema).nullable().optional().default(null),
-  encryptedNote: z.string().nullable().optional().default(null),
+  encryptedNote: z.optional(z.nullable(sealedShiftFieldSchema)).default(null),
 })
 
 export const overrideQuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
+
+export type ShiftOverride = z.infer<typeof shiftOverrideResponseSchema>
+export type ShiftOverrideListResponse = z.infer<typeof shiftOverrideListResponseSchema>
+/** What a client sends: defaulted keys may be omitted. */
+export type CreateShiftOverrideBody = z.input<typeof createShiftOverrideBodySchema>

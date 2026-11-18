@@ -27,6 +27,9 @@ import {
 } from '@protocol/schemas/shift-request'
 import { z } from 'zod/v4'
 import { hubOnly, pathHubId } from '../lib/hub-scope'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
+import { sealedFieldFromColumns } from '../lib/sealed-shift-field'
+import type { RecipientEnvelope } from '@protocol/schemas/common'
 
 const shifts = new Hono<AppEnv>()
 
@@ -43,13 +46,17 @@ function holds(c: Context<AppEnv>, perm: string): boolean {
     || (hubPermissions != null && permissionGranted(hubPermissions, perm))
 }
 
-// Helper: map DB row timestamps to ISO strings
+// Helper: map DB row timestamps to ISO strings, and a sealed field's two
+// columns to its one wire object (#2777, #2778).
 function mapOverride(row: {
   id: string; hubId: string; shiftId: string | null; date: string; type: string;
-  userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: Date
+  userPubkeys: string[] | null; encryptedNote: string | null; noteEnvelopes: RecipientEnvelope[] | null;
+  createdBy: string; createdAt: Date
 }) {
+  const { encryptedNote, noteEnvelopes, ...rest } = row
   return {
-    ...row,
+    ...rest,
+    encryptedNote: sealedFieldFromColumns(encryptedNote, noteEnvelopes),
     createdAt: row.createdAt.toISOString(),
   }
 }
@@ -61,10 +68,12 @@ function overrideAuditDetails(row: { id: string; shiftId: string | null; date: s
 
 function mapAvailability(row: {
   id: string; hubId: string; userPubkey: string; startDate: string; endDate: string;
-  encryptedReason: string | null; createdAt: Date
+  encryptedReason: string | null; reasonEnvelopes: RecipientEnvelope[] | null; createdAt: Date
 }) {
+  const { encryptedReason, reasonEnvelopes, ...rest } = row
   return {
-    ...row,
+    ...rest,
+    encryptedReason: sealedFieldFromColumns(encryptedReason, reasonEnvelopes),
     createdAt: row.createdAt.toISOString(),
   }
 }
@@ -238,18 +247,24 @@ shifts.post('/overrides',
     const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+    // The note is client-sealed (`shift_record.rs`): the envelope set the client
+    // sends is its reader set forever, so one no admin can open is refused here.
+    if (body.encryptedNote) {
+      await assertAdminCanRead(services, c.env, hubId, body.encryptedNote.envelopes, 'A shift override note', { authorPubkey: pubkey })
+    }
     const row = await services.shiftOverrides.create(hubId, {
       hubId,
       shiftId: body.shiftId ?? null,
       date: body.date,
       type: body.type,
       userPubkeys: body.userPubkeys ?? null,
-      encryptedNote: body.encryptedNote ?? null,
+      encryptedNote: body.encryptedNote,
       createdBy: pubkey,
     })
     // An override changes who is rung on a date — a cancel can leave it with nobody — so
     // making one and removing one are both recorded (#2575). The note stays out: it is
-    // ciphertext, and the date and type are what an admin reading the log needs.
+    // ciphertext sealed to its readers (#2778), and the date and type are what an admin
+    // reading the log needs.
     await audit(services.audit, 'shiftOverrideCreated', pubkey, overrideAuditDetails(row), undefined, hubId || null)
     return c.json(mapOverride(row))
   },
@@ -334,11 +349,16 @@ shifts.post('/availability',
     const hubId = pathHubId(c)
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+    // The reason is client-sealed (`shift_record.rs`) to the volunteer and the
+    // hub's admins; a set no admin can open is refused, never stored (#2777).
+    if (body.encryptedReason) {
+      await assertAdminCanRead(services, c.env, hubId, body.encryptedReason.envelopes, 'An availability reason', { authorPubkey: pubkey })
+    }
     const row = await services.shiftAvailability.create(hubId, {
       userPubkey: pubkey,
       startDate: body.startDate,
       endDate: body.endDate,
-      encryptedReason: body.encryptedReason ?? undefined,
+      encryptedReason: body.encryptedReason,
     })
     return c.json(mapAvailability(row))
   },

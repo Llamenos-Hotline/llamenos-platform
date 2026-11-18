@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Dejarás de recibir llamadas entrantes.",
     "deleteConfirmTitle": "¿Eliminar este turno?",
-    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante su horario. Si ningún otro turno cubre esas horas, las llamadas irán al grupo de reserva o quedarán sin atender si no hay ninguno. Esta acción no se puede deshacer."
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante su horario. Si ningún otro turno cubre esas horas, las llamadas irán al grupo de reserva o quedarán sin atender si no hay ninguno. Esta acción no se puede deshacer.",
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Contestar llamada",

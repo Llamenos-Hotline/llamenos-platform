@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Ev şift were jêbirin?",
-    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin."
+    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin.",
+    "noAdminReader": "Ev nivîs nayê tomarkirin: tu rêveberê vî hubê amûrek tomarkirî nîne, ji ber vê yekê tu rêveber nikare wê bixwîne. Ji rêveberekî hubê bixwazin ku li ser amûrekê têkeve."
   },
   "shortcuts": {
     "answerCall": "Bangê bersiv bide",

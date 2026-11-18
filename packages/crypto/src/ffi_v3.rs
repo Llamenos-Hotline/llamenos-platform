@@ -622,6 +622,38 @@ pub fn mobile_open_case(
     })
 }
 
+// ── Free-text shift fields, sealed per purpose (#2777, #2778) ────────
+
+/// Seal an availability reason or a shift override note as this device, for
+/// this device plus `reader_pubkeys` (X25519, hex).
+///
+/// No label and no AAD argument: `crate::shift_record` derives both from
+/// `purpose`. The result maps onto `encryptedReason`/`reasonEnvelopes` and
+/// `encryptedNote`/`noteEnvelopes` unchanged.
+#[uniffi::export]
+pub fn mobile_seal_shift_field(
+    purpose: crate::shift_record::ShiftFieldPurpose,
+    plaintext: String,
+    reader_pubkeys: Vec<String>,
+) -> Result<crate::shift_record::EncryptedShiftField, CryptoError> {
+    with_secrets(|_, ds| {
+        crate::shift_record::seal_as_device(purpose, ds, &plaintext, &reader_pubkeys)
+    })
+}
+
+/// Open a shift field as this device from all of its envelopes; Rust picks the
+/// one addressed to this device's X25519 key.
+#[uniffi::export]
+pub fn mobile_open_shift_field(
+    purpose: crate::shift_record::ShiftFieldPurpose,
+    encrypted_content: String,
+    envelopes: Vec<RecipientKeyEnvelope>,
+) -> Result<String, CryptoError> {
+    with_secrets(|secrets, ds| {
+        crate::shift_record::open_as_device(purpose, secrets, ds, &encrypted_content, &envelopes)
+    })
+}
+
 // ── Envelope AAD derivation (exported so mobile never re-spells the rule) ──
 
 /// `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.

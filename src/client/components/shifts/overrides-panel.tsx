@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ShiftOverride } from '@protocol/schemas/shift-override'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { DeletionConfirmed } from '@/lib/admin-deletion'
@@ -14,17 +15,6 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-type ShiftOverride = {
-  id: string
-  hubId: string
-  shiftId: string | null
-  date: string
-  type: string
-  userPubkeys: string[] | null
-  encryptedNote: string | null
-  createdBy: string
-  createdAt: string
-}
 
 export function OverridesPanel() {
   const { t } = useTranslation()

@@ -4104,7 +4104,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Diese Schicht löschen?",
-    "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen."
+    "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen.",
+    "noAdminReader": "Dieser Text kann nicht gespeichert werden: Kein Administrator dieses Hubs hat ein registriertes Gerät, daher könnte ihn nie ein Administrator lesen. Bitten Sie einen Hub-Administrator, sich auf einem Gerät anzumelden."
   },
   "shortcuts": {
     "answerCall": "Anruf annehmen",

@@ -49,3 +49,14 @@ Feature: Shift Overrides
     Given I am authenticated as a volunteer
     When I POST to "/hubs/{hubId}/shifts/overrides" with any valid data
     Then the response status should be 403
+
+  # #2778: the note is admin narrative about who covers the hotline. It is
+  # sealed on the client; the server stores ciphertext and audits no note.
+  Scenario: An override note is stored sealed, and an admin can open it
+    When I save a note "Ana covers; Ben is in court" sealed to myself and the hub admins
+    Then the response status should be 200
+    And the stored note is ciphertext an admin opens as "Ana covers; Ben is in court"
+
+  Scenario: An override note sent as the typed text is refused
+    When I save a note "Ana covers" as plain text
+    Then the response status should be 400

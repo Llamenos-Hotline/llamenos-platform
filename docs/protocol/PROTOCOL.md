@@ -806,6 +806,7 @@ readersFor(hub, purpose) =
 |----------------|--------------------------------------------|-------------------|
 | `admin`        | `settings:manage` + `notes:read-all` (the admin minimum) | D1 |
 | `call-history` | `calls:read-history`                       | D2 |
+| `shift-overrides` | `shifts:manage-overrides`              | #2778 |
 
 **Subject readers.** Some records are additionally sealed to the one member
 they are *about*. A subject reader purpose maps to permissions in
@@ -1576,6 +1577,49 @@ Case records and comments written before #2499 by desktop or Android
 (`LABEL_MESSAGE`, no AAD) and comments written by Android (sealed as notes) do not
 open under this construction. Pre-production: no migration or fallback reader is
 provided.
+
+### 2.19 Availability Reasons and Shift Override Notes
+
+Two shift rows carry a sentence a person typed: an availability block's **reason**
+(`encryptedReason`, why a volunteer cannot take shifts) and a shift override's
+**note** (`encryptedNote`, why a shift is cancelled or who covers it). Both are
+client-sealed with the §2.18 construction, differing only in the label:
+
+| Purpose | Label | Registry `labelId` |
+|---------|-------|--------------------|
+| availability reason | `LABEL_AVAILABILITY_REASON` (`llamenos:availability-reason`) | 81 |
+| override note | `LABEL_SHIFT_OVERRIDE_NOTE` (`llamenos:shift-override-note`) | 84 |
+
+On the wire each is one object, `SealedShiftField`, or `null` when there is no text:
+
+```
+SealedShiftField = { "encryptedContent": hex, "envelopes": RecipientEnvelope[] (≥ 1) }
+  encryptedContent = hex(iv(12) || AES-256-GCM(content_key, plaintext, aad = UTF-8(label)) || tag(16))
+  envelope.ct      = HPKE(info = label, aad = UTF-8(label + ":key-wrap")).Seal(content_key)
+```
+
+A bare string is **refused** (400). Both fields used to be `z.string()` and the only
+writer (iOS) sent the typed text, so two columns named `encrypted_*` held plaintext
+(#2777, #2778); the migration that introduced envelopes scrubbed every such value.
+The server stores the object as two columns (`encrypted_reason` + `reason_envelopes`,
+`encrypted_note` + `note_envelopes`) and returns it unchanged; a row with only one of
+the two reads as `null`.
+
+**Readers.** The sealing device is always a reader. The others are the hub's
+`admin` reader set (§2.4.2) — and, for an override note, the `shift-overrides` set,
+whose holders can list overrides without being admins. An availability reason is
+sealed to admins only: the route that lists every block requires `shifts:manage`,
+which only a `shifts:*` or `*` wildcard grants, so admins are exactly who can read
+reasons today; a reason is never sealed to every hub member. A client with no
+`admin` reader refuses to write. The server refuses (422) a field whose envelopes
+name no admin recipient, and 503 when the hub has no admin recipient at all (§4.7
+write guard, `assertAdminCanRead`). The note is never written to the audit log.
+
+**Where the decision lives.** `packages/crypto/src/shift_record.rs`, reached through
+an operation that takes a purpose (`availability-reason`, `override-note`) and no
+label or AAD: `mobile_seal_shift_field` / `mobile_open_shift_field` on iOS and
+Android. A reason opens as no note and a note as no reason, and neither opens as a
+case ciphertext. Desktop and Android do not collect either field yet.
 
 ---
 
@@ -2890,9 +2934,9 @@ Response: { "generation": int, "epoch": int }  // HubKeyRotateResponse
 // One transaction (§2.7 Key Rotation): 409 on a stale generation, a member left out, a value not
 // re-sealed or changed since the read, or a shredded hub; 403 for a wrap addressed to a non-member.
 
-GET /api/hubs/:hubId/readers?purpose=admin|call-history
+GET /api/hubs/:hubId/readers?purpose=admin|call-history|shift-overrides
 Auth: Required (hub member)
-Response: { "hubId": string, "purpose": "admin" | "call-history", "recipients": hex64[] }  // HubReadersResponse
+Response: { "hubId": string, "purpose": "admin" | "call-history" | "shift-overrides", "recipients": hex64[] }  // HubReadersResponse
 // The hub's reader set for the purpose (§2.4.2): X25519 device keys of every member holding the
 // purpose's permissions in this hub's own role assignments, then the hub escrow key. Never an Ed25519
 // identity key, never ADMIN_DECRYPTION_PUBKEY, never a super-admin's device unless it holds the

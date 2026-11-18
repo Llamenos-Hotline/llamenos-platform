@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya.",
     "deleteConfirmTitle": "Wareeggan ma tirtiraa?",
-    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo."
+    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo.",
+    "noAdminReader": "Qoraalkan lama keydin karo: maamule kasta oo hubkan ka tirsan ma laha qalab diiwaangashan, sidaas darteed maamule toona ma akhrin karo. U sheeg maamulaha hubka inuu qalab ku soo galo."
   },
   "shortcuts": {
     "answerCall": "Ka jawaab wicitaanka",
