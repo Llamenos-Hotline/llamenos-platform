@@ -11,10 +11,11 @@
 #   DERIVED_DATA_PATH = /tmp/llamenos-screenshots
 #   OUTPUT_DIR        = site/public/screenshots/ios
 #
-# Run tests first:
+# Run tests first (pin the simulator by UDID, never by name — #2861; the UDID
+# comes from `bash scripts/ios-build.sh status`, or `xcrun simctl list devices`):
 #   xcodebuild test \
 #     -scheme Llamenos \
-#     -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+#     -destination "platform=iOS Simulator,id=<udid>" \
 #     -only-testing:LlamenosUITests/ScreenshotAuditTests \
 #     -derivedDataPath /tmp/llamenos-screenshots \
 #     2>&1 | xcbeautify
