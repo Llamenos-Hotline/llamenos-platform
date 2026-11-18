@@ -372,7 +372,8 @@ conversations.post('/:id/messages',
       // populated), so it cannot substitute the right one — and must not invent
       // one. Clients that hold their own device key send `encryptedContent` and
       // `readerEnvelopes` instead and take the branch above; the desktop does.
-      const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
+      // #1034: the hub's admin reader set (admin devices + escrow key), not an env var.
+      const adminRecipients = await c.get('services').identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient(c.env), conv.hubId)
       // `pubkey` is the sender's Ed25519 *identity* key, not a recipient key.
       // Resolve the X25519 keys of the devices they actually registered.
       const authorRecipients = await c.get('services').identity.getHpkeRecipients(pubkey)
@@ -386,7 +387,7 @@ conversations.post('/:id/messages',
           conversationId: id,
         })
       }
-      const readerPubkeys = messageReaders(adminDecryptionPubkey, authorRecipients)
+      const readerPubkeys = messageReaders(adminRecipients, authorRecipients)
 
       // An EMPTY reader list — no admin decryption key configured AND the
       // author has no registered device — is a deployment-level failure, and

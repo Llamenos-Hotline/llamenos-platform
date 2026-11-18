@@ -49,7 +49,8 @@ export async function getUserHpkeRecipients(
 }
 
 /**
- * The readers of one message: the platform admin, plus every device the author
+ * The readers of one message: the hub's admin reader set
+ * (`IdentityService.listAdminEnvelopeRecipients`), plus every device the author
  * or assignee has registered.
  *
  * Both write paths (`handleIncoming` and `POST /conversations/:id/messages`)
@@ -57,13 +58,13 @@ export async function getUserHpkeRecipients(
  * to exist at two sites (#1283, #1466). Deduplicated, because an admin who is
  * also the author would otherwise be sealed to twice.
  *
- * An empty `userRecipients` yields the admin alone, and both callers log that
+ * An empty `userRecipients` yields the admins alone, and both callers log that
  * case as an error before calling. The message is still written: a reply the
  * author cannot re-read is a bad outcome, but refusing to send a crisis reply —
  * which is what any client with no registered key would get, iOS included — is
  * a far worse one.
  *
- * When the admin recipient is absent too, the result is an EMPTY reader list.
+ * When the hub has no admin recipient either, the result is an EMPTY reader list.
  * That is a deployment-level failure (no admin decryption key configured, no
  * device registered anywhere), and the contract for it is loud-but-stored:
  * the callers log an error an operator must see and persist the message
@@ -72,11 +73,11 @@ export async function getUserHpkeRecipients(
  * branch before reaching it.
  */
 export function messageReaders(
-  adminRecipient: HpkeRecipientPubkey | undefined,
+  adminRecipients: readonly HpkeRecipientPubkey[],
   userRecipients: readonly HpkeRecipientPubkey[],
 ): HpkeRecipientPubkey[] {
-  const readers: HpkeRecipientPubkey[] = adminRecipient ? [adminRecipient] : []
-  for (const recipient of userRecipients) {
+  const readers: HpkeRecipientPubkey[] = []
+  for (const recipient of [...adminRecipients, ...userRecipients]) {
     if (!readers.includes(recipient)) readers.push(recipient)
   }
   return readers

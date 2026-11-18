@@ -458,8 +458,8 @@ export class IdentityService {
    * The one definition of "a key an admin holds": server-sealed records are
    * wrapped to it, and client-sealed ones are checked against it.
    */
-  async listAdminEnvelopeRecipients(transitionalInstanceKey: string | undefined, hubId?: string): Promise<string[]> {
-    const readers: string[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
+  async listAdminEnvelopeRecipients(transitionalInstanceKey: string | undefined, hubId?: string): Promise<HpkeRecipientPubkey[]> {
+    const readers: HpkeRecipientPubkey[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
     const instance = hpkeRecipientPubkey(transitionalInstanceKey?.trim().toLowerCase())
     return instance && !readers.includes(instance) ? [instance, ...readers] : readers
   }

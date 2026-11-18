@@ -55,6 +55,7 @@ function baseConfig(overrides: Partial<MessagingConfig>): MessagingConfig {
 function makeServices(config: MessagingConfig) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
+    identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([]) },
     settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(config) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),

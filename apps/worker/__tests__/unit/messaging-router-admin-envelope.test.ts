@@ -78,7 +78,12 @@ function tryOpen(
   }
 }
 
-function setup() {
+/**
+ * `identity.listAdminEnvelopeRecipients` as the real service defines it: the
+ * hub's admin reader set (`hubAdminDeviceKeys`, standing in for `readersFor`)
+ * followed by the transitional instance key when one is configured.
+ */
+function setup(hubAdminDeviceKeys: string[] = []) {
   const { db } = createMockDb(['conversations', 'messages'])
   // An existing, unassigned conversation from this sender — so the only reader
   // the server can seal to is the admin.
@@ -101,6 +106,12 @@ function setup() {
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
+    },
+    identity: {
+      listAdminEnvelopeRecipients: vi.fn().mockImplementation(async (instanceKey: string | undefined, hubId: string) => {
+        expect(hubId).toBe('hub-test')
+        return instanceKey && !hubAdminDeviceKeys.includes(instanceKey) ? [instanceKey, ...hubAdminDeviceKeys] : hubAdminDeviceKeys
+      }),
     },
     conversations,
   } as unknown as Services
@@ -156,6 +167,29 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
     expect(opened).toEqual([PLAINTEXT])
   })
 
+  it('seals to the hub admin\'s device key on a deployment with NO ADMIN_DECRYPTION_PUBKEY (#1034)', async () => {
+    // A wizard-bootstrapped deployment has no admin env keys: the only readers
+    // are the devices its hub admins registered. Before #1034 the webhook
+    // sealed to `undefined` and 500'd; with an Ed25519 ADMIN_PUBKEY set it
+    // stored an envelope no device could open.
+    const admin = makeAdmin()
+    const { services, addMessage } = setup([admin.decryptionPubkey])
+    const app = await createApp(services, makeAdmin(), /* withDecryptionKey */ false)
+
+    const res = await app.request('/api/messaging/sms/webhook?hub=hub-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: incoming.externalId }),
+    })
+
+    expect(res.status).toBe(200)
+    const stored = addMessage.mock.calls[0][0]
+    const opened = (stored.readerEnvelopes ?? [])
+      .map(env => tryOpen(admin.decryptionSecret, env, stored.encryptedContent ?? ''))
+      .filter((p): p is string => p !== null)
+    expect(opened).toEqual([PLAINTEXT])
+  })
+
   it('never lists the Ed25519 signing key as a recipient', async () => {
     const admin = makeAdmin()
     const { services, addMessage } = setup()
@@ -172,8 +206,8 @@ describe('inbound messaging webhook — admin envelope is decryptable (#1283)', 
   })
 
   it('still stores the message and answers 200 when NO recipient exists anywhere', async () => {
-    // No ADMIN_DECRYPTION_PUBKEY in the env, and the conversation is
-    // unassigned, so `messageReaders` yields an empty list. The empty-reader
+    // No ADMIN_DECRYPTION_PUBKEY in the env, the hub has no admin device and
+    // the conversation is unassigned, so `messageReaders` yields an empty list. The empty-reader
     // contract is loud-but-stored: before it existed, the encryption step
     // threw, the webhook 500'd, and the provider's retry was consumed by the
     // replay guard as an idempotent 200 — the inbound crisis message silently

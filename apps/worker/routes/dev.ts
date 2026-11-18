@@ -1028,14 +1028,14 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   const channel: MessagingChannelType = body.channel || 'sms'
   const senderHash = messagingContactHash(body.senderNumber, body.hubId, c.env.MESSAGING_HASH_KEY)
 
-  const adminDecryptionPubkey = transitionalInstanceRecipient(c.env)
+  const adminRecipients = await services.identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient(c.env), body.hubId)
   const result = await services.conversations.handleIncoming({
     channelType: channel,
     externalId: crypto.randomUUID(),
     senderIdentifier: body.senderNumber,
     body: body.body,
     timestamp: new Date().toISOString(),
-  }, senderHash, adminDecryptionPubkey, body.hubId)
+  }, senderHash, adminRecipients, body.hubId)
 
   // Publish to the conversation's hub (mirrors real messaging webhook flow)
   publishEvent(c.env, KIND_MESSAGE_NEW, {
