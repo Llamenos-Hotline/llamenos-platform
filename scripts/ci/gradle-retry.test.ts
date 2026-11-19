@@ -1,0 +1,130 @@
+// @suite: repo
+// scripts/ci/gradle-retry.sh (#2864) against a stub gradle launcher.
+//
+// The stub's behaviour per run is read from a script file: run N takes line N
+// (the last line repeats). A line is `ok`, `resolve-miss` (the exact failure of
+// merge group 44432600870), `timeout`, `test-fail` or `compile-fail`.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const SCRIPT = join(import.meta.dir, 'gradle-retry.sh')
+
+const STUB_GRADLE = `#!/usr/bin/env bash
+echo "gradle $*" >> "$STUB_CALLS"
+n=$(wc -l < "$STUB_CALLS")
+mode=$(sed -n "\${n}p" "$STUB_PLAN"); [ -n "$mode" ] || mode=$(tail -n 1 "$STUB_PLAN")
+case "$mode" in
+  ok) echo "BUILD SUCCESSFUL in 3s"; exit 0 ;;
+  resolve-miss)
+    echo "> Task :app:processDebugUnitTestManifest FAILED"
+    echo "> Could not resolve all files for configuration ':app:debugUnitTestRuntimeClasspath'."
+    echo "   > Could not find junit:junit:4.13.2."
+    echo "     Searched in the following locations:"
+    echo "       - https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom"
+    echo "BUILD FAILED in 37s"; exit 1 ;;
+  timeout) echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Read timed out"; echo "BUILD FAILED"; exit 1 ;;
+  test-fail) echo "> Task :app:testDebugUnitTest FAILED"; echo "FooTest > bar FAILED"; echo "BUILD FAILED in 2m"; exit 1 ;;
+  compile-fail) echo "e: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar"; echo "BUILD FAILED"; exit 1 ;;
+esac
+`
+
+let dir: string
+let calls: string
+let plan: string
+let summary: string
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'gradle-retry-test-'))
+  calls = join(dir, 'calls.log')
+  plan = join(dir, 'plan.txt')
+  summary = join(dir, 'summary.md')
+  writeFileSync(calls, '')
+  writeFileSync(join(dir, 'gradlew'), STUB_GRADLE)
+  chmodSync(join(dir, 'gradlew'), 0o755)
+})
+
+afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+function run(modes: string[], args: string[] = ['testDebugUnitTest', '--console=plain'], env: Record<string, string> = {}) {
+  writeFileSync(plan, modes.join('\n') + '\n')
+  const r = Bun.spawnSync(['bash', SCRIPT, ...args], {
+    env: {
+      PATH: process.env.PATH ?? '',
+      GRADLE_BIN: join(dir, 'gradlew'),
+      GRADLE_RETRY_BACKOFF_SEC: '0',
+      RUNNER_TEMP: dir,
+      GITHUB_STEP_SUMMARY: summary,
+      STUB_CALLS: calls,
+      STUB_PLAN: plan,
+      ...env,
+    },
+  })
+  const invocations = readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean)
+  return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString(), invocations }
+}
+
+describe('gradle-retry.sh', () => {
+  test('a clean build runs Gradle once, unmodified, and says nothing', () => {
+    const r = run(['ok'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(1)
+    expect(r.invocations[0]).toContain('testDebugUnitTest --console=plain')
+    expect(r.out).not.toContain('::warning')
+  })
+
+  test('the #2864 failure — one POM miss — is survived by a plain second run', () => {
+    const r = run(['resolve-miss', 'ok'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
+    // The retry is the same invocation, not --refresh-dependencies: that would
+    // revalidate the whole restored cache against the registry that just blipped.
+    expect(r.invocations[1]).toContain('testDebugUnitTest --console=plain')
+    expect(r.invocations.every((c) => !c.includes('--refresh-dependencies'))).toBe(true)
+  })
+
+  test('a recovered retry is visible: a warning naming the dependency, and a step summary', () => {
+    const r = run(['resolve-miss', 'ok'])
+    expect(r.out).toMatch(/::warning title=[^:]*recovered on attempt 2/)
+    expect(r.out).toContain('junit:junit:4.13.2')
+    expect(readFileSync(summary, 'utf8')).toContain('transient failure survived')
+  })
+
+  test('a transport timeout is retried too', () => {
+    const r = run(['timeout', 'ok'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
+  })
+
+  test('a persistent miss fails after every attempt, with Gradle exit status and an error annotation', () => {
+    const r = run(['resolve-miss'], undefined, { GRADLE_RETRY_ATTEMPTS: '3' })
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(3)
+    expect(r.out).toMatch(/::error title=[^:]*failed on all 3 attempts/)
+  })
+
+  test('a failing test is returned after exactly one run — never retried', () => {
+    const r = run(['test-fail', 'ok'])
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(1)
+    expect(r.out).toContain('not retrying')
+  })
+
+  test('a compile error that says "Could not compile" is not mistaken for a registry failure', () => {
+    const r = run(['compile-fail', 'ok'])
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(1)
+  })
+
+  test("Gradle's own HTTP retry budget is raised on every run", () => {
+    const r = run(['ok'])
+    expect(r.invocations[0]).toContain('-Dorg.gradle.internal.repository.max.retries=6')
+  })
+
+  test('no Gradle arguments is a usage error, not a bare ./gradlew', () => {
+    const r = run(['ok'], [])
+    expect(r.code).toBe(2)
+    expect(r.invocations).toHaveLength(0)
+  })
+})

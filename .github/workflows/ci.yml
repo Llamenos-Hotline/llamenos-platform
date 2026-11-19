@@ -1729,6 +1729,10 @@ jobs:
   #                                         desktop-rust's bounded, .deb-cached apt
   #                                         install (#2545, #2736); desktop-rust
   #                                         itself only exercises the happy path
+  #   scripts/ci/gradle-retry.test.ts       the Android jobs' dependency-resolution
+  #                                         retry (#2864): re-runs only a registry
+  #                                         miss, never a failing test or a compile
+  #                                         error
   #   scripts/ci/playwright-deps.test.ts    the Playwright jobs' OS-deps probe,
   #                                         which must not touch apt on a cache hit
   #                                         (#2736)
@@ -2172,17 +2176,22 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      # Every Gradle step below goes through gradle-retry.sh (#2864): a single
+      # registry lookup that missed (junit:junit:4.13.2, merge group
+      # 44432600870) ejected four PRs from the queue. It re-runs ONLY when
+      # Gradle's output names a dependency-resolution/transport error — a
+      # failing test, a compile error and a lint finding come back after one run.
       - name: Run unit tests
         working-directory: apps/android
-        run: ./gradlew testDebugUnitTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh testDebugUnitTest --console=plain
 
       - name: Lint
         working-directory: apps/android
-        run: ./gradlew lintDebug --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh lintDebug --console=plain
 
       - name: Build debug APK + androidTest APK
         working-directory: apps/android
-        run: ./gradlew assembleDebug assembleDebugAndroidTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain
 
       # The JUnit XML carries each failure's full stack and the test's stdout/stderr;
       # the HTML report is the same, browsable. Only a failure needs either.
@@ -2239,9 +2248,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      # gradle-retry.sh: survives a transient registry miss (#2864); see android-build-test.
       - name: Compile every Kotlin source set (no tests run)
         working-directory: apps/android
-        run: ./gradlew assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
 
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
