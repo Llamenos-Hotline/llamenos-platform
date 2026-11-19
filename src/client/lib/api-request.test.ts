@@ -9,6 +9,7 @@ import {
   isHubNotFound,
   getAuthHeadersForReplay,
   setOnAuthExpired,
+  setOnHubGone,
   setOnApiActivity,
   setActiveHub,
   bootstrapAdmin,
@@ -136,6 +137,7 @@ describe('request retry logic', () => {
     sessionStorage.clear()
     keyManager.lock()
     setOnAuthExpired(null)
+    setOnHubGone(null)
     setOnApiActivity(null)
     setActiveHub(null)
     await offlineQueue.clear()
@@ -275,6 +277,30 @@ describe('request retry logic', () => {
     setOnAuthExpired(cb)
 
     await expect(request('/auth/login')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('reports the hub as gone when a hub-scoped route answers "Hub not found"', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found' }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+  })
+
+  it('does not report a hub as gone for a 404 about something inside it', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'No key envelope for this user' }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/key')).rejects.toBeInstanceOf(ApiError)
     expect(cb).not.toHaveBeenCalled()
   })
 

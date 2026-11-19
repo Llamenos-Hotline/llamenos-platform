@@ -16,6 +16,15 @@ export function setOnAuthExpired(cb: (() => void) | null) { onAuthExpired = cb }
  */
 export function notifyAuthExpired(): void { onAuthExpired?.() }
 
+// Hub-gone callback — set by ConfigProvider so a hub the server says does not
+// exist leaves the membership snapshot at once, instead of being polled until
+// the next slow membership refresh.
+let onHubGone: ((hubId: string) => void) | null = null
+export function setOnHubGone(cb: ((hubId: string) => void) | null) { onHubGone = cb }
+
+/** Invoke the registered hub-gone callback — see `notifyAuthExpired` for why this is exported. */
+export function notifyHubGone(hubId: string): void { onHubGone?.(hubId) }
+
 // Monotonic timestamp: ensures each auth token gets a unique timestamp even when
 // multiple requests fire within the same millisecond. The server's nonce replay
 // protection rejects duplicate Ed25519 signatures (which are deterministic), so
@@ -186,6 +195,10 @@ export async function request<T>(path: string, options: RequestInit & { retries?
           onAuthExpired?.()
         }
         const err = new ApiError(res.status, body)
+        if (isHubNotFound(err)) {
+          const goneHubId = hubIdOfPath(pathOnly)
+          if (goneHubId) notifyHubGone(goneHubId)
+        }
         if (isRetryable(res.status) && attempt < maxRetries) {
           lastError = err
           continue
@@ -293,6 +306,11 @@ export class NoSessionError extends Error {
     super(`No session for ${path}`)
     this.name = 'NoSessionError'
   }
+}
+
+/** The hub id in a `/hubs/:id/…` path, if it is one. */
+function hubIdOfPath(pathOnly: string): string | undefined {
+  return /^\/hubs\/([^/]+)/.exec(pathOnly)?.[1]
 }
 
 /** Every route under `/hubs` sits behind the server's authentication. */

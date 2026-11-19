@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
-import { getConfig, listHubs, setActiveHub } from './api'
+import { getConfig, listHubs, setActiveHub, setOnHubGone } from './api'
 import type { EnabledChannels, Hub } from '@shared/types'
 
 interface ConfigContextValue {
@@ -25,6 +25,12 @@ interface ConfigContextValue {
   refreshMemberHubs: () => Promise<void>
   /** Drop membership state (sign-out, session loss). */
   clearMemberHubs: () => void
+  /**
+   * Remove one hub from the membership snapshot because it no longer exists
+   * (the server answered "Hub not found", or this client deleted it). Every
+   * member-hub poll reads `hubs`, so this is what stops them asking about it.
+   */
+  dropMemberHub: (hubId: string) => void
   /** Server's Ed25519 pubkey for verifying event signatures */
   serverPubkey: string | undefined
   /** WebSocket relay URL */
@@ -119,6 +125,7 @@ const ConfigContext = createContext<ConfigContextValue>({
   isMultiHub: false,
   refreshMemberHubs: async () => {},
   clearMemberHubs: () => {},
+  dropMemberHub: () => {},
   serverPubkey: undefined,
   wsRelayUrl: undefined,
 })
@@ -140,6 +147,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   // Read without re-creating refreshMemberHubs on every hub change.
   const currentHubIdRef = useRef(currentHubId)
   currentHubIdRef.current = currentHubId
+  // Same for the membership snapshot, which `dropMemberHub` edits.
+  const hubsRef = useRef(hubs)
+  hubsRef.current = hubs
 
   // Apply the harness pin to the API client before anything issues a
   // hub-scoped request. Outside tests this is a no-op.
@@ -193,6 +203,29 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     setActiveHub(pinned ?? null)
   }, [])
 
+  const dropMemberHub = useCallback((hubId: string) => {
+    const remaining = hubsRef.current.filter(h => h.id !== hubId)
+    if (remaining.length === hubsRef.current.length) return
+    hubsRef.current = remaining
+    setHubs(remaining)
+    // The active hub may have been the one that went; pick again from the hubs
+    // that are left (a harness pin is never overridden).
+    if (currentHubIdRef.current === hubId) {
+      const chosen = chooseActiveHub(remaining, undefined)
+      currentHubIdRef.current = chosen
+      setCurrentHubIdState(chosen)
+      setActiveHub(chosen ?? null)
+    }
+  }, [])
+
+  // The API client reports a hub the server says does not exist. Without this a
+  // hub deleted elsewhere stays in `hubs` until the next membership refresh, and
+  // every poll that walks the member hubs keeps asking about it.
+  useEffect(() => {
+    setOnHubGone(dropMemberHub)
+    return () => setOnHubGone(null)
+  }, [dropMemberHub])
+
   useEffect(() => {
     getConfig()
       .then(config => {
@@ -228,7 +261,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       hotlineName, hotlineNumber, channels, setupCompleted,
       needsBootstrap, isLoading,
       hubs, hubsResolved, hubsError, currentHubId,
-      setCurrentHubId, isMultiHub, refreshMemberHubs, clearMemberHubs,
+      setCurrentHubId, isMultiHub, refreshMemberHubs, clearMemberHubs, dropMemberHub,
       serverPubkey, wsRelayUrl,
     }}>
       {children}
