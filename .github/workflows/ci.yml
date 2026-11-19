@@ -1786,7 +1786,7 @@ jobs:
           ran_files=$(echo "$summary" | awk '{print $5}')
           echo "repo-tests: ran $ran_tests test(s) across $ran_files file(s)."
           if [ "$ran_tests" -eq 0 ] || [ "$ran_files" -eq 0 ]; then
-            echo "::error::bun collected nothing — test:repo's path list no longer matches what is on disk"
+            echo "::error::bun collected nothing — test:repo's discovery (scripts/test-repo.ts) no longer matches what is on disk"
             exit 1
           fi
           exit "$rc"

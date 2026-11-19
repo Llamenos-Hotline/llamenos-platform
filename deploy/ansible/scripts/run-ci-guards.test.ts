@@ -1,3 +1,4 @@
+// @suite: repo
 // deploy/ansible/scripts/run-ci-guards.py (#2645): the single ci.yml step that
 // runs every guard registered under deploy/ansible/ci-guards/.
 //

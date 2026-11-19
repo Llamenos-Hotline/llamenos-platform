@@ -1,3 +1,4 @@
+// @suite: repo
 // scripts/ci/playwright-deps.sh (#2736) against a stub ldd and a stub install command.
 //
 // The property under test is the acceptance criterion of the issue: with the Ubuntu

@@ -1,3 +1,4 @@
+// @suite: repo
 // Runs mac-ci-work-volume.sh's own `selftest` (stubs stand in for hdiutil, mount,
 // launchctl, ps and xcrun, so it runs anywhere) so the cutover's safety rules are
 // enforced by CI rather than by whoever remembers to run it after an edit.
