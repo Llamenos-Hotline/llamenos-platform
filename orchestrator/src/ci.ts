@@ -1209,7 +1209,9 @@ export async function decideReviewSet(deps: ReviewSetDeps): Promise<ReviewSetDec
 async function resolveLane(deps: CiDeps): Promise<Lane | undefined> {
   const laneId = laneIdFromBranch(deps.ctx.branch)
   if (laneId === undefined) return UNSCOPED_LANE
-  return (await deps.lanes()).find((l) => l.id === laneId)
+  // A scope-only fragment is grantable, never a PR's own lane: `fleet/mac/…`
+  // stays "unknown lane" (#2600).
+  return (await deps.lanes()).find((l) => l.id === laneId && l.scopeOnly !== true)
 }
 
 /** The prefix a label must carry to grant a lane's scope to a PR (#1115). */

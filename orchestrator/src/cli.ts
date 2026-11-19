@@ -7,7 +7,7 @@ import { acquire } from './lock.js'
 import { checkHalt, halt, resume, haltedLocally } from './killswitch.js'
 import { readAll, append, since, type RunRecord } from './ledger.js'
 import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt, quotaCooldowns } from './circuit.js'
-import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
+import { loadLanes, loadGrantableLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
 import {
   assessRuntimeCurrency, checkoutProvenance, fleetRuntimeRoot, isFastForwardable, provenanceProblems,
@@ -733,7 +733,7 @@ async function grantScopeAtOpenFor(
     { pr, headRefName, branchMismatch },
     defaultScopeGrantDeps(
       log,
-      () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
       async (prNumber, branch) => {
         const r = await refireReviewRequest({ pr: prNumber, headRefName: branch }, reviewDeps)
         return r.kind === 'requested'
@@ -896,7 +896,7 @@ export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha:
     let last: VerifyReport | undefined
     const verdict = await runVerifyCi({
       ctx,
-      lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
       verify: async (v) => { last = await verifyMechanical({ ...v, testEnv: scrubbedTestEnv(tmp) }); return last },
       pathExists: existsSync,
       log,
@@ -2323,7 +2323,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
   'verify-ci': asVerification(() => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
-    lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+    lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
@@ -2341,7 +2341,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   'review-ci': asVerification(() => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
     apiKey: process.env[REVIEW_KEY_ENV],
-    lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+    lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,

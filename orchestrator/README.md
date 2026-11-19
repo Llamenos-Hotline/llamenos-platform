@@ -697,6 +697,24 @@ What a grant cannot do:
   can still fail in the queue. That direction is safe but surprising — worth
   knowing before enabling a merge queue.
 
+- **Make a fragment a lane.** A fragment can own paths without being a lane:
+  `mac-supervisor` owns a machine, so nothing is dispatched to it and a
+  `fleet/mac/<item>` branch stays "unknown lane". Its paths are still
+  grantable — `SCOPE_ONLY_LANE_IDS` in `config.ts` names the fragments whose
+  `scope:<id>` label the gate and `scope-grant` honour, and `loadGrantableLanes`
+  is the lane list they read (`loadLanes`, which dispatch/doctor/digest use,
+  never contains one). The measured need (#2867): a fleet-authored change to
+  `scripts/ci/mac-ci-work-volume.sh` must update `docs/runbooks/mac-ci-runner-disk.md`
+  in the same commit, and while `mac` was not grantable the runbook read as
+  owned by no lane and the gate said to delete it. The list is explicit, not
+  "every fragment outside `LANE_IDS`", so making a fragment grantable is a
+  decision in this human-gated file. The grant reaches only
+  `SCOPE_ONLY_GRANT_PATHS` — the runbook — not everything the fragment owns:
+  `mac` also owns the disk guard and `mac-run.sh`, which execute on the shared
+  self-hosted runner and stay unreachable by any grant. `GRANT_EXCLUDED_PATHS`
+  still applies: a diff holding `.github/workflows/ios-e2e.yml` is refused whole
+  and lands from a plain branch, as before.
+
 - **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
   is missing or unparseable, has `owned: []` — and an empty owned list means
   "no ownership check". Honouring a grant for such a lane would make the whole
