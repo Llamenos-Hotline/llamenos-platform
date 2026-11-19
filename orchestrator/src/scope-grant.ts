@@ -169,7 +169,7 @@ export async function grantScopeAtOpen(
   }
   try {
     const lanes = await deps.lanes()
-    const own = lanes.find((l) => l.id === laneId)
+    const own = lanes.find((l) => l.id === laneId && l.scopeOnly !== true)
     if (own === undefined) return { kind: 'skipped', reason: `unknown lane ${laneId}` }
     const changed = await deps.readChangedFiles(pr)
     if (changed === undefined) {

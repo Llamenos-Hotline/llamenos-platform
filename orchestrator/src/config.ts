@@ -25,9 +25,36 @@ export interface Lane {
   milestone?: string
   /** Filled by loadLanes() from .claude/agents/fragments/<id>-supervisor.md */
   scope: LaneScope
+  /**
+   * Set only on a SCOPE-ONLY lane (`SCOPE_ONLY_LANE_IDS`): a fragment whose
+   * owned paths a `scope:<id>` grant may reach, but which is not a lane — no
+   * dispatch, no `fleet/<id>/<item>` branch, no `lanes.json` mode. See
+   * `loadGrantableLanes` (#2867).
+   */
+  scopeOnly?: true
 }
 
 export const LANE_IDS = ['backend', 'shared', 'desktop', 'ios', 'android', 'infra'] as const
+
+/**
+ * Fragments that own paths but are NOT lanes (#2600): `mac-supervisor` owns a
+ * machine, not a workstream, so nothing is ever dispatched to it and a
+ * `fleet/mac/<item>` branch stays "unknown lane".
+ *
+ * Owning paths and being grantable are different things, and treating the
+ * first as "not a lane, therefore owns nothing" was the gap #2867 measured:
+ * `docs/runbooks/mac-ci-runner-disk.md` is `mac`'s, infra's own `scripts/ci/`
+ * change needs to update it in the same commit, and because `mac` was not in
+ * the lane list the runbook read as owned by NO lane — so `scope:mac` could not
+ * be granted and the gate told the author to delete the documentation.
+ *
+ * Listed explicitly rather than "every fragment outside LANE_IDS": a fragment
+ * becoming grantable widens what a self-applicable label can reach, and that
+ * decision belongs in this human-gated file, not in whichever fragment is
+ * added next. Everything `GRANT_EXCLUDED_PATHS` covers (ios-e2e.yml, which is
+ * `mac`'s) stays out of a grant exactly as before.
+ */
+export const SCOPE_ONLY_LANE_IDS = ['mac'] as const
 
 /**
  * Lane order is claim priority: the first lane to claim an item owns it, so two
@@ -221,6 +248,32 @@ export async function loadLanes(
   })
   assertLiveLanesHaveScope(lanes)
   return lanes
+}
+
+/**
+ * Every lane a `scope:<id>` grant may name: the real lanes (`loadLanes`) plus
+ * the scope-only fragments (`SCOPE_ONLY_LANE_IDS`). Used by everything that
+ * JUDGES or GRANTS a scope; dispatch, digests and `doctor` keep `loadLanes`,
+ * so a scope-only fragment never shows up as an `off` lane or gets work.
+ */
+export async function loadGrantableLanes(
+  repoRoot: string,
+  modesFile: string = LANE_MODES_FILE,
+  onReject?: (laneId: string, reason: string) => void,
+): Promise<Lane[]> {
+  const lanes = await loadLanes(repoRoot, modesFile, onReject)
+  const scopes = await loadLaneScopes(repoRoot)
+  const scopeOnly: Lane[] = SCOPE_ONLY_LANE_IDS.map((id) => ({
+    id,
+    mode: 'off',
+    cap: 0,
+    engine: 'claude',
+    requireLabel: 'agent-dispatchable',
+    vetoLabels: [],
+    scope: scopes[id] ?? { owned: [], notOwned: [] },
+    scopeOnly: true,
+  }))
+  return [...lanes, ...scopeOnly]
 }
 
 /**
