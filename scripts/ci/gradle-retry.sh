@@ -84,7 +84,7 @@
 # WHAT IS RETRIED
 # ---------------
 # Only a failure whose Gradle output names a resolution/transport error
-# (RESOLUTION_PATTERN below). A compile error, a failing test, a lint finding
+# (gradle-resolution.patterns). A compile error, a failing test, a lint finding
 # and a Gradle configuration error all exit non-zero WITHOUT matching it and are
 # returned immediately, after exactly one run, with Gradle's own exit status.
 # A genuinely missing dependency (a typo in libs.versions.toml) also matches, is
@@ -120,9 +120,19 @@ RATE_REPO_RETRIES="${GRADLE_RATE_LIMIT_REPO_MAX_RETRIES:-2}"
 REPO_INITIAL_BACKOFF_MS=500
 RATE_REPO_INITIAL_BACKOFF_MS=5000
 
-# A transport or resolution failure, as Gradle prints it. Deliberately specific:
-# a bare "Could not" would also match "Could not compile", which is a real error.
-RESOLUTION_PATTERN='Could not resolve |Could not find |Could not GET |Could not HEAD |Could not download |Could not get resource|Could not resolve all (files|dependencies)|Read timed out|Connect timed out|Connection (reset|refused)|Remote host terminated|Premature end of Content-Length|Received status code 5[0-9][0-9]|Received status code 429|Temporary failure in name resolution|Network is unreachable|UnknownHostException|SSLHandshakeException|Unable to tunnel'
+# What counts as a resolution/transport failure, and which of those Gradle
+# REMEMBERS, live in two pattern files beside this script (one ERE per line) so
+# that .github/scripts/classify-infra-failure.py reads the very same lists
+# (#2870). Deliberately specific: a bare "Could not" would also match "Could not
+# compile", which is a real error. Never inline a copy of either list here or
+# anywhere else: three implementations that disagree is how android-e2e came to
+# call a missed gson jar "not an infrastructure signature".
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESOLUTION_PATTERNS="${GRADLE_RESOLUTION_PATTERNS:-$HERE/gradle-resolution.patterns}"
+CACHED_MISS_PATTERNS="${GRADLE_CACHED_MISS_PATTERNS:-$HERE/gradle-cached-miss.patterns}"
+for f in "$RESOLUTION_PATTERNS" "$CACHED_MISS_PATTERNS"; do
+  [ -s "$f" ] || { echo "gradle-retry: pattern file ${f} is missing or empty" >&2; exit 2; }
+done
 
 gh_escape_data() {
   local s="$1"
@@ -152,7 +162,7 @@ trap 'rm -rf "$WORK"' EXIT
 # find or fetch, before the generic "Could not resolve all files" wrapper.
 first_failure() {
   { grep -m1 -E 'Could not (find|GET|HEAD|download|get resource) |timed out|reset|refused|status code' "$1" \
-      || grep -m1 -E "$RESOLUTION_PATTERN" "$1"; } | sed -E 's/^[[:space:]>*-]+//' | cut -c1-240
+      || grep -m1 -E -f "$RESOLUTION_PATTERNS" "$1"; } | sed -E 's/^[[:space:]>*-]+//' | cut -c1-240
 }
 
 REPORTS=()
@@ -187,7 +197,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     exit 0
   fi
 
-  if ! grep -qE "$RESOLUTION_PATTERN" "$log"; then
+  if ! grep -qE -f "$RESOLUTION_PATTERNS" "$log"; then
     # Not a registry problem: a compile error, a failing test, a lint finding.
     # Retrying would only hide a flake or double the time to a real failure.
     echo "gradle-retry: Gradle exited ${rc} with no dependency-resolution error — not retrying."
@@ -196,7 +206,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   REPORTS+=("attempt ${attempt}: $(first_failure "$log")")
   # An authoritative miss is what Gradle remembers; only that needs the refresh.
-  if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE 'Could not find ' "$log"; then
+  if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE -f "$CACHED_MISS_PATTERNS" "$log"; then
     REFRESH=(--refresh-dependencies)
   fi
   # The registry told us to slow down. Back off hard, and stop Gradle's own
