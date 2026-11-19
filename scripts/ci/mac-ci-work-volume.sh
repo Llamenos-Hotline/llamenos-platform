@@ -609,7 +609,7 @@ case "\$1" in
           if [ -f "$sb/launchd-denied" ]; then echo "touch: Operation not permitted" > "\$o"; echo PROBE-DONE >> "\$o"; exit 0; fi
           "\$@" > "\$o" 2>&1 ;;
   kickstart) echo "\$@" >> "$sb/kickstart.calls"
-             if [ -f "$sb/kickstart-works" ]; then n="\${@: -1}"; n="\${n##*ios-}"; echo "$sb/home/actions-runner-ios-\$n/bin.2.338.2/Runner.Listener run --startuptype service" >> "$sb/ps.out"; fi
+             if [ -f "$sb/kickstart-works" ]; then for n in "\$@"; do :; done; n="\${n##*ios-}"; echo "$sb/home/actions-runner-ios-\$n/bin.2.338.2/Runner.Listener run --startuptype service" >> "$sb/ps.out"; fi
              exit 0 ;;
   *) exit 0 ;;
 esac
