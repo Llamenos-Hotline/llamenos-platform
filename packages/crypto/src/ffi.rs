@@ -660,11 +660,14 @@ pub fn ban_digest_finalize(
     blind_hex: &str,
     evaluated_element_hex: &str,
 ) -> Result<String, CryptoError> {
-    let mut blind: [u8; 32] = hex::decode(blind_hex)?
-        .try_into()
-        .map_err(|_| CryptoError::InvalidInput("blind must be 32 bytes".into()))?;
+    // `Zeroizing`: the `?` exits below (a malformed evaluated element, a failed finalize) must
+    // wipe the blind too — an explicit `.zeroize()` after them would be skipped.
+    let blind: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        hex::decode(blind_hex)?
+            .try_into()
+            .map_err(|_| CryptoError::InvalidInput("blind must be 32 bytes".into()))?,
+    );
     let evaluated = hex::decode(evaluated_element_hex)?;
-    let digest = crate::ban_digest::finalize(phone, &blind, &evaluated);
-    blind.zeroize();
-    Ok(hex::encode(digest?))
+    let digest = crate::ban_digest::finalize(phone, &blind, &evaluated)?;
+    Ok(hex::encode(digest))
 }
