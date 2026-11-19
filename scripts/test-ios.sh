@@ -14,7 +14,11 @@ VERBOSE="${VERBOSE:-false}"
 NO_CODEGEN="${NO_CODEGEN:-false}"
 JSON_OUTPUT="${JSON_OUTPUT:-false}"
 REPORTER_TIMEOUT="${REPORTER_TIMEOUT:-600}"
-SIMULATOR="${SIMULATOR:-iPhone 17}"
+# Optional human override: a simulator NAME or UDID. Unset (the default) means
+# the dedicated create-or-reuse device, exactly as scripts/ios-build.sh does.
+# Either way the destination is pinned by UDID, never by name (#2861).
+SIMULATOR="${SIMULATOR:-}"
+DEV_SIM_NAME="${IOS_SIMULATOR:-llamenos-dev-ios}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,8 +54,21 @@ fi
 source "$SCRIPT_DIR/lib/ios-build-data.sh"
 ios_build_data_preflight "$PROJECT_ROOT"
 
+# Resolve the simulator to ONE UDID up front and address it by id= for every
+# xcodebuild below. A name matching zero or several devices fails here, loudly,
+# instead of xcodebuild silently taking one. See scripts/lib/ios-simulator.sh.
+# shellcheck source=lib/ios-simulator.sh
+source "$SCRIPT_DIR/lib/ios-simulator.sh"
+if [[ -n "$SIMULATOR" ]]; then
+  SIMULATOR_UDID="$(ios_sim_resolve_override "$SIMULATOR")" || exit 1
+  echo "Using simulator: $SIMULATOR ($SIMULATOR_UDID)"
+else
+  SIMULATOR_UDID="$(ios_sim_resolve_dedicated "$DEV_SIM_NAME")" || exit 1
+  echo "Using simulator: $DEV_SIM_NAME ($SIMULATOR_UDID)"
+fi
+
 IOS_DIR="$PROJECT_ROOT/apps/ios"
-DESTINATION="platform=iOS Simulator,name=${SIMULATOR}"
+DESTINATION="platform=iOS Simulator,id=${SIMULATOR_UDID}"
 TEST_HUB_URL="${TEST_HUB_URL:-http://localhost:3000}"
 BACKEND_STARTUP_TIMEOUT="${BACKEND_STARTUP_TIMEOUT:-30}"
 

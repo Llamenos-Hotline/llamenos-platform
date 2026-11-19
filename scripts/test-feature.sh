@@ -97,8 +97,12 @@ if [[ " $available " == *" ios "* ]]; then
       for cls in $ios_classes; do
         only_testing="$only_testing -only-testing:LlamenosTests/$cls"
       done
+      # UDID-pinned, never name-resolved (#2861): see scripts/lib/ios-simulator.sh.
+      # shellcheck source=lib/ios-simulator.sh
+      source "$SCRIPT_DIR/lib/ios-simulator.sh"
+      ios_sim_udid="$(ios_sim_resolve_dedicated "${IOS_SIMULATOR:-llamenos-dev-ios}")" || exit 1
       xcodebuild test -project apps/ios/Llamenos.xcodeproj -scheme Llamenos \
-        -destination "platform=iOS Simulator,name=iPhone 17" \
+        -destination "platform=iOS Simulator,id=${ios_sim_udid}" \
         $only_testing \
         CODE_SIGNING_ALLOWED=NO 2>&1 | \
         tee "/tmp/test-feature-ios-$(date +%Y%m%d-%H%M%S).log" | \
