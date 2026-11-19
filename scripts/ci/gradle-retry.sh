@@ -73,6 +73,14 @@
 # seconds. settings.gradle.kts was untouched and every one of those jars is on
 # Central; the same cache restore passed on a sibling PR minutes earlier.
 #
+# A PARTIALLY RESTORED cache (module metadata intact, some files-2.1 jars gone) is
+# not a separate case, measured against the same Gradle 9.4.0 (#2871): with a live
+# registry Gradle notices the missing file and re-downloads it even on a plain run,
+# so that state alone never produces "Could not find"; the failure needs the
+# registry to miss the jar too, and then it is the remembered-miss case above —
+# attempt 1 "Could not find", attempt 2 with --refresh-dependencies re-downloads
+# the jar and resolves. Discarding the restored Gradle home is not needed.
+#
 # So once an attempt fails with an authoritative "Could not find", every later
 # attempt runs with --refresh-dependencies, which drops the remembered miss. It
 # is NOT used for a transport error (timeout, reset, DNS): Gradle does not cache
