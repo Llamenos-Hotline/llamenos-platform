@@ -16,7 +16,7 @@ import { cacheArtifactName, reviewSetTag } from '../../orchestrator/src/review-c
 import { claimDigest } from '../../orchestrator/src/review.js'
 import { KNOPE_RELEASE_BRANCH } from '../../orchestrator/src/roles/release.js'
 import { gitThreeWayMerge } from '../../orchestrator/src/merge-sim.js'
-import { MERGE_HOLD_LABEL, MERGE_QUEUE_BOT_LOGIN, type QueueHistory } from '../../orchestrator/src/merge-hold.js'
+import { MERGE_HOLD_LABEL, MERGE_QUEUE_BOT_LOGIN, HOLD_COMMENT_MARKER, HOLD_UNEXPLAINED_MARKER, type QueueHistory } from '../../orchestrator/src/merge-hold.js'
 
 const TREE = 'a'.repeat(40)
 const OTHER_TREE = 'c'.repeat(40)
@@ -975,6 +975,7 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
     const DEQUEUED_BY_A_PERSON: QueueHistory = {
       last: { kind: 'removed', actorType: 'User', actorLogin: 'rhonda-rodododo', at: '2026-11-16T09:19:44Z' },
       holdClearedAt: undefined,
+      holdRecorded: false,
     }
 
     it('does NOT re-queue a PR a person dequeued — it labels it merge-hold and says why on the PR', async () => {
@@ -993,16 +994,51 @@ describe('a deep queue still restores EJECTED entries — add and re-arm are dif
       expect(t.labelled).toEqual([]) // never cleared for the queue either
       expect(holds).toEqual([2788])
       expect(comments).toHaveLength(1)
+      expect(comments[0]).toContain(HOLD_COMMENT_MARKER)
       expect(comments[0]).toMatch(/rhonda-rodododo/)
       expect(result.branches[0]?.skipped).toEqual([{ pr: 2788, reason: expect.stringMatching(/held: removed from the merge queue by rhonda-rodododo/) }])
       expect(renderQueueFeed(result)).toMatch(/held: removed from the merge queue/)
     })
 
-    it('a PR carrying merge-hold is skipped before its history is even read', async () => {
-      const t = deepQueue({ pr: { labels: [MERGE_HOLD_LABEL] } })
+    it('a PR carrying merge-hold is never armed, and writes nothing when its hold is recorded', async () => {
+      const writes: string[] = []
+      const t = deepQueue({
+        pr: { labels: [MERGE_HOLD_LABEL] },
+        overrides: {
+          readQueueHistory: async () => ({ ...DEQUEUED_BY_A_PERSON, holdRecorded: true }),
+          addHoldLabel: async () => { writes.push('label') },
+          postPrComment: async () => { writes.push('comment') },
+        },
+      })
       const result = await runQueueFeedWith(t.deps)
       expect(t.armed).toEqual([])
-      expect(t.readQueueHistory).not.toHaveBeenCalled()
+      expect(writes).toEqual([])
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/carries the `merge-hold` label/)
+      expect(result.branches[0]?.skipped[0]?.reason).not.toMatch(/UNEXPLAINED/)
+    })
+
+    it('a merge-hold with no hold comment is reported UNEXPLAINED in the skip list, logged, and noted on the PR once (#2876, #2829)', async () => {
+      const comments: string[] = []
+      const t = deepQueue({
+        pr: { labels: [MERGE_HOLD_LABEL] },
+        overrides: {
+          readQueueHistory: async () => ({ ...DEQUEUED_BY_A_PERSON, holdLabeledBy: 'llamenos-auto', holdLabeledAt: '2026-11-18T01:59:48Z', holdRecorded: false, unexplainedNoted: false }),
+          postPrComment: async (_n, body) => { comments.push(body) },
+        },
+      })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
+      expect(result.branches[0]?.skipped[0]?.reason).toMatch(/UNEXPLAINED/)
+      expect(renderQueueFeed(result)).toMatch(/UNEXPLAINED/)
+      expect(t.logs.join('\n')).toMatch(/UNEXPLAINED/)
+      expect(comments).toHaveLength(1)
+      expect(comments[0]).toContain(HOLD_UNEXPLAINED_MARKER)
+    })
+
+    it('a merge-hold whose history cannot be read is still a hold, just without the detail', async () => {
+      const t = deepQueue({ pr: { labels: [MERGE_HOLD_LABEL] }, overrides: { readQueueHistory: async () => undefined } })
+      const result = await runQueueFeedWith(t.deps)
+      expect(t.armed).toEqual([])
       expect(result.branches[0]?.skipped[0]?.reason).toMatch(/carries the `merge-hold` label/)
     })
 
