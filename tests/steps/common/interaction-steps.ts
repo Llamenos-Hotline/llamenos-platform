@@ -11,7 +11,6 @@ import { expect } from '@playwright/test'
 import { When, Then } from '../fixtures'
 import { TestIds, navTestIdMap, sectionTestIdMap } from '../../test-ids'
 import { Timeouts, navigateViaSpa } from '../../helpers'
-import { Navigation } from '../../pages/index'
 
 /**
  * Map from feature-file button text to data-testid values.
