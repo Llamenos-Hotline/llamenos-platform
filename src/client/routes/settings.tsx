@@ -13,7 +13,7 @@ import {
 } from '@/lib/api'
 import type { ErasureRequest } from '@protocol/schemas'
 import * as keyManager from '@/lib/key-manager'
-import { logoutAndRemoveKey } from '@/lib/logout'
+import { useLogoutAndRemoveKey } from '@/lib/use-logout-and-remove-key'
 import { useToast } from '@/lib/toast'
 import { supportsInAppAudio } from '@/lib/in-app-audio'
 import { Settings2, Mic, Bell, User, Globe, Fingerprint, KeyRound, Trash2, Plus, Phone, Monitor, PhoneCall, Loader2, Bug, Send, MessageSquare, LogOut, Lock, AlertTriangle, Clock, Server } from 'lucide-react'
@@ -60,9 +60,10 @@ export const Route = createFileRoute('/settings')({
 function SettingsPage() {
   const { t } = useTranslation()
   const { section } = useSearch({ from: '/settings' })
-  const { transcriptionEnabled, name: authName, spokenLanguages, callPreference, refreshProfile, publicKey, signOut, hasPermission } = useAuth()
+  const { transcriptionEnabled, name: authName, spokenLanguages, callPreference, refreshProfile, publicKey, hasPermission } = useAuth()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const logoutAndRemoveKey = useLogoutAndRemoveKey()
   const [myTranscription, setMyTranscription] = useState(transcriptionEnabled)
   const [notifPrefs, setNotifPrefs] = useState(getNotificationPrefs)
   const [loading, setLoading] = useState(true)
@@ -676,8 +677,8 @@ function SettingsPage() {
         variant="destructive"
         onConfirm={async () => {
           // The dialog promises the encrypted keys leave this device, so end the
-          // session AND delete the vault — see logoutAndRemoveKey (#2110).
-          await logoutAndRemoveKey(signOut, () => toast(t('settings.logoutKeyRemovalFailed'), 'error'))
+          // session AND delete the vault — see useLogoutAndRemoveKey (#2110).
+          await logoutAndRemoveKey()
           await navigate({ to: '/login' })
         }}
       />

@@ -6,8 +6,17 @@ interface Toast {
   type: 'success' | 'error' | 'info'
 }
 
+interface ToastOptions {
+  /**
+   * The message reports the outcome of something the user just did on purpose
+   * (not a stray in-flight request failing), so it is shown even while error
+   * toasts are suppressed after sign-out.
+   */
+  deliberate?: boolean
+}
+
 interface ToastContextType {
-  toast: (message: string, type?: Toast['type']) => void
+  toast: (message: string, type?: Toast['type'], options?: ToastOptions) => void
 }
 
 /**
@@ -16,6 +25,10 @@ interface ToastContextType {
  * toast on the login screen. Those failures are an artefact of signing out, not
  * something the user can act on, so error toasts are dropped from sign-out until
  * the next unlock. Module-level because `ToastProvider` sits above `AuthProvider`.
+ *
+ * Suppression targets that cascade only. A failure the user needs to act on —
+ * e.g. the stored keys could not be removed on log out — passes
+ * `{ deliberate: true }` and is not dropped.
  */
 let errorToastsSuppressed = false
 export function setErrorToastsSuppressed(suppressed: boolean): void {
@@ -31,8 +44,8 @@ export function useToast() {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
-    if (type === 'error' && errorToastsSuppressed) return
+  const addToast = useCallback((message: string, type: Toast['type'] = 'info', options?: ToastOptions) => {
+    if (type === 'error' && errorToastsSuppressed && !options?.deliberate) return
     const id = crypto.randomUUID()
     setToasts(prev => [...prev, { id, message, type }])
     setTimeout(() => {
