@@ -39,7 +39,7 @@ export const Route = createFileRoute('/admin/hubs')({
 export function HubsPage() {
   const { t } = useTranslation()
   const { hasPermission } = useAuth()
-  const { refreshMemberHubs } = useConfig()
+  const { refreshMemberHubs, dropMemberHub } = useConfig()
   const { toast } = useToast()
   const [hubs, setHubs] = useState<Hub[]>([])
   const [loading, setLoading] = useState(true)
@@ -146,6 +146,7 @@ export function HubsPage() {
           hub={deletingHub}
           onDeleted={(hubId) => {
             setHubs(prev => prev.filter(h => h.id !== hubId))
+            dropMemberHub(hubId)
             setDeletingHub(null)
           }}
         />

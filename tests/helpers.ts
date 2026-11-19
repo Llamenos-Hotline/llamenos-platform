@@ -567,7 +567,7 @@ export async function resetTestState(request: APIRequestContext) {
  * The hub-scoped reads the app makes on its own, on a timer, from every page —
  * whatever the spec is about: the dashboard's live-call poll and presence list,
  * the shift status and schedule, the volunteer roster, open incidents, the
- * active conversation list and the hub-key recipients.
+ * active conversation list and the hub key and its recipients.
  *
  * A spec that pins a SYNTHETIC hub (`mockConfigWithHub`) names a hub the real
  * backend has never heard of, so these reads 404 on every poll for the whole
@@ -627,6 +627,25 @@ async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> 
       })
     })
   }
+
+  // The hub-key read is the one background read whose real answer is a 404 —
+  // and the 404's MESSAGE is what the client acts on. A member of an existing hub
+  // whom nobody has wrapped the key for gets "No key envelope for this user"
+  // (apps/worker/routes/hubs.ts), which the key manager reads as "not held yet".
+  // Left to reach the real backend, the synthetic hub would instead get "Hub not
+  // found", which says the hub does not exist, and the client then drops it from
+  // the membership snapshot (#2855) and loses the active hub the spec pinned.
+  await page.route(new RegExp(`/api/hubs/${hubId}/key(\\?.*)?$`), async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'No key envelope for this user' }),
+    })
+  })
 }
 
 /**
