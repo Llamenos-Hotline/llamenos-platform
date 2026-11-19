@@ -23,7 +23,7 @@ import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
 import { isMockTelephonyAllowed, recoverMockRecording, mockCallTrace } from '../telephony/mock'
 import { simulateIncomingCall, simulateCallerHangup, simulateVoicemail, randomFictionalCallerNumber } from '../services/call-simulation'
-import { ServiceError } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/settings'
 
 /** Fictional hotline number the mock answers for (555-01xx is reserved for fiction). */
 const DEFAULT_MOCK_HOTLINE_NUMBER = '+15555550100'
@@ -146,7 +146,7 @@ simulatedTelephony.put('/mock',
         await services.settings.disableHubMockTelephony(hubId)
       }
     } catch (err) {
-      if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 409)
+      if (err instanceof ServiceError) return c.json(serviceErrorBody(err), err.status as 409)
       throw err
     }
     await audit(services.audit, 'mockTelephonyToggled', c.get('pubkey'), { enabled }, undefined, hubId)

@@ -20,7 +20,7 @@ import {
 } from './hub-shred-targets'
 import type { AuditService } from './audit'
 import type { ProviderMediaEraser } from './provider-recordings'
-import { ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './settings'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.hub-shred')
@@ -86,7 +86,7 @@ export class HubShredService {
     const [hub] = await this.db.execute(
       sql`SELECT id, status FROM hubs WHERE id = ${hubId}`,
     )
-    if (!hub) throw new ServiceError(404, 'Hub not found')
+    if (!hub) throw new HubNotFoundError()
 
     // Caller audio the telephony provider still holds is plaintext on a third
     // party's disk: no key this shred destroys protects it, so it has to be

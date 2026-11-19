@@ -35,6 +35,7 @@ import { assertMayManageHubEscrow, HUB_ESCROW_MANAGE_PERMISSIONS } from '../../l
 import hubsRoutes from '../../routes/hubs'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, READER_PURPOSE_PERMISSIONS, resolvePermissions, type Role } from '@shared/permissions'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import { hubReadersResponseSchema, type ReaderPurpose } from '@protocol/schemas/hubs'
 
 const DATABASE_URL =
@@ -207,6 +208,19 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
 })
 
 describe('the hub escrow key (D1, A7)', () => {
+  it('answers HUB_NOT_FOUND for a hub that does not exist, on every path that looks the hub up', async () => {
+    const missing = crypto.randomUUID()
+    for (const read of [
+      () => identity.getHubEscrowKey(missing),
+      () => identity.setHubEscrowKey(missing, x25519('ee'), undefined),
+      () => identity.clearHubEscrowKey(missing),
+    ]) {
+      const err = await refusal(read)
+      expect(err.status).toBe(404)
+      expect(err.code).toBe(HUB_NOT_FOUND_CODE)
+    }
+  })
+
   it('is a member of every purpose\'s set, and an escrow-only note is accepted', async () => {
     const founder = await makePerson('esc-founder')
     const hubId = await makeHub('esc', founder)

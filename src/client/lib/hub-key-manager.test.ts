@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import { renderHook, waitFor } from '@testing-library/react'
 import type {
   HubKeyEnvelopeResponse,
@@ -51,11 +52,11 @@ class FakeHubKeyServer {
   puts = 0
   rotations = 0
   recipientReads = 0
-  /** The hub is not there for this server (deleted elsewhere): every key route answers 404 "Hub not found". */
+  /** The hub is not there for this server (deleted elsewhere): every key route answers 404 with the HUB_NOT_FOUND code. */
   gone = false
 
   private served(ApiError: ApiErrorCtor) {
-    if (this.gone) throw new ApiError(404, '{"error":"Hub not found"}')
+    if (this.gone) throw new ApiError(404, JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }))
   }
 
   join(member: Member) {

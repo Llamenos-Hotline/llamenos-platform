@@ -27,7 +27,7 @@ interface ConfigContextValue {
   clearMemberHubs: () => void
   /**
    * Remove one hub from the membership snapshot because it no longer exists
-   * (the server answered "Hub not found", or this client deleted it). Every
+   * (the server answered with the HUB_NOT_FOUND code, or this client deleted it). Every
    * member-hub poll reads `hubs`, so this is what stops them asking about it.
    */
   dropMemberHub: (hubId: string) => void

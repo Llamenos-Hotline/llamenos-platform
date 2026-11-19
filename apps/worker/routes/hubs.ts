@@ -14,7 +14,7 @@ import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
-import { ServiceError } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/settings'
 import { SealedRecordingDeleteError } from '../services/call-recordings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
@@ -156,7 +156,7 @@ routes.post('/',
       await services.settings.createHub(hub, { pubkey })
     } catch (err) {
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
+        return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)
       }
       const message = err instanceof Error ? err.message : 'Failed to create hub'
       return c.json({ error: message }, 500)
@@ -248,7 +248,7 @@ routes.patch('/:hubId',
       // honour it. Anything else is a server fault: log it (#1700 — a bare
       // catch here answered 500 with no log line at all).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
+        return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)
       }
       logger.error('Failed to update hub', err, { hubId })
       return c.json({ error: 'Failed to update hub' }, 500)
@@ -304,7 +304,7 @@ routes.post('/:hubId/members',
       // unlogged 500, #1700) or the change would demote the hub's last
       // admin (409). Anything else must be logged, never swallowed.
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
       }
       logger.error('Failed to add hub member', err, { hubId })
       return c.json({ error: 'Failed to add member' }, 500)
@@ -356,7 +356,7 @@ routes.delete('/:hubId/members/:pubkey',
       // pubkey is not a registered user (404) or is the hub's last admin
       // (409). Anything else must be logged, never swallowed (#1700).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
       }
       logger.error('Failed to remove hub member', err, { hubId })
       return c.json({ error: 'Failed to remove member' }, 500)
@@ -436,7 +436,7 @@ routes.delete('/:hubId',
         await reportUndeletedRecordings(c.get('services'), c.get('pubkey'), err)
       }
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500 | 502)
+        return c.json(serviceErrorBody(err), err.status as 404 | 500 | 502)
       }
       const message = err instanceof Error ? err.message : 'Failed to delete hub'
       return c.json({ error: message }, 500)
@@ -485,7 +485,7 @@ routes.get('/:hubId/key',
       // all means a store fault: answer 500 and log it (#1700 — a bare catch
       // here reported a database failure as "Hub not found" and logged nothing).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500)
+        return c.json(serviceErrorBody(err), err.status as 404 | 500)
       }
       logger.error('Failed to read hub key envelopes', err, { hubId })
       return c.json({ error: 'Failed to read hub key' }, 500)
@@ -518,7 +518,7 @@ routes.get('/:hubId/key/recipients',
       return c.json(await c.get('services').identity.getHubKeyRecipients(hubId))
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       throw err
     }
@@ -556,7 +556,7 @@ routes.put('/:hubId/key',
       return c.json(await services.settings.setHubKeyEnvelopes(hubId, body))
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       logger.error('Failed to set hub key envelopes', err, { hubId })
       return c.json({ error: 'Failed to set hub key' }, 500)
@@ -589,7 +589,7 @@ routes.get('/:hubId/key/rotation',
       return c.json(await c.get('services').identity.getHubKeyRotation(hubId))
     } catch (err) {
       if (err instanceof ServiceError && [404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
       }
       throw err
     }
@@ -631,7 +631,7 @@ routes.post('/:hubId/key/rotate',
       return c.json(rotated)
     } catch (err) {
       if (err instanceof ServiceError && [400, 403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 400 | 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 400 | 403 | 404 | 409)
       }
       logger.error('Failed to rotate hub key', err, { hubId })
       return c.json({ error: 'Failed to rotate hub key' }, 500)
@@ -722,7 +722,7 @@ routes.put('/:hubId/escrow-key',
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       throw err
     }
@@ -753,7 +753,7 @@ routes.delete('/:hubId/escrow-key',
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       throw err
     }

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import {
   request,
   ApiError,
@@ -39,16 +40,31 @@ describe('ApiError', () => {
 })
 
 describe('isHubNotFound', () => {
+  const gone = { error: 'Hub not found', code: HUB_NOT_FOUND_CODE }
+
   it('is the server saying the hub is not there', () => {
-    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(true)
+    expect(isHubNotFound(new ApiError(404, JSON.stringify(gone)))).toBe(true)
+  })
+
+  it('is decided by the code, not the prose: a reworded message still drops the hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ ...gone, error: 'Ese centro ya no existe' })))).toBe(true)
+  })
+
+  it('is not decided by the prose: the English message without the code never drops a hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
   })
 
   it('is not a 404 for something inside a hub that does exist', () => {
     expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'No key envelope for this user' })))).toBe(false)
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found', code: 'SOMETHING_ELSE' })))).toBe(false)
   })
 
-  it('is not an answer other than 404, an unreadable body, or something that is not an API error', () => {
-    expect(isHubNotFound(new ApiError(403, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
+  it('is never an authorization answer, whatever code it carries', () => {
+    expect(isHubNotFound(new ApiError(403, JSON.stringify(gone)))).toBe(false)
+    expect(isHubNotFound(new ApiError(401, JSON.stringify(gone)))).toBe(false)
+  })
+
+  it('is not an unreadable body, or something that is not an API error', () => {
     expect(isHubNotFound(new ApiError(404, 'Hub not found'))).toBe(false)
     expect(isHubNotFound(new Error('Hub not found'))).toBe(false)
   })
@@ -280,7 +296,19 @@ describe('request retry logic', () => {
     expect(cb).not.toHaveBeenCalled()
   })
 
-  it('reports the hub as gone when a hub-scoped route answers "Hub not found"', async () => {
+  it('reports the hub as gone when a hub-scoped route answers with the HUB_NOT_FOUND code', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+  })
+
+  it('does not report a hub as gone for a 404 whose prose says so but which carries no code', async () => {
     const fetchMock = vi.mocked(globalThis.fetch)
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found' }), { status: 404 }))
 
@@ -289,7 +317,7 @@ describe('request retry logic', () => {
     setOnHubGone(cb)
 
     await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
-    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+    expect(cb).not.toHaveBeenCalled()
   })
 
   it('does not report a hub as gone for a 404 about something inside it', async () => {

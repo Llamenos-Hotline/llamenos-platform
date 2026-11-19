@@ -1,7 +1,7 @@
 import type { Context, Next } from 'hono'
 import type { AppEnv } from '../types'
 import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
-import { ServiceError } from '../services/settings'
+import { HubNotFoundError, serviceErrorBody } from '../services/settings'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('middleware.hub')
@@ -24,8 +24,10 @@ export async function hubContext(c: Context<AppEnv>, next: Next): Promise<Respon
   try {
     await services.settings.getHub(hubId)
   } catch (err) {
-    if (err instanceof ServiceError && err.status === 404) {
-      return c.json({ error: 'Hub not found' }, 404)
+    // The one place a hub-scoped route says the hub is gone, and it says it with
+    // the HUB_NOT_FOUND code — the code, not the prose, is what clients act on.
+    if (err instanceof HubNotFoundError) {
+      return c.json(serviceErrorBody(err), 404)
     }
     throw err // Propagate DB errors as 500
   }

@@ -10,7 +10,7 @@ import type { Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'
-import { ServiceError } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/settings'
 import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, roleUsableIn, type Role } from '@shared/permissions'
 
 export type TargetHub =
@@ -242,7 +242,7 @@ export function resourceInPathHub(opts: {
     } catch (err) {
       // Answered here rather than left to the app's error handler, so the 404 is
       // the same wherever the router is mounted.
-      if (err instanceof ServiceError && err.status === 404) return c.json({ error: err.message }, 404)
+      if (err instanceof ServiceError && err.status === 404) return c.json(serviceErrorBody(err), 404)
       throw err
     }
     return next()

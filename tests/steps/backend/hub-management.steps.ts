@@ -8,7 +8,8 @@
 import { expect } from '@playwright/test'
 import { Given, When, Then, Before, After, getState, setState } from './fixtures'
 import { apiGet, apiPost, apiDelete, uniqueName } from '../../api-helpers'
-import { setLastResponse } from './shared-state'
+import { getSharedState, setLastResponse } from './shared-state'
+import { hubNotFoundResponseSchema } from '@protocol/schemas/common'
 
 // ── Local State ────────────────────────────────────────────────────
 
@@ -91,6 +92,11 @@ When(
   },
 )
 
+When('the admin requests a hub that does not exist', async ({ request, world }) => {
+  const res = await apiGet(request, `/hubs/${crypto.randomUUID()}`)
+  setLastResponse(world, res)
+})
+
 // ── Then ───────────────────────────────────────────────────────────
 
 Then('the hub list should contain at least {int} hub', async ({ world }, count: number) => {
@@ -122,4 +128,11 @@ Then('the hub should appear in the list', async ({ request, world }) => {
   expect(res.status).toBe(200)
   const found = res.data.hubs.find(h => h.id === getHubManagementState(world).createdHub!.id)
   expect(found).toBeTruthy()
+})
+
+Then('the response should carry the hub-not-found code', async ({ world }) => {
+  const res = getSharedState(world).lastResponse
+  // Parsed against the protocol schema the mobile clients are generated from: the
+  // code, not the English `error` beside it, is what a client forgets a hub on (#2872).
+  expect(hubNotFoundResponseSchema.safeParse(res?.data).success).toBe(true)
 })

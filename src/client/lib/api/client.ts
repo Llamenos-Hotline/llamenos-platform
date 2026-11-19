@@ -4,6 +4,7 @@ import { APP_API_VERSION, emitUpdateRequired } from '../version'
 import { offlineQueue, isQueueableMethod, isNetworkError as isOfflineNetworkError } from '../offline-queue'
 import { getApiUrl, getApiPath, needsServerAddress } from '../api-config'
 import { netFetch } from '../net'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 
 // Auth expiry callback — set by AuthProvider to handle 401s reactively
 let onAuthExpired: (() => void) | null = null
@@ -250,14 +251,6 @@ export async function request<T>(path: string, options: RequestInit & { retries?
   throw lastError ?? new Error('Request failed')
 }
 
-/**
- * What a hub-scoped route answers, before it looks at anything else, when the hub
- * does not exist (`hubContext`, apps/worker/middleware/hub.ts; pinned by
- * hub-middleware.test.ts). Every other 404 under `/hubs/:id/…` is about a thing
- * inside a hub that does exist.
- */
-const HUB_NOT_FOUND_ERROR = 'Hub not found'
-
 export class ApiError extends Error {
   constructor(public status: number, public body: string) {
     super(`API error ${status}: ${body}`)
@@ -267,15 +260,16 @@ export class ApiError extends Error {
 
 /**
  * Whether `err` is the server saying the hub itself does not exist — as opposed
- * to a 404 for a resource inside it (a hub key this user has no wrap of, say).
+ * to a 404 for a resource inside it (a hub key this user has no wrap of, say), a
+ * 403, or an update that matched nothing.
+ *
+ * Decided by the typed `code` of the error body (`hubNotFoundResponseSchema`,
+ * `@protocol/schemas`), never by its English `error` prose: the message may be
+ * reworded or translated, the code may not. Both the 404 status and the code are
+ * required, so no permission-shaped answer can make a client forget a hub.
  */
 export function isHubNotFound(err: unknown): boolean {
-  if (!(err instanceof ApiError) || err.status !== 404) return false
-  try {
-    return (JSON.parse(err.body) as { error?: unknown }).error === HUB_NOT_FOUND_ERROR
-  } catch {
-    return false
-  }
+  return err instanceof ApiError && err.status === 404 && getApiErrorCode(err) === HUB_NOT_FOUND_CODE
 }
 
 /**

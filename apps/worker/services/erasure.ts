@@ -25,7 +25,7 @@ import {
   securityEvents,
   userSignalContacts,
 } from '../db/schema'
-import { ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './settings'
 import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, type HubRoleAssignment } from '../lib/hub-admin'
 import { markHubKeyRotationDue } from '../lib/hub-key'
 import { createLogger } from '../lib/logger'
@@ -481,7 +481,7 @@ export class ErasureService {
   ): Promise<typeof erasureRequests.$inferSelect> {
     const [hub] = await this.db.select().from(hubs).where(eq(hubs.id, hubId))
     if (!hub) {
-      throw new ServiceError(404, 'Hub not found')
+      throw new HubNotFoundError()
     }
     const existing = await this.getPendingHubShred(hubId)
     if (existing) {
