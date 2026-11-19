@@ -141,6 +141,9 @@ bash scripts/ci/mac-ci-work-volume.sh install-agent   # keep it attached across 
 bash scripts/ci/mac-ci-work-volume.sh verify          # prove a LAUNCHD-started process can use it
 bash scripts/ci/mac-ci-work-volume.sh cutover         # move _work and the device set onto it
 bash scripts/ci/mac-ci-work-volume.sh rollback        # and back
+bash scripts/ci/mac-ci-work-volume.sh rollback --discard-missing   # the volume is LOST for good (see below)
+bash scripts/ci/mac-ci-work-volume.sh runner-health   # assert a Runner.Listener process exists per install
+bash scripts/ci/mac-ci-work-volume.sh runner-start    # kickstart the ones without, and assert they came up
 bash scripts/ci/mac-ci-work-volume.sh selftest        # all of it against stubs; runs anywhere
 ```
 
@@ -150,6 +153,32 @@ bash scripts/ci/mac-ci-work-volume.sh selftest        # all of it against stubs;
   registration. They copy before they link, refuse a link that already points
   somewhere else, and name a removal that did not happen. `cutover` runs `verify`
   first, so a volume the runner's kind of process cannot use is never linked.
+- **The volume is gone for good** (the SSD did not come back after a reboot: absent
+  from `diskutil list` and `system_profiler SPUSBDataType SPThunderboltDataType`).
+  A plain `rollback` refuses, correctly, when the image merely needs attaching, so it
+  cannot help here: `_work` dangles and the iOS gate stays down until the merge
+  queue's `check_response_timeout_minutes` expires. Run
+  `rollback --discard-missing` instead. It proceeds only when **every** link target
+  is provably absent, **no** image file exists on the SSD path (an image that exists
+  can be attached, so it is not lost) and no job is running; otherwise it refuses and
+  changes nothing, so a partially attached volume is never guessed at. It replaces each
+  dangling link with an empty real directory and prints one `DISCARDED:` line per link;
+  what they held is lost (the next job re-checks out, CoreSimulator starts empty).
+  Then `runner-start`. Reattaching or recreating the SSD is a separate job; once it
+  is back, `create`, `attach` and `cutover` as before.
+- **Do not trust `svc.sh start` or `launchctl list` for "is the runner up".**
+  `svc.sh start` can print `Load failed: 5: Input/output error` then
+  `Started: - 0 <label>` (a `-` PID) and exit 0; `launchctl list` shows the agent
+  loaded with `-` and last exit 0. `runner-health` checks the process table for a
+  `Runner.Listener` under each install and exits 1 naming those without one;
+  `runner-start` does `launchctl kickstart -k gui/<uid>/<label>` (the label comes from
+  the install's `.service` file) and then asserts the process exists.
+- **The attach agent now says when it is failing.** `ci-work-attach.sh` exits 1 when it
+  could not attach (launchd's last exit is no longer a permanent 0), logs failures with
+  backoff (attempts 1, 2, 4, 8, ... and hourly, not one line a minute), writes a
+  `ALERT:` line after 5 consecutive minutes naming `rollback --discard-missing`, and
+  keeps a count in `~/.llamenos-mac/ci-work-attach.failing` that `status` reports.
+  Re-run `install-agent` to pick up the new wrapper on a host that already has one.
 - **Order: cut over only after the guard that understands this layout is on
   `main`.** A job's guard comes from its own checkout. One that predates this
   change demands every write path be on the internal volume and refuses a job
