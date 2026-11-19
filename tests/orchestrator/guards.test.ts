@@ -5651,6 +5651,19 @@ BUILD FAILED in 41s
       expect(bare).toEqual([])
     })
 
+    // The job #2853 was first ejected from, on `Could not find junit:junit:4.13.2`. The workflow-wide guard above
+    // would also catch a bare ./gradlew here, but it cannot say the steps EXIST: a refactor that moved them into
+    // a composite action would leave it green and the job unprotected.
+    it('#2870: android-build-test runs its unit tests, lint and APK build through gradle-retry.sh', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const start = ci.indexOf('\n  android-build-test:')
+      expect(start, 'android-build-test job missing').toBeGreaterThan(0)
+      const job = ci.slice(start, ci.indexOf('\n  android-compile-check:', start))
+      for (const task of ['testDebugUnitTest', 'lintDebug', 'assembleDebug assembleDebugAndroidTest']) {
+        expect(job, `${task} must go through gradle-retry.sh`).toContain(`gradle-retry.sh ${task}`)
+      }
+    })
+
     it('#2870: android-e2e resolves and builds through gradle-retry.sh BEFORE the emulator boots, and the retry does too', () => {
       const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
       const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
