@@ -177,8 +177,13 @@ A PR is queued only if **all** of:
    (`github-merge-queue`, whose removals are ejections and merges): a person
    dequeuing a PR is a decision, not a transient — #2788 was dequeued for a
    recorded regression and re-queued by this feed 3m19s later. The feed writes
-   that hold onto the PR as the `merge-hold` label plus one comment naming who
-   held it, so it is visible and survives the queue. **To release a hold,
+   that hold onto the PR as one comment naming who held it and when, and THEN
+   the `merge-hold` label (#2876): a hold whose record did not land is not
+   labelled — the dequeue still holds it and the next pass retries. A labelled
+   PR with no such comment (applied by hand) is reported **UNEXPLAINED** in the
+   skip list and the log and gets one note saying so; it is never auto-released.
+   Hold on purpose with `llamenos-fleet merge-hold <pr> --reason "…"` (comment,
+   then label). **To release a hold,
    remove the `merge-hold` label**; a dequeue hold is released only by a label
    removal *after* the dequeue (a new push does not release it). An unreadable
    queue history is not armed. The check lives at the single arming point

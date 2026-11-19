@@ -98,7 +98,7 @@ export async function armAutoMergeWithQueueClearance(pr: string, deps: ArmAutoMe
   }
   const hold = decideHold(labels, history)
   if (hold.held) {
-    await recordHold(Number(pr), hold, deps)
+    await recordHold(Number(pr), hold, history, deps)
     throw new MergeHeldError(pr, hold)
   }
   const needsLabel = laneIdFromBranch(headRefName) !== undefined && !labels.includes(QUEUE_CLEARED_LABEL)

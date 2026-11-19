@@ -33,6 +33,15 @@ import { REPO, ghJson } from './gh.js'
  * push does not release it (a worker pushing a fix is not the person who held
  * it agreeing it is fixed), and neither does time.
  *
+ * A hold is only as releasable as its record is readable (#2876). The label
+ * says THAT a PR is held; only the comment says who held it and why, and the
+ * release rule makes the holder's intent the one thing that matters. So the
+ * comment is written FIRST and the label only after it landed — a hold whose
+ * record did not land is not labelled (the timeline still holds it, and the
+ * next pass retries). A labelled hold that has no such comment (applied by
+ * hand, or before this rule) is reported as UNEXPLAINED wherever holds are
+ * surfaced, and gets one comment saying so; it is never auto-released.
+ *
  * Fail-closed: a queue history that cannot be read is "cannot tell whether a
  * person dequeued it", never "nobody did" — the PR is not armed.
  */
@@ -52,16 +61,31 @@ export interface QueueEvent {
   at: string
 }
 
+/**
+ * Hidden markers. A hold comment is recognised by its marker, not its prose, so
+ * rewording the text can never make an explained hold read as unexplained.
+ */
+export const HOLD_COMMENT_MARKER = '<!-- llamenos:merge-hold -->'
+export const HOLD_UNEXPLAINED_MARKER = '<!-- llamenos:merge-hold-unexplained -->'
+
 export interface QueueHistory {
   /** The PR's most recent merge-queue event; `null` when it was never queued. */
   last: QueueEvent | null
   /** When the hold label was most recently REMOVED from the PR, if ever. */
   holdClearedAt: string | undefined
+  /** When, and by whom, the hold label was most recently APPLIED, if ever. */
+  holdLabeledAt?: string | undefined
+  holdLabeledBy?: string | undefined
+  /** A comment bearing HOLD_COMMENT_MARKER exists. `undefined` = not asked, or
+   *  the comment window was incomplete — neither is "no comment". */
+  holdRecorded?: boolean | undefined
+  /** The "unexplained hold" comment (HOLD_UNEXPLAINED_MARKER) was already posted. */
+  unexplainedNoted?: boolean | undefined
 }
 
 export type HoldDecision =
   | { held: false }
-  | { held: true; source: 'label' }
+  | { held: true; source: 'label'; unexplained?: true; labeledBy?: string; labeledAt?: string }
   | { held: true; source: 'dequeue'; by: string; at: string }
 
 /** A removal only the merge queue itself makes — an ejection or a merge. */
@@ -71,7 +95,15 @@ export function isHoldTransient(event: QueueEvent): boolean {
 
 /** The one eligibility decision. Pure; every arming path asks it. */
 export function decideHold(labels: readonly string[], history: QueueHistory): HoldDecision {
-  if (labels.includes(MERGE_HOLD_LABEL)) return { held: true, source: 'label' }
+  if (labels.includes(MERGE_HOLD_LABEL)) {
+    return {
+      held: true,
+      source: 'label',
+      ...(history.holdRecorded === false ? { unexplained: true as const } : {}),
+      ...(history.holdLabeledBy !== undefined ? { labeledBy: history.holdLabeledBy } : {}),
+      ...(history.holdLabeledAt !== undefined ? { labeledAt: history.holdLabeledAt } : {}),
+    }
+  }
   const last = history.last
   if (last === null || last.kind !== 'removed' || isHoldTransient(last)) return { held: false }
   if (history.holdClearedAt !== undefined && Date.parse(history.holdClearedAt) > Date.parse(last.at)) {
@@ -83,12 +115,19 @@ export function decideHold(labels: readonly string[], history: QueueHistory): Ho
 /** One line for a skip reason, a log, or the tick's needs-human note. */
 export function holdReason(d: HoldDecision): string {
   if (!d.held) return 'not held'
-  if (d.source === 'label') return `held: the PR carries the \`${MERGE_HOLD_LABEL}\` label — remove it to release`
+  if (d.source === 'label') {
+    if (d.unexplained === true) {
+      const who = d.labeledBy !== undefined ? ` by ${d.labeledBy}${d.labeledAt !== undefined ? ` at ${d.labeledAt}` : ''}` : ''
+      return `held UNEXPLAINED: the PR carries the \`${MERGE_HOLD_LABEL}\` label${who} but no hold comment says who held it or why — the holder should record the reason (\`llamenos-fleet merge-hold <pr> --reason "…"\`) or remove the label to release`
+    }
+    return `held: the PR carries the \`${MERGE_HOLD_LABEL}\` label — remove it to release`
+  }
   return `held: removed from the merge queue by ${d.by} at ${d.at}, not by the queue itself — a decision, not an ejection; remove the \`${MERGE_HOLD_LABEL}\` label to release`
 }
 
 export function renderHoldComment(by: string, at: string): string {
   return [
+    HOLD_COMMENT_MARKER,
     `**Merge hold.** This PR was removed from the merge queue by @${by} at ${at} — not by the queue itself, so the fleet reads it as a decision, not an ejection.`,
     '',
     `The fleet will not arm auto-merge or re-queue it while it carries the \`${MERGE_HOLD_LABEL}\` label. To release it, remove the \`${MERGE_HOLD_LABEL}\` label; the next queue-feed pass picks it up as usual. (#2814)`,
@@ -105,6 +144,29 @@ export class MergeHeldError extends Error {
   }
 }
 
+/** A hold the holder declared and explained, by hand (`llamenos-fleet merge-hold`). */
+export function renderManualHoldComment(reason: string): string {
+  return [
+    HOLD_COMMENT_MARKER,
+    // Who is not named in the text: GitHub already shows this comment's author and time, and
+    // the fleet never resolves its own identity (guards.test.ts), so there is no "self" to print.
+    `**Merge hold.** Held on purpose — ${reason}`,
+    '',
+    `The fleet will not arm auto-merge or re-queue it while it carries the \`${MERGE_HOLD_LABEL}\` label. To release it, remove the \`${MERGE_HOLD_LABEL}\` label; the next queue-feed pass picks it up as usual. (#2876)`,
+  ].join('\n')
+}
+
+/** Posted once on a labelled hold that has no explaining comment. Explains nothing — it says so. */
+export function renderUnexplainedHoldComment(labeledBy: string | undefined, labeledAt: string | undefined): string {
+  const who = labeledBy !== undefined ? ` by @${labeledBy}${labeledAt !== undefined ? ` at ${labeledAt}` : ''}` : ''
+  return [
+    HOLD_UNEXPLAINED_MARKER,
+    `**Unexplained merge hold.** This PR carries the \`${MERGE_HOLD_LABEL}\` label${who}, but no comment records who held it or why, so nobody can tell a deliberate veto from a dequeue made only to let a worker push.`,
+    '',
+    `It is NOT released automatically — a push or the passage of time never releases a hold. The holder (or anyone with the facts) should either record the reason: \`llamenos-fleet merge-hold <pr> --reason "…"\`, or release it by removing the \`${MERGE_HOLD_LABEL}\` label. (#2876)`,
+  ].join('\n')
+}
+
 export interface HoldWriteDeps {
   /** Applies MERGE_HOLD_LABEL. THROWS on failure. */
   addHoldLabel(pr: number): Promise<void>
@@ -114,25 +176,64 @@ export interface HoldWriteDeps {
 }
 
 /**
- * Writes a dequeue hold onto the PR: the label first (the durable part — the
- * next pass reads it before anything else), then one comment saying who held
- * it and how to release it. The comment is posted only when the label landed,
- * so a label that cannot be applied does not become a comment per pass. Never
- * throws: the PR is held either way, by the timeline if not by the label.
+ * Writes a hold's record onto the PR.
+ *
+ * A dequeue hold: the explaining comment FIRST, then the label (#2876). The
+ * label is the durable part the next pass reads, and once it is there nothing
+ * ever asks for the comment again — so a label written before its comment, with
+ * the comment then failing, was a hold nobody could explain or release (#2829,
+ * 44 hours). Reversed, a failed comment leaves NO label: the PR is still held
+ * by its queue history (the dequeue is a decision whether or not the label
+ * exists) and the next pass retries the whole record. A comment that already
+ * landed (a previous pass whose label then failed) is not posted twice.
+ *
+ * A label hold with no explaining comment (applied by hand, or before #2876):
+ * one comment saying it is unexplained, once. It never clears the hold.
+ *
+ * Never throws: the PR is held either way.
  */
-export async function recordHold(pr: number, d: HoldDecision, deps: HoldWriteDeps): Promise<void> {
-  if (!d.held || d.source !== 'dequeue') return
+export async function recordHold(pr: number, d: HoldDecision, history: QueueHistory, deps: HoldWriteDeps): Promise<void> {
+  if (!d.held) return
+  const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+  if (d.source === 'label') {
+    if (d.unexplained !== true || history.unexplainedNoted === true) return
+    try {
+      await deps.postPrComment(pr, renderUnexplainedHoldComment(d.labeledBy, d.labeledAt))
+    } catch (e) {
+      deps.log(`merge-hold: pr ${pr}: carries ${MERGE_HOLD_LABEL} with no hold comment, and the note saying so could not be posted (${errMsg(e)}) — retried next pass`)
+    }
+    return
+  }
+  if (history.holdRecorded === undefined) {
+    deps.log(`merge-hold: pr ${pr}: whether a hold comment already exists could not be established — not labelling ${MERGE_HOLD_LABEL} without its record; still held by its queue history`)
+    return
+  }
+  if (!history.holdRecorded) {
+    try {
+      await deps.postPrComment(pr, renderHoldComment(d.by, d.at))
+    } catch (e) {
+      deps.log(`merge-hold: pr ${pr}: the hold comment could not be posted (${errMsg(e)}) — NOT labelling ${MERGE_HOLD_LABEL} without its record; still held by its queue history, retried next pass`)
+      return
+    }
+  }
   try {
     await deps.addHoldLabel(pr)
   } catch (e) {
-    deps.log(`merge-hold: pr ${pr}: could not apply ${MERGE_HOLD_LABEL} (${e instanceof Error ? e.message : String(e)}) — still held by its queue history`)
-    return
+    deps.log(`merge-hold: pr ${pr}: hold comment recorded but ${MERGE_HOLD_LABEL} could not be applied (${errMsg(e)}) — still held by its queue history`)
   }
-  try {
-    await deps.postPrComment(pr, renderHoldComment(d.by, d.at))
-  } catch (e) {
-    deps.log(`merge-hold: pr ${pr}: labelled ${MERGE_HOLD_LABEL}, but the explaining comment could not be posted: ${e instanceof Error ? e.message : String(e)}`)
-  }
+}
+
+/**
+ * `llamenos-fleet merge-hold <pr> --reason "…"`: a hold declared by hand. Same
+ * order as recordHold, but a failure THROWS — the operator asked for this one,
+ * and "could not record it" must not read as "held". Safe to repeat on a PR
+ * that already carries the label: it adds the missing reason.
+ */
+export async function placeManualHold(pr: number, reason: string, deps: Pick<HoldWriteDeps, 'addHoldLabel' | 'postPrComment'>): Promise<void> {
+  const text = reason.trim()
+  if (text === '') throw new Error('a hold needs a reason — the comment is the only record of why the PR must not merge')
+  await deps.postPrComment(pr, renderManualHoldComment(text))
+  await deps.addHoldLabel(pr)
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +241,7 @@ export async function recordHold(pr: number, d: HoldDecision, deps: HoldWriteDep
 // ---------------------------------------------------------------------------
 
 /**
- * The PR's merge-queue events and hold-label removals, newest 100. The newest
+ * The PR's merge-queue events, hold-label changes and its newest 100 comments (is there a hold record?), newest 100 timeline items. The newest
  * queue event is what matters; if the window holds none and older pages exist
  * the history is unreadable rather than "never queued".
  */
@@ -148,14 +249,19 @@ export const QUEUE_HISTORY_QUERY = `
 query($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
-      timelineItems(last: 100, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT, UNLABELED_EVENT]) {
+      timelineItems(last: 100, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT, LABELED_EVENT, UNLABELED_EVENT]) {
         pageInfo { hasPreviousPage }
         nodes {
           __typename
           ... on AddedToMergeQueueEvent { createdAt actor { __typename login } }
           ... on RemovedFromMergeQueueEvent { createdAt actor { __typename login } }
+          ... on LabeledEvent { createdAt actor { __typename login } label { name } }
           ... on UnlabeledEvent { createdAt label { name } }
         }
+      }
+      comments(last: 100) {
+        pageInfo { hasPreviousPage }
+        nodes { body }
       }
     }
   }
@@ -169,15 +275,34 @@ interface TimelineNode {
   label?: { name?: unknown } | null
 }
 
+/** The PR's newest comment bodies, and whether that is every comment on it. */
+export interface CommentWindow {
+  bodies: readonly string[]
+  complete: boolean
+}
+
 /** Reduces the timeline nodes (oldest first, as GraphQL returns them). `undefined` = unreadable. */
-export function queueHistoryFromTimeline(nodes: readonly (TimelineNode | null)[], hasPreviousPage: boolean): QueueHistory | undefined {
+export function queueHistoryFromTimeline(
+  nodes: readonly (TimelineNode | null)[],
+  hasPreviousPage: boolean,
+  comments?: CommentWindow,
+): QueueHistory | undefined {
   let last: QueueEvent | null = null
   let holdClearedAt: string | undefined
+  let holdLabeledAt: string | undefined
+  let holdLabeledBy: string | undefined
   for (const n of nodes) {
     if (n === null || typeof n.createdAt !== 'string') return undefined
     if (n.__typename === 'UnlabeledEvent') {
       if (n.label?.name === MERGE_HOLD_LABEL && (holdClearedAt === undefined || Date.parse(n.createdAt) > Date.parse(holdClearedAt))) {
         holdClearedAt = n.createdAt
+      }
+      continue
+    }
+    if (n.__typename === 'LabeledEvent') {
+      if (n.label?.name === MERGE_HOLD_LABEL && (holdLabeledAt === undefined || Date.parse(n.createdAt) > Date.parse(holdLabeledAt))) {
+        holdLabeledAt = n.createdAt
+        holdLabeledBy = typeof n.actor?.login === 'string' ? n.actor.login : undefined
       }
       continue
     }
@@ -188,11 +313,20 @@ export function queueHistoryFromTimeline(nodes: readonly (TimelineNode | null)[]
     if (last === null || Date.parse(n.createdAt) >= Date.parse(last.at)) last = { kind, actorType, actorLogin, at: n.createdAt }
   }
   if (last === null && hasPreviousPage) return undefined
-  return { last, holdClearedAt }
+  const history: QueueHistory = { last, holdClearedAt, holdLabeledAt, holdLabeledBy }
+  if (comments !== undefined) {
+    // A marker found in an incomplete window is still proof; its absence is not.
+    const has = (marker: string): boolean | undefined => (
+      comments.bodies.some((b) => b.includes(marker)) ? true : comments.complete ? false : undefined
+    )
+    history.holdRecorded = has(HOLD_COMMENT_MARKER)
+    history.unexplainedNoted = has(HOLD_UNEXPLAINED_MARKER)
+  }
+  return history
 }
 
 interface QueueHistoryResponse {
-  data?: { repository?: { pullRequest?: { timelineItems?: { pageInfo?: { hasPreviousPage?: unknown } | null; nodes?: (TimelineNode | null)[] | null } | null } | null } | null } | null
+  data?: { repository?: { pullRequest?: { timelineItems?: { pageInfo?: { hasPreviousPage?: unknown } | null; nodes?: (TimelineNode | null)[] | null } | null; comments?: { pageInfo?: { hasPreviousPage?: unknown } | null; nodes?: ({ body?: unknown } | null)[] | null } | null } | null } | null } | null
   errors?: unknown
 }
 
@@ -208,5 +342,11 @@ export async function readQueueHistory(pr: number, log: (msg: string) => void): 
   ], 60_000, (d) => log(`merge-hold: reading PR #${pr}'s merge-queue history failed: ${d}`))
   const items = raw?.data?.repository?.pullRequest?.timelineItems
   if (raw === undefined || raw.errors !== undefined || !Array.isArray(items?.nodes)) return undefined
-  return queueHistoryFromTimeline(items.nodes, items.pageInfo?.hasPreviousPage === true)
+  const cs = raw.data?.repository?.pullRequest?.comments
+  // Comments are read for the hold record only; an unreadable window leaves
+  // `holdRecorded` undefined (not asked), which no caller treats as "no comment".
+  const comments: CommentWindow | undefined = Array.isArray(cs?.nodes)
+    ? { bodies: cs.nodes.flatMap((c) => (typeof c?.body === 'string' ? [c.body] : [])), complete: cs.pageInfo?.hasPreviousPage === false }
+    : undefined
+  return queueHistoryFromTimeline(items.nodes, items.pageInfo?.hasPreviousPage === true, comments)
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  revert, digestInputFrom, COMMANDS, type RevertDeps,
+  revert, digestInputFrom, COMMANDS, parseMergeHoldArgs, type RevertDeps,
   runPlanWith, type PlanDeps,
   runIntegrateWith, type IntegrateDeps, type DirtyFleetPr,
   resolveDispatchResult, statusForItemWith, type StatusItemDeps, type ResolveDispatchDeps,
@@ -802,5 +802,18 @@ describe('doctorHaltVerdict', () => {
     expect(v.kind).toBe('halted-fail')
     if (v.kind !== 'halted-fail') return
     expect(v.fix).toContain('llamenos-fleet resume')
+  })
+})
+
+describe('merge-hold command (#2876)', () => {
+  it('is a registered subcommand', () => {
+    expect(COMMANDS).toContain('merge-hold')
+  })
+
+  it('needs a PR number and a non-empty --reason — a hold without its reason is the defect', () => {
+    expect(parseMergeHoldArgs(['2829', '--reason', 'regression', 'in', 'claims'])).toEqual({ ok: true, pr: 2829, reason: 'regression in claims' })
+    for (const bad of [[], ['2829'], ['2829', '--reason'], ['2829', '--reason', '  '], ['x', '--reason', 'why'], ['2829', 'why']]) {
+      expect(parseMergeHoldArgs(bad), JSON.stringify(bad)).toEqual({ ok: false })
+    }
   })
 })

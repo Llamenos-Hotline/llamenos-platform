@@ -777,8 +777,16 @@ async function feedBranch(
 
     // A hold outranks everything (#2814). The label is read off the PR this
     // pass already has; the dequeue hold needs the queue history, read next.
+    // The history is still read for a labelled PR: it says whether the hold
+    // has a record of who held it and why (#2876). A label whose history cannot
+    // be read is still a hold — it is only reported without that detail.
     if (pr.labels.includes(MERGE_HOLD_LABEL)) {
-      result.skipped.push({ pr: pr.number, reason: holdReason({ held: true, source: 'label' }) })
+      const labelled = await deps.readQueueHistory(pr.number)
+      const hold = decideHold(pr.labels, labelled ?? { last: null, holdClearedAt: undefined })
+      if (labelled !== undefined) await recordHold(pr.number, hold, labelled, deps)
+      const reason = holdReason(hold)
+      if (hold.held && hold.source === 'label' && hold.unexplained === true) deps.log(`queue-feed: pr ${pr.number}: ${reason}`)
+      result.skipped.push({ pr: pr.number, reason })
       continue
     }
 
@@ -797,7 +805,7 @@ async function feedBranch(
     }
     const hold = decideHold(pr.labels, history)
     if (hold.held) {
-      await recordHold(pr.number, hold, deps)
+      await recordHold(pr.number, hold, history, deps)
       const reason = holdReason(hold)
       deps.log(`queue-feed: pr ${pr.number}: NOT re-queued — ${reason}`)
       result.skipped.push({ pr: pr.number, reason })

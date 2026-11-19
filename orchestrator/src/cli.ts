@@ -80,7 +80,7 @@ import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult }
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
 import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 import { armAutoMergeWithQueueClearance } from './automerge.js'
-import { MERGE_HOLD_LABEL, readQueueHistory } from './merge-hold.js'
+import { MERGE_HOLD_LABEL, readQueueHistory, placeManualHold } from './merge-hold.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -758,6 +758,29 @@ async function runScopeGrantCommand(pr: string | undefined): Promise<number> {
   const outcome = await grantScopeAtOpenFor(pr, head.headRefName, undefined)
   process.stdout.write(`scope-grant: ${JSON.stringify(outcome)}\n`)
   return outcome.kind === 'granted' || outcome.kind === 'not-needed' ? 0 : 1
+}
+
+/** `llamenos-fleet merge-hold <pr> --reason "…"` — hold a PR on purpose, with the
+ *  record the release rule depends on (#2876): comment first, then the label.
+ *  Release is removing the label; there is no command for it. */
+export function parseMergeHoldArgs(rest: readonly string[]): { ok: true; pr: number; reason: string } | { ok: false } {
+  const [pr, flag, ...reason] = rest
+  if (pr === undefined || !/^\d+$/.test(pr) || flag !== '--reason' || reason.join(' ').trim() === '') return { ok: false }
+  return { ok: true, pr: Number(pr), reason: reason.join(' ').trim() }
+}
+
+async function runMergeHoldCommand(rest: readonly string[]): Promise<number> {
+  const args = parseMergeHoldArgs(rest)
+  if (!args.ok) {
+    process.stderr.write('usage: llamenos-fleet merge-hold <pr-number> --reason <why it must not merge>\n')
+    return 2
+  }
+  await placeManualHold(args.pr, args.reason, {
+    addHoldLabel: async (n) => { await gh(['pr', 'edit', String(n), '--add-label', MERGE_HOLD_LABEL]) },
+    postPrComment: async (n, body) => { await gh(['pr', 'comment', String(n), '--body', body]) },
+  })
+  process.stdout.write(`merge-hold: PR #${args.pr} held — release it by removing the \`${MERGE_HOLD_LABEL}\` label\n`)
+  return 0
 }
 
 async function prDiff(pr: string): Promise<string> {
@@ -2321,6 +2344,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   },
   digest: (rest) => runDigest(rest[0]),
   'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
+  'merge-hold': (rest) => runMergeHoldCommand(rest),
   'verify-ci': asVerification(() => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
     lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
