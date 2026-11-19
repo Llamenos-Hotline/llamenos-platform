@@ -51,10 +51,27 @@ export const LANE_IDS = ['backend', 'shared', 'desktop', 'ios', 'android', 'infr
  * Listed explicitly rather than "every fragment outside LANE_IDS": a fragment
  * becoming grantable widens what a self-applicable label can reach, and that
  * decision belongs in this human-gated file, not in whichever fragment is
- * added next. Everything `GRANT_EXCLUDED_PATHS` covers (ios-e2e.yml, which is
- * `mac`'s) stays out of a grant exactly as before.
+ * added next.
  */
 export const SCOPE_ONLY_LANE_IDS = ['mac'] as const
+
+/**
+ * What a scope-only `scope:<id>` grant may reach — a SUBSET of the fragment's
+ * owned paths, never all of them.
+ *
+ * `mac` also owns `scripts/ci/mac-runner-disk-guard.sh` and `scripts/mac-run.sh`:
+ * code that executes on the shared, self-hosted Mac runner. Those were
+ * unreachable by any grant (owned by no real lane), and a grant that merely
+ * "honours the fragment" would have quietly made them reachable by a
+ * self-applicable label. The measured need is the runbook, so the runbook is
+ * all that is granted; `ios-e2e.yml` is separately `GRANT_EXCLUDED_PATHS`.
+ * Entries must appear verbatim in the fragment's `**Owned paths:**` — a path
+ * the fragment stops owning drops out here, and the "grants something" test
+ * fails rather than the grant silently going empty.
+ */
+export const SCOPE_ONLY_GRANT_PATHS: Readonly<Record<(typeof SCOPE_ONLY_LANE_IDS)[number], readonly string[]>> = {
+  mac: ['docs/runbooks/mac-ci-runner-disk.md'],
+}
 
 /**
  * Lane order is claim priority: the first lane to claim an item owns it, so two
@@ -250,6 +267,12 @@ export async function loadLanes(
   return lanes
 }
 
+/** The fragment's scope narrowed to `allowed`: only owned entries named verbatim survive. */
+function grantableScope(declared: LaneScope | undefined, allowed: readonly string[]): LaneScope {
+  if (declared === undefined) return { owned: [], notOwned: [] }
+  return { owned: declared.owned.filter((p) => allowed.includes(p)), notOwned: declared.notOwned }
+}
+
 /**
  * Every lane a `scope:<id>` grant may name: the real lanes (`loadLanes`) plus
  * the scope-only fragments (`SCOPE_ONLY_LANE_IDS`). Used by everything that
@@ -270,7 +293,7 @@ export async function loadGrantableLanes(
     engine: 'claude',
     requireLabel: 'agent-dispatchable',
     vetoLabels: [],
-    scope: scopes[id] ?? { owned: [], notOwned: [] },
+    scope: grantableScope(scopes[id], SCOPE_ONLY_GRANT_PATHS[id]),
     scopeOnly: true,
   }))
   return [...lanes, ...scopeOnly]

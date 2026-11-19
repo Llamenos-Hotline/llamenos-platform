@@ -708,9 +708,12 @@ What a grant cannot do:
   in the same commit, and while `mac` was not grantable the runbook read as
   owned by no lane and the gate said to delete it. The list is explicit, not
   "every fragment outside `LANE_IDS`", so making a fragment grantable is a
-  decision in this human-gated file. `GRANT_EXCLUDED_PATHS` still applies: a
-  diff holding `.github/workflows/ios-e2e.yml` is refused whole and lands from a
-  plain branch, as before.
+  decision in this human-gated file. The grant reaches only
+  `SCOPE_ONLY_GRANT_PATHS` — the runbook — not everything the fragment owns:
+  `mac` also owns the disk guard and `mac-run.sh`, which execute on the shared
+  self-hosted runner and stay unreachable by any grant. `GRANT_EXCLUDED_PATHS`
+  still applies: a diff holding `.github/workflows/ios-e2e.yml` is refused whole
+  and lands from a plain branch, as before.
 
 - **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
   is missing or unparseable, has `owned: []` — and an empty owned list means

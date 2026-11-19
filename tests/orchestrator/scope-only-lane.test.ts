@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
-  loadLanes, loadGrantableLanes, LANE_IDS, SCOPE_ONLY_LANE_IDS, GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS, type Lane,
+  loadLanes, loadGrantableLanes, LANE_IDS, SCOPE_ONLY_LANE_IDS, SCOPE_ONLY_GRANT_PATHS, GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS, type Lane,
 } from '../../orchestrator/src/config.js'
 import { loadLaneScopes } from '../../orchestrator/src/fragments.js'
 import { checkScopeAcross } from '../../orchestrator/src/scope.js'
@@ -57,12 +57,20 @@ describe('a scope-only fragment is grantable but is not a lane', () => {
     const mac = find(grantable, 'mac')
     expect(mac.scopeOnly).toBe(true)
     expect(mac.mode).toBe('off')
-    expect(mac.scope.owned).toContain(RUNBOOK)
+    expect(mac.scope.owned).toEqual([RUNBOOK])
     for (const l of grantable.filter((x) => x.id !== 'mac')) expect(l.scopeOnly).toBeUndefined()
   })
 
   it('every scope-only id has a fragment with owned paths — an empty one would grant nothing and read as a gap', () => {
     for (const id of SCOPE_ONLY_LANE_IDS) expect(find(grantable, id).scope.owned.length).toBeGreaterThan(0)
+  })
+
+  it('every granted path is one the fragment really owns — a path it drops must fail here, not go silently empty', async () => {
+    const scopes = await loadLaneScopes(process.cwd())
+    for (const id of SCOPE_ONLY_LANE_IDS) {
+      for (const p of SCOPE_ONLY_GRANT_PATHS[id]) expect(scopes[id]?.owned).toContain(p)
+      expect(find(grantable, id).scope.owned).toEqual([...SCOPE_ONLY_GRANT_PATHS[id]])
+    }
   })
 
   it('a scope-only id is never also a real lane', () => {
@@ -194,6 +202,14 @@ describe('what a scope-only grant must NOT widen', () => {
     )
     expect(out.kind).toBe('refused')
   })
+
+  it.each(['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts'])(
+    'mac also owns %s, but it is host-executed/gate code: still unreachable by any grant',
+    (file) => {
+      const plan = planScopeGrants([...PR_2863, file], find(grantable, 'infra'), grantable)
+      expect(plan.refused).toEqual([{ file, reason: 'unowned' }])
+    },
+  )
 
   it('a runbook nobody owns stays unowned — the grant reaches mac\'s files, not docs/runbooks/', () => {
     const plan = planScopeGrants(['scripts/ci/x.sh', 'docs/runbooks/deploy-official.md'], find(grantable, 'infra'), grantable)
