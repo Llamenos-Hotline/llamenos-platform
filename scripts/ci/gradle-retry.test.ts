@@ -24,6 +24,15 @@ case "$mode" in
     echo "     Searched in the following locations:"
     echo "       - https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom"
     echo "BUILD FAILED in 37s"; exit 1 ;;
+  jar-miss)
+    case " $* " in *" --refresh-dependencies "*) echo "BUILD SUCCESSFUL in 3s"; exit 0 ;; esac
+    echo "> Task :app:checkDebugDuplicateClasses FAILED"
+    echo "> Could not resolve all files for configuration ':app:debugRuntimeClasspath'."
+    echo "   > Failed to transform gson-2.8.9.jar (com.google.code.gson:gson:2.8.9) to match attributes {artifactType=enumerated-runtime-classes}."
+    echo "      > Could not find gson-2.8.9.jar (com.google.code.gson:gson:2.8.9)."
+    echo "        Searched in the following locations:"
+    echo "            https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.8.9/gson-2.8.9.jar"
+    echo "BUILD FAILED in 11s"; exit 1 ;;
   timeout) echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Read timed out"; echo "BUILD FAILED"; exit 1 ;;
   test-fail) echo "> Task :app:testDebugUnitTest FAILED"; echo "FooTest > bar FAILED"; echo "BUILD FAILED in 2m"; exit 1 ;;
   compile-fail) echo "e: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar"; echo "BUILD FAILED"; exit 1 ;;
@@ -74,14 +83,33 @@ describe('gradle-retry.sh', () => {
     expect(r.out).not.toContain('::warning')
   })
 
-  test('the #2864 failure — one POM miss — is survived by a plain second run', () => {
+  test('the #2864 failure — one POM miss — is survived by a retry', () => {
     const r = run(['resolve-miss', 'ok'])
     expect(r.code).toBe(0)
     expect(r.invocations).toHaveLength(2)
-    // The retry is the same invocation, not --refresh-dependencies: that would
-    // revalidate the whole restored cache against the registry that just blipped.
     expect(r.invocations[1]).toContain('testDebugUnitTest --console=plain')
+  })
+
+  test('the #2866 failure — a remembered JAR miss — is cleared by --refresh-dependencies, never by a plain re-run', () => {
+    const r = run(['jar-miss'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
+    expect(r.invocations[0]).not.toContain('--refresh-dependencies')
+    expect(r.invocations[1]).toContain('--refresh-dependencies')
+    expect(r.invocations[1]).toContain('testDebugUnitTest --console=plain')
+    expect(r.out).toContain('gson-2.8.9.jar')
+    expect(r.out).toMatch(/::warning title=[^:]*recovered on attempt 2/)
+  })
+
+  test('a transport error does NOT trigger --refresh-dependencies (Gradle forgets it; refresh would hammer the registry)', () => {
+    const r = run(['timeout', 'ok'])
+    expect(r.code).toBe(0)
     expect(r.invocations.every((c) => !c.includes('--refresh-dependencies'))).toBe(true)
+  })
+
+  test('the first attempt of a clean build never refreshes', () => {
+    const r = run(['ok'])
+    expect(r.invocations[0]).not.toContain('--refresh-dependencies')
   })
 
   test('a recovered retry is visible: a warning naming the dependency, and a step summary', () => {

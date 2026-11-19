@@ -2181,6 +2181,8 @@ jobs:
       # 44432600870) ejected four PRs from the queue. It re-runs ONLY when
       # Gradle's output names a dependency-resolution/transport error — a
       # failing test, a compile error and a lint finding come back after one run.
+      # After a "Could not find" it re-runs with --refresh-dependencies, because Gradle
+      # remembers a missed jar and a plain re-run would never ask the registry again (#2866).
       - name: Run unit tests
         working-directory: apps/android
         run: bash ../../scripts/ci/gradle-retry.sh testDebugUnitTest --console=plain

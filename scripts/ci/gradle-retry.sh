@@ -33,12 +33,34 @@
 # Gradle already retries 5xx and timeouts on its own (org.gradle.internal.repository
 # .max.retries, default 3, which this script raises). It does NOT retry a 404:
 # that is an authoritative "this repository does not have it", and fails the
-# build on the spot. So the retry has to live above Gradle. It is a plain re-run,
-# not `--refresh-dependencies`: measured against Gradle 9.4.0 with a repository
-# that 404s a POM once, a second ordinary invocation on the SAME cache asks the
-# registry again and succeeds, so no cached miss needs discarding — and
-# `--refresh-dependencies` would revalidate every module in the restored cache,
-# which is hundreds of extra requests to the very registry that just blipped.
+# build on the spot. So the retry has to live above Gradle.
+#
+# WHY A PLAIN RE-RUN IS NOT ENOUGH AFTER A 404 (#2866)
+# ----------------------------------------------------
+# Gradle remembers that "not found" in the GRADLE_USER_HOME a re-run reuses, and
+# does not ask the registry again. The first version of this script retried with
+# a plain re-run, on the strength of a test where a repository 404'd a POM once;
+# a JAR miss behaves differently. Measured against Gradle 9.4.0 with a repository
+# that 404s `lib-1.0.jar` exactly ONCE and then serves it:
+#
+#   run 1  > Could not find lib-1.0.jar (org.ex:lib:1.0).     (the one 404)
+#   run 2  > Could not find lib-1.0.jar (org.ex:lib:1.0).     (the server saw NO request)
+#   run 3  > Could not find lib-1.0.jar (org.ex:lib:1.0).     (nor this one)
+#   run 4  --refresh-dependencies   RESOLVED                  (and a plain run after it too)
+#
+# That is the shape PR #2866 hit: five runtime-only legacy jars
+# (kotlin-parcelize-runtime-1.9.22, gson-2.8.9, tink-android-1.8.0, ...) all
+# "Could not find", identically, on all three attempts, the later ones failing in
+# seconds. settings.gradle.kts was untouched and every one of those jars is on
+# Central; the same cache restore passed on a sibling PR minutes earlier.
+#
+# So once an attempt fails with an authoritative "Could not find", every later
+# attempt runs with --refresh-dependencies, which drops the remembered miss. It
+# is NOT used for a transport error (timeout, reset, DNS): Gradle does not cache
+# those, a plain re-run recovers them (the DNS blip in the first #2864 run did
+# exactly that), and --refresh-dependencies revalidates every module in the
+# restored cache — hundreds of requests to the registry that just blipped. The
+# first attempt never refreshes, so a green build costs nothing extra.
 #
 # WHAT IS RETRIED
 # ---------------
@@ -108,15 +130,17 @@ first_failure() {
 }
 
 REPORTS=()
+REFRESH=()   # becomes (--refresh-dependencies) once a remembered "Could not find" is suspected
 rc=0
 for attempt in $(seq 1 "$ATTEMPTS"); do
   log="$WORK/attempt-${attempt}.log"
-  echo "::group::gradle-retry — attempt ${attempt}/${ATTEMPTS}: ${GRADLE_BIN} $*"
+  echo "::group::gradle-retry — attempt ${attempt}/${ATTEMPTS}: ${GRADLE_BIN} ${REFRESH[*]:-} $*"
   echo "::endgroup::"
   rc=0
   "$GRADLE_BIN" \
     "-Dorg.gradle.internal.repository.max.retries=${REPO_RETRIES}" \
     "-Dorg.gradle.internal.repository.initial.backoff=500" \
+    ${REFRESH[@]+"${REFRESH[@]}"} \
     "$@" 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
 
@@ -144,10 +168,14 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   fi
 
   REPORTS+=("attempt ${attempt}: $(first_failure "$log")")
+  # An authoritative miss is what Gradle remembers; only that needs the refresh.
+  if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE 'Could not find ' "$log"; then
+    REFRESH=(--refresh-dependencies)
+  fi
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
     delay=$(( BACKOFF * (1 << (attempt - 1)) ))
     echo "gradle-retry: dependency resolution failed (attempt ${attempt}/${ATTEMPTS}): $(first_failure "$log")"
-    echo "gradle-retry: retrying in ${delay}s."
+    echo "gradle-retry: retrying in ${delay}s${REFRESH[*]:+ with ${REFRESH[*]} (Gradle remembers a 'Could not find'; a plain re-run would not ask the registry again)}."
     sleep "$delay"
   fi
 done
