@@ -287,18 +287,13 @@ When('I reload and re-authenticate', async ({ page }) => {
 })
 
 When('I log out', async ({ page }) => {
-  // The sidebar logout button signs out immediately without a confirmation;
-  // the settings-page logout is the flow that requires confirming key removal.
-  // Use the settings flow so the confirmation dialog assertion below exercises
-  // real app behavior.
-  await Navigation.goToSettings(page)
-  const logoutBtn = page.getByTestId(TestIds.SETTINGS_LOGOUT_BTN)
-  await expect(logoutBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await logoutBtn.scrollIntoViewIfNeeded()
-  await logoutBtn.click()
-  const confirmBtn = page.getByTestId(TestIds.CONFIRM_DIALOG_OK)
-  await expect(confirmBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
-  await confirmBtn.click()
+  // The sidebar logout ends the session and leaves the encrypted device keys on
+  // the machine, so the login page that follows is the stored-key page (PIN pad,
+  // "Recovery options"). The Settings → Log Out flow deliberately deletes the
+  // keys (#2110) and lands on the no-stored-key page instead; that flow has its
+  // own scenario (logout-removes-keys.feature) and must not be the precondition
+  // of scenarios about the stored-key login page.
+  await page.getByTestId(TestIds.LOGOUT_BTN).click()
   await page.waitForURL(/\/login/, { timeout: Timeouts.ELEMENT })
 })
 
