@@ -98,6 +98,7 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // H16: Recovery group key isolation — private key AND plaintext shares never enter JS
     'recovery_group_create',
     'recovery_share_contribute_from_state',
+    'recovery_share_liveness_proof_from_state',
     'recovery_group_reconstruct_from_shares',
     'recovery_group_decrypt',
     // Window plugin commands (window management + tray toggle)

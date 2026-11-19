@@ -210,6 +210,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.18 (2026-11-18)
+
+### Fixes
+
+- seal inbound messages to the hub's admin reader set, not an env var (#2843)
+- a caller sent to voicemail stops being ringing and answerable (#2858)
+- do not issue hub-scoped requests without a session (#2851) (#2856)
+
 ## 0.21.17 (2026-11-18)
 
 ### Fixes

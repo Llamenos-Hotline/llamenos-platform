@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки.",
     "deleteConfirmTitle": "Видалити цю зміну?",
-    "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати."
+    "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати.",
+    "noAdminReader": "Неможливо зберегти цей текст: жоден адміністратор цього хабу не має зареєстрованого пристрою, тож жоден адміністратор ніколи не зможе його прочитати. Попросіть адміністратора хабу увійти на пристрої."
   },
   "shortcuts": {
     "answerCall": "Відповісти на дзвінок",
@@ -3785,6 +3786,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Не вдалося перевірити частку",
+    "liveness": {
+      "title": "Ваша частка відновлення",
+      "description": "Підтвердьте, що цей пристрій досі зберігає вашу частку відновлення. Частка ніколи не залишає пристрій; хаб перевіряє лише підпис, створений за її допомогою.",
+      "prove": "Перевірити мою частку",
+      "proving": "Перевірка…",
+      "success": "Частку перевірено. Адміністратори побачать, що ваша частка в порядку.",
+      "error": "Не вдалося перевірити частку"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

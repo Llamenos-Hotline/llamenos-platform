@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Ev şift were jêbirin?",
-    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin."
+    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin.",
+    "noAdminReader": "Ev nivîs nayê tomarkirin: tu rêveberê vî hubê amûrek tomarkirî nîne, ji ber vê yekê tu rêveber nikare wê bixwîne. Ji rêveberekî hubê bixwazin ku li ser amûrekê têkeve."
   },
   "shortcuts": {
     "answerCall": "Bangê bersiv bide",
@@ -3672,6 +3673,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Piştrastkirina parçeyê têk çû",
+    "liveness": {
+      "title": "Parçeya te ya vegerandinê",
+      "description": "Îsbat bike ku ev amûr hê jî parçeya te ya vegerandinê dihebîne. Parçeya te qet ji amûrê dernakeve; hub tenê îmzeyekî ku pê hatiye çêkirin kontrol dike.",
+      "prove": "Parçeya min piştrast bike",
+      "proving": "Tê piştrastkirin…",
+      "success": "Parçe hat piştrastkirin. Rêveber dê parçeya te saxlem bibînin.",
+      "error": "Piştrastkirina parçeyê têk çû"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

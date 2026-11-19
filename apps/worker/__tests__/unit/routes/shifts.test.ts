@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import shiftRoutes from '@worker/routes/shifts'
+import { ServiceError } from '@worker/services/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,9 +29,15 @@ function createTestApp(opts: {
     shiftAvailability: serviceMock.shiftAvailability || {},
     shiftOverrides: serviceMock.shiftOverrides || {},
     audit: serviceMock.audit || { log: vi.fn().mockResolvedValue(undefined) },
+    identity: serviceMock.identity || {},
   }
 
   const app = new Hono<AppEnv>()
+  // As apps/worker/app.ts: a ServiceError is its own status.
+  app.onError((err, c) => {
+    if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 400 | 422 | 503)
+    throw err
+  })
 
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
@@ -312,7 +319,7 @@ describe('shifts routes', () => {
   describe('DELETE /shifts/availability/:id', () => {
     const block = (userPubkey: string) => ({
       id: 'blk-1', hubId: 'hub-1', userPubkey, startDate: '2026-09-01', endDate: '2026-09-07',
-      encryptedReason: null, createdAt: new Date(),
+      encryptedReason: null, reasonEnvelopes: null, createdAt: new Date(),
     })
 
     it('deletes the caller\'s own block', async () => {
@@ -364,7 +371,7 @@ describe('shifts routes', () => {
   describe('shift override audit', () => {
     const override = {
       id: 'ov-1', hubId: 'hub-1', shiftId: 'shift-1', date: '2026-07-04', type: 'cancel',
-      userPubkeys: null, encryptedNote: 'ciphertext', createdBy: 'a'.repeat(64), createdAt: new Date(),
+      userPubkeys: null, encryptedNote: null, noteEnvelopes: null, createdBy: 'a'.repeat(64), createdAt: new Date(),
     }
 
     it('records the override it created, without its note', async () => {
@@ -411,6 +418,124 @@ describe('shifts routes', () => {
         { overrideId: 'ov-1', shiftId: 'shift-1', date: '2026-07-04', type: 'cancel' },
         'hub-1',
       )
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Sealed free text (#2777, #2778): a reason or note is a ciphertext plus its
+  // reader envelopes, never a string, and no admin-unreadable set is stored
+  // -------------------------------------------------------------------------
+
+  describe('sealed availability reasons and override notes', () => {
+    const ADMIN = 'ad'.repeat(32)
+    const MEMBER = 'be'.repeat(32)
+    const envelope = (pubkey: string) => ({ pubkey, enc: 'e1'.repeat(32), ct: 'c7'.repeat(48) })
+    const sealed = (readers: string[]) => ({ encryptedContent: 'f0'.repeat(40), envelopes: readers.map(envelope) })
+    const identity = { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([ADMIN]) }
+    const post = (app: Hono<AppEnv>, path: string, body: unknown) => app.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, {})
+    const block = {
+      id: 'blk-1', hubId: 'hub-1', userPubkey: 'a'.repeat(64), startDate: '2026-09-01', endDate: '2026-09-02',
+      createdAt: new Date(),
+    }
+    const blockBody = { id: crypto.randomUUID(), startDate: '2026-09-01', endDate: '2026-09-02' }
+    const overrideBody = { id: crypto.randomUUID(), date: '2026-07-04', type: 'cancel' }
+    const overrideRow = {
+      id: 'ov-1', hubId: 'hub-1', shiftId: null, date: '2026-07-04', type: 'cancel', userPubkeys: null,
+      createdBy: 'a'.repeat(64), createdAt: new Date(),
+    }
+
+    it('refuses an availability reason sent as the typed text', async () => {
+      const create = vi.fn()
+      const { app } = createTestApp({ permissions: ['shifts:set-availability'], serviceMock: { shiftAvailability: { create }, identity } })
+      const res = await post(app, '/shifts/availability', { ...blockBody, encryptedReason: 'medical appointment' })
+      expect(res.status).toBe(400)
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('refuses an override note sent as the typed text', async () => {
+      const create = vi.fn()
+      const { app } = createTestApp({ permissions: ['shifts:manage-overrides'], serviceMock: { shiftOverrides: { create }, identity } })
+      const res = await post(app, '/shifts/overrides', { ...overrideBody, encryptedNote: 'Ana covers, Ben is in court' })
+      expect(res.status).toBe(400)
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('refuses a sealed reason no admin of the hub can open', async () => {
+      const create = vi.fn()
+      const { app } = createTestApp({ permissions: ['shifts:set-availability'], serviceMock: { shiftAvailability: { create }, identity } })
+      const res = await post(app, '/shifts/availability', { ...blockBody, encryptedReason: sealed([MEMBER]) })
+      expect(res.status).toBe(422)
+      expect(create).not.toHaveBeenCalled()
+      expect(identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
+    })
+
+    it('refuses a sealed note no admin of the hub can open', async () => {
+      const create = vi.fn()
+      const { app } = createTestApp({ permissions: ['shifts:manage-overrides'], serviceMock: { shiftOverrides: { create }, identity } })
+      const res = await post(app, '/shifts/overrides', { ...overrideBody, encryptedNote: sealed([MEMBER]) })
+      expect(res.status).toBe(422)
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('stores a reason an admin can open and returns it as the same sealed object', async () => {
+      const reason = sealed([MEMBER, ADMIN])
+      const create = vi.fn().mockResolvedValue({ ...block, encryptedReason: reason.encryptedContent, reasonEnvelopes: reason.envelopes })
+      const { app } = createTestApp({ permissions: ['shifts:set-availability'], serviceMock: { shiftAvailability: { create }, identity } })
+      const res = await post(app, '/shifts/availability', { ...blockBody, encryptedReason: reason })
+      expect(res.status).toBe(200)
+      expect(create).toHaveBeenCalledWith('hub-1', expect.objectContaining({ encryptedReason: reason }))
+      const json = await res.json() as Record<string, unknown>
+      expect(json.encryptedReason).toEqual(reason)
+      expect(json).not.toHaveProperty('reasonEnvelopes')
+    })
+
+    it('stores a note an admin can open, and keeps it out of the audit entry', async () => {
+      const note = sealed([ADMIN])
+      const auditLog = vi.fn().mockResolvedValue(undefined)
+      const create = vi.fn().mockResolvedValue({ ...overrideRow, encryptedNote: note.encryptedContent, noteEnvelopes: note.envelopes })
+      const { app } = createTestApp({
+        permissions: ['shifts:manage-overrides'],
+        serviceMock: { shiftOverrides: { create }, identity, audit: { log: auditLog } },
+      })
+      const res = await post(app, '/shifts/overrides', { ...overrideBody, encryptedNote: note })
+      expect(res.status).toBe(200)
+      expect(create).toHaveBeenCalledWith('hub-1', expect.objectContaining({ encryptedNote: note }))
+      expect((await res.json() as Record<string, unknown>).encryptedNote).toEqual(note)
+      expect(JSON.stringify(auditLog.mock.calls)).not.toContain(note.encryptedContent)
+    })
+
+    it('a block or override without free text needs no admin check', async () => {
+      const listAdmins = vi.fn()
+      const createBlock = vi.fn().mockResolvedValue({ ...block, encryptedReason: null, reasonEnvelopes: null })
+      const createOverride = vi.fn().mockResolvedValue({ ...overrideRow, encryptedNote: null, noteEnvelopes: null })
+      const { app } = createTestApp({
+        permissions: ['shifts:set-availability', 'shifts:manage-overrides'],
+        serviceMock: {
+          shiftAvailability: { create: createBlock },
+          shiftOverrides: { create: createOverride },
+          identity: { listAdminEnvelopeRecipients: listAdmins },
+        },
+      })
+      const blockRes = await post(app, '/shifts/availability', blockBody)
+      expect(blockRes.status).toBe(200)
+      expect((await blockRes.json() as Record<string, unknown>).encryptedReason).toBeNull()
+      const overrideRes = await post(app, '/shifts/overrides', overrideBody)
+      expect(overrideRes.status).toBe(200)
+      expect((await overrideRes.json() as Record<string, unknown>).encryptedNote).toBeNull()
+      expect(listAdmins).not.toHaveBeenCalled()
+    })
+
+    it('lists a row whose ciphertext has lost its envelopes as having no note', async () => {
+      const list = vi.fn().mockResolvedValue({ overrides: [{ ...overrideRow, encryptedNote: 'f0'.repeat(40), noteEnvelopes: null }] })
+      const { app } = createTestApp({ permissions: ['shifts:manage-overrides'], serviceMock: { shiftOverrides: { listByDateRange: list } } })
+      const res = await app.request('/shifts/overrides?from=2026-07-01&to=2026-07-31', {}, {})
+      expect(res.status).toBe(200)
+      const json = await res.json() as { overrides: Array<Record<string, unknown>> }
+      expect(json.overrides[0].encryptedNote).toBeNull()
     })
   })
 

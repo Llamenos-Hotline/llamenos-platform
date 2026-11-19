@@ -1,6 +1,6 @@
 import { eq, and, sql } from 'drizzle-orm'
-import { ed25519Verify } from '@llamenos/crypto/ffi'
-import { hexToBytes, utf8ToBytes } from '@shared/encoding'
+import { ed25519Verify, recoveryLivenessVerify } from '@llamenos/crypto/ffi'
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { resolveHubPermissions, type Role } from '@shared/permissions'
 import type { Database } from '../db'
 import {
@@ -9,6 +9,7 @@ import {
   userRecoveryEnvelopes,
   recoverySessions,
   recoverySessionContributions,
+  recoveryLivenessChallenges,
   users,
 } from '../db/schema'
 import { createLogger } from '../lib/logger'
@@ -26,6 +27,17 @@ const VERIFICATION_CODE_LENGTH = 6
  * identical so neither answer confirms the other.
  */
 const NOT_A_SHARE_HOLDER = 'Not a share holder for this hub'
+
+/** How long an issued liveness challenge stays valid (#2782). */
+const LIVENESS_CHALLENGE_TTL_MS = 5 * 60 * 1000
+
+/** One holder's share entry in an enroll/rotate request. */
+type ShareEnvelopeInput = {
+  holderPubkey: string
+  shareEnvelope: string
+  /** Hex Ed25519 key derived from this holder's share — the liveness verifier. */
+  livenessPublicKey: string
+}
 
 export class RecoveryGroupError extends Error {
   constructor(
@@ -134,7 +146,7 @@ export class RecoveryGroupService {
     threshold: number
     totalShares: number
     groupPublicKey: string
-    shareEnvelopes: Array<{ holderPubkey: string; shareEnvelope: string }>
+    shareEnvelopes: ShareEnvelopeInput[]
     shareCommitments: string[]
     duressCommitments?: Array<string | null>
     sigchainLinkHash: string
@@ -201,6 +213,7 @@ export class RecoveryGroupService {
             hubId,
             holderPubkey: se.holderPubkey,
             shareEnvelope: se.shareEnvelope,
+            livenessPublicKey: se.livenessPublicKey,
           })),
         )
       }
@@ -239,7 +252,7 @@ export class RecoveryGroupService {
     threshold: number
     totalShares: number
     groupPublicKey: string
-    shareEnvelopes: Array<{ holderPubkey: string; shareEnvelope: string }>
+    shareEnvelopes: ShareEnvelopeInput[]
     shareCommitments: string[]
     duressCommitments?: Array<string | null>
     sigchainLinkHash: string
@@ -342,6 +355,7 @@ export class RecoveryGroupService {
             hubId,
             holderPubkey: se.holderPubkey,
             shareEnvelope: se.shareEnvelope,
+            livenessPublicKey: se.livenessPublicKey,
           })),
         )
       }
@@ -391,6 +405,7 @@ export class RecoveryGroupService {
       .select({
         holderPubkey: hubRecoveryGroupShares.holderPubkey,
         lastLivenessProof: hubRecoveryGroupShares.lastLivenessProof,
+        lastLivenessFailure: hubRecoveryGroupShares.lastLivenessFailure,
         createdAt: hubRecoveryGroupShares.createdAt,
       })
       .from(hubRecoveryGroupShares)
@@ -412,6 +427,7 @@ export class RecoveryGroupService {
       shareHolderLiveness: shares.map((s) => ({
         holderPubkey: s.holderPubkey,
         lastLivenessProof: s.lastLivenessProof?.toISOString() ?? null,
+        lastLivenessFailure: s.lastLivenessFailure?.toISOString() ?? null,
         createdAt: s.createdAt.toISOString(),
       })),
     }
@@ -1082,15 +1098,26 @@ export class RecoveryGroupService {
     return { hubId, shareEnvelope: rows[0].shareEnvelope }
   }
 
-  async submitLivenessProof(params: {
+  /**
+   * Issue a fresh, single-use liveness challenge for the authenticated holder
+   * (#2782). Replaces any challenge still outstanding for (hub, holder), so at
+   * most one is live per holder.
+   *
+   * Same gate as `getMyShareEnvelope`: current hub membership first, then
+   * enrollment, refused with one message. A share row enrolled without a
+   * liveness key (before #2782) cannot be proven at all, and says so rather
+   * than handing out a challenge no proof could satisfy.
+   */
+  async issueLivenessChallenge(params: {
     hubId: string
     holderPubkey: string
-    proof: string
-  }): Promise<void> {
+  }): Promise<{ challenge: string; expiresAt: string }> {
     const { hubId, holderPubkey } = params
 
-    const holders = await this.db
-      .select({ holderPubkey: hubRecoveryGroupShares.holderPubkey })
+    await this.assertStillHubMember(holderPubkey, hubId)
+
+    const rows = await this.db
+      .select({ livenessPublicKey: hubRecoveryGroupShares.livenessPublicKey })
       .from(hubRecoveryGroupShares)
       .where(
         and(
@@ -1100,21 +1127,137 @@ export class RecoveryGroupService {
       )
       .limit(1)
 
-    if (holders.length === 0) {
-      throw new RecoveryGroupError('Not a share holder for this hub', 403)
+    if (rows.length === 0) {
+      throw new RecoveryGroupError(NOT_A_SHARE_HOLDER, 403)
+    }
+    if (!rows[0].livenessPublicKey) {
+      throw new RecoveryGroupError(
+        'This share was enrolled without a liveness key — rotate the recovery group to enable liveness proofs',
+        409,
+      )
     }
 
+    const bytes = new Uint8Array(32)
+    crypto.getRandomValues(bytes)
+    const challenge = bytesToHex(bytes)
+    const expiresAt = new Date(Date.now() + LIVENESS_CHALLENGE_TTL_MS)
+
     await this.db
-      .update(hubRecoveryGroupShares)
-      .set({ lastLivenessProof: new Date() })
+      .insert(recoveryLivenessChallenges)
+      .values({ hubId, holderPubkey, challenge, expiresAt })
+      .onConflictDoUpdate({
+        target: [recoveryLivenessChallenges.hubId, recoveryLivenessChallenges.holderPubkey],
+        set: { challenge, expiresAt, createdAt: new Date() },
+      })
+
+    return { challenge, expiresAt: expiresAt.toISOString() }
+  }
+
+  /**
+   * Verify a liveness proof and record the outcome (#2782).
+   *
+   * The proof is an Ed25519 signature, under the key the enrolling client
+   * derived from this holder's Shamir share, over (hubId, holderPubkey,
+   * challenge) — see `packages/crypto/src/recovery_liveness.rs`. Producing it
+   * requires holding the share; the server verifies it with the stored
+   * `livenessPublicKey` and never sees the share.
+   *
+   * The challenge is consumed atomically BEFORE the signature is checked, so it
+   * is single-use whatever the outcome. An unknown, expired, already-used or
+   * other-hub challenge is refused (409) without touching the holder's
+   * liveness — it says nothing about the share. A signature that does not
+   * verify against a live challenge IS evidence about the share: it clears
+   * `lastLivenessProof` (so the holder stops reading as healthy), stamps
+   * `lastLivenessFailure` for admins, and is audit-logged.
+   */
+  async submitLivenessProof(params: {
+    hubId: string
+    holderPubkey: string
+    challenge: string
+    proof: string
+  }): Promise<{ verifiedAt: string }> {
+    const { hubId, holderPubkey, challenge, proof } = params
+
+    await this.assertStillHubMember(holderPubkey, hubId)
+
+    const shares = await this.db
+      .select({ livenessPublicKey: hubRecoveryGroupShares.livenessPublicKey })
+      .from(hubRecoveryGroupShares)
       .where(
         and(
           eq(hubRecoveryGroupShares.hubId, hubId),
           eq(hubRecoveryGroupShares.holderPubkey, holderPubkey),
         ),
       )
+      .limit(1)
 
-    logger.info('Share liveness proof submitted', { hubId, holderPubkey })
+    if (shares.length === 0) {
+      throw new RecoveryGroupError(NOT_A_SHARE_HOLDER, 403)
+    }
+
+    const consumed = await this.db
+      .delete(recoveryLivenessChallenges)
+      .where(
+        and(
+          eq(recoveryLivenessChallenges.hubId, hubId),
+          eq(recoveryLivenessChallenges.holderPubkey, holderPubkey),
+          eq(recoveryLivenessChallenges.challenge, challenge),
+          sql`${recoveryLivenessChallenges.expiresAt} > now()`,
+        ),
+      )
+      .returning({ challenge: recoveryLivenessChallenges.challenge })
+
+    if (consumed.length === 0) {
+      throw new RecoveryGroupError(
+        'Liveness challenge is unknown, expired or already used — request a new one',
+        409,
+      )
+    }
+
+    const livenessPublicKey = shares[0].livenessPublicKey
+    let verified = false
+    if (livenessPublicKey) {
+      try {
+        verified = recoveryLivenessVerify(
+          hexToBytes(livenessPublicKey),
+          hubId,
+          holderPubkey,
+          hexToBytes(challenge),
+          hexToBytes(proof),
+        )
+      } catch (err) {
+        logger.warn('Liveness proof could not be checked — treating as failed', { err, hubId })
+        verified = false
+      }
+    }
+
+    const now = new Date()
+    const holderRow = and(
+      eq(hubRecoveryGroupShares.hubId, hubId),
+      eq(hubRecoveryGroupShares.holderPubkey, holderPubkey),
+    )
+
+    if (!verified) {
+      await this.db
+        .update(hubRecoveryGroupShares)
+        .set({ lastLivenessProof: null, lastLivenessFailure: now })
+        .where(holderRow)
+      if (this.audit) {
+        await this.audit.log('recoveryShareLivenessFailed', holderPubkey, { hubId }, hubId)
+      }
+      logger.warn('Share liveness proof failed verification', { hubId, holderPubkey })
+      throw new RecoveryGroupError('Liveness proof did not verify against this share', 403)
+    }
+
+    await this.db
+      .update(hubRecoveryGroupShares)
+      .set({ lastLivenessProof: now })
+      .where(holderRow)
+    if (this.audit) {
+      await this.audit.log('recoveryShareLivenessProven', holderPubkey, { hubId }, hubId)
+    }
+    logger.info('Share liveness proof verified', { hubId, holderPubkey })
+    return { verifiedAt: now.toISOString() }
   }
 
   async applyEmergencyOverride(params: {

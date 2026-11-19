@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Gelen aramaları almayı bırakacaksınız.",
     "deleteConfirmTitle": "Bu vardiya silinsin mi?",
-    "deleteConfirmMessage": "Bu vardiyadaki gönüllüler, vardiya saatleri boyunca arama almayı bırakacak. Bu saatleri başka bir vardiya kapsamıyorsa aramalar yedek gruba gider; yedek grup yoksa yanıtsız kalır. Bu işlem geri alınamaz."
+    "deleteConfirmMessage": "Bu vardiyadaki gönüllüler, vardiya saatleri boyunca arama almayı bırakacak. Bu saatleri başka bir vardiya kapsamıyorsa aramalar yedek gruba gider; yedek grup yoksa yanıtsız kalır. Bu işlem geri alınamaz.",
+    "noAdminReader": "Bu metin kaydedilemiyor: bu merkezin hiçbir yöneticisinin kayıtlı bir cihazı yok, bu yüzden hiçbir yönetici onu asla okuyamaz. Merkez yöneticisinden bir cihazda oturum açmasını isteyin."
   },
   "shortcuts": {
     "answerCall": "Aramayı cevapla",
@@ -4122,6 +4123,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Pay doğrulaması başarısız oldu",
+    "liveness": {
+      "title": "Kurtarma payınız",
+      "description": "Bu cihazın kurtarma payınızı hâlâ elinde tuttuğunu kanıtlayın. Payınız cihazdan asla çıkmaz; hub yalnızca onunla atılmış bir imzayı denetler.",
+      "prove": "Payımı doğrula",
+      "proving": "Doğrulanıyor…",
+      "success": "Pay doğrulandı. Yöneticiler payınızı sağlıklı olarak görecek.",
+      "error": "Pay doğrulaması başarısız oldu"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

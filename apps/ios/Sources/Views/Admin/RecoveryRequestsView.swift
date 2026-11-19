@@ -15,6 +15,10 @@ struct RecoveryRequestsView: View {
     @State private var showUrgentSheet = false
     @State private var isApproving = false
     @State private var errorMessage: String?
+    /// This user's own share envelope for the active hub; nil when they hold none.
+    @State private var myShareEnvelope: String?
+    @State private var isProvingLiveness = false
+    @State private var livenessResult: String?
 
     var body: some View {
         ZStack {
@@ -39,11 +43,40 @@ struct RecoveryRequestsView: View {
                 onDismiss: { selectedSession = nil }
             )
         }
+        .toolbar {
+            if myShareEnvelope != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task { await proveLiveness() }
+                    } label: {
+                        if isProvingLiveness {
+                            ProgressView()
+                        } else {
+                            Label(
+                                NSLocalizedString("recovery_group_liveness_prove", comment: "Verify my share"),
+                                systemImage: "checkmark.shield"
+                            )
+                        }
+                    }
+                    .disabled(isProvingLiveness)
+                    .accessibilityIdentifier("recovery-prove-liveness")
+                }
+            }
+        }
+        .alert(
+            NSLocalizedString("recovery_group_liveness_title", comment: "Your recovery share"),
+            isPresented: Binding(get: { livenessResult != nil }, set: { if !$0 { livenessResult = nil } })
+        ) {
+            Button(NSLocalizedString("ok", comment: "OK")) { livenessResult = nil }
+        } message: {
+            Text(livenessResult ?? "")
+        }
         .refreshable {
             await loadRecoveryRequests()
         }
         .task(id: hubContext.browsing) {
             await loadRecoveryRequests()
+            await loadMyShareEnvelope()
         }
     }
 
@@ -108,6 +141,42 @@ struct RecoveryRequestsView: View {
     }
 
     // MARK: - Actions
+
+    /// The holder's own envelope, if any. The server answers "not a holder" with
+    /// one 403, which here just means there is nothing to prove.
+    private func loadMyShareEnvelope() async {
+        guard let hubId = hubContext.activeHubId else {
+            myShareEnvelope = nil
+            return
+        }
+        myShareEnvelope = try? await appState.apiService.getMyShareEnvelope(hubId: hubId).shareEnvelope
+    }
+
+    /// Prove to the hub that this device still holds its share (#2782): get a
+    /// fresh challenge, sign it with the share-derived key in Rust, submit it.
+    /// Only a proof the server verifies makes admins see this share as healthy;
+    /// a failure is shown, never swallowed.
+    private func proveLiveness() async {
+        guard let hubId = hubContext.activeHubId, let envelopeJSON = myShareEnvelope else { return }
+        isProvingLiveness = true
+        defer { isProvingLiveness = false }
+        do {
+            let envelope = try JSONDecoder().decode(HpkeEnvelope.self, from: Data(envelopeJSON.utf8))
+            let challenge = try await appState.apiService.requestShareLivenessChallenge(hubId: hubId)
+            let proof = try appState.cryptoService.recoveryShareLivenessProof(
+                shareEnvelope: envelope,
+                hubId: hubId,
+                challengeHex: challenge.challenge
+            )
+            _ = try await appState.apiService.submitShareLivenessProof(
+                ShareLivenessProof(challenge: challenge.challenge, hubID: hubId, proof: proof)
+            )
+            livenessResult = NSLocalizedString("recovery_group_liveness_success", comment: "Share verified")
+        } catch {
+            livenessResult = NSLocalizedString("recovery_group_liveness_error", comment: "Share verification failed")
+                + ": " + error.localizedDescription
+        }
+    }
 
     private func loadRecoveryRequests() async {
         do {

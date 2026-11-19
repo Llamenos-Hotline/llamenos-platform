@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Falló la verificación de la parte",
+    "liveness": {
+      "title": "Tu parte de recuperación",
+      "description": "Demuestra que este dispositivo aún conserva tu parte de recuperación. Tu parte nunca sale del dispositivo; el centro solo comprueba una firma hecha con ella.",
+      "prove": "Verificar mi parte",
+      "proving": "Verificando…",
+      "success": "Parte verificada. Los administradores verán tu parte como en buen estado.",
+      "error": "Falló la verificación de la parte"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Dejarás de recibir llamadas entrantes.",
     "deleteConfirmTitle": "¿Eliminar este turno?",
-    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante su horario. Si ningún otro turno cubre esas horas, las llamadas irán al grupo de reserva o quedarán sin atender si no hay ninguno. Esta acción no se puede deshacer."
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante su horario. Si ningún otro turno cubre esas horas, las llamadas irán al grupo de reserva o quedarán sin atender si no hay ninguno. Esta acción no se puede deshacer.",
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Contestar llamada",

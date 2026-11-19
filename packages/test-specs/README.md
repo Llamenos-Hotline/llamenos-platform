@@ -102,7 +102,8 @@ bun run test-specs:validate --platform all
 `validate-coverage.ts` proves a step is *bound*; it does not prove the
 step's body does anything (see its own doc comment). `audit-silent-steps.ts`
 checks that instead — see [`STRATEGY.md`](./STRATEGY.md) for the full
-rationale and the current ratchet baseline.
+rationale and the per-step ratchet (`tools/silent-steps.baseline.json`; regenerate
+only after fixing a step, with `--write-baseline`).
 
 ```bash
 bun packages/test-specs/tools/audit-silent-steps.ts

@@ -9,6 +9,8 @@ import { eq, and, gte, lte } from 'drizzle-orm'
 import type { Database } from '../db'
 import { userAvailabilityBlocks } from '../db/schema'
 import { ServiceError } from './settings'
+import type { SealedShiftField } from '@protocol/schemas/shifts'
+import { sealedFieldColumns } from '../lib/sealed-shift-field'
 
 // ---------------------------------------------------------------------------
 // Inferred row types from Drizzle schema
@@ -20,13 +22,15 @@ type CreateAvailabilityInput = {
   userPubkey: string
   startDate: string
   endDate: string
-  encryptedReason?: string
+  /** Sealed by the client (`shift_record.rs`, LABEL_AVAILABILITY_REASON); never the typed text. */
+  encryptedReason?: SealedShiftField | null
 }
 
 type UpdateAvailabilityInput = {
   startDate?: string
   endDate?: string
-  encryptedReason?: string
+  /** Omitted keeps the reason; `null` clears it. */
+  encryptedReason?: SealedShiftField | null
 }
 
 export class ShiftAvailabilityService {
@@ -95,6 +99,7 @@ export class ShiftAvailabilityService {
     }
 
     const id = crypto.randomUUID()
+    const reason = sealedFieldColumns(data.encryptedReason)
 
     const [row] = await this.db
       .insert(userAvailabilityBlocks)
@@ -104,7 +109,8 @@ export class ShiftAvailabilityService {
         userPubkey: data.userPubkey,
         startDate: data.startDate,
         endDate: data.endDate,
-        encryptedReason: data.encryptedReason ?? null,
+        encryptedReason: reason.ciphertext,
+        reasonEnvelopes: reason.envelopes,
       })
       .returning()
 
@@ -125,9 +131,15 @@ export class ShiftAvailabilityService {
       throw new ServiceError(400, 'startDate must be before or equal to endDate')
     }
 
+    const { encryptedReason, ...dates } = data
+    const reason = encryptedReason === undefined ? undefined : sealedFieldColumns(encryptedReason)
+
     const [row] = await this.db
       .update(userAvailabilityBlocks)
-      .set(data)
+      .set({
+        ...dates,
+        ...(reason && { encryptedReason: reason.ciphertext, reasonEnvelopes: reason.envelopes }),
+      })
       .where(
         and(
           eq(userAvailabilityBlocks.id, blockId),

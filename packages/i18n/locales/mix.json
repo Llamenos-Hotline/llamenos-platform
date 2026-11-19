@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "¿Xíta turno yóꞌo?",
-    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer."
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer.",
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Nakuiin llamada",
@@ -4265,6 +4266,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Ma ni̱ kúu ndakuaa-ka parte",
+    "liveness": {
+      "title": "Parte ña̱ ndakoo-ni̱ mií",
+      "description": "Ka̱ʼa̱n ña̱ ni̱ ndaʼa-ka dispositivo yóʼo parte ña̱ ndakoo-ni̱. Parte-ni̱ ndáa-ka ni̱ ndáa-ka kúu dispositivo; hub só̱lo ndakuaa firma ña̱ kuiʼva ni̱ chi̱ka̱a̱ ña̱.",
+      "prove": "Ndakuaa parte-ri",
+      "proving": "Ndakuaa-ña…",
+      "success": "Ni̱ ndakuaa parte. Administrador kúu ni̱ kana̱ ña̱ parte-ni̱ ndáa-ka.",
+      "error": "Ma ni̱ kúu ndakuaa-ka parte"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

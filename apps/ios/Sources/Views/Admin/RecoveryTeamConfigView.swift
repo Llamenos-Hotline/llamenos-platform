@@ -172,6 +172,15 @@ struct RecoveryTeamConfigView: View {
                                 )
                                 .font(.brand(.caption))
                                 .foregroundStyle(.green)
+                            } else if holder.lastLivenessFailure != nil {
+                                // A proof that failed verification (#2782) — shown as a
+                                // failure, not as merely overdue.
+                                Label(
+                                    NSLocalizedString("recovery_group_liveness_failed", comment: "Share verification failed"),
+                                    systemImage: "xmark.shield.fill"
+                                )
+                                .font(.brand(.caption))
+                                .foregroundStyle(.red)
                             } else {
                                 Label(
                                     NSLocalizedString("recovery_group_liveness_stale", comment: "Share verification overdue"),

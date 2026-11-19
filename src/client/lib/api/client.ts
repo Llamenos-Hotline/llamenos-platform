@@ -2,7 +2,7 @@ import * as keyManager from '../key-manager'
 import { createAuthToken } from '../platform'
 import { APP_API_VERSION, emitUpdateRequired } from '../version'
 import { offlineQueue, isQueueableMethod, isNetworkError as isOfflineNetworkError } from '../offline-queue'
-import { getApiUrl, getApiPath } from '../api-config'
+import { getApiUrl, getApiPath, needsServerAddress } from '../api-config'
 import { netFetch } from '../net'
 
 // Auth expiry callback — set by AuthProvider to handle 401s reactively
@@ -28,9 +28,23 @@ function monotoneNow(): number {
   return lastAuthTimestamp
 }
 
+const SESSION_TOKEN_KEY = 'llamenos-session-token'
+
+/**
+ * Whether this device holds a session it could authenticate with right now: a
+ * server to hold it with, and a session token or an unlocked device key. A session
+ * belongs to a server, so with the first-run screen up (no address configured)
+ * there is none even if a token is still in sessionStorage — whatever left it
+ * there has not finished tearing it down (`endServerSession`).
+ */
+export function holdsSession(): boolean {
+  if (needsServerAddress()) return false
+  return sessionStorage.getItem(SESSION_TOKEN_KEY) !== null || keyManager.isUnlocked()
+}
+
 export async function getAuthHeaders(method: string, apiPath: string): Promise<Record<string, string>> {
   // Prefer session token if available (WebAuthn-based sessions)
-  const sessionToken = sessionStorage.getItem('llamenos-session-token')
+  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY)
   if (sessionToken) {
     return { 'Authorization': `Session ${sessionToken}` }
   }
@@ -129,10 +143,18 @@ export async function request<T>(path: string, options: RequestInit & { retries?
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
     try {
+      // A hub's routes answer only to a signed-in caller. Without a session the
+      // answer is a certain 401 (the server authenticates before it looks for the
+      // hub), and a console error with it — so the request is not made. The check
+      // is "do we hold a session", never "is this the active hub": a member hub the
+      // UI is not showing is still asked (multi-hub axiom).
+      if (isHubScopedPath(pathOnly) && !holdsSession()) throw new NoSessionError(path)
+      const authHeaders = await getAuthHeaders(method, pathOnly)
+      if (isHubScopedPath(pathOnly) && !('Authorization' in authHeaders)) throw new NoSessionError(path)
       const headers = {
         'Content-Type': 'application/json',
         'X-API-Version': String(APP_API_VERSION),
-        ...await getAuthHeaders(method, pathOnly),
+        ...authHeaders,
         ...options.headers,
       }
       const res = await netFetch(getApiUrl(path), {
@@ -194,6 +216,7 @@ export async function request<T>(path: string, options: RequestInit & { retries?
     } catch (err) {
       if (err instanceof ApiError) throw err
       if (err instanceof OfflineQueuedError) throw err
+      if (err instanceof NoSessionError) throw err
       // Network error or timeout — retry if idempotent
       lastError = err instanceof Error ? err : new Error(String(err))
       if (attempt < maxRetries) continue
@@ -214,10 +237,31 @@ export async function request<T>(path: string, options: RequestInit & { retries?
   throw lastError ?? new Error('Request failed')
 }
 
+/**
+ * What a hub-scoped route answers, before it looks at anything else, when the hub
+ * does not exist (`hubContext`, apps/worker/middleware/hub.ts; pinned by
+ * hub-middleware.test.ts). Every other 404 under `/hubs/:id/…` is about a thing
+ * inside a hub that does exist.
+ */
+const HUB_NOT_FOUND_ERROR = 'Hub not found'
+
 export class ApiError extends Error {
   constructor(public status: number, public body: string) {
     super(`API error ${status}: ${body}`)
     this.name = 'ApiError'
+  }
+}
+
+/**
+ * Whether `err` is the server saying the hub itself does not exist — as opposed
+ * to a 404 for a resource inside it (a hub key this user has no wrap of, say).
+ */
+export function isHubNotFound(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 404) return false
+  try {
+    return (JSON.parse(err.body) as { error?: unknown }).error === HUB_NOT_FOUND_ERROR
+  } catch {
+    return false
   }
 }
 
@@ -236,6 +280,24 @@ export function getApiErrorCode(err: unknown): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * A hub-scoped request was asked for while this device holds no session: signed
+ * out, locked, or the first-run screen has taken over. Nothing was sent. Work that
+ * started under a session and outlived it (a hub-key sync, a poll) ends on this
+ * rather than reporting a failure — the next session starts it again.
+ */
+export class NoSessionError extends Error {
+  constructor(public path: string) {
+    super(`No session for ${path}`)
+    this.name = 'NoSessionError'
+  }
+}
+
+/** Every route under `/hubs` sits behind the server's authentication. */
+function isHubScopedPath(pathOnly: string): boolean {
+  return pathOnly.startsWith('/hubs/')
 }
 
 export class NetworkError extends Error {

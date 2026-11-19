@@ -33,7 +33,7 @@ import {
   getAssigneeEnvelopeGaps,
   listActiveConversationsInHub,
 } from './api/conversations'
-import { ApiError, NetworkError, OfflineQueuedError } from './api/client'
+import { ApiError, NetworkError, NoSessionError, OfflineQueuedError } from './api/client'
 import { rewrapMessageKey } from './platform'
 import { useAuth } from './auth'
 import { useMemberHubIds } from './member-hubs'
@@ -245,6 +245,12 @@ function reportRewrapFailure(hubId: string, conversationId: string | null, err: 
       console.warn(`[assignee-rewrap] ${where} no longer needs a re-wrap (${err.status})`)
       return
     }
+  }
+  // The session ended under a sweep already under way (sign-out, a server
+  // switch): no request was sent, and the next session's sweep starts afresh.
+  if (err instanceof NoSessionError) {
+    console.debug(`[assignee-rewrap] ${where} stopped: the session ended`)
+    return
   }
   // Offline: the next relay reconnect sweeps again, from a fresh GET.
   if (err instanceof NetworkError || err instanceof OfflineQueuedError) {

@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Verifikasyon pati a echwe",
+    "liveness": {
+      "title": "Pati rekiperasyon ou",
+      "description": "Montre aparèy sa a toujou gen pati rekiperasyon ou. Pati ou a pa janm kite aparèy la; hub la sèlman verifye yon siyati ki fèt avè l.",
+      "prove": "Verifye pati mwen",
+      "proving": "Y ap verifye…",
+      "success": "Pati a verifye. Administratè yo pral wè pati ou an nan bon eta.",
+      "error": "Verifikasyon pati a echwe"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Ou p ap resevwa apèl k ap antre ankò.",
     "deleteConfirmTitle": "Efase ekip travay sa a?",
-    "deleteConfirmMessage": "Volontè nan ekip travay sa a pap resevwa apèl ankò pandan lè li yo. Sof si yon lòt ekip kouvri lè sa yo, apèl yo ap ale nan gwoup ranplasman an, oswa yo pap jwenn repons si pa gen okenn. Pa gen fason pou defèt sa."
+    "deleteConfirmMessage": "Volontè nan ekip travay sa a pap resevwa apèl ankò pandan lè li yo. Sof si yon lòt ekip kouvri lè sa yo, apèl yo ap ale nan gwoup ranplasman an, oswa yo pap jwenn repons si pa gen okenn. Pa gen fason pou defèt sa.",
+    "noAdminReader": "Pa kapab anrejistre tèks sa a: pa gen okenn administratè nan hub sa a ki gen yon aparèy anrejistre, kidonk okenn administratè pa t ap janm kapab li l. Mande yon administratè hub la pou l konekte sou yon aparèy."
   },
   "shortcuts": {
     "answerCall": "Reponn apèl",

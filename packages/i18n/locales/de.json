@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Überprüfung des Anteils fehlgeschlagen",
+    "liveness": {
+      "title": "Dein Wiederherstellungsanteil",
+      "description": "Weise nach, dass dieses Gerät deinen Wiederherstellungsanteil noch besitzt. Dein Anteil verlässt das Gerät nie; der Hub prüft nur eine damit erstellte Signatur.",
+      "prove": "Meinen Anteil überprüfen",
+      "proving": "Wird überprüft…",
+      "success": "Anteil überprüft. Admins sehen deinen Anteil als intakt an.",
+      "error": "Überprüfung des Anteils fehlgeschlagen"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Diese Schicht löschen?",
-    "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen."
+    "deleteConfirmMessage": "Freiwillige in dieser Schicht erhalten während der Schichtzeiten keine Anrufe mehr. Sofern keine andere Schicht diese Zeiten abdeckt, gehen Anrufe an die Ersatzgruppe oder bleiben unbeantwortet, wenn keine festgelegt ist. Das lässt sich nicht rückgängig machen.",
+    "noAdminReader": "Dieser Text kann nicht gespeichert werden: Kein Administrator dieses Hubs hat ein registriertes Gerät, daher könnte ihn nie ein Administrator lesen. Bitten Sie einen Hub-Administrator, sich auf einem Gerät anzumelden."
   },
   "shortcuts": {
     "answerCall": "Anruf annehmen",

@@ -269,8 +269,11 @@ export type HubKeyRotateResponse = z.infer<typeof hubKeyRotateResponseSchema>
  *
  * - `admin`: holders, in the hub, of the admin minimum (D1).
  * - `call-history`: holders, in the hub, of `calls:read-history` (D2).
+ * - `shift-overrides`: holders, in the hub, of `shifts:manage-overrides` — the
+ *   permission that reads override notes (#2778). Clients seal a note to this
+ *   set AND the `admin` set, so an admin can always read it.
  */
-export const readerPurposeSchema = z.enum(['admin', 'call-history'])
+export const readerPurposeSchema = z.enum(['admin', 'call-history', 'shift-overrides'])
 
 export type ReaderPurpose = z.infer<typeof readerPurposeSchema>
 

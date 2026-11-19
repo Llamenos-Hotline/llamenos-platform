@@ -1573,7 +1573,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "دیگر تماس‌های ورودی را دریافت نخواهید کرد.",
     "deleteConfirmTitle": "این شیفت حذف شود؟",
-    "deleteConfirmMessage": "داوطلبان این شیفت در ساعات آن دیگر تماسی دریافت نخواهند کرد. اگر شیفت دیگری این ساعات را پوشش ندهد، تماس‌ها به گروه پشتیبان می‌روند یا اگر گروهی تعیین نشده باشد بی‌پاسخ می‌مانند. این کار قابل بازگشت نیست."
+    "deleteConfirmMessage": "داوطلبان این شیفت در ساعات آن دیگر تماسی دریافت نخواهند کرد. اگر شیفت دیگری این ساعات را پوشش ندهد، تماس‌ها به گروه پشتیبان می‌روند یا اگر گروهی تعیین نشده باشد بی‌پاسخ می‌مانند. این کار قابل بازگشت نیست.",
+    "noAdminReader": "ذخیره این متن ممکن نیست: هیچ مدیری در این مرکز دستگاه ثبت‌شده‌ای ندارد، بنابراین هیچ مدیری هرگز نمی‌تواند آن را بخواند. از یکی از مدیران مرکز بخواهید روی یک دستگاه وارد شود."
   },
   "shortcuts": {
     "answerCall": "پاسخ به تماس",
@@ -4032,6 +4033,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "تأیید سهم ناموفق بود",
+    "liveness": {
+      "title": "سهم بازیابی شما",
+      "description": "ثابت کنید این دستگاه هنوز سهم بازیابی شما را دارد. سهم شما هرگز از دستگاه خارج نمی‌شود؛ هاب فقط امضایی را که با آن ساخته شده بررسی می‌کند.",
+      "prove": "تأیید سهم من",
+      "proving": "در حال تأیید…",
+      "success": "سهم تأیید شد. مدیران سهم شما را سالم خواهند دید.",
+      "error": "تأیید سهم ناموفق بود"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

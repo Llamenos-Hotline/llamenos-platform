@@ -52,6 +52,7 @@ import { buildAuthMessage, randomAuthNonce } from '@shared/auth-message'
 import { shamirCommitment } from './shamir-mock'
 import { decryptProvisioningBundle, newDeviceProvisioningSas } from './provisioning-mock'
 import { openCaseMock, sealCaseMock, type CaseCiphertextMock, type CasePurposeMock } from './case-record-mock'
+import { livenessPublicKey, signLivenessProof } from '../helpers/recovery-liveness'
 
 /** Mirrors `platform.ts` RECOVERY_SHARE_COMMITMENT_MISMATCH / crypto.rs. */
 const RECOVERY_SHARE_COMMITMENT_MISMATCH = 'Share does not match its commitment'
@@ -1113,7 +1114,28 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
       publicKeyHex: bytesToHex(publicKey),
       shareEnvelopes,
       commitments: splitResult.commitments,
+      livenessPublicKeys: splitResult.shares.map((share) =>
+        livenessPublicKey({ x: share.x, y: hexToBytes(share.y) }),
+      ),
     }
+  },
+
+  // Prove this device holds its share (mirrors recovery_share_liveness_proof_from_state):
+  // open the share, sign the challenge with its derived key, bound to the hub and to
+  // this device's own signing pubkey — never one the caller names.
+  recovery_share_liveness_proof_from_state: async (a) => {
+    const secrets = requireSecrets()
+    const { signingPubkeyHex } = requireDeviceState()
+    const challengeHex = a.challengeHex as string
+    if (!/^[0-9a-f]{64}$/.test(challengeHex)) throw new Error('Liveness challenge must be 32 bytes')
+    const share = await hpkeOpenMock(
+      a.envelope as { v: number; labelId: number; enc: string; ct: string },
+      bytesToHex(secrets.encryptionSeed),
+      LABEL_RECOVERY_GROUP_SHARE_WRAP,
+      new Uint8Array(0),
+    )
+    if (share.length === 0) throw new Error('Decrypted share is empty')
+    return signLivenessProof({ x: share[0], y: share.slice(1) }, a.hubId as string, signingPubkeyHex, challengeHex)
   },
 
   // Approve a recovery session (mirrors recovery_share_contribute_from_state). Like

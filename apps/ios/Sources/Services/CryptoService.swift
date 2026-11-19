@@ -184,6 +184,13 @@ private func ffiMobileShamirVerify(share: ShamirShare, commitmentHex: String) th
     try mobileShamirVerify(share: share, commitmentHex: commitmentHex)
 }
 
+// Recovery share liveness proof (#2782) — opens the share and signs inside Rust
+private func ffiMobileRecoveryShareLivenessProof(
+    shareEnvelope: HpkeEnvelope, hubId: String, challengeHex: String
+) throws -> String {
+    try mobileRecoveryShareLivenessProof(shareEnvelope: shareEnvelope, hubId: hubId, challengeHex: challengeHex)
+}
+
 // V3 Recovery group keypair generation (stateless — produces X25519 keypair)
 private func ffiMobileRecoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
     mobileRecoveryGroupGenerateKeypair()
@@ -448,6 +455,34 @@ final class CryptoService: @unchecked Sendable {
         )
     }
 
+    // MARK: - Free-text shift fields (sealed per purpose, #2777, #2778)
+
+    /// Seal an availability reason or an override note as this device, for this
+    /// device plus `readerPubkeys` (X25519).
+    ///
+    /// No label and no AAD parameter: `mobileSealShiftField` derives both from
+    /// `purpose` inside `packages/crypto/src/shift_record.rs`. Both fields used
+    /// to go on the wire as the typed text, into columns named `encrypted_*`.
+    func sealShiftField(purpose: ShiftFieldPurpose, plaintext: String, readerPubkeys: [String]) throws -> SealedShiftField {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        let sealed = try mobileSealShiftField(purpose: purpose, plaintext: plaintext, readerPubkeys: readerPubkeys)
+        return SealedShiftField(
+            encryptedContent: sealed.encryptedContent,
+            envelopes: sealed.readerEnvelopes.map { SharedAdminEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
+        )
+    }
+
+    /// Open a sealed shift field as this device from all of its envelopes; Rust
+    /// picks the one addressed to this device's X25519 key.
+    func openShiftField(purpose: ShiftFieldPurpose, sealed: SealedShiftField) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try mobileOpenShiftField(
+            purpose: purpose,
+            encryptedContent: sealed.encryptedContent,
+            envelopes: sealed.envelopes.map { RecipientKeyEnvelope(pubkey: $0.pubkey, enc: $0.enc, ct: $0.ct) }
+        )
+    }
+
     /// Generate 32 random bytes as hex (for content keys, etc.).
     func randomBytesHex() -> String {
         ffiMobileRandomBytesHex()
@@ -675,6 +710,23 @@ final class CryptoService: @unchecked Sendable {
 
     func recoveryGroupGenerateKeypair() -> RecoveryGroupKeypair {
         ffiMobileRecoveryGroupGenerateKeypair()
+    }
+
+    /// Prove this device still holds its recovery share (#2782).
+    ///
+    /// Rust opens the holder's share envelope with this device's key and signs
+    /// the server's single-use `challengeHex` with the key derived from the
+    /// share, bound to `hubId` and to this device's own signing pubkey — the
+    /// identity the server authenticates the submission as. Returns the proof
+    /// (hex) for `POST /api/recovery-group/shares/liveness`. Neither the share
+    /// nor the derived key enters Swift.
+    func recoveryShareLivenessProof(shareEnvelope: HpkeEnvelope, hubId: String, challengeHex: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileRecoveryShareLivenessProof(
+            shareEnvelope: shareEnvelope,
+            hubId: hubId,
+            challengeHex: challengeHex
+        )
     }
 
     // MARK: - Call Metadata Decryption (HPKE)

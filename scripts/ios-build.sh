@@ -70,56 +70,12 @@ info() { echo -e "${BLUE}[ios]${NC} $*"; }
 
 DEV_SIM_NAME="${IOS_SIMULATOR:-llamenos-dev-ios}"
 
-find_simulator_udid() {
-  local udid runtime types type err
-  udid=$(xcrun simctl list devices available -j 2>/dev/null | python3 -c "
-import json, sys
-name = sys.argv[1]
-data = json.load(sys.stdin)
-for runtime, devices in data.get('devices', {}).items():
-    if 'iOS' not in runtime:
-        continue
-    for d in devices:
-        if d.get('isAvailable') and d.get('name') == name:
-            print(d['udid'])
-            sys.exit(0)
-" "$DEV_SIM_NAME") || true
-  if [ -n "$udid" ]; then
-    echo "$udid"
-    return
-  fi
+# The create-or-reuse / UDID resolution lives in lib/ios-simulator.sh, shared
+# with scripts/test-ios.sh and scripts/test-feature.sh (#2861).
+# shellcheck source=lib/ios-simulator.sh
+source "$SCRIPT_DIR/lib/ios-simulator.sh"
 
-  log "Creating dedicated simulator: $DEV_SIM_NAME"
-  runtime=$(xcrun simctl list runtimes -j | python3 -c "
-import json, sys
-rs = [r for r in json.load(sys.stdin)['runtimes']
-      if r.get('isAvailable') and r.get('platform') == 'iOS']
-if not rs: sys.exit('no available iOS runtime')
-print(sorted(rs, key=lambda r: r['version'], reverse=True)[0]['identifier'])
-")
-  # Iterate iPhone types newest-first until simctl accepts one: a hardcoded
-  # type newer than the installed runtime is listed but refused
-  # ("Incompatible device").
-  types=$(xcrun simctl list devicetypes -j | python3 -c "
-import json, sys
-ts = [t['identifier'] for t in json.load(sys.stdin)['devicetypes']
-      if t.get('name', '').startswith('iPhone')]
-if not ts: sys.exit('simctl lists no iPhone device types')
-for t in ts:
-    print(t)
-")
-  err="${TMPDIR:-/tmp}/ios-build-simctl-create.err"
-  for type in $types; do
-    if udid=$(xcrun simctl create "$DEV_SIM_NAME" "$type" "$runtime" 2>"$err"); then
-      log "Created simulator: $DEV_SIM_NAME ($udid)"
-      echo "$udid"
-      return
-    fi
-    warn "simctl refused $type on $runtime: $(tr '\n' ' ' < "$err")"
-  done
-  err "could not create an iPhone simulator on $runtime; simctl refused every iPhone device type"
-  return 1
-}
+find_simulator_udid() { ios_sim_resolve_dedicated "$DEV_SIM_NAME"; }
 
 # ─── Helpers ──────────────────────────────────────────────────
 

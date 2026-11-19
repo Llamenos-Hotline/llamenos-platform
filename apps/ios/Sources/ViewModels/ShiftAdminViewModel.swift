@@ -26,6 +26,7 @@ import UIKit
 @Observable
 final class ShiftAdminViewModel {
     private let apiService: APIService
+    private let cryptoService: CryptoService
     private let hubContext: HubContext
 
     // MARK: - Public State
@@ -38,6 +39,10 @@ final class ShiftAdminViewModel {
 
     /// Overrides inside the currently selected date range.
     var overrides: [Override] = []
+
+    /// Each override's note, opened on this device (#2778). Keyed by override
+    /// id; an override with no note has no entry.
+    private(set) var openedNotes: [String: OpenedShiftField] = [:]
 
     /// Pending join/leave requests awaiting review.
     var requests: [Request] = []
@@ -70,8 +75,9 @@ final class ShiftAdminViewModel {
 
     // MARK: - Initialization
 
-    init(apiService: APIService, hubContext: HubContext) {
+    init(apiService: APIService, cryptoService: CryptoService, hubContext: HubContext) {
         self.apiService = apiService
+        self.cryptoService = cryptoService
         self.hubContext = hubContext
     }
 
@@ -281,6 +287,9 @@ final class ShiftAdminViewModel {
                 .getHubOwned("/api/shifts/overrides?from=\(from)&to=\(to)", as: ShiftOverrideListResponse.self)
                 .rows(\.overrides)
                 .sorted { $0.date < $1.date }
+            openedNotes = overrides.reduce(into: [:]) { opened, override in
+                opened[override.id] = OpenedShiftField.open(override.encryptedNote, as: .overrideNote, with: cryptoService)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -289,6 +298,9 @@ final class ShiftAdminViewModel {
 
     /// Create an override. `shiftId == nil` means "all shifts on this date"
     /// (the desktop panel's only mode); a specific shift scopes it.
+    ///
+    /// The note is sealed in Rust to this device, the hub's admins and its
+    /// `shifts:manage-overrides` holders before it is sent (#2778).
     func createOverride(
         shiftId: String?,
         date: Date,
@@ -300,10 +312,19 @@ final class ShiftAdminViewModel {
         errorMessage = nil
         successMessage = nil
         do {
-            let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var sealedNote: SealedShiftField?
+            if !trimmedNote.isEmpty {
+                let readers = try await ShiftFieldReaders.readers(for: .overrideNote, apiService: apiService)
+                sealedNote = try cryptoService.sealShiftField(
+                    purpose: .overrideNote,
+                    plaintext: trimmedNote,
+                    readerPubkeys: readers
+                )
+            }
             let body = CreateShiftOverrideBody(
                 date: DateFormatting.wireDateString(from: date),
-                encryptedNote: trimmedNote?.isEmpty == false ? trimmedNote : nil,
+                encryptedNote: sealedNote,
                 id: UUID().uuidString,
                 shiftID: shiftId,
                 type: type,

@@ -23,7 +23,7 @@ use llamenos_core::{
         LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
         LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
     },
-    puk, sas, shamir, sigchain,
+    puk, recovery_liveness, sas, shamir, sigchain,
 };
 use tauri::Manager;
 
@@ -395,6 +395,42 @@ impl CryptoState {
             "encryptedShare": encrypted_share,
             "signature": signature,
         }))
+    }
+
+    /// Body of `recovery_share_liveness_proof_from_state`, without Tauri state.
+    ///
+    /// Opens this device's share envelope, derives the share's liveness key and
+    /// signs (hub, this device's signing pubkey, challenge) with it (#2782). The
+    /// holder identity is this device's own signing key — the same pubkey the
+    /// server authenticates the submission as — never an argument.
+    fn recovery_share_liveness_proof(
+        &self,
+        envelope: &hpke_envelope::HpkeEnvelope,
+        hub_id: &str,
+        challenge_hex: &str,
+    ) -> Result<String, String> {
+        let challenge: [u8; recovery_liveness::LIVENESS_CHALLENGE_LEN] = hex::decode(challenge_hex)
+            .map_err(err_str)?
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Liveness challenge must be 32 bytes".to_string())?;
+        let ds = self.get_device_state()?;
+        let secret_hex = self.encryption_secret_hex()?;
+        let plaintext =
+            hpke_envelope::hpke_open(envelope, &secret_hex, LABEL_RECOVERY_GROUP_SHARE_WRAP, &[])
+                .map_err(err_str)?;
+        let Some((&x, y)) = plaintext.split_first() else {
+            return Err("Decrypted share is empty".into());
+        };
+        let share = shamir::Share { x, y: y.to_vec() };
+        let sig = recovery_liveness::sign_liveness_proof(
+            &share,
+            hub_id,
+            &ds.signing_pubkey_hex,
+            &challenge,
+        )
+        .map_err(err_str)?;
+        Ok(hex::encode(sig))
     }
 
     #[cfg(test)]
@@ -1074,7 +1110,9 @@ pub fn shamir_verify(x: u8, y_hex: String, commitment_hex: String) -> Result<boo
 /// seal each share to its holder's X25519 pubkey — all inside Rust.
 ///
 /// Returns the group public key, one sealed envelope per holder (in
-/// `holder_encryption_pubkeys` order) and the share commitments. Neither the
+/// `holder_encryption_pubkeys` order), the share commitments, and one liveness
+/// verifying key per share (same order) for the server to check liveness
+/// proofs against (#2782). Neither the
 /// private key nor any plaintext share crosses the IPC boundary: with N ≥
 /// threshold plaintext shares the webview could reconstruct the group key
 /// itself, which is the same as being handed the key.
@@ -1103,7 +1141,13 @@ pub fn recovery_group_create(
         .map(|share| hex::encode(shamir::commit(share)))
         .collect();
     let mut share_envelopes = Vec::with_capacity(shares.len());
+    let mut liveness_public_keys = Vec::with_capacity(shares.len());
     for (share, holder_pubkey) in shares.iter().zip(&holder_encryption_pubkeys) {
+        // The verifier the server checks this holder's liveness proofs against
+        // (#2782) — a one-way function of the share, safe to hand to the server.
+        liveness_public_keys.push(hex::encode(
+            recovery_liveness::liveness_public_key(share).map_err(err_str)?,
+        ));
         // Share plaintext: x (1 byte) || y.
         let mut plaintext = zeroize::Zeroizing::new(vec![share.x]);
         plaintext.extend_from_slice(&share.y);
@@ -1121,6 +1165,7 @@ pub fn recovery_group_create(
         "publicKeyHex": hex::encode(public.as_bytes()),
         "shareEnvelopes": share_envelopes,
         "commitments": commitments,
+        "livenessPublicKeys": liveness_public_keys,
     }))
 }
 
@@ -1199,6 +1244,24 @@ pub async fn recovery_share_contribute_from_state(
         return Err("Server returned a different recovery session".into());
     }
     state.recovery_share_contribution(&envelope, commitment_hex, &session)
+}
+
+/// Prove this device still holds its recovery share (#2782): open the share,
+/// derive its liveness key and sign the server's challenge with it — all in
+/// Rust, so neither the share nor the derived key reaches the webview. Returns
+/// the 64-byte proof as hex for `POST /api/recovery-group/shares/liveness`.
+///
+/// A webview could only ask this device to prove what it can in fact prove:
+/// the signature is bound to this device's own signing pubkey and to the hub
+/// and challenge passed, so it is useless as a proof for anyone else.
+#[tauri::command]
+pub fn recovery_share_liveness_proof_from_state(
+    state: tauri::State<'_, CryptoState>,
+    envelope: hpke_envelope::HpkeEnvelope,
+    hub_id: String,
+    challenge_hex: String,
+) -> Result<String, String> {
+    state.recovery_share_liveness_proof(&envelope, &hub_id, &challenge_hex)
 }
 
 /// HPKE-encrypted share envelope for recovery group reconstruction.
@@ -2351,6 +2414,75 @@ mod ipc_surface_tests {
             )
             .unwrap_err();
         assert!(err.contains("commitment"), "{err}");
+    }
+
+    #[test]
+    fn recovery_share_liveness_proof_verifies_only_against_its_own_share() {
+        let holder = device();
+        let other = device();
+        let created = recovery_group_create(
+            3,
+            2,
+            vec![
+                holder.encryption_pubkey_hex.clone(),
+                other.encryption_pubkey_hex.clone(),
+                device().encryption_pubkey_hex,
+            ],
+        )
+        .unwrap();
+        let keys = created["livenessPublicKeys"].as_array().unwrap();
+        assert_eq!(keys.len(), 3);
+        let key = |i: usize| -> [u8; 32] {
+            hex::decode(keys[i].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        };
+        let held: hpke_envelope::HpkeEnvelope =
+            serde_json::from_value(created["shareEnvelopes"][0].clone()).unwrap();
+        let challenge = [9u8; 32];
+        let proof = holder
+            .state
+            .recovery_share_liveness_proof(&held, "hub-1", &hex::encode(challenge))
+            .unwrap();
+        let sig: [u8; 64] = hex::decode(proof).unwrap().try_into().unwrap();
+
+        assert!(recovery_liveness::verify_liveness_proof(
+            &key(0),
+            "hub-1",
+            &holder.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        // Not another holder's key, hub, or identity.
+        assert!(!recovery_liveness::verify_liveness_proof(
+            &key(1),
+            "hub-1",
+            &holder.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        assert!(!recovery_liveness::verify_liveness_proof(
+            &key(0),
+            "hub-2",
+            &holder.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        assert!(!recovery_liveness::verify_liveness_proof(
+            &key(0),
+            "hub-1",
+            &other.signing_pubkey_hex,
+            &challenge,
+            &sig
+        ));
+        // A device that does not hold the share cannot open it to prove anything.
+        assert!(
+            other
+                .state
+                .recovery_share_liveness_proof(&held, "hub-1", &hex::encode(challenge))
+                .is_err()
+        );
     }
 
     /// The server's record of a session, as `fetch_json` would hand it over.

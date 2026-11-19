@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "فشل التحقق من الحصة",
+    "liveness": {
+      "title": "حصة الاسترداد الخاصة بك",
+      "description": "أثبت أن هذا الجهاز ما زال يحتفظ بحصة الاسترداد الخاصة بك. لا تغادر حصتك الجهاز أبدًا؛ فالمركز يتحقق فقط من توقيع تم إنشاؤه بها.",
+      "prove": "التحقق من حصتي",
+      "proving": "جارٍ التحقق…",
+      "success": "تم التحقق من الحصة. سيرى المشرفون أن حصتك سليمة.",
+      "error": "فشل التحقق من الحصة"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "ستتوقف عن تلقي المكالمات الواردة.",
     "deleteConfirmTitle": "هل تريد حذف هذه المناوبة؟",
-    "deleteConfirmMessage": "سيتوقف المتطوعون في هذه المناوبة عن تلقي المكالمات خلال ساعاتها. وما لم تغطِّ مناوبة أخرى هذه الساعات، ستذهب المكالمات إلى المجموعة الاحتياطية أو تبقى دون رد إن لم تُحدَّد مجموعة. لا يمكن التراجع عن هذا الإجراء."
+    "deleteConfirmMessage": "سيتوقف المتطوعون في هذه المناوبة عن تلقي المكالمات خلال ساعاتها. وما لم تغطِّ مناوبة أخرى هذه الساعات، ستذهب المكالمات إلى المجموعة الاحتياطية أو تبقى دون رد إن لم تُحدَّد مجموعة. لا يمكن التراجع عن هذا الإجراء.",
+    "noAdminReader": "يتعذّر حفظ هذا النص: لا يملك أي مشرف في هذا المركز جهازًا مسجّلًا، لذلك لن يتمكن أي مشرف من قراءته أبدًا. اطلب من مشرف المركز تسجيل الدخول على جهاز."
   },
   "shortcuts": {
     "answerCall": "الرد على المكالمة",

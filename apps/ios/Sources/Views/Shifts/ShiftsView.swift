@@ -299,8 +299,8 @@ struct ShiftsView: View {
                             Text("\(block.startDate) – \(block.endDate)")
                                 .font(.brand(.body))
                                 .foregroundStyle(Color.brandForeground)
-                            if let reason = block.encryptedReason, !reason.isEmpty {
-                                Text(reason)
+                            if let reason = vm.openedReasons[block.id] {
+                                Text(reason.displayText)
                                     .font(.brand(.caption))
                                     .foregroundStyle(Color.brandMutedForeground)
                             }
@@ -430,6 +430,7 @@ struct ShiftsView: View {
         }
         let vm = ShiftsViewModel(
             apiService: appState.apiService,
+            cryptoService: appState.cryptoService,
             hubContext: hubContext,
             linphoneService: appState.linphoneService,
             shiftClockService: appState.shiftClockService

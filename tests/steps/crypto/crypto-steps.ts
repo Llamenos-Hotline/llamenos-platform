@@ -642,6 +642,7 @@ When('I create a recovery group of 3 shares with threshold 2 sealed to this devi
       keys: Object.keys(out).sort(),
       envelopes: (out.shareEnvelopes as unknown[]).length,
       commitments: (out.commitments as unknown[]).length,
+      livenessPublicKeys: out.livenessPublicKeys as string[],
       envelope: (out.shareEnvelopes as unknown[])[0],
     }
   })
@@ -650,9 +651,15 @@ When('I create a recovery group of 3 shares with threshold 2 sealed to this devi
 Then('the result should contain sealed share envelopes and no plaintext shares', async ({ cryptoWorld }) => {
   const r = cryptoWorld.recoveryGroup
   expect(r).toBeTruthy()
-  expect(r!.keys).toEqual(['commitments', 'publicKeyHex', 'shareEnvelopes'])
+  // Exhaustive on purpose: a new returned field must be consciously judged safe
+  // before it is added here. `livenessPublicKeys` is public key material only —
+  // one Ed25519 verifying key per share, a one-way function of the share (#2782).
+  expect(r!.keys).toEqual(['commitments', 'livenessPublicKeys', 'publicKeyHex', 'shareEnvelopes'])
   expect(r!.envelopes).toBe(3)
   expect(r!.commitments).toBe(3)
+  // Each is a 32-byte Ed25519 public key (64 hex chars) — a 33-byte share (x‖y) could not pass.
+  expect(r!.livenessPublicKeys).toHaveLength(3)
+  for (const key of r!.livenessPublicKeys) expect(key).toMatch(/^[0-9a-f]{64}$/)
 })
 
 Then('the webview should be unable to open a share envelope itself', async ({ page, cryptoWorld }) => {

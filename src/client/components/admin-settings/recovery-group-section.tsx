@@ -1,11 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
-import {
-  enrollRecoveryGroup,
-  type RecoveryGroupEnrollBody,
-} from '@/lib/api'
-import type { RecoveryGroupInfo } from '@protocol/schemas/recovery-group'
+import { enrollRecoveryGroup } from '@/lib/api'
+import type { RecoveryGroupEnrollBody, RecoveryGroupInfo } from '@protocol/schemas/recovery-group'
 import {
   recoveryGroupCreate,
   sigchainCreateLinkFromState,
@@ -108,14 +105,17 @@ export function RecoveryGroupSettingsSection({
 
       // 2. Generate the recovery group keypair, split it and seal every share to its
       //    holder in Rust — neither the private key nor a plaintext share enters JS
-      const { publicKeyHex, shareEnvelopes: sealedShares, commitments } = await recoveryGroupCreate(
-        totalShares,
-        threshold,
-        holderEncryptionPubkeys,
-      )
+      const {
+        publicKeyHex,
+        shareEnvelopes: sealedShares,
+        commitments,
+        livenessPublicKeys,
+      } = await recoveryGroupCreate(totalShares, threshold, holderEncryptionPubkeys)
       const shareEnvelopes = selectedHolders.map((holderPubkey, idx) => ({
         holderPubkey,
-        envelope: JSON.stringify(sealedShares[idx]),
+        shareEnvelope: JSON.stringify(sealedShares[idx]),
+        // The key this holder's liveness proofs are verified against (#2782).
+        livenessPublicKey: livenessPublicKeys[idx],
       }))
 
       // 3. Create sigchain link for the recovery group enrollment
@@ -149,7 +149,6 @@ export function RecoveryGroupSettingsSection({
         sigchainLinkHash: sigchainLink.entryHash,
         delayHours,
         emergencyFloorHours,
-        rotate: isRotation,
       }
 
       await enrollRecoveryGroup(body)
@@ -204,10 +203,14 @@ export function RecoveryGroupSettingsSection({
               const candidate = shareHolderCandidates.find(
                 (c) => c.pubkey === holder.holderPubkey,
               )
+              // Healthy only on a VERIFIED liveness proof (#2782). A proof that
+              // failed verification clears lastLivenessProof server-side, and is
+              // shown as a failure rather than as merely stale.
               const livenessOk =
-                holder.lastLivenessProof &&
+                holder.lastLivenessProof !== null &&
                 Date.now() - new Date(holder.lastLivenessProof).getTime() <
                   30 * 24 * 60 * 60 * 1000
+              const livenessFailed = !livenessOk && holder.lastLivenessFailure !== null
               return (
                 <div key={holder.holderPubkey} className="flex items-center gap-2 text-xs">
                   <span className="truncate max-w-[200px]">
@@ -226,13 +229,21 @@ export function RecoveryGroupSettingsSection({
                   )}
                   <Badge
                     variant="outline"
+                    data-testid={`recovery-holder-liveness-${holder.holderPubkey.slice(0, 16)}`}
+                    data-liveness={livenessOk ? 'ok' : livenessFailed ? 'failed' : 'stale'}
                     className={
                       livenessOk
                         ? 'text-emerald-600 border-emerald-600/30'
-                        : 'text-amber-600 border-amber-600/30'
+                        : livenessFailed
+                          ? 'text-destructive border-destructive/30'
+                          : 'text-amber-600 border-amber-600/30'
                     }
                   >
-                    {livenessOk ? t('recoveryGroup.livenessOk') : t('recoveryGroup.livenessStale')}
+                    {livenessOk
+                      ? t('recoveryGroup.livenessOk')
+                      : livenessFailed
+                        ? t('recoveryGroup.livenessFailed')
+                        : t('recoveryGroup.livenessStale')}
                   </Badge>
                 </div>
               )

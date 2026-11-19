@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "हिस्से का सत्यापन विफल रहा",
+    "liveness": {
+      "title": "आपका रिकवरी हिस्सा",
+      "description": "साबित करें कि यह डिवाइस अब भी आपका रिकवरी हिस्सा रखता है। आपका हिस्सा डिवाइस से बाहर कभी नहीं जाता; हब केवल उससे बने हस्ताक्षर की जाँच करता है।",
+      "prove": "मेरा हिस्सा सत्यापित करें",
+      "proving": "सत्यापित किया जा रहा है…",
+      "success": "हिस्सा सत्यापित हो गया। एडमिन आपके हिस्से को स्वस्थ देखेंगे।",
+      "error": "हिस्से का सत्यापन विफल रहा"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "आपको आने वाली कॉल मिलना बंद हो जाएगा।",
     "deleteConfirmTitle": "यह शिफ़्ट हटाएँ?",
-    "deleteConfirmMessage": "इस शिफ़्ट के स्वयंसेवकों को इसके समय के दौरान कॉल मिलना बंद हो जाएगा। यदि कोई और शिफ़्ट उन घंटों को कवर नहीं करती, तो कॉल बैकअप समूह को जाएँगी, या समूह न होने पर अनुत्तरित रहेंगी। इसे पूर्ववत नहीं किया जा सकता।"
+    "deleteConfirmMessage": "इस शिफ़्ट के स्वयंसेवकों को इसके समय के दौरान कॉल मिलना बंद हो जाएगा। यदि कोई और शिफ़्ट उन घंटों को कवर नहीं करती, तो कॉल बैकअप समूह को जाएँगी, या समूह न होने पर अनुत्तरित रहेंगी। इसे पूर्ववत नहीं किया जा सकता।",
+    "noAdminReader": "यह पाठ सहेजा नहीं जा सकता: इस हब के किसी भी एडमिन का कोई पंजीकृत डिवाइस नहीं है, इसलिए कोई एडमिन इसे कभी पढ़ नहीं सकेगा। हब के किसी एडमिन से किसी डिवाइस पर साइन इन करने को कहें।"
   },
   "shortcuts": {
     "answerCall": "कॉल का उत्तर दें",

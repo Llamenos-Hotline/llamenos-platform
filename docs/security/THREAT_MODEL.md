@@ -721,7 +721,7 @@ This prevents:
 | Recovery initiation without identity verification | Attacker initiates recovery for another user without proving identity | Recovery initiation requires Signal OTP verification via the signal-notifier sidecar (zero-knowledge); IP rate limiting as defense-in-depth; server creates recovery session only after Signal verification |
 | Stale share after member departure | Departed share holder's share remains valid, reducing the effective security of the group | EP08 erasure invalidates recovery group shares held by departed users and triggers re-deal of affected groups excluding the departed member |
 | Recovery ceremony desynchronization | Network failure during share contribution leaves ceremony in inconsistent state | Ceremony is idempotent — share contributions can be retried; session has configurable timeout; admin can cancel stuck sessions |
-| Liveness proof forgery | Attacker forges a share holder's liveness proof to claim they are still active | Liveness proofs are Ed25519-signed with the share holder's device key and domain-separated (`LABEL_RECOVERY_LIVENESS_PROOF`); verified against sigchain |
+| Liveness proof forgery | Attacker (or a holder's device that has lost its share) claims the holder can still produce their share | A liveness proof is an Ed25519 signature under a key derived from the holder's Shamir share itself (HKDF, `LABEL_RECOVERY_LIVENESS_PROOF`), over a single-use server challenge bound to hub and holder; the server verifies it against the liveness public key stored at enrollment. A device key or authenticated session alone cannot produce one. A failed proof clears the holder's healthy status and is recorded (#2782) |
 
 ### Recovery Group Pubkey Transparency
 

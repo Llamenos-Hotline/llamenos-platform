@@ -3235,6 +3235,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "조각 확인에 실패했습니다",
+    "liveness": {
+      "title": "내 복구 조각",
+      "description": "이 기기가 여전히 내 복구 조각을 가지고 있음을 증명하세요. 조각은 기기 밖으로 나가지 않으며, 허브는 그 조각으로 만든 서명만 확인합니다.",
+      "prove": "내 조각 확인",
+      "proving": "확인 중…",
+      "success": "조각이 확인되었습니다. 관리자에게 내 조각이 정상으로 표시됩니다.",
+      "error": "조각 확인에 실패했습니다"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -4104,7 +4113,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "더 이상 수신 전화를 받지 않습니다.",
     "deleteConfirmTitle": "이 근무를 삭제할까요?",
-    "deleteConfirmMessage": "이 근무의 자원봉사자는 해당 시간 동안 전화를 받지 못하게 됩니다. 다른 근무가 그 시간을 맡지 않으면 전화는 대체 그룹으로 가거나, 대체 그룹이 없으면 응답되지 않습니다. 이 작업은 되돌릴 수 없습니다."
+    "deleteConfirmMessage": "이 근무의 자원봉사자는 해당 시간 동안 전화를 받지 못하게 됩니다. 다른 근무가 그 시간을 맡지 않으면 전화는 대체 그룹으로 가거나, 대체 그룹이 없으면 응답되지 않습니다. 이 작업은 되돌릴 수 없습니다.",
+    "noAdminReader": "이 텍스트를 저장할 수 없습니다. 이 허브의 어떤 관리자도 등록된 기기가 없어서 어떤 관리자도 이 내용을 읽을 수 없습니다. 허브 관리자에게 기기에서 로그인하도록 요청하세요."
   },
   "shortcuts": {
     "answerCall": "전화 받기",

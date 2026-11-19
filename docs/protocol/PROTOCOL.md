@@ -806,6 +806,7 @@ readersFor(hub, purpose) =
 |----------------|--------------------------------------------|-------------------|
 | `admin`        | `settings:manage` + `notes:read-all` (the admin minimum) | D1 |
 | `call-history` | `calls:read-history`                       | D2 |
+| `shift-overrides` | `shifts:manage-overrides`              | #2778 |
 
 **Subject readers.** Some records are additionally sealed to the one member
 they are *about*. A subject reader purpose maps to permissions in
@@ -1576,6 +1577,49 @@ Case records and comments written before #2499 by desktop or Android
 (`LABEL_MESSAGE`, no AAD) and comments written by Android (sealed as notes) do not
 open under this construction. Pre-production: no migration or fallback reader is
 provided.
+
+### 2.19 Availability Reasons and Shift Override Notes
+
+Two shift rows carry a sentence a person typed: an availability block's **reason**
+(`encryptedReason`, why a volunteer cannot take shifts) and a shift override's
+**note** (`encryptedNote`, why a shift is cancelled or who covers it). Both are
+client-sealed with the §2.18 construction, differing only in the label:
+
+| Purpose | Label | Registry `labelId` |
+|---------|-------|--------------------|
+| availability reason | `LABEL_AVAILABILITY_REASON` (`llamenos:availability-reason`) | 81 |
+| override note | `LABEL_SHIFT_OVERRIDE_NOTE` (`llamenos:shift-override-note`) | 84 |
+
+On the wire each is one object, `SealedShiftField`, or `null` when there is no text:
+
+```
+SealedShiftField = { "encryptedContent": hex, "envelopes": RecipientEnvelope[] (≥ 1) }
+  encryptedContent = hex(iv(12) || AES-256-GCM(content_key, plaintext, aad = UTF-8(label)) || tag(16))
+  envelope.ct      = HPKE(info = label, aad = UTF-8(label + ":key-wrap")).Seal(content_key)
+```
+
+A bare string is **refused** (400). Both fields used to be `z.string()` and the only
+writer (iOS) sent the typed text, so two columns named `encrypted_*` held plaintext
+(#2777, #2778); the migration that introduced envelopes scrubbed every such value.
+The server stores the object as two columns (`encrypted_reason` + `reason_envelopes`,
+`encrypted_note` + `note_envelopes`) and returns it unchanged; a row with only one of
+the two reads as `null`.
+
+**Readers.** The sealing device is always a reader. The others are the hub's
+`admin` reader set (§2.4.2) — and, for an override note, the `shift-overrides` set,
+whose holders can list overrides without being admins. An availability reason is
+sealed to admins only: the route that lists every block requires `shifts:manage`,
+which only a `shifts:*` or `*` wildcard grants, so admins are exactly who can read
+reasons today; a reason is never sealed to every hub member. A client with no
+`admin` reader refuses to write. The server refuses (422) a field whose envelopes
+name no admin recipient, and 503 when the hub has no admin recipient at all (§4.7
+write guard, `assertAdminCanRead`). The note is never written to the audit log.
+
+**Where the decision lives.** `packages/crypto/src/shift_record.rs`, reached through
+an operation that takes a purpose (`availability-reason`, `override-note`) and no
+label or AAD: `mobile_seal_shift_field` / `mobile_open_shift_field` on iOS and
+Android. A reason opens as no note and a note as no reason, and neither opens as a
+case ciphertext. Desktop and Android do not collect either field yet.
 
 ---
 
@@ -2890,9 +2934,9 @@ Response: { "generation": int, "epoch": int }  // HubKeyRotateResponse
 // One transaction (§2.7 Key Rotation): 409 on a stale generation, a member left out, a value not
 // re-sealed or changed since the read, or a shredded hub; 403 for a wrap addressed to a non-member.
 
-GET /api/hubs/:hubId/readers?purpose=admin|call-history
+GET /api/hubs/:hubId/readers?purpose=admin|call-history|shift-overrides
 Auth: Required (hub member)
-Response: { "hubId": string, "purpose": "admin" | "call-history", "recipients": hex64[] }  // HubReadersResponse
+Response: { "hubId": string, "purpose": "admin" | "call-history" | "shift-overrides", "recipients": hex64[] }  // HubReadersResponse
 // The hub's reader set for the purpose (§2.4.2): X25519 device keys of every member holding the
 // purpose's permissions in this hub's own role assignments, then the hub escrow key. Never an Ed25519
 // identity key, never ADMIN_DECRYPTION_PUBKEY, never a super-admin's device unless it holds the
@@ -4143,6 +4187,9 @@ Body: { hubId, threshold, totalShares, groupPublicKey, shareEnvelopes, shareComm
         rewrappedUserEnvelopes: [{ userPubkey, envelope }] }
 Response: { "ok": true }
 Atomic: replaces the group and re-wraps every user envelope in one transaction.
+Each shareEnvelopes entry (enroll and rotate) is
+  { holderPubkey, shareEnvelope, livenessPublicKey: hex64 }
+where livenessPublicKey is derived from that holder's share — see "Share liveness proofs".
 
 GET  /api/recovery-group/sessions?hubId=<uuid>
 Permission: recovery:view (and membership of the hub)
@@ -4176,10 +4223,15 @@ Auth: Required
 Body: { "hubId": uuid, "envelope": string }
 Response: { "ok": true }
 
+POST /api/recovery-group/shares/liveness/challenge
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid }
+Response: { "challenge": hex64, "expiresAt": iso8601 }   (single use, 5 minutes)
+
 POST /api/recovery-group/shares/liveness
-Permission: recovery:hold-share
-Body: { "hubId": uuid, "proof": string }
-Response: { "ok": true }
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid, "challenge": hex64, "proof": hex128 }
+Response: { "ok": true, "verifiedAt": iso8601 }
 
 GET  /api/recovery-group/shares/my?hubId=<uuid>
 Permission: recovery:hold-share (and current hub membership + enrollment)
@@ -4196,6 +4248,35 @@ longer a member of the hub, was never enrolled, or the hub has no recovery
 group, so the route cannot be used to probe enrollment. A holder cannot take part
 in recovery without this route: it is the only way to get the envelope they must
 open to produce a `contribute` payload.
+
+**Share liveness proofs** (#2782) let a holder demonstrate, before any recovery
+is needed, that they can still produce their share — without the share, or
+anything that narrows it, reaching the server. Defined in
+`packages/crypto/src/recovery_liveness.rs`:
+
+```
+seed      = HKDF-SHA256(ikm = x || y, salt = none, info = LABEL_RECOVERY_LIVENESS_PROOF, L = 32)
+(sk, pk)  = Ed25519 keypair from seed            // pk = the holder's livenessPublicKey
+message   = UTF-8(LABEL_RECOVERY_LIVENESS_PROOF) || 0x00
+            || u32be(len(hubId)) || UTF-8(hubId)
+            || u32be(len(holderPubkey)) || UTF-8(holderPubkey)
+            || challenge (32 bytes)
+proof     = Ed25519.sign(sk, message)
+```
+
+The enrolling client computes `livenessPublicKey` per share at split time (the
+share commitment cannot serve: a hash commitment is checkable only by a holder
+of the share). `holderPubkey` is the authenticated caller's signing pubkey. The
+server consumes the challenge atomically before verifying, so a challenge is
+single-use whatever the outcome. An unknown, expired, reused or other-hub
+challenge is `409` and changes nothing. A proof that does not verify is `403`:
+it clears the holder's `lastLivenessProof` and records `lastLivenessFailure`
+(both in `shareHolderLiveness`), so a holder who cannot produce their share
+never reads as healthy. A share row enrolled without a liveness key gets `409`
+from the challenge endpoint until the group is rotated. Clients sign inside
+Rust (`recovery_share_liveness_proof_from_state` on desktop,
+`mobile_recovery_share_liveness_proof` on iOS/Android): the share is opened
+and used without entering the webview, Swift or Kotlin.
 
 ### 4.51 Teams
 
