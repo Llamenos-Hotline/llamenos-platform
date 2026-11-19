@@ -72,11 +72,6 @@ class RoleSteps : BaseSteps() {
         assertAnyTagDisplayed("admin-tabs", "custom-fields-list", "custom-fields-empty")
     }
 
-    @Then("the role's slug should not reveal its name")
-    fun theRoleSlugShouldNotRevealItsName() {
-        // A custom role's slug is its id (#2780) — verified at API level
-    }
-
     @Given("a custom role {string} exists")
     fun aCustomRoleExists(roleName: String) {
         // Precondition — role data should exist server-side
@@ -158,18 +153,17 @@ class RoleSteps : BaseSteps() {
     }
 
     // ---- Plaintext role name ----
+    // Deliberately NO Then definitions for "the role's slug should not reveal its name" and
+    // "the server should refuse the plaintext role name" (#2780): both are properties of the
+    // server's response and stored row, which Android has no UI to observe, so any body here
+    // would assert nothing. They are asserted in tests/steps/admin/roles-steps.ts. If these
+    // scenarios are ever shipped to the device runner they fail as undefined steps, not pass.
 
     @When("I create a role with the plaintext name {string}")
     fun iCreateARoleWithThePlaintextName(name: String) {
         // API-level operation — the server refuses a plaintext role name (#2780)
         navigateToAdminTab("volunteers")
         composeRule.waitForIdle()
-    }
-
-    @Then("the server should refuse the plaintext role name")
-    fun theServerShouldRefuseThePlaintextRoleName() {
-        // Server returns 400 — Android shows error toast/snackbar
-        assertAnyTagDisplayed("admin-tabs", "dashboard-title", "volunteers-list", "volunteers-empty")
     }
 
     // ---- Update / permissions catalog ----

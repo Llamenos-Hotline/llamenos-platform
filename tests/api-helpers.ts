@@ -96,6 +96,29 @@ async function safeJson(res: import('@playwright/test').APIResponse): Promise<un
   }
 }
 
+/**
+ * The status and parsed body of a response that must be JSON or empty — for steps that make a
+ * raw `request.*` call (an unauthenticated one, say) which `apiGet`/`apiPost` cannot sign.
+ *
+ * A body that is present but not JSON (a proxy's HTML error page, a crashed handler's plain
+ * text) THROWS, naming the status. The `.json().catch(() => null)` it replaces turned exactly
+ * that into `data: null`, so a step carried on and a later `Then` on the status alone could
+ * pass against a server that never answered in the API's own format.
+ */
+export async function readJsonResponse<T = unknown>(
+  res: import('@playwright/test').APIResponse,
+): Promise<{ status: number; data: T | null }> {
+  const text = await res.text()
+  if (text === '') return { status: res.status(), data: null }
+  let data: T
+  try {
+    data = JSON.parse(text) as T
+  } catch {
+    throw new Error(`HTTP ${res.status()} ${res.url()} returned a non-JSON body: ${text.slice(0, 200)}`)
+  }
+  return { status: res.status(), data }
+}
+
 // ── Dev Route Request Primitives ─────────────────────────────────
 // Dev routes (/api/test-*) require X-Test-Secret header instead of Bearer auth.
 // These are gated by ENVIRONMENT=development + DEV_ROUTES_ENABLED=true + secret.
