@@ -296,7 +296,19 @@ describe('request retry logic', () => {
     expect(cb).not.toHaveBeenCalled()
   })
 
-  it('reports the hub as gone when a hub-scoped route answers "Hub not found"', async () => {
+  it('reports the hub as gone when a hub-scoped route answers with the HUB_NOT_FOUND code', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+  })
+
+  it('does not report a hub as gone for a 404 whose prose says so but which carries no code', async () => {
     const fetchMock = vi.mocked(globalThis.fetch)
     fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found' }), { status: 404 }))
 
@@ -305,7 +317,7 @@ describe('request retry logic', () => {
     setOnHubGone(cb)
 
     await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
-    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+    expect(cb).not.toHaveBeenCalled()
   })
 
   it('does not report a hub as gone for a 404 about something inside it', async () => {

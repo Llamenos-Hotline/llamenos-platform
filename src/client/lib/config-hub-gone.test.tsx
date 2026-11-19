@@ -74,7 +74,7 @@ describe('ConfigProvider with a hub deleted elsewhere', () => {
     await act(() => result.current.refreshMemberHubs())
     await waitFor(() => expect(result.current.hubs).toHaveLength(2))
 
-    // `request()` calls this when a hub route answers "Hub not found"
+    // `request()` calls this when a hub route answers with the HUB_NOT_FOUND code
     // (api-request.test.ts); the provider is what registered to hear it.
     act(() => notifyHubGone('hub-B'))
 
