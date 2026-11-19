@@ -32,7 +32,7 @@ import type { Database } from '../db'
 import { devices, hubs, users } from '../db/schema'
 import { READER_PURPOSE_PERMISSIONS, SUBJECT_READER_PURPOSE_PERMISSIONS, type Permission, type RoleCatalog } from '@shared/permissions'
 import type { ReaderPurpose, SubjectReaderPurpose } from '@protocol/schemas/hubs'
-import { ServiceError } from '../services/settings'
+import { HubNotFoundError, ServiceError } from '../services/settings'
 import { resolveEncryptionPubkeys } from './encryption-keys'
 import { adminStateOf, holdsInHub, listHolderPubkeys } from './hub-admin'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from './hpke-recipient'
@@ -87,7 +87,7 @@ async function loadEscrowRow(db: Database, hubId: string): Promise<{ escrowPubke
 /** The hub's escrow key, or `undefined` when it has none. 404 for an unknown hub. */
 export async function getHubEscrowKey(db: Database, hubId: string): Promise<HpkeRecipientPubkey | undefined> {
   const row = await loadEscrowRow(db, hubId)
-  if (!row) throw new ServiceError(404, 'Hub not found')
+  if (!row) throw new HubNotFoundError()
   return hpkeRecipientPubkey(row.escrowPubkey)
 }
 
@@ -297,7 +297,10 @@ export async function setHubEscrowKey(
     .set({ escrowPubkey, updatedAt: new Date() })
     .where(eq(hubs.id, hubId))
     .returning({ id: hubs.id })
-  if (updated.length === 0) throw new ServiceError(404, 'Hub not found')
+  // The UPDATE's only predicate is the hub's id, so zero rows IS the hub row being
+  // absent — here the write is itself the lookup (set never reads the hub first).
+  // An UPDATE with any further predicate would not be, and must not use this error.
+  if (updated.length === 0) throw new HubNotFoundError()
 }
 
 /**
@@ -324,5 +327,7 @@ export async function clearHubEscrowKey(db: Database, hubId: string): Promise<vo
     .set({ escrowPubkey: null, updatedAt: new Date() })
     .where(eq(hubs.id, hubId))
     .returning({ id: hubs.id })
-  if (updated.length === 0) throw new ServiceError(404, 'Hub not found')
+  // The UPDATE's only predicate is the hub's id (see setHubEscrowKey): zero rows is
+  // the hub row being gone, here lost to a delete between the read above and this write.
+  if (updated.length === 0) throw new HubNotFoundError()
 }

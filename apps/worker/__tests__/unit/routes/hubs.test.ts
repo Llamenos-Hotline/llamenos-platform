@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import hubRoutes from '@worker/routes/hubs'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/settings'
 import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { DEFAULT_ROLES } from '@shared/permissions'
 
@@ -442,7 +442,7 @@ describe('hubs routes', () => {
     })
 
     it('returns 404 when hub not found', async () => {
-      const getHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const getHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['*'],
         serviceMock: { settings: { getHub: getHubSpy } },
@@ -450,6 +450,7 @@ describe('hubs routes', () => {
 
       const res = await app.request('/hubs/nonexistent')
       expect(res.status).toBe(404)
+      expect((await res.json()).code).toBe('HUB_NOT_FOUND')
     })
 
     it('returns 403 without hubs:read permission', async () => {
@@ -514,7 +515,7 @@ describe('hubs routes', () => {
 
     // #1700: a bare catch turned the service's 404 into an unlogged 500.
     it('answers 404 when the hub does not exist (#1700)', async () => {
-      const updateHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const updateHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: { settings: { updateHub: updateHubSpy } },
@@ -527,7 +528,7 @@ describe('hubs routes', () => {
       })
 
       expect(res.status).toBe(404)
-      expect((await res.json()).error).toBe('Not found')
+      expect((await res.json()).code).toBe('HUB_NOT_FOUND')
     })
 
     it('answers 500 for an unexpected store failure', async () => {

@@ -94,6 +94,7 @@ import type {
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
 import type { IvrLanguageSettings } from '@protocol/schemas/settings'
+import { HUB_NOT_FOUND_CODE, type ErrorResponse } from '@protocol/schemas/common'
 import {
   callHistoryAccessSettingsSchema,
   type CallHistoryAccessSettings,
@@ -159,10 +160,30 @@ export class ServiceError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** Machine-readable code clients branch on (`errorResponseSchema.code`); absent for plain errors. */
+    public readonly code?: ErrorResponse['code'],
   ) {
     super(message)
     this.name = 'ServiceError'
   }
+}
+
+/**
+ * The hub row looked up by its id is not there (#2872). The ONLY error that
+ * carries `HUB_NOT_FOUND`, the code a client forgets a hub on — throw it only
+ * from a lookup of the hub itself. An update that matched no rows, a missing
+ * resource inside a hub, and every permission refusal are plain `ServiceError`s.
+ */
+export class HubNotFoundError extends ServiceError {
+  constructor() {
+    super(404, 'Hub not found', HUB_NOT_FOUND_CODE)
+    this.name = 'HubNotFoundError'
+  }
+}
+
+/** The wire body for a `ServiceError`: its message, plus its code when it has one. */
+export function serviceErrorBody(err: ServiceError): ErrorResponse {
+  return err.code === undefined ? { error: err.message } : { error: err.message, code: err.code }
 }
 
 // ---------------------------------------------------------------------------
@@ -2386,7 +2407,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!row) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
     return { hub: hubFromRow(row) }
   }
@@ -2400,7 +2421,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
 
     const now = new Date()
@@ -2431,7 +2452,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
 
     await this.db
@@ -2470,7 +2491,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Hub not found')
+      throw new HubNotFoundError()
     }
 
     // The server's own sealed copies first, so a blob the object store will not
@@ -3118,7 +3139,7 @@ export class SettingsService {
           .select({ status: hubsTable.status, generation: hubsTable.hubKeyGeneration })
           .from(hubsTable)
           .where(eq(hubsTable.id, hubId))
-        if (!hub) throw new ServiceError(404, 'Hub not found')
+        if (!hub) throw new HubNotFoundError()
         if (hub.status === 'shredded') {
           throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
         }

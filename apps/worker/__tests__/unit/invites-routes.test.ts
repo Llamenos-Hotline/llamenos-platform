@@ -52,7 +52,7 @@ vi.mock('hono-openapi', () => ({
 }))
 
 import invitesRoutes from '@worker/routes/invites'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError, serviceErrorBody } from '@worker/services/settings'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -81,7 +81,7 @@ function createApp(
   const app = new Hono<AppEnv>()
   // Same mapping as the global handler in apps/worker/app.ts.
   app.onError((err, c) => {
-    if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 400 | 403 | 404 | 409)
+    if (err instanceof ServiceError) return c.json(serviceErrorBody(err), err.status as 400 | 403 | 404 | 409)
     throw err
   })
   const services = {
@@ -379,7 +379,7 @@ describe('invites routes', () => {
 
     it('rejects an invite naming a hub that does not exist', async () => {
       const { app, services } = createApp(['*'])
-      services.settings.getHub.mockRejectedValue(new ServiceError(404, 'Hub not found'))
+      services.settings.getHub.mockRejectedValue(new HubNotFoundError())
 
       const res = await app.request('/invites', {
         method: 'POST',
@@ -388,6 +388,7 @@ describe('invites routes', () => {
       }, defaultEnv)
 
       expect(res.status).toBe(404)
+      expect((await res.json()).code).toBe('HUB_NOT_FOUND')
       expect(services.identity.createInvite).not.toHaveBeenCalled()
     })
 

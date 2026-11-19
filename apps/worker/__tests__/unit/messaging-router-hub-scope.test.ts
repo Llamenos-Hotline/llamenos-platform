@@ -33,7 +33,7 @@ vi.mock('@worker/services/webhook-replay', () => ({
 vi.mock('@worker/db', () => ({ getDb: vi.fn().mockReturnValue({}) }))
 vi.mock('@worker/lib/ws-events', () => ({ publishEvent: vi.fn() }))
 import { getMessagingAdapterFromService } from '@worker/lib/service-factories'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError } from '@worker/services/settings'
 
 const HUB = '9f2c1b64-0000-4000-8000-0000000000aa'
 
@@ -139,7 +139,7 @@ describe('inbound messaging webhook hub scoping — #1140', () => {
 
   it('refuses a webhook that names a hub that does not exist, and stores nothing', async () => {
     const services = makeServices()
-    vi.mocked(services.settings.getHub).mockRejectedValueOnce(new ServiceError(404, 'Hub not found'))
+    vi.mocked(services.settings.getHub).mockRejectedValueOnce(new HubNotFoundError())
     const app = await createApp(services)
 
     const res = await app.request('/api/messaging/sms/webhook?hub=no-such-hub', {

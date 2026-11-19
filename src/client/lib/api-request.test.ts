@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import {
   request,
   ApiError,
@@ -39,16 +40,31 @@ describe('ApiError', () => {
 })
 
 describe('isHubNotFound', () => {
+  const gone = { error: 'Hub not found', code: HUB_NOT_FOUND_CODE }
+
   it('is the server saying the hub is not there', () => {
-    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(true)
+    expect(isHubNotFound(new ApiError(404, JSON.stringify(gone)))).toBe(true)
+  })
+
+  it('is decided by the code, not the prose: a reworded message still drops the hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ ...gone, error: 'Ese centro ya no existe' })))).toBe(true)
+  })
+
+  it('is not decided by the prose: the English message without the code never drops a hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
   })
 
   it('is not a 404 for something inside a hub that does exist', () => {
     expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'No key envelope for this user' })))).toBe(false)
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found', code: 'SOMETHING_ELSE' })))).toBe(false)
   })
 
-  it('is not an answer other than 404, an unreadable body, or something that is not an API error', () => {
-    expect(isHubNotFound(new ApiError(403, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
+  it('is never an authorization answer, whatever code it carries', () => {
+    expect(isHubNotFound(new ApiError(403, JSON.stringify(gone)))).toBe(false)
+    expect(isHubNotFound(new ApiError(401, JSON.stringify(gone)))).toBe(false)
+  })
+
+  it('is not an unreadable body, or something that is not an API error', () => {
     expect(isHubNotFound(new ApiError(404, 'Hub not found'))).toBe(false)
     expect(isHubNotFound(new Error('Hub not found'))).toBe(false)
   })

@@ -18,7 +18,7 @@ import type {
   HubKeyRotationResponse,
   HubSealedValues,
 } from '@protocol/schemas/hubs'
-import { ServiceError } from '../services/settings'
+import { HubNotFoundError, ServiceError } from '../services/settings'
 import { adminStateOf, administersHub, holdsInHub, listHolderPubkeys } from './hub-admin'
 
 /** The explicit grant for distributing (and generating) a hub's key. */
@@ -99,7 +99,7 @@ async function readHubKeyState(tx: Tx, hubId: string, lock: boolean): Promise<Hu
     .from(hubs)
     .where(eq(hubs.id, hubId))
   const [hub] = lock ? await query.for('update') : await query
-  if (!hub) throw new ServiceError(404, 'Hub not found')
+  if (!hub) throw new HubNotFoundError()
   if (hub.status === 'shredded') throw new ServiceError(409, 'Hub is shredded — its key is destroyed')
   return {
     generation: hub.generation,
@@ -230,7 +230,7 @@ export async function getHubKeyRotation(db: Database, hubId: string): Promise<Hu
     })
     .from(hubs)
     .where(eq(hubs.id, hubId))
-  if (!hub) throw new ServiceError(404, 'Hub not found')
+  if (!hub) throw new HubNotFoundError()
   if (hub.status === 'shredded') throw new ServiceError(409, 'Hub is shredded — its key is destroyed')
   return { epoch: hub.epoch, rotation: statementOf(hub.proof, hub.check) }
 }

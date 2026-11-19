@@ -13,7 +13,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import type { Services } from '@worker/services'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/settings'
 import '@worker/__tests__/mocks/llamenos-crypto-ffi'
 
 vi.mock('@worker/lib/service-factories')
@@ -52,7 +52,7 @@ function makeServices() {
   const services = {
     settings: {
       getHub: vi.fn(async (id: string) => {
-        if (id !== 'hub-1') throw new ServiceError(404, 'Not found')
+        if (id !== 'hub-1') throw new HubNotFoundError()
         return { hub: { id } }
       }),
       getHubByPhone: vi.fn(async (phone: string) => {
