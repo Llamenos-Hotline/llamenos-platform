@@ -210,6 +210,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.20 (2026-11-19)
+
+### Features
+
+- name a contact's readers per tier (summary/pii/admin) so contact writes can seal to them (#2853)
+
+### Fixes
+
+- drop a hub the server says is gone from the membership snapshot (#2865)
+
 ## 0.21.19 (2026-11-19)
 
 ### Fixes
