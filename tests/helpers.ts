@@ -649,6 +649,48 @@ async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> 
 }
 
 /**
+ * Answer `GET /api/hubs/<hubId>/permissions/me` for a SYNTHETIC hub (#1101).
+ *
+ * The UI gates every admin panel on the permissions the SERVER resolves for the
+ * hub being browsed, and fails closed — nothing is offered until that hub has
+ * answered. A synthetic hub is one the real backend has never heard of, so left
+ * to reach it the read 404s ("Hub not found"), which is a real answer ("you hold
+ * nothing here") and renders no admin panel at all.
+ *
+ * What this stands in for is the answer of a hub the signed-in admin belongs to:
+ * the same permissions the backend itself reported for that admin on `/auth/me`
+ * (captured off the page's own response — nothing is hardcoded here, so the set
+ * moves with the real admin role). `/auth/me` is always read before the hub is
+ * asked, because the hub read needs the signed-in pubkey; the route simply waits
+ * on that response rather than on a clock.
+ */
+async function mockHubPermissionsMe(page: Page, hubId: string): Promise<void> {
+  let admit: (permissions: string[]) => void = () => {}
+  let held = new Promise<string[]>((resolve) => { admit = resolve })
+  let known = false
+  page.on('response', async (res) => {
+    if (new URL(res.url()).pathname !== '/api/auth/me' || res.request().method() !== 'GET' || !res.ok()) return
+    const body = (await res.json()) as { permissions?: string[] }
+    const permissions = body.permissions ?? []
+    // A later /auth/me (a re-login in the same page) replaces the answer.
+    if (known) held = Promise.resolve(permissions)
+    else { known = true; admit(permissions) }
+  })
+  await page.route(new RegExp(`/api/hubs/${hubId}/permissions/me(\\?.*)?$`), async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+    const permissions = await held
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ hubId, permissions }),
+    })
+  })
+}
+
+/**
  * Pin the app to one known hub.
  *
  * The active hub comes from the AUTHENTICATED `GET /api/hubs` — the user's own
@@ -661,6 +703,7 @@ async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> 
  */
 export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promise<void> {
   await mockBackgroundHubReads(page, hubId)
+  await mockHubPermissionsMe(page, hubId)
   const hub = {
     id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active',
     createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
