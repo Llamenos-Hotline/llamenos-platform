@@ -725,14 +725,18 @@ export async function resyncHubKeys(): Promise<void> {
  *
  * Who may distribute or rotate is the server's call (`assertMayManageHubKey`:
  * `hubs:manage-keys` or hub admin, from the hub's own roles). The permissions
- * here are account-wide and only decide whether to TRY; the server answers 403
- * in a hub where the user's roles there grant neither.
+ * here are the ACCOUNT-WIDE union (`hasAccountPermission`), never the active
+ * hub's `hasPermission`: this acts on every member hub, so gating it on the hub
+ * being browsed would silently skip the rotation that revokes a departed
+ * member's access to a hub the user manages whenever they browse another one.
+ * They only decide whether to TRY; the server answers 403 in a hub where the
+ * user's roles there grant neither.
  */
 export function useHubKeys(): void {
-  const { hasPermission, isAuthenticated } = useAuth()
+  const { hasAccountPermission, isAuthenticated } = useAuth()
   const memberHubIds = useMemberHubIds()
   const relayConnected = useRelayState() === 'connected'
-  const mayManage = hasPermission('hubs:manage-keys') || HUB_ADMIN_PERMISSIONS.every(p => hasPermission(p))
+  const mayManage = hasAccountPermission('hubs:manage-keys') || HUB_ADMIN_PERMISSIONS.every(p => hasAccountPermission(p))
   const hubIdsKey = memberHubIds.join(',')
   const previousHubIds = useRef<readonly string[]>([])
 
