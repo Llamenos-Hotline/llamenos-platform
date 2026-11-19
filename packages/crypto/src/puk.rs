@@ -82,9 +82,11 @@ fn derive_subkey(seed: &[u8; 32], label: &str, generation: u32) -> [u8; 32] {
         <HmacSha256 as Mac>::new_from_slice(seed).expect("HMAC key length is always valid");
     mac.update(label.as_bytes());
     mac.update(&generation.to_be_bytes());
-    let result = mac.finalize().into_bytes();
+    let mut result = mac.finalize().into_bytes();
     let mut out = [0u8; 32];
     out.copy_from_slice(&result);
+    // The MAC output IS the subkey: wipe this copy as well as handing one back.
+    result.as_mut_slice().zeroize();
     out
 }
 
@@ -124,21 +126,23 @@ pub fn create_initial_puk(
     device_encryption_pubkey_hex: &str,
     device_id: &str,
 ) -> Result<(PukState, [u8; 32], HpkeEnvelope), CryptoError> {
-    let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).expect("getrandom failed");
+    // `Zeroizing`: the `?` on the seal below would otherwise skip any trailing
+    // wipe. The caller gets a copy by value; this local is erased on every exit.
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(&mut *seed).expect("getrandom failed");
 
     let state = derive_puk_subkeys(&seed, 1);
 
     // Seal seed to device
     let aad = format!("{LABEL_PUK_WRAP_TO_DEVICE}:{device_id}");
     let envelope = hpke_seal(
-        &seed,
+        seed.as_slice(),
         device_encryption_pubkey_hex,
         LABEL_PUK_WRAP_TO_DEVICE,
         aad.as_bytes(),
     )?;
 
-    Ok((state, seed, envelope))
+    Ok((state, *seed, envelope))
 }
 
 /// Rotate the PUK: generate new seed, create CLKR chain link, seal to remaining devices.
@@ -154,22 +158,21 @@ pub fn rotate_puk(
     let new_gen = old_gen + 1;
 
     // Generate new seed
-    let mut new_seed = [0u8; 32];
-    getrandom::getrandom(&mut new_seed).expect("getrandom failed");
+    let mut new_seed = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(&mut *new_seed).expect("getrandom failed");
 
     let state = derive_puk_subkeys(&new_seed, new_gen);
 
     // Create CLKR chain link: encrypt old seed under new generation's secretbox key
-    let mut secretbox_key = derive_secretbox_key(&new_seed, new_gen);
+    let secretbox_key = Zeroizing::new(derive_secretbox_key(&new_seed, new_gen));
     let clkr_chain_link_hex = encrypt_clkr_link(old_seed, &secretbox_key, new_gen)?;
-    secretbox_key.zeroize();
 
     // Seal new seed to each remaining device
     let mut device_envelopes = Vec::with_capacity(remaining_devices.len());
     for (device_id, pubkey_hex) in remaining_devices {
         let aad = format!("{LABEL_PUK_WRAP_TO_DEVICE}:{device_id}");
         let envelope = hpke_seal(
-            &new_seed,
+            new_seed.as_slice(),
             pubkey_hex,
             LABEL_PUK_WRAP_TO_DEVICE,
             aad.as_bytes(),
@@ -179,8 +182,6 @@ pub fn rotate_puk(
             envelope,
         });
     }
-
-    new_seed.zeroize();
 
     Ok(RotatePukResult {
         state,
@@ -262,7 +263,7 @@ pub fn decrypt_clkr_link(
 
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    Ok(seed) // by-value return: the caller owns, and must wipe, this copy
 }
 
 /// Walk the CLKR chain backwards from current generation to target generation.
@@ -283,7 +284,9 @@ pub fn generation_walk(
         ));
     }
 
-    let mut seed = *current_seed;
+    // Every intermediate generation's seed lives in `Zeroizing`, so the `?` on a
+    // bad chain link cannot return with a PUK seed left un-wiped.
+    let mut seed = Zeroizing::new(*current_seed);
     let mut gen = current_gen;
 
     while gen > target_gen {
@@ -291,21 +294,22 @@ pub fn generation_walk(
         // (gen 2's link decrypts gen 1's seed, stored at index 0)
         let link_idx = (gen - 2) as usize;
         if link_idx >= chain_links.len() {
-            seed.zeroize();
             return Err(CryptoError::InvalidInput(format!(
                 "missing CLKR chain link for generation {gen}"
             )));
         }
 
-        let mut secretbox_key = derive_secretbox_key(&seed, gen);
-        let old_seed = decrypt_clkr_link(&chain_links[link_idx], &secretbox_key, gen)?;
-        secretbox_key.zeroize();
-        seed.zeroize();
-        seed = old_seed;
+        let secretbox_key = Zeroizing::new(derive_secretbox_key(&seed, gen));
+        // Assigning drops (and so wipes) the seed it replaces.
+        seed = Zeroizing::new(decrypt_clkr_link(
+            &chain_links[link_idx],
+            &secretbox_key,
+            gen,
+        )?);
         gen -= 1;
     }
 
-    Ok(seed)
+    Ok(*seed)
 }
 
 #[cfg(test)]

@@ -119,15 +119,15 @@ pub fn generate_device_keys(
     }
 
     // Generate random seeds
-    let mut signing_seed = [0u8; 32];
-    let mut encryption_seed = [0u8; 32];
-    getrandom::getrandom(&mut signing_seed).expect("getrandom failed");
-    getrandom::getrandom(&mut encryption_seed).expect("getrandom failed");
-
-    let secrets = DeviceSecrets {
-        signing_seed,
-        encryption_seed,
+    // `DeviceSecrets` is zeroize-on-drop and owns the only copy: seeds are
+    // generated straight into it, so no `Copy` array is left behind on any path
+    // (including the `?` on the encrypt below).
+    let mut secrets = DeviceSecrets {
+        signing_seed: [0u8; 32],
+        encryption_seed: [0u8; 32],
     };
+    getrandom::getrandom(&mut secrets.signing_seed).expect("getrandom failed");
+    getrandom::getrandom(&mut secrets.encryption_seed).expect("getrandom failed");
 
     let state = DeviceKeyState {
         device_id: device_id.to_string(),
@@ -136,13 +136,7 @@ pub fn generate_device_keys(
     };
 
     // Encrypt the secret seeds with credential
-    let encrypted = encrypt_device_secrets(&secrets, credential, &state)?;
-
-    // Zero the stack copies
-    signing_seed.zeroize();
-    encryption_seed.zeroize();
-
-    Ok(encrypted)
+    encrypt_device_secrets(&secrets, credential, &state)
 }
 
 /// Decrypt device keys from a credential-encrypted blob.
@@ -160,9 +154,11 @@ pub fn unlock_device_keys(
         return Err(CryptoError::InvalidNonce);
     }
 
-    let mut kek = derive_kek(credential, &salt)?;
+    // `Zeroizing`: a wrong PIN returns through the `?` below, the most common
+    // exit from this function, and must not leave the KEK behind.
+    let kek = derive_kek(credential, &salt)?;
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let cipher = Aes256Gcm::new_from_slice(&kek)
+    let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     let plaintext = Zeroizing::new(
@@ -170,8 +166,6 @@ pub fn unlock_device_keys(
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(|_| CryptoError::WrongPin)?,
     );
-
-    kek.zeroize();
 
     if plaintext.len() != 64 {
         return Err(CryptoError::InvalidFormat(
@@ -258,26 +252,23 @@ fn encrypt_device_secrets(
     let mut salt = [0u8; 32];
     getrandom::getrandom(&mut salt).expect("getrandom failed");
 
-    let mut kek = derive_kek(credential, &salt)?;
+    let kek = derive_kek(credential, &salt)?;
 
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(&kek)
+    let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
     // Concatenate signing_seed || encryption_seed
-    let mut plaintext = Vec::with_capacity(64);
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(64));
     plaintext.extend_from_slice(&secrets.signing_seed);
     plaintext.extend_from_slice(&secrets.encryption_seed);
 
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-
-    plaintext.zeroize();
-    kek.zeroize();
 
     Ok(EncryptedDeviceKeys {
         kdf_version: KDF_VERSION,
@@ -292,13 +283,13 @@ fn encrypt_device_secrets(
 }
 
 /// Derive a 32-byte KEK from a credential using Argon2id.
-fn derive_kek(credential: &str, salt: &[u8]) -> Result<[u8; 32], CryptoError> {
-    let mut kek = [0u8; 32];
+fn derive_kek(credential: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    let mut kek = Zeroizing::new([0u8; 32]);
     let params = argon2::Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(32))
         .map_err(|e| CryptoError::EncryptionFailed(format!("argon2 params: {e}")))?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     argon2
-        .hash_password_into(credential.as_bytes(), salt, &mut kek)
+        .hash_password_into(credential.as_bytes(), salt, &mut *kek)
         .map_err(|e| CryptoError::EncryptionFailed(format!("argon2id: {e}")))?;
     Ok(kek)
 }
