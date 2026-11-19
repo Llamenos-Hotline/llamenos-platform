@@ -3765,6 +3765,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "आप लॉग आउट हो गए हैं, लेकिन आपकी एन्क्रिप्टेड कुंजियाँ इस डिवाइस से हटाई नहीं जा सकीं।",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",

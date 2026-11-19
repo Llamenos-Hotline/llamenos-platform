@@ -1263,6 +1263,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     // to see localStorage.length === 1 instead of 0.
     pinLockoutState = { failedAttempts: 0, lockoutUntil: 0 }
     localStorage.removeItem(LOCKOUT_STORAGE_KEY)
+    // Rust deletes vault.hold; the mock vault is the stronghold localStorage
+    // store, so the persisted encrypted device keys must go with it.
+    localStorage.removeItem('stronghold:llamenos:llamenos-encrypted-device-keys')
   },
 
   // --- SAS emoji verification ---

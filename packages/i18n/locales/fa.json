@@ -1267,6 +1267,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "از حساب خود خارج شدید، اما کلیدهای رمزگذاری‌شده شما از این دستگاه حذف نشدند.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "به‌جای تایپ پین، با اثر انگشت یا چهره خود قفل را باز کنید. پین شما همچنان کار می‌کند و هرگز غیرفعال نمی‌شود.",
