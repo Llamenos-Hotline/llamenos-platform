@@ -210,6 +210,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.22 (2026-11-20)
+
+### Fixes
+
+- platform bans carry an OPRF ban digest; the server never receives the number (#2759) (#2829)
+
 ## 0.21.21 (2026-11-20)
 
 ### Fixes
