@@ -139,6 +139,9 @@ export interface HeadCheckRun {
   /** ISO 8601, or `''` when GitHub has not set one. Orders carriers within an
    *  app so a re-run supersedes what it replaced. */
   startedAt: string
+  /** The creator's own tag (`external_id`) — `review-and-merge` puts the review-set and
+   *  description binding of its verdict here (#2884). Absent for every other carrier. */
+  externalId?: string
 }
 
 /** One legacy commit status on the head. A required name can be satisfied by
@@ -677,7 +680,7 @@ export async function diagnosePrsWith(deps: MissingChecksDeps, prNumber?: number
   return out
 }
 
-interface GhCheckRunsPage { check_runs?: { id?: number; name?: string; status?: string; conclusion?: string | null; app?: { slug?: string } | null; started_at?: string | null }[] }
+interface GhCheckRunsPage { check_runs?: { id?: number; name?: string; status?: string; conclusion?: string | null; app?: { slug?: string } | null; started_at?: string | null; external_id?: string | null }[] }
 interface GhStatusResponse { statuses?: { context?: string; state?: string; updated_at?: string | null }[] }
 interface GhRunsPage { workflow_runs?: { id?: number; name?: string; event?: string; status?: string; conclusion?: string | null; run_attempt?: number }[] }
 interface GhJobsPage { jobs?: { name?: string; conclusion?: string | null }[] }
@@ -739,6 +742,7 @@ export function defaultMissingChecksDeps(run: GhRunner = gh): MissingChecksDeps 
         conclusion: r.conclusion ?? null,
         appSlug: r.app?.slug ?? '(no app)',
         startedAt: r.started_at ?? '',
+        externalId: r.external_id ?? '',
       }))
     },
     fetchCommitStatuses: async (sha) => {

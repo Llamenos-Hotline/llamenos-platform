@@ -179,6 +179,17 @@ export function reviewSetTag(profiles: readonly string[]): string | undefined {
 }
 
 /**
+ * What a recorded PASS judged besides the commit: the review set
+ * (`reviewSetTag`, `general` when it is the general reviewer alone) and the
+ * PR's title and description (`claimDigest`, truncated to the width the cache
+ * key uses). Written by `review-and-merge` into the check run's `external_id`,
+ * recomputed by the gate from the live PR, and compared as an exact string.
+ */
+export function reviewBinding(setTag: string | undefined, claim: string): string {
+  return `fleet-review:v1;set=${setTag ?? 'general'};claim=${claim.slice(0, CLAIM_DIGEST_NAME_CHARS)}`
+}
+
+/**
  * `findArtifact` collapsed three outcomes into one `undefined` — a genuine
  * miss, a forged-or-expired record, and a lookup that could not be answered
  * — because its one caller (the review gate) treats them identically: run

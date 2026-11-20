@@ -32,6 +32,7 @@ import {
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
+import { readAppRecordedVerdict, REVIEW_RECORDER_APP_SLUG } from './review-app-verdict.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import { IN_VERIFICATION_ENV } from './review-and-merge-guards.js'
 import {
@@ -1847,6 +1848,10 @@ async function runReviewGate(): Promise<number> {
     republishOnly: isRepublishOnlyEvent(event),
     // Asked only on a push whose diff changed — see `ReviewGateDeps.lastVerdict`.
     lastVerdict: () => lastEarnedVerdict(liveLastVerdictDeps(ctx.pr, ctx.branch, process.env['GITHUB_RUN_ID'], ciLog)),
+    // The PASS `review-and-merge` recorded as a check run by the review App
+    // on this head (#2884) — asked on the same republish-only path, after
+    // the cache, before this gate would fail closed `unreviewed`.
+    appRecordedVerdict: (binding) => readAppRecordedVerdict(ctx.headSha, binding, ciLog),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
@@ -1999,6 +2004,18 @@ async function runReviewGate(): Promise<number> {
   // IS this check's own output. Never silent: a required check that goes
   // green with no stated reason is the exact fail-open shape this file's own
   // header (and #848 before it) exists to prevent.
+  // A PASS the review App recorded on this exact head (#2884): `review-and-merge`
+  // ran the real review set from the operator's machine and posted the verdict
+  // as a check run, which this carrier cannot see as an artifact. Said plainly,
+  // with whose verdict it is and what it does not cover — a green required
+  // check must always state its reason (#848).
+  if (outcome.kind === 'app-recorded') {
+    process.stdout.write(
+      `${REVIEW_JOB}: PASS recorded by the ${REVIEW_RECORDER_APP_SLUG} App on this exact head — ${outcome.url}\n` +
+      `  - written by \`review-and-merge\`, which runs the same review set locally; republished here, not re-run.\n` +
+      `  - bound to this head's commit, review set and PR description: a change to any of them is not covered.\n`,
+    )
+  }
   if (outcome.kind === 'low-tier') {
     process.stdout.write(
       `${REVIEW_JOB}: no reviewable content (tier ${outcome.tier}) — skipping the non-author review\n` +

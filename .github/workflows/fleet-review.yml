@@ -193,6 +193,19 @@
 #                             concludes RED with the original verdict
 #                             restated. An UNREADABLE is never cached, so an
 #                             infrastructure failure is always retried.
+#   `app-recorded`          → SUCCESS, no model call (#2884). A republish-only
+#                             event, nothing cached for this tree, and the
+#                             `llamenos-fleet-review` GitHub App recorded a
+#                             PASS as a `fleet/review` check run on this exact
+#                             head — what `review-and-merge` does from the
+#                             operator's machine, where it cannot write the
+#                             artifact the cache reads. Named
+#                             `PASS:app-recorded`. After the cache, so a
+#                             cached FAIL still wins; before `unreviewed` /
+#                             `tree-changed` / `carried`, which it replaces
+#                             only when the App's LATEST verdict is a PASS.
+#                             `review-and-merge` re-runs this carrier after it
+#                             posts, so nobody dispatches a second review.
 #   `low-tier`              → SUCCESS, no model call. `tierFor` (impact.ts)
 #                             classifies every changed file Tier 0/1 — no
 #                             reviewable content. Checked before the request
@@ -454,9 +467,16 @@ on:
   # rollup surfaces only the FAILURE; #1378 the same; #1184's head carries TWO
   # dispatch successes and still shows a four-day-old red. So a dispatch is
   # how you GET a verdict (a real review, a real check run on the commit, a
-  # readable outcome in the log) — not how you CLEAR the gate. Treat it as
-  # debugging and as evidence, and do not route a blocked PR through it
-  # expecting to merge.
+  # readable outcome in the log) — not how you CLEAR the gate by ITSELF.
+  #
+  # Its CHECK RUN does not reach the rollup, but its CACHE WRITE does the work
+  # (#2884): a dispatch run is a `CACHE_WRITER_WORKFLOWS` run, so the verdict
+  # it earns is stored under this tree, and the head's `pull_request` carrier —
+  # re-run — republishes it (`cache-hit`). That is a real, if indirect, route
+  # to green for a head whose review cannot be re-requested; it costs a full
+  # review, and it is NOT needed after `llamenos-fleet review-and-merge`,
+  # which records its PASS as a check run the carrier reads directly
+  # (`app-recorded`) and re-runs the carrier itself.
   #
   # ALWAYS dispatch with `--ref <the PR's own head branch>`: the ctx step
   # refuses any other ref outright rather than review a diff nobody asked for
@@ -2500,6 +2520,12 @@ jobs:
             case "$OUTCOME" in
               low-tier) token="PASS:low-tier" ;;
               cache-hit) token="PASS:cached" ;;
+              # A PASS the `llamenos-fleet-review` App recorded as a check run on
+              # this exact head (#2884) — `review-and-merge` ran the real review
+              # set from the operator's machine, which cannot write the artifact
+              # `cache-hit` reads. A verdict ABOUT this head, so a real PASS,
+              # `judged` in REVIEW_GATE_STANDING; never the unnamed default.
+              app-recorded) token="PASS:app-recorded" ;;
               # An automated dependency PR, concluded green with no model
               # call — `REVIEW_SKIP_AUTHORS`/`bot-authored` in ci.ts, whose
               # `REVIEW_GATE_STANDING` is `no-review-needed`, the same class
@@ -2621,6 +2647,7 @@ jobs:
           case "$token" in
             PASS:reviewed) detail="every reviewer read this diff and passed it" ;;
             PASS:cached) detail="this exact tree, description and review set already passed; not reviewed again" ;;
+            PASS:app-recorded) detail="review-and-merge recorded a PASS for this exact head as a check run; republished, not re-run" ;;
             PASS:low-tier) detail="no reviewable content (tier 0/1); no review needed" ;;
             PASS:bot-authored) detail="an automated dependency update; no model review, and a human still merges it" ;;
             PASS:release-pr) detail="knope's release PR, a version-only diff (release branch + only knope.toml-listed files changed by a version swap); no review was run, by the operator's ruling, and a human still merges it" ;;
