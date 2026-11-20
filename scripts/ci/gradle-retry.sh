@@ -20,13 +20,32 @@
 # cost is strictly serial: every ejection pushes every ready PR back by a group,
 # and this one landed after ~an hour of Mac time on the iOS gate.
 #
-# Why a warm Gradle cache would NOT have saved it: a merge group's ref is not the
-# default branch, so setup-gradle restores read-only, and the only cache it can
-# restore is the one a default-branch build wrote — CodeQL's `compileDebugKotlin`.
-# That never resolves `debugUnitTestRuntimeClasspath` (junit arrives there,
-# transitively via androidx.compose.ui:ui-test-junit4), so the unit-test graph
-# is fetched from the network on every group. Nothing here changes that; it
-# makes the fetch survivable.
+# WHY THIS SCRIPT IS NOT THE WHOLE ANSWER (#2879)
+# ------------------------------------------------
+# A merge group's ref is not the default branch, so setup-gradle restores
+# read-only, and the only cache it can restore is the one a default-branch build
+# wrote. That used to be CodeQL's `compileDebugKotlin`, which never resolves
+# `debugUnitTestRuntimeClasspath` (junit arrives there, transitively via
+# androidx.compose.ui:ui-test-junit4), so every group cold-fetched the unit-test
+# graph from Maven Central — and on 2026-11-19, with two groups building at once
+# from one egress address, Central answered 429 on all three attempts of run
+# 44629546088 and ejected #2854.
+#
+# Retrying cannot fix that: the defect is the NUMBER of requests, not their
+# spacing. The fix is android-cache-warm.yml, which runs the same Gradle tasks as
+# android-build-test on the default branch so the cache a group restores already
+# holds the whole graph. This script only makes a residual miss survivable —
+# and, for a 429, stops making it worse (see WHY A 429 IS HANDLED DIFFERENTLY).
+#
+# WHY A 429 IS HANDLED DIFFERENTLY (#2879)
+# ----------------------------------------
+# Gradle's own repository retry (max.retries=6, initial.backoff=500ms) is right
+# for a 5xx or a timeout: the server is flaky, ask again soon. A 429 is the
+# server explicitly asking us to slow down, and across the hundreds of artifacts
+# of a graph, six half-second retries each RAISE our request rate at exactly the
+# wrong moment. So once an attempt has been answered with a 429, every later
+# attempt runs with a small Gradle retry budget and a long initial backoff, and
+# the delay between attempts is the (much longer) rate-limit one.
 #
 # WHY RETRY THE WHOLE INVOCATION
 # ------------------------------
@@ -84,6 +103,9 @@
 #   GRADLE_RETRY_ATTEMPTS    total runs, first included (default 3)
 #   GRADLE_RETRY_BACKOFF_SEC base delay, doubles        (default 20 -> 20s, 40s)
 #   GRADLE_REPO_MAX_RETRIES  Gradle's own HTTP retries  (default 6)
+#   GRADLE_RATE_LIMIT_BACKOFF_SEC  base delay after a 429 (default 90 -> 90s, 180s)
+#   GRADLE_RATE_LIMIT_REPO_MAX_RETRIES  Gradle's own HTTP retries once a 429
+#                            has been seen              (default 2)
 #
 # Exit status: the final Gradle run's own status.
 
@@ -93,6 +115,10 @@ GRADLE_BIN="${GRADLE_BIN:-./gradlew}"
 ATTEMPTS="${GRADLE_RETRY_ATTEMPTS:-3}"
 BACKOFF="${GRADLE_RETRY_BACKOFF_SEC:-20}"
 REPO_RETRIES="${GRADLE_REPO_MAX_RETRIES:-6}"
+RATE_BACKOFF="${GRADLE_RATE_LIMIT_BACKOFF_SEC:-90}"
+RATE_REPO_RETRIES="${GRADLE_RATE_LIMIT_REPO_MAX_RETRIES:-2}"
+REPO_INITIAL_BACKOFF_MS=500
+RATE_REPO_INITIAL_BACKOFF_MS=5000
 
 # A transport or resolution failure, as Gradle prints it. Deliberately specific:
 # a bare "Could not" would also match "Could not compile", which is a real error.
@@ -131,6 +157,7 @@ first_failure() {
 
 REPORTS=()
 REFRESH=()   # becomes (--refresh-dependencies) once a remembered "Could not find" is suspected
+RATE_LIMITED=0   # becomes 1 once any attempt was answered with a 429 (#2879)
 rc=0
 for attempt in $(seq 1 "$ATTEMPTS"); do
   log="$WORK/attempt-${attempt}.log"
@@ -139,7 +166,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   rc=0
   "$GRADLE_BIN" \
     "-Dorg.gradle.internal.repository.max.retries=${REPO_RETRIES}" \
-    "-Dorg.gradle.internal.repository.initial.backoff=500" \
+    "-Dorg.gradle.internal.repository.initial.backoff=${REPO_INITIAL_BACKOFF_MS}" \
     ${REFRESH[@]+"${REFRESH[@]}"} \
     "$@" 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
@@ -172,9 +199,19 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE 'Could not find ' "$log"; then
     REFRESH=(--refresh-dependencies)
   fi
+  # The registry told us to slow down. Back off hard, and stop Gradle's own
+  # per-artifact retries from multiplying the very request rate being limited.
+  if grep -qE 'Received status code 429' "$log"; then
+    RATE_LIMITED=1
+    REPO_RETRIES="$RATE_REPO_RETRIES"
+    REPO_INITIAL_BACKOFF_MS="$RATE_REPO_INITIAL_BACKOFF_MS"
+  fi
   if [ "$attempt" -lt "$ATTEMPTS" ]; then
-    delay=$(( BACKOFF * (1 << (attempt - 1)) ))
+    base="$BACKOFF"
+    [ "$RATE_LIMITED" -eq 1 ] && base="$RATE_BACKOFF"
+    delay=$(( base * (1 << (attempt - 1)) ))
     echo "gradle-retry: dependency resolution failed (attempt ${attempt}/${ATTEMPTS}): $(first_failure "$log")"
+    [ "$RATE_LIMITED" -eq 1 ] && echo "gradle-retry: the registry answered 429 Too Many Requests — Gradle's own HTTP retries are cut to ${REPO_RETRIES} (initial backoff ${REPO_INITIAL_BACKOFF_MS}ms) and the delay base is ${base}s, so this does not add to the request rate being limited."
     echo "gradle-retry: retrying in ${delay}s${REFRESH[*]:+ with ${REFRESH[*]} (Gradle remembers a 'Could not find'; a plain re-run would not ask the registry again)}."
     sleep "$delay"
   fi
