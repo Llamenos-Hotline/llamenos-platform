@@ -1,7 +1,7 @@
 import { type APIRequestContext, type Page } from '@playwright/test'
 import { test, expect } from '../console-guard'
 import { loginAsAdmin, TEST_PIN, Timeouts } from '../helpers'
-import { apiDelete, apiPost, uniqueName } from '../api-helpers'
+import { createOwnHubViaApi } from '../api-helpers'
 import { TestIds } from '../test-ids'
 
 /**
@@ -49,9 +49,7 @@ interface LiveSession {
  * so the active-hub assertions never depend on what other suites have created.
  */
 async function useOwnHub(page: Page, request: APIRequestContext): Promise<string> {
-  const { status, data } = await apiPost<{ hub: { id: string } }>(request, '/hubs', { name: uniqueName('Server switch') })
-  expect(status, 'admin could not create a hub').toBe(201)
-  const hubId = data.hub.id
+  const hubId = await createOwnHubViaApi(request, 'Server switch')
   await page.addInitScript((id) => {
     (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
   }, hubId)
@@ -154,19 +152,8 @@ async function openInviteScreenWithLiveSession(page: Page, hubId: string): Promi
 }
 
 test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
-  const createdHubs: string[] = []
-
-  test.afterEach(async ({ page, request }) => {
-    // The page outlives this hook (fixtures are torn down after afterEach) and its
-    // hub polls keep running; deleting the hub beneath it makes every poll a 404
-    // that the console guard then rightly reports. Stop the app first.
-    await page.goto('about:blank')
-    for (const hubId of createdHubs.splice(0)) await apiDelete(request, `/hubs/${hubId}`)
-  })
-
   test('a signed-in user sent to the invite-code screen is returned to the app without the page ever loading', async ({ page, request }) => {
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     const origin = await simulatePackagedBuildOnOwnOrigin(page)
 
@@ -198,7 +185,6 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
 
@@ -220,7 +206,6 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     const origin = await simulatePackagedBuildOnOwnOrigin(page)
     await openInviteScreenWithLiveSession(page, hubId)
@@ -252,7 +237,6 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
     // The app is still working through its hubs' keys (a chain of requests per hub
