@@ -37,8 +37,7 @@ import {
 } from './helpers'
 import {
   apiGet,
-  createHubViaApi,
-  deleteHubViaApi,
+  createOwnHubViaApi,
   enableMessagingViaApi,
   uniquePhone,
 } from './api-helpers'
@@ -77,32 +76,6 @@ function watchConsole(page: Page): string[] {
   })
   page.on('pageerror', (err) => record(`pageerror: ${err.message}`))
   return errors
-}
-
-/**
- * A hub this test can rely on, reusing the suite's if there is one.
- *
- * `chromium` runs fullyParallel over one database, and the hub list has long
- * windows carrying **no** hub at all while the hub specs work — measured at
- * over 60 seconds. So a hub cannot simply be waited for. Nor should one always
- * be created: other specs resolve "the" hub positionally, and an extra hub sent
- * `simulation.spec` looking for calls in the wrong one.
- *
- * Read from the authenticated `GET /hubs` (the admin's memberships) — the
- * public `/api/config` no longer publishes a hub roster (#1710).
- *
- * Reuse when there is something to reuse, create only when there is not, and
- * always clean up what was created.
- */
-async function acquireHub(
-  request: APIRequestContext,
-): Promise<{ hubId: string; release: () => Promise<void> }> {
-  const { data } = await apiGet<{ hubs?: Array<{ id: string }> }>(request, '/hubs')
-  const existing = data?.hubs?.[0]?.id
-  if (existing) return { hubId: existing, release: async () => {} }
-
-  const hubId = await createHubViaApi(request, `decrypt-${Date.now()}`)
-  return { hubId, release: () => deleteHubViaApi(request, hubId) }
 }
 
 /**
@@ -232,17 +205,12 @@ test.describe('server-written messages decrypt in the real client', () => {
   test.slow()
   test.setTimeout(240_000)
 
-  let releaseHub: (() => Promise<void>) | null = null
-  test.afterEach(async () => {
-    const release = releaseHub
-    releaseHub = null
-    if (release) await release()
-  })
-
   test('an online admin re-wraps pre-claim messages for the claiming volunteer', async ({ browser, page, request }) => {
     const consoleErrors = watchConsole(page)
-    const { hubId, release } = await acquireHub(request)
-    releaseHub = release
+    // A hub of this test's own, never deleted: the shared admin is a member of
+    // it, so every other worker's admin client polls it, and deleting it would
+    // put a `404 Hub not found` in whichever of them is running (#2524).
+    const hubId = await createOwnHubViaApi(request, 'decrypt')
 
     // --- An admin client is online for the whole exchange ----------------
     const admin = await openAdminClient(browser, hubId)
@@ -283,8 +251,10 @@ test.describe('server-written messages decrypt in the real client', () => {
 
   test('the first admin client to come online re-wraps a claim made while none was', async ({ browser, page, request }) => {
     const consoleErrors = watchConsole(page)
-    const { hubId, release } = await acquireHub(request)
-    releaseHub = release
+    // A hub of this test's own, never deleted: the shared admin is a member of
+    // it, so every other worker's admin client polls it, and deleting it would
+    // put a `404 Hub not found` in whichever of them is running (#2524).
+    const hubId = await createOwnHubViaApi(request, 'decrypt')
 
     // The admin client exists only to create the volunteer, then goes away
     // before anything is claimed.

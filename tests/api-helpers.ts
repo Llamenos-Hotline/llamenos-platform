@@ -280,6 +280,28 @@ export async function createHubViaApi(
 }
 
 /**
+ * Create a hub that ONE browser spec owns for its lifetime — and leave it.
+ *
+ * The name is unique per call (a millisecond clock alone collides: two workers
+ * starting together both asked for `decrypt-<same ms>` and one got a 409).
+ *
+ * There is deliberately no matching "delete". The `chromium` project runs four
+ * workers against one backend and one admin identity, and creating a hub makes
+ * that admin a member of it — so every admin client in every worker polls it.
+ * Deleting it makes each of those clients log a `404 Hub not found`, failing
+ * whichever spec happens to be running (#2524). The hub is cleaned up by the
+ * database reset every run begins with. `tests/hub-lifecycle-guard.test.ts`
+ * fails any browser spec that deletes a hub or adopts `hubs[0]`.
+ */
+export async function createOwnHubViaApi(
+  request: APIRequestContext,
+  namePrefix: string,
+): Promise<string> {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return createHubViaApi(request, `${namePrefix}-${suffix}`)
+}
+
+/**
  * Add a user to a hub with the specified role IDs.
  * Used to ensure test volunteers are members of the worker-scoped hub.
  */
