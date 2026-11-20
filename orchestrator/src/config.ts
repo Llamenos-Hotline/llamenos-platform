@@ -582,6 +582,11 @@ export const TRUST_ANCHOR_APPROVERS: readonly string[] = ['rhonda-rodododo']
  */
 export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   '.github/workflows/',
+  // The helper scripts the workflows run — the action-pinning guard, the failure
+  // classifier, the changed-platform detector. Supply chain for the same reason
+  // the workflows are, and infra owns them outright (#2875) the same way it owns
+  // the workflows: its own PR writes them, a label on someone else's cannot.
+  '.github/scripts/',
   '.github/actions/',
   'deploy/',
   'Dockerfile*',
