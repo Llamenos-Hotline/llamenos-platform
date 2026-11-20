@@ -33,6 +33,10 @@ case "$mode" in
     echo "        Searched in the following locations:"
     echo "            https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.8.9/gson-2.8.9.jar"
     echo "BUILD FAILED in 11s"; exit 1 ;;
+  rate-limit)
+    echo "> Could not resolve all files for configuration ':app:debugUnitTestRuntimeClasspath'."
+    echo "   > Could not GET 'https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom'. Received status code 429 from server: Too Many Requests"
+    echo "BUILD FAILED in 46s"; exit 1 ;;
   timeout) echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Read timed out"; echo "BUILD FAILED"; exit 1 ;;
   test-fail) echo "> Task :app:testDebugUnitTest FAILED"; echo "FooTest > bar FAILED"; echo "BUILD FAILED in 2m"; exit 1 ;;
   compile-fail) echo "e: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar"; echo "BUILD FAILED"; exit 1 ;;
@@ -63,6 +67,7 @@ function run(modes: string[], args: string[] = ['testDebugUnitTest', '--console=
       PATH: process.env.PATH ?? '',
       GRADLE_BIN: join(dir, 'gradlew'),
       GRADLE_RETRY_BACKOFF_SEC: '0',
+      GRADLE_RATE_LIMIT_BACKOFF_SEC: '0',
       RUNNER_TEMP: dir,
       GITHUB_STEP_SUMMARY: summary,
       STUB_CALLS: calls,
@@ -148,6 +153,40 @@ describe('gradle-retry.sh', () => {
   test("Gradle's own HTTP retry budget is raised on every run", () => {
     const r = run(['ok'])
     expect(r.invocations[0]).toContain('-Dorg.gradle.internal.repository.max.retries=6')
+  })
+
+  test('a 429 is retried, and cuts Gradle\'s own per-artifact retries instead of multiplying the request rate (#2879)', () => {
+    const r = run(['rate-limit', 'ok'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
+    // attempt 1: the normal budget — the first attempt never knows about a 429.
+    expect(r.invocations[0]).toContain('-Dorg.gradle.internal.repository.max.retries=6')
+    expect(r.invocations[0]).toContain('-Dorg.gradle.internal.repository.initial.backoff=500 ')
+    // attempt 2: the registry asked us to slow down — small budget, long initial backoff.
+    expect(r.invocations[1]).toContain('-Dorg.gradle.internal.repository.max.retries=2')
+    expect(r.invocations[1]).toContain('-Dorg.gradle.internal.repository.initial.backoff=5000')
+    expect(r.invocations[1]).not.toContain('--refresh-dependencies')
+    expect(r.out).toContain('429 Too Many Requests')
+  })
+
+  test('after a 429 the delay uses the rate-limit base, not the transport one (#2879)', () => {
+    const r = run(['rate-limit', 'ok'], undefined, { GRADLE_RETRY_BACKOFF_SEC: '0', GRADLE_RATE_LIMIT_BACKOFF_SEC: '1' })
+    expect(r.code).toBe(0)
+    expect(r.out).toContain('retrying in 1s')
+  })
+
+  test('a transport error alone keeps the normal Gradle retry budget and the short backoff', () => {
+    const r = run(['timeout', 'ok'], undefined, { GRADLE_RETRY_BACKOFF_SEC: '1', GRADLE_RATE_LIMIT_BACKOFF_SEC: '600' })
+    expect(r.code).toBe(0)
+    expect(r.invocations[1]).toContain('-Dorg.gradle.internal.repository.max.retries=6')
+    expect(r.out).toContain('retrying in 1s')
+  })
+
+  test('a persistent 429 fails after every attempt with Gradle\'s exit status', () => {
+    const r = run(['rate-limit'], undefined, { GRADLE_RETRY_ATTEMPTS: '3' })
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(3)
+    expect(r.out).toMatch(/::error title=[^:]*failed on all 3 attempts/)
   })
 
   test('no Gradle arguments is a usage error, not a bare ./gradlew', () => {
