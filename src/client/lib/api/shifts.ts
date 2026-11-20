@@ -13,6 +13,16 @@ export async function getMyShiftStatus() {
   return request<ShiftStatus>(activeHubPath('/shifts/my-status'))
 }
 
+/**
+ * The user's shift state in an explicit hub, whichever hub the UI is showing. A
+ * clock-in is per hub, so anything that must act on every clock-in the user holds
+ * (the heartbeat sender) reads each member hub rather than only the active one
+ * (multi-hub axiom).
+ */
+export async function getMyShiftStatusIn(hubId: string) {
+  return request<ShiftStatus>(hubPath(hubId, '/shifts/my-status'))
+}
+
 // --- Shifts (admin only) ---
 
 export async function listShifts() {

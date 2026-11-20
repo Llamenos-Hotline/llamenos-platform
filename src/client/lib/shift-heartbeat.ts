@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS } from '@shared/active-shift-liveness'
 import { ApiError, NoSessionError, sendHeartbeat } from '@/lib/api'
-import { shiftKeys } from '@/lib/queries/shifts'
+import { shiftKeys, useClockedInHubIds } from '@/lib/queries/shifts'
 import { useMemberHubIds } from '@/lib/member-hubs'
 
 /** What a hub said to a heartbeat. A hub that gave no usable answer is simply absent from the result. */
@@ -11,13 +11,12 @@ export type HeartbeatOutcome = 'alive' | 'not-clocked-in'
 /**
  * Send one heartbeat to every hub in `hubIds`.
  *
- * Every member hub is asked, not just the active one: a user can be clocked into
- * several hubs at once and each clock-in goes stale on its own (multi-hub axiom).
- * A 404 is the ordinary answer for a hub the user is not clocked into — or whose
- * clock-in the server already considers stale and will not revive — and a 403 means
- * they cannot clock in there at all; both read as `not-clocked-in`. Anything else
- * (offline, a 5xx) says nothing about the clock-in, so it is left out of the result
- * rather than guessed at, and reported once to the console.
+ * The caller passes only hubs the server has said this user is clocked into. A 404
+ * then means the clock-in went stale (and a heartbeat does not revive it) or was
+ * cleared elsewhere, and a 403 means the right to clock in was withdrawn; both read
+ * as `not-clocked-in`. Anything else (offline, a 5xx) says nothing about the
+ * clock-in, so it is left out of the result rather than guessed at, and reported
+ * once to the console.
  */
 export async function sendHeartbeats(
   hubIds: readonly string[],
@@ -42,35 +41,53 @@ export async function sendHeartbeats(
 /**
  * Keep every clock-in this user holds alive while the app is open.
  *
- * Runs once on mount (an app restarted mid-shift re-asserts its clock-in at once)
- * and then every `ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS`. When a hub that was
- * accepting heartbeats stops — the server reaped the clock-in, or it was cleared
- * elsewhere — the shift status caches are invalidated, so the dashboard stops
- * showing "clocked in" for a volunteer who is no longer being rung.
+ * Which hubs are beaten is decided by the server, not guessed: each member hub's
+ * shift status is read (a clock-in is per hub and the user may hold several at
+ * once — multi-hub axiom) and only the hubs the user is clocked into receive a
+ * beat. A heartbeat is a liveness signal for a clock-in that exists; sent to a hub
+ * with none it can only be refused, on every tick, for as long as the app is open.
  *
- * `enabled` is whether this user may clock in at all; without it every beat would
- * be a 403.
+ * Beats go out when a clock-in is first seen (an app restarted mid-shift
+ * re-asserts it at once) and then every `ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS`. A
+ * 4xx answer is final for that clock-in: the hub is not beaten again until the
+ * server reports the user clocked in afresh, and the shift status caches are
+ * refreshed so the dashboard stops showing "clocked in" for a volunteer who is no
+ * longer being rung.
+ *
+ * `enabled` is whether this user may clock in at all.
  */
 export function useShiftHeartbeat(enabled: boolean): void {
-  const hubIds = useMemberHubIds()
+  const memberHubIds = useMemberHubIds()
+  const clockedIn = useClockedInHubIds(memberHubIds, enabled)
   const queryClient = useQueryClient()
-  const alive = useRef(new Set<string>())
+  /** Hubs that refused a beat for the clock-in we last saw; cleared once the server stops reporting it. */
+  const refused = useRef(new Set<string>())
 
   useEffect(() => {
-    if (!enabled || hubIds.length === 0) return
+    for (const hubId of refused.current) {
+      if (!clockedIn.includes(hubId)) refused.current.delete(hubId)
+    }
+  }, [clockedIn])
+
+  useEffect(() => {
+    if (!enabled || clockedIn.length === 0) return
     let cancelled = false
     let inFlight = false
 
     const beat = async () => {
       if (inFlight) return
+      const targets = clockedIn.filter(hubId => !refused.current.has(hubId))
+      if (targets.length === 0) return
       inFlight = true
       try {
-        const outcomes = await sendHeartbeats(hubIds)
+        const outcomes = await sendHeartbeats(targets)
         if (cancelled) return
         let lostClockIn = false
         for (const [hubId, outcome] of outcomes) {
-          if (outcome === 'alive') alive.current.add(hubId)
-          else if (alive.current.delete(hubId)) lostClockIn = true
+          if (outcome === 'not-clocked-in') {
+            refused.current.add(hubId)
+            lostClockIn = true
+          }
         }
         if (lostClockIn) {
           void queryClient.invalidateQueries({ queryKey: shiftKeys.myStatus() })
@@ -87,5 +104,5 @@ export function useShiftHeartbeat(enabled: boolean): void {
       cancelled = true
       clearInterval(timer)
     }
-  }, [enabled, hubIds, queryClient])
+  }, [enabled, clockedIn, queryClient])
 }

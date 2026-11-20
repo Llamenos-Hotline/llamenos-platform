@@ -19,7 +19,7 @@ import { listRecords, getRecord, createRecord, deleteRecord, listEventLinkedReco
 import { listInteractions } from './interactions'
 import { listEvidence, getEvidenceMetadata } from './evidence'
 import { getCallHistory, getCallsTodayCount, getUserPresence } from './calls'
-import { listShifts, getMyShiftStatus, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
+import { listShifts, getMyShiftStatus, getMyShiftStatusIn, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
 import { listRingGroups, createRingGroup } from './ring-groups'
 import { getCustomFields } from './call-settings'
 
@@ -92,6 +92,15 @@ describe('sendHeartbeat (#1142)', () => {
   it('does not need an active hub', async () => {
     await sendHeartbeat('hub-2')
     expect(urls).toEqual(['/api/hubs/hub-2/shifts/heartbeat'])
+  })
+})
+
+describe('getMyShiftStatusIn (#1142)', () => {
+  // The heartbeat sender asks each member hub whether the user is clocked in there.
+  it('reads the hub it names, whatever hub is active', async () => {
+    setActiveHub('hub-1')
+    await getMyShiftStatusIn('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/my-status'])
   })
 })
 
