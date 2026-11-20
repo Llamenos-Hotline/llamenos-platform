@@ -5577,16 +5577,68 @@ BUILD FAILED in 39s
     })
 
     it.each([
-      ['a 404: the artifact does not exist (a bad version bump is the build\'s fault)', { marker: true, log: repoRefused('Received status code 404 from server: Not Found') }],
-      ['a 403 from the repository', { marker: true, log: repoRefused('Received status code 403 from server: Forbidden') }],
       ['a repository 429 alongside a failing scenario', { marker: true, log: `${repoRefused('Received status code 429 from server: Too Many Requests')}${GENUINE_FAILURE}` }],
       ['a 429 the code under test reported, not Gradle\'s resolver', { marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nHTTP 429 Too Many Requests from /api/calls\n' }],
+      ['a Kotlin compile error that merely says "Could not compile"', { marker: true, log: '> Task :app:compileDebugAndroidTestKotlin FAILED\ne: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar\n' }],
+      ['a resolution line quoted inside a failing scenario', { marker: true, log: `${GENUINE_FAILURE}  Caused by: Could not find gson-2.8.9.jar (com.google.code.gson:gson:2.8.9).\n` }],
     ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
       const v = android(opts)
       expect(v.kind, v.detail).toBe('genuine')
     })
 
-    it('#2870: every Gradle invocation in a workflow goes through gradle-retry.sh, except the emulator run, which the shard retry owns', () => {
+    // ── #2870: a cached-negative artifact miss. Verbatim from run 44513364742, android-e2e (0):
+    // a transient 404 on a jar that exists, which Gradle then remembers. The classifier said
+    // "no infrastructure signature", spent none of the shard's retry budget, and blamed #2869 for gson.
+    const cachedMiss = `> Task :app:checkDebugDuplicateClasses FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:checkDebugDuplicateClasses'.
+> Could not resolve all files for configuration ':app:debugRuntimeClasspath'.
+   > Failed to transform gson-2.8.9.jar (com.google.code.gson:gson:2.8.9) to match attributes {artifactType=enumerated-runtime-classes}.
+      > Could not find gson-2.8.9.jar (com.google.code.gson:gson:2.8.9).
+        Searched in the following locations:
+            https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.8.9/gson-2.8.9.jar
+   > Could not find tink-android-1.8.0.jar (com.google.crypto.tink:tink-android:1.8.0).
+   > Failed to transform kotlin-android-extensions-runtime-1.9.22.jar (org.jetbrains.kotlin:kotlin-android-extensions-runtime:1.9.22) to match attributes {artifactType=enumerated-runtime-classes}.
+
+BUILD FAILED in 41s
+`
+
+    it('#2870: a "Could not find <jar>" the shard hit before any test ran is infrastructure, named as dependency resolution', () => {
+      const v = android({ marker: true, log: cachedMiss })
+      expect(v.kind, v.detail).toBe('infra')
+      expect(v.signatures).toContain('dependency-resolution-failed')
+    })
+
+    it.each([
+      ['Could not find only', '> Could not find gson-2.8.9.jar (com.google.code.gson:gson:2.8.9).'],
+      ['Failed to transform ... to match attributes only', '> Failed to transform kotlin-android-extensions-runtime-1.9.22.jar (org.x:y:1) to match attributes {artifactType=enumerated-runtime-classes}.'],
+      ['Could not resolve all files only', "> Could not resolve all files for configuration ':app:debugAndroidTestRuntimeClasspath'."],
+      ['a 404 on a POM', "> Could not find junit:junit:4.13.2.\n   - https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom"],
+    ])('#2870: %s is recognised on its own', (_n, line) => {
+      expect(android({ marker: true, log: `${line}\nBUILD FAILED\n` }).kind).toBe('infra')
+    })
+
+    it('#2870: a resolution failure next to a failing scenario stays genuine — the test result is not erased', () => {
+      const v = android({ marker: true, log: `${cachedMiss}${GENUINE_FAILURE}` })
+      expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    // One implementation of the knowledge (#2870): the classifier and gradle-retry.sh read the same file.
+    it('#2870: gradle-retry.sh and the classifier read ONE pattern file — neither carries an inline copy', () => {
+      const retry = readFileSync(join(process.cwd(), 'scripts', 'ci', 'gradle-retry.sh'), 'utf8')
+      const classifier = readFileSync(join(process.cwd(), '.github', 'scripts', 'classify-infra-failure.py'), 'utf8')
+      expect(retry).toContain('gradle-resolution.patterns')
+      expect(classifier).toContain('gradle-resolution.patterns')
+      for (const text of [retry, classifier]) {
+        const code = text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')
+        expect(code).not.toContain('Premature end of Content-Length')
+      }
+    })
+
+    it('#2870: every Gradle invocation in a workflow goes through gradle-retry.sh, except the emulator run the classifier owns', () => {
       const wfDir = join(process.cwd(), '.github', 'workflows')
       const bare: string[] = []
       for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {

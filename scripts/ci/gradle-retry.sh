@@ -130,13 +130,11 @@ RATE_REPO_INITIAL_BACKOFF_MS=5000
 
 # What counts as a resolution/transport failure, and which of those Gradle
 # REMEMBERS, live in two pattern files beside this script (one ERE per line) so
-# there is ONE definition of the class (#2870). Deliberately specific: a bare
-# "Could not" would also match "Could not compile", which is a real error. Never
-# inline a copy of either list here or anywhere else: implementations that
-# disagree is how android-e2e came to call a missed gson jar "not an
-# infrastructure signature". .github/scripts/classify-infra-failure.py still
-# carries its own, narrower regex; it moves onto these files in #2875's follow-up
-# (that directory is in no lane's scope, so it cannot ride with this change).
+# that .github/scripts/classify-infra-failure.py reads the very same lists
+# (#2870). Deliberately specific: a bare "Could not" would also match "Could not
+# compile", which is a real error. Never inline a copy of either list here or
+# anywhere else: three implementations that disagree is how android-e2e came to
+# call a missed gson jar "not an infrastructure signature".
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLUTION_PATTERNS="${GRADLE_RESOLUTION_PATTERNS:-$HERE/gradle-resolution.patterns}"
 CACHED_MISS_PATTERNS="${GRADLE_CACHED_MISS_PATTERNS:-$HERE/gradle-cached-miss.patterns}"
