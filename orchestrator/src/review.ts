@@ -3563,6 +3563,10 @@ export interface ReviewLoopResult {
    *  The caller (tick.ts) uses this to decide whether to label the issue
    *  for a human rather than merge. */
   needsHuman: boolean
+  /** True when the loop ended because the test runner reached no verdict
+   *  (`VerifyReport.testsRunnerCrashed`, #2889) — NOT because the diff failed
+   *  verification. Absent otherwise. */
+  runnerCrashed?: true
   /** The last mechanical verification report produced, whichever round it
    *  came from — `undefined` only if verifyMechanical itself never got a
    *  chance to run, which does not currently happen in this loop. */
@@ -3620,6 +3624,21 @@ export async function runReviewLoop(input: ReviewLoopInput, deps: ReviewLoopDeps
     const report = await deps.verifyMechanical({ worktree: input.worktree, branch: input.branch, lane: input.lane, allLanes: input.allLanes })
     lastReport = report
     if (!report.passed) {
+      if (report.testsRunnerCrashed === true) {
+        // #2889: the test runner reached NO verdict — it died, wrote nothing,
+        // or the host had no Node to run it on. That is a fact about this run,
+        // not about the diff, and the round must not be recorded as the diff
+        // failing. No second opinion is spent on a head with no verdict (arming
+        // needs a passing report), but the caller can tell the two apart: it
+        // records the item as UNVERIFIED — outside the failure budget and the
+        // breakers — and the re-entry pass (reverify.ts) re-runs the head and
+        // requests the review once the run has a verdict.
+        deps.log(
+          `review loop: the test runner reached no verdict on round ${round} for PR ${input.pr} — ` +
+          'an infrastructure outcome, not a finding about the diff; the head is re-run by the re-entry pass, which requests the review once it has a verdict',
+        )
+        return { finalVerdict: 'UNREADABLE', rounds, needsHuman: false, lastReport, runnerCrashed: true }
+      }
       deps.log(`review loop: mechanical verification failed on round ${round} for PR ${input.pr} — ending the loop, no review requested`)
       return { finalVerdict: 'FAIL', rounds, needsHuman: true, lastReport }
     }

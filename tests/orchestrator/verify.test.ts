@@ -1424,3 +1424,67 @@ describe('verifyMechanical reads certificate content from the head object (#1610
     expect(report.reasons.join(' ')).not.toContain(PEM)
   })
 })
+
+// --- #2889: a host with no Node vitest can start on is named, not crashed on,
+// and a crash is never the same verdict as a red suite.
+
+describe('verifyMechanical chooses the Node the runner runs on (#2889)', () => {
+  const cleanup: string[] = []
+  afterEach(() => {
+    while (cleanup.length > 0) {
+      const dir = cleanup.pop()
+      if (dir) rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /** A repo routed to the orchestrator suite whose trusted vitest declares
+   *  `engines.node`, with a stand-in runner that records the PATH it saw. */
+  const repoWithEngines = (body: string): { dir: string; sawPath: string; ran: string } => {
+    const dir = orchestratorDiffRepo(cleanup, {})
+    mkdirSync(join(dir, 'node_modules', 'vitest'), { recursive: true })
+    writeFileSync(join(dir, 'node_modules', 'vitest', 'package.json'),
+      JSON.stringify({ name: 'vitest', engines: { node: '^20.0.0 || ^22.0.0 || >=24.0.0' } }))
+    const sawPath = join(dir, 'runner-saw-path')
+    const ran = join(dir, 'runner-ran')
+    installRunner(dir, `echo ran > "${ran}"; printf '%s' "$PATH" > "${sawPath}"\n${body}`)
+    return { dir, sawPath, ran }
+  }
+
+  it('on a host whose only Node is 18, never starts the runner and says why — as no-verdict, not a failing suite', async () => {
+    const { dir, ran } = repoWithEngines(`printf '%s' '${vitestJson()}' > "$OUT"; exit 0`)
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: fleetLane,
+      nodeResolution: { candidates: async () => ['/usr/bin/node'], probe: async () => 'v18.19.1' },
+    })
+    expect(report.passed).toBe(false)
+    expect(report.testsPassed).toBe(false)
+    expect(report.testsRunnerCrashed).toBe(true)
+    expect(report.reasons.join('\n')).toMatch(/orchestrator: node-unavailable — no Node satisfying vitest's engines\.node/)
+    expect(report.reasons.join('\n')).toContain('v18.19.1 (/usr/bin/node)')
+    expect(existsSync(ran)).toBe(false)
+  })
+
+  it('puts the chosen Node first on the runner\'s PATH, so the `env node` shebang finds it', async () => {
+    const { dir, sawPath } = repoWithEngines(`printf '%s' '${vitestJson()}' > "$OUT"; exit 0`)
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: fleetLane,
+      nodeResolution: { candidates: async () => ['/usr/bin/node', '/opt/volta/bin/node'], probe: async (b) => (b === '/usr/bin/node' ? 'v18.19.1' : 'v24.21.0') },
+    })
+    expect(report.passed).toBe(true)
+    expect(report.testsRunnerCrashed).toBeUndefined()
+    expect(readFileSync(sawPath, 'utf8').startsWith(`/opt/volta/bin${delimiter}`)).toBe(true)
+  })
+
+  it('a runner that dies is a crash; a red result that was read is a red head, not a crash', async () => {
+    const crash = orchestratorDiffRepo(cleanup)
+    installRunner(crash, 'exit 1')
+    const crashed = await verifyMechanical({ worktree: crash, branch: 'main', lane: fleetLane })
+    expect(crashed.testsRunnerCrashed).toBe(true)
+
+    const red = orchestratorDiffRepo(cleanup)
+    installRunner(red, `printf '%s' '${vitestJson({ numFailedTests: 1, numPassedTests: 11, success: false })}' > "$OUT"; exit 1`)
+    const redReport = await verifyMechanical({ worktree: red, branch: 'main', lane: fleetLane })
+    expect(redReport.passed).toBe(false)
+    expect(redReport.testsRunnerCrashed).toBeUndefined()
+  })
+})

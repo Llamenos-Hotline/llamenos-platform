@@ -1102,6 +1102,21 @@ systemd would then schedule nothing at all while `is-enabled`/`is-active`
 still both say yes. An `OnCalendar` expression always has a next occurrence
 computed from the clock alone, so it cannot enter that state.
 
+**The Node the test runner uses (#2889).** The units' `PATH` carries `bun` but
+no version manager, so a bare `node` there is the distro's (18.x on this host)
+while an operator's shell resolves a current one. vitest 4 does not start on
+Node 18, and before #2889 every orchestrator PR the gate verified died at module
+load and was recorded `tests=orchestrator:crash`. `verifyMechanical` now reads
+the trusted vitest's own `engines.node`, picks a `node` that satisfies it
+(`PATH`, then volta, mise and nvm under the fleet user's real home), and puts it
+first on the runner's `PATH`; when none exists it does not start the runner and
+records `<suite>: node-unavailable — …` naming the range and what it found. A
+run that reached no verdict (`tests=<suite>:crash`) is an infrastructure
+outcome, never a finding about the diff: it is recorded `UNVERIFIED` (outside
+the item's attempt budget and the breakers), `runReviewLoop` logs it as "reached
+no verdict" rather than "mechanical verification failed", and the re-entry pass
+re-runs that head once and requests the review on a verdict.
+
 The tick service unit sets `SuccessExitStatus=0` and does not treat a pass that
 declined to run (lock held, halted, breaker tripped) as a failure — those
 are `tick()` working as designed, not a fault for systemd to back off on. The

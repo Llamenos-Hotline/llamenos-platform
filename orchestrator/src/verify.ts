@@ -14,6 +14,7 @@ import {
 } from './write-gate.js'
 import { scrubSecrets } from './github-app.js'
 import { withVerificationMarker } from './review-and-merge-guards.js'
+import { resolveVitestNode, withNodeOnPath, type NodeResolutionDeps } from './node-runtime.js'
 import type { Lane } from './config.js'
 
 const execFileAsync = promisify(execFile)
@@ -98,6 +99,8 @@ export interface VerifyInput {
    * under test never inherits the fleet's credentials.
    */
   testEnv?: NodeJS.ProcessEnv
+  /** Seam for the Node lookup (`resolveVitestNode`); production never sets it. */
+  nodeResolution?: NodeResolutionDeps
   /**
    * The human sign-off a TRUST-ANCHOR change needs (#2556): the logins whose
    * sign-off names the exact commit under judgement, or `undefined`
@@ -124,12 +127,15 @@ export interface VerifyReport {
   testsRun?: string[]
   testsPassed?: boolean
   /**
-   * True when at least one test target failed WITHOUT reaching a verdict — the
-   * runner crashed, wrote no result file or an unreadable one — as opposed to
-   * a result that was read and held failing tests. Always accompanies
-   * `testsPassed: false`. The gate trace renders it `tests=<suite>:crash`, so
-   * "the head's tests are red" and "the runner never ran them" stop sharing a
-   * word (#2738). It changes no verdict: both still fail the gate.
+   * True when a test target failed WITHOUT reaching a verdict — the runner
+   * crashed, wrote no result file or an unreadable one, or the host had no
+   * Node it could run on — and NO target produced a real red result. Always
+   * accompanies `testsPassed: false`. The gate trace renders it
+   * `tests=<suite>:crash`, so "the head's tests are red" and "the runner never
+   * ran them" stop sharing a word (#2738). Both still fail THIS gate, but a
+   * crash is an infrastructure outcome: the review loop, the ledger and the
+   * re-entry pass treat it as "no verdict yet", never as an adverse one
+   * (#2889). One real red result alongside a crash is a red head, not a crash.
    */
   testsRunnerCrashed?: boolean
   /** One line per target whose result file was read and was green — the
@@ -1203,29 +1209,44 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
   const routes = input.skipTests === true ? [] : routesFor(changedFiles)
   const testsRun = routes.map((r) => r.suite)
   let testsPassed: boolean | undefined
-  let testsRunnerCrashed = false
+  let sawNoVerdict = false
+  let sawRealFailure = false
   const testResults: string[] = []
 
   if (routes.length > 0) {
     const resultDir = await mkdtemp(join(tmpdir(), 'llamenos-fleet-verify-'))
     try {
       let allPassed = true
+      // The Node the runner will run on is chosen once, up front (#2889): a
+      // host whose PATH offers only a Node vitest cannot start on is named
+      // here, not discovered as a stack trace from every suite.
+      const baseEnv = input.testEnv ?? process.env
+      const node = await resolveVitestNode(worktree, baseEnv, input.nodeResolution)
+      const runEnv = node.ok ? withNodeOnPath(baseEnv, node.binDir) : baseEnv
       for (const route of routes) {
         const prepared = await prepareTestRoot(worktree, testRoot, route, resultDir)
         if (!prepared.ok) {
           allPassed = false
+          sawRealFailure = true
           reasons.push(prepared.reason)
           continue
         }
+        if (!node.ok) {
+          allPassed = false
+          sawNoVerdict = true
+          reasons.push(`${route.suite}: node-unavailable — ${node.reason}`)
+          continue
+        }
         const outputFile = join(resultDir, `${route.suite.replaceAll('/', '_')}.json`)
-        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile, input.testEnv)
+        const run = await runVitestTarget(worktree, testRoot, route, prepared.config, outputFile, runEnv)
         const resultText = await readFile(outputFile, 'utf8').catch(() => undefined)
         const outcome = judgeTargetRun(route.suite, run, resultText, testRoot)
         if (outcome.passed) {
           testResults.push(outcome.evidence)
         } else {
           allPassed = false
-          if (outcome.noVerdict === true) testsRunnerCrashed = true
+          if (outcome.noVerdict === true) sawNoVerdict = true
+          else sawRealFailure = true
           reasons.push(outcome.reason)
         }
       }
@@ -1246,7 +1267,7 @@ export async function verifyMechanical(input: VerifyInput): Promise<VerifyReport
     impactReasons,
     testsRun,
     testsPassed,
-    ...(testsRunnerCrashed ? { testsRunnerCrashed } : {}),
+    ...(sawNoVerdict && !sawRealFailure ? { testsRunnerCrashed: true } : {}),
     testResults,
     verifiedCommit,
     trustAnchors,
