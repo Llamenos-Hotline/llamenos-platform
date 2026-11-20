@@ -551,6 +551,9 @@
     "noEntries": "Aucun numéro bloqué",
     "phoneNumber": "Numéro de téléphone",
     "reason": "Raison",
+    "reentryDescription": "Ces blocages ne bloquent plus les appelants. La façon de stocker les blocages a changé et le serveur n'a jamais conservé les numéros, il ne peut donc pas les convertir. Bloquez de nouveau chaque numéro, puis fermez son entrée.",
+    "reentryDismiss": "Ignorer",
+    "reentryTitle": "Blocages à ressaisir",
     "remove": "Remove Ban",
     "removeConfirmMessage": "Cet appelant pourra de nouveau joindre la ligne. Seule une empreinte irréversible du numéro est conservée : vous ne pourrez le bloquer à nouveau que si vous avez encore le numéro. La levée est enregistrée dans le journal d'audit.",
     "removeConfirmTitle": "Lever ce blocage ?",
@@ -2664,6 +2667,7 @@
     "callId": "ID d'appel",
     "callIdBadge": "Call",
     "callIdPlaceholder": "ID d'appel ou référence",
+    "callIdRequired": "Saisissez l'identifiant ou la référence de l'appel auquel cette note se rapporte.",
     "callWith": "Appel avec {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",
@@ -3234,6 +3238,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Échec de la vérification de la part",
+    "liveness": {
+      "title": "Votre part de récupération",
+      "description": "Prouvez que cet appareil détient toujours votre part de récupération. Votre part ne quitte jamais l’appareil ; le hub vérifie seulement une signature réalisée avec elle.",
+      "prove": "Vérifier ma part",
+      "proving": "Vérification…",
+      "success": "Part vérifiée. Les administrateurs verront votre part comme saine.",
+      "error": "Échec de la vérification de la part"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -3755,6 +3768,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Vous avez été déconnecté, mais vos clés chiffrées n’ont pas pu être supprimées de cet appareil.",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",
@@ -4103,7 +4117,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Vous ne recevrez plus d'appels entrants.",
     "deleteConfirmTitle": "Supprimer cette garde ?",
-    "deleteConfirmMessage": "Les bénévoles de cette garde cesseront de recevoir des appels pendant ses horaires. Sauf si une autre garde couvre ces heures, les appels iront au groupe de secours, ou resteront sans réponse s'il n'y en a pas. Cette action est irréversible."
+    "deleteConfirmMessage": "Les bénévoles de cette garde cesseront de recevoir des appels pendant ses horaires. Sauf si une autre garde couvre ces heures, les appels iront au groupe de secours, ou resteront sans réponse s'il n'y en a pas. Cette action est irréversible.",
+    "noAdminReader": "Impossible d’enregistrer ce texte : aucun administrateur de ce hub n’a d’appareil enregistré, donc aucun administrateur ne pourrait jamais le lire. Demandez à un administrateur du hub de se connecter sur un appareil."
   },
   "shortcuts": {
     "answerCall": "Répondre à l'appel",

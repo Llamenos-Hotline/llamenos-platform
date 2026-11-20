@@ -1,0 +1,14 @@
+name = "Check the preflight memory assertion"
+run = """
+cd deploy/ansible
+ansible-playbook playbooks/check-preflight-memory.yml \\
+  -i localhost, -c local -e ansible_become=false
+"""
+why = """
+playbooks/check-preflight-memory.yml proves the preflight RAM assertion counts
+reclaimable cache (a warm-cache host with MemFree 481 but 7929 available must
+PASS, an exhausted one must FAIL, exactly 512 must PASS). It documented itself
+as a CI/dev verification playbook yet no workflow ran it, so the assertion it
+guards could regress with every check green. Found by the exhaustiveness test
+in run-ci-guards.test.ts (#2645).
+"""

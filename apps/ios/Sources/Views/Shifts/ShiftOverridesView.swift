@@ -145,8 +145,8 @@ struct ShiftOverridesView: View {
                     .foregroundStyle(Color.brandMutedForeground)
                 }
 
-                if let note = override.encryptedNote, !note.isEmpty {
-                    Text(note)
+                if let note = viewModel.openedNotes[override.id] {
+                    Text(note.displayText)
                         .font(.brand(.caption))
                         .foregroundStyle(Color.brandMutedForeground)
                 }

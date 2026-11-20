@@ -541,6 +541,9 @@
     "noEntries": "No banned numbers. Add numbers to block spam callers.",
     "phoneNumber": "Phone Number",
     "reason": "Reason",
+    "reentryDescription": "These bans no longer block callers. The way bans are stored changed, and the server never kept the numbers, so it cannot convert them. Ban each number again, then dismiss its entry.",
+    "reentryDismiss": "Dismiss",
+    "reentryTitle": "Bans to re-enter",
     "remove": "Remove Ban",
     "removeConfirmMessage": "This caller will be able to reach the hotline again. Only a one-way hash of the number is kept, so you can only ban it again if you still have the number. The removal is recorded in the audit log.",
     "removeConfirmTitle": "Remove this ban?",
@@ -2591,6 +2594,7 @@
     "callId": "Call ID",
     "callIdBadge": "Call",
     "callIdPlaceholder": "Call ID or reference",
+    "callIdRequired": "Enter the call ID or reference this note belongs to.",
     "callWith": "Call with {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",
@@ -3604,6 +3608,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "You were logged out, but your encrypted keys could not be removed from this device.",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",
@@ -3948,7 +3953,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Delete this shift?",
-    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone."
+    "deleteConfirmMessage": "Volunteers on this shift will stop receiving calls during its hours. Unless another shift covers those hours, calls will go to the fallback group, or go unanswered if none is set. This cannot be undone.",
+    "noAdminReader": "Cannot save this text: no admin of this hub has a registered device, so no admin could ever read it. Ask a hub administrator to sign in on a device."
   },
   "shortcuts": {
     "answerCall": "Answer call",
@@ -4665,6 +4671,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Share verification failed",
+    "liveness": {
+      "title": "Your recovery share",
+      "description": "Prove that this device still holds your recovery share. Your share never leaves the device; the hub only checks a signature made with it.",
+      "prove": "Verify my share",
+      "proving": "Verifying…",
+      "success": "Share verified. Admins will see your share as healthy.",
+      "error": "Share verification failed"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

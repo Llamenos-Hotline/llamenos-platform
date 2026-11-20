@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { paginationSchema, paginatedMeta, recipientEnvelopeSchema } from './common'
+import { forPatch } from './patch'
 
 // --- Response schemas ---
 
@@ -83,10 +84,73 @@ export const banCallResponseSchema = z.object({
   hungUp: z.boolean(),
 })
 
+/**
+ * What part of the hub's call history a `GET /calls/history` page was drawn
+ * from (#1342). Always present, so a client never has to infer it from a short
+ * or empty list:
+ *
+ * - `all`: the caller holds `calls:read-history` — every call of the hub.
+ * - `own`: the caller holds only `calls:read-own-history` — the calls they
+ *   answered whose answer time is on or after `availableSince`, i.e. within the
+ *   hub's `windowDays`. Older calls are NOT deleted (the admin system of record
+ *   keeps them); they are no longer served to this caller, and a client says so
+ *   ("calls older than N days are no longer available to you").
+ *
+ * The window is access control, not cryptographic expiry: a record the caller
+ * already fetched stays decryptable with their device key.
+ */
+export const callHistoryAccessScopeSchema = z.enum(['all', 'own'])
+
+export const callHistoryAccessSchema = z.object({
+  scope: callHistoryAccessScopeSchema,
+  /** The hub's volunteer access window in days. Present when `scope` is `own`. */
+  windowDays: z.number().int().optional(),
+  /** ISO 8601 server time: the oldest answer time served. Present when `scope` is `own`. */
+  availableSince: z.string().optional(),
+})
+
+export type CallHistoryAccess = z.infer<typeof callHistoryAccessSchema>
+
 export const callHistoryResponseSchema = z.object({
   calls: z.array(callRecordResponseSchema),
   ...paginatedMeta,
+  access: callHistoryAccessSchema,
 })
+
+// --- Volunteer access window (#1342) ---
+
+/** Bounds of a hub's volunteer call-history access window, in days. */
+export const CALL_HISTORY_ACCESS_DAYS_MIN = 1
+export const CALL_HISTORY_ACCESS_DAYS_MAX = 365
+/** The operator's default (2026-11-15): one week. */
+export const CALL_HISTORY_ACCESS_DAYS_DEFAULT = 7
+
+/**
+ * A hub's volunteer call-history ACCESS window (#1342): how far back a member
+ * holding only `calls:read-own-history` may read the calls they answered.
+ *
+ * This is NOT data retention. Nothing here deletes anything, and it must never
+ * be wired into `retention.ts` / the erasure path: the records stay the admin
+ * system of record, readable by every holder of `calls:read-history`, for as
+ * long as the hub's retention policy keeps them.
+ *
+ * `GET`/`PATCH /hubs/:hubId/settings/call-history-access`. The PATCH body is
+ * `forPatch` of this schema, so a body that omits the key changes nothing
+ * instead of resetting the window to the default (#1643).
+ */
+export const callHistoryAccessSettingsSchema = z.object({
+  volunteerAccessDays: z.number().int()
+    .min(CALL_HISTORY_ACCESS_DAYS_MIN)
+    .max(CALL_HISTORY_ACCESS_DAYS_MAX)
+    .optional()
+    .default(CALL_HISTORY_ACCESS_DAYS_DEFAULT),
+})
+
+export type CallHistoryAccessSettings = z.infer<typeof callHistoryAccessSettingsSchema>
+
+export const callHistoryAccessSettingsPatchSchema = forPatch(callHistoryAccessSettingsSchema)
+
+export type CallHistoryAccessSettingsPatch = z.infer<typeof callHistoryAccessSettingsPatchSchema>
 
 // --- Input schemas ---
 

@@ -179,6 +179,17 @@ export function reviewSetTag(profiles: readonly string[]): string | undefined {
 }
 
 /**
+ * What a recorded PASS judged besides the commit: the review set
+ * (`reviewSetTag`, `general` when it is the general reviewer alone) and the
+ * PR's title and description (`claimDigest`, truncated to the width the cache
+ * key uses). Written by `review-and-merge` into the check run's `external_id`,
+ * recomputed by the gate from the live PR, and compared as an exact string.
+ */
+export function reviewBinding(setTag: string | undefined, claim: string): string {
+  return `fleet-review:v1;set=${setTag ?? 'general'};claim=${claim.slice(0, CLAIM_DIGEST_NAME_CHARS)}`
+}
+
+/**
  * `findArtifact` collapsed three outcomes into one `undefined` — a genuine
  * miss, a forged-or-expired record, and a lookup that could not be answered
  * — because its one caller (the review gate) treats them identically: run
@@ -190,7 +201,7 @@ export function reviewSetTag(profiles: readonly string[]): string | undefined {
  *
  * This is the same read with the three outcomes kept apart. The producing-
  * workflow rule is unchanged: an artifact's EXISTENCE is the verdict, so
- * only `CACHE_WRITER_WORKFLOW` may be believed.
+ * only `CACHE_WRITER_WORKFLOWS` may be believed.
  */
 export type VerdictArtifactState = 'present' | 'absent' | 'unreadable'
 
@@ -212,8 +223,8 @@ export async function verdictArtifactState(
       (detail) => log(`could not read run ${runId} behind artifact ${name}: ${detail}`),
     )
     if (run === undefined) return 'unreadable'
-    if (run.path !== CACHE_WRITER_WORKFLOW) {
-      log(`ignoring artifact ${name}: run ${runId} came from ${run.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOW}`)
+    if (!isCacheWriter(run.path)) {
+      log(`ignoring artifact ${name}: run ${runId} came from ${run.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOWS.join(' or ')}`)
       continue
     }
     return 'present'
@@ -226,7 +237,7 @@ interface ArtifactListResponse {
 }
 
 /**
- * The ONLY workflow whose artifacts may be believed. An artifact's
+ * The ONLY workflows whose artifacts may be believed. An artifact's
  * EXISTENCE is the whole PASS verdict, and any workflow run in this
  * repository can create an artifact with any name it likes — so without
  * this check a same-repo PR could add its own `pull_request`-triggered
@@ -234,11 +245,29 @@ interface ArtifactListResponse {
  * `fleet-review-pass-pr<N>-tree-<head tree>-claim-<digest>` and the next review
  * request would find it, conclude `cache-hit`, and go green with no review
  * ever run. The name is not a capability; the producing workflow is.
+ *
+ * Two, because the review engine runs in two workflows' runs, and the run
+ * that owns an artifact is the TOP-LEVEL run — for a called workflow, its
+ * caller:
+ *  - `fleet-review-re-evaluate.yml` — every `review_requested` review. It
+ *    holds no logic of its own: it only calls `fleet-review.yml` (#2815,
+ *    see its header for why the review request cannot run in
+ *    `fleet-review.yml`'s own suites);
+ *  - `fleet-review.yml` — the operator's `workflow_dispatch` (#1471).
+ * Both are this repository's own workflow files, so a PR can forge either
+ * only by editing it — the same exposure the single path always had.
  */
-const CACHE_WRITER_WORKFLOW = '.github/workflows/fleet-review.yml'
+export const CACHE_WRITER_WORKFLOWS: readonly string[] = [
+  '.github/workflows/fleet-review.yml',
+  '.github/workflows/fleet-review-re-evaluate.yml',
+]
 
-/** The one unexpired artifact under `name` that `fleet-review.yml` itself
- *  produced, or `undefined` — for a genuine miss, for one written by
+function isCacheWriter(path: string | undefined): boolean {
+  return path !== undefined && CACHE_WRITER_WORKFLOWS.includes(path)
+}
+
+/** The one unexpired artifact under `name` that a `CACHE_WRITER_WORKFLOWS`
+ *  run produced, or `undefined` — for a genuine miss, for one written by
  *  anything else, AND for a lookup that could not be answered, which
  *  callers must not tell apart (see `artifactReviewCache`). */
 async function findArtifact(
@@ -260,8 +289,8 @@ async function findArtifact(
       30_000,
       (detail) => log(`could not read run ${runId} behind cache artifact ${name} — ignoring it (fail safe): ${detail}`),
     )
-    if (run?.path !== CACHE_WRITER_WORKFLOW) {
-      log(`ignoring cache artifact ${name}: run ${runId} came from ${run?.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOW}`)
+    if (!isCacheWriter(run?.path)) {
+      log(`ignoring cache artifact ${name}: run ${runId} came from ${run?.path ?? '(unreadable)'}, not ${CACHE_WRITER_WORKFLOWS.join(' or ')}`)
       continue
     }
     return { id: candidate.id, runId }
@@ -444,15 +473,18 @@ export type LastVerdictLookup =
   | { kind: 'unreadable'; reason: string }
 
 /**
- * How many of the PR branch's most recent completed `fleet-review.yml` runs
- * are searched — one page of the runs API. Every push adds a run with no
- * verdict in it, so this is the depth of push history a verdict survives;
- * the verdict artifacts themselves are kept 30 days.
+ * How many of the PR branch's most recent completed runs of EACH
+ * `CACHE_WRITER_WORKFLOWS` workflow are searched — one page of the runs API
+ * per workflow. Every push adds a run with no verdict in it, so this is the
+ * depth of push history a verdict survives; the verdict artifacts themselves
+ * are kept 30 days.
  */
 export const LAST_VERDICT_RUN_WINDOW = 100
 
+interface WorkflowRun { id: number; head_sha: string; html_url: string; path?: string; created_at?: string }
+
 interface WorkflowRunsResponse {
-  workflow_runs: { id: number; head_sha: string; html_url: string; path?: string }[]
+  workflow_runs: WorkflowRun[]
 }
 
 interface RunArtifactsResponse {
@@ -500,15 +532,37 @@ export interface LastVerdictDeps {
 export async function lastEarnedVerdict(deps: LastVerdictDeps): Promise<LastVerdictLookup> {
   if (!/^[0-9]+$/.test(deps.pr)) return { kind: 'unreadable', reason: `pr "${deps.pr}" is not a PR number` }
   if (deps.branch.trim().length === 0) return { kind: 'unreadable', reason: 'no head branch to search' }
-  const workflow = CACHE_WRITER_WORKFLOW.split('/').pop() ?? CACHE_WRITER_WORKFLOW
-  const runs = await deps.api<WorkflowRunsResponse>(
-    `repos/${REPO}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(deps.branch)}` +
-    `&status=completed&per_page=${LAST_VERDICT_RUN_WINDOW}`,
-  )
-  if (runs === undefined || !Array.isArray(runs.workflow_runs)) {
-    return { kind: 'unreadable', reason: `could not list ${workflow} runs on ${deps.branch}` }
+  // Every writer's runs, merged newest-first by CREATION time (the runs API's
+  // own order is not chronological). A writer whose page came back full has
+  // unread runs older than its oldest listed one, so nothing older than that
+  // horizon is searched from ANY writer — the merged history is exactly as
+  // deep as the shallowest full page, as one writer's window always was.
+  const listed: WorkflowRun[] = []
+  let horizon = ''
+  for (const path of CACHE_WRITER_WORKFLOWS) {
+    const workflow = path.split('/').pop() ?? path
+    const runs = await deps.api<WorkflowRunsResponse>(
+      `repos/${REPO}/actions/workflows/${workflow}/runs?branch=${encodeURIComponent(deps.branch)}` +
+      `&status=completed&per_page=${LAST_VERDICT_RUN_WINDOW}`,
+    )
+    if (runs === undefined || !Array.isArray(runs.workflow_runs)) {
+      return { kind: 'unreadable', reason: `could not list ${workflow} runs on ${deps.branch}` }
+    }
+    for (const r of runs.workflow_runs) {
+      if (typeof r.created_at !== 'string' || Number.isNaN(Date.parse(r.created_at))) {
+        return { kind: 'unreadable', reason: `run ${r.id} of ${workflow} has no readable created_at to order it by` }
+      }
+    }
+    if (runs.workflow_runs.length >= LAST_VERDICT_RUN_WINDOW) {
+      const oldest = runs.workflow_runs.map((r) => r.created_at as string).sort()[0] ?? ''
+      if (oldest > horizon) horizon = oldest
+    }
+    listed.push(...runs.workflow_runs)
   }
-  // Same producing-workflow rule as the cache (`CACHE_WRITER_WORKFLOW`): an
+  const history = listed
+    .filter((r) => (r.created_at as string) >= horizon)
+    .sort((a, b) => Date.parse(b.created_at as string) - Date.parse(a.created_at as string) || b.id - a.id)
+  // Same producing-workflow rule as the cache (`CACHE_WRITER_WORKFLOWS`): an
   // artifact's name is not a capability, so a record from any other
   // workflow is never believed. Scoped or general, PASS or FAIL, THIS PR.
   // Every naming era: a (tree, claim)-keyed record (#2336), a tree-keyed one
@@ -520,9 +574,9 @@ export async function lastEarnedVerdict(deps: LastVerdictDeps): Promise<LastVerd
     `(?:[0-9a-f]{24}|tree-(?:[0-9a-f]{40}|[0-9a-f]{64})(?:-claim-[0-9a-f]{${CLAIM_DIGEST_NAME_CHARS}})?)$`,
   )
   let searched = 0
-  for (const run of runs.workflow_runs) {
+  for (const run of history) {
     if (String(run.id) === deps.currentRunId) continue
-    if (run.path !== undefined && run.path !== CACHE_WRITER_WORKFLOW) continue
+    if (run.path !== undefined && !isCacheWriter(run.path)) continue
     searched += 1
     const listed = await deps.api<RunArtifactsResponse>(`repos/${REPO}/actions/runs/${run.id}/artifacts?per_page=100`)
     // Unreadable, never skipped: skipping a run could skip the FAIL that

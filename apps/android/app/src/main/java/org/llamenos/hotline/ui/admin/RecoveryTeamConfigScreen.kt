@@ -505,6 +505,8 @@ private fun ShareHolderHealthCard(
     modifier: Modifier = Modifier,
 ) {
     val isHealthy = holder.lastLivenessProof != null
+    // A proof that failed verification (#2782) reads as a failure, not as merely overdue.
+    val hasFailed = !isHealthy && holder.lastLivenessFailure != null
 
     Card(
         modifier = modifier
@@ -535,10 +537,10 @@ private fun ShareHolderHealthCard(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = if (isHealthy) {
-                        stringResource(R.string.recovery_group_liveness_ok)
-                    } else {
-                        stringResource(R.string.recovery_group_liveness_stale)
+                    text = when {
+                        isHealthy -> stringResource(R.string.recovery_group_liveness_ok)
+                        hasFailed -> stringResource(R.string.recovery_group_liveness_failed)
+                        else -> stringResource(R.string.recovery_group_liveness_stale)
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isHealthy) {

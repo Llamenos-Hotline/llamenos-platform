@@ -2,8 +2,9 @@ import * as keyManager from '../key-manager'
 import { createAuthToken } from '../platform'
 import { APP_API_VERSION, emitUpdateRequired } from '../version'
 import { offlineQueue, isQueueableMethod, isNetworkError as isOfflineNetworkError } from '../offline-queue'
-import { getApiUrl, getApiPath } from '../api-config'
+import { getApiUrl, getApiPath, needsServerAddress } from '../api-config'
 import { netFetch } from '../net'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 
 // Auth expiry callback — set by AuthProvider to handle 401s reactively
 let onAuthExpired: (() => void) | null = null
@@ -15,6 +16,15 @@ export function setOnAuthExpired(cb: (() => void) | null) { onAuthExpired = cb }
  * bodies, not JSON) can react to a 401 the same way `request()` does.
  */
 export function notifyAuthExpired(): void { onAuthExpired?.() }
+
+// Hub-gone callback — set by ConfigProvider so a hub the server says does not
+// exist leaves the membership snapshot at once, instead of being polled until
+// the next slow membership refresh.
+let onHubGone: ((hubId: string) => void) | null = null
+export function setOnHubGone(cb: ((hubId: string) => void) | null) { onHubGone = cb }
+
+/** Invoke the registered hub-gone callback — see `notifyAuthExpired` for why this is exported. */
+export function notifyHubGone(hubId: string): void { onHubGone?.(hubId) }
 
 // Monotonic timestamp: ensures each auth token gets a unique timestamp even when
 // multiple requests fire within the same millisecond. The server's nonce replay
@@ -28,9 +38,23 @@ function monotoneNow(): number {
   return lastAuthTimestamp
 }
 
+const SESSION_TOKEN_KEY = 'llamenos-session-token'
+
+/**
+ * Whether this device holds a session it could authenticate with right now: a
+ * server to hold it with, and a session token or an unlocked device key. A session
+ * belongs to a server, so with the first-run screen up (no address configured)
+ * there is none even if a token is still in sessionStorage — whatever left it
+ * there has not finished tearing it down (`endServerSession`).
+ */
+export function holdsSession(): boolean {
+  if (needsServerAddress()) return false
+  return sessionStorage.getItem(SESSION_TOKEN_KEY) !== null || keyManager.isUnlocked()
+}
+
 export async function getAuthHeaders(method: string, apiPath: string): Promise<Record<string, string>> {
   // Prefer session token if available (WebAuthn-based sessions)
-  const sessionToken = sessionStorage.getItem('llamenos-session-token')
+  const sessionToken = sessionStorage.getItem(SESSION_TOKEN_KEY)
   if (sessionToken) {
     return { 'Authorization': `Session ${sessionToken}` }
   }
@@ -78,6 +102,9 @@ const NON_QUEUEABLE_PATHS = [
   '/telephony/',
   '/uploads/', // Chunked uploads have their own retry logic
   '/files/',
+  // Hub-key writes are compare-and-set on a generation read moments earlier; a
+  // replay after reconnect can only be refused, so it is never queued.
+  '/key',
 ]
 
 function isQueueablePath(path: string): boolean {
@@ -126,10 +153,18 @@ export async function request<T>(path: string, options: RequestInit & { retries?
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
     try {
+      // A hub's routes answer only to a signed-in caller. Without a session the
+      // answer is a certain 401 (the server authenticates before it looks for the
+      // hub), and a console error with it — so the request is not made. The check
+      // is "do we hold a session", never "is this the active hub": a member hub the
+      // UI is not showing is still asked (multi-hub axiom).
+      if (isHubScopedPath(pathOnly) && !holdsSession()) throw new NoSessionError(path)
+      const authHeaders = await getAuthHeaders(method, pathOnly)
+      if (isHubScopedPath(pathOnly) && !('Authorization' in authHeaders)) throw new NoSessionError(path)
       const headers = {
         'Content-Type': 'application/json',
         'X-API-Version': String(APP_API_VERSION),
-        ...await getAuthHeaders(method, pathOnly),
+        ...authHeaders,
         ...options.headers,
       }
       const res = await netFetch(getApiUrl(path), {
@@ -161,6 +196,10 @@ export async function request<T>(path: string, options: RequestInit & { retries?
           onAuthExpired?.()
         }
         const err = new ApiError(res.status, body)
+        if (isHubNotFound(err)) {
+          const goneHubId = hubIdOfPath(pathOnly)
+          if (goneHubId) notifyHubGone(goneHubId)
+        }
         if (isRetryable(res.status) && attempt < maxRetries) {
           lastError = err
           continue
@@ -191,6 +230,7 @@ export async function request<T>(path: string, options: RequestInit & { retries?
     } catch (err) {
       if (err instanceof ApiError) throw err
       if (err instanceof OfflineQueuedError) throw err
+      if (err instanceof NoSessionError) throw err
       // Network error or timeout — retry if idempotent
       lastError = err instanceof Error ? err : new Error(String(err))
       if (attempt < maxRetries) continue
@@ -219,6 +259,20 @@ export class ApiError extends Error {
 }
 
 /**
+ * Whether `err` is the server saying the hub itself does not exist — as opposed
+ * to a 404 for a resource inside it (a hub key this user has no wrap of, say), a
+ * 403, or an update that matched nothing.
+ *
+ * Decided by the typed `code` of the error body (`hubNotFoundResponseSchema`,
+ * `@protocol/schemas`), never by its English `error` prose: the message may be
+ * reworded or translated, the code may not. Both the 404 status and the code are
+ * required, so no permission-shaped answer can make a client forget a hub.
+ */
+export function isHubNotFound(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404 && getApiErrorCode(err) === HUB_NOT_FOUND_CODE
+}
+
+/**
  * Extract the machine-readable `code` from an ApiError's JSON body, if present.
  * Server error responses follow `errorResponseSchema` (`@protocol/schemas`):
  * `{ error: string, code?: string, ... }`. Returns undefined for non-ApiErrors,
@@ -233,6 +287,29 @@ export function getApiErrorCode(err: unknown): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * A hub-scoped request was asked for while this device holds no session: signed
+ * out, locked, or the first-run screen has taken over. Nothing was sent. Work that
+ * started under a session and outlived it (a hub-key sync, a poll) ends on this
+ * rather than reporting a failure — the next session starts it again.
+ */
+export class NoSessionError extends Error {
+  constructor(public path: string) {
+    super(`No session for ${path}`)
+    this.name = 'NoSessionError'
+  }
+}
+
+/** The hub id in a `/hubs/:id/…` path, if it is one. */
+function hubIdOfPath(pathOnly: string): string | undefined {
+  return /^\/hubs\/([^/]+)/.exec(pathOnly)?.[1]
+}
+
+/** Every route under `/hubs` sits behind the server's authentication. */
+function isHubScopedPath(pathOnly: string): boolean {
+  return pathOnly.startsWith('/hubs/')
 }
 
 export class NetworkError extends Error {

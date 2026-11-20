@@ -56,6 +56,16 @@ const lib = dlopen(LIB_PATH, {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
   },
+  ffi_recovery_liveness_verify: {
+    args: [
+      FFIType.ptr, FFIType.u64, // liveness_pubkey (32)
+      FFIType.ptr, FFIType.u64, // hub_id (UTF-8)
+      FFIType.ptr, FFIType.u64, // holder_pubkey (UTF-8)
+      FFIType.ptr, FFIType.u64, // challenge (32)
+      FFIType.ptr, FFIType.u64, // signature (64)
+    ],
+    returns: FFIType.i32,
+  },
   ffi_ed25519_pubkey_from_seed: {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
@@ -86,6 +96,24 @@ const lib = dlopen(LIB_PATH, {
       FFIType.ptr, FFIType.u64, // secret key
       FFIType.ptr, FFIType.u64, // sealed JSON
       FFIType.ptr, FFIType.u64, // out (plaintext)
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_ban_digest_evaluate: {
+    args: [
+      FFIType.ptr, FFIType.u64, // BAN_HASH_KEY (32)
+      FFIType.ptr, FFIType.u64, // scope (UTF-8)
+      FFIType.ptr, FFIType.u64, // caller identifier (UTF-8)
+      FFIType.ptr, FFIType.u64, // out (64)
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_ban_digest_blind_evaluate: {
+    args: [
+      FFIType.ptr, FFIType.u64, // BAN_HASH_KEY (32)
+      FFIType.ptr, FFIType.u64, // scope (UTF-8)
+      FFIType.ptr, FFIType.u64, // blinded element (32)
+      FFIType.ptr, FFIType.u64, // out (32)
     ],
     returns: FFIType.i32,
   },
@@ -229,6 +257,35 @@ export function ed25519Verify(pubkey: Uint8Array, message: Uint8Array, signature
   throw new CryptoError(code, msg)
 }
 
+/**
+ * Verify a recovery-share liveness proof (#2782).
+ *
+ * Delegates to `packages/crypto/src/recovery_liveness.rs`, which owns the signed
+ * message layout. Returns `false` for a proof that does not verify; throws only
+ * on malformed input sizes (wrong-length key, challenge or signature), which a
+ * caller must validate before it gets here.
+ */
+export function recoveryLivenessVerify(
+  livenessPubkey: Uint8Array,
+  hubId: string,
+  holderPubkey: string,
+  challenge: Uint8Array,
+  signature: Uint8Array,
+): boolean {
+  const hub = new TextEncoder().encode(hubId)
+  const holder = new TextEncoder().encode(holderPubkey)
+  const code = lib.symbols.ffi_recovery_liveness_verify(
+    ptr(livenessPubkey), livenessPubkey.length,
+    ptr(hub), hub.length,
+    ptr(holder), holder.length,
+    ptr(challenge), challenge.length,
+    ptr(signature), signature.length,
+  )
+  if (code === 0) return true
+  if (code === -1) return false
+  throw new CryptoError(code, getLastError())
+}
+
 export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {
   const out = new Uint8Array(32)
   checkResult(lib.symbols.ffi_ed25519_pubkey_from_seed(
@@ -336,4 +393,38 @@ export function caseOpen(
   )
   if (written < 0) checkResult(written)
   return new TextDecoder().decode(out.subarray(0, written))
+}
+
+/**
+ * The ban digest (64 bytes) of a caller identifier the server already holds, under one scope's key —
+ * RFC 9497 OPRF `Evaluate` (`packages/crypto/src/ban_digest.rs`). Equal to what a client gets
+ * from blinding the same number, `banDigestBlindEvaluate`, and finalizing.
+ */
+export function banDigestEvaluate(banHashKey: Uint8Array, scope: string, identifier: string): Uint8Array {
+  const scopeBytes = new TextEncoder().encode(scope)
+  const phoneBytes = new TextEncoder().encode(identifier)
+  const out = new Uint8Array(64)
+  checkResult(lib.symbols.ffi_ban_digest_evaluate(
+    ptr(banHashKey), banHashKey.length,
+    ptr(scopeBytes), scopeBytes.length,
+    ptr(phoneBytes), phoneBytes.length,
+    ptr(out), out.length,
+  ))
+  return out
+}
+
+/**
+ * Evaluate a client's blinded element (32 bytes) under one scope's key — RFC 9497 OPRF
+ * `BlindEvaluate`. The server learns nothing about the number behind it.
+ */
+export function banDigestBlindEvaluate(banHashKey: Uint8Array, scope: string, blinded: Uint8Array): Uint8Array {
+  const scopeBytes = new TextEncoder().encode(scope)
+  const out = new Uint8Array(32)
+  checkResult(lib.symbols.ffi_ban_digest_blind_evaluate(
+    ptr(banHashKey), banHashKey.length,
+    ptr(scopeBytes), scopeBytes.length,
+    ptr(blinded), blinded.length,
+    ptr(out), out.length,
+  ))
+  return out
 }

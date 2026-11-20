@@ -11,7 +11,8 @@
  *   POST   /session/:id/emergency   — Emergency override (recovery:approve)
  *   POST   /session/:id/cancel      — Cancel session (auth required)
  *   POST   /user-envelope           — Store user recovery envelope (auth required)
- *   POST   /shares/liveness         — Submit liveness proof (recovery:hold-share)
+ *   POST   /shares/liveness/challenge — Issue a single-use liveness challenge (recovery:hold-share)
+ *   POST   /shares/liveness         — Submit + verify a liveness proof (recovery:hold-share)
  *   GET    /shares/my               — Read the caller's OWN share envelope (recovery:hold-share)
  *
  * Unauthenticated routes (rate-limited):
@@ -42,6 +43,10 @@ import {
   recoverySessionStatusResponseSchema,
   userRecoveryEnvelopeSchema,
   shareLivenessProofSchema,
+  shareLivenessProofResponseSchema,
+  shareLivenessChallengeRequestSchema,
+  shareLivenessChallengeResponseSchema,
+  recoveryShareEnvelopeSchema,
   recoveryCancelResponseSchema,
   recoveryEmergencyOverrideSchema,
   myShareEnvelopeQuerySchema,
@@ -62,17 +67,12 @@ const rewrappedUserEnvelopeSchema = z.object({
   envelope: z.string(),
 })
 
-const shareEnvelopeSchema = z.object({
-  holderPubkey: z.string(),
-  shareEnvelope: z.string(),
-})
-
 const recoveryGroupRotateSchema = z.object({
   hubId: z.string().uuid(),
   threshold: z.number().int().min(2).max(5),
   totalShares: z.number().int().min(3).max(5),
   groupPublicKey: z.string(),
-  shareEnvelopes: z.array(shareEnvelopeSchema),
+  shareEnvelopes: z.array(recoveryShareEnvelopeSchema),
   shareCommitments: z.array(z.string()),
   duressCommitments: z.array(z.string().nullable()).optional(),
   sigchainLinkHash: z.string(),
@@ -589,18 +589,58 @@ authenticatedRoutes.post('/user-envelope',
   },
 )
 
-// POST /shares/liveness — Submit share liveness proof
+// POST /shares/liveness/challenge — Issue a single-use liveness challenge
+authenticatedRoutes.post('/shares/liveness/challenge',
+  describeRoute({
+    tags: ['Recovery Group'],
+    summary: 'Issue a share liveness challenge',
+    description: 'Issues a fresh 32-byte challenge, valid once for five minutes, for the authenticated share holder to sign with the key derived from their Shamir share. Replaces any outstanding challenge for this holder. Refused (403, one message) unless the caller is a current hub member AND an enrolled holder; 409 if their share was enrolled without a liveness key.',
+    responses: {
+      200: {
+        description: 'Challenge issued',
+        content: {
+          'application/json': {
+            schema: resolver(shareLivenessChallengeResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('recovery:hold-share'),
+  validator('json', shareLivenessChallengeRequestSchema),
+  async (c) => {
+    const holderPubkey = c.get('pubkey')
+    const body = c.req.valid('json')
+    const services = c.get('services')
+
+    try {
+      const issued = await services.recoveryGroup.issueLivenessChallenge({
+        hubId: body.hubId,
+        holderPubkey,
+      })
+      return c.json(issued)
+    } catch (err) {
+      if (err instanceof RecoveryGroupError) {
+        return c.json({ error: err.message }, err.status)
+      }
+      throw err
+    }
+  },
+)
+
+// POST /shares/liveness — Submit and verify a share liveness proof
 authenticatedRoutes.post('/shares/liveness',
   describeRoute({
     tags: ['Recovery Group'],
     summary: 'Submit a share liveness proof',
-    description: 'Share holder proves they can still decrypt their share without revealing it. Updates lastLivenessProof timestamp.',
+    description: 'Verifies an Ed25519 signature, made with the key derived from the holder\'s Shamir share, over (hubId, holder pubkey, challenge) against the holder\'s enrolled liveness key, and consumes the challenge. Only a verified proof updates lastLivenessProof. A proof that does not verify clears lastLivenessProof, records lastLivenessFailure and returns 403; an unknown, expired or reused challenge returns 409 and changes nothing.',
     responses: {
       200: {
-        description: 'Proof accepted',
+        description: 'Proof verified',
         content: {
           'application/json': {
-            schema: resolver(okResponseSchema),
+            schema: resolver(shareLivenessProofResponseSchema),
           },
         },
       },
@@ -615,12 +655,13 @@ authenticatedRoutes.post('/shares/liveness',
     const services = c.get('services')
 
     try {
-      await services.recoveryGroup.submitLivenessProof({
+      const { verifiedAt } = await services.recoveryGroup.submitLivenessProof({
         hubId: body.hubId,
         holderPubkey,
+        challenge: body.challenge,
         proof: body.proof,
       })
-      return c.json({ ok: true })
+      return c.json({ ok: true, verifiedAt })
     } catch (err) {
       if (err instanceof RecoveryGroupError) {
         return c.json({ error: err.message }, err.status)

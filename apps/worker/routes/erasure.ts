@@ -20,7 +20,7 @@ import {
 import { platformSettingsSchema } from '@protocol/schemas/platform-settings'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { ServiceError } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/settings'
 import { PLATFORM_INCIDENT_PERMISSION } from '../services/incidents-categories'
 import { getConnectionManager } from '../lib/ws-manager'
 import { revokeVolunteerSipIdentity } from '../telephony/registrar'
@@ -439,7 +439,7 @@ erasure.post(
       const updated = await services.erasure.retryFailed(request.id, c.get('pubkey'), services.audit, decision.auditHubIds)
       return c.json({ request: serializeRequest(updated) })
     } catch (err) {
-      if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 404 | 409)
+      if (err instanceof ServiceError) return c.json(serviceErrorBody(err), err.status as 404 | 409)
       throw err
     }
   },
@@ -480,7 +480,7 @@ erasure.post(
       )
       return c.json({ request: serializeRequest(updated) })
     } catch (err) {
-      if (err instanceof ServiceError) return c.json({ error: err.message }, err.status as 404 | 409)
+      if (err instanceof ServiceError) return c.json(serviceErrorBody(err), err.status as 404 | 409)
       throw err
     }
   },

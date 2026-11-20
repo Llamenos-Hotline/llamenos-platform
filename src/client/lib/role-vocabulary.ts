@@ -17,9 +17,8 @@
  * empty string that would read as "unnamed".
  */
 import { getActiveHub, listHubRoles, listRoles, type RoleDefinition } from '@/lib/api'
+import { decryptFromHub, encryptForHub } from '@/lib/hub-key-manager'
 import {
-  decryptHubField,
-  encryptHubField,
   getDevicePubkeys,
   hpkeOpenFromState,
   hpkeSeal,
@@ -40,9 +39,13 @@ export interface ReadableRole extends RoleDefinition {
   readable: boolean
 }
 
-/** Seal a hub role's name or description under the active hub's key. */
-export function sealHubRoleField(plaintext: string): Promise<string> {
-  return encryptHubField(plaintext, LABEL_HUB_ROLE_ENCRYPT)
+/**
+ * Seal a hub role's name or description under `hubId`'s key — the hub that
+ * will own the role. Throws `HubKeyUnavailableError` when this device does not
+ * hold that key; there is no plaintext fallback.
+ */
+export function sealHubRoleField(hubId: string, plaintext: string): Promise<string> {
+  return encryptForHub(hubId, plaintext, LABEL_HUB_ROLE_ENCRYPT)
 }
 
 function textToHex(text: string): string {
@@ -94,12 +97,12 @@ async function openPlatformRole(
   }
 }
 
-async function openHubRole(role: RoleDefinition): Promise<{ name: string; description: string } | null> {
+async function openHubRole(hubId: string, role: RoleDefinition): Promise<{ name: string; description: string } | null> {
   if (!role.encryptedName) return null
   const [name, description] = await Promise.all([
-    decryptHubField(role.encryptedName, LABEL_HUB_ROLE_ENCRYPT),
+    decryptFromHub(hubId, role.encryptedName, LABEL_HUB_ROLE_ENCRYPT),
     role.encryptedDescription
-      ? decryptHubField(role.encryptedDescription, LABEL_HUB_ROLE_ENCRYPT)
+      ? decryptFromHub(hubId, role.encryptedDescription, LABEL_HUB_ROLE_ENCRYPT)
       : Promise.resolve(''),
   ])
   return name === null ? null : { name, description: description ?? '' }
@@ -113,7 +116,7 @@ export async function readableRoles(roles: readonly RoleDefinition[]): Promise<R
     if (role.name !== null) {
       return { ...role, displayName: role.name, displayDescription: role.description, readable: true }
     }
-    const opened = role.hubId ? await openHubRole(role) : await openPlatformRole(role, myEncPubkey)
+    const opened = role.hubId ? await openHubRole(role.hubId, role) : await openPlatformRole(role, myEncPubkey)
     return opened
       ? { ...role, displayName: opened.name, displayDescription: opened.description, readable: true }
       : { ...role, displayName: role.id, displayDescription: '', readable: false }

@@ -14,51 +14,65 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Loader2, Shield, Search, Upload, Trash2 } from 'lucide-react'
 import {
   createPlatformBan,
+  dismissPlatformBanReentry,
   deletePlatformBan,
   bulkImportPlatformBans,
   searchPlatformBans,
+  type BanSearchResult,
 } from '@/lib/api'
-import type { PlatformBan } from '@protocol/schemas/bans'
+import type { BanReentry, PlatformBan } from '@protocol/schemas/bans'
+import { BanReentryList } from '@/components/ban-reentry-list'
 import { DeletionConfirmed } from '@/lib/admin-deletion'
+
+/** E.164, as the crate requires: a number typed any other way digests to something no call matches. */
+const E164 = /^\+\d{7,15}$/
 
 interface Props {
   bans: PlatformBan[]
   total: number
+  /** Platform bans that no longer enforce and must be entered again (#2829). */
+  reentries: readonly BanReentry[]
   onRefresh: () => void
   expanded: boolean
   onToggle: (open: boolean) => void
   statusSummary?: string
 }
 
-export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle, statusSummary }: Props) {
+export function PlatformBansSection({ bans, total, reentries, onRefresh, expanded, onToggle, statusSummary }: Props) {
   const { t } = useTranslation()
   const { toast } = useToast()
 
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [newPhoneHash, setNewPhoneHash] = useState('')
+  // The admin types numbers; only their ban digests are ever sent (#2759, lib/api/governance.ts).
+  const [newPhone, setNewPhone] = useState('')
   const [newReason, setNewReason] = useState('')
   const [creating, setCreating] = useState(false)
 
   const [showBulkDialog, setShowBulkDialog] = useState(false)
-  const [bulkPhoneHashes, setBulkPhoneHashes] = useState('')
+  const [bulkPhones, setBulkPhones] = useState('')
   const [bulkReason, setBulkReason] = useState('')
   const [bulkImporting, setBulkImporting] = useState(false)
 
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<(PlatformBan & { scope: 'hub' | 'platform' })[] | null>(null)
+  const [searchResults, setSearchResults] = useState<BanSearchResult[] | null>(null)
   const [searching, setSearching] = useState(false)
 
   const [deleting, setDeleting] = useState<string | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState<PlatformBan | null>(null)
 
   async function handleCreate() {
-    if (!newPhoneHash.trim() || !newReason.trim()) return
+    const phone = newPhone.trim()
+    if (!phone || !newReason.trim()) return
+    if (!E164.test(phone)) {
+      toast(t('users.invalidPhone'), 'error')
+      return
+    }
     setCreating(true)
     try {
-      await createPlatformBan({ phoneHash: newPhoneHash.trim(), reason: newReason.trim() })
+      await createPlatformBan({ phone, reason: newReason.trim() })
       toast(t('platformBans.created'), 'success')
       setShowCreateDialog(false)
-      setNewPhoneHash('')
+      setNewPhone('')
       setNewReason('')
       onRefresh()
     } catch {
@@ -69,14 +83,18 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
   }
 
   async function handleBulkImport() {
-    const hashes = bulkPhoneHashes.split('\n').map(h => h.trim()).filter(Boolean)
-    if (hashes.length === 0 || !bulkReason.trim()) return
+    const phones = bulkPhones.split('\n').map(p => p.trim()).filter(Boolean)
+    if (phones.length === 0 || !bulkReason.trim()) return
+    if (!phones.every((p) => E164.test(p))) {
+      toast(t('users.invalidPhone'), 'error')
+      return
+    }
     setBulkImporting(true)
     try {
-      const { count } = await bulkImportPlatformBans({ phoneHashes: hashes, reason: bulkReason.trim() })
+      const { count } = await bulkImportPlatformBans({ phones, reason: bulkReason.trim() })
       toast(t('platformBans.bulkImported', { count }), 'success')
       setShowBulkDialog(false)
-      setBulkPhoneHashes('')
+      setBulkPhones('')
       setBulkReason('')
       onRefresh()
     } catch {
@@ -87,10 +105,15 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
   }
 
   async function handleSearch() {
-    if (!searchQuery.trim()) return
+    const phone = searchQuery.trim()
+    if (!phone) return
+    if (!E164.test(phone)) {
+      toast(t('users.invalidPhone'), 'error')
+      return
+    }
     setSearching(true)
     try {
-      const { bans } = await searchPlatformBans(searchQuery.trim())
+      const { bans } = await searchPlatformBans(phone)
       setSearchResults(bans)
     } catch {
       toast(t('common.error'), 'error')
@@ -123,13 +146,15 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
     >
       <SectionDescription>{t('platformBans.description')}</SectionDescription>
 
+      <BanReentryList reentries={reentries} onDismiss={dismissPlatformBanReentry} onDismissed={onRefresh} />
+
       {/* Search bar */}
       <div className="flex items-center gap-2 mb-4">
         <Input
           data-testid="platform-bans-search"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={t('platformBans.searchPlaceholder')}
+          placeholder={t('banList.phoneNumber')}
           onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           className="max-w-sm"
         />
@@ -149,14 +174,16 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
         <div className="mb-4 rounded-lg border border-border p-3" data-testid="platform-bans-search-results">
           <h4 className="text-sm font-medium mb-2">{t('platformBans.searchResults', { count: searchResults.length })}</h4>
           {searchResults.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('platformBans.noResults')}</p>
+            <p className="text-sm text-muted-foreground">{t('common.noResults')}</p>
           ) : (
             <div className="space-y-1">
               {searchResults.map((ban) => (
                 <div key={ban.id} className="flex items-center justify-between text-sm py-1">
                   <div>
                     <span className="font-mono text-xs">{ban.phoneHash.slice(0, 16)}...</span>
-                    <Badge variant="outline" className="ml-2">{ban.scope}</Badge>
+                    <Badge variant="outline" className="ml-2">
+                      {ban.hubId ? t('platformBans.scopeHub') : t('platformBans.scopePlatform')}
+                    </Badge>
                   </div>
                   <span className="text-muted-foreground">{ban.reason}</span>
                 </div>
@@ -240,13 +267,14 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
             <DialogTitle>{t('platformBans.createDialogTitle')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <SectionField label={t('platformBans.phoneHash')} htmlFor="ban-phone-hash" required>
+            <SectionField label={t('banList.phoneNumber')} htmlFor="ban-phone" required>
               <Input
-                id="ban-phone-hash"
-                data-testid="ban-phone-hash-input"
-                value={newPhoneHash}
-                onChange={(e) => setNewPhoneHash(e.target.value)}
-                placeholder={t('platformBans.phoneHashPlaceholder')}
+                id="ban-phone"
+                data-testid="ban-phone-input"
+                type="tel"
+                autoComplete="off"
+                value={newPhone}
+                onChange={(e) => setNewPhone(e.target.value)}
               />
             </SectionField>
             <SectionField label={t('platformBans.reason')} htmlFor="ban-reason" required>
@@ -266,7 +294,7 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
             <Button
               data-testid="ban-create-confirm-btn"
               onClick={handleCreate}
-              disabled={creating || !newPhoneHash.trim() || !newReason.trim()}
+              disabled={creating || !newPhone.trim() || !newReason.trim()}
             >
               {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('platformBans.confirmCreate')}
@@ -282,13 +310,13 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
             <DialogTitle>{t('platformBans.bulkDialogTitle')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <SectionField label={t('platformBans.phoneHashList')} htmlFor="bulk-phone-hashes" required>
+            <SectionField label={t('banList.bulkImportDescription')} htmlFor="bulk-phones" required>
               <Textarea
-                id="bulk-phone-hashes"
-                data-testid="bulk-phone-hashes-input"
-                value={bulkPhoneHashes}
-                onChange={(e) => setBulkPhoneHashes(e.target.value)}
-                placeholder={t('platformBans.bulkPlaceholder')}
+                id="bulk-phones"
+                data-testid="bulk-phones-input"
+                value={bulkPhones}
+                onChange={(e) => setBulkPhones(e.target.value)}
+                placeholder={t('banList.importHint')}
                 rows={6}
               />
             </SectionField>
@@ -308,7 +336,7 @@ export function PlatformBansSection({ bans, total, onRefresh, expanded, onToggle
             <Button
               data-testid="bulk-import-confirm-btn"
               onClick={handleBulkImport}
-              disabled={bulkImporting || !bulkPhoneHashes.trim() || !bulkReason.trim()}
+              disabled={bulkImporting || !bulkPhones.trim() || !bulkReason.trim()}
             >
               {bulkImporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('platformBans.confirmBulkImport')}

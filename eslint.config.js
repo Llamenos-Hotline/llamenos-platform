@@ -228,6 +228,36 @@ export default tseslint.config(
       }],
     },
   },
+  // Test-state rail (#1008): BDD steps must not pass state between steps through
+  // `window.__test_*` — the handoff is invisible to the type checker, so a misspelled
+  // key fails at runtime as `undefined`, if at all. State shared across steps belongs
+  // in a scenario-scoped world fixture (tests/steps/fixtures.ts); state the APP itself
+  // exposes to tests uses the uppercase `__TEST_*` hook convention (e.g.
+  // `__TEST_PLATFORM`, `__TEST_MOCK_PIN_LOCKOUT_STATE__`), which does not match this rail.
+  {
+    files: [
+      'tests/**/*.ts',
+      'src/client/**/*.ts',
+      'src/client/**/*.tsx',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'Literal[value=/__test_/]',
+          message:
+            'No window.__test_* step handoffs (#1008): carry cross-step state in a world fixture ' +
+            '(tests/steps/fixtures.ts). App-exposed test hooks use the uppercase __TEST_* convention.',
+        },
+        {
+          selector: 'TemplateElement[value.raw=/__test_/]',
+          message:
+            'No window.__test_* step handoffs (#1008): carry cross-step state in a world fixture ' +
+            '(tests/steps/fixtures.ts). App-exposed test hooks use the uppercase __TEST_* convention.',
+        },
+      ],
+    },
+  },
   // api-schema-binding rail (see scripts/api-schema-binding/): a hand-written request/response
   // shape here is a build error, so the client/server drift documented in
   // scripts/api-schema-binding/report.md cannot keep spreading by copy-paste from a neighbour.

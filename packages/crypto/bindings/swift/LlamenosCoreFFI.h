@@ -273,6 +273,16 @@ RustBuffer uniffi_llamenos_core_fn_func_encrypt_with_pin(RustBuffer key_material
 int8_t uniffi_llamenos_core_fn_func_is_valid_pin(RustBuffer pin, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_BLIND
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_BLIND
+RustBuffer uniffi_llamenos_core_fn_func_ban_digest_blind(RustBuffer phone, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_FINALIZE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_BAN_DIGEST_FINALIZE
+RustBuffer uniffi_llamenos_core_fn_func_ban_digest_finalize(RustBuffer phone, RustBuffer blind_hex, RustBuffer evaluated_element_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_COMPUTE_SAS_CODE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_COMPUTE_SAS_CODE
 RustBuffer uniffi_llamenos_core_fn_func_compute_sas_code(RustBuffer shared_x_hex, RustCallStatus *_Nonnull out_status
@@ -317,6 +327,11 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_group_generate_keypair(R
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_GROUP_SPLIT_PRIVATE_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_GROUP_SPLIT_PRIVATE_KEY
 RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_group_split_private_key(uint64_t handle, uint8_t total, uint8_t threshold, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_LIVENESS_PUBLIC_KEY
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_LIVENESS_PUBLIC_KEY
+RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(RustBuffer share, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SHAMIR_COMBINE
@@ -592,6 +607,11 @@ void uniffi_llamenos_core_fn_func_mobile_lock(RustCallStatus *_Nonnull out_statu
 RustBuffer uniffi_llamenos_core_fn_func_mobile_open_case(RustBuffer purpose, RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_OPEN_SHIFT_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_open_shift_field(RustBuffer purpose, RustBuffer encrypted_content, RustBuffer envelopes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_PUK_CREATE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_puk_create(RustCallStatus *_Nonnull out_status
@@ -619,9 +639,19 @@ RustBuffer uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(RustCallStatus *
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_SHARE_LIVENESS_PROOF
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_RECOVERY_SHARE_LIVENESS_PROOF
+RustBuffer uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(RustBuffer share_envelope, RustBuffer hub_id, RustBuffer challenge_hex, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_CASE
 RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_case(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SEAL_SHIFT_FIELD
+RustBuffer uniffi_llamenos_core_fn_func_mobile_seal_shift_field(RustBuffer purpose, RustBuffer plaintext, RustBuffer reader_pubkeys, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_FN_FUNC_MOBILE_SET_HUB_KEY
@@ -976,6 +1006,18 @@ uint16_t uniffi_llamenos_core_checksum_func_is_valid_pin(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_BLIND
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_BLIND
+uint16_t uniffi_llamenos_core_checksum_func_ban_digest_blind(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_FINALIZE
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_BAN_DIGEST_FINALIZE
+uint16_t uniffi_llamenos_core_checksum_func_ban_digest_finalize(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_COMPUTE_SAS_CODE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_COMPUTE_SAS_CODE
 uint16_t uniffi_llamenos_core_checksum_func_compute_sas_code(void
@@ -1027,6 +1069,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_recovery_group_generate_keypa
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_GROUP_SPLIT_PRIVATE_KEY
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_GROUP_SPLIT_PRIVATE_KEY
 uint16_t uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_LIVENESS_PUBLIC_KEY
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_LIVENESS_PUBLIC_KEY
+uint16_t uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key(void
     
 );
 #endif
@@ -1342,6 +1390,12 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_open_case(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_OPEN_SHIFT_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_open_shift_field(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_PUK_CREATE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_puk_create(void
@@ -1372,9 +1426,21 @@ uint16_t uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_SHARE_LIVENESS_PROOF
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_RECOVERY_SHARE_LIVENESS_PROOF
+uint16_t uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 #define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_CASE
 uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_case(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_SHIFT_FIELD
+#define UNIFFI_FFIDEF_UNIFFI_LLAMENOS_CORE_CHECKSUM_FUNC_MOBILE_SEAL_SHIFT_FIELD
+uint16_t uniffi_llamenos_core_checksum_func_mobile_seal_shift_field(void
     
 );
 #endif

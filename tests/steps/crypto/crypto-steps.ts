@@ -39,7 +39,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import {
+  Given,
+  When,
+  Then,
+  type CryptoWorld,
+  type EncryptedDeviceKeys,
+  type ParsedAuthToken,
+} from '../fixtures'
 import * as clientLabels from '@shared/crypto-labels'
 import { buildAuthMessage } from '@shared/auth-message'
 import { keyWrapAadHex } from '@shared/envelope-aad'
@@ -51,18 +58,6 @@ import { encryptBundleForProvisioning, type ProvisioningOffer } from '../../mock
 
 const __dirname_ = dirname(fileURLToPath(import.meta.url))
 const CRYPTO_LABELS_JSON = resolve(__dirname_, '../../../packages/protocol/crypto-labels.json')
-
-/** Shape returned by platform.deviceGenerateAndLoad / deviceImportAndLoad. */
-type EncryptedDeviceKeys = {
-  kdfVersion: number
-  salt: string
-  nonce: string
-  ciphertext: string
-  argon2MCost: number
-  argon2TCost: number
-  argon2PCost: number
-  state: { deviceId: string; signingPubkeyHex: string; encryptionPubkeyHex: string }
-}
 
 const HEX64 = /^[0-9a-f]{64}$/
 
@@ -80,21 +75,6 @@ async function ensureAppLoaded(page: Page) {
   await loginAsAdmin(page)
 }
 
-/** Read a value previously stashed on `window` by an earlier step. */
-function stash<T>(page: Page, key: string): Promise<T> {
-  return page.evaluate(k => (window as unknown as Record<string, unknown>)[k], key) as Promise<T>
-}
-
-/** Write a value onto `window` for a later step in the same scenario. */
-async function setStash(page: Page, key: string, value: unknown) {
-  await page.evaluate(
-    ([k, v]) => {
-      ;(window as unknown as Record<string, unknown>)[k as string] = v
-    },
-    [key, value] as [string, unknown],
-  )
-}
-
 // ─── Device keypair generation ──────────────────────────────────────────
 
 /** Generate a device keypair and return only its PUBLIC state. */
@@ -108,66 +88,65 @@ async function generateDevice(page: Page): Promise<EncryptedDeviceKeys['state']>
   }) as Promise<EncryptedDeviceKeys['state']>
 }
 
-When('I generate a device keypair', async ({ page }) => {
+When('I generate a device keypair', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
-  await setStash(page, '__test_device', await generateDevice(page))
+  cryptoWorld.device = await generateDevice(page)
 })
 
-Then('the signing public key should be 64 hex characters', async ({ page }) => {
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.signingPubkeyHex).toMatch(HEX64)
+Then('the signing public key should be 64 hex characters', async ({ cryptoWorld }) => {
+  const d = cryptoWorld.device
+  expect(d?.signingPubkeyHex).toMatch(HEX64)
 })
 
-Then('the encryption public key should be 64 hex characters', async ({ page }) => {
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.encryptionPubkeyHex).toMatch(HEX64)
+Then('the encryption public key should be 64 hex characters', async ({ cryptoWorld }) => {
+  const d = cryptoWorld.device
+  expect(d?.encryptionPubkeyHex).toMatch(HEX64)
 })
 
-Then('the signing and encryption public keys should differ', async ({ page }) => {
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
+Then('the signing and encryption public keys should differ', async ({ cryptoWorld }) => {
+  const d = cryptoWorld.device
+  expect(d).toBeTruthy()
   // Ed25519 signing key and X25519 encryption key are derived from separate
   // seeds; a device where these collide would mean one seed is being reused
   // for both roles.
-  expect(d.signingPubkeyHex).not.toBe(d.encryptionPubkeyHex)
+  expect(d!.signingPubkeyHex).not.toBe(d!.encryptionPubkeyHex)
 })
 
-When('I generate device keypair A', async ({ page }) => {
+When('I generate device keypair A', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
-  await setStash(page, '__test_device_a', await generateDevice(page))
+  cryptoWorld.deviceA = await generateDevice(page)
 })
 
-When('I generate device keypair B', async ({ page }) => {
-  await setStash(page, '__test_device_b', await generateDevice(page))
+When('I generate device keypair B', async ({ page, cryptoWorld }) => {
+  cryptoWorld.deviceB = await generateDevice(page)
 })
 
-Then("device keypair A's signing public key should differ from B's", async ({ page }) => {
-  const a = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_a')
-  const b = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_b')
-  expect(a.signingPubkeyHex).toMatch(HEX64)
-  expect(b.signingPubkeyHex).toMatch(HEX64)
-  expect(a.signingPubkeyHex).not.toBe(b.signingPubkeyHex)
+Then("device keypair A's signing public key should differ from B's", async ({ cryptoWorld }) => {
+  const a = cryptoWorld.deviceA
+  const b = cryptoWorld.deviceB
+  expect(a?.signingPubkeyHex).toMatch(HEX64)
+  expect(b?.signingPubkeyHex).toMatch(HEX64)
+  expect(a!.signingPubkeyHex).not.toBe(b!.signingPubkeyHex)
 })
 
-Then("device keypair A's encryption public key should differ from B's", async ({ page }) => {
-  const a = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_a')
-  const b = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_b')
-  expect(a.encryptionPubkeyHex).not.toBe(b.encryptionPubkeyHex)
+Then("device keypair A's encryption public key should differ from B's", async ({ cryptoWorld }) => {
+  const a = cryptoWorld.deviceA
+  const b = cryptoWorld.deviceB
+  expect(a!.encryptionPubkeyHex).not.toBe(b!.encryptionPubkeyHex)
 })
 
 // Shared with @ios/@android via the feature file — keep the wording.
-When('I generate a keypair', async ({ page }) => {
+When('I generate a keypair', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
-  await setStash(page, '__test_device', await generateDevice(page))
+  cryptoWorld.device = await generateDevice(page)
 })
 
-Then('the public key hex should be 64 characters', async ({ page }) => {
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.signingPubkeyHex).toHaveLength(64)
+Then('the public key hex should be 64 characters', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.device?.signingPubkeyHex).toHaveLength(64)
 })
 
-Then('the public key should only contain hex characters [0-9a-f]', async ({ page }) => {
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.signingPubkeyHex).toMatch(/^[0-9a-f]+$/)
+Then('the public key should only contain hex characters [0-9a-f]', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.device?.signingPubkeyHex).toMatch(/^[0-9a-f]+$/)
 })
 
 // ─── Operator-issued signing seed import ────────────────────────────────
@@ -181,7 +160,7 @@ Then('the public key should only contain hex characters [0-9a-f]', async ({ page
 // import must reproduce exactly those — and must not depend on the PIN or the
 // deviceId it is imported under.
 
-When('I import a signing seed issued by the admin bootstrap script', async ({ page }) => {
+When('I import a signing seed issued by the admin bootstrap script', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
   const issued = generateAdminKeys()
   const state = await page.evaluate(async (seedHex) => {
@@ -192,48 +171,49 @@ When('I import a signing seed issued by the admin bootstrap script', async ({ pa
   }, issued.seedHex)
   // The seed is kept only so the next step can import it a second time; it is
   // never asserted on, logged, or printed.
-  await setStash(page, '__test_issued', {
+  cryptoWorld.issued = {
     seedHex: issued.seedHex,
     identityPubkey: issued.identityPubkey,
     decryptionPubkey: issued.decryptionPubkey,
-  })
-  await setStash(page, '__test_device', state)
+  }
+  cryptoWorld.device = state
 })
 
-When('I import the same seed into a fresh device under a different PIN', async ({ page }) => {
-  const { seedHex } = await stash<{ seedHex: string }>(page, '__test_issued')
+When('I import the same seed into a fresh device under a different PIN', async ({ page, cryptoWorld }) => {
+  const seedHex = cryptoWorld.issued?.seedHex
+  expect(seedHex, 'the import step must record the issued seed').toBeTruthy()
   const state = await page.evaluate(async (seed) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       deviceImportAndLoad(s: string, pin: string, d: string): Promise<EncryptedDeviceKeys>
     }
     return (await p.deviceImportAndLoad(seed, '87654321', crypto.randomUUID())).state
-  }, seedHex)
-  await setStash(page, '__test_device_reimported', state)
+  }, seedHex as string)
+  cryptoWorld.deviceReimported = state
 })
 
-Then('the imported signing public key should be the one the bootstrap script published', async ({ page }) => {
-  const issued = await stash<{ identityPubkey: string }>(page, '__test_issued')
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.signingPubkeyHex).toMatch(HEX64)
+Then('the imported signing public key should be the one the bootstrap script published', async ({ cryptoWorld }) => {
+  const issued = cryptoWorld.issued
+  const d = cryptoWorld.device
+  expect(d?.signingPubkeyHex).toMatch(HEX64)
   // ADMIN_PUBKEY: the server verifies this device's auth tokens against it.
-  expect(d.signingPubkeyHex).toBe(issued.identityPubkey)
+  expect(d!.signingPubkeyHex).toBe(issued!.identityPubkey)
 })
 
-Then('the imported encryption public key should be the one the bootstrap script published', async ({ page }) => {
-  const issued = await stash<{ decryptionPubkey: string }>(page, '__test_issued')
-  const d = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(d.encryptionPubkeyHex).toMatch(HEX64)
+Then('the imported encryption public key should be the one the bootstrap script published', async ({ cryptoWorld }) => {
+  const issued = cryptoWorld.issued
+  const d = cryptoWorld.device
+  expect(d?.encryptionPubkeyHex).toMatch(HEX64)
   // ADMIN_DECRYPTION_PUBKEY: envelopes the server wraps for the admin are
   // addressed to this key. A mismatch means the admin decrypts nothing.
-  expect(d.encryptionPubkeyHex).toBe(issued.decryptionPubkey)
+  expect(d!.encryptionPubkeyHex).toBe(issued!.decryptionPubkey)
 })
 
-Then('both imports should yield the same device identity', async ({ page }) => {
-  const a = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  const b = await stash<EncryptedDeviceKeys['state']>(page, '__test_device_reimported')
-  expect(b.deviceId).not.toBe(a.deviceId)
-  expect(b.signingPubkeyHex).toBe(a.signingPubkeyHex)
-  expect(b.encryptionPubkeyHex).toBe(a.encryptionPubkeyHex)
+Then('both imports should yield the same device identity', async ({ cryptoWorld }) => {
+  const a = cryptoWorld.device
+  const b = cryptoWorld.deviceReimported
+  expect(b!.deviceId).not.toBe(a!.deviceId)
+  expect(b!.signingPubkeyHex).toBe(a!.signingPubkeyHex)
+  expect(b!.encryptionPubkeyHex).toBe(a!.encryptionPubkeyHex)
 })
 
 // ─── Device-linking session key ─────────────────────────────────────────
@@ -243,9 +223,9 @@ Then('both imports should yield the same device identity', async ({ page }) => {
 // CryptoState and only the public half reaches the webview. Each session must
 // get a fresh key, and it must never be the device's long-term encryption key.
 
-When('I open a device-linking session', async ({ page }) => {
+When('I open a device-linking session', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
-  const keys = await page.evaluate(async () => {
+  cryptoWorld.linkSession = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       provisionCreateSession(): Promise<string>
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
@@ -255,34 +235,28 @@ When('I open a device-linking session', async ({ page }) => {
     const device = await p.getDevicePubkeys()
     return { first, second, deviceEncryptionPubkey: device.encryptionPubkeyHex }
   })
-  await setStash(page, '__test_link_session', keys)
 })
 
-Then('the session public key should be 64 hex characters', async ({ page }) => {
-  const { first } = await stash<{ first: string }>(page, '__test_link_session')
-  expect(first).toMatch(HEX64)
+Then('the session public key should be 64 hex characters', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.linkSession?.first).toMatch(HEX64)
 })
 
-Then("the session public key should not be the device's own encryption key", async ({ page }) => {
-  const { first, second, deviceEncryptionPubkey } = await stash<{
-    first: string
-    second: string
-    deviceEncryptionPubkey: string
-  }>(page, '__test_link_session')
-  expect(deviceEncryptionPubkey).toMatch(HEX64)
-  expect(first).not.toBe(deviceEncryptionPubkey)
-  expect(second).not.toBe(deviceEncryptionPubkey)
+Then("the session public key should not be the device's own encryption key", async ({ cryptoWorld }) => {
+  const s = cryptoWorld.linkSession
+  expect(s?.deviceEncryptionPubkey).toMatch(HEX64)
+  expect(s!.first).not.toBe(s!.deviceEncryptionPubkey)
+  expect(s!.second).not.toBe(s!.deviceEncryptionPubkey)
 })
 
-Then('opening another device-linking session should produce a different public key', async ({ page }) => {
-  const { first, second } = await stash<{ first: string; second: string }>(page, '__test_link_session')
-  expect(second).toMatch(HEX64)
-  expect(second).not.toBe(first)
+Then('opening another device-linking session should produce a different public key', async ({ cryptoWorld }) => {
+  const s = cryptoWorld.linkSession
+  expect(s?.second).toMatch(HEX64)
+  expect(s!.second).not.toBe(s!.first)
 })
 
 // ─── Envelope encryption through the app crypto path ────────────────────
 
-Given('I have an unlocked device', async ({ page }) => {
+Given('I have an unlocked device', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
   const state = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
@@ -296,43 +270,38 @@ Given('I have an unlocked device', async ({ page }) => {
     return p.getDevicePubkeys()
   })
   expect(state, 'device should be unlocked with pubkeys available').not.toBeNull()
-  await setStash(page, '__test_device', state)
+  cryptoWorld.device = state as EncryptedDeviceKeys['state']
 })
 
 const NOTE_PAYLOAD = JSON.stringify({ text: 'interop note', fields: { severity: 'high' } })
 
-When('I encrypt a note for the author and no admins', async ({ page }) => {
-  const note = await page.evaluate(async (payload) => {
+When('I encrypt a note for the author and no admins', async ({ page, cryptoWorld }) => {
+  cryptoWorld.note = await page.evaluate(async (payload) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       encryptNote(payload: string, author: string, admins: string[]): Promise<unknown>
     }
     const me = await p.getDevicePubkeys()
     return p.encryptNote(payload, me.signingPubkeyHex, [])
-  }, NOTE_PAYLOAD)
-  await setStash(page, '__test_note', note)
+  }, NOTE_PAYLOAD) as CryptoWorld['note']
 })
 
-When('I decrypt that note with the author envelope', async ({ page }) => {
-  const plaintext = await page.evaluate(async () => {
+When('I decrypt that note with the author envelope', async ({ page, cryptoWorld }) => {
+  const note = cryptoWorld.note
+  expect(note, 'the encrypt step must record the note').toBeTruthy()
+  cryptoWorld.notePlaintext = await page.evaluate(async (n) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       decryptNote(content: string, envelope: unknown): Promise<string | null>
     }
-    const note = (window as unknown as Record<string, unknown>).__test_note as {
-      encryptedContent: string
-      authorEnvelope: unknown
-    }
-    return p.decryptNote(note.encryptedContent, note.authorEnvelope)
-  })
-  await setStash(page, '__test_note_plaintext', plaintext)
+    return p.decryptNote(n.encryptedContent, n.authorEnvelope)
+  }, note as NonNullable<CryptoWorld['note']>)
 })
 
-Then('the decrypted note should match the original payload', async ({ page }) => {
-  const plaintext = await stash<string | null>(page, '__test_note_plaintext')
-  expect(plaintext).toBe(NOTE_PAYLOAD)
+Then('the decrypted note should match the original payload', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.notePlaintext).toBe(NOTE_PAYLOAD)
 })
 
-Given('two admin encryption public keys', async ({ page }) => {
+Given('two admin encryption public keys', async ({ page, cryptoWorld }) => {
   // provisionCreateSession mints a genuine X25519 public key; calling it twice
   // yields two distinct valid recipients without inventing key material.
   const admins = await page.evaluate(async () => {
@@ -346,43 +315,42 @@ Given('two admin encryption public keys', async ({ page }) => {
   expect(admins[0]).toMatch(HEX64)
   expect(admins[1]).toMatch(HEX64)
   expect(admins[0]).not.toBe(admins[1])
-  await setStash(page, '__test_admins', admins)
+  cryptoWorld.admins = admins
 })
 
-When('I encrypt a note for the author and both admins', async ({ page }) => {
-  const note = await page.evaluate(async (payload) => {
+When('I encrypt a note for the author and both admins', async ({ page, cryptoWorld }) => {
+  const admins = cryptoWorld.admins
+  expect(admins, 'the admins step must record the recipient pubkeys').toBeTruthy()
+  cryptoWorld.note = await page.evaluate(async ({ payload, recipients }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       encryptNote(payload: string, author: string, admins: string[]): Promise<unknown>
     }
     const me = await p.getDevicePubkeys()
-    const admins = (window as unknown as Record<string, unknown>).__test_admins as string[]
-    return p.encryptNote(payload, me.signingPubkeyHex, admins)
-  }, NOTE_PAYLOAD)
-  await setStash(page, '__test_note', note)
+    return p.encryptNote(payload, me.signingPubkeyHex, recipients)
+  }, { payload: NOTE_PAYLOAD, recipients: admins as string[] }) as CryptoWorld['note']
 })
 
-Then('the note should carry one admin envelope per admin', async ({ page }) => {
-  const admins = await stash<string[]>(page, '__test_admins')
-  const note = await stash<{ adminEnvelopes: Array<{ pubkey: string }> }>(page, '__test_note')
-  expect(note.adminEnvelopes).toHaveLength(admins.length)
-  expect(note.adminEnvelopes.map(e => e.pubkey).sort()).toEqual([...admins].sort())
+Then('the note should carry one admin envelope per admin', async ({ cryptoWorld }) => {
+  const admins = cryptoWorld.admins
+  const note = cryptoWorld.note
+  expect(note?.adminEnvelopes).toHaveLength(admins!.length)
+  expect(note!.adminEnvelopes.map(e => e.pubkey).sort()).toEqual([...admins!].sort())
 })
 
-Then('every admin envelope should name a distinct recipient', async ({ page }) => {
-  const note = await stash<{
-    adminEnvelopes: Array<{ pubkey: string; enc: string; ct: string }>
-  }>(page, '__test_note')
-  const pubkeys = note.adminEnvelopes.map(e => e.pubkey)
+Then('every admin envelope should name a distinct recipient', async ({ cryptoWorld }) => {
+  const note = cryptoWorld.note
+  expect(note).toBeTruthy()
+  const pubkeys = note!.adminEnvelopes.map(e => e.pubkey)
   expect(new Set(pubkeys).size).toBe(pubkeys.length)
   // Each recipient gets an independently sealed envelope: same content key,
   // different HPKE encapsulation. Identical ct across recipients would mean
   // the wrap is not actually per-recipient.
-  const cts = note.adminEnvelopes.map(e => e.ct)
+  const cts = note!.adminEnvelopes.map(e => e.ct)
   expect(new Set(cts).size).toBe(cts.length)
 })
 
-When('I encrypt the same payload as two separate notes', async ({ page }) => {
+When('I encrypt the same payload as two separate notes', async ({ page, cryptoWorld }) => {
   const notes = await page.evaluate(async ({ payload, keyWrapAad }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
@@ -429,59 +397,52 @@ When('I encrypt the same payload as two separate notes', async ({ page }) => {
       keyLen: k1.length,
     }
   }, { payload: NOTE_PAYLOAD, keyWrapAad: keyWrapAadHex(clientLabels.LABEL_NOTE_KEY) })
-  await setStash(page, '__test_notes_pair', notes)
+  cryptoWorld.notesPair = notes
 })
 
-Then('the two notes should have different ciphertext', async ({ page }) => {
-  const { one, two } = await stash<{
-    one: { encryptedContent: string }
-    two: { encryptedContent: string }
-  }>(page, '__test_notes_pair')
-  expect(one.encryptedContent).toBeTruthy()
-  expect(one.encryptedContent).not.toBe(two.encryptedContent)
+Then('the two notes should have different ciphertext', async ({ cryptoWorld }) => {
+  const pair = cryptoWorld.notesPair
+  expect(pair).toBeTruthy()
+  expect(pair!.one.encryptedContent).toBeTruthy()
+  expect(pair!.one.encryptedContent).not.toBe(pair!.two.encryptedContent)
 })
 
-Then('the two notes should have different wrapped content keys', async ({ page }) => {
-  const { keysEqual, keyLen } = await stash<{ keysEqual: boolean; keyLen: number }>(
-    page,
-    '__test_notes_pair',
-  )
+Then('the two notes should have different wrapped content keys', async ({ cryptoWorld }) => {
+  const pair = cryptoWorld.notesPair
+  expect(pair).toBeTruthy()
   // Per-note forward secrecy: a fresh random content key per note. The keys are
   // unwrapped and compared inside the page, so only this boolean and the length
   // cross back — no key material reaches the test runner.
-  expect(keyLen, 'content key should be 32 bytes').toBe(64)
-  expect(keysEqual, 'two notes must not share a content key').toBe(false)
+  expect(pair!.keyLen, 'content key should be 32 bytes').toBe(64)
+  expect(pair!.keysEqual, 'two notes must not share a content key').toBe(false)
 })
 
-When('I flip one byte of the note ciphertext', async ({ page }) => {
-  await page.evaluate(() => {
-    const note = (window as unknown as Record<string, unknown>).__test_note as {
-      encryptedContent: string
-    }
-    const hex = note.encryptedContent
-    // Flip one nibble in the middle of the ciphertext body (past the 12-byte
-    // IV) so the AES-GCM tag check must reject it.
-    const i = Math.floor(hex.length / 2)
-    const flipped = (parseInt(hex[i], 16) ^ 0x1).toString(16)
-    ;(window as unknown as Record<string, unknown>).__test_tampered =
-      hex.slice(0, i) + flipped + hex.slice(i + 1)
-  })
+When('I flip one byte of the note ciphertext', async ({ cryptoWorld }) => {
+  const hex = cryptoWorld.note?.encryptedContent
+  expect(hex, 'the encrypt step must record the note').toBeTruthy()
+  // Flip one nibble in the middle of the ciphertext body (past the 12-byte
+  // IV) so the AES-GCM tag check must reject it. Pure string work — stays in
+  // the runner, no page round-trip.
+  const i = Math.floor(hex!.length / 2)
+  const flipped = (parseInt(hex![i], 16) ^ 0x1).toString(16)
+  cryptoWorld.tampered = hex!.slice(0, i) + flipped + hex!.slice(i + 1)
 })
 
-Then('decrypting the tampered note should return null', async ({ page }) => {
-  const result = await page.evaluate(async () => {
+Then('decrypting the tampered note should return null', async ({ page, cryptoWorld }) => {
+  const note = cryptoWorld.note
+  const tampered = cryptoWorld.tampered
+  expect(note && tampered, 'the tamper step must record the tampered ciphertext').toBeTruthy()
+  const result = await page.evaluate(async ({ content, envelope }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       decryptNote(content: string, envelope: unknown): Promise<string | null>
     }
-    const w = window as unknown as Record<string, unknown>
-    const note = w.__test_note as { authorEnvelope: unknown }
-    return p.decryptNote(w.__test_tampered as string, note.authorEnvelope)
-  })
+    return p.decryptNote(content, envelope)
+  }, { content: tampered as string, envelope: note!.authorEnvelope })
   expect(result).toBeNull()
 })
 
-When('I encrypt a message for this device and one other reader', async ({ page }) => {
-  const out = await page.evaluate(async () => {
+When('I encrypt a message for this device and one other reader', async ({ page, cryptoWorld }) => {
+  cryptoWorld.msg = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       provisionCreateSession(): Promise<string>
@@ -495,40 +456,33 @@ When('I encrypt a message for this device and one other reader', async ({ page }
     const msg = await p.encryptMessage('hotline message body', [me.signingPubkeyHex, other])
     return { msg, mine: me.signingPubkeyHex, other }
   })
-  await setStash(page, '__test_msg', out)
 })
 
-Then('this device can decrypt the message', async ({ page }) => {
-  const plaintext = await page.evaluate(async () => {
+Then('this device can decrypt the message', async ({ page, cryptoWorld }) => {
+  const m = cryptoWorld.msg
+  expect(m, 'the encrypt step must record the message').toBeTruthy()
+  const plaintext = await page.evaluate(async (m2) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       decryptMessage(content: string, envelopes: unknown[]): Promise<string | null>
     }
-    const { msg } = (window as unknown as Record<string, unknown>).__test_msg as {
-      msg: { encryptedContent: string; readerEnvelopes: unknown[] }
-    }
-    return p.decryptMessage(msg.encryptedContent, msg.readerEnvelopes)
-  })
+    return p.decryptMessage(m2.encryptedContent, m2.readerEnvelopes)
+  }, m!.msg)
   expect(plaintext).toBe('hotline message body')
 })
 
-Then('a reader whose envelope is absent cannot decrypt the message', async ({ page }) => {
-  const plaintext = await page.evaluate(async () => {
+Then('a reader whose envelope is absent cannot decrypt the message', async ({ page, cryptoWorld }) => {
+  const m = cryptoWorld.msg
+  expect(m, 'the encrypt step must record the message').toBeTruthy()
+  const plaintext = await page.evaluate(async ({ msg, mine }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       decryptMessage(content: string, envelopes: unknown[]): Promise<string | null>
-    }
-    const { msg, mine } = (window as unknown as Record<string, unknown>).__test_msg as {
-      msg: {
-        encryptedContent: string
-        readerEnvelopes: Array<{ pubkey: string }>
-      }
-      mine: string
     }
     // Present only the OTHER reader's envelope. This device holds no key that
     // opens it, so decryption must fail rather than fall back to any other
     // envelope in the list.
     const withoutMine = msg.readerEnvelopes.filter(e => e.pubkey !== mine)
     return p.decryptMessage(msg.encryptedContent, withoutMine)
-  })
+  }, { msg: m!.msg, mine: m!.mine })
   expect(plaintext).toBeNull()
 })
 
@@ -587,7 +541,7 @@ Then('every label should be prefixed {string}', async ({}, prefix: string) => {
 // packages/crypto/tests/interop.rs::hpke_cross_label_rejection and
 // ::domain_separation_all_labels.
 
-When('I wrap a key under the label {string}', async ({ page }, labelName: string) => {
+When('I wrap a key under the label {string}', async ({ page, cryptoWorld }, labelName: string) => {
   const label = (clientLabels as unknown as Record<string, string>)[labelName]
   expect(label, `unknown label constant ${labelName}`).toBeTruthy()
   const envelope = await page.evaluate(
@@ -605,65 +559,65 @@ When('I wrap a key under the label {string}', async ({ page }, labelName: string
     },
     label,
   )
-  await setStash(page, '__test_wrapped', envelope)
+  cryptoWorld.wrapped = envelope
 })
 
-Then('unwrapping it under the label {string} should succeed', async ({ page }, labelName: string) => {
+Then('unwrapping it under the label {string} should succeed', async ({ page, cryptoWorld }, labelName: string) => {
   const label = (clientLabels as unknown as Record<string, string>)[labelName]
-  const result = await page.evaluate(async (lbl) => {
+  const w = cryptoWorld.wrapped
+  expect(w, 'the wrap step must record the envelope').toBeTruthy()
+  const result = await page.evaluate(async ({ lbl, wrapped }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
     }
-    const w = (window as unknown as Record<string, unknown>).__test_wrapped as {
-      env: unknown
-      keyHex: string
-    }
     try {
-      const got = await p.hpkeOpenKeyFromState(w.env, lbl, '')
-      return { ok: got === w.keyHex, error: null as string | null }
+      const got = await p.hpkeOpenKeyFromState(wrapped.env, lbl, '')
+      return { ok: got === wrapped.keyHex, error: null as string | null }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
-  }, label)
+  }, { lbl: label, wrapped: w as { env: unknown; keyHex: string } })
   expect(result.error).toBeNull()
   // Compare the unwrapped key to the original inside the page; only the
   // boolean crosses back, so no key material is ever surfaced to the runner.
   expect(result.ok, 'unwrapped key should equal the key that was wrapped').toBe(true)
 })
 
-Then('unwrapping it under the label {string} should be rejected', async ({ page }, labelName: string) => {
+Then('unwrapping it under the label {string} should be rejected', async ({ page, cryptoWorld }, labelName: string) => {
   const label = (clientLabels as unknown as Record<string, string>)[labelName]
   expect(label, `unknown label constant ${labelName}`).toBeTruthy()
-  const result = await page.evaluate(async (lbl) => {
+  const w = cryptoWorld.wrapped
+  expect(w, 'the wrap step must record the envelope').toBeTruthy()
+  const result = await page.evaluate(async ({ lbl, env }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+      hpkeOpenKeyFromState(e: unknown, expected: string, aad: string): Promise<string>
     }
-    const w = (window as unknown as Record<string, unknown>).__test_wrapped as { env: unknown }
     try {
-      await p.hpkeOpenKeyFromState(w.env, lbl, '')
+      await p.hpkeOpenKeyFromState(env, lbl, '')
       return { rejected: false, error: null as string | null }
     } catch (e) {
       return { rejected: true, error: e instanceof Error ? e.message : String(e) }
     }
-  }, label)
+  }, { lbl: label, env: w!.env })
   expect(result.rejected, `unwrap under ${labelName} must be rejected, but it succeeded`).toBe(true)
 })
 
-Then('unwrapping it under the label {string} should be refused as not openable from the webview', async ({ page }, labelName: string) => {
+Then('unwrapping it under the label {string} should be refused as not openable from the webview', async ({ page, cryptoWorld }, labelName: string) => {
   const label = (clientLabels as unknown as Record<string, string>)[labelName]
   expect(label, `unknown label constant ${labelName}`).toBeTruthy()
-  const result = await page.evaluate(async (lbl) => {
+  const w = cryptoWorld.wrapped
+  expect(w, 'the wrap step must record the envelope').toBeTruthy()
+  const result = await page.evaluate(async ({ lbl, env }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+      hpkeOpenKeyFromState(e: unknown, expected: string, aad: string): Promise<string>
     }
-    const w = (window as unknown as Record<string, unknown>).__test_wrapped as { env: unknown }
     try {
-      await p.hpkeOpenKeyFromState(w.env, lbl, '')
+      await p.hpkeOpenKeyFromState(env, lbl, '')
       return { error: null as string | null }
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) }
     }
-  }, label)
+  }, { lbl: label, env: w!.env })
   // The envelope IS valid under this label (the step above wrapped it under it),
   // so a refusal for any other reason — a label mismatch, say — would be the
   // allow-list not doing its job.
@@ -672,8 +626,8 @@ Then('unwrapping it under the label {string} should be refused as not openable f
 
 // ─── Recovery group: shares are sealed in Rust, never returned ───────────
 
-When('I create a recovery group of 3 shares with threshold 2 sealed to this device', async ({ page }) => {
-  const result = await page.evaluate(async () => {
+When('I create a recovery group of 3 shares with threshold 2 sealed to this device', async ({ page, cryptoWorld }) => {
+  cryptoWorld.recoveryGroup = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       recoveryGroupCreate(total: number, threshold: number, holders: string[]): Promise<Record<string, unknown>>
@@ -688,21 +642,29 @@ When('I create a recovery group of 3 shares with threshold 2 sealed to this devi
       keys: Object.keys(out).sort(),
       envelopes: (out.shareEnvelopes as unknown[]).length,
       commitments: (out.commitments as unknown[]).length,
+      livenessPublicKeys: out.livenessPublicKeys as string[],
       envelope: (out.shareEnvelopes as unknown[])[0],
     }
   })
-  await setStash(page, '__test_recovery_group', result)
 })
 
-Then('the result should contain sealed share envelopes and no plaintext shares', async ({ page }) => {
-  const r = await stash<{ keys: string[]; envelopes: number; commitments: number }>(page, '__test_recovery_group')
-  expect(r.keys).toEqual(['commitments', 'publicKeyHex', 'shareEnvelopes'])
-  expect(r.envelopes).toBe(3)
-  expect(r.commitments).toBe(3)
+Then('the result should contain sealed share envelopes and no plaintext shares', async ({ cryptoWorld }) => {
+  const r = cryptoWorld.recoveryGroup
+  expect(r).toBeTruthy()
+  // Exhaustive on purpose: a new returned field must be consciously judged safe
+  // before it is added here. `livenessPublicKeys` is public key material only —
+  // one Ed25519 verifying key per share, a one-way function of the share (#2782).
+  expect(r!.keys).toEqual(['commitments', 'livenessPublicKeys', 'publicKeyHex', 'shareEnvelopes'])
+  expect(r!.envelopes).toBe(3)
+  expect(r!.commitments).toBe(3)
+  // Each is a 32-byte Ed25519 public key (64 hex chars) — a 33-byte share (x‖y) could not pass.
+  expect(r!.livenessPublicKeys).toHaveLength(3)
+  for (const key of r!.livenessPublicKeys) expect(key).toMatch(/^[0-9a-f]{64}$/)
 })
 
-Then('the webview should be unable to open a share envelope itself', async ({ page }) => {
-  const r = await stash<{ envelope: unknown }>(page, '__test_recovery_group')
+Then('the webview should be unable to open a share envelope itself', async ({ page, cryptoWorld }) => {
+  const r = cryptoWorld.recoveryGroup
+  expect(r, 'the create step must record the group summary').toBeTruthy()
   const label = clientLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP
   const errors = await page.evaluate(async ({ envelope, lbl }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
@@ -721,7 +683,7 @@ Then('the webview should be unable to open a share envelope itself', async ({ pa
       await attempt(() => p.hpkeOpenFromState(envelope, lbl, '')),
       await attempt(() => p.hpkeOpenKeyFromState(envelope, lbl, '')),
     ]
-  }, { envelope: r.envelope, lbl: label })
+  }, { envelope: r!.envelope, lbl: label })
   for (const err of errors) expect(err).toMatch(/not openable from the webview/)
 })
 
@@ -732,7 +694,7 @@ Then('the webview should be unable to open a share envelope itself', async ({ pa
 // ephemeral key before anything is derived. These steps play the primary with
 // `tests/mocks/provisioning-mock.ts`, the mirror of the crate's wire format.
 
-Given('a provisioning room with a claim signed by the primary', async ({ page }) => {
+Given('a provisioning room with a claim signed by the primary', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
   const ephemeralPubkey = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
@@ -751,21 +713,19 @@ Given('a provisioning room with a claim signed by the primary', async ({ page })
     randomBytes(32),
     bytesToHex(x25519.getPublicKey(randomBytes(32))),
   )
-  await setStash(page, '__test_sas_claims', {
+  cryptoWorld.sasClaims = {
     claim: first.claimHex,
     expected: first.sasCode,
     otherPrimaryClaim: other.claimHex,
     otherRoomClaim: otherRoom.claimHex,
     barePubkey: bytesToHex(x25519.getPublicKey(randomBytes(32))),
-  })
+  }
 })
 
-When('I derive the SAS code', async ({ page }) => {
-  const claims = await stash<{
-    claim: string
-    otherPrimaryClaim: string
-  }>(page, '__test_sas_claims')
-  const codes = await page.evaluate(async (c) => {
+When('I derive the SAS code', async ({ page, cryptoWorld }) => {
+  const claims = cryptoWorld.sasClaims
+  expect(claims, 'the provisioning-room step must record the claims').toBeTruthy()
+  cryptoWorld.sas = await page.evaluate(async (c) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       provisionComputeSas(claimHex: string): Promise<string>
     }
@@ -774,36 +734,35 @@ When('I derive the SAS code', async ({ page }) => {
       again: await p.provisionComputeSas(c.claim),
       different: await p.provisionComputeSas(c.otherPrimaryClaim),
     }
-  }, claims)
-  await setStash(page, '__test_sas', codes)
+  }, claims!)
 })
 
-Then('it should be exactly 6 digits', async ({ page }) => {
-  const { first } = await stash<{ first: string }>(page, '__test_sas')
+Then('it should be exactly 6 digits', async ({ cryptoWorld }) => {
+  const first = cryptoWorld.sas?.first
+  expect(first, 'the derive step must record the codes').toBeTruthy()
   // Rendered as "NNN NNN" for readability; the code itself is six digits.
-  expect(first.replace(/\s/g, '')).toMatch(/^\d{6}$/)
+  expect(first!.replace(/\s/g, '')).toMatch(/^\d{6}$/)
 })
 
-Then('it should equal the code the primary derived', async ({ page }) => {
-  const { first } = await stash<{ first: string }>(page, '__test_sas')
-  const { expected } = await stash<{ expected: string }>(page, '__test_sas_claims')
-  expect(first).toBe(expected)
+Then('it should equal the code the primary derived', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.sas?.first).toBe(cryptoWorld.sasClaims?.expected)
 })
 
-Then('deriving again with the same claim should produce the same code', async ({ page }) => {
-  const { first, again } = await stash<{ first: string; again: string }>(page, '__test_sas')
-  expect(again).toBe(first)
+Then('deriving again with the same claim should produce the same code', async ({ cryptoWorld }) => {
+  const s = cryptoWorld.sas
+  expect(s?.again).toBe(s?.first)
 })
 
-Then('deriving with a different primary\'s claim should produce a different code', async ({ page }) => {
-  const { first, different } = await stash<{ first: string; different: string }>(page, '__test_sas')
+Then('deriving with a different primary\'s claim should produce a different code', async ({ cryptoWorld }) => {
+  const s = cryptoWorld.sas
   // A SAS that ignored its input would make the device-linking confirmation
   // meaningless — both peers would always read the same numbers.
-  expect(different).not.toBe(first)
+  expect(s?.different).not.toBe(s?.first)
 })
 
-Then('a bare public key or another room\'s claim should be refused instead of yielding a code', async ({ page }) => {
-  const claims = await stash<{ barePubkey: string; otherRoomClaim: string }>(page, '__test_sas_claims')
+Then('a bare public key or another room\'s claim should be refused instead of yielding a code', async ({ page, cryptoWorld }) => {
+  const claims = cryptoWorld.sasClaims
+  expect(claims, 'the provisioning-room step must record the claims').toBeTruthy()
   const outcomes = await page.evaluate(async (c) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       provisionComputeSas(claimHex: string): Promise<string>
@@ -819,7 +778,7 @@ Then('a bare public key or another room\'s claim should be refused instead of yi
       barePubkey: await attempt(c.barePubkey),
       otherRoom: await attempt(c.otherRoomClaim),
     }
-  }, claims)
+  }, claims!)
   // An unauthenticated exchange must never reach a SAS the user could confirm.
   expect(outcomes.barePubkey.code).toBeUndefined()
   expect(outcomes.barePubkey.error).toMatch(/claim must be 129 bytes/)
@@ -828,8 +787,6 @@ Then('a bare public key or another room\'s claim should be refused instead of yi
 })
 
 // ─── Auth tokens ────────────────────────────────────────────────────────
-
-type ParsedToken = { pubkey: string; timestamp: number; token: string; nonce?: string }
 
 async function createToken(page: Page, method: string, path: string, timestamp: number) {
   return page.evaluate(
@@ -840,10 +797,10 @@ async function createToken(page: Page, method: string, path: string, timestamp: 
       return JSON.parse(await plat.createAuthToken(ts, m, pth))
     },
     { m: method, p: path, ts: timestamp },
-  ) as Promise<ParsedToken>
+  ) as Promise<ParsedAuthToken>
 }
 
-Given('I have a loaded keypair with known pubkey', async ({ page }) => {
+Given('I have a loaded keypair with known pubkey', async ({ page, cryptoWorld }) => {
   await ensureAppLoaded(page)
   const state = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
@@ -856,43 +813,39 @@ Given('I have a loaded keypair with known pubkey', async ({ page }) => {
     }
     return p.getDevicePubkeys()
   })
-  await setStash(page, '__test_device', state)
+  cryptoWorld.device = state
 })
 
-When('I create an auth token for {string} {string}', async ({ page }, method: string, path: string) => {
+When('I create an auth token for {string} {string}', async ({ page, cryptoWorld }, method: string, path: string) => {
   const before = Date.now()
   const token = await createToken(page, method, path, Date.now())
-  await setStash(page, '__test_token', { ...token, method, path, createdAfter: before })
+  cryptoWorld.token = { ...token, method, path, createdAfter: before }
 })
 
-When('I create a second auth token for {string} {string}', async ({ page }, method: string, path: string) => {
+When('I create a second auth token for {string} {string}', async ({ page, cryptoWorld }, method: string, path: string) => {
   const token = await createToken(page, method, path, Date.now())
-  await setStash(page, '__test_token2', { ...token, method, path })
+  cryptoWorld.token2 = { ...token, method, path }
 })
 
-Then('the token should contain the pubkey', async ({ page }) => {
-  const token = await stash<ParsedToken>(page, '__test_token')
-  const device = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(token.pubkey).toBe(device.signingPubkeyHex)
+Then('the token should contain the pubkey', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.token?.pubkey).toBe(cryptoWorld.device?.signingPubkeyHex)
 })
 
-Then('the token should contain a timestamp within the last minute', async ({ page }) => {
-  const token = await stash<ParsedToken & { createdAfter: number }>(page, '__test_token')
-  expect(token.timestamp).toBeGreaterThanOrEqual(token.createdAfter)
-  expect(token.timestamp).toBeLessThanOrEqual(Date.now())
-  expect(Date.now() - token.timestamp).toBeLessThan(60_000)
+Then('the token should contain a timestamp within the last minute', async ({ cryptoWorld }) => {
+  const token = cryptoWorld.token
+  expect(token?.createdAfter).toBeTruthy()
+  expect(token!.timestamp).toBeGreaterThanOrEqual(token!.createdAfter as number)
+  expect(token!.timestamp).toBeLessThanOrEqual(Date.now())
+  expect(Date.now() - token!.timestamp).toBeLessThan(60_000)
 })
 
-Then('the token signature should be 128 hex characters', async ({ page }) => {
-  const token = await stash<ParsedToken>(page, '__test_token')
+Then('the token signature should be 128 hex characters', async ({ cryptoWorld }) => {
   // Ed25519 signature: 64 bytes.
-  expect(token.token).toMatch(/^[0-9a-f]{128}$/)
+  expect(cryptoWorld.token?.token).toMatch(/^[0-9a-f]{128}$/)
 })
 
-Then('the two tokens should have different signatures', async ({ page }) => {
-  const a = await stash<ParsedToken>(page, '__test_token')
-  const b = await stash<ParsedToken>(page, '__test_token2')
-  expect(a.token).not.toBe(b.token)
+Then('the two tokens should have different signatures', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.token?.token).not.toBe(cryptoWorld.token2?.token)
 })
 
 /**
@@ -906,7 +859,7 @@ Then('the two tokens should have different signatures', async ({ page }) => {
  */
 async function verifyToken(
   page: Page,
-  token: ParsedToken,
+  token: ParsedAuthToken,
   method: string,
   path: string,
 ): Promise<boolean> {
@@ -922,24 +875,26 @@ async function verifyToken(
   ) as Promise<boolean>
 }
 
-Then('each token signature should verify against its own request', async ({ page }) => {
-  const a = await stash<ParsedToken & { method: string; path: string }>(page, '__test_token')
-  const b = await stash<ParsedToken & { method: string; path: string }>(page, '__test_token2')
-  expect(await verifyToken(page, a, a.method, a.path)).toBe(true)
-  expect(await verifyToken(page, b, b.method, b.path)).toBe(true)
+Then('each token signature should verify against its own request', async ({ page, cryptoWorld }) => {
+  const a = cryptoWorld.token
+  const b = cryptoWorld.token2
+  expect(a && b, 'both token steps must have run').toBeTruthy()
+  expect(await verifyToken(page, a!, a!.method, a!.path)).toBe(true)
+  expect(await verifyToken(page, b!, b!.method, b!.path)).toBe(true)
 })
 
-Then('neither token signature should verify against the other request', async ({ page }) => {
-  const a = await stash<ParsedToken & { method: string; path: string }>(page, '__test_token')
-  const b = await stash<ParsedToken & { method: string; path: string }>(page, '__test_token2')
+Then('neither token signature should verify against the other request', async ({ page, cryptoWorld }) => {
+  const a = cryptoWorld.token
+  const b = cryptoWorld.token2
+  expect(a && b, 'both token steps must have run').toBeTruthy()
   // If the signature did not cover method and path, a captured token could be
   // replayed against a different endpoint.
-  expect(await verifyToken(page, a, b.method, b.path)).toBe(false)
-  expect(await verifyToken(page, b, a.method, a.path)).toBe(false)
+  expect(await verifyToken(page, a!, b!.method, b!.path)).toBe(false)
+  expect(await verifyToken(page, b!, a!.method, a!.path)).toBe(false)
 })
 
-When('I attempt to create an auth token while locked', async ({ page }) => {
-  const outcome = await page.evaluate(async () => {
+When('I attempt to create an auth token while locked', async ({ page, cryptoWorld }) => {
+  cryptoWorld.lockedToken = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       createAuthToken(ts: number, method: string, path: string): Promise<string>
     }
@@ -950,12 +905,10 @@ When('I attempt to create an auth token while locked', async ({ page }) => {
       return { rejected: true }
     }
   })
-  await setStash(page, '__test_locked_token', outcome)
 })
 
-Then('auth token creation should have been rejected', async ({ page }) => {
-  const { rejected } = await stash<{ rejected: boolean }>(page, '__test_locked_token')
-  expect(rejected, 'a locked crypto service must not sign auth tokens').toBe(true)
+Then('auth token creation should have been rejected', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.lockedToken?.rejected, 'a locked crypto service must not sign auth tokens').toBe(true)
 })
 
 // ─── PIN encryption ─────────────────────────────────────────────────────
@@ -971,7 +924,7 @@ Given('I have a loaded keypair', async ({ page }) => {
   expect(ready, 'platform crypto API must be reachable from the page').toBe(true)
 })
 
-When('I encrypt the key with PIN {string}', async ({ page }, pin: string) => {
+When('I encrypt the key with PIN {string}', async ({ page, cryptoWorld }, pin: string) => {
   // Keep the whole EncryptedDeviceKeys record: the structural assertions below
   // inspect this object directly. The previous version read a localStorage key
   // ('llamenos:llamenos-encrypted-key') that does not exist — the real one is
@@ -986,8 +939,8 @@ When('I encrypt the key with PIN {string}', async ({ page }, pin: string) => {
     await platform.persistAndUnlockDeviceKeys(enc, p)
     return enc
   }, pin)
-  await setStash(page, '__test_encrypted', encrypted)
-  await setStash(page, '__test_device', encrypted.state)
+  cryptoWorld.encrypted = encrypted
+  cryptoWorld.device = encrypted.state
 })
 
 When('I lock the crypto service', async ({ page }) => {
@@ -1006,27 +959,26 @@ When('I lock the crypto service', async ({ page }) => {
   expect(unlocked, 'lockCrypto() must actually lock the service').toBe(false)
 })
 
-async function attemptUnlock(page: Page, pin: string) {
-  return page.evaluate(async (p) => {
+async function attemptUnlock(page: Page, encrypted: unknown, pin: string) {
+  return page.evaluate(async ({ enc, p }) => {
     const platform = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       unlockWithPin(data: unknown, pin: string): Promise<unknown | null>
     }
-    const enc = (window as unknown as Record<string, unknown>).__test_encrypted
     try {
       const state = await platform.unlockWithPin(enc, p)
       return { ok: state !== null, error: null as string | null }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
-  }, pin)
+  }, { enc: encrypted, p: pin })
 }
 
-When('I decrypt with PIN {string}', async ({ page }, pin: string) => {
-  await setStash(page, '__test_unlock', await attemptUnlock(page, pin))
+When('I decrypt with PIN {string}', async ({ page, cryptoWorld }, pin: string) => {
+  cryptoWorld.unlock = await attemptUnlock(page, cryptoWorld.encrypted, pin)
 })
 
-When('I attempt to decrypt with PIN {string}', async ({ page }, pin: string) => {
-  await setStash(page, '__test_unlock', await attemptUnlock(page, pin))
+When('I attempt to decrypt with PIN {string}', async ({ page, cryptoWorld }, pin: string) => {
+  cryptoWorld.unlock = await attemptUnlock(page, cryptoWorld.encrypted, pin)
 })
 
 Then('the crypto service should be unlocked', async ({ page }) => {
@@ -1059,75 +1011,69 @@ Then('the crypto service should remain locked', async ({ page }) => {
   expect(unlocked).toBe(false)
 })
 
-Then('the pubkey should match the original', async ({ page }) => {
+Then('the pubkey should match the original', async ({ page, cryptoWorld }) => {
   const pubkey = await page.evaluate(async () => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<{ signingPubkeyHex: string } | null>
     }
     return (await p.getDevicePubkeys())?.signingPubkeyHex ?? null
   })
-  const device = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(pubkey).toBe(device.signingPubkeyHex)
+  expect(pubkey).toBe(cryptoWorld.device?.signingPubkeyHex)
 })
 
-Then('decryption should fail with {string}', async ({ page }, errorText: string) => {
-  const result = await stash<{ ok: boolean; error: string | null }>(page, '__test_unlock')
-  expect(result.ok, 'unlock with the wrong PIN must not succeed').toBe(false)
-  if (result.error) {
+Then('decryption should fail with {string}', async ({ cryptoWorld }, errorText: string) => {
+  const result = cryptoWorld.unlock
+  expect(result?.ok, 'unlock with the wrong PIN must not succeed').toBe(false)
+  if (result?.error) {
     expect(result.error).toMatch(new RegExp(errorText, 'i'))
   }
 })
 
-Then('the encrypted data should have a non-empty ciphertext', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  expect(enc.ciphertext).toMatch(/^[0-9a-f]+$/)
+Then('the encrypted data should have a non-empty ciphertext', async ({ cryptoWorld }) => {
+  const enc = cryptoWorld.encrypted
+  expect(enc?.ciphertext).toMatch(/^[0-9a-f]+$/)
   // 64 bytes of seed material + a 16-byte GCM tag = 80 bytes = 160 hex chars.
-  expect(enc.ciphertext.length).toBeGreaterThanOrEqual(160)
+  expect(enc!.ciphertext.length).toBeGreaterThanOrEqual(160)
 })
 
-Then('the encrypted data should have a non-empty salt', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  expect(enc.salt).toMatch(/^[0-9a-f]+$/)
+Then('the encrypted data should have a non-empty salt', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.encrypted?.salt).toMatch(/^[0-9a-f]+$/)
 })
 
-Then('the encrypted data should have a non-empty nonce', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  expect(enc.nonce).toMatch(/^[0-9a-f]+$/)
+Then('the encrypted data should have a non-empty nonce', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.encrypted?.nonce).toMatch(/^[0-9a-f]+$/)
 })
 
-Then('the encrypted data should have a pubkey matching the original', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  const device = await stash<EncryptedDeviceKeys['state']>(page, '__test_device')
-  expect(enc.state.signingPubkeyHex).toBe(device.signingPubkeyHex)
-  expect(enc.state.signingPubkeyHex).toMatch(HEX64)
+Then('the encrypted data should have a pubkey matching the original', async ({ cryptoWorld }) => {
+  const enc = cryptoWorld.encrypted
+  expect(enc?.state.signingPubkeyHex).toBe(cryptoWorld.device?.signingPubkeyHex)
+  expect(enc!.state.signingPubkeyHex).toMatch(HEX64)
 })
 
-Then('the encrypted data should declare KDF version {int}', async ({ page }, version: number) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  expect(enc.kdfVersion).toBe(version)
+Then('the encrypted data should declare KDF version {int}', async ({ cryptoWorld }, version: number) => {
+  expect(cryptoWorld.encrypted?.kdfVersion).toBe(version)
 })
 
-Then('the encrypted data should carry a 32-byte salt', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
-  expect(enc.salt).toHaveLength(64)
+Then('the encrypted data should carry a 32-byte salt', async ({ cryptoWorld }) => {
+  expect(cryptoWorld.encrypted?.salt).toHaveLength(64)
 })
 
-Then('the encrypted data should carry a 12-byte nonce', async ({ page }) => {
-  const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
+Then('the encrypted data should carry a 12-byte nonce', async ({ cryptoWorld }) => {
   // AES-256-GCM nonce.
-  expect(enc.nonce).toHaveLength(24)
+  expect(cryptoWorld.encrypted?.nonce).toHaveLength(24)
 })
 
 Then(
   'the encrypted data should declare positive Argon2 memory, time and parallelism costs',
-  async ({ page }) => {
-    const enc = await stash<EncryptedDeviceKeys>(page, '__test_encrypted')
+  async ({ cryptoWorld }) => {
+    const enc = cryptoWorld.encrypted
+    expect(enc, 'the encrypt step must record the encrypted record').toBeTruthy()
     // Values are not asserted: the Playwright mock deliberately uses reduced
     // Argon2 costs for speed, so pinning a number here would assert the mock's
     // weakened parameters. The shipped costs are asserted in Rust
     // (packages/crypto/src/kdf_params.rs and its tests).
-    expect(enc.argon2MCost).toBeGreaterThan(0)
-    expect(enc.argon2TCost).toBeGreaterThan(0)
-    expect(enc.argon2PCost).toBeGreaterThan(0)
+    expect(enc!.argon2MCost).toBeGreaterThan(0)
+    expect(enc!.argon2TCost).toBeGreaterThan(0)
+    expect(enc!.argon2PCost).toBeGreaterThan(0)
   },
 )

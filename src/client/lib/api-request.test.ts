@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import {
   request,
   ApiError,
   NetworkError,
+  NoSessionError,
   OfflineQueuedError,
   isNetworkError,
+  isHubNotFound,
   getAuthHeadersForReplay,
   setOnAuthExpired,
+  setOnHubGone,
   setOnApiActivity,
   setActiveHub,
   bootstrapAdmin,
@@ -32,6 +36,37 @@ describe('ApiError', () => {
     expect(err.body).toBe('Not found')
     expect(err.message).toBe('API error 404: Not found')
     expect(err.name).toBe('ApiError')
+  })
+})
+
+describe('isHubNotFound', () => {
+  const gone = { error: 'Hub not found', code: HUB_NOT_FOUND_CODE }
+
+  it('is the server saying the hub is not there', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify(gone)))).toBe(true)
+  })
+
+  it('is decided by the code, not the prose: a reworded message still drops the hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ ...gone, error: 'Ese centro ya no existe' })))).toBe(true)
+  })
+
+  it('is not decided by the prose: the English message without the code never drops a hub', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found' })))).toBe(false)
+  })
+
+  it('is not a 404 for something inside a hub that does exist', () => {
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'No key envelope for this user' })))).toBe(false)
+    expect(isHubNotFound(new ApiError(404, JSON.stringify({ error: 'Hub not found', code: 'SOMETHING_ELSE' })))).toBe(false)
+  })
+
+  it('is never an authorization answer, whatever code it carries', () => {
+    expect(isHubNotFound(new ApiError(403, JSON.stringify(gone)))).toBe(false)
+    expect(isHubNotFound(new ApiError(401, JSON.stringify(gone)))).toBe(false)
+  })
+
+  it('is not an unreadable body, or something that is not an API error', () => {
+    expect(isHubNotFound(new ApiError(404, 'Hub not found'))).toBe(false)
+    expect(isHubNotFound(new Error('Hub not found'))).toBe(false)
   })
 })
 
@@ -118,6 +153,7 @@ describe('request retry logic', () => {
     sessionStorage.clear()
     keyManager.lock()
     setOnAuthExpired(null)
+    setOnHubGone(null)
     setOnApiActivity(null)
     setActiveHub(null)
     await offlineQueue.clear()
@@ -260,6 +296,42 @@ describe('request retry logic', () => {
     expect(cb).not.toHaveBeenCalled()
   })
 
+  it('reports the hub as gone when a hub-scoped route answers with the HUB_NOT_FOUND code', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).toHaveBeenCalledExactlyOnceWith('hub-a')
+  })
+
+  it('does not report a hub as gone for a 404 whose prose says so but which carries no code', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'Hub not found' }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/incidents?open=true')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).not.toHaveBeenCalled()
+  })
+
+  it('does not report a hub as gone for a 404 about something inside it', async () => {
+    const fetchMock = vi.mocked(globalThis.fetch)
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: 'No key envelope for this user' }), { status: 404 }))
+
+    keyManager.markUnlocked('test-pubkey')
+    const cb = vi.fn()
+    setOnHubGone(cb)
+
+    await expect(request('/hubs/hub-a/key')).rejects.toBeInstanceOf(ApiError)
+    expect(cb).not.toHaveBeenCalled()
+  })
+
   it('calls onApiActivity on success', async () => {
     const fetchMock = vi.mocked(globalThis.fetch)
     fetchMock.mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
@@ -323,6 +395,66 @@ describe('request retry logic', () => {
     await request('/test')
     const headers = fetchMock.mock.calls[0][1]?.headers as Record<string, string>
     expect(headers['Authorization']).toBeUndefined()
+  })
+
+  describe('a hub-scoped request with no session (#2851)', () => {
+    it('is never sent: the server can only answer 401, and the answer is a console error', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+
+      await expect(request('/hubs/hub-1/key/rotation')).rejects.toBeInstanceOf(NoSessionError)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('is not retried and not queued for offline replay', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+
+      await expect(request('/hubs/hub-1/incidents', { method: 'POST', body: '{}' })).rejects.toBeInstanceOf(NoSessionError)
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(offlineQueue.pendingCount).toBe(0)
+    })
+
+    it('does not depend on which hub is active — a hub the user is a member of is asked whatever the UI shows', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+      fetchMock.mockResolvedValue(new Response('{"calls":[]}', { status: 200 }))
+      keyManager.markUnlocked('test-pubkey')
+      setActiveHub('some-other-hub')
+
+      await request('/hubs/hub-1/calls/active')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('is sent on a session token alone, with the key locked', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+      fetchMock.mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
+      sessionStorage.setItem('llamenos-session-token', 'session-123')
+
+      await request('/hubs/hub-1/key')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('is not sent from the first-run screen, even while a token the old server issued is still stored', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+      sessionStorage.setItem('llamenos-session-token', 'issued-by-the-old-server')
+      vi.stubEnv('PLAYWRIGHT_TEST', 'true')
+      ;(window as unknown as Record<string, unknown>).__TEST_SIMULATE_PACKAGED_TAURI__ = true
+
+      try {
+        await expect(request('/hubs/hub-1/key')).rejects.toBeInstanceOf(NoSessionError)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        delete (window as unknown as Record<string, unknown>).__TEST_SIMULATE_PACKAGED_TAURI__
+        vi.unstubAllEnvs()
+      }
+    })
+
+    it('leaves routes that are public to a signed-out client alone', async () => {
+      const fetchMock = vi.mocked(globalThis.fetch)
+      fetchMock.mockImplementation(async () => new Response('{"ok":true}', { status: 200 }))
+
+      await request('/auth/login')
+      await request('/config')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
   })
 
   it('strips query params from auth path', async () => {

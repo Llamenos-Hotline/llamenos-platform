@@ -25,11 +25,34 @@ export const Route = createFileRoute('/login')({
 })
 
 
+/** The login page's theme switch. Both login branches (stored key / no stored key)
+ *  render it, so the controls and their test ids cannot drift apart. */
+function ThemeButtons() {
+  const { t } = useTranslation()
+  const { theme, setTheme } = useTheme()
+  return (
+    <>
+      {([['system', Monitor], ['light', Sun], ['dark', Moon]] as const).map(([value, Icon]) => (
+        <Button
+          key={value}
+          variant={theme === value ? 'secondary' : 'ghost'}
+          size="xs"
+          onClick={() => setTheme(value)}
+          title={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
+          aria-label={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
+          data-testid={`theme-${value}`}
+        >
+          <Icon className="h-3 w-3" />
+        </Button>
+      ))}
+    </>
+  )
+}
+
 function LoginPage() {
   const { t } = useTranslation()
   const { signIn, loginAfterKeyLoaded, signInWithPasskey, unlockWithPin, error, isLoading } = useAuth()
   const { hotlineName, needsBootstrap } = useConfig()
-  const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [validationError, setValidationError] = useState('')
   const [showRecovery, setShowRecovery] = useState(false)
@@ -255,19 +278,7 @@ function LoginPage() {
             <div className="flex items-center justify-center gap-2">
               <LanguageSelect size="sm" />
               <span className="h-4 w-px bg-border" />
-              {([['system', Monitor], ['light', Sun], ['dark', Moon]] as const).map(([value, Icon]) => (
-                <Button
-                  key={value}
-                  variant={theme === value ? 'secondary' : 'ghost'}
-                  size="xs"
-                  onClick={() => setTheme(value)}
-                  title={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
-                  aria-label={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
-                  data-testid={`theme-${value}`}
-                >
-                  <Icon className="h-3 w-3" />
-                </Button>
-              ))}
+              <ThemeButtons />
             </div>
 
             <PinUnlockInline onUnlock={handlePinUnlock} />
@@ -394,18 +405,7 @@ function LoginPage() {
           <div className="flex items-center justify-center gap-2">
             <LanguageSelect size="sm" />
             <span className="h-4 w-px bg-border" />
-            {([['system', Monitor], ['light', Sun], ['dark', Moon]] as const).map(([value, Icon]) => (
-              <Button
-                key={value}
-                variant={theme === value ? 'secondary' : 'ghost'}
-                size="xs"
-                onClick={() => setTheme(value)}
-                title={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
-                aria-label={t(`a11y.theme${value.charAt(0).toUpperCase() + value.slice(1)}`)}
-              >
-                <Icon className="h-3 w-3" />
-              </Button>
-            ))}
+            <ThemeButtons />
           </div>
 
           {(validationError || error) && (

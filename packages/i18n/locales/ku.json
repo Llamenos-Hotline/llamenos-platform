@@ -213,6 +213,9 @@
     "noEntries": "Tu jimareyên qedexekirî tune. Jimareyan lê zêde bike da ku bangkerên spam asteng bikî.",
     "phoneNumber": "Jimareya Têlefonê",
     "reason": "Sedem",
+    "reentryDescription": "Ev qedexekirin êdî bangkeran asteng nakin. Awayê tomarkirina qedexekirinan guherî û server qet jimare negirtiye, ji ber vê nikare wan veguherîne. Her jimareyê dîsa qedexe bike, paşê têketina wê rake.",
+    "reentryDismiss": "Rake",
+    "reentryTitle": "Qedexekirinên ku divê dîsa werin tomarkirin",
     "remove": "Qedexekirinê Rake",
     "removeConfirmMessage": "Ev bangker dê dîsa karibe xeta alîkariyê bigire. Tenê hash-a yekalî ya jimareyê tê parastin, ji ber vê yekê tu tenê dikarî dîsa qedexe bikî heke jimare hê jî li cem te be. Rakirin di Têketina Çavdêriyê de tê tomarkirin.",
     "removeConfirmTitle": "Ev qedexekirin were rakirin?",
@@ -799,6 +802,7 @@
     "callId": "Nasnameya Bangê",
     "callIdBadge": "Bang",
     "callIdPlaceholder": "Nasnameya bangê an referans",
+    "callIdRequired": "Nasnameya bangê an jî referansa ku ev nota pê ve girêdayî ye binivîse.",
     "callWith": "Bang bi {{number}}",
     "chatIdBadge": "Sohbet",
     "conversationBadge": "Sohbet",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Hûn derketin, lê mifteyên weyên şîfrekirî ji vê cihazê nehatin jêbirin.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "Ev şift were jêbirin?",
-    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin."
+    "deleteConfirmMessage": "Xwebexşên di vê şiftê de dê di saetên wê de bangan wernegirin. Heke şifteke din wan saetan nepêçe, bang dê biçin Koma Bêserûber, an jî heke tune be bê bersiv bimînin. Ev nayê paşve standin.",
+    "noAdminReader": "Ev nivîs nayê tomarkirin: tu rêveberê vî hubê amûrek tomarkirî nîne, ji ber vê yekê tu rêveber nikare wê bixwîne. Ji rêveberekî hubê bixwazin ku li ser amûrekê têkeve."
   },
   "shortcuts": {
     "answerCall": "Bangê bersiv bide",
@@ -3671,6 +3677,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Piştrastkirina parçeyê têk çû",
+    "liveness": {
+      "title": "Parçeya te ya vegerandinê",
+      "description": "Îsbat bike ku ev amûr hê jî parçeya te ya vegerandinê dihebîne. Parçeya te qet ji amûrê dernakeve; hub tenê îmzeyekî ku pê hatiye çêkirin kontrol dike.",
+      "prove": "Parçeya min piştrast bike",
+      "proving": "Tê piştrastkirin…",
+      "success": "Parçe hat piştrastkirin. Rêveber dê parçeya te saxlem bibînin.",
+      "error": "Piştrastkirina parçeyê têk çû"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

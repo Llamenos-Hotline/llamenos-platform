@@ -213,6 +213,9 @@
     "noEntries": "Заблокованих номерів немає. Додайте номери для блокування спам-абонентів.",
     "phoneNumber": "Номер телефону",
     "reason": "Причина",
+    "reentryDescription": "Ці блокування більше не блокують абонентів. Спосіб зберігання блокувань змінився, а сервер ніколи не зберігав номери, тому не може їх перетворити. Заблокуйте кожен номер знову, потім закрийте його запис.",
+    "reentryDismiss": "Закрити",
+    "reentryTitle": "Блокування, які потрібно ввести повторно",
     "remove": "Зняти блокування",
     "removeConfirmMessage": "Цей абонент знову зможе додзвонитися на лінію. Зберігається лише незворотний хеш номера, тому заблокувати його знову можна, лише якщо номер у вас залишився. Зняття блокування записується в журнал аудиту.",
     "removeConfirmTitle": "Зняти це блокування?",
@@ -799,6 +802,7 @@
     "callId": "ID дзвінка",
     "callIdBadge": "Дзвінок",
     "callIdPlaceholder": "ID дзвінка або посилання",
+    "callIdRequired": "Вкажіть ID або номер дзвінка, до якого належить ця нотатка.",
     "callWith": "Дзвінок з {{number}}",
     "chatIdBadge": "Чат",
     "conversationBadge": "Чат",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Ви вийшли із системи, але не вдалося видалити ваші зашифровані ключі з цього пристрою.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Розблоковуйте за допомогою відбитка пальця або обличчя замість введення PIN-коду. Ваш PIN-код продовжує працювати і ніколи не вимикається.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Ви перестанете отримувати вхідні дзвінки.",
     "deleteConfirmTitle": "Видалити цю зміну?",
-    "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати."
+    "deleteConfirmMessage": "Волонтери цієї зміни перестануть отримувати дзвінки в її години. Якщо ці години не покриває інша зміна, дзвінки підуть до резервної групи або залишаться без відповіді, якщо її не задано. Цю дію неможливо скасувати.",
+    "noAdminReader": "Неможливо зберегти цей текст: жоден адміністратор цього хабу не має зареєстрованого пристрою, тож жоден адміністратор ніколи не зможе його прочитати. Попросіть адміністратора хабу увійти на пристрої."
   },
   "shortcuts": {
     "answerCall": "Відповісти на дзвінок",
@@ -3784,6 +3790,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Не вдалося перевірити частку",
+    "liveness": {
+      "title": "Ваша частка відновлення",
+      "description": "Підтвердьте, що цей пристрій досі зберігає вашу частку відновлення. Частка ніколи не залишає пристрій; хаб перевіряє лише підпис, створений за її допомогою.",
+      "prove": "Перевірити мою частку",
+      "proving": "Перевірка…",
+      "success": "Частку перевірено. Адміністратори побачать, що ваша частка в порядку.",
+      "error": "Не вдалося перевірити частку"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

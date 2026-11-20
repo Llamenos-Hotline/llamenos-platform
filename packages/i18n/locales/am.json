@@ -213,6 +213,9 @@
     "noEntries": "የታገዱ ቁጥሮች የሉም። አይፈለጌ ደዋዮችን ለመዝጋት ቁጥሮች ያክሉ።",
     "phoneNumber": "ስልክ ቁጥር",
     "reason": "ምክንያት",
+    "reentryDescription": "እነዚህ እገዳዎች ደዋዮችን አይከለክሉም። እገዳዎች የሚቀመጡበት መንገድ ተቀይሯል፣ አገልጋዩም ቁጥሮቹን ጠብቆ አያውቅም፤ ስለዚህ ሊቀይራቸው አይችልም። እያንዳንዱን ቁጥር እንደገና ያግዱ፣ ከዚያ ግቤቱን ያስወግዱ።",
+    "reentryDismiss": "አስወግድ",
+    "reentryTitle": "እንደገና መግባት ያለባቸው እገዳዎች",
     "remove": "እገዳ አስወግድ",
     "removeConfirmMessage": "ይህ ደዋይ እንደገና ወደ ስልክ መስመሩ መደወል ይችላል። የቁጥሩ አንድ-አቅጣጫ ሃሽ ብቻ ስለሚቀመጥ፣ ቁጥሩ አሁንም ካለዎት ብቻ እንደገና ማገድ ይችላሉ። ማስወገዱ በኦዲት መዝገብ ውስጥ ይመዘገባል።",
     "removeConfirmTitle": "ይህ እገዳ ይወገድ?",
@@ -799,6 +802,7 @@
     "callId": "የጥሪ መለያ",
     "callIdBadge": "ጥሪ",
     "callIdPlaceholder": "የጥሪ መለያ ወይም ማጣቀሻ",
+    "callIdRequired": "ይህ ማስታወሻ የሚመለከተውን የጥሪ መለያ ወይም ማጣቀሻ ያስገቡ።",
     "callWith": "ከ {{number}} ጋር ጥሪ",
     "chatIdBadge": "ቻት",
     "conversationBadge": "ቻት",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "ወጥተዋል፣ ነገር ግን የተመሰጠሩ ቁልፎችዎ ከዚህ መሣሪያ ሊወገዱ አልቻሉም።",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "ይህ ፈረቃ ይሰረዝ?",
-    "deleteConfirmMessage": "በዚህ ፈረቃ ላይ ያሉ ፈቃደኞች በፈረቃው ሰዓታት ጥሪ መቀበል ያቆማሉ። ሌላ ፈረቃ እነዚያን ሰዓታት ካልሸፈነ፣ ጥሪዎች ወደ ተተኪ ቡድን ይሄዳሉ፤ ተተኪ ቡድን ካልተመደበ ደግሞ ያለ መልስ ይቀራሉ። ይህ ሊመለስ አይችልም።"
+    "deleteConfirmMessage": "በዚህ ፈረቃ ላይ ያሉ ፈቃደኞች በፈረቃው ሰዓታት ጥሪ መቀበል ያቆማሉ። ሌላ ፈረቃ እነዚያን ሰዓታት ካልሸፈነ፣ ጥሪዎች ወደ ተተኪ ቡድን ይሄዳሉ፤ ተተኪ ቡድን ካልተመደበ ደግሞ ያለ መልስ ይቀራሉ። ይህ ሊመለስ አይችልም።",
+    "noAdminReader": "ይህን ጽሑፍ ማስቀመጥ አይቻልም፦ የዚህ ማዕከል አስተዳዳሪ የተመዘገበ መሣሪያ የለውም፣ ስለዚህ ማንም አስተዳዳሪ ሊያነበው አይችልም። የማዕከሉን አስተዳዳሪ በአንድ መሣሪያ እንዲገባ ይጠይቁ።"
   },
   "shortcuts": {
     "answerCall": "ጥሪ መልስ",
@@ -2483,6 +2489,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "የማጋራት ማረጋገጫ አልተሳካም",
+    "liveness": {
+      "title": "የእርስዎ የማገገሚያ ድርሻ",
+      "description": "ይህ መሣሪያ የማገገሚያ ድርሻዎን አሁንም እንደያዘ ያረጋግጡ። ድርሻዎ ከመሣሪያው ፈጽሞ አይወጣም፤ ማዕከሉ በእሱ የተፈረመውን ፊርማ ብቻ ይመረምራል።",
+      "prove": "ድርሻዬን አረጋግጥ",
+      "proving": "በማረጋገጥ ላይ…",
+      "success": "ድርሻው ተረጋግጧል። አስተዳዳሪዎች ድርሻዎን ጤናማ ሆኖ ያዩታል።",
+      "error": "የማጋራት ማረጋገጫ አልተሳካም"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

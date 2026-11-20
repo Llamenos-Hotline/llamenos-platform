@@ -213,6 +213,9 @@
     "noEntries": "Ñá íyo número bloqueado. Chikaa número ña kasi ña̱yivi spam.",
     "phoneNumber": "Número de Teléfono",
     "reason": "Xa̱ꞌa̱ ndí",
+    "reentryDescription": "Estos bloqueos ya no bloquean a quienes llaman. Cambió la forma en que se guardan los bloqueos y el servidor nunca guardó los números, así que no puede convertirlos. Bloquea de nuevo cada número y luego descarta su entrada.",
+    "reentryDismiss": "Descartar",
+    "reentryTitle": "Bloqueos por volver a introducir",
     "remove": "Tava Bloqueo",
     "removeConfirmMessage": "Ña̱yivi kána yóꞌo podrá volver a comunicarse con la línea de ayuda. Solo se conserva un hash unidireccional del número, así que solo podrás volver a bloquearlo si todavía tienes el número. La eliminación queda registrada en el Registro de Auditoría.",
     "removeConfirmTitle": "¿Tava bloqueo yóꞌo?",
@@ -799,6 +802,7 @@
     "callId": "ID de Llamada",
     "callIdBadge": "Llamada",
     "callIdPlaceholder": "ID de llamada xi referencia",
+    "callIdRequired": "Tee ID de llamada xi referencia xa̱ꞌa̱ nota yóꞌo.",
     "callWith": "Llamada ji {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Ni keta ún, ta ni kuu ka̱xi̱ nuú llaves cifradas ún nuu aparato yā.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "¿Xíta turno yóꞌo?",
-    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer."
+    "deleteConfirmMessage": "Los voluntarios de este turno dejarán de recibir llamadas durante sus horas. A menos que otro turno cubra esas horas, las llamadas irán al Grupo de Respaldo, o quedarán sin respuesta si no hay ninguno. Esto no se puede deshacer.",
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Nakuiin llamada",
@@ -4264,6 +4270,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Ma ni̱ kúu ndakuaa-ka parte",
+    "liveness": {
+      "title": "Parte ña̱ ndakoo-ni̱ mií",
+      "description": "Ka̱ʼa̱n ña̱ ni̱ ndaʼa-ka dispositivo yóʼo parte ña̱ ndakoo-ni̱. Parte-ni̱ ndáa-ka ni̱ ndáa-ka kúu dispositivo; hub só̱lo ndakuaa firma ña̱ kuiʼva ni̱ chi̱ka̱a̱ ña̱.",
+      "prove": "Ndakuaa parte-ri",
+      "proving": "Ndakuaa-ña…",
+      "success": "Ni̱ ndakuaa parte. Administrador kúu ni̱ kana̱ ña̱ parte-ni̱ ndáa-ka.",
+      "error": "Ma ni̱ kúu ndakuaa-ka parte"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

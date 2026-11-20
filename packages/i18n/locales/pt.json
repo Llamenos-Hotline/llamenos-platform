@@ -551,6 +551,9 @@
     "noEntries": "Nenhum número bloqueado",
     "phoneNumber": "Número de Telefone",
     "reason": "Motivo",
+    "reentryDescription": "Estes bloqueios já não bloqueiam quem liga. A forma de guardar bloqueios mudou e o servidor nunca guardou os números, por isso não os pode converter. Bloqueie cada número outra vez e depois dispense a entrada.",
+    "reentryDismiss": "Dispensar",
+    "reentryTitle": "Bloqueios a inserir de novo",
     "remove": "Remove Ban",
     "removeConfirmMessage": "Quem ligou poderá voltar a contactar a linha. Apenas um hash irreversível do número é guardado, por isso só poderá bloqueá-lo novamente se ainda tiver o número. A remoção fica registada no registo de auditoria.",
     "removeConfirmTitle": "Remover este bloqueio?",
@@ -2664,6 +2667,7 @@
     "callId": "ID da Chamada",
     "callIdBadge": "Call",
     "callIdPlaceholder": "ID da chamada ou referência",
+    "callIdRequired": "Informe o ID ou a referência da chamada à qual esta nota pertence.",
     "callWith": "Chamada com {{number}}",
     "chatIdBadge": "Chat",
     "conversationBadge": "Chat",
@@ -3234,6 +3238,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Falha na verificação da parte",
+    "liveness": {
+      "title": "Sua parte de recuperação",
+      "description": "Comprove que este dispositivo ainda guarda a sua parte de recuperação. Sua parte nunca sai do dispositivo; o hub apenas verifica uma assinatura feita com ela.",
+      "prove": "Verificar minha parte",
+      "proving": "Verificando…",
+      "success": "Parte verificada. Os administradores verão sua parte como íntegra.",
+      "error": "Falha na verificação da parte"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",
@@ -3755,6 +3768,7 @@
     "logout": "Logout",
     "logoutConfirmMessage": "Are you sure you want to log out? Make sure you have backed up your key.",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Você saiu da sessão, mas não foi possível remover suas chaves criptografadas deste dispositivo.",
     "logoutTitle": "Log Out",
     "messageAlerts": "Message Alerts",
     "notConfigured": "Not configured",
@@ -4103,7 +4117,8 @@
     "weeklySchedule": "Weekly Schedule",
     "clockOutMessage": "Você deixará de receber chamadas.",
     "deleteConfirmTitle": "Excluir este turno?",
-    "deleteConfirmMessage": "Os voluntários deste turno deixarão de receber chamadas durante o seu horário. Se nenhum outro turno cobrir essas horas, as chamadas vão para o grupo de reserva ou ficam sem resposta se não houver nenhum. Esta ação não pode ser desfeita."
+    "deleteConfirmMessage": "Os voluntários deste turno deixarão de receber chamadas durante o seu horário. Se nenhum outro turno cobrir essas horas, as chamadas vão para o grupo de reserva ou ficam sem resposta se não houver nenhum. Esta ação não pode ser desfeita.",
+    "noAdminReader": "Não é possível guardar este texto: nenhum administrador deste hub tem um dispositivo registado, por isso nenhum administrador poderia lê-lo. Peça a um administrador do hub que inicie sessão num dispositivo."
   },
   "shortcuts": {
     "answerCall": "Atender chamada",

@@ -89,8 +89,8 @@ flowchart TD
     PUK --- Clkr
     Clkr --- ClkrLink
 
-    HubKey["Hub Key (per-hub, random 32 bytes)"]
-    HubWrap["HPKE-wrapped per member (LABEL_HUB_KEY_WRAP)"]
+    HubKey["Hub Key (per-hub, random 32 bytes; rotated on member departure)"]
+    HubWrap["HPKE-wrapped per current member (LABEL_HUB_KEY_WRAP)"]
     HubEvent["Hub Event Key (HKDF from hub key, LABEL_HUB_EVENT) — WebSocket event encryption"]
     HubPtk["Hub PTK (derived via MLS export or HKDF, LABEL_HUB_PTK)"]
 
@@ -327,6 +327,12 @@ Derived from PUK via HKDF export (`LABEL_ITEMS_KEY_EXPORT`). Used as an intermed
 
 Same pattern as notes but with label `LABEL_MESSAGE`. Server encrypts inbound webhook messages (SMS/WhatsApp/Signal) immediately on receipt, discards plaintext.
 
+### Hub Key Rotation on Member Departure
+
+The hub key is replaced when someone who held it leaves (PROTOCOL.md §2.7 "Key Rotation"). The departure itself — removal, erasure, a re-distribution that drops a holder — sets `hubs.hub_key_rotation_due` in the transaction that revokes the wrap; a deactivated or deleted member still holding a wrap counts too. A manager's device then generates a fresh random key (never derived from the old one or any identity key), wraps it under `LABEL_HUB_KEY_WRAP` for **exactly** the hub's current members with a device key, re-seals every hub-sealed value (tag labels/categories, team names/descriptions, hub role names/descriptions) under it, and installs all of it with one compare-and-set write (`POST /api/hubs/:hubId/key/rotate`). The server refuses a wrap for a non-member, a set that leaves a member out (so no admin can be orphaned), and a re-seal that misses or misstates any stored value.
+
+Each rotation leaves a two-part statement under `LABEL_HUB_KEY_ROTATION`: `check` = `{hubId, epoch}` sealed under the new key, and `proof` = `{hubId, epoch, check}` sealed under the old key. A member's device adopts a rotated key only if `proof` opens under the key it holds and its new wrap opens to a key that opens `check`. The server never holds a hub key, so it cannot make a device adopt a key it chose. What rotation cannot do is take back what a departed member already copied; it guarantees they cannot open anything stored or sealed after it. Mobile clients load the current key at unlock and do not yet adopt a rotation mid-session (#2831).
+
 ### Hub Event Encryption (Server-Published WebSocket Events)
 
 The server publishes WebSocket events encrypted under a key derived from `SERVER_SECRET` (not the hub key directly). The derivation uses epoch-based forward secrecy:
@@ -427,8 +433,11 @@ Values are canonicalized (lowercase + NFKD + strip diacritics) before indexing. 
 
 ### Zeroization
 
-- All secret key material uses `zeroize::Zeroizing<>` wrappers
-- `MobileState` zeroizes secrets on `mobile_lock()` call
+- Secret key material is held in `zeroize::Zeroizing<>` (or a `ZeroizeOnDrop` struct), never a bare `[u8; 32]`. A bare array is `Copy`: replacing a map entry, an early `?` return, or a plain drop leaves a duplicate in freed heap/stack, which a swap file, crash dump or hibernation image can capture. The wrapper wipes on **every** exit path; a trailing `key.zeroize()` after a fallible call does not (the wrong-PIN path of `decrypt_with_pin` / `unlock_device_keys` returned before it ran, leaving the Argon2id KEK behind).
+- Hex-encoded secrets are decoded through `encryption::secret_from_hex`, which wipes the intermediate `Vec` as well as the result.
+- `MobileState` holds hub keys, server-event keys, the ephemeral ECDH secret and the wake key as `Zeroizing`, and clears them on `mobile_lock()`. Replacing a hub key drops, and so wipes, the old one.
+- Library state: `aes` is built with its `zeroize` feature (wipes the expanded AES key schedule — a full copy of the key — of every AEAD call) and `argon2` with its `zeroize` feature (wipes the PIN-derived working memory). `tests/zeroize_key_material.rs` fails to compile if either is dropped.
+- Not wiped, by construction: `hmac`/`hkdf` internal key pads (no zeroize support in the pinned versions), and any secret returned across the UniFFI / `bun:ffi` boundary as a hex `String` (the caller owns that copy).
 - Desktop `CryptoState` zeroizes on session lock
 - WASM target cannot zeroize JS strings — acceptable for test builds only
 

@@ -253,7 +253,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew bundleRelease
+        run: bash ../../scripts/ci/gradle-retry.sh bundleRelease
 
       - name: Build release APK (direct download)
         working-directory: apps/android
@@ -262,7 +262,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: bash ../../scripts/ci/gradle-retry.sh assembleRelease
 
       - name: Verify release artifacts (signed, production native libs only)
         run: |

@@ -103,8 +103,8 @@ pub const AUTH_PREFIX: &str = "llamenos:auth:";
 /// Phone number hashing prefix
 pub const HMAC_PHONE_PREFIX: &str = "llamenos:phone:";
 
-/// Ban-list hashing prefix — message prefix of HMAC(HKDF(BAN_HASH_KEY, scope), prefix || E.164).
-/// Distinct from `HMAC_PHONE_PREFIX` so a ban hash can never equal a contact/thread hash.
+/// Ban-digest input prefix — the RFC 9497 OPRF input is `prefix || identifier` (`ban_digest`).
+/// Distinct from `HMAC_PHONE_PREFIX` so a ban digest can never equal a contact/thread hash.
 pub const HMAC_BAN_PREFIX: &str = "llamenos:ban:";
 
 /// Messaging-thread hashing prefix — message prefix of
@@ -318,9 +318,9 @@ pub const LABEL_AUDIT_USER_KEY_WRAP: &str = "llamenos:audit-user-key-wrap:v1";
 /// encrypted_key`); registered so the label set stays closed across platforms.
 pub const LABEL_AUDIT_USER_KEY_SERVER_SEAL: &str = "llamenos:audit-user-key-server-seal:v1";
 
-/// Per-scope ban-key derivation — HKDF info = `label:scope`, where scope is a hub id or
-/// `platform`. Derives the HMAC key behind a ban hash from the file-only BAN_HASH_KEY, so a
-/// hub's ban hashes cannot be compared with another hub's or with the platform's.
+/// Per-scope ban-key derivation — OPRF `DeriveKeyPair` info = `label:scope`, where scope is a
+/// hub id or `platform` (`ban_digest`). Derives the OPRF key behind a ban digest from the
+/// file-only BAN_HASH_KEY, so a hub's digests cannot be compared with another hub's or the platform's.
 pub const LABEL_BAN_KEY_DERIVE: &str = "llamenos:ban-key-derive:v1";
 
 /// Per-hub messaging-thread key derivation — HKDF info = `label:hubId` (or `label:global` for
@@ -467,6 +467,14 @@ pub const LABEL_SAS_DERIVE: &str = "llamenos:sas-derive:v1";
 /// hub-shared, never leaves the device.
 pub const LABEL_OFFLINE_QUEUE: &str = "llamenos:offline-queue:v1";
 
+// --- Hub key rotation ---
+
+/// A hub-key rotation statement (PROTOCOL.md §2.7 "Key Rotation"), sealed with
+/// `encryption::encrypt_hub_field`: the outer statement under the PREVIOUS hub
+/// key, its check value under the NEW one. A member's device adopts a rotated
+/// key only once the statement opens under the key it already holds.
+pub const LABEL_HUB_KEY_ROTATION: &str = "llamenos:hub-key-rotation:v1";
+
 // =============================================================================
 // LABEL REGISTRY — maps numeric IDs (u8) to label strings.
 //
@@ -499,6 +507,7 @@ pub const LABEL_OFFLINE_QUEUE: &str = "llamenos:offline-queue:v1";
 // Indices 105-106: Messaging-thread hashing prefix and per-hub key derivation (#2182)
 // Index 109: Case comment (#2499)
 // Index 110: Device-local offline write queue
+// Index 111: Hub key rotation statement
 // =============================================================================
 
 pub const LABEL_REGISTRY: &[&str] = &[
@@ -656,6 +665,8 @@ pub const LABEL_REGISTRY: &[&str] = &[
     LABEL_CASE_COMMENT, // 109
     // 110: Device-local offline write queue, sealed by `encryption::seal_device_local`
     LABEL_OFFLINE_QUEUE, // 110
+    // 111: Hub key rotation statement (PROTOCOL.md §2.7)
+    LABEL_HUB_KEY_ROTATION, // 111
 ];
 
 /// Look up a label string by its numeric ID.
@@ -860,6 +871,7 @@ mod tests {
         assert_eq!(LABEL_CALL_RECORDING_SEAL, "llamenos:call-recording-seal:v1");
         assert_eq!(LABEL_PROVIDER_REF_KEY, "llamenos:provider-ref-key:v1");
         assert_eq!(LABEL_CASE_COMMENT, "llamenos:case-comment");
+        assert_eq!(LABEL_HUB_KEY_ROTATION, "llamenos:hub-key-rotation:v1");
     }
 
     /// Verify registry index stability.

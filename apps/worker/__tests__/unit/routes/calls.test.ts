@@ -81,6 +81,7 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
     endedAt: new Date('2026-09-30T09:05:00.000Z'),
     duration: 300,
     answeredBy: VOLUNTEER,
+    answeredAt: new Date('2026-09-30T09:00:05.000Z'),
     status: 'completed',
     hasTranscription: false,
     hasVoicemail: false,
@@ -208,7 +209,7 @@ describe('GET /history — projects rows onto the call-record shape', () => {
     expectNoRowLeak(raw)
 
     const body = callHistoryResponseSchema.parse(JSON.parse(raw))
-    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(['calls', 'limit', 'page', 'total'])
+    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(['access', 'calls', 'limit', 'page', 'total'])
     expect(body).toMatchObject({ total: 1, page: 1, limit: 20 })
     expect(body.calls[0]).toMatchObject({
       id: 'CA-history-1',
@@ -237,8 +238,8 @@ describe('single-call routes — send the projected call', () => {
     expect(body.id).toBe('CA-active-1')
   })
 
-  it('GET /:callId falls back to the history record', async () => {
-    const app = createTestApp(['calls:read-active'], {
+  it('GET /:callId falls back to the history record for a reader of history', async () => {
+    const app = createTestApp(['calls:read-active', 'calls:read-history'], {
       getActiveCallById: vi.fn().mockResolvedValue(null),
       getCallRecord: vi.fn().mockResolvedValue(historyRow()),
     })

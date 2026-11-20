@@ -1,3 +1,4 @@
+// @suite: repo
 // A shift fixture must never close at 23:59 (#2693, #2573).
 //
 // A shift window is half-open — `startTime <= now < endTime`

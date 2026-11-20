@@ -40,12 +40,15 @@ function newPushRef(): string {
 
 export interface CallsServiceDeps {
   /**
-   * Resolve every admin X25519 recipient for §2.5 call-metadata envelopes
-   * (ADMIN_DECRYPTION_PUBKEY plus each super-admin's device keys). Supplied by
-   * createServices; when absent the service cannot seal and stores records
-   * without envelopes (unit-test construction only).
+   * Resolve every X25519 recipient of a finished call's §2.5 metadata envelope
+   * set, for a call of `hubId` answered by `answeredBy` (null: nobody answered).
+   * createServices supplies `IdentityService.listCallRecordRecipients`: the
+   * hub's admin and call-history readers, the transitional instance key, and —
+   * when they hold `calls:read-own-history` in the hub — the answering
+   * volunteer's own devices (#1342). When absent the service cannot seal and
+   * stores records without envelopes (unit-test construction only).
    */
-  getAdminRecipients?: () => Promise<string[]>
+  getRecordRecipients?: (hubId: string, answeredBy: string | null) => Promise<string[]>
   /**
    * SERVER_KEK, to open the sealed caller number an active call carries. Without it
    * (unit-test construction only) a finished call's record carries no number.
@@ -72,19 +75,26 @@ export class CallsService {
   ) {}
 
   /**
-   * Resolve the §2.5 envelope recipients once per write batch, or null when
-   * the service was constructed without the sealing dep (unit-test only).
+   * Resolve one call's §2.5 envelope recipients, or null when the service was
+   * constructed without the sealing dep (unit-test only). Per call, because the
+   * set depends on the call's hub and on who answered it.
    */
-  private async resolveAdminRecipients(): Promise<string[] | null> {
-    if (!this.deps?.getAdminRecipients) return null
-    return this.deps.getAdminRecipients()
+  private async resolveRecordRecipients(
+    call: Pick<ActiveCallRow, 'hubId' | 'answeredBy'>,
+  ): Promise<string[] | null> {
+    if (!this.deps?.getRecordRecipients) return null
+    if (!call.hubId) throw new Error('A call must belong to a hub (#2460)')
+    return this.deps.getRecordRecipients(call.hubId, call.answeredBy ?? null)
   }
 
   /**
-   * Seal a finished call's §2.5 metadata for the admin envelope set.
+   * Seal a finished call's §2.5 metadata for its reader set (the admins, the
+   * call-history readers and the answering volunteer, see
+   * {@link CallsServiceDeps.getRecordRecipients}). The wire field keeps its
+   * name, `adminEnvelopes`; each envelope names the key it is sealed to.
    *
    * The caller's number is opened from the row's KEK-sealed copy and goes only
-   * into the admin envelopes; the row, and with it the sealed copy, is deleted
+   * into the envelopes; the row, and with it the sealed copy, is deleted
    * in the same transaction. §2.5 keeps timestamps, duration and flags in
    * plaintext columns. No hash of the number, and no fragment of it, is kept anywhere.
    *
@@ -176,7 +186,9 @@ export class CallsService {
         (row.status === 'ringing' && age > RINGING_TTL_MS) ||
         // A spam-reported call stays in active_calls with its status changed; it
         // ages out like an in-progress one, so its sealed caller number cannot outlive it.
-        ((row.status === 'in-progress' || row.status === 'spam') && age > IN_PROGRESS_TTL_MS)
+        // So does a call parked on voicemail, whose end the provider normally reports
+        // but may not (the caller can hang up mid-message with no further callback).
+        ((row.status === 'in-progress' || row.status === 'spam' || row.status === 'voicemail') && age > IN_PROGRESS_TTL_MS)
       ) {
         stale.push(row)
       } else {
@@ -186,15 +198,16 @@ export class CallsService {
 
     // Move stale calls to call_records atomically
     if (stale.length > 0) {
-      const recipients = await this.resolveAdminRecipients()
+      const recipientsByCall = new Map<string, string[] | null>()
+      for (const call of stale) recipientsByCall.set(call.callId, await this.resolveRecordRecipients(call))
       await this.db.transaction(async (tx) => {
         for (const call of stale) {
           const endedAt = call.endedAt ?? new Date()
           const duration = call.duration ?? Math.floor(
             (new Date(endedAt).getTime() - new Date(call.startedAt).getTime()) / 1000,
           )
-          const finalStatus = call.status === 'ringing' ? 'unanswered' : 'completed'
-          const sealed = this.sealCallMetadata(call, recipients)
+          const finalStatus = call.status === 'ringing' || call.status === 'voicemail' ? 'unanswered' : 'completed'
+          const sealed = this.sealCallMetadata(call, recipientsByCall.get(call.callId) ?? null)
 
           await tx.insert(callRecords).values({
             callId: call.callId,
@@ -202,6 +215,8 @@ export class CallsService {
             startedAt: call.startedAt,
             endedAt,
             duration,
+            answeredBy: call.answeredBy ?? null,
+            answeredAt: call.answeredBy ? call.answeredAt : null,
             status: finalStatus,
             hasTranscription: call.hasTranscription ?? false,
             hasVoicemail: call.hasVoicemail ?? false,
@@ -444,34 +459,91 @@ export class CallsService {
   }
 
   /**
+   * The caller has left the queue for voicemail: nobody can be bridged to them any
+   * more, so the call stops being answerable and stops being shown as ringing (#2753).
+   *
+   * `ringing` → `voicemail` is a single conditional UPDATE, the same shape as the
+   * answer claims above, so it and an answer race for the row and exactly one wins:
+   * an answer that lands first keeps the call (this returns false); one that lands
+   * after finds it no longer `ringing` and is refused. The row stays in
+   * `active_calls` until the recording (or the provider's status callback) ends it,
+   * and ends as `unanswered`. `voicemail` is internal — it never goes on the wire.
+   *
+   * Returns whether this call made the transition (false: already answered, already
+   * parked, ended, or unknown).
+   */
+  async markLeftQueue(hubId: string, callId: string): Promise<boolean> {
+    const rows = await this.db
+      .update(activeCalls)
+      .set({ status: 'voicemail' })
+      .where(
+        and(
+          eq(activeCalls.callId, callId),
+          eq(activeCalls.hubId, hubId),
+          eq(activeCalls.status, 'ringing'),
+          isNull(activeCalls.answeredBy),
+        ),
+      )
+      .returning({ callId: activeCalls.callId })
+    return rows.length > 0
+  }
+
+  /**
    * End an active call: remove from active_calls and insert into call_records.
    * The history record's §2.5 metadata ({ answeredBy, callerNumber }) is sealed
-   * for the admin envelope set here — callers cannot supply their own. The row's
+   * for the call's reader set here — callers cannot supply their own. The row's
    * sealed caller number goes with the row.
+   *
+   * The reader set depends on who answered (#1342) and is resolved from the
+   * database, so it is resolved BEFORE the transaction: a root-pool query
+   * inside it is refused (`db/pool-gate.ts`, #1208). The delete is then
+   * conditional on the answerer the set was resolved for. If a ringing call
+   * was answered in between, the delete matches nothing and the set is
+   * resolved again for the new answerer; an answer happens at most once, so
+   * the second attempt settles it. A call that is gone is 404, as before.
    */
   async endCall(hubId: string, callId: string): Promise<CallRecordRow> {
-    const record = await this.db.transaction(async (tx) => {
-      // Fetch and delete the active call
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const live = await this.getActiveCallById(hubId, callId)
+      if (!live) throw new ServiceError(404, 'Call not found')
+      const recipients = await this.resolveRecordRecipients(live)
+      const record = await this.archiveEndedCall(hubId, callId, live.answeredBy ?? null, recipients)
+      if (record) return record
+    }
+    throw new Error(`endCall: call ${callId} kept changing answerer while ending`)
+  }
+
+  /**
+   * The transactional half of {@link endCall}: delete the live row — only if it
+   * is still answered by `answeredBy` — and write its sealed history record.
+   * `null` when the row no longer matches (answered meanwhile, or ended).
+   */
+  private async archiveEndedCall(
+    hubId: string,
+    callId: string,
+    answeredBy: string | null,
+    recipients: string[] | null,
+  ): Promise<CallRecordRow | null> {
+    return this.db.transaction(async (tx) => {
       const [call] = await tx
         .delete(activeCalls)
         .where(
           and(
             eq(activeCalls.callId, callId),
             eq(activeCalls.hubId, hubId),
+            answeredBy === null ? isNull(activeCalls.answeredBy) : eq(activeCalls.answeredBy, answeredBy),
           ),
         )
         .returning()
 
-      if (!call) {
-        throw new ServiceError(404, 'Call not found')
-      }
+      if (!call) return null
 
       const endedAt = new Date()
       const duration = Math.floor(
         (endedAt.getTime() - new Date(call.startedAt).getTime()) / 1000,
       )
       const finalStatus = call.answeredBy ? 'completed' : 'unanswered'
-      const sealed = this.sealCallMetadata(call, await this.resolveAdminRecipients())
+      const sealed = this.sealCallMetadata(call, recipients)
 
       const [row] = await tx
         .insert(callRecords)
@@ -482,6 +554,7 @@ export class CallsService {
           endedAt,
           duration,
           answeredBy: call.answeredBy ?? null,
+          answeredAt: call.answeredBy ? call.answeredAt : null,
           status: finalStatus,
           hasTranscription: call.hasTranscription ?? false,
           hasVoicemail: call.hasVoicemail ?? false,
@@ -497,8 +570,6 @@ export class CallsService {
 
       return row
     })
-
-    return record
   }
 
   // =========================================================================
@@ -532,6 +603,8 @@ export class CallsService {
         endedAt,
         duration: data.durationSeconds,
         answeredBy: data.answeredBy,
+        // A sample call is answered the moment it starts.
+        answeredAt: data.answeredBy ? data.startedAt : null,
         status: data.status,
         hasVoicemail: data.hasVoicemail ?? false,
         encryptedContent: data.encryptedContent,
@@ -548,11 +621,23 @@ export class CallsService {
    * id alone: every caller is on a hub-only router, and a hubless form would
    * hand any hub's call to whoever reached it without a hub (#2461).
    */
-  async getCallRecord(hubId: string, callId: string): Promise<CallRecordRow | null> {
+  async getCallRecord(
+    hubId: string,
+    callId: string,
+    own?: { answeredBy: string; answeredSince: Date },
+  ): Promise<CallRecordRow | null> {
+    // With `own`, the same bound as listCallHistory's, in the same query: a
+    // call the reader did not answer, or answered before the window, reads as
+    // missing (#1342).
     const [row] = await this.db
       .select()
       .from(callRecords)
-      .where(and(eq(callRecords.callId, callId), eq(callRecords.hubId, hubId)))
+      .where(and(
+        eq(callRecords.callId, callId),
+        eq(callRecords.hubId, hubId),
+        own ? eq(callRecords.answeredBy, own.answeredBy) : undefined,
+        own ? gte(callRecords.answeredAt, own.answeredSince) : undefined,
+      ))
       .limit(1)
 
     return row ?? null
@@ -563,6 +648,12 @@ export class CallsService {
    * Supports search by callId, status, and date range filtering. Every filter
    * feeds the same WHERE for the count and the page, so `total` describes the
    * filtered set — a pager built on it is never a lie (#1139).
+   *
+   * With `own`, only the calls `own.answeredBy` answered at or after
+   * `own.answeredSince` (#1342). Both are conditions of the SAME query as the
+   * hub and the filters — never a second pass over a hub-wide page — so the
+   * count, the page and `hasMore` all describe exactly what the caller may see.
+   * `answeredSince` is computed by the caller from the server clock.
    */
   async listCallHistory(
     hubId: string,
@@ -574,6 +665,7 @@ export class CallsService {
       page?: number
       limit?: number
     },
+    own?: { answeredBy: string; answeredSince: Date },
   ): Promise<{
     calls: CallRecordRow[]
     total: number
@@ -585,6 +677,11 @@ export class CallsService {
 
     // Build WHERE conditions
     const conditions = [eq(callRecords.hubId, hubId)]
+
+    if (own) {
+      conditions.push(eq(callRecords.answeredBy, own.answeredBy))
+      conditions.push(gte(callRecords.answeredAt, own.answeredSince))
+    }
 
     if (filters?.search) {
       const q = filters.search.toLowerCase()

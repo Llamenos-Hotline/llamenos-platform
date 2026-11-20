@@ -8,7 +8,11 @@ import { throwawayPrivateKeyPem } from './pem-fixtures.js'
 import { classifyImpact, HIGH_IMPACT_PATHS } from '../../orchestrator/src/impact.js'
 import { checkScope } from '../../orchestrator/src/scope.js'
 import { haltedOnGitHubFrom } from '../../orchestrator/src/killswitch.js'
-import { codeownersMatcher, codeownersPatterns, trackedFiles, trackedFilesUnder } from './codeowners.js'
+import {
+  catchAllViolations, codeownersMatcher, codeownersMatcherOf, codeownersRules, isCatchAllPattern, namedCodeownersMatcher,
+  namedCodeownersMatcherOf, trackedFiles, trackedFilesUnder,
+} from './codeowners.js'
+import { codeOwnersOf, parseCodeOwners } from '../../orchestrator/src/board.js'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
@@ -21,6 +25,7 @@ import {
   isRepublishOnlyEvent, REVIEW_REPUBLISH_ACTIONS, reviewRequestFor, reviewRequestEventFromEnv, REVIEW_REQUEST_LOGIN,
   type CiContext, type ReviewCiDeps, type ReviewSetDecision,
 } from '../../orchestrator/src/ci.js'
+import { asksForSelfHostedMac, firstStepIsForkGuard, isSchedulableOnMacs, jobMergeGatingEvents, loadWorkflows as loadRunnerWorkflows, MAC_RUNNER_LABELS, needsClosure, resolveAll, resolveJob, type RawJob } from './workflow-runners.js'
 import { claimDigest, DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS, REVIEWER_TOOLS, REVIEWER_HOME_PREFIX, REVIEWER_CREDENTIALS_RELPATH } from '../../orchestrator/src/review.js'
 import { diffHash, cacheArtifactName, type ReviewCache, type CachedVerdict, type ReviewCacheKey } from '../../orchestrator/src/review-cache.js'
 import type { Lane } from '../../orchestrator/src/config.js'
@@ -91,7 +96,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
 
   it('CODEOWNERS owns every tracked file under every HIGH_IMPACT_PATH, by gitignore semantics', () => {
     const files = trackedFiles()
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     const unowned: string[] = []
     for (const p of HIGH_IMPACT_PATHS) {
       for (const f of trackedFilesUnder(p, files)) {
@@ -108,7 +113,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
     const configs = trackedFiles().filter((f) => /^vitest\.[^/]+\.config\.ts$/.test(f))
     expect(configs).toContain('vitest.orchestrator.config.ts')
     expect(configs).toContain('vitest.unit.config.ts')
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of configs) {
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
       expect(HIGH_IMPACT_PATHS, `${f} is missing from HIGH_IMPACT_PATHS`).toContain(f)
@@ -207,7 +212,7 @@ describe('rail: the fleet cannot merge its own changes', () => {
       'scripts/verify-runtime.ts',
       'scripts/lib/test-reporter.sh',
     ]
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of [...family, ...named]) {
       expect(files, `${f} is not a tracked file`).toContain(f)
       expect(owner.owns(f), `${f} has no CODEOWNERS owner`).toBe(true)
@@ -218,8 +223,97 @@ describe('rail: the fleet cannot merge its own changes', () => {
     }
   })
 
-  it('has no catch-all `*` rule — one would gate every PR and stop the fleet merging anything', () => {
-    expect(codeownersPatterns()).not.toContain('*')
+  // #2825. A path no rule owns gets no auto-requested reviewer, and on a PR
+  // `llamenos-auto` authored that auto-request is the ONLY thing that starts
+  // `fleet/review` (`reviewTriggerLogins`, ci.ts — GitHub refuses to request
+  // a PR's own author). So the context is created (#2806) and can then never
+  // go green: #2805 (`deploy/docker/`) and #2824 (root `CLAUDE.md`, zero
+  // pending reviewers) sat BLOCKED that way. Every tracked file must resolve
+  // to an owner by GitHub's own last-match rule — which also catches a later
+  // rule that names nobody, the CODEOWNERS spelling of "un-own this".
+  it('every tracked file has a CODEOWNERS owner — an unowned path can never earn a fleet/review verdict', () => {
+    const owner = codeownersMatcher()
+    const unowned = trackedFiles().filter((f) => !owner.owns(f))
+    expect(
+      unowned,
+      `${unowned.length} tracked file(s) resolve to no CODEOWNERS owner, so a PR touching only them gets no ` +
+      `review request and its fleet/review can never go green (#2825):\n${unowned.slice(0, 40).join('\n')}`,
+    ).toEqual([])
+  })
+
+  // GitHub resolves CODEOWNERS by the LAST matching rule. A catch-all
+  // anywhere but first overrides every named entry above it — the secret
+  // globs, the trust anchors, the gates — and with one owner today that
+  // would change nothing visible, which is exactly how it would survive
+  // until the day a second owner appears. First, exactly once, with an owner.
+  it('the catch-all is the FIRST rule, appears once, and names an owner — so every named entry still wins', () => {
+    expect(catchAllViolations(codeownersRules())).toEqual([])
+  })
+
+  // The all-path spellings the matcher (the `ignore` package, gitignore
+  // semantics — the one board.ts resolves ownership with) treats as matching
+  // EVERY path. Enumerated here so a change of matcher semantics shows up as
+  // a diff; the detector itself does not read this list, it asks the matcher.
+  const ALL_PATH_SPELLINGS = [
+    '*', '**', '/**', '**/*', '/**/*', '/*', '**/**', '/**/**', '**/**/*', '***', '/***', '?*', '[!/]*',
+  ]
+  // Look like catch-alls and are not: each misses root-level files (a trailing
+  // `/` means directories only) or is narrower than every path. Recognising
+  // one as a catch-all would reject a legitimate named entry.
+  const NOT_ALL_PATH_SPELLINGS = [
+    '*/', '**/', '/**/', '*/**', '/*/**', '*/*', '**/*/', '**/*.*', '*.*', '**/.*', '**/*.pem', 'apps/', '/CODEOWNERS',
+  ]
+
+  it.each(ALL_PATH_SPELLINGS)('%s is recognised as a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(true)
+  })
+
+  it.each(NOT_ALL_PATH_SPELLINGS)('%s is not mistaken for a catch-all', (spelling) => {
+    expect(isCatchAllPattern(spelling)).toBe(false)
+  })
+
+  // The reviewer's scenario (#2826): the catch-all re-added at the BOTTOM,
+  // where last-match-wins lets it override every named entry. Run against the
+  // real file's rules for every spelling and every position but the first —
+  // the guard must fail, and the override must be real (the secret-shaped
+  // glob's owner really does change), so this proves the failure is a
+  // control failing rather than a hypothetical.
+  describe.each(ALL_PATH_SPELLINGS)('a `%s` rule anywhere but first', (spelling) => {
+    const real = codeownersRules()
+    const [intruder] = parseCodeOwners(`${spelling} @intruder`)
+    if (intruder === undefined) throw new Error(`${spelling} did not parse as a rule`)
+    const positions = [1, Math.floor(real.length / 2), real.length]
+
+    it.each(positions)('at index %i fails the placement guard', (at) => {
+      const rules = [...real.slice(0, at), intruder, ...real.slice(at)]
+      expect(catchAllViolations(rules).length, 'a displaced catch-all passed the guard').toBeGreaterThan(0)
+    })
+
+    it('overrides every named entry under last-match-wins — the hazard is real', () => {
+      const rules = [...real, intruder]
+      const secret = 'apps/worker/.env'
+      expect(codeownersMatcherOf(real).owns(secret)).toBe(true)
+      expect(codeOwnersOf(rules, secret)).toEqual(['intruder'])
+      expect(codeOwnersOf(real, secret)).not.toContain('intruder')
+    })
+
+    it('does not leave the named matcher vacuous: it still excludes the intruder and keeps named entries', () => {
+      const named = namedCodeownersMatcherOf([...real, intruder])
+      expect(named.owns('apps/worker/.env'), 'named entries were lost').toBe(true)
+      expect(named.owns('README.md'), 'the intruder was treated as a named entry').toBe(false)
+    })
+  })
+
+  // The named-entry rails above use `namedCodeownersMatcher`, which drops
+  // the catch-all. If it ever stopped dropping it, every one of them would
+  // pass with the named entry deleted. Proved on the real file: some tracked
+  // file must be owned ONLY through the catch-all.
+  it('the named-entry rails are not answered by the catch-all', () => {
+    const all = codeownersMatcher()
+    const named = namedCodeownersMatcher()
+    const onlyViaCatchAll = trackedFiles().filter((f) => all.owns(f) && !named.owns(f))
+    expect(onlyViaCatchAll, 'no tracked file is owned only via the catch-all — the named matcher is not excluding it')
+      .toContain('README.md')
   })
 })
 
@@ -751,7 +845,7 @@ describe('rail: a shipped client\'s trust anchors always reach a human', () => {
   // fleet gate does not judge without the operator ever being asked.
   it.each(TRUST_ANCHOR_FILES.map((a) => [a.path]))('%s is a tracked file CODEOWNERS owns', (f) => {
     expect(trackedFiles(), `${f} is in TRUST_ANCHOR_FILES but not tracked`).toContain(f)
-    expect(codeownersMatcher().owns(f), `${f} is a trust anchor with no CODEOWNERS owner`).toBe(true)
+    expect(namedCodeownersMatcher().owns(f), `${f} is a trust anchor with no CODEOWNERS owner`).toBe(true)
   })
 
   it('only a human may sign one off — never the fleet\'s own reviewer identity', () => {
@@ -789,7 +883,7 @@ describe('rail: never-write binds even an unrestricted lane', () => {
     const name = pattern.replace('*', 'sample')
     const samples = [name, `deploy/ansible/${name}`, `apps/android/app/${name}`]
     if (!pattern.includes('*') && !TEMPLATED_SECRET_PATTERNS.includes(pattern)) samples.push(`deploy/${name}.orig`)
-    const owner = codeownersMatcher()
+    const owner = namedCodeownersMatcher()
     for (const f of samples) {
       expect(matchesSecretPath(f, pattern), `test sample ${f} is not a secret to the gate — fix the sample`).toBe(true)
       expect(owner.owns(f), `${f} is refused by the gate as \`${pattern}\` but has no CODEOWNERS owner`).toBe(true)
@@ -1473,8 +1567,11 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   }
 
   it('finds fleet-verify (fleet-verify.yml) and fleet-review (fleet-review.yml) as real jobs — the parser must not pass vacuously', () => {
-    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain('name: fleet/verify')
-    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain('name: fleet/review')
+    // #2813: the carrier name is a literal inside a per-event `name:`
+    // expression (tests/orchestrator/required-context-creation.test.ts
+    // evaluates it per event).
+    expect(jobBlock(fleetVerifyYaml(), 'fleet-verify')).toContain("&& 'fleet/verify' ||")
+    expect(jobBlock(fleetReviewYaml(), 'fleet-review')).toContain("&& 'fleet/review' ||")
   })
 
   // The load-bearing assertion of this whole rail, in its post-#844-fail-open
@@ -1525,7 +1622,15 @@ describe('rail: fleet/review runs once per review request, not on every push', (
    * `review_requested` along with the explicitness.
    */
   it('fleet-verify.yml re-runs on review_requested, so a scope grant applied after open is actually consulted', () => {
+    // #2815: the request reaches it through fleet-verify-re-evaluate.yml,
+    // which triggers on exactly that and calls this file — never as one of
+    // this file's own `pull_request` types (see required-context-creation.test.ts).
+    const caller = workflowYaml('fleet-verify-re-evaluate.yml')
+    const callerOn = caller.split(/\njobs:\n/)[0] ?? ''
+    expect(callerOn).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]\n/)
+    expect(caller).toMatch(/\n {4}uses: \.\/\.github\/workflows\/fleet-verify\.yml\n/)
     const onBlock = fleetVerifyYaml().split(/\njobs:\n/)[0] ?? ''
+    expect(onBlock, 'fleet-verify.yml must be callable, or the re-evaluation cannot reach it').toMatch(/\n {2}workflow_call:/)
     // Scoped to the literal `pull_request:` trigger sub-block, not the whole
     // pre-`jobs:` text: this file's `on:` block carries prose comments that
     // legitimately name these events while explaining them, and a
@@ -1534,9 +1639,10 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
     expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
       .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
-    for (const type of ['opened', 'synchronize', 'reopened', 'review_requested']) {
+    for (const type of ['opened', 'synchronize', 'reopened']) {
       expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
     }
+    expect(pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? '', 'review_requested in fleet-verify.yml\'s own types shadows its carrier (#2815)').not.toContain('review_requested')
   })
 
   // The load-bearing assertion for fleet-review.yml's own trigger list:
@@ -1573,10 +1679,20 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // with no `fleet/review` check run at all because of it.
   // required-context-creation.test.ts is the rail that fails if a head event
   // stops creating the context.
-  it('fleet-review.yml triggers on pull_request (review_requested + the republish-only actions), workflow_dispatch AND merge_group, and NEVER push', () => {
+  it('fleet-review.yml triggers on pull_request (the republish-only actions), workflow_call (review_requested, #2815), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*,\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
+    // The review request arrives through the caller, and ONLY a review
+    // request: never a label, an edit or a push (the every-label and
+    // every-push bugs), and never a carrier action (that is this file's).
+    expect(onBlock).toMatch(/\n {2}workflow_call:/)
+    const caller = workflowYaml('fleet-review-re-evaluate.yml')
+    const callerOn = caller.split(/\njobs:\n/)[0] ?? ''
+    expect(callerOn).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*review_requested\s*\]\n/)
+    expect(callerOn, 'fleet-review-re-evaluate.yml must never trigger on "push"').not.toMatch(/\n {2}(push|workflow_dispatch|merge_group|pull_request_target):/)
+    expect(caller).toMatch(/\n {4}uses: \.\/\.github\/workflows\/fleet-review\.yml\n/)
+    expect(caller, 'pass the review\'s secrets by name — `secrets: inherit` hands it every secret in the repo').not.toMatch(/\n\s+secrets:\s*inherit\s*\n/)
     // Scoped to the LITERAL pull_request trigger sub-block (from its own
     // `\n  pull_request:` line to the next 2-space-indented key), not the
     // whole pre-`jobs:` text — the file's own prose comments above `on:`
@@ -1596,7 +1712,7 @@ describe('rail: fleet/review runs once per review request, not on every push', (
         .not.toContain(forbiddenType)
     }
     const types = (typesLine.match(/\[([^\]]*)\]/)?.[1] ?? '').split(',').map((t) => t.trim()).filter((t) => t.length > 0)
-    expect(types.filter((t) => t !== 'review_requested'), 'every non-request trigger must be republish-only')
+    expect(types, 'every pull_request trigger of the carrier\'s own workflow must be republish-only')
       .toEqual([...REVIEW_REPUBLISH_ACTIONS])
     expect(onBlock, 'fleet-review.yml must never trigger on "push" — that reopens the every-push model-call bug')
       .not.toMatch(/\n {2}push:/)
@@ -4056,13 +4172,11 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
    * runner (runner_name="", steps=0) and were abandoned after ~15 minutes, while
    * `ui (0)` and `ui (3)` — queued for the self-hosted Macs at the same second —
    * waited 28 minutes and passed. `ci-status` read "ios-e2e(abandoned) produced
-   * NO VERDICT" and ejected four innocent PRs. A job queued for our own runners
-   * waits; a job queued for the repo-wide-capped hosted pool is abandoned, so the
-   * only schedulable capacity is the two Macs and every job must queue for them.
+   * NO VERDICT" and ejected four innocent PRs. These two rails pin ios-e2e.yml's
+   * own matrix shape; the repo-wide rail below is what covers every runs-on.
    */
   describe('ios-e2e depends only on the self-hosted Macs, which queue rather than abandon', () => {
     const iosYaml = () => readFileSync(join(process.cwd(), '.github', 'workflows', 'ios-e2e.yml'), 'utf8')
-    const MAC_LABELS = '[self-hosted, macOS, ARM64, ios-e2e]'
 
     /** Every `host` the build and ui matrices can produce, in both tiers. */
     function matrixHosts(): string[] {
@@ -4083,19 +4197,115 @@ describe("rail: a PR's changes decide which ci.yml platform jobs run (#664)", ()
       expect(matrixHosts().length, 'the host scan found nothing, so this rail proves nothing').toBeGreaterThanOrEqual(4)
     })
 
-    it('every job runs on the self-hosted Mac label set, with no hosted image anywhere in runs-on', () => {
-      const text = iosYaml()
-      const runsOn = [...text.matchAll(/^\s+runs-on: (.+)$/gm)].map((m) => (m[1] as string).trim())
-      expect(runsOn.length, 'expected the build and ui jobs').toBeGreaterThanOrEqual(2)
-      for (const r of runsOn) expect(r, `runs-on must be the Mac labels, got ${r}`).toBe(MAC_LABELS)
-      expect(text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n'), 'no hosted macOS image outside a comment').not.toMatch(/macos-(\d+|latest)/)
-    })
-
     it('runs the full tier on more shards than there are runners, all of them Mac shards', () => {
       const full = (iosYaml().match(/\|\| '(\[\{"shard".+?\])'\) \}\}/s)?.[1]) as string
       const entries = JSON.parse(full) as Array<{ shard: number; host: string }>
       expect(entries.map((e) => e.shard).sort()).toEqual([0, 1, 2, 3])
       expect(entries.every((e) => e.host === 'mac')).toBe(true)
+    })
+  })
+
+  /**
+   * #2544 — the same class, in every workflow. #2748's rail above read
+   * ios-e2e.yml alone, and it passed while PR #2749 was BLOCKED by ci.yml's
+   * `ios-compile-check` on `macos-15`: job 131373494457, labels `macos-15`,
+   * created 17:45:59, cancelled 18:02:04, runner_name="", 0 steps, and
+   * `ci-status`: "ios-compile-check(abandoned) produced NO VERDICT". A guard
+   * narrower than the class it protects against reports safety it does not
+   * provide, so this one resolves `runs-on` for EVERY job in EVERY workflow
+   * (workflow-runners.ts) — literal, label list, matrix, fromJSON, expression —
+   * and refuses any job it cannot resolve.
+   *
+   * A job may stay on a hosted macOS image only if it is listed here with the
+   * reason it needs one, AND it provably cannot gate a merge: no merge-gating
+   * trigger reaches it and no required check's verdict depends on it. Then an
+   * abandonment is a cancelled release or scheduled run, loud in its own
+   * workflow, and never a silent NO VERDICT on ci-status.
+   */
+  describe('no job that can gate a merge can land on a GitHub-hosted macOS image (#2544)', () => {
+    const HOSTED_MACOS_ALLOWED: Record<string, string> = {
+      'tauri-release.yml:build':
+        'imports the Apple signing certificate into a temporary keychain and makes it the default keychain; on the shared, persistent Macs that would swap the keychain under a running ios-e2e job and leave Developer ID material on a host that executes merge-queue code from every PR',
+      'mobile-release.yml:build-ios':
+        'creates build.keychain, imports the iOS distribution certificate and sets it as the default keychain — the same objection as tauri-release.yml:build',
+      'codeql.yml:analyze-swift':
+        'a capacity decision, not a technical one: a 45-90 minute traced build that would hold one of the only two runners that gate every iOS merge; staged and non-required, it runs on schedule/workflow_dispatch only',
+    }
+    /** The jobs that carry a required status check (ruleset on main: ci-status, CodeQL, gitleaks, fleet/verify, fleet/review). */
+    const REQUIRED_CARRIERS: Array<[file: string, job: string, name: string]> = [
+      ['ci.yml', 'ci-status', 'ci-status'],
+      ['codeql.yml', 'codeql', 'CodeQL'],
+    ]
+    const workflows = loadRunnerWorkflows()
+    const all = resolveAll(workflows)
+
+    it('resolves runs-on for every job in every workflow, and refuses to guess at any it cannot', () => {
+      expect(all.length, 'the scan found too few jobs, so this rail proves nothing').toBeGreaterThanOrEqual(50)
+      expect(all.filter((j) => j.unresolved !== undefined).map((j) => `${j.where}: ${j.unresolved}`)).toEqual([])
+      // Non-vacuous: the scan must see the Mac jobs, including the two this
+      // rail was written for, through a literal list AND through a matrix.
+      const onMacs = all.filter((j) => j.placements.some(asksForSelfHostedMac)).map((j) => j.where)
+      expect(onMacs).toEqual(expect.arrayContaining([
+        'ci.yml:ios-build-test', 'ci.yml:ios-compile-check', 'ios-e2e.yml:build', 'ios-e2e.yml:ui', 'desktop-voice.yml:artifacts',
+      ]))
+    })
+
+    it('every job that can resolve to a hosted macOS image is allowlisted with a reason, and no allowlist entry is stale', () => {
+      const hosted = all.filter((j) => j.placements.some((p) => p.kind === 'hosted-macos'))
+      const offenders = hosted.filter((j) => !(j.where in HOSTED_MACOS_ALLOWED)).map((j) =>
+        `${j.where} -> ${j.placements.filter((p) => p.kind === 'hosted-macos').map((p) => (p as { image: string }).image).join(',')}`)
+      expect(offenders, 'route it to [self-hosted, macOS, ARM64, ios-e2e] so it WAITS instead of being abandoned after ~15 min').toEqual([])
+      for (const where of Object.keys(HOSTED_MACOS_ALLOWED)) {
+        expect(hosted.map((j) => j.where), `${where} is allowlisted but no longer runs on hosted macOS — remove the exemption`).toContain(where)
+      }
+    })
+
+    it('no allowlisted hosted-macOS job runs under a merge-gating event', () => {
+      for (const where of Object.keys(HOSTED_MACOS_ALLOWED)) {
+        const [file, job] = where.split(':') as [string, string]
+        expect(jobMergeGatingEvents(file, job, workflows), `${where} can run under a merge-gating event, so its abandonment is a NO VERDICT on a PR or merge group`).toEqual([])
+      }
+    })
+
+    it('no required check depends on a hosted-macOS job, through needs or a called workflow', () => {
+      const hosted = new Set(all.filter((j) => j.placements.some((p) => p.kind === 'hosted-macos')).map((j) => j.where))
+      for (const [file, job, name] of REQUIRED_CARRIERS) {
+        const carrier = workflows.get(file)?.jobs?.[job]
+        expect(carrier, `${file}:${job} is gone — this rail would check nothing`).toBeDefined()
+        expect(carrier?.name ?? job).toBe(name)
+        const closure = needsClosure(file, job, workflows)
+        // ios-e2e.yml reached via ci.yml's `uses:` — proves the expansion works.
+        if (file === 'ci.yml') expect(closure.has('ios-e2e.yml:ui'), 'the closure did not expand the called workflow').toBe(true)
+        expect([...closure].filter((w) => hosted.has(w)), `${name} would read an abandoned hosted job as NO VERDICT`).toEqual([])
+      }
+    })
+
+    it('every self-hosted macOS job requests only labels the two registered Macs carry', () => {
+      for (const j of all) {
+        for (const p of j.placements.filter(asksForSelfHostedMac)) {
+          expect(isSchedulableOnMacs(p), `${j.where} asks for ${JSON.stringify((p as { labels: string[] }).labels)}; mac-mini-ios-1/2 carry only ${MAC_RUNNER_LABELS.join(',')} — it would wait forever`).toBe(true)
+        }
+      }
+    })
+
+    it('every job that can land on the Macs refuses a fork PR as its literal first step', () => {
+      for (const j of all.filter((x) => x.placements.some(asksForSelfHostedMac))) {
+        expect(firstStepIsForkGuard(workflows.get(j.file)?.jobs?.[j.job]), `${j.where} runs on a machine the operator owns without the fork-PR guard first`).toBe(true)
+      }
+    })
+
+    it('the resolver sees through every runs-on shape a hosted image can hide in', () => {
+      const r = (job: RawJob) => resolveJob('x.yml', 'j', job).placements.filter((p) => p.kind === 'hosted-macos')
+      expect(r({ 'runs-on': 'macos-15' })).toHaveLength(1)
+      expect(r({ 'runs-on': ['macos-14-large'] })).toHaveLength(1)
+      expect(r({ 'runs-on': { group: 'g', labels: 'macos-latest' } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { os: ['ubuntu-latest', 'macos-15'] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { include: [{ os: 'macos-latest' }] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': '${{ matrix.os }}', strategy: { matrix: { include: `\${{ fromJSON('[{"os":"macos-15"}]') }}` } } })).toHaveLength(1)
+      expect(r({ 'runs-on': "${{ matrix.host == 'mac' && fromJSON('[\"self-hosted\",\"macOS\"]') || 'macos-15' }}", strategy: { matrix: { host: ['mac'] } } })).toHaveLength(1)
+      expect(r({ 'runs-on': "${{ inputs.fast && 'ubuntu-latest' || 'macos-15' }}" })).toHaveLength(1)
+      expect(r({ 'runs-on': [ 'self-hosted', 'macOS', 'ARM64', 'ios-e2e' ] })).toHaveLength(0)
+      expect(resolveJob('x.yml', 'j', { 'runs-on': '${{ inputs.runner }}' }).unresolved, 'an unresolvable runs-on must be refused, not passed').toBeDefined()
     })
   })
 
@@ -5274,7 +5484,18 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
   })
 
   describe('Android', () => {
-    function android(opts: { marker: boolean; log?: string; xml?: string }) {
+    // Verbatim from the failed shard of run 42802239979 (#2657): the text the test helper
+    // and the M1 probe produce when the emulator booted with no default route.
+    const CONNECT = 'java.net.ConnectException: Failed to connect to /10.0.2.2:3000'
+    const FRAMES = 'at com.android.okhttp.internal.io.RealConnection.connectSocket(RealConnection.java:147)\nat com.android.okhttp.internal.io.RealConnection.connect(RealConnection.java:116)'
+    const wrapped = (cause: string) => `java.lang.AssertionError: createTestHub FAILED after 3 attempts (hubUrl=http://10.0.2.2:3000): ${cause.split(': ').slice(1).join(': ')}\nat org.llamenos.hotline.steps.ScenarioHooks.createScenarioHub(ScenarioHooks.kt:119)\nCaused by: ${cause}\n${FRAMES}`
+    const xmlOf = (...bodies: string[]) => `<?xml version='1.0' encoding='UTF-8' ?>\n<testsuites tests="${bodies.length}" failures="${bodies.length}"><testsuite name=".Admin Sidebar Navigation">${bodies.map((b, i) => `<testcase name="t${i}" classname=".x"><failure>${b}</failure></testcase>`).join('')}</testsuite></testsuites>`
+    const probeReport = (name: string, cause: string) => `\norg.llamenos.hotline.discovery.M1CapabilityProbe:\nError in ${name}(org.llamenos.hotline.discovery.M1CapabilityProbe):\n${cause}\n\t${FRAMES.split('\n')[0]}\n\nTime: 0.096\nThere was 1 failure:\n1) ${name}(org.llamenos.hotline.discovery.M1CapabilityProbe)\n${cause}\n\nFAILURES!!!\nTests run: 1,  Failures: 1\n`
+    const PROBE_PASS = '\norg.llamenos.hotline.discovery.M1CapabilityProbe:\n\nTime: 1.2\n\nOK (1 test)\n\n'
+    const NO_ROUTE = '11-10 11:02:18.068 E/netd    (  328): Error adding route 0.0.0.0/0 -> 10.0.2.2 wlan0 to table 1016: Network is unreachable'
+    const SHARD_LOG = `${'\n'}.Admin Sidebar Navigation > t0[emulator-5554 - 14] FAILED\n\t${CONNECT}\n> Task :app:connectedDebugAndroidTest FAILED\n> Task :app:m1ProbeGate\nM1 probe FAIL auth\n\n> There were failing tests. See the report at: file:///x\n`
+
+    function android(opts: { marker: boolean; log?: string; xml?: string; probe?: Record<string, string>; logcat?: string; backend?: 'up' | 'down' | null }) {
       const dir = mkdtempSync(join(tmpdir(), 'classify-and-'))
       try {
         const results = join(dir, 'androidTest-results')
@@ -5284,7 +5505,19 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
         if (opts.marker) writeFileSync(marker, '')
         const log = join(dir, 'gradle.log')
         if (opts.log !== undefined) writeFileSync(log, opts.log)
-        return run(['android', opts.log === undefined ? '-' : log, marker, results])
+        const extra: string[] = []
+        if (opts.probe !== undefined) {
+          const probeDir = join(dir, 'm1-probe')
+          mkdirSync(probeDir)
+          for (const [name, text] of Object.entries(opts.probe)) writeFileSync(join(probeDir, `${name}.instrument.txt`), text)
+          extra.push('--probe-dir', probeDir)
+        }
+        if (opts.logcat !== undefined) {
+          writeFileSync(join(dir, 'logcat.txt'), opts.logcat)
+          extra.push('--logcat', join(dir, 'logcat.txt'))
+        }
+        if (opts.backend) extra.push('--host-backend', opts.backend)
+        return run(['android', opts.log === undefined ? '-' : log, marker, results, ...extra])
       } finally {
         rmSync(dir, { recursive: true, force: true })
       }
@@ -5351,6 +5584,100 @@ BUILD FAILED in 39s
     ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
       const v = android(opts)
       expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    it('#2870: every Gradle invocation in a workflow goes through gradle-retry.sh, except the emulator run, which the shard retry owns', () => {
+      const wfDir = join(process.cwd(), '.github', 'workflows')
+      const bare: string[] = []
+      for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {
+        readFileSync(join(wfDir, f), 'utf8').split('\n').forEach((l, i) => {
+          if (l.trim().startsWith('#') || !/\.\/gradlew\b/.test(l)) return
+          if (l.includes('connectedDebugAndroidTest')) return // the emulator run: classified, retried a whole shard at a time, after the pre-resolve step
+          bare.push(`${f}:${i + 1}: ${l.trim()}`)
+        })
+      }
+      expect(bare).toEqual([])
+    })
+
+    // The job #2853 was first ejected from, on `Could not find junit:junit:4.13.2`. The workflow-wide guard above
+    // would also catch a bare ./gradlew here, but it cannot say the steps EXIST: a refactor that moved them into
+    // a composite action would leave it green and the job unprotected.
+    it('#2870: android-build-test runs its unit tests, lint and APK build through gradle-retry.sh', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const start = ci.indexOf('\n  android-build-test:')
+      expect(start, 'android-build-test job missing').toBeGreaterThan(0)
+      const job = ci.slice(start, ci.indexOf('\n  android-compile-check:', start))
+      for (const task of ['testDebugUnitTest', 'lintDebug', 'assembleDebug assembleDebugAndroidTest']) {
+        expect(job, `${task} must go through gradle-retry.sh`).toContain(`gradle-retry.sh ${task}`)
+      }
+    })
+
+    it('#2870: android-e2e resolves and builds through gradle-retry.sh BEFORE the emulator boots, and the retry does too', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const firstEmulator = job.indexOf('reactivecircus/android-emulator-runner')
+      const preResolve = job.indexOf('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+      expect(preResolve, 'pre-resolve step missing').toBeGreaterThan(0)
+      // The AVD-snapshot step also uses the emulator action: the pre-resolve must precede ALL of them.
+      expect(preResolve).toBeLessThan(firstEmulator)
+      const prep = job.slice(job.indexOf('Prepare the infrastructure retry'), job.indexOf('infrastructure retry\n', job.indexOf('Prepare the infrastructure retry')))
+      expect(prep).toContain('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+    })
+
+    // ── #2657: an emulator with no default route reaches the tests as ConnectException, not as an
+    // emulator-level line. Evidence is the ROOT CAUSE of every failure, not a log pattern. ──
+    const noRoute = {
+      marker: true, log: SHARD_LOG, logcat: `${NO_ROUTE}\n`, backend: 'up' as const,
+      xml: xmlOf(wrapped(CONNECT), wrapped(CONNECT), wrapped(CONNECT)),
+      probe: { auth: probeReport('auth', CONNECT), hubs: probeReport('hubs', CONNECT), logout: PROBE_PASS },
+    }
+
+    it('#2657: every scenario AND every failing probe flow rooted in a connect failure to 10.0.2.2, backend live, is infrastructure', () => {
+      const v = android(noRoute)
+      expect(v).toMatchObject({ kind: 'infra', signatures: 'host-unreachable,no-default-route' })
+      // The reason is visible: the cause is named and counted, not just "infra".
+      expect(v.detail).toContain('3 failing scenario(s) and 2 failing probe flow(s)')
+      expect(v.detail).toContain('Failed to connect to /10.0.2.2:3000')
+    })
+
+    it('#2657: the netd route line only NAMES the cause — without it the verdict is the same, without the signature', () => {
+      const v = android({ ...noRoute, logcat: 'nothing relevant\n' })
+      expect(v).toMatchObject({ kind: 'infra', signatures: 'host-unreachable' })
+    })
+
+    it.each([
+      ['one scenario fails with an assertion among connect failures', { ...noRoute, xml: xmlOf(wrapped(CONNECT), 'java.lang.AssertionError: expected 1 was 0\nat org.x.Steps.check(Steps.kt:9)') }],
+      ['a scenario fails with a connect failure to a DIFFERENT host (the app pointing elsewhere is code, not the harness link)', { ...noRoute, xml: xmlOf(wrapped('java.net.ConnectException: Failed to connect to /192.0.2.7:3000')) }],
+      ['a connect failure to the right host that is only QUOTED inside an assertion (root cause is the assertion)', { ...noRoute, xml: xmlOf(`java.lang.AssertionError: wanted a banner, saw "${CONNECT}"\nat org.x.Steps.check(Steps.kt:9)`) }],
+      ['a timeout, not a connect failure, even to 10.0.2.2', { ...noRoute, xml: xmlOf(wrapped('java.net.SocketTimeoutException: failed to connect to /10.0.2.2 (port 3000) after 10000ms')) }],
+      ['a probe flow fails for another reason while every scenario is a connect failure', { ...noRoute, probe: { auth: probeReport('auth', CONNECT), hubs: probeReport('hubs', 'java.lang.AssertionError: probe saw 500') } }],
+      ['the probe gate failed but its reports are not there to attribute', { ...noRoute, probe: undefined }],
+      ['the probe gate failed but no report records a failing flow', { ...noRoute, probe: { auth: PROBE_PASS } }],
+      ['the host backend is DOWN (the PR may have crashed it, so the emulator is not the one to blame)', { ...noRoute, backend: 'down' as const }],
+      ['the host backend was never checked (a mis-wired caller must not buy a retry)', { ...noRoute, backend: null }],
+      ['Gradle reports failing tests but the JUnit results record none', { ...noRoute, xml: undefined }],
+      ['a JUnit file that cannot be parsed', { ...noRoute, xml: '<testsuites><testcase' }],
+      ['the route line in logcat ALONE, with an assertion failure', { marker: true, log: GENUINE_FAILURE, backend: 'up' as const, logcat: `${NO_ROUTE}\n`, xml: xmlOf('java.lang.AssertionError: expected 1 was 0') }],
+    ])('#2657 BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
+      const v = android(opts)
+      expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    it('#2657: a genuine verdict names the root causes it found, so the next unmatched shape is read off the job output', () => {
+      const v = android({ ...noRoute, xml: xmlOf(wrapped(CONNECT), 'java.lang.IllegalStateException: no hub selected\nat org.x.Y.z(Y.kt:1)') })
+      expect(v.kind).toBe('genuine')
+      expect(v.detail).toContain('java.lang.IllegalStateException: no hub selected')
+    })
+
+    it('#2657: the workflow hands the classifier the evidence it needs (an unwired call is a silent genuine)', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const call = ci.split('\n').findIndex((l) => l.includes('classify-infra-failure.py android'))
+      expect(call, 'the android classify call moved').toBeGreaterThan(0)
+      const stmt = ci.split('\n').slice(call - 3, call + 3).join('\n')
+      expect(stmt).toContain('--probe-dir "$ANDROID_BUILD_DIR/reports/m1-probe"')
+      expect(stmt).toContain('--logcat /tmp/logcat.txt')
+      expect(stmt).toContain('--host-backend "$backend"')
+      expect(stmt).toContain('http://localhost:3000/api/health/live')
     })
   })
 })

@@ -36,6 +36,10 @@ import {
 } from '@worker/lib/provider-recording-sweep-worker'
 import { startIncidentChecksWorker, stopIncidentChecksWorker } from '@worker/lib/incident-checks-worker'
 import { startIncidentCloserWorker, stopIncidentCloserWorker } from '@worker/lib/incident-closer-worker'
+import {
+  startActiveShiftReaperWorker,
+  stopActiveShiftReaperWorker,
+} from '@worker/lib/active-shift-reaper-worker'
 import metricsRoutes from '@worker/routes/metrics'
 
 /**
@@ -130,6 +134,17 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
     start: () => startIncidentCloserWorker({ closeQuiet: async () => ({ closed: 0, updated: 0 }) }),
     stop: stopIncidentCloserWorker,
   },
+  'active-shift-reaper': {
+    start: () =>
+      startActiveShiftReaperWorker({
+        activeShifts: {
+          liveness: { staleAfterMs: 300_000, reapIntervalMs: 60_000 },
+          cleanupStale: async () => ({ removed: 0, evicted: [] }),
+        } as never,
+        auditService: { log: async () => undefined } as never,
+      }),
+    stop: stopActiveShiftReaperWorker,
+  },
 }
 
 /** A fixed instant well after any real clock this suite could run at. */
@@ -168,6 +183,21 @@ describe('worker liveness gauges', () => {
         `${WORKER_LAST_SUCCESS_METRIC}{worker="${name}"} ${(last ?? NaN).toFixed(3)}`,
       )
     })
+  })
+})
+
+describe('a worker whose period is configured', () => {
+  it('publishes the period it really runs at, not the default', async () => {
+    vi.resetModules()
+    const fresh = await import('@worker/metrics/worker-liveness')
+    fresh.setWorkerTickInterval('active-shift-reaper', 15_000)
+
+    expect(fresh.getWorkerTickIntervalMs('active-shift-reaper')).toBe(15_000)
+    expect(fresh.renderWorkerLivenessMetrics()).toContain(
+      `${WORKER_TICK_INTERVAL_METRIC}{worker="active-shift-reaper"} 15`,
+    )
+    // Others keep their default.
+    expect(fresh.getWorkerTickIntervalMs('stale-call-reaper')).toBe(fresh.WORKER_TICK_INTERVAL_MS['stale-call-reaper'])
   })
 })
 

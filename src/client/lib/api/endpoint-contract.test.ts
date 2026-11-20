@@ -10,6 +10,7 @@ import { getRecoveryGroup } from './recovery'
 import { updateDirectoryContact } from './directory'
 import { initUpload, completeUpload, getFileEnvelopes } from './files'
 import { createHubRole, createRole, deleteHubRole, listHubRoles, listRoles, updateHubRole } from './roles'
+import { getMyHubPermissions } from './hubs'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
 import { confirmDeletionThroughDialog } from '../admin-deletion.test-helpers'
 
@@ -25,6 +26,8 @@ let calls: RecordedCall[]
 let respond: () => Response
 
 beforeEach(() => {
+  // Hub-scoped requests are only made under a session (#2851).
+  sessionStorage.setItem('llamenos-session-token', 'test-session')
   calls = []
   respond = () => new Response('{}', { status: 200 })
   vi.stubGlobal(
@@ -38,8 +41,18 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  sessionStorage.clear()
   vi.unstubAllGlobals()
   setActiveHub(null)
+})
+
+describe('hub permissions', () => {
+  it('reads the caller\'s permissions on the hub-owned route, naming the hub explicitly', async () => {
+    // #1101: the route exists only under /hubs/:hubId (hubContext decides the answer),
+    // and the hub asked about is the argument — not whichever hub is active.
+    await getMyHubPermissions('hub-9')
+    expect(calls).toEqual([{ method: 'GET', url: '/api/hubs/hub-9/permissions/me' }])
+  })
 })
 
 describe('recovery group', () => {
@@ -143,8 +156,8 @@ describe('hub-owned roles', () => {
   it('reads and writes the active hub\'s roles under /hubs/:hubId/settings/roles', async () => {
     setActiveHub('hub-1')
     await listHubRoles()
-    await createHubRole({ permissions: [], encryptedName: 'ab'.repeat(28) })
-    await updateHubRole('role-x', { permissions: [] })
+    await createHubRole('hub-1', { permissions: [], encryptedName: 'ab'.repeat(28) })
+    await updateHubRole('hub-1', 'role-x', { permissions: [] })
     await deleteHubRole('role-x')
     expect(calls).toEqual([
       { method: 'GET', url: '/api/hubs/hub-1/settings/roles' },

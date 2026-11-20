@@ -76,6 +76,7 @@ export const IOS_GATE_HARNESS: readonly string[] = [
   '.github/scripts/classify-infra-failure.py',
   '.github/scripts/detect-changed-platforms.sh',
   'scripts/ci/mac-runner-disk-guard.sh',
+  'scripts/ci/mac-runner-disk-guard-wait.sh',
   'scripts/lib/server-hash-keys.sh',
   'scripts/run-migrations.ts',
 ]

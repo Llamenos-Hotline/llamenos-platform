@@ -9,13 +9,18 @@ import { eq, and, gte, lte } from 'drizzle-orm'
 import type { Database } from '../db'
 import { shiftOverrides } from '../db/schema'
 import { ServiceError } from './settings'
+import type { SealedShiftField } from '@protocol/schemas/shifts'
+import { sealedFieldColumns } from '../lib/sealed-shift-field'
 
 // ---------------------------------------------------------------------------
 // Inferred row types from Drizzle schema
 // ---------------------------------------------------------------------------
 
 type ShiftOverrideRow = typeof shiftOverrides.$inferSelect
-type ShiftOverrideInsert = Omit<typeof shiftOverrides.$inferInsert, 'id' | 'createdAt'>
+type ShiftOverrideInsert = Omit<typeof shiftOverrides.$inferInsert, 'id' | 'createdAt' | 'encryptedNote' | 'noteEnvelopes'> & {
+  /** Sealed by the client (`shift_record.rs`, LABEL_SHIFT_OVERRIDE_NOTE); never the typed text. */
+  encryptedNote?: SealedShiftField | null
+}
 
 export class ShiftOverridesService {
   constructor(protected db: Database) {}
@@ -72,6 +77,7 @@ export class ShiftOverridesService {
     }
 
     const id = crypto.randomUUID()
+    const note = sealedFieldColumns(data.encryptedNote)
 
     const [row] = await this.db
       .insert(shiftOverrides)
@@ -82,7 +88,8 @@ export class ShiftOverridesService {
         date: data.date,
         type: data.type,
         userPubkeys: data.userPubkeys ?? null,
-        encryptedNote: data.encryptedNote ?? null,
+        encryptedNote: note.ciphertext,
+        noteEnvelopes: note.envelopes,
         createdBy: data.createdBy,
       })
       .returning()
@@ -96,9 +103,15 @@ export class ShiftOverridesService {
     overrideId: string,
     data: Partial<Pick<ShiftOverrideInsert, 'userPubkeys' | 'encryptedNote'>>,
   ): Promise<ShiftOverrideRow> {
+    // Omitted keeps the note; `null` clears ciphertext and envelopes together.
+    const { encryptedNote, ...rest } = data
+    const note = encryptedNote === undefined ? undefined : sealedFieldColumns(encryptedNote)
     const [row] = await this.db
       .update(shiftOverrides)
-      .set(data)
+      .set({
+        ...rest,
+        ...(note && { encryptedNote: note.ciphertext, noteEnvelopes: note.envelopes }),
+      })
       .where(
         and(
           eq(shiftOverrides.id, overrideId),

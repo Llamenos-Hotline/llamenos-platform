@@ -33,6 +33,7 @@ pub mod device_keys;
 pub mod hpke_envelope;
 pub mod labels;
 pub mod puk;
+pub mod recovery_liveness;
 pub mod shamir;
 pub mod sigchain;
 
@@ -42,6 +43,9 @@ pub mod sframe;
 
 // === KDF parameters (shared across device_keys + encryption) ===
 pub mod kdf_params;
+
+// === Ban digest: RFC 9497 OPRF over ristretto255 (#2759) ===
+pub mod ban_digest;
 
 // === Stable modules (curve-independent) ===
 pub mod blind_index;
@@ -59,6 +63,9 @@ pub mod audit_key;
 
 // === Case records + case comments, sealed per purpose (#2499) ===
 pub mod case_record;
+
+// === Free-text shift fields (availability reason, override note), sealed per purpose (#2777, #2778) ===
+pub mod shift_record;
 
 // === Offline key backup — the one canonical backup file format (v4) ===
 pub mod backup;

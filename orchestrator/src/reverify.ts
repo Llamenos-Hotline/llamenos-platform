@@ -51,7 +51,12 @@ export function latestMechanicalRejection(rows: RunRecord[], itemId: string): { 
   const latest = rows
     .filter((r) => r.itemId === itemId && r.outcome !== 'DISPATCHED')
     .sort((a, b) => b.ts - a.ts)[0]
-  if (latest === undefined || latest.outcome !== 'REJECTED' || latest.verification === undefined) return undefined
+  // A runner that reached no verdict is recorded UNVERIFIED, not REJECTED
+  // (#2889: it is not the diff failing); both carry `verification`, and a re-entry
+  // row that PASSED carries none, so the field — not the outcome — says "this
+  // row ended at a failed verification".
+  if (latest === undefined || (latest.outcome !== 'REJECTED' && latest.outcome !== 'UNVERIFIED') ||
+    latest.verification === undefined) return undefined
   const { failedSha, runnerCrashed } = latest.verification
   if (!FULL_SHA.test(failedSha)) return undefined
   return { row: latest, sha: failedSha, runnerCrashed: runnerCrashed === true }
@@ -70,7 +75,8 @@ export function assessOpenPr(rows: RunRecord[], itemId: string, headSha: string 
 
   if (failure.runnerCrashed) {
     const crashesOnThisHead = rows.filter((r) =>
-      r.itemId === itemId && r.outcome === 'REJECTED' && r.verification?.runnerCrashed === true &&
+      r.itemId === itemId && (r.outcome === 'REJECTED' || r.outcome === 'UNVERIFIED') &&
+      r.verification?.runnerCrashed === true &&
       r.verification.failedSha === failure.sha,
     ).length
     // The first crash is the original round; retries are the extra rows.

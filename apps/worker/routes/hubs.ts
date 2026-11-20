@@ -7,13 +7,14 @@ import type { AppEnv, Env } from '../types'
 import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import { resolveHubPermissions } from '@shared/permissions'
-import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
+import { createHubBodySchema, updateHubBodySchema, addHubMemberBodySchema, hubKeyEnvelopesBodySchema, hubListResponseSchema, hubDetailResponseSchema, hubKeyEnvelopeResponseSchema, hubKeyRecipientsResponseSchema, hubKeySetResponseSchema, hubKeyRotateBodySchema, hubKeyRotateResponseSchema, hubKeyRotationResponseSchema, hubPermissionsResponseSchema, hubReadersQuerySchema, hubReadersResponseSchema, hubEscrowKeyResponseSchema, setHubEscrowKeyBodySchema } from '@protocol/schemas/hubs'
 import { assertMayManageHubEscrow } from '../lib/readers'
+import { assertMayManageHubKey } from '../lib/hub-key'
 import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-recipient'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
-import { ServiceError } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/settings'
 import { SealedRecordingDeleteError } from '../services/call-recordings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
@@ -155,7 +156,7 @@ routes.post('/',
       await services.settings.createHub(hub, { pubkey })
     } catch (err) {
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
+        return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)
       }
       const message = err instanceof Error ? err.message : 'Failed to create hub'
       return c.json({ error: message }, 500)
@@ -214,6 +215,35 @@ routes.get('/:hubId',
   },
 )
 
+// The caller's own permissions in this hub (#1101). `/auth/me` is the account-wide
+// union and `/settings/users/:id/effective-permissions` needs a GLOBAL `users:read`,
+// which a member whose roles are all hub-scoped does not hold — so neither can tell
+// such a member what they may do HERE. This answers it with exactly the set
+// `hubContext` authorises the request with; nothing about anyone else.
+routes.get('/:hubId/permissions/me',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'Get the current user\'s permissions in one hub',
+    responses: {
+      200: {
+        description: 'Permissions the caller holds in this hub',
+        content: {
+          'application/json': {
+            schema: resolver(hubPermissionsResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  // hubContext: 404 for an unknown hub, 403 unless the caller holds a role in it.
+  hubContext,
+  async (c) => {
+    return c.json({ hubId: c.get('hubId'), permissions: c.get('hubPermissions') })
+  },
+)
+
 // Update hub
 routes.patch('/:hubId',
   describeRoute({
@@ -247,7 +277,7 @@ routes.patch('/:hubId',
       // honour it. Anything else is a server fault: log it (#1700 — a bare
       // catch here answered 500 with no log line at all).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 400 | 404 | 409 | 500)
+        return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)
       }
       logger.error('Failed to update hub', err, { hubId })
       return c.json({ error: 'Failed to update hub' }, 500)
@@ -303,7 +333,7 @@ routes.post('/:hubId/members',
       // unlogged 500, #1700) or the change would demote the hub's last
       // admin (409). Anything else must be logged, never swallowed.
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
       }
       logger.error('Failed to add hub member', err, { hubId })
       return c.json({ error: 'Failed to add member' }, 500)
@@ -355,7 +385,7 @@ routes.delete('/:hubId/members/:pubkey',
       // pubkey is not a registered user (404) or is the hub's last admin
       // (409). Anything else must be logged, never swallowed (#1700).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
       }
       logger.error('Failed to remove hub member', err, { hubId })
       return c.json({ error: 'Failed to remove member' }, 500)
@@ -435,7 +465,7 @@ routes.delete('/:hubId',
         await reportUndeletedRecordings(c.get('services'), c.get('pubkey'), err)
       }
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500 | 502)
+        return c.json(serviceErrorBody(err), err.status as 404 | 500 | 502)
       }
       const message = err instanceof Error ? err.message : 'Failed to delete hub'
       return c.json({ error: message }, 500)
@@ -484,7 +514,7 @@ routes.get('/:hubId/key',
       // all means a store fault: answer 500 and log it (#1700 — a bare catch
       // here reported a database failure as "Hub not found" and logged nothing).
       if (err instanceof ServiceError) {
-        return c.json({ error: err.message }, err.status as 404 | 500)
+        return c.json(serviceErrorBody(err), err.status as 404 | 500)
       }
       logger.error('Failed to read hub key envelopes', err, { hubId })
       return c.json({ error: 'Failed to read hub key' }, 500)
@@ -492,26 +522,58 @@ routes.get('/:hubId/key',
   },
 )
 
-// Set hub key envelopes (admin only — distributes wrapped hub key to all members)
-routes.put('/:hubId/key',
+// What a key holder needs to distribute the hub key: every member, the device
+// key to wrap for, and who already holds a wrap (PROTOCOL.md §2.7). Authority is
+// the hub's OWN roles (assertMayManageHubKey): a super-admin with no role here
+// must not be able to install a key and so read the hub (D1).
+routes.get('/:hubId/key/recipients',
   describeRoute({
     tags: ['Hubs'],
-    summary: 'Set hub key envelopes for all members',
+    summary: 'List the members a hub key is distributed to',
     responses: {
       200: {
-        description: 'Hub key envelopes set',
-        content: {
-          'application/json': {
-            schema: resolver(okResponseSchema),
-          },
-        },
+        description: 'Generation, the current wraps, and every member with their device key',
+        content: { 'application/json': { schema: resolver(hubKeyRecipientsResponseSchema) } },
       },
       ...authErrors,
       ...notFoundError,
     },
   }),
   hubContext,
-  requirePermission('hubs:manage-keys'),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    try {
+      assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
+      return c.json(await c.get('services').identity.getHubKeyRecipients(hubId))
+    } catch (err) {
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
+      }
+      throw err
+    }
+  },
+)
+
+// Replace the hub key envelopes — compare-and-set on `expectedGeneration`.
+routes.put('/:hubId/key',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'Set hub key envelopes for all members',
+    responses: {
+      200: {
+        description: 'Hub key envelopes set; the envelope set\'s new generation',
+        content: {
+          'application/json': {
+            schema: resolver(hubKeySetResponseSchema),
+          },
+        },
+      },
+      409: { description: 'The generation moved on since it was read (re-read and retry), or the hub is shredded' },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
   validator('json', hubKeyEnvelopesBodySchema),
   async (c) => {
     const hubId = c.req.param('hubId')
@@ -519,12 +581,89 @@ routes.put('/:hubId/key',
     const body = c.req.valid('json')
 
     try {
-      await services.settings.setHubKeyEnvelopes(hubId, body)
-      return c.json({ ok: true })
+      assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
+      return c.json(await services.settings.setHubKeyEnvelopes(hubId, body))
     } catch (err) {
-      const status = (err as { status?: number }).status ?? 500
-      const message = err instanceof Error ? err.message : 'Failed to set hub key'
-      return c.json({ error: message }, status as 404 | 500)
+      if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
+      }
+      logger.error('Failed to set hub key envelopes', err, { hubId })
+      return c.json({ error: 'Failed to set hub key' }, 500)
+    }
+  },
+)
+
+// The hub key's epoch and the statement that introduced it (any member). A
+// device holding the previous epoch's key opens the statement before adopting
+// the new key, so a server-chosen key is never adopted (PROTOCOL.md §2.7).
+routes.get('/:hubId/key/rotation',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: "Get the hub key's epoch and rotation statement",
+    responses: {
+      200: {
+        description: 'The current key epoch and the statement sealed under the previous key',
+        content: { 'application/json': { schema: resolver(hubKeyRotationResponseSchema) } },
+      },
+      409: { description: 'The hub is shredded' },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  hubContext,
+  requirePermission('hubs:read'),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    try {
+      return c.json(await c.get('services').identity.getHubKeyRotation(hubId))
+    } catch (err) {
+      if (err instanceof ServiceError && [404, 409].includes(err.status)) {
+        return c.json(serviceErrorBody(err), err.status as 404 | 409)
+      }
+      throw err
+    }
+  },
+)
+
+// Rotate the hub key: a fresh key wrapped for exactly the current members, with
+// every hub-sealed value re-sealed under it, in one transaction (PROTOCOL.md
+// §2.7 "Key Rotation"). Authority as for distribution: the hub's own roles.
+routes.post('/:hubId/key/rotate',
+  describeRoute({
+    tags: ['Hubs'],
+    summary: 'Rotate the hub key',
+    responses: {
+      200: {
+        description: "The hub key is rotated; the envelope set's new generation and the new epoch",
+        content: { 'application/json': { schema: resolver(hubKeyRotateResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+      400: { description: 'Validation error, a re-seal that adds or drops a value, or a member wrapped twice' },
+      403: { description: 'Not a key manager in this hub, or a wrap for someone who is not a member' },
+      409: { description: 'The generation, the membership or a sealed value moved on since it was read (re-read and retry), or the hub is shredded' },
+    },
+  }),
+  hubContext,
+  validator('json', hubKeyRotateBodySchema),
+  async (c) => {
+    const hubId = c.req.param('hubId')
+    const services = c.get('services')
+    const body = c.req.valid('json')
+    try {
+      assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
+      const rotated = await services.identity.rotateHubKey(hubId, body)
+      await audit(services.audit, 'hubKeyRotated', c.get('pubkey'), {
+        epoch: rotated.epoch,
+        recipients: body.envelopes.length,
+      }, undefined, hubId)
+      return c.json(rotated)
+    } catch (err) {
+      if (err instanceof ServiceError && [400, 403, 404, 409].includes(err.status)) {
+        return c.json(serviceErrorBody(err), err.status as 400 | 403 | 404 | 409)
+      }
+      logger.error('Failed to rotate hub key', err, { hubId })
+      return c.json({ error: 'Failed to rotate hub key' }, 500)
     }
   },
 )
@@ -612,7 +751,7 @@ routes.put('/:hubId/escrow-key',
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       throw err
     }
@@ -643,7 +782,7 @@ routes.delete('/:hubId/escrow-key',
       return c.json({ ok: true })
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
-        return c.json({ error: err.message }, err.status as 403 | 404 | 409)
+        return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)
       }
       throw err
     }

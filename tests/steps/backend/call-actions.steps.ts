@@ -155,13 +155,14 @@ When('the call ends', async ({ request, world }) => {
 })
 
 Then(
-  'volunteer {int} cannot read the hub call history',
+  'volunteer {int} can read only their own call history',
   async ({ request, world }, volIndex: number) => {
     const state = getScenarioState(world)
-    const res = await apiGet(request, `/hubs/${state.hubId}/calls/history`, state.volunteers[volIndex].deviceKey)
-    // The note below must succeed WITHOUT this permission: a volunteer writes up their
-    // own call without being able to read everyone else's.
-    expect(res.status).toBe(403)
+    const res = await apiGet<{ access: { scope: string } }>(request, `/hubs/${state.hubId}/calls/history`, state.volunteers[volIndex].deviceKey)
+    // The note below must succeed WITHOUT calls:read-history: a volunteer writes up their
+    // own call without being able to read everyone else's (#1342 serves them their own).
+    expect(res.status).toBe(200)
+    expect(res.data.access.scope).toBe('own')
   },
 )
 

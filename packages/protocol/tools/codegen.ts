@@ -197,6 +197,32 @@ const REFERENCED_BY_NAME = new Set([
   // imported that. Once hub roles gained `hubId` the two became identical and the item was
   // renamed `Role`, breaking the iOS compile. It is `RoleResponse` — its own schema's name.
   'RoleResponse',
+  // #1342 — `callHistoryResponse.access`. Inline it mints a bare `Access` beside the
+  // identical `CallHistoryAccess`, and a bare `Access` is a Swift-module collision waiting.
+  'CallHistoryAccess',
+  'CallHistoryAccessScope',
+  // Hub key rotation (PROTOCOL.md §2.7) — `sealed` / `resealed` hold `tags`, `teams` and
+  // `roles` arrays, and an inline `tags` item beside the tag list's renamed iOS's `Tag` to
+  // `TagListResponseTag`. Each item is referenced by its own schema's name instead.
+  'HubSealedTag',
+  'HubSealedTeam',
+  'HubSealedRole',
+  'HubSealedValues',
+  'HubResealedTag',
+  'HubResealedTeam',
+  'HubResealedRole',
+  'HubResealedValues',
+  'HubKeyRotationStatement',
+  // #2777 / #2778 — the sealed availability reason and override note are one shape.
+  // Deduplicated, it was named after whichever property sorted first
+  // (`SharedEncryptedReason`, even on the override's `encryptedNote`). It is
+  // `SealedShiftField` — its own schema's name — wherever it appears.
+  'SealedShiftField',
+  // #2759 — a search's per-scope lookups and evaluations. Without this the array items take
+  // the bare property names `Lookup` and `Evaluation`, which say nothing about bans and sit
+  // one unrelated schema away from being renamed under the mobile clients.
+  'BanLookup',
+  'BanScopeEvaluation',
 ])
 
 /**

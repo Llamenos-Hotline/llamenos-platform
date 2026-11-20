@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * bind-report.test.ts — rail for the CodeQL `js/incomplete-sanitization` finding
  * at bind-report.ts's markdown table generation.

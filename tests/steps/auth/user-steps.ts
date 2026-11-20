@@ -22,19 +22,16 @@ import { apiDelete, apiGet, updateUserViaApi, seedHexToPubkey, addHubMemberViaAp
 
 // --- Volunteer lifecycle ---
 
-Given('an admin has created a volunteer', async ({ page }) => {
+Given('an admin has created a volunteer', async ({ page, rolesWorld }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_vol_nsec = n
-  }, deviceKey)
+  rolesWorld.volunteerNsec = await inviteVolunteerAndJoin(page, name, phone)
 })
 
-When('the volunteer logs in with their device key', async ({ page }) => {
-  const deviceKey = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_vol_nsec)) as string
-  await loginAsVolunteer(page, deviceKey)
+When('the volunteer logs in with their device key', async ({ page, rolesWorld }) => {
+  expect(rolesWorld.volunteerNsec, 'a volunteer must be created first (see "an admin has created a volunteer")').toBeTruthy()
+  await loginAsVolunteer(page, rolesWorld.volunteerNsec)
 })
 
 Given('a volunteer has logged in', async ({ page }) => {
@@ -67,14 +64,11 @@ Given('a volunteer is logged in', async ({ page }) => {
   await loginAsVolunteer(page, deviceKey)
 })
 
-Given('a volunteer exists', async ({ page }) => {
+Given('a volunteer exists', async ({ page, rolesWorld }) => {
   await Navigation.goToVolunteers(page)
   const name = `TestVol ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
-  const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_vol_nsec = n
-  }, deviceKey)
+  rolesWorld.volunteerNsec = await inviteVolunteerAndJoin(page, name, phone)
 })
 
 When('they tap the break button', async ({ page }) => {
@@ -85,7 +79,7 @@ When('they tap the break button', async ({ page }) => {
 // Redemption itself (the volunteer's side) is driven end to end in
 // tests/steps/auth/onboarding-steps.ts.
 
-When('I create an invite for a new volunteer', async ({ page }) => {
+When('I create an invite for a new volunteer', async ({ page, adminWorld }) => {
   await page.getByTestId(TestIds.INVITE_BTN).click()
   const name = `InviteVol ${Date.now()}`
   await page.getByTestId('invite-name-input').fill(name)
@@ -101,11 +95,9 @@ When('I create an invite for a new volunteer', async ({ page }) => {
   // Wait for the invite card to appear; its link is asserted where it matters.
   await expect(page.getByTestId('invite-link-code')).toBeVisible({ timeout: Timeouts.API })
   await page.getByTestId('dismiss-invite').waitFor({ state: 'visible', timeout: Timeouts.API })
-  // Persist the vol name in localStorage so it survives page.reload()
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_invite_vol_name = n
-    localStorage.setItem('__test_invite_vol_name', n)
-  }, name)
+  // The fixture lives in the test process, so it survives the page.reload() the
+  // revoke scenario performs — what the old window + localStorage pair was for.
+  adminWorld.inviteVolunteerName = name
 })
 
 When('I copy the new invite link', async ({ page }) => {
@@ -113,8 +105,9 @@ When('I copy the new invite link', async ({ page }) => {
   await page.getByTestId('copy-invite-link-btn').click()
 })
 
-Then("the clipboard should hold the invite link on the configured server's address", async ({ page, backendRequest }) => {
-  const volName = (await page.evaluate(() => localStorage.getItem('__test_invite_vol_name'))) as string
+Then("the clipboard should hold the invite link on the configured server's address", async ({ page, backendRequest, adminWorld }) => {
+  const volName = adminWorld.inviteVolunteerName
+  expect(volName, 'the invite step must record the volunteer name').toBeTruthy()
   const { data } = await apiGet<{ invites: Array<{ code: string; name: string }> }>(backendRequest, '/invites')
   const invite = data.invites.find(i => i.name === volName)
   expect(invite, `no pending invite named ${volName}`).toBeTruthy()
@@ -152,11 +145,11 @@ When('the volunteer opens the invite link', async ({ page }) => {
   await expect(page).toHaveURL(/\/onboarding\?code=/, { timeout: Timeouts.NAVIGATION })
 })
 
-Then('they should see a welcome screen with their name', async ({ page }) => {
-  const volName = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'))) as string
-  expect(volName).toBeTruthy()
+Then('they should see a welcome screen with their name', async ({ page, adminWorld }) => {
+  const volName = adminWorld.inviteVolunteerName
+  expect(volName, 'the invite step must record the volunteer name').toBeTruthy()
   // Content assertion — verifying displayed volunteer name
-  await expect(page.getByText(new RegExp(volName, 'i')).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByText(new RegExp(volName as string, 'i')).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 When('the volunteer completes the onboarding flow', async ({ page }) => {
@@ -175,21 +168,20 @@ When('the volunteer completes the onboarding flow', async ({ page }) => {
   await continueBtn.click()
 })
 
-Then('the volunteer name should appear in the pending invites list', async ({ page }) => {
-  const volName = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'))) as string
-  expect(volName).toBeTruthy()
+Then('the volunteer name should appear in the pending invites list', async ({ page, adminWorld }) => {
+  const volName = adminWorld.inviteVolunteerName
+  expect(volName, 'the invite step must record the volunteer name').toBeTruthy()
   // Content assertion — verifying volunteer name is displayed
-  await expect(page.getByText(volName, { exact: true }).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByText(volName as string, { exact: true }).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-When('I revoke the invite', async ({ page, request }) => {
+When('I revoke the invite', async ({ request, adminWorld }) => {
   // The UI revoke flow (optimistic removal + DELETE) is unreliable in CI:
   // background 401s cause component remounts that re-fetch the invite list,
   // and the click→DELETE pipeline has intermittent failures. Use the API
   // directly to ensure the invite is actually deleted.
-  const volName = (await page.evaluate(() =>
-    (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'),
-  )) as string
+  const volName = adminWorld.inviteVolunteerName
+  expect(volName, 'the invite step must record the volunteer name').toBeTruthy()
   const { data: inviteList } = await apiGet<{ invites: Array<{ code: string; name: string }> }>(request, '/invites')
   const invite = inviteList.invites.find((i: { name: string }) => i.name === volName)
   expect(invite).toBeTruthy()
@@ -197,13 +189,13 @@ When('I revoke the invite', async ({ page, request }) => {
   expect(status).toBeLessThan(400)
 })
 
-Then('the volunteer name should no longer appear in the list', async ({ page }) => {
-  const volName = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_invite_vol_name || localStorage.getItem('__test_invite_vol_name'))) as string
-  expect(volName).toBeTruthy()
+Then('the volunteer name should no longer appear in the list', async ({ page, adminWorld }) => {
+  const volName = adminWorld.inviteVolunteerName
+  expect(volName, 'the invite step must record the volunteer name').toBeTruthy()
   // Reload the page to pick up the server-side deletion, then verify the name is gone.
   await page.reload()
   await page.waitForLoadState('networkidle').catch(() => {})
-  await expect(page.getByText(volName, { exact: true }).first()).not.toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(page.getByText(volName as string, { exact: true }).first()).not.toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
 // --- Form validation ---
@@ -218,18 +210,13 @@ When('I paste invalid phone numbers in the textarea', async ({ page }) => {
   await bulkPhones.fill('+12\n+34\ninvalid')
 })
 
-When('I paste two phone numbers in the textarea', async ({ page }) => {
+When('I paste two phone numbers in the textarea', async ({ page, banWorld }) => {
   const phone1 = `+1212${Date.now().toString().slice(-7)}`
   const phone2 = `+1212${(Date.now() + 1).toString().slice(-7)}`
   const bulkPhones = page.getByTestId('ban-bulk-phones')
   await expect(bulkPhones).toBeVisible({ timeout: Timeouts.ELEMENT })
   await bulkPhones.fill(`${phone1}\n${phone2}`)
-  await page.evaluate(
-    ({ p1, p2 }) => {
-      (window as unknown as Record<string, unknown>).__test_ban_phones = [p1, p2]
-    },
-    { p1: phone1, p2: phone2 },
-  )
+  banWorld.phones = [phone1, phone2]
 })
 
 // --- Volunteer CRUD specific ---
@@ -253,9 +240,9 @@ Given('I have created and then deleted a volunteer', async ({ page }) => {
   await expect(page.getByRole('dialog')).toBeHidden()
 })
 
-When('the volunteer logs in and navigates to {string}', async ({ page }, path: string) => {
-  const deviceKey = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_vol_nsec)) as string
-  await loginAsVolunteer(page, deviceKey)
+When('the volunteer logs in and navigates to {string}', async ({ page, rolesWorld }, path: string) => {
+  expect(rolesWorld.volunteerNsec, 'a volunteer must exist first (see "a volunteer exists")').toBeTruthy()
+  await loginAsVolunteer(page, rolesWorld.volunteerNsec)
   // This step is only used in access-denied scenarios — the volunteer is navigating
   // somewhere they shouldn't be able to reach. Passing true asserts "Access Denied"
   // is shown rather than accepting either outcome.
@@ -303,21 +290,19 @@ async function grantReporterRole(
   ).toContain('role-reporter')
 }
 
-Given('a reporter has been invited and onboarded', async ({ page, backendRequest, workerHub }) => {
+Given('a reporter has been invited and onboarded', async ({ page, backendRequest, workerHub, rolesWorld }) => {
   // Create a user via the volunteer creation flow, then assign the reporter role via API
   await Navigation.goToVolunteers(page)
   const name = `Reporter ${Date.now()}`
   const phone = `+1212${Date.now().toString().slice(-7)}`
   const deviceKey = await inviteVolunteerAndJoin(page, name, phone)
-  await page.evaluate((n) => {
-    (window as unknown as Record<string, unknown>).__test_reporter_nsec = n
-  }, deviceKey)
+  rolesWorld.reporterNsec = deviceKey
   await grantReporterRole(backendRequest, deviceKey, workerHub)
 })
 
-Given('a reporter is logged in', async ({ page, backendRequest, workerHub }) => {
+Given('a reporter is logged in', async ({ page, backendRequest, workerHub, rolesWorld }) => {
   // Check if a reporter key was set by a previous step (e.g., "a reporter has been invited and onboarded")
-  let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
+  let key = rolesWorld.reporterNsec
   if (!key) {
     // No reporter exists yet — create one via the admin flow, as the admin.
     await ensureAuthenticated(page)
@@ -326,12 +311,13 @@ Given('a reporter is logged in', async ({ page, backendRequest, workerHub }) => 
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await inviteVolunteerAndJoin(page, name, phone)
     await grantReporterRole(backendRequest, key, workerHub)
+    rolesWorld.reporterNsec = key
   }
   await loginAsVolunteer(page, key)
 })
 
-When('the reporter logs in', async ({ page, backendRequest, workerHub }) => {
-  let key = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_reporter_nsec)) as string | undefined
+When('the reporter logs in', async ({ page, backendRequest, workerHub, rolesWorld }) => {
+  let key = rolesWorld.reporterNsec
   if (!key) {
     // Reporter wasn't set up yet — create one (loginAsAdmin first to access volunteers)
     await loginAsAdmin(page)
@@ -340,11 +326,12 @@ When('the reporter logs in', async ({ page, backendRequest, workerHub }) => {
     const phone = `+1212${Date.now().toString().slice(-7)}`
     key = await inviteVolunteerAndJoin(page, name, phone)
     await grantReporterRole(backendRequest, key, workerHub)
+    rolesWorld.reporterNsec = key
   }
   await loginAsVolunteer(page, key)
 })
 
-When('they create a new report', async ({ page }) => {
+When('they create a new report', async ({ page, reportsWorld }) => {
   const newBtn = page.getByTestId(TestIds.REPORT_NEW_BTN)
   await expect(newBtn).toBeVisible({ timeout: Timeouts.ELEMENT })
   await newBtn.click()
@@ -352,9 +339,7 @@ When('they create a new report', async ({ page }) => {
   const title = `Test report ${Date.now()}`
   await page.getByTestId(TestIds.REPORT_TITLE_INPUT).fill(title)
   await page.getByTestId(TestIds.REPORT_BODY_INPUT).fill('Test report body content')
-  await page.evaluate((t) => {
-    (window as unknown as Record<string, unknown>).__test_report_title = t
-  }, title)
+  reportsWorld.reportTitle = title
   const submitBtn = page.getByTestId(TestIds.REPORT_SUBMIT_BTN)
   await expect(submitBtn).toBeEnabled({ timeout: Timeouts.ELEMENT })
   await submitBtn.click()
@@ -365,12 +350,10 @@ When('they create a new report', async ({ page }) => {
   await expect(page.getByTestId(TestIds.REPORT_TITLE_INPUT)).toBeHidden({ timeout: Timeouts.API })
 })
 
-Then('the report should be saved successfully', async ({ page }) => {
+Then('the report should be saved successfully', async ({ page, reportsWorld }) => {
   // The report list is on screen whether or not anything was saved, so it proves
   // nothing by itself: the new report must be listed under its own title.
-  const title = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_report_title as string | undefined,
-  )
+  const title = reportsWorld.reportTitle
   expect(title, 'the create step must record the report title').toBeTruthy()
   await expect(page.getByTestId(TestIds.REPORT_LIST).getByText(title as string)).toBeVisible({ timeout: Timeouts.API })
 })

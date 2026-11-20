@@ -14,7 +14,6 @@ use std::time::Instant;
 use crate::encryption::{encrypt_note, random_bytes_32, EncryptedNote, KeyEnvelope};
 use crate::errors::CryptoError;
 use crate::hpke_envelope;
-use zeroize::Zeroize;
 
 /// RACE-12: Recovery key entry with TTL tracking.
 struct KeyEntry {
@@ -50,15 +49,9 @@ pub fn hpke_wrap_key_hex(
     recipient_pubkey_hex: &str,
     label: &str,
 ) -> Result<KeyEnvelope, CryptoError> {
-    let key_bytes = hex::decode(key_hex).map_err(CryptoError::HexError)?;
-    if key_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_bytes);
+    let key = crate::encryption::secret_from_hex(key_hex)?;
     let aad = crate::envelope_aad::key_wrap_aad(label);
     let envelope = hpke_envelope::hpke_seal_key(&key, recipient_pubkey_hex, label, &aad)?;
-    key.zeroize();
     // Convert base64url → hex wire format
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
@@ -120,28 +113,19 @@ pub fn compute_shared_x_hex(
 ) -> Result<String, CryptoError> {
     use x25519_dalek::StaticSecret as X25519StaticSecret;
 
-    let sk_bytes = hex::decode(our_secret_hex).map_err(CryptoError::HexError)?;
-    if sk_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
-    let mut sk_arr = [0u8; 32];
-    sk_arr.copy_from_slice(&sk_bytes);
-    let secret = X25519StaticSecret::from(sk_arr);
+    let sk_arr = crate::encryption::secret_from_hex(our_secret_hex)?;
+    // `StaticSecret` zeroizes on drop; `sk_arr` is `Zeroizing`.
+    let secret = X25519StaticSecret::from(*sk_arr);
 
     // Delegate to shared parse logic which validates format and rejects the identity point.
     let public_key = crate::provisioning::parse_x25519_pubkey(their_pubkey_hex)?;
 
     let shared = secret.diffie_hellman(&public_key);
-    let mut shared_bytes = *shared.as_bytes();
-    if shared_bytes == [0u8; 32] {
-        shared_bytes.zeroize();
-        sk_arr.zeroize();
+    let shared_bytes = zeroize::Zeroizing::new(*shared.as_bytes());
+    if *shared_bytes == [0u8; 32] {
         return Err(CryptoError::EcdhFailed);
     }
-    let hex_out = hex::encode(shared_bytes);
-    shared_bytes.zeroize();
-    sk_arr.zeroize();
-    Ok(hex_out)
+    Ok(hex::encode(*shared_bytes))
 }
 
 /// Decrypt a UTF-8 payload that was encrypted with a provisioning shared key.
@@ -166,12 +150,15 @@ pub fn decrypt_with_shared_key_hex(
         Aes256Gcm, Nonce,
     };
 
-    let shared_x = hex::decode(shared_x_hex).map_err(CryptoError::HexError)?;
+    let shared_x =
+        zeroize::Zeroizing::new(hex::decode(shared_x_hex).map_err(CryptoError::HexError)?);
     if shared_x.len() != 32 {
         return Err(CryptoError::InvalidSecretKey);
     }
 
-    let mut symmetric_key = crate::provisioning::derive_provisioning_key(&shared_x);
+    // `Zeroizing`: the `?` exits below (bad ciphertext, failed tag) must wipe it too.
+    let symmetric_key =
+        zeroize::Zeroizing::new(crate::provisioning::derive_provisioning_key(&shared_x));
 
     let data = hex::decode(ciphertext_hex).map_err(CryptoError::HexError)?;
     if data.len() < 28 {
@@ -180,7 +167,7 @@ pub fn decrypt_with_shared_key_hex(
     }
     let nonce = Nonce::from_slice(&data[..12]);
 
-    let cipher = Aes256Gcm::new_from_slice(&symmetric_key)
+    let cipher = Aes256Gcm::new_from_slice(symmetric_key.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let plaintext = cipher
         .decrypt(
@@ -192,7 +179,6 @@ pub fn decrypt_with_shared_key_hex(
         )
         .map_err(|_| CryptoError::DecryptionFailed)?;
 
-    symmetric_key.zeroize();
     String::from_utf8(plaintext).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -226,16 +212,13 @@ pub fn decrypt_server_event_hex(encrypted_hex: &str, key_hex: &str) -> Result<St
     };
 
     let data = hex::decode(encrypted_hex).map_err(CryptoError::HexError)?;
-    let key_bytes = hex::decode(key_hex).map_err(CryptoError::HexError)?;
-    if key_bytes.len() != 32 {
-        return Err(CryptoError::InvalidSecretKey);
-    }
+    let key_bytes = crate::encryption::secret_from_hex(key_hex)?;
     if data.len() < 28 {
         return Err(CryptoError::InvalidCiphertext);
     }
 
     let nonce = Nonce::from_slice(&data[..12]);
-    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+    let cipher = Aes256Gcm::new_from_slice(key_bytes.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let plaintext = cipher
         .decrypt(
@@ -518,7 +501,7 @@ pub fn mobile_shamir_split(
     total: u8,
     threshold: u8,
 ) -> Result<Vec<crate::shamir::ShamirShare>, CryptoError> {
-    let secret = hex::decode(secret_hex).map_err(CryptoError::HexError)?;
+    let secret = zeroize::Zeroizing::new(hex::decode(secret_hex).map_err(CryptoError::HexError)?);
     let shares = crate::shamir::split(&secret, total, threshold)?;
     Ok(shares.into_iter().map(|s| s.to_shamir_share()).collect())
 }
@@ -536,8 +519,8 @@ pub fn mobile_shamir_combine(
         .into_iter()
         .map(|s| s.to_share())
         .collect::<Result<Vec<_>, _>>()?;
-    let secret = crate::shamir::combine(&shares, threshold)?;
-    Ok(hex::encode(secret))
+    let secret = zeroize::Zeroizing::new(crate::shamir::combine(&shares, threshold)?);
+    Ok(hex::encode(&*secret))
 }
 
 /// Compute a SHA-256 commitment for a Shamir share.
@@ -566,6 +549,19 @@ pub fn mobile_shamir_verify(
     let mut commitment = [0u8; 32];
     commitment.copy_from_slice(&commitment_bytes);
     Ok(crate::shamir::verify(&share, &commitment))
+}
+
+/// The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+/// share (#2782). An enrolling client computes one per share and sends it beside
+/// the holder's share envelope; see `recovery_liveness`.
+#[uniffi::export]
+pub fn mobile_recovery_liveness_public_key(
+    share: &crate::shamir::ShamirShare,
+) -> Result<String, CryptoError> {
+    let share = share.to_share()?;
+    Ok(hex::encode(crate::recovery_liveness::liveness_public_key(
+        &share,
+    )?))
 }
 
 /// Generate an X25519 keypair for a recovery group.
@@ -629,10 +625,49 @@ pub fn mobile_recovery_group_split_private_key(
                 "invalid or already-consumed or expired recovery group handle".to_string(),
             )
         })?;
-    let mut sk = entry.key;
-    let secret = hex::decode(&*sk).map_err(CryptoError::HexError)?;
-    // Zeroize the hex string now that we have the bytes
-    sk.zeroize();
+    // `entry.key` is `Zeroizing<String>`: it is wiped when `entry` drops, on every
+    // exit path, and the decoded bytes are wrapped the same way.
+    let secret = zeroize::Zeroizing::new(hex::decode(&*entry.key).map_err(CryptoError::HexError)?);
     let shares = crate::shamir::split(&secret, total, threshold)?;
     Ok(shares.into_iter().map(|s| s.to_shamir_share()).collect())
+}
+
+// ── Ban digest (RFC 9497 OPRF, `crate::ban_digest`, #2759) ─────────────
+
+/// The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+/// server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+#[derive(uniffi::Record)]
+pub struct BanDigestBlind {
+    pub blind_hex: String,
+    pub blinded_element_hex: String,
+}
+
+/// Blind an E.164 phone number for a ban digest. The server never sees the number.
+#[uniffi::export]
+pub fn ban_digest_blind(phone: &str) -> Result<BanDigestBlind, CryptoError> {
+    let b = crate::ban_digest::blind(phone)?;
+    Ok(BanDigestBlind {
+        blind_hex: hex::encode(b.blind),
+        blinded_element_hex: hex::encode(b.blinded_element),
+    })
+}
+
+/// Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+/// the `phoneHash` a platform-ban request carries.
+#[uniffi::export]
+pub fn ban_digest_finalize(
+    phone: &str,
+    blind_hex: &str,
+    evaluated_element_hex: &str,
+) -> Result<String, CryptoError> {
+    // `Zeroizing`: the `?` exits below (a malformed evaluated element, a failed finalize) must
+    // wipe the blind too — an explicit `.zeroize()` after them would be skipped.
+    let blind: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        hex::decode(blind_hex)?
+            .try_into()
+            .map_err(|_| CryptoError::InvalidInput("blind must be 32 bytes".into()))?,
+    );
+    let evaluated = hex::decode(evaluated_element_hex)?;
+    let digest = crate::ban_digest::finalize(phone, &blind, &evaluated)?;
+    Ok(hex::encode(digest))
 }

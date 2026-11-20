@@ -8,7 +8,7 @@
 import { eq, and, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { shifts, pushRemindersSent, hubs } from '../db/schema'
-import { ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './settings'
 import { permissionGranted } from '@shared/permissions'
 
 /** Validate HH:MM format (00:00-23:59) */
@@ -111,7 +111,7 @@ export class ShiftsService {
       .from(hubs)
       .where(eq(hubs.id, hubId))
       .limit(1)
-    if (!row) throw new ServiceError(404, 'Hub not found')
+    if (!row) throw new HubNotFoundError()
     return row.timezone
   }
 

@@ -213,6 +213,9 @@
     "noEntries": "شماره مسدودی وجود ندارد. برای مسدود کردن تماس‌گیرندگان هرزنامه، شماره اضافه کنید.",
     "phoneNumber": "شماره تلفن",
     "reason": "دلیل",
+    "reentryDescription": "این مسدودسازی‌ها دیگر تماس‌گیرندگان را مسدود نمی‌کنند. روش ذخیره مسدودسازی‌ها تغییر کرده و سرور هرگز شماره‌ها را نگه نداشته است، بنابراین نمی‌تواند آن‌ها را تبدیل کند. هر شماره را دوباره مسدود کنید و سپس ورودی آن را حذف کنید.",
+    "reentryDismiss": "حذف",
+    "reentryTitle": "مسدودسازی‌هایی که باید دوباره وارد شوند",
     "remove": "حذف مسدودیت",
     "removeConfirmMessage": "این تماس‌گیرنده دوباره می‌تواند به خط تماس برسد. فقط یک چکیدهٔ یک‌طرفهٔ شماره نگهداری می‌شود، پس فقط اگر هنوز شماره را داشته باشید می‌توانید دوباره آن را مسدود کنید. برداشتن مسدودسازی در گزارش ممیزی ثبت می‌شود.",
     "removeConfirmTitle": "این مسدودسازی برداشته شود؟",
@@ -799,6 +802,7 @@
     "callId": "شناسه تماس",
     "callIdBadge": "تماس",
     "callIdPlaceholder": "شناسه یا مرجع تماس",
+    "callIdRequired": "شناسه یا مرجع تماسی را که این یادداشت به آن تعلق دارد وارد کنید.",
     "callWith": "تماس با {{number}}",
     "chatIdBadge": "گفتگو",
     "conversationBadge": "گفتگو",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "از حساب خود خارج شدید، اما کلیدهای رمزگذاری‌شده شما از این دستگاه حذف نشدند.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "به‌جای تایپ پین، با اثر انگشت یا چهره خود قفل را باز کنید. پین شما همچنان کار می‌کند و هرگز غیرفعال نمی‌شود.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "دیگر تماس‌های ورودی را دریافت نخواهید کرد.",
     "deleteConfirmTitle": "این شیفت حذف شود؟",
-    "deleteConfirmMessage": "داوطلبان این شیفت در ساعات آن دیگر تماسی دریافت نخواهند کرد. اگر شیفت دیگری این ساعات را پوشش ندهد، تماس‌ها به گروه پشتیبان می‌روند یا اگر گروهی تعیین نشده باشد بی‌پاسخ می‌مانند. این کار قابل بازگشت نیست."
+    "deleteConfirmMessage": "داوطلبان این شیفت در ساعات آن دیگر تماسی دریافت نخواهند کرد. اگر شیفت دیگری این ساعات را پوشش ندهد، تماس‌ها به گروه پشتیبان می‌روند یا اگر گروهی تعیین نشده باشد بی‌پاسخ می‌مانند. این کار قابل بازگشت نیست.",
+    "noAdminReader": "ذخیره این متن ممکن نیست: هیچ مدیری در این مرکز دستگاه ثبت‌شده‌ای ندارد، بنابراین هیچ مدیری هرگز نمی‌تواند آن را بخواند. از یکی از مدیران مرکز بخواهید روی یک دستگاه وارد شود."
   },
   "shortcuts": {
     "answerCall": "پاسخ به تماس",
@@ -4031,6 +4037,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "تأیید سهم ناموفق بود",
+    "liveness": {
+      "title": "سهم بازیابی شما",
+      "description": "ثابت کنید این دستگاه هنوز سهم بازیابی شما را دارد. سهم شما هرگز از دستگاه خارج نمی‌شود؛ هاب فقط امضایی را که با آن ساخته شده بررسی می‌کند.",
+      "prove": "تأیید سهم من",
+      "proving": "در حال تأیید…",
+      "success": "سهم تأیید شد. مدیران سهم شما را سالم خواهند دید.",
+      "error": "تأیید سهم ناموفق بود"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

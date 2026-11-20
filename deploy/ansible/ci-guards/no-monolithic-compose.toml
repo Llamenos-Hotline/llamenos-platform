@@ -1,0 +1,36 @@
+name = "No monolithic compose path outside the legacy demo role"
+run = '''
+set -euo pipefail
+# roles/llamenos + playbooks/migrate-to-multi-host.yml are the
+# legacy single-compose layout (deploy-demo.yml only) and the
+# migration off it; both legitimately reference the old path.
+if grep -rn --include='*.yml' --include='*.j2' \
+     -e '{{ app_dir }}/docker-compose.yml' \
+     -e '{{app_dir}}/docker-compose.yml' \
+     deploy/ansible \
+     | grep -v '^deploy/ansible/roles/llamenos/' \
+     | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
+     | grep -v '^deploy/ansible/playbooks/group_vars/all/compose.yml' \
+     | grep -vE '^[^:]+:[0-9]+: *#' \
+     `# update.yml and rollback.yml still assume the monolithic` \
+     `# layout. Their blue/green and snapshot logic needs a` \
+     `# redesign, not a path swap -- tracked separately. They` \
+     `# are allowlisted so this guard protects the backup and` \
+     `# restore paths that ARE fixed, instead of being deleted.` \
+     | grep -v '^deploy/ansible/playbooks/update.yml' \
+     | grep -v '^deploy/ansible/playbooks/rollback.yml' ; then
+  echo "::error::Day-2 operations must resolve Compose files through"
+  echo "::error::group_vars/all/compose.yml, not {{ app_dir }}/docker-compose.yml"
+  echo "::error::which the production deploy never creates. See #1121."
+  exit 1
+fi
+echo "OK: no monolithic compose references outside the legacy demo role"
+'''
+why = """
+The multi-host refactor moved every service to its own Compose project under
+{{ app_dir }}/services/<svc>/. Day-2 operations kept pointing at a monolithic
+{{ app_dir }}/docker-compose.yml that the production deploy never creates, so
+backup, restore, update, rollback, security-update and the alert cron were all
+dead -- and invisibly so, because none of them runs on day one (#1121). Compose
+paths belong in group_vars/all/compose.yml.
+"""

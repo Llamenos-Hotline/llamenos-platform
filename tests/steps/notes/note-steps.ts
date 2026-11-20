@@ -30,6 +30,28 @@ When('I type {string} in the note text field', async ({ page }, text: string) =>
   await page.getByTestId(TestIds.NOTE_CONTENT).fill(text)
 })
 
+When('I enter the call reference {string} in the note form', async ({ page }, callId: string) => {
+  await fillCallId(page, callId)
+})
+
+Then('the note form should say a call reference is required', async ({ page }) => {
+  const error = page.getByTestId(TestIds.NOTE_FORM).getByTestId(TestIds.NOTE_CALL_ID_ERROR)
+  await expect(error).toBeVisible({ timeout: Timeouts.ELEMENT })
+})
+
+Then('the note form should not complain about the call reference', async ({ page }) => {
+  const error = page.getByTestId(TestIds.NOTE_FORM).getByTestId(TestIds.NOTE_CALL_ID_ERROR)
+  await expect(error).toHaveCount(0, { timeout: Timeouts.ELEMENT })
+})
+
+Then('the note form save button should be disabled', async ({ page }) => {
+  await expect(page.getByTestId(TestIds.FORM_SAVE_BTN)).toBeDisabled({ timeout: Timeouts.ELEMENT })
+})
+
+Then('the note form save button should be enabled', async ({ page }) => {
+  await expect(page.getByTestId(TestIds.FORM_SAVE_BTN)).toBeEnabled({ timeout: Timeouts.ELEMENT })
+})
+
 Then('the text {string} should be displayed', async ({ page }, text: string) => {
   await expect(page.getByTestId(TestIds.NOTE_CONTENT)).toHaveValue(text)
 })
@@ -293,9 +315,6 @@ Then('I should see the full notes list', async ({ page, backendRequest: request,
 
 When('I fill in the call ID with {string}', async ({ page }, callId: string) => {
   await fillCallId(page, callId)
-  await page.evaluate((id) => {
-    (window as unknown as Record<string, unknown>).__test_note_call_id = id
-  }, callId)
 })
 
 Then('I should see {string} in the notes list', async ({ page }, text: string) => {

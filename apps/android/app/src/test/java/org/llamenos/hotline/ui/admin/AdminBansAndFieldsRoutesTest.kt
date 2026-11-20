@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.admin
 
+import org.llamenos.hotline.crypto.CryptoService
 import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -123,7 +124,7 @@ class AdminBansAndFieldsRoutesTest {
         server.shutdown()
     }
 
-    private fun viewModel() = AdminViewModel(server.apiService, SavedStateHandle())
+    private fun viewModel() = AdminViewModel(server.apiService, SavedStateHandle(), CryptoService())
 
     // ── Ban list ─────────────────────────────────────────────────────────────
 

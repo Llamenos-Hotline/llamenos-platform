@@ -923,6 +923,21 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   // caller who was gone, and a volunteer who picked one up claimed a call with
   // no one on it. Read before the call ends, which deletes the recorded legs.
   // ('bridged' means a volunteer answered, and that answer already cancelled the others.)
+  //
+  // A caller sent to voicemail also stops being answerable (#2753): the call row
+  // leaves `ringing` BEFORE the legs are cancelled, so a pickup racing the cancel —
+  // a phone leg already answered, or an in-app answer, which no cancel can stop —
+  // finds nothing to claim. Clients are told it stopped ringing with the terminal
+  // `unanswered` status; the recording's own `voicemail:new` follows later.
+  if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
+    if (await services.calls.markLeftQueue(hubId, callSid)) {
+      publishEvent(c.env, KIND_CALL_UPDATE, {
+        type: 'call:update',
+        callId: callSid,
+        status: 'unanswered',
+      }, hubId)
+    }
+  }
   if (queueResult !== 'bridged') await cancelLosingLegs(c.env, services, hubId, callSid)
 
   if (queueResult === 'hangup') {

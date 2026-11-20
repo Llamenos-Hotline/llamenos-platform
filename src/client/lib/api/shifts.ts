@@ -1,7 +1,9 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
-import { request, activeHubPath } from './client'
+import { request, activeHubPath, hubPath } from './client'
 import type { CreateShiftBody, FallbackGroup } from '@protocol/schemas/shifts'
 import type { Shift, ShiftStatus } from '@protocol/schemas'
+import type { CreateShiftOverrideBody, ShiftOverride, ShiftOverrideListResponse } from '@protocol/schemas/shift-override'
+import type { AvailabilityBlock, AvailabilityBlockListResponse, CreateAvailabilityBlockBody } from '@protocol/schemas/shift-availability'
 
 export type { Shift, ShiftStatus }
 
@@ -9,6 +11,16 @@ export type { Shift, ShiftStatus }
 
 export async function getMyShiftStatus() {
   return request<ShiftStatus>(activeHubPath('/shifts/my-status'))
+}
+
+/**
+ * The user's shift state in an explicit hub, whichever hub the UI is showing. A
+ * clock-in is per hub, so anything that must act on every clock-in the user holds
+ * (the heartbeat sender) reads each member hub rather than only the active one
+ * (multi-hub axiom).
+ */
+export async function getMyShiftStatusIn(hubId: string) {
+  return request<ShiftStatus>(hubPath(hubId, '/shifts/my-status'))
 }
 
 // --- Shifts (admin only) ---
@@ -58,8 +70,14 @@ export async function clockOut() {
   return request<{ ok: true }>(activeHubPath('/shifts/clock-out'), { method: 'POST' })
 }
 
-export async function sendHeartbeat() {
-  return request<{ ok: true }>(activeHubPath('/shifts/heartbeat'), { method: 'POST' })
+/**
+ * Tell `hubId` this clocked-in client is still here. Takes the hub explicitly:
+ * a clock-in is per hub and the user may be clocked into several at once, so the
+ * heartbeat must reach each of them whichever hub the UI is showing (multi-hub
+ * axiom). Answers 404 when the user is not (or is no longer) clocked in there.
+ */
+export async function sendHeartbeat(hubId: string) {
+  return request<{ ok: true }>(hubPath(hubId, '/shifts/heartbeat'), { method: 'POST' })
 }
 
 export async function listActiveShifts() {
@@ -69,13 +87,13 @@ export async function listActiveShifts() {
 // --- Shift Overrides ---
 
 export async function listShiftOverrides(from: string, to: string) {
-  return request<{ overrides: Array<{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }> }>(
+  return request<ShiftOverrideListResponse>(
     activeHubPath(`/shifts/overrides?from=${from}&to=${to}`)
   )
 }
 
-export async function createShiftOverride(data: { id: string; shiftId?: string | null; date: string; type: 'cancel' | 'substitute'; userPubkeys?: string[] | null; encryptedNote?: string | null }) {
-  return request<{ id: string; hubId: string; shiftId: string | null; date: string; type: string; userPubkeys: string[] | null; encryptedNote: string | null; createdBy: string; createdAt: string }>(activeHubPath('/shifts/overrides'), {
+export async function createShiftOverride(data: CreateShiftOverrideBody) {
+  return request<ShiftOverride>(activeHubPath('/shifts/overrides'), {
     method: 'POST',
     body: JSON.stringify(data),
   })
@@ -90,17 +108,17 @@ export async function deleteShiftOverride(id: string, confirmed: DeletionConfirm
 // --- Availability Blocks ---
 
 export async function listAvailabilityBlocks(from: string, to: string) {
-  return request<{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }>(
+  return request<AvailabilityBlockListResponse>(
     activeHubPath(`/shifts/availability?from=${from}&to=${to}`)
   )
 }
 
 export async function listMyAvailabilityBlocks() {
-  return request<{ blocks: Array<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }> }>(activeHubPath('/shifts/availability/my'))
+  return request<AvailabilityBlockListResponse>(activeHubPath('/shifts/availability/my'))
 }
 
-export async function createAvailabilityBlock(data: { id: string; startDate: string; endDate: string; encryptedReason?: string | null }) {
-  return request<{ id: string; hubId: string; userPubkey: string; startDate: string; endDate: string; encryptedReason: string | null; createdAt: string }>(activeHubPath('/shifts/availability'), {
+export async function createAvailabilityBlock(data: CreateAvailabilityBlockBody) {
+  return request<AvailabilityBlock>(activeHubPath('/shifts/availability'), {
     method: 'POST',
     body: JSON.stringify(data),
   })

@@ -107,7 +107,7 @@ async function makeHub(label: string, founder: Person): Promise<string> {
   return id
 }
 
-const recipientsOf = (hubId: string | undefined) => identity.listAdminEnvelopeRecipients(ESCROW, hubId)
+const recipientsOf = async (hubId: string | undefined): Promise<string[]> => [...await identity.listAdminEnvelopeRecipients(ESCROW, hubId)]
 
 /** Resolve to the ServiceError an operation throws, or fail if it succeeds. */
 async function refusal(fn: () => Promise<unknown>): Promise<ServiceError> {

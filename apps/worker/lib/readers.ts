@@ -30,25 +30,52 @@
 import { eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { devices, hubs, users } from '../db/schema'
-import { READER_PURPOSE_PERMISSIONS, type RoleCatalog } from '@shared/permissions'
-import type { ReaderPurpose } from '@protocol/schemas/hubs'
-import { ServiceError } from '../services/settings'
+import { READER_PURPOSE_PERMISSIONS, SUBJECT_READER_PURPOSE_PERMISSIONS, type Permission, type RoleCatalog } from '@shared/permissions'
+import type { ReaderPurpose, SubjectReaderPurpose } from '@protocol/schemas/hubs'
+import { HubNotFoundError, ServiceError } from '../services/settings'
 import { resolveEncryptionPubkeys } from './encryption-keys'
 import { adminStateOf, holdsInHub, listHolderPubkeys } from './hub-admin'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from './hpke-recipient'
 
 /**
+ * What a hub member must hold, IN THE HUB, to be a reader of each tier of a
+ * contact (PROTOCOL §4.30, "Contact readers"). Each tier is the union of the
+ * holders of ANY listed permission set, and every tier also contains the hub's
+ * admin readers — the invariant that a contact is never sealed to a set without
+ * an admin in it.
+ *
+ * - `summary`: `contacts:view` — the permission the contact summary schema
+ *   (`contactSummarySchema`) documents as its audience — and `contacts:view-pii`,
+ *   so that whoever may open a contact's PII may also open what labels it.
+ *   `contacts:search` alone is NOT a reader: it finds a contact, it does not read it.
+ * - `pii`: `contacts:view-pii` (identifiers, demographics, emergency contacts).
+ *
+ * Tested through the same hub-roles-only predicate as the admin set, so a
+ * wildcard such as `contacts:*` qualifies and a global super-admin's `*` in
+ * `users.roles` does not.
+ */
+export const CONTACT_TIER_PERMISSIONS = {
+  summary: [['contacts:view'], ['contacts:view-pii']],
+  pii: [['contacts:view-pii']],
+} as const satisfies Record<string, readonly (readonly Permission[])[]>
+
+/**
  * What a member must hold IN THE HUB to set, rotate or clear its escrow key.
  *
  * A7: "set/rotated by hub admins (`hubs:manage-keys`)". The escrow key reads
- * every purpose, so installing one hands its holder a reader of everything the
- * hub seals. Nobody may confer read access they do not hold themselves: the
- * setter needs `hubs:manage-keys` AND every reader purpose's permissions (which
+ * every purpose and every contact tier, so installing one hands its holder a
+ * reader of everything the hub seals. Nobody may confer read access they do
+ * not hold themselves: the setter needs `hubs:manage-keys` AND every reader purpose's permissions (which
  * include the admin minimum). Otherwise a custom role granting only
  * `hubs:manage-keys` would be a path to reading every note.
  */
 export const HUB_ESCROW_MANAGE_PERMISSIONS: readonly string[] = [
-  ...new Set(['hubs:manage-keys', ...Object.values(READER_PURPOSE_PERMISSIONS).flat()]),
+  ...new Set([
+    'hubs:manage-keys',
+    ...Object.values(READER_PURPOSE_PERMISSIONS).flat(),
+    // The escrow key is a reader of every contact tier too (#2741).
+    ...Object.values(CONTACT_TIER_PERMISSIONS).flat(2),
+  ]),
 ]
 
 /** The hub's row as the escrow key needs it; `null` for an unknown hub. */
@@ -60,7 +87,7 @@ async function loadEscrowRow(db: Database, hubId: string): Promise<{ escrowPubke
 /** The hub's escrow key, or `undefined` when it has none. 404 for an unknown hub. */
 export async function getHubEscrowKey(db: Database, hubId: string): Promise<HpkeRecipientPubkey | undefined> {
   const row = await loadEscrowRow(db, hubId)
-  if (!row) throw new ServiceError(404, 'Hub not found')
+  if (!row) throw new HubNotFoundError()
   return hpkeRecipientPubkey(row.escrowPubkey)
 }
 
@@ -76,11 +103,19 @@ export async function getHubEscrowKey(db: Database, hubId: string): Promise<Hpke
  * (A8), never store under it.
  */
 export async function readersFor(db: Database, hubId: string, purpose: ReaderPurpose): Promise<HpkeRecipientPubkey[]> {
+  return deviceReaders(db, hubId, await listHolderPubkeys(db, hubId, READER_PURPOSE_PERMISSIONS[purpose]))
+}
+
+/**
+ * The device keys of `holders` (Ed25519 user ids, resolved HERE and never
+ * emitted), then the hub's escrow key when it has one. Deduplicated, in a
+ * stable order. A holder with no registered device contributes nothing.
+ */
+async function deviceReaders(db: Database, hubId: string, holders: readonly string[]): Promise<HpkeRecipientPubkey[]> {
   // An unknown hub has no members and no escrow: the empty set, which every
   // sealing caller refuses. Routes 404 an unknown hub before asking.
   const escrow = hpkeRecipientPubkey((await loadEscrowRow(db, hubId))?.escrowPubkey)
-  const holders = await listHolderPubkeys(db, hubId, READER_PURPOSE_PERMISSIONS[purpose])
-  const byUser = await resolveEncryptionPubkeys(db, holders)
+  const byUser = await resolveEncryptionPubkeys(db, [...holders])
 
   const seen = new Set<string>()
   const readers: HpkeRecipientPubkey[] = []
@@ -93,6 +128,86 @@ export async function readersFor(db: Database, hubId: string, purpose: ReaderPur
     for (const key of byUser.get(holder) ?? []) add(hpkeRecipientPubkey(key))
   }
   add(escrow)
+  return readers
+}
+
+/** The readers of one hub's contacts, per tier, every entry an X25519 device key or the hub's escrow key. */
+export interface ContactReaders {
+  /** Everyone who may open a contact's summary. */
+  summary: HpkeRecipientPubkey[]
+  /** Everyone who may open a contact's PII. A subset of `summary`. */
+  pii: HpkeRecipientPubkey[]
+  /**
+   * Admin readers only (the `admin` reader set): for the contact-adjacent
+   * records no member below an admin may read — affinity groups and
+   * relationships.
+   */
+  admin: HpkeRecipientPubkey[]
+}
+
+/**
+ * The reader sets of `hubId`'s contacts. See {@link CONTACT_TIER_PERMISSIONS}.
+ *
+ * Every tier contains {@link ContactReaders.admin}, so when the hub has no
+ * admin reader at all (no admin has a registered device and there is no escrow
+ * key — a deployment-level failure) the whole answer is refused with a 503
+ * rather than named: a reader set with no admin in it is the defect this
+ * exists to prevent (#2741), and the client must not seal one.
+ */
+export async function contactReadersFor(db: Database, hubId: string): Promise<ContactReaders> {
+  const adminHolders = await listHolderPubkeys(db, hubId, READER_PURPOSE_PERMISSIONS.admin)
+  const tierHolders = async (anyOf: readonly (readonly string[])[]): Promise<string[]> => {
+    const holders = new Set(adminHolders)
+    for (const required of anyOf) for (const holder of await listHolderPubkeys(db, hubId, required)) holders.add(holder)
+    return [...holders]
+  }
+  const admin = await deviceReaders(db, hubId, adminHolders)
+  if (admin.length === 0) {
+    throw new ServiceError(503, 'This hub has no admin reader (no admin device registered and no escrow key); contacts cannot be sealed to anyone who can recover them')
+  }
+  return {
+    summary: await deviceReaders(db, hubId, await tierHolders(CONTACT_TIER_PERMISSIONS.summary)),
+    pii: await deviceReaders(db, hubId, await tierHolders(CONTACT_TIER_PERMISSIONS.pii)),
+    admin,
+  }
+}
+
+/**
+ * The SUBJECT reader set of a record of `hubId` (PROTOCOL §2.4.2, "Subject
+ * readers"): the registered device X25519 keys of `subjectPubkey` — the one
+ * member the record is about, e.g. the volunteer who answered a call — when,
+ * and only when, they hold the purpose's permissions in that hub. Never anyone
+ * else's keys, and never the escrow key (the hub-wide sets a record is also
+ * sealed to already carry it).
+ *
+ * Resolved with the same candidate filter and hub-roles-only predicate as
+ * {@link readersFor}: a subject who has left the hub, is mid-erasure, or holds
+ * the permission only through a global role is not a reader. Empty when they
+ * hold nothing, or hold it with no registered device — a subject reader set is
+ * an ADDITION to a hub-wide set, so empty is not an A8 violation on its own;
+ * the caller refuses or alerts on the union, never on this part.
+ *
+ * Fixed at seal time like every reader set: a member granted the permission
+ * later does not gain records sealed before. For `call-history-own` that costs
+ * nothing — a volunteer's own calls are answered after they hold it (#1342).
+ */
+export async function subjectReadersFor(
+  db: Database,
+  hubId: string,
+  purpose: SubjectReaderPurpose,
+  subjectPubkey: string,
+): Promise<HpkeRecipientPubkey[]> {
+  const holders = await listHolderPubkeys(db, hubId, SUBJECT_READER_PURPOSE_PERMISSIONS[purpose])
+  if (!holders.includes(subjectPubkey)) return []
+  const keys = (await resolveEncryptionPubkeys(db, [subjectPubkey])).get(subjectPubkey) ?? []
+  const seen = new Set<string>()
+  const readers: HpkeRecipientPubkey[] = []
+  for (const raw of keys) {
+    const key = hpkeRecipientPubkey(raw)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    readers.push(key)
+  }
   return readers
 }
 
@@ -182,7 +297,10 @@ export async function setHubEscrowKey(
     .set({ escrowPubkey, updatedAt: new Date() })
     .where(eq(hubs.id, hubId))
     .returning({ id: hubs.id })
-  if (updated.length === 0) throw new ServiceError(404, 'Hub not found')
+  // The UPDATE's only predicate is the hub's id, so zero rows IS the hub row being
+  // absent — here the write is itself the lookup (set never reads the hub first).
+  // An UPDATE with any further predicate would not be, and must not use this error.
+  if (updated.length === 0) throw new HubNotFoundError()
 }
 
 /**
@@ -209,5 +327,7 @@ export async function clearHubEscrowKey(db: Database, hubId: string): Promise<vo
     .set({ escrowPubkey: null, updatedAt: new Date() })
     .where(eq(hubs.id, hubId))
     .returning({ id: hubs.id })
-  if (updated.length === 0) throw new ServiceError(404, 'Hub not found')
+  // The UPDATE's only predicate is the hub's id (see setHubEscrowKey): zero rows is
+  // the hub row being gone, here lost to a delete between the read above and this write.
+  if (updated.length === 0) throw new HubNotFoundError()
 }

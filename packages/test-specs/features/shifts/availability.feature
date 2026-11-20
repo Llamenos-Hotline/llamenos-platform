@@ -44,11 +44,17 @@ Feature: Availability Blocks
       | endDate   | "2026-07-01"  |
     Then the response status should be 400
 
-  Scenario: Create availability block with encrypted reason
-    When I POST to "/hubs/{hubId}/shifts/availability" with:
-      | id              | a valid UUID        |
-      | startDate       | "2026-08-01"         |
-      | endDate         | "2026-08-05"         |
-      | encryptedReason | "encrypted-reason"  |
+  # #2777: the reason is a volunteer's personal circumstance. It is sealed on the
+  # client to the volunteer and the hub's admins; the server stores ciphertext.
+  Scenario: An availability reason is stored sealed, and an admin can open it
+    When I save a reason "court date" sealed to myself and the hub admins
     Then the response status should be 200
-    And the response body "encryptedReason" should not be null
+    And the stored reason is ciphertext an admin opens as "court date"
+
+  Scenario: An availability reason sent as the typed text is refused
+    When I save a reason "medical appointment" as plain text
+    Then the response status should be 400
+
+  Scenario: An availability reason no admin can open is refused
+    When I save a reason "childcare" sealed only to myself
+    Then the response status should be 422

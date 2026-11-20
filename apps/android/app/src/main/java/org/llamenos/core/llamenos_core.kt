@@ -647,6 +647,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_is_valid_pin(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_ban_digest_blind(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_ban_digest_finalize(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_sas_code(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_shared_x_hex(
@@ -664,6 +668,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_group_generate_keypair(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_shamir_combine(
     ): Short
@@ -769,6 +775,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_open_case(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_open_shift_field(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_create(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_puk_derive_state(
@@ -779,7 +787,11 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_seal_case(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_seal_shift_field(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_set_hub_key(
     ): Short
@@ -828,6 +840,10 @@ external fun uniffi_llamenos_core_fn_func_encrypt_with_pin(`keyMaterial`: RustBu
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_is_valid_pin(`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+external fun uniffi_llamenos_core_fn_func_ban_digest_blind(`phone`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_ban_digest_finalize(`phone`: RustBuffer.ByValue,`blindHex`: RustBuffer.ByValue,`evaluatedElementHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_sas_code(`sharedXHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_shared_x_hex(`ourSecretHex`: RustBuffer.ByValue,`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -845,6 +861,8 @@ external fun uniffi_llamenos_core_fn_func_hpke_wrap_key_hex(`keyHex`: RustBuffer
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_group_generate_keypair(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_group_split_private_key(`handle`: Long,`total`: Byte,`threshold`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(`share`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_shamir_combine(`shares`: RustBuffer.ByValue,`threshold`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -950,6 +968,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_lock(uniffi_out_err: UniffiRust
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_open_case(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_open_shift_field(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_create(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_derive_state(`seedHex`: RustBuffer.ByValue,`generation`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -960,7 +980,11 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: Rus
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(`shareEnvelope`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`challengeHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_seal_case(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_seal_shift_field(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_set_hub_key(`hubId`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1121,6 +1145,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_is_valid_pin() != 51720.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_ban_digest_blind() != 43517.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_ban_digest_finalize() != 8758.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_compute_sas_code() != 62033.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1146,6 +1176,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key() != 15169.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key() != 23991.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_shamir_combine() != 20665.toShort()) {
@@ -1292,7 +1325,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 63290.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 48594.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647.toShort()) {
@@ -1302,6 +1335,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_open_shift_field() != 64391.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309.toShort()) {
@@ -1319,7 +1355,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_shift_field() != 23967.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956.toShort()) {
@@ -1667,6 +1709,48 @@ public object FfiConverterTypeAuthToken: FfiConverterRustBuffer<AuthToken> {
             FfiConverterULong.write(value.`timestamp`, buf)
             FfiConverterString.write(value.`token`, buf)
             FfiConverterOptionalString.write(value.`nonce`, buf)
+    }
+}
+
+
+
+/**
+ * The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+ * server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+ */
+data class BanDigestBlind (
+    val `blindHex`: kotlin.String
+    , 
+    val `blindedElementHex`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeBanDigestBlind: FfiConverterRustBuffer<BanDigestBlind> {
+    override fun read(buf: ByteBuffer): BanDigestBlind {
+        return BanDigestBlind(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: BanDigestBlind) = (
+            FfiConverterString.allocationSize(value.`blindHex`) +
+            FfiConverterString.allocationSize(value.`blindedElementHex`)
+    )
+
+    override fun write(value: BanDigestBlind, buf: ByteBuffer) {
+            FfiConverterString.write(value.`blindHex`, buf)
+            FfiConverterString.write(value.`blindedElementHex`, buf)
     }
 }
 
@@ -2080,6 +2164,55 @@ public object FfiConverterTypeEncryptedNote: FfiConverterRustBuffer<EncryptedNot
             FfiConverterString.write(value.`encryptedContent`, buf)
             FfiConverterTypeKeyEnvelope.write(value.`authorEnvelope`, buf)
             FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`adminEnvelopes`, buf)
+    }
+}
+
+
+
+/**
+ * A sealed shift field in wire form: the ciphertext plus one envelope per
+ * reader. Maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+data class EncryptedShiftField (
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    val `encryptedContent`: kotlin.String
+    , 
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    val `readerEnvelopes`: List<RecipientKeyEnvelope>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEncryptedShiftField: FfiConverterRustBuffer<EncryptedShiftField> {
+    override fun read(buf: ByteBuffer): EncryptedShiftField {
+        return EncryptedShiftField(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeRecipientKeyEnvelope.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EncryptedShiftField) = (
+            FfiConverterString.allocationSize(value.`encryptedContent`) +
+            FfiConverterSequenceTypeRecipientKeyEnvelope.allocationSize(value.`readerEnvelopes`)
+    )
+
+    override fun write(value: EncryptedShiftField, buf: ByteBuffer) {
+            FfiConverterString.write(value.`encryptedContent`, buf)
+            FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`readerEnvelopes`, buf)
     }
 }
 
@@ -2906,6 +3039,50 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
 
 
 
+/**
+ * What a shift ciphertext is. The only choice a caller makes — it names the
+ * field being sealed, never how. A UniFFI enum on mobile.
+ */
+
+enum class ShiftFieldPurpose {
+    
+    /**
+     * A volunteer's reason for an availability block.
+     */
+    AVAILABILITY_REASON,
+    /**
+     * The note on a shift override.
+     */
+    OVERRIDE_NOTE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeShiftFieldPurpose: FfiConverterRustBuffer<ShiftFieldPurpose> {
+    override fun read(buf: ByteBuffer) = try {
+        ShiftFieldPurpose.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ShiftFieldPurpose) = 4UL
+
+    override fun write(value: ShiftFieldPurpose, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 /**
  * @suppress
@@ -3132,6 +3309,35 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Blind an E.164 phone number for a ban digest. The server never sees the number.
+         */
+    @Throws(CryptoException::class) fun `banDigestBlind`(`phone`: kotlin.String): BanDigestBlind {
+            return FfiConverterTypeBanDigestBlind.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_ban_digest_blind(
+    
+        FfiConverterString.lower(`phone`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+         * the `phoneHash` a platform-ban request carries.
+         */
+    @Throws(CryptoException::class) fun `banDigestFinalize`(`phone`: kotlin.String, `blindHex`: kotlin.String, `evaluatedElementHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_ban_digest_finalize(
+    
+        FfiConverterString.lower(`phone`),FfiConverterString.lower(`blindHex`),FfiConverterString.lower(`evaluatedElementHex`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Derive a 6-digit SAS code from an ECDH shared secret.
          */
     @Throws(CryptoException::class) fun `computeSasCode`(`sharedXHex`: kotlin.String): kotlin.String {
@@ -3279,6 +3485,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_group_split_private_key(
     
         FfiConverterULong.lower(`handle`),FfiConverterUByte.lower(`total`),FfiConverterUByte.lower(`threshold`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+         * share (#2782). An enrolling client computes one per share and sends it beside
+         * the holder's share envelope; see `recovery_liveness`.
+         */
+    @Throws(CryptoException::class) fun `mobileRecoveryLivenessPublicKey`(`share`: ShamirShare): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(
+    
+        FfiConverterTypeShamirShare.lower(`share`),_status)
 }
     )
     }
@@ -4033,17 +4255,19 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Unwrap a hub key from server-provided HPKE envelope fields and store in state.
+         * Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
          *
-         * The caller provides only `enc` and `ct` from the server response. The envelope
-         * version and label ID are constructed by Rust from the label registry — clients
-         * never need to hardcode protocol constants.
+         * `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
+         * **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
+         * envelope version, registry `labelId`, label and AAD are fixed here, by
+         * [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
+         * loader calls — so no client hardcodes a protocol constant.
          *
-         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
-         * what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
-         * desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
-         * with the other two clients and with none of the spec, the crate's own
-         * wrap/unwrap pair, or the interop vectors.
+         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
+         * [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
+         * until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
+         * the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
+         * server ever stored could open on Android.
          */
     @Throws(CryptoException::class) fun `mobileLoadHubKey`(`hubId`: kotlin.String, `enc`: kotlin.String, `ct`: kotlin.String)
         = 
@@ -4093,6 +4317,21 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_case(
     
         FfiConverterTypeCasePurpose.lower(`purpose`),FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Open a shift field as this device from all of its envelopes; Rust picks the
+         * one addressed to this device's X25519 key.
+         */
+    @Throws(CryptoException::class) fun `mobileOpenShiftField`(`purpose`: ShiftFieldPurpose, `encryptedContent`: kotlin.String, `envelopes`: List<RecipientKeyEnvelope>): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_shift_field(
+    
+        FfiConverterTypeShiftFieldPurpose.lower(`purpose`),FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
 }
     )
     }
@@ -4169,6 +4408,27 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Prove this device still holds its recovery share (#2782).
+         *
+         * Opens `share_envelope` (sealed to this device under
+         * `LABEL_RECOVERY_GROUP_SHARE_WRAP`) with the device key in mobile state,
+         * derives the share's liveness key and signs the server's single-use
+         * `challenge_hex`, bound to `hub_id` and to this device's own signing pubkey —
+         * the identity the server authenticates the submission as. Returns the 64-byte
+         * proof as hex. Neither the share nor the derived key leaves Rust.
+         */
+    @Throws(CryptoException::class) fun `mobileRecoveryShareLivenessProof`(`shareEnvelope`: HpkeEnvelope, `hubId`: kotlin.String, `challengeHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(
+    
+        FfiConverterTypeHpkeEnvelope.lower(`shareEnvelope`),FfiConverterString.lower(`hubId`),FfiConverterString.lower(`challengeHex`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Seal a case ciphertext — a record's summary or fields, or a comment — as
          * this device, for this device plus `reader_pubkeys` (X25519, hex).
          *
@@ -4183,6 +4443,25 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_seal_case(
     
         FfiConverterTypeCasePurpose.lower(`purpose`),FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal an availability reason or a shift override note as this device, for
+         * this device plus `reader_pubkeys` (X25519, hex).
+         *
+         * No label and no AAD argument: `crate::shift_record` derives both from
+         * `purpose`. The result maps onto `encryptedReason`/`reasonEnvelopes` and
+         * `encryptedNote`/`noteEnvelopes` unchanged.
+         */
+    @Throws(CryptoException::class) fun `mobileSealShiftField`(`purpose`: ShiftFieldPurpose, `plaintext`: kotlin.String, `readerPubkeys`: List<kotlin.String>): EncryptedShiftField {
+            return FfiConverterTypeEncryptedShiftField.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_seal_shift_field(
+    
+        FfiConverterTypeShiftFieldPurpose.lower(`purpose`),FfiConverterString.lower(`plaintext`),FfiConverterSequenceString.lower(`readerPubkeys`),_status)
 }
     )
     }

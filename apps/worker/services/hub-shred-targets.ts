@@ -218,6 +218,9 @@ export const HUB_SHRED_TARGETS: readonly HubShredTarget[] = [
   // --- Class D: key-recovery paths ----------------------------------------
   // Destroying hub_keys while leaving these behind is not a shred at all: a
   // threshold of share holders reconstructs the hub recovery secret.
+  // Outstanding liveness challenges (#2782) — would cascade from the share rows,
+  // listed so the inventory names every hub-scoped recovery table itself.
+  { kind: 'delete-rows', table: 'recovery_liveness_challenges', scope: BY_HUB },
   { kind: 'delete-rows', table: 'hub_recovery_group_shares', scope: BY_HUB },
   { kind: 'delete-rows', table: 'hub_recovery_groups', scope: BY_HUB },
   { kind: 'delete-rows', table: 'user_recovery_envelopes', scope: BY_HUB },

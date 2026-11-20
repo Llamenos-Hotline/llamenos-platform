@@ -10,6 +10,7 @@ import {
   type Hub,
 } from '@/lib/api'
 import { useToast } from '@/lib/toast'
+import { ensureHubKey } from '@/lib/hub-key-manager'
 import { useConfig } from '@/lib/config'
 import { Building2, Plus, Pencil, Phone, Trash2 } from 'lucide-react'
 import { AlertTriangle } from 'lucide-react'
@@ -38,7 +39,7 @@ export const Route = createFileRoute('/admin/hubs')({
 export function HubsPage() {
   const { t } = useTranslation()
   const { hasPermission } = useAuth()
-  const { refreshMemberHubs } = useConfig()
+  const { refreshMemberHubs, dropMemberHub } = useConfig()
   const { toast } = useToast()
   const [hubs, setHubs] = useState<Hub[]>([])
   const [loading, setLoading] = useState(true)
@@ -145,6 +146,7 @@ export function HubsPage() {
           hub={deletingHub}
           onDeleted={(hubId) => {
             setHubs(prev => prev.filter(h => h.id !== hubId))
+            dropMemberHub(hubId)
             setDeletingHub(null)
           }}
         />
@@ -238,6 +240,13 @@ function CreateHubDialog({
         ...(description.trim() && { description: description.trim() }),
         ...(phoneNumber.trim() && { phoneNumber: phoneNumber.trim() }),
         timezone: timezone.trim(),
+      })
+      // The creator is the new hub's founding admin, so this device generates
+      // its key now and wraps it for the creator: the hub's tags, teams and
+      // role names are sealed under it from the first write. If this does not
+      // complete (offline, a crash), `useHubKeys` finishes it on the next sync.
+      await ensureHubKey(res.hub.id).catch((err: unknown) => {
+        console.error(`[hub-key] hub ${res.hub.id}: generating its key failed`, err)
       })
       onCreated(res.hub)
       resetForm()

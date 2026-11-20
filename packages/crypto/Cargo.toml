@@ -13,6 +13,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # Ed25519 signing
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 
+# ristretto255 for the RFC 9497 OPRF behind ban digests (ban_digest.rs). Already in the
+# graph via ed25519-dalek; named directly so the crate owns the group it uses.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
 # X25519 key agreement
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 
@@ -20,11 +24,16 @@ x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
 
 # AES-256-GCM (standalone symmetric operations — PIN encryption, items_key)
-aes-gcm = "0.10"
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+# aes-gcm's own `zeroize` feature only wipes the GHASH subkey. The expanded AES
+# key schedule (a full copy of the key) is wiped by the cipher crate's feature,
+# which cargo unifies onto the `aes` that aes-gcm builds on. Without this every
+# AEAD call leaves a copy of its key in the freed stack/heap (#1107).
+aes = { version = "0.8", features = ["zeroize"] }
 
 # Key derivation
 hkdf = "0.12"
-argon2 = "0.5"
+argon2 = { version = "0.5", features = ["zeroize"] }
 
 # Hashing
 sha2 = "0.10"
@@ -36,8 +45,11 @@ zeroize = { version = "1", features = ["derive"] }
 # Unicode normalization (for blind index canonicalization)
 unicode-normalization = "0.1"
 
-# Date/time (for blind index epoch bucketing)
-chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# NOTE: there is deliberately no date/time crate. Blind-index epoch bucketing
+# (blind_index.rs) parses `YYYY-MM-DD` and computes the ISO week itself, pinned
+# to the semantics of the `chrono` code it replaced (chrono is unmaintained,
+# RUSTSEC-2026-0543). Do not reintroduce one without re-running the golden
+# vectors in blind_index.rs.
 
 # Encoding
 hex = "0.4"

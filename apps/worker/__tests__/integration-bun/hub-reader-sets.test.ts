@@ -35,7 +35,8 @@ import { assertMayManageHubEscrow, HUB_ESCROW_MANAGE_PERMISSIONS } from '../../l
 import hubsRoutes from '../../routes/hubs'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, READER_PURPOSE_PERMISSIONS, resolvePermissions, type Role } from '@shared/permissions'
-import { hubReadersResponseSchema } from '@protocol/schemas/hubs'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
+import { hubReadersResponseSchema, type ReaderPurpose } from '@protocol/schemas/hubs'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
@@ -104,7 +105,7 @@ async function refusal(fn: () => Promise<unknown> | unknown): Promise<ServiceErr
 }
 
 /** The reader set as plain strings, so fixtures' unbranded keys compare against it. */
-const readersOf = async (hubId: string, purpose: 'admin' | 'call-history'): Promise<string[]> => identity.readersFor(hubId, purpose)
+const readersOf = async (hubId: string, purpose: ReaderPurpose): Promise<string[]> => identity.readersFor(hubId, purpose)
 
 const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
 
@@ -161,6 +162,22 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
     expect(admins).not.toContain(analyst.deviceKey)
   })
 
+  it('shift-overrides = holders of shifts:manage-overrides, who need not be admins (#2778)', async () => {
+    const founder = await makePerson('rs-so-founder')
+    const hubId = await makeHub('rs-so', founder)
+    const coordinatorRole = await makeRole([...READER_PURPOSE_PERMISSIONS['shift-overrides']])
+    const coordinator = await makePerson('rs-so-coord', { hubRoles: [{ hubId, roleIds: [coordinatorRole] }] })
+    const volunteer = await makePerson('rs-so-vol', { hubRoles: [{ hubId, roleIds: ['role-volunteer'] }] })
+
+    const overrides = await readersOf(hubId, 'shift-overrides')
+    expect(overrides).toContain(coordinator.deviceKey)
+    expect(overrides).toContain(founder.deviceKey) // role-hub-admin grants shifts:*
+    expect(overrides).not.toContain(volunteer.deviceKey)
+    // A coordinator is not an admin: a note sealed only to this set could miss
+    // every admin, so clients seal to `admin` as well and the write guard checks it.
+    expect(await readersOf(hubId, 'admin')).not.toContain(coordinator.deviceKey)
+  })
+
   it('holds a role only for the hub it is held in', async () => {
     const founderA = await makePerson('rs-a')
     const hubA = await makeHub('rs-a', founderA)
@@ -191,6 +208,19 @@ describe('readersFor: who is in a purpose\'s reader set', () => {
 })
 
 describe('the hub escrow key (D1, A7)', () => {
+  it('answers HUB_NOT_FOUND for a hub that does not exist, on every path that looks the hub up', async () => {
+    const missing = crypto.randomUUID()
+    for (const read of [
+      () => identity.getHubEscrowKey(missing),
+      () => identity.setHubEscrowKey(missing, x25519('ee'), undefined),
+      () => identity.clearHubEscrowKey(missing),
+    ]) {
+      const err = await refusal(read)
+      expect(err.status).toBe(404)
+      expect(err.code).toBe(HUB_NOT_FOUND_CODE)
+    }
+  })
+
   it('is a member of every purpose\'s set, and an escrow-only note is accepted', async () => {
     const founder = await makePerson('esc-founder')
     const hubId = await makeHub('esc', founder)

@@ -36,6 +36,9 @@ app:
     # to a store listing or download page (the app refuses to boot on anything
     # else). Empty: the page offers "Open in app" alone.
     APP_DOWNLOAD_URL: ""
+    # Set for ONE boot to acknowledge a deliberately replaced ban-hash-key (#2829); the app's
+    # refusal prints the value. Leave empty otherwise.
+    BAN_KEY_REPLACED_ACK: ""
 
 # PostgreSQL connection
 postgres:

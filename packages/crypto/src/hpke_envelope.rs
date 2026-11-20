@@ -29,7 +29,7 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use hpke::aead::AesGcm256;
 use hpke::kdf::HkdfSha256;
@@ -161,18 +161,15 @@ pub fn hpke_open(
     }
 
     // Step 4: Parse secret key
-    let mut sk_bytes =
-        hex::decode(recipient_secret_hex).map_err(|_| CryptoError::DecryptionFailed)?;
+    let sk_bytes = Zeroizing::new(
+        hex::decode(recipient_secret_hex).map_err(|_| CryptoError::DecryptionFailed)?,
+    );
     if sk_bytes.len() != 32 {
-        sk_bytes.zeroize();
         return Err(CryptoError::DecryptionFailed);
     }
 
-    let sk = <Kem as KemTrait>::PrivateKey::from_bytes(&sk_bytes).map_err(|_| {
-        sk_bytes.zeroize();
-        CryptoError::DecryptionFailed
-    })?;
-    sk_bytes.zeroize();
+    let sk = <Kem as KemTrait>::PrivateKey::from_bytes(&sk_bytes)
+        .map_err(|_| CryptoError::DecryptionFailed)?;
 
     // Step 5: Decode enc and ct from base64url
     let enc_bytes = URL_SAFE_NO_PAD

@@ -1,7 +1,7 @@
 import { type APIRequestContext, type Page } from '@playwright/test'
 import { test, expect } from '../console-guard'
 import { loginAsAdmin, TEST_PIN, Timeouts } from '../helpers'
-import { apiDelete, apiPost, uniqueName } from '../api-helpers'
+import { createOwnHubViaApi } from '../api-helpers'
 import { TestIds } from '../test-ids'
 
 /**
@@ -32,6 +32,7 @@ interface TestWindow {
   __TEST_PLATFORM: typeof import('../../src/client/lib/platform')
   __TEST_API_CONFIG: typeof import('../../src/client/lib/api-config')
   __TEST_GET_ACTIVE_HUB: () => string | null
+  __TEST_HUB_KEYS_SETTLED: () => Promise<void>
   __TEST_SIMULATE_PACKAGED_TAURI__?: boolean
 }
 
@@ -48,9 +49,7 @@ interface LiveSession {
  * so the active-hub assertions never depend on what other suites have created.
  */
 async function useOwnHub(page: Page, request: APIRequestContext): Promise<string> {
-  const { status, data } = await apiPost<{ hub: { id: string } }>(request, '/hubs', { name: uniqueName('Server switch') })
-  expect(status, 'admin could not create a hub').toBe(201)
-  const hubId = data.hub.id
+  const hubId = await createOwnHubViaApi(request, 'Server switch')
   await page.addInitScript((id) => {
     (window as unknown as Record<string, unknown>).__TEST_WORKER_HUB = id
   }, hubId)
@@ -103,7 +102,7 @@ async function navigateInApp(page: Page, to: string, search: Record<string, stri
  * synchronous: it settles in the microtask checkpoint right after the handler,
  * long before the reloaded document commits.
  */
-const UNLOAD_SNAPSHOT_KEY = '__test_state_at_unload'
+const UNLOAD_SNAPSHOT_KEY = '__TEST_STATE_AT_UNLOAD__'
 
 async function recordStateAtUnload(page: Page): Promise<void> {
   await page.evaluate(({ tokenKey, snapshotKey }) => {
@@ -153,19 +152,8 @@ async function openInviteScreenWithLiveSession(page: Page, hubId: string): Promi
 }
 
 test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
-  const createdHubs: string[] = []
-
-  test.afterEach(async ({ page, request }) => {
-    // The page outlives this hook (fixtures are torn down after afterEach) and its
-    // hub polls keep running; deleting the hub beneath it makes every poll a 404
-    // that the console guard then rightly reports. Stop the app first.
-    await page.goto('about:blank')
-    for (const hubId of createdHubs.splice(0)) await apiDelete(request, `/hubs/${hubId}`)
-  })
-
   test('a signed-in user sent to the invite-code screen is returned to the app without the page ever loading', async ({ page, request }) => {
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     const origin = await simulatePackagedBuildOnOwnOrigin(page)
 
@@ -197,7 +185,6 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
 
@@ -219,7 +206,6 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     const origin = await simulatePackagedBuildOnOwnOrigin(page)
     await openInviteScreenWithLiveSession(page, hubId)
@@ -251,9 +237,13 @@ test.describe('invite-code screen on a packaged desktop build (#1166)', () => {
       reason: 'the test signs the session out; a hub poll already in flight reaches the server without a token',
     })
     const hubId = await useOwnHub(page, request)
-    createdHubs.push(hubId)
     await loginAsAdmin(page)
     await simulatePackagedBuildOnOwnOrigin(page)
+    // The app is still working through its hubs' keys (a chain of requests per hub
+    // that lasts as long as the hub list is long). The token set next is one the
+    // server rejects, so anything launched under it is a 401 that no part of the
+    // app could have avoided: it is put in place only once nothing is in flight.
+    await page.evaluate(() => (window as unknown as TestWindow).__TEST_HUB_KEYS_SETTLED())
     await page.evaluate((tokenKey) => sessionStorage.setItem(tokenKey, 'passkey-session-issued-by-the-old-server'), SESSION_TOKEN_KEY)
     expect(await readLiveSession(page)).toEqual({ cryptoUnlocked: true, activeHub: hubId, sessionToken: 'passkey-session-issued-by-the-old-server' })
 

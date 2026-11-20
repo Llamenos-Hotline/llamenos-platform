@@ -210,6 +210,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.22 (2026-11-20)
+
+### Fixes
+
+- platform bans carry an OPRF ban digest; the server never receives the number (#2759) (#2829)
+
+## 0.21.21 (2026-11-20)
+
+### Fixes
+
+- hub-is-gone is a typed HUB_NOT_FOUND code, not an English 404 message (#2873)
+- refuse a stale src/main/jniLibs in the build (#2854)
+
+## 0.21.20 (2026-11-19)
+
+### Features
+
+- name a contact's readers per tier (summary/pii/admin) so contact writes can seal to them (#2853)
+
+### Fixes
+
+- drop a hub the server says is gone from the membership snapshot (#2865)
+
+## 0.21.19 (2026-11-19)
+
+### Fixes
+
+- zeroize hub keys, KEKs and PUK seeds on every exit path (#2847)
+- Settings Log Out removes the stored device keys it says it removes (#2845)
+
+## 0.21.18 (2026-11-18)
+
+### Fixes
+
+- seal inbound messages to the hub's admin reader set, not an env var (#2843)
+- a caller sent to voicemail stops being ringing and answerable (#2858)
+- do not issue hub-scoped requests without a session (#2851) (#2856)
+
+## 0.21.17 (2026-11-18)
+
+### Fixes
+
+- explain why New Note cannot save without a call reference (#2688)
+
+## 0.21.16 (2026-11-17)
+
+### Features
+
+- volunteers read their own call history inside a hub access window (#1342) (#2807)
+
+### Fixes
+
+- seal hub role names under the hub key; no plaintext role vocabulary server-side (#2780) (#2788)
+- deploy.yml run on its own refuses to place secrets on an unencrypted host (#2616)
+- seal the offline write queue under a device-local key so queued writes survive a restart (#2797)
+- delete GET /api/config/pins — pins are compiled into clients (#2708) (#2749)
+
 ## 0.21.15 (2026-11-16)
 
 ### Fixes

@@ -58,6 +58,8 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // Hub key management (stateful — key never enters JS)
     'hpke_unwrap_and_set_hub_key',
     'generate_hub_key_in_state',
+    'has_hub_key',
+    'forget_hub_key',
     'wrap_hub_key_for_member',
     // Hub-key field encryption (team/tag names — key stays in Rust)
     'encrypt_hub_field',
@@ -93,9 +95,13 @@ window.__TAURI_ISOLATION_HOOK__ = (payload) => {
     // Shamir verification (split/combine are internal-only — secrets never enter JS)
     'shamir_commit',
     'shamir_verify',
+    // Ban digest (#2759) — blind/finalize a typed number; the key never leaves the server
+    'ban_digest_blind',
+    'ban_digest_finalize',
     // H16: Recovery group key isolation — private key AND plaintext shares never enter JS
     'recovery_group_create',
     'recovery_share_contribute_from_state',
+    'recovery_share_liveness_proof_from_state',
     'recovery_group_reconstruct_from_shares',
     'recovery_group_decrypt',
     // Window plugin commands (window management + tray toggle)

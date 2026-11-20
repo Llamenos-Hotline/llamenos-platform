@@ -29,10 +29,10 @@ When('I click the platform bans create button', async ({ page }) => {
   await page.getByTestId('platform-bans-create-btn').click()
 })
 
-Then('I should see a dialog for entering phone hash and reason', async ({ page }) => {
-  const hashInput = page.getByTestId('ban-phone-hash-input')
+Then('I should see a dialog for entering a phone number and reason', async ({ page }) => {
+  const phoneInput = page.getByTestId('ban-phone-input')
   const reasonInput = page.getByTestId('ban-reason-input')
-  await expect(hashInput).toBeVisible({ timeout: Timeouts.ELEMENT })
+  await expect(phoneInput).toBeVisible({ timeout: Timeouts.ELEMENT })
   await expect(reasonInput).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 

@@ -47,7 +47,7 @@ class CallRecordingRoutesTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         routes = MountedRoutes(
             Route("GET", "/api/hubs/:hubId/calls/history") {
-                json("""{"calls":[],"total":0,"page":1,"limit":50}""")
+                json("""{"calls":[],"total":0,"page":1,"limit":50,"access":{"scope":"all"}}""")
             },
             Route("GET", "/api/hubs/:hubId/calls/:callId/recording") { call ->
                 if (call.params["callId"] != "call-1") {

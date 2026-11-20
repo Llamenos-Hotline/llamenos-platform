@@ -104,7 +104,7 @@ Then('the hub selector should not be visible', async ({ page }) => {
   await expect(page.getByTestId(TestIds.HUB_SWITCHER_TRIGGER)).toHaveCount(0)
 })
 
-Given('a volunteer assigned to multiple hubs', async ({ page, backendRequest: request, workerHub }) => {
+Given('a volunteer assigned to multiple hubs', async ({ page, backendRequest: request, workerHub, hubsWorld }) => {
   // Create a second hub and a volunteer who is a member of BOTH hubs. Two
   // active hubs make the switcher render, and membership in both is what makes
   // switching meaningful — hub-scoped API calls 403 for non-members.
@@ -113,14 +113,11 @@ Given('a volunteer assigned to multiple hubs', async ({ page, backendRequest: re
   await addHubMemberViaApi(request, workerHub, vol.pubkey)
   await addHubMemberViaApi(request, secondHubId, vol.pubkey)
   await loginAsVolunteer(page, vol.nsec)
-  // Record after login (a full page load wipes window state); later steps read
-  // the hub id to pick the created hub out of the switcher options, and the
-  // volunteer pubkey to put them in that hub's ring set (multi-hub call steps).
-  await page.evaluate(({ id, pubkey }) => {
-    const w = window as unknown as Record<string, unknown>
-    w.__test_second_hub_id = id
-    w.__test_multi_hub_volunteer_pubkey = pubkey
-  }, { id: secondHubId, pubkey: vol.pubkey })
+  // Later steps read the hub id to pick the created hub out of the switcher
+  // options, and the volunteer pubkey to put them in that hub's ring set
+  // (multi-hub call steps). The fixture survives the login page load.
+  hubsWorld.secondHubId = secondHubId
+  hubsWorld.multiHubVolunteerPubkey = vol.pubkey
 })
 
 Then('the hub selector should be visible', async ({ page }) => {
@@ -131,13 +128,11 @@ Given('the volunteer is on the cases page', async ({ page }) => {
   await navigateAfterLogin(page, '/cases')
 })
 
-When('the volunteer switches to a different hub', async ({ page }) => {
+When('the volunteer switches to a different hub', async ({ page, hubsWorld }) => {
   // The Given step guarantees two active hubs and records the created hub's
   // id — pick that exact option rather than an arbitrary index, since the
   // shared server accumulates hubs from other parallel workers.
-  const secondHubId = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_second_hub_id as string | undefined,
-  )
+  const secondHubId = hubsWorld.secondHubId
   expect(secondHubId, 'Given step must record the second hub id').toBeTruthy()
   const hubSelector = page.getByTestId(TestIds.HUB_SWITCHER_TRIGGER)
   await expect(hubSelector).toBeVisible({ timeout: Timeouts.ELEMENT })

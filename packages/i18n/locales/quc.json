@@ -213,6 +213,9 @@
     "noEntries": "Majun q'atal taq ajilab'al. Titz'aqatisax taq ajilab'al rech keq'at ri itzel oyonela'.",
     "phoneNumber": "Rajilab'al Teléfono",
     "reason": "Ruma ri",
+    "reentryDescription": "Estos bloqueos ya no bloquean a quienes llaman. Cambió la forma en que se guardan los bloqueos y el servidor nunca guardó los números, así que no puede convertirlos. Bloquea de nuevo cada número y luego descarta su entrada.",
+    "reentryDismiss": "Descartar",
+    "reentryTitle": "Bloqueos por volver a introducir",
     "remove": "Teleq'aj Q'atoj",
     "removeConfirmMessage": "Re oyonel re' kaqatikir chik kayon pa ri oyonem tzij. Xa xe jun hash ri nik'oj rech ri ajilab'al kakoj, rumal wa' xa xe kaqatikir kaq'at chik we k'o chik ri ajilab'al awik'in. Ri teleq'ab'äl kakoj pa Ucholajil Tz'etoj.",
     "removeConfirmTitle": "¿Teleq'aj re q'atoj re'?",
@@ -799,6 +802,7 @@
     "callId": "Retal Oyonik",
     "callIdBadge": "Oyonik",
     "callIdPlaceholder": "Retal oyonik",
+    "callIdRequired": "Tatz'ib'aj ri retal oyonik chrij re tz'ib'atajem re'.",
     "callWith": "Oyonik rik'in {{number}}",
     "chatIdBadge": "Tzijoxik",
     "conversationBadge": "Tzijoxik",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Xatel pa ri samaj, xa xa man xkuqasax ta ri eqal ruchaq’ab’ chi re re samajib’al re.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "¿Tiyuj re samaj re'?",
-    "deleteConfirmMessage": "Ri aj samajela' pa re samaj re' man kekoj ta chik oyonem chupam ri q'ij re'. We man k'o jun chik samaj kakoj chupam ri q'ij, ri oyonem kebe pa Molaj rech K'ayewal, o man k'o ta jun kataqe we man k'o. Man kakiq'ax ta chik wa'."
+    "deleteConfirmMessage": "Ri aj samajela' pa re samaj re' man kekoj ta chik oyonem chupam ri q'ij re'. We man k'o jun chik samaj kakoj chupam ri q'ij, ri oyonem kebe pa Molaj rech K'ayewal, o man k'o ta jun kataqe we man k'o. Man kakiq'ax ta chik wa'.",
+    "noAdminReader": "No se puede guardar este texto: ningún administrador de este centro tiene un dispositivo registrado, por lo que ningún administrador podría leerlo nunca. Pida a un administrador del centro que inicie sesión en un dispositivo."
   },
   "shortcuts": {
     "answerCall": "Tik'ulux oyonik",
@@ -4171,6 +4177,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Xsach ruchajixik le cholaj",
+    "liveness": {
+      "title": "Ri cholaj chi rij ri kajiloj",
+      "description": "Tanimaj chi re samajib’al re k’a k’o ri cholaj chi rij ri kajiloj. Ri cholaj man kel ta pa samajib’al; ri hub xa xe nuchajij jun tzij chi xb’an rik’in.",
+      "prove": "Nuchajij ri cholaj",
+      "proving": "Nchajix…",
+      "success": "Xchajix ri cholaj. Ri ajtijoxela’ kakilo chi utz ri cholaj.",
+      "error": "Xsach ruchajixik le cholaj"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

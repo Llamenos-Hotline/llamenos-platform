@@ -88,6 +88,10 @@ export interface Env {
   MESSAGING_HASH_KEY: string
   /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
   SIGNAL_QUEUE_RETENTION_DAYS?: string
+  /** Minutes without a heartbeat before a clock-in stops ringing and is reaped (default: 5; at least 3 heartbeats). */
+  ACTIVE_SHIFT_STALE_AFTER_MINUTES?: string
+  /** Seconds between runs of the stale clock-in reaper (default: 60; at most the stale window). */
+  ACTIVE_SHIFT_REAP_INTERVAL_SECONDS?: string
   METRICS_SCRAPE_TOKEN?: string
   E2E_TEST_SECRET?: string
   DEV_RESET_SECRET?: string
@@ -136,10 +140,6 @@ export interface Env {
 
   // GlitchTip/Sentry DSN for client-side crash reporting (Epic 293)
   GLITCHTIP_DSN?: string
-
-  // Certificate pinning — comma-separated base64 SHA-256 SPKI hashes for pin override.
-  // Defaults to Let's Encrypt ISRG Root X1 + X2 if not set.
-  CERT_PIN_HASHES?: string
 
   // Push notifications (Epic 86) — APNs (iOS)
   APNS_KEY_P8?: string       // Apple Push Notification auth key (PEM format)

@@ -6,7 +6,7 @@ import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
 import { claimDigest, finalLine, outOfScopeFindings, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
-  diffHash, hasCacheKey, isTreeSha, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
+  diffHash, hasCacheKey, isClaimDigest, isTreeSha, reviewBinding, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -15,6 +15,7 @@ import { tierFor, type ImpactTier } from './impact.js'
 import { isReviewerLabel, type ReviewerProfile, type ReviewerResolution } from './specialist.js'
 import { KNOPE_RELEASE_BRANCH } from './roles/release.js'
 import { releasePrShape } from './release-shape.js'
+import type { AppRecordedVerdict } from './review-app-verdict.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -755,7 +756,7 @@ export function reviewResultRecorder(env: NodeJS.ProcessEnv): (result: ReviewCiR
  * entry, never that anything was judged.
  */
 export const REVIEW_OUTCOME_TOKENS = [
-  'PASS:reviewed', 'PASS:cached', 'PASS:low-tier', 'PASS:bot-authored', 'PASS:release-pr',
+  'PASS:reviewed', 'PASS:cached', 'PASS:app-recorded', 'PASS:low-tier', 'PASS:bot-authored', 'PASS:release-pr',
   'REJECTED:reviewed', 'REJECTED:cached', 'REJECTED:carried', 'REJECTED:partial',
   'NO-VERDICT:not-requested', 'NO-VERDICT:unreviewed', 'NO-VERDICT:tree-changed',
   'NO-VERDICT:carry-unreadable', 'NO-VERDICT:review-set-unresolved', 'NO-VERDICT:scope',
@@ -1209,7 +1210,9 @@ export async function decideReviewSet(deps: ReviewSetDeps): Promise<ReviewSetDec
 async function resolveLane(deps: CiDeps): Promise<Lane | undefined> {
   const laneId = laneIdFromBranch(deps.ctx.branch)
   if (laneId === undefined) return UNSCOPED_LANE
-  return (await deps.lanes()).find((l) => l.id === laneId)
+  // A scope-only fragment is grantable, never a PR's own lane: `fleet/mac/…`
+  // stays "unknown lane" (#2600).
+  return (await deps.lanes()).find((l) => l.id === laneId && l.scopeOnly !== true)
 }
 
 /** The prefix a label must carry to grant a lane's scope to a PR (#1115). */
@@ -1822,6 +1825,15 @@ async function reviewCiVerdict(deps: ReviewCiDeps): Promise<ReviewCiVerdict> {
  *    and the file-level reasons are logged (and printed to the job's own
  *    stdout by `runReviewGate`, cli.ts) so the decision is auditable from
  *    the check's own output, not just from reading this file's source.
+ *  - `app-recorded` (#2884) — a republish-only event with nothing cached for
+ *    this tree, on a head the `llamenos-fleet-review` GitHub App recorded a
+ *    PASS on as a `fleet/review` check run (`review-and-merge`, run locally,
+ *    cannot write the artifact the cache reads). Republished as a PASS — the
+ *    escape hatch for a PR whose review cannot be re-requested, made to
+ *    reach the required context instead of being outvoted by this carrier's
+ *    own `unreviewed`. Consulted AFTER the cache (a cached FAIL for this tree
+ *    still wins) and BEFORE the three reds below; a recorded FAIL, no record,
+ *    or an unreadable one changes nothing.
  *  - `carried` / `tree-changed` / `unreviewed` / `carry-unreadable` — a
  *    PUSH (#1284, `republishOnly`) with nothing cached for this exact tree.
  *    A push is not a review request, so it never starts a review — and
@@ -1875,6 +1887,7 @@ export type ReviewGateOutcome =
   | { kind: 'low-tier'; cacheKey: ReviewCacheKey; tier: ImpactTier; reasons: string[] }
   | { kind: 'bot-authored'; cacheKey: ReviewCacheKey; author: string; reason: string }
   | { kind: 'release-pr'; cacheKey: ReviewCacheKey; from: string; to: string; files: string[] }
+  | { kind: 'app-recorded'; cacheKey: ReviewCacheKey; checkRunId: number; url: string }
   | { kind: 'carried'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'FAIL' } }
   | { kind: 'tree-changed'; cacheKey: ReviewCacheKey; earned: EarnedVerdict & { verdict: 'PASS' } }
   | { kind: 'unreviewed'; cacheKey: ReviewCacheKey }
@@ -1935,6 +1948,20 @@ export interface ReviewGateDeps {
    * must never read as "no verdict was ever earned", which is a green.
    */
   lastVerdict?: (() => Promise<LastVerdictLookup>) | undefined
+  /**
+   * The verdict the `llamenos-fleet-review` GitHub App recorded as a
+   * `fleet/review` check run on THIS head (`review-app-verdict.ts`, #2884) —
+   * the other home of a verdict, written by `review-and-merge` from the
+   * operator's machine, which cannot write the artifact this gate otherwise
+   * reads. Asked only on a republish-only event that found no cached verdict
+   * for the head's tree, and only a `pass` changes anything: `none` and
+   * `unreadable` fall through to exactly the verdict this gate would have
+   * reached without it. Omitted, the gate behaves as it did before.
+   * Called with the BINDING this head's PASS must carry — the review set and
+   * the PR description as the gate reads them now (`reviewBinding`) — so a PASS
+   * that judged a narrower set, or another description, is never believed.
+   */
+  appRecordedVerdict?: ((binding: string) => Promise<AppRecordedVerdict>) | undefined
   /**
    * The BASE checkout's `knope.toml` text — what `releasePrShape` reads the
    * list of knope-versioned files from. Absent or failing means no release
@@ -2001,6 +2028,7 @@ export type ReviewGateStanding = 'judged' | 'no-review-needed' | 'no-verdict'
 
 export const REVIEW_GATE_STANDING: Record<ReviewGateOutcome['kind'], ReviewGateStanding> = {
   'cache-hit': 'judged',
+  'app-recorded': 'judged',
   'carried': 'judged',
   'run-engine': 'judged',
   'tree-changed': 'no-verdict',
@@ -2182,6 +2210,26 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
   // verdict was EVER earned" is red for the same reason (#1564). Each says
   // why and whom to ask; a requested review judges this tree.
   if (deps.republishOnly) {
+    // The cache above holds the verdicts an Actions run EARNED. A verdict
+    // `review-and-merge` earned lives in a check run the App posted against
+    // this exact head (#2884), and the carrier used to be blind to it: it
+    // concluded `unreviewed`, and the required context — the worst of its
+    // carriers — stayed red under a recorded PASS. Consulted after the
+    // cache, so a FAIL cached for this tree and description still wins, and
+    // only a PASS changes anything: every other answer falls through.
+    if (deps.appRecordedVerdict !== undefined && isClaimDigest(cacheKey.claimDigest)) {
+      let recorded: AppRecordedVerdict
+      try {
+        recorded = await deps.appRecordedVerdict(reviewBinding(reviewSetTag(set.profiles), cacheKey.claimDigest))
+      } catch (e) {
+        recorded = { kind: 'unreadable', reason: e instanceof Error ? e.message : String(e) }
+      }
+      if (recorded.kind === 'pass') {
+        deps.log(`pr=${cacheKey.pr} head ${deps.ctx.headSha} carries a PASS recorded by the review App (${recorded.url}) — republishing it`)
+        return { kind: 'app-recorded', cacheKey, checkRunId: recorded.checkRunId, url: recorded.url }
+      }
+      deps.log(`no App-recorded PASS for pr=${cacheKey.pr}: ${recorded.reason}`)
+    }
     const last: LastVerdictLookup = deps.lastVerdict === undefined
       ? { kind: 'unreadable', reason: 'no lookup for the last earned verdict was wired into this gate' }
       : await deps.lastVerdict()

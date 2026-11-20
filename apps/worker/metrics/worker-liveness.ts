@@ -56,7 +56,29 @@ export const WORKER_TICK_INTERVAL_MS = {
   'provider-recording-sweep': 15 * MINUTE_MS,
   'incident-checks': 5 * MINUTE_MS,
   'incident-closer': MINUTE_MS,
+  // The DEFAULT: the reaper's period is operator-configurable
+  // (ACTIVE_SHIFT_REAP_INTERVAL_SECONDS) and overrides this at start-up via
+  // `setWorkerTickInterval`, so the gauge always names the period it runs at.
+  'active-shift-reaper': MINUTE_MS,
 } as const satisfies Record<SchedulerWorkerName, number>
+
+/**
+ * Periods of the workers whose interval an operator can change, set once as the
+ * worker starts. A worker absent here ticks at its `WORKER_TICK_INTERVAL_MS`
+ * default. Without this the gauge would keep claiming the default after the
+ * operator changed it, and `WorkerStalled` (three intervals) would fire — or
+ * stay silent — against the wrong period.
+ */
+const configuredIntervalMs = new Map<SchedulerWorkerName, number>()
+
+export function setWorkerTickInterval(worker: SchedulerWorkerName, intervalMs: number): void {
+  configuredIntervalMs.set(worker, intervalMs)
+}
+
+/** The period `worker` really ticks at: its configured one, else the default. */
+export function getWorkerTickIntervalMs(worker: SchedulerWorkerName): number {
+  return configuredIntervalMs.get(worker) ?? WORKER_TICK_INTERVAL_MS[worker]
+}
 
 export const WORKER_LAST_SUCCESS_METRIC = 'llamenos_worker_last_success_timestamp_seconds'
 export const WORKER_TICK_INTERVAL_METRIC = 'llamenos_worker_tick_interval_seconds'
@@ -93,8 +115,8 @@ export function renderWorkerLivenessMetrics(): string[] {
     `# HELP ${WORKER_TICK_INTERVAL_METRIC} Configured tick interval of each scheduler worker`,
     `# TYPE ${WORKER_TICK_INTERVAL_METRIC} gauge`,
   ]
-  for (const [worker, intervalMs] of Object.entries(WORKER_TICK_INTERVAL_MS)) {
-    lines.push(`${WORKER_TICK_INTERVAL_METRIC}{worker="${worker}"} ${intervalMs / 1000}`)
+  for (const worker of Object.keys(WORKER_TICK_INTERVAL_MS) as SchedulerWorkerName[]) {
+    lines.push(`${WORKER_TICK_INTERVAL_METRIC}{worker="${worker}"} ${getWorkerTickIntervalMs(worker) / 1000}`)
   }
 
   lines.push(

@@ -7,7 +7,7 @@ import { acquire } from './lock.js'
 import { checkHalt, halt, resume, haltedLocally } from './killswitch.js'
 import { readAll, append, since, type RunRecord } from './ledger.js'
 import { readResumedAt, isQuotaHaltReason, parseQuotaResumeAt, quotaCooldowns } from './circuit.js'
-import { loadLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
+import { loadLanes, loadGrantableLanes, LIMITS, LANE_MODES_FILE, type Lane } from './config.js'
 import { checkDispatchDependency, type DependencyReport } from './dependency.js'
 import {
   assessRuntimeCurrency, checkoutProvenance, fleetRuntimeRoot, isFastForwardable, provenanceProblems,
@@ -32,6 +32,7 @@ import {
 } from './review.js'
 import { resolveReviewerLabel, buildProfileReviewPrompt, AGENT_REGISTRY_DIR } from './specialist.js'
 import { artifactReviewCache, diffHash, lastEarnedVerdict, liveLastVerdictDeps } from './review-cache.js'
+import { readAppRecordedVerdict, REVIEW_RECORDER_APP_SLUG } from './review-app-verdict.js'
 import { runReviewAndMerge, defaultReviewAndMergeDeps, describeOutcome } from './review-and-merge.js'
 import { IN_VERIFICATION_ENV } from './review-and-merge-guards.js'
 import {
@@ -39,7 +40,7 @@ import {
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   reviewNotRequestedAdvice, reviewGateFailsClosed,
   ciContextFromEnv, ciDiff, ciChangedFiles, ciHeadTree,
-  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB, QUEUE_CLEARED_LABEL,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
@@ -79,6 +80,8 @@ import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
 import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
+import { armAutoMergeWithQueueClearance } from './automerge.js'
+import { MERGE_HOLD_LABEL, readQueueHistory, placeManualHold } from './merge-hold.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -731,7 +734,7 @@ async function grantScopeAtOpenFor(
     { pr, headRefName, branchMismatch },
     defaultScopeGrantDeps(
       log,
-      () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
       async (prNumber, branch) => {
         const r = await refireReviewRequest({ pr: prNumber, headRefName: branch }, reviewDeps)
         return r.kind === 'requested'
@@ -756,6 +759,29 @@ async function runScopeGrantCommand(pr: string | undefined): Promise<number> {
   const outcome = await grantScopeAtOpenFor(pr, head.headRefName, undefined)
   process.stdout.write(`scope-grant: ${JSON.stringify(outcome)}\n`)
   return outcome.kind === 'granted' || outcome.kind === 'not-needed' ? 0 : 1
+}
+
+/** `llamenos-fleet merge-hold <pr> --reason "…"` — hold a PR on purpose, with the
+ *  record the release rule depends on (#2876): comment first, then the label.
+ *  Release is removing the label; there is no command for it. */
+export function parseMergeHoldArgs(rest: readonly string[]): { ok: true; pr: number; reason: string } | { ok: false } {
+  const [pr, flag, ...reason] = rest
+  if (pr === undefined || !/^\d+$/.test(pr) || flag !== '--reason' || reason.join(' ').trim() === '') return { ok: false }
+  return { ok: true, pr: Number(pr), reason: reason.join(' ').trim() }
+}
+
+async function runMergeHoldCommand(rest: readonly string[]): Promise<number> {
+  const args = parseMergeHoldArgs(rest)
+  if (!args.ok) {
+    process.stderr.write('usage: llamenos-fleet merge-hold <pr-number> --reason <why it must not merge>\n')
+    return 2
+  }
+  await placeManualHold(args.pr, args.reason, {
+    addHoldLabel: async (n) => { await gh(['pr', 'edit', String(n), '--add-label', MERGE_HOLD_LABEL]) },
+    postPrComment: async (n, body) => { await gh(['pr', 'comment', String(n), '--body', body]) },
+  })
+  process.stdout.write(`merge-hold: PR #${args.pr} held — release it by removing the \`${MERGE_HOLD_LABEL}\` label\n`)
+  return 0
 }
 
 async function prDiff(pr: string): Promise<string> {
@@ -894,7 +920,7 @@ export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha:
     let last: VerifyReport | undefined
     const verdict = await runVerifyCi({
       ctx,
-      lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+      lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
       verify: async (v) => { last = await verifyMechanical({ ...v, testEnv: scrubbedTestEnv(tmp) }); return last },
       pathExists: existsSync,
       log,
@@ -939,7 +965,31 @@ async function requestReviewOnNewHead(pr: string, branch: string): Promise<strin
  * itself once the queue merges.
  */
 async function enableAutoMerge(pr: string): Promise<void> {
-  await gh(['pr', 'merge', pr, '--auto', '--squash'])
+  // Every arm goes through armAutoMergeWithQueueClearance, which applies the
+  // `queue-cleared` label to a fleet-dispatched PR first (#2689) — see there.
+  await armAutoMergeWithQueueClearance(pr, {
+    readPr: async (n) => {
+      const raw = JSON.parse(await gh(['pr', 'view', n, '--json', 'headRefName,labels'])) as
+        { headRefName?: unknown; labels?: { name?: unknown }[] }
+      if (typeof raw.headRefName !== 'string' || !Array.isArray(raw.labels)) {
+        throw new Error(`could not read PR ${n}'s head branch and labels`)
+      }
+      return { headRefName: raw.headRefName, labels: raw.labels.flatMap((l) => (typeof l.name === 'string' ? [l.name] : [])) }
+    },
+    readQueueHistory: (n) => readQueueHistory(n, log),
+    addHoldLabel: async (n) => { await gh(['pr', 'edit', String(n), '--add-label', MERGE_HOLD_LABEL]) },
+    postPrComment: async (n, body) => { await gh(['pr', 'comment', String(n), '--body', body]) },
+    addQueueClearedLabel: async (n) => { await gh(['pr', 'edit', n, '--add-label', QUEUE_CLEARED_LABEL]) },
+    removeQueueClearedLabel: async (n) => {
+      try {
+        await gh(['pr', 'edit', n, '--remove-label', QUEUE_CLEARED_LABEL])
+      } catch (e) {
+        log(`auto-merge: could not remove ${QUEUE_CLEARED_LABEL} from PR ${n}: ${errMsg(e)}`)
+      }
+    },
+    requestAutoMerge: async (n) => { await gh(['pr', 'merge', n, '--auto', '--squash']) },
+    log,
+  })
 }
 
 /** Clears an auto-merge armed by an EARLIER attempt on the same PR before
@@ -1798,6 +1848,10 @@ async function runReviewGate(): Promise<number> {
     republishOnly: isRepublishOnlyEvent(event),
     // Asked only on a push whose diff changed — see `ReviewGateDeps.lastVerdict`.
     lastVerdict: () => lastEarnedVerdict(liveLastVerdictDeps(ctx.pr, ctx.branch, process.env['GITHUB_RUN_ID'], ciLog)),
+    // The PASS `review-and-merge` recorded as a check run by the review App
+    // on this head (#2884) — asked on the same republish-only path, after
+    // the cache, before this gate would fail closed `unreviewed`.
+    appRecordedVerdict: (binding) => readAppRecordedVerdict(ctx.headSha, binding, ciLog),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
@@ -1950,6 +2004,18 @@ async function runReviewGate(): Promise<number> {
   // IS this check's own output. Never silent: a required check that goes
   // green with no stated reason is the exact fail-open shape this file's own
   // header (and #848 before it) exists to prevent.
+  // A PASS the review App recorded on this exact head (#2884): `review-and-merge`
+  // ran the real review set from the operator's machine and posted the verdict
+  // as a check run, which this carrier cannot see as an artifact. Said plainly,
+  // with whose verdict it is and what it does not cover — a green required
+  // check must always state its reason (#848).
+  if (outcome.kind === 'app-recorded') {
+    process.stdout.write(
+      `${REVIEW_JOB}: PASS recorded by the ${REVIEW_RECORDER_APP_SLUG} App on this exact head — ${outcome.url}\n` +
+      `  - written by \`review-and-merge\`, which runs the same review set locally; republished here, not re-run.\n` +
+      `  - bound to this head's commit, review set and PR description: a change to any of them is not covered.\n`,
+    )
+  }
   if (outcome.kind === 'low-tier') {
     process.stdout.write(
       `${REVIEW_JOB}: no reviewable content (tier ${outcome.tier}) — skipping the non-author review\n` +
@@ -2295,9 +2361,10 @@ const HANDLERS: Record<string, CommandHandler> = {
   },
   digest: (rest) => runDigest(rest[0]),
   'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
+  'merge-hold': (rest) => runMergeHoldCommand(rest),
   'verify-ci': asVerification(() => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
-    lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+    lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
@@ -2315,7 +2382,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   'review-ci': asVerification(() => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
     ctx,
     apiKey: process.env[REVIEW_KEY_ENV],
-    lanes: () => loadLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
+    lanes: () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,

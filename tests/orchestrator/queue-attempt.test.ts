@@ -604,7 +604,8 @@ function harness(attemptJobs: RunJob[], opts: HarnessOpts = {}): Harness {
       if (opts.postFails === true) throw new Error('HTTP 502')
       posted.push(body)
     },
-    lastQueueEvent: async () => 'none',
+    readQueueHistory: async () => ({ last: null, holdClearedAt: undefined }),
+    addHoldLabel: async () => {},
     addQueueClearedLabel: async () => {},
     removeQueueClearedLabel: async () => {},
     enableAutoMerge: async (p) => { armed.push(p) },

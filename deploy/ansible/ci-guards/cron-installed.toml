@@ -1,0 +1,8 @@
+name = "Check every cron job's file installs cron first"
+run = "python3 deploy/ansible/scripts/check-cron-installed.py"
+why = """
+A minimal Debian image has no `cron` package, so the first
+ansible.builtin.cron task on a host built from one died with
+`Failed to find required executable "crontab"` and nothing installed it. Every
+file that declares a cron job now includes roles/cron first.
+"""

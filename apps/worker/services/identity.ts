@@ -9,7 +9,9 @@ import { eq, and, or, lt, sql, inArray, asc, type SQL } from 'drizzle-orm'
 import { timingSafeCompare } from '../lib/timing-safe'
 import { isHubMember } from '../lib/hub-membership'
 import { buildReaderPubkeys, resolveEncryptionPubkeys } from '../lib/encryption-keys'
-import { clearHubEscrowKey, getHubEscrowKey, readersFor, setHubEscrowKey } from '../lib/readers'
+import { getHubKeyRecipients, getHubKeyRotation, markHubKeyRotationDue, rotateHubKey } from '../lib/hub-key'
+import type { HubKeyRecipientsResponse, HubKeyRotateBody, HubKeyRotateResponse, HubKeyRotationResponse } from '@protocol/schemas/hubs'
+import { clearHubEscrowKey, contactReadersFor, getHubEscrowKey, readersFor, setHubEscrowKey, subjectReadersFor, type ContactReaders } from '../lib/readers'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { ReaderPurpose } from '@protocol/schemas/hubs'
 import type { Database } from '../db'
@@ -410,6 +412,29 @@ export class IdentityService {
     return readersFor(this.db, hubId, purpose)
   }
 
+  /**
+   * The readers of `hubId`'s contacts, per tier (PROTOCOL §4.30). 503 when the
+   * hub has no admin reader. See `lib/readers.ts`.
+   */
+  async contactReadersFor(hubId: string): Promise<ContactReaders> {
+    return contactReadersFor(this.db, hubId)
+  }
+
+  /** What a key holder needs to distribute `hubId`'s key. See `lib/hub-key.ts`. */
+  async getHubKeyRecipients(hubId: string): Promise<HubKeyRecipientsResponse> {
+    return getHubKeyRecipients(this.db, hubId)
+  }
+
+  /** The hub's key epoch and the statement that introduced it. See `lib/hub-key.ts`. */
+  async getHubKeyRotation(hubId: string): Promise<HubKeyRotationResponse> {
+    return getHubKeyRotation(this.db, hubId)
+  }
+
+  /** Replace the hub's key with a fresh one, re-sealing everything. See `lib/hub-key.ts`. */
+  async rotateHubKey(hubId: string, body: HubKeyRotateBody): Promise<HubKeyRotateResponse> {
+    return rotateHubKey(this.db, hubId, body)
+  }
+
   /** The hub's escrow key, or `undefined` when it has none (404 for an unknown hub). */
   async getHubEscrowKey(hubId: string): Promise<HpkeRecipientPubkey | undefined> {
     return getHubEscrowKey(this.db, hubId)
@@ -441,10 +466,35 @@ export class IdentityService {
    * The one definition of "a key an admin holds": server-sealed records are
    * wrapped to it, and client-sealed ones are checked against it.
    */
-  async listAdminEnvelopeRecipients(transitionalInstanceKey: string | undefined, hubId?: string): Promise<string[]> {
-    const readers: string[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
+  async listAdminEnvelopeRecipients(transitionalInstanceKey: string | undefined, hubId?: string): Promise<HpkeRecipientPubkey[]> {
+    const readers: HpkeRecipientPubkey[] = hubId === undefined ? [] : await readersFor(this.db, hubId, 'admin')
     const instance = hpkeRecipientPubkey(transitionalInstanceKey?.trim().toLowerCase())
     return instance && !readers.includes(instance) ? [instance, ...readers] : readers
+  }
+
+  /**
+   * Every key a finished call's §2.5 record of `hubId` is sealed to (#1342):
+   *
+   * - {@link listAdminEnvelopeRecipients}: the hub's `admin` reader set and the
+   *   transitional instance key — the admin system of record (D1);
+   * - the hub's `call-history` reader set: holders of `calls:read-history` (D2);
+   * - the `call-history-own` subject readers: `answeredBy`'s own devices, when
+   *   they hold `calls:read-own-history` in this hub (D3). Never any other
+   *   volunteer's.
+   *
+   * Fixed at seal time (§2.4.2). Deduplicated, admin recipients first. Empty
+   * only when the hub has no admin reader and no instance key is configured;
+   * the caller treats that as the A8 alarm it is.
+   */
+  async listCallRecordRecipients(
+    transitionalInstanceKey: string | undefined,
+    hubId: string,
+    answeredBy: string | null,
+  ): Promise<string[]> {
+    const admin = await this.listAdminEnvelopeRecipients(transitionalInstanceKey, hubId)
+    const history = await readersFor(this.db, hubId, 'call-history')
+    const own = answeredBy ? await subjectReadersFor(this.db, hubId, 'call-history-own', answeredBy) : []
+    return [...new Set<string>([...admin, ...history, ...own])]
   }
 
   /**
@@ -923,6 +973,11 @@ export class IdentityService {
           and(eq(hubKeys.hubId, data.hubId), eq(hubKeys.recipientPubkey, data.pubkey)),
         )
         .returning({ recipientPubkey: hubKeys.recipientPubkey })
+
+      // The departed member may have kept the key the wrap held: the hub's key
+      // must be rotated, and with the wrap gone this flag is the only record of
+      // that (PROTOCOL.md §2.7 "Key Rotation").
+      if (revokedWraps.length > 0) await markHubKeyRotationDue(tx, [data.hubId])
 
       const wasMember =
         priorRoles.length !== hubRoles.length || revokedWraps.length > 0

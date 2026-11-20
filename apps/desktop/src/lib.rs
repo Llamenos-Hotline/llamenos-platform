@@ -229,6 +229,8 @@ pub fn run() {
             // Hub key management (key stays in Rust CryptoState)
             crypto::hpke_unwrap_and_set_hub_key,
             crypto::generate_hub_key_in_state,
+            crypto::has_hub_key,
+            crypto::forget_hub_key,
             crypto::wrap_hub_key_for_member,
             crypto::set_server_event_keys,
             crypto::decrypt_hub_event,
@@ -243,9 +245,13 @@ pub fn run() {
             // Shamir secret sharing (only stateless verification — split/combine are internal)
             crypto::shamir_commit,
             crypto::shamir_verify,
+            // Ban digest (#2759): blind/finalize a typed number; the server never sees it
+            crypto::ban_digest_blind,
+            crypto::ban_digest_finalize,
             // H16: Recovery group key isolation (combine+decrypt in Rust only)
             crypto::recovery_group_create,
             crypto::recovery_share_contribute_from_state,
+            crypto::recovery_share_liveness_proof_from_state,
             crypto::recovery_group_reconstruct_from_shares,
             crypto::recovery_group_decrypt,
             // C06: Missing IPC commands

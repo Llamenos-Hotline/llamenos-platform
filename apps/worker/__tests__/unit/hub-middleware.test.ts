@@ -8,7 +8,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types/infra'
 import { hubContext, requireHubPermission, checkHubPermission } from '@worker/middleware/hub'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/settings'
+import { HUB_NOT_FOUND_CODE, hubNotFoundResponseSchema } from '@protocol/schemas/common'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,7 +67,7 @@ function createApp(user: Record<string, unknown>, hubExists = true) {
   const services = {
     settings: {
       getHub: vi.fn().mockImplementation(async (id: string) => {
-        if (!hubExists) throw new ServiceError(404, 'Not found')
+        if (!hubExists) throw new HubNotFoundError()
         return { id, name: 'Test Hub' }
       }),
     },
@@ -107,7 +108,33 @@ describe('hubContext middleware', () => {
     const res = await app.request('/hub/nonexistent')
     expect(res.status).toBe(404)
     const body = await res.json()
-    expect(body.error).toBe('Hub not found')
+    // The code is the contract (#2872); the prose beside it is for people.
+    expect(hubNotFoundResponseSchema.parse(body).code).toBe(HUB_NOT_FOUND_CODE)
+  })
+
+  it('carries the hub-gone code whatever the prose says', async () => {
+    const { app, services } = createApp(makeUser(), true)
+    services.settings.getHub.mockRejectedValue(
+      Object.assign(new HubNotFoundError(), { message: 'reworded entirely' }),
+    )
+    app.use('/hub/:hubId', hubContext)
+    app.get('/hub/:hubId', (c) => c.json({ ok: true }))
+
+    const res = await app.request('/hub/gone')
+    expect(res.status).toBe(404)
+    expect((await res.json()).code).toBe(HUB_NOT_FOUND_CODE)
+  })
+
+  it('does not answer hub-gone for a 404 that is not the hub row lookup', async () => {
+    const { app, services } = createApp(makeUser(), true)
+    services.settings.getHub.mockRejectedValue(new ServiceError(404, 'Hub not found'))
+    app.use('/hub/:hubId', hubContext)
+    app.get('/hub/:hubId', (c) => c.json({ ok: true }))
+    app.onError((err, c) => c.json({ error: err.message }, err instanceof ServiceError ? (err.status as 404) : 500))
+
+    const res = await app.request('/hub/hub-1')
+    expect(res.status).toBe(404)
+    expect((await res.json()).code).toBeUndefined()
   })
 
   it('returns 403 when user has no permissions in hub', async () => {
@@ -121,6 +148,8 @@ describe('hubContext middleware', () => {
     expect(res.status).toBe(403)
     const body = await res.json()
     expect(body.error).toBe('Access denied')
+    // Never the hub-gone signal: dropping a hub must not be reachable from an authorization answer.
+    expect(body.code).toBeUndefined()
   })
 
   // #1037: a non-super-admin global role is not hub membership. A volunteer

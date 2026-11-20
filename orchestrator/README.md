@@ -132,7 +132,12 @@ armed — the queue guard (`fleet-verify.yml`) reads the PR inside the merge
 group, after the auto-merge request is consumed, so without the label the entry
 is rejected again in seconds — and a PR whose last attempt failed *only*
 because the guard refused that unsignalled entry is eligible again (the failure
-is the entry's, not the diff's). A PR is queued only if **all** of:
+is the entry's, not the diff's). The label is applied at the single arming
+point (`armAutoMergeWithQueueClearance`, `automerge.ts`, behind cli.ts's
+`enableAutoMerge`), not per caller, so the tick's
+post-review arm is labelled too, not only queue-feed's (#2689); a rail in
+`tests/orchestrator/automerge.test.ts` fails if any other arm path appears.
+A PR is queued only if **all** of:
 
 1. A **per-PR** `gh pr view` says `CLEAN` — the list form's
    `mergeStateStatus` is stale, so the list enumerates numbers and never
@@ -166,6 +171,24 @@ is the entry's, not the diff's). A PR is queued only if **all** of:
    `ci.yml` edit outside the iOS jobs schedule the gate but cannot change its
    verdict, and are batched like any other PR. A read that cannot be made
    isolates.
+5. It is **not held** (#2814, `src/merge-hold.ts`). A PR carrying the
+   `merge-hold` label is never armed. Neither is one whose last merge-queue
+   event is a removal by anyone **other than the merge queue itself**
+   (`github-merge-queue`, whose removals are ejections and merges): a person
+   dequeuing a PR is a decision, not a transient — #2788 was dequeued for a
+   recorded regression and re-queued by this feed 3m19s later. The feed writes
+   that hold onto the PR as one comment naming who held it and when, and THEN
+   the `merge-hold` label (#2876): a hold whose record did not land is not
+   labelled — the dequeue still holds it and the next pass retries. A labelled
+   PR with no such comment (applied by hand) is reported **UNEXPLAINED** in the
+   skip list and the log and gets one note saying so; it is never auto-released.
+   Hold on purpose with `llamenos-fleet merge-hold <pr> --reason "…"` (comment,
+   then label). **To release a hold,
+   remove the `merge-hold` label**; a dequeue hold is released only by a label
+   removal *after* the dequeue (a new push does not release it). An unreadable
+   queue history is not armed. The check lives at the single arming point
+   (`armAutoMergeWithQueueClearance`), so the tick's arm refuses a held PR too;
+   queue-feed asks first only so its summary reports the skip as a hold.
 
 The **not-a-retry guard**: a PR whose latest queue attempt (a `merge_group`
 run whose branch names it) failed on a shard its own diff schedules is a
@@ -588,6 +611,23 @@ attacker could do is post a check-run conclusion — it cannot read this
 repository's code, merge, push, or touch issues or pull requests. See issue
 #1483 for the creation steps.
 
+**The App's slug is a trust anchor (#2884).** The head's Actions `fleet/review`
+carrier believes a recorded PASS only from a check run whose `app.slug` is
+exactly `llamenos-fleet-review` (`REVIEW_RECORDER_APP_SLUG`,
+`review-app-verdict.ts`) — a check run's name is not a capability, the App that
+created it is. Renaming the App therefore silently turns this route off (the
+carrier concludes `unreviewed` again). After posting a PASS, `review-and-merge`
+re-runs the head's failed carrier (`review-carrier-refresh.ts`) with the
+operator's own `gh` credentials — it needs `actions: write`, which the App
+deliberately does not have — and logs whether it did.
+The PASS is also **bound** to what it judged: `review-and-merge` writes the
+review-set tag and the PR description's digest into the check run's
+`external_id` (`reviewBinding`, `review-cache.ts`), and the carrier believes a
+run only when that tag equals the binding it computes from the live PR. A
+profile label added, or a description edited, after the review makes the PASS
+stale for the gate (and for `review-and-merge`'s own reuse, which then reviews
+again); a PASS posted before bindings existed is treated the same way.
+
 Each invocation mints a fresh installation token (RS256 App JWT → installation
 token → one POST) and keeps no copy of it. A missing, mis-permissioned or
 unparseable key is a hard refusal with the remedy named — never a silent
@@ -678,6 +718,24 @@ What a grant cannot do:
   not available: grants drop, so a cross-lane PR that passed on its own branch
   can still fail in the queue. That direction is safe but surprising — worth
   knowing before enabling a merge queue.
+
+- **Make a fragment a lane.** A fragment can own paths without being a lane:
+  `mac-supervisor` owns a machine, so nothing is dispatched to it and a
+  `fleet/mac/<item>` branch stays "unknown lane". Its paths are still
+  grantable — `SCOPE_ONLY_LANE_IDS` in `config.ts` names the fragments whose
+  `scope:<id>` label the gate and `scope-grant` honour, and `loadGrantableLanes`
+  is the lane list they read (`loadLanes`, which dispatch/doctor/digest use,
+  never contains one). The measured need (#2867): a fleet-authored change to
+  `scripts/ci/mac-ci-work-volume.sh` must update `docs/runbooks/mac-ci-runner-disk.md`
+  in the same commit, and while `mac` was not grantable the runbook read as
+  owned by no lane and the gate said to delete it. The list is explicit, not
+  "every fragment outside `LANE_IDS`", so making a fragment grantable is a
+  decision in this human-gated file. The grant reaches only
+  `SCOPE_ONLY_GRANT_PATHS` — the runbook — not everything the fragment owns:
+  `mac` also owns the disk guard and `mac-run.sh`, which execute on the shared
+  self-hosted runner and stay unreachable by any grant. `GRANT_EXCLUDED_PATHS`
+  still applies: a diff holding `.github/workflows/ios-e2e.yml` is refused whole
+  and lands from a plain branch, as before.
 
 - **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
   is missing or unparseable, has `owned: []` — and an empty owned list means
@@ -1043,6 +1101,21 @@ up for days with no recent activation would have nothing to anchor to —
 systemd would then schedule nothing at all while `is-enabled`/`is-active`
 still both say yes. An `OnCalendar` expression always has a next occurrence
 computed from the clock alone, so it cannot enter that state.
+
+**The Node the test runner uses (#2889).** The units' `PATH` carries `bun` but
+no version manager, so a bare `node` there is the distro's (18.x on this host)
+while an operator's shell resolves a current one. vitest 4 does not start on
+Node 18, and before #2889 every orchestrator PR the gate verified died at module
+load and was recorded `tests=orchestrator:crash`. `verifyMechanical` now reads
+the trusted vitest's own `engines.node`, picks a `node` that satisfies it
+(`PATH`, then volta, mise and nvm under the fleet user's real home), and puts it
+first on the runner's `PATH`; when none exists it does not start the runner and
+records `<suite>: node-unavailable — …` naming the range and what it found. A
+run that reached no verdict (`tests=<suite>:crash`) is an infrastructure
+outcome, never a finding about the diff: it is recorded `UNVERIFIED` (outside
+the item's attempt budget and the breakers), `runReviewLoop` logs it as "reached
+no verdict" rather than "mechanical verification failed", and the re-entry pass
+re-runs that head once and requests the review on a verdict.
 
 The tick service unit sets `SuccessExitStatus=0` and does not treat a pass that
 declined to run (lock held, halted, breaker tripped) as a failure — those

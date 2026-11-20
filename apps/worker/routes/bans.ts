@@ -4,7 +4,7 @@ import type { AppEnv } from '../types'
 import { isValidE164 } from '../lib/helpers'
 import { requirePermission } from '../middleware/permission-guard'
 import { okResponseSchema } from '@protocol/schemas/common'
-import { createBanBodySchema, createBanResponseSchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema } from '@protocol/schemas/bans'
+import { createBanBodySchema, createBanResponseSchema, bulkBanBodySchema, banListResponseSchema, bulkBanResponseSchema, banDigestSchema } from '@protocol/schemas/bans'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { banHash } from '../lib/crypto'
@@ -39,7 +39,14 @@ bans.get('/',
   requirePermission('bans:read'),
   async (c) => {
     const services = c.get('services')
-    return c.json(await services.records.listBans(hubScope(pathHubId(c))))
+    const scope = hubScope(pathHubId(c))
+    // `reentries` are bans that stopped enforcing and must be entered again (#2829):
+    // the list shows them so a defence that went quiet is never invisible to the admin.
+    const [list, reentries] = await Promise.all([
+      services.records.listBans(scope),
+      services.records.listBanReentries(scope),
+    ])
+    return c.json({ ...list, reentries })
   },
 )
 
@@ -119,6 +126,37 @@ bans.post('/bulk',
   },
 )
 
+bans.delete('/reentries/:id',
+  describeRoute({
+    tags: ['Bans'],
+    summary: 'Dismiss a ban that had to be re-entered, once the number is banned again',
+    responses: {
+      200: {
+        description: 'Reminder dismissed',
+        content: {
+          'application/json': {
+            schema: resolver(okResponseSchema),
+          },
+        },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('bans:delete'),
+  async (c) => {
+    const services = c.get('services')
+    const hubId = pathHubId(c)
+    const id = c.req.param('id')
+    const dismissed = await services.records.dismissBanReentry(hubScope(hubId), id)
+    if (!dismissed) {
+      return c.json({ error: 'Re-entry not found' }, 404)
+    }
+    await audit(services.audit, 'banReentryDismissed', c.get('pubkey'), { reentryId: id }, undefined, hubId)
+    return c.json({ ok: true })
+  },
+)
+
 bans.delete('/:phoneHash',
   describeRoute({
     tags: ['Bans'],
@@ -143,8 +181,8 @@ bans.delete('/:phoneHash',
     const hubId = pathHubId(c)
     const phoneHash = c.req.param('phoneHash')
     // Only the opaque handle from the ban list: a raw number in the path would land in
-    // access logs and proxy logs, and the client has no key to compute a hash itself.
-    if (!/^[0-9a-f]{64}$/i.test(phoneHash)) {
+    // access logs and proxy logs. The handle is the ban digest (`banDigestSchema`, #2759).
+    if (!banDigestSchema.safeParse(phoneHash).success) {
       return c.json({ error: 'Invalid ban handle' }, 400)
     }
     // Lifting a ban re-admits a caller the hub deliberately excluded, so the audit entry

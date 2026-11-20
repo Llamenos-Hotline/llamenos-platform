@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { jobNameOn, type RunEvent } from './required-context-creation'
 
 /**
  * Rails for `fleet/review`'s MERGE QUEUE arm (#1187).
@@ -133,11 +134,16 @@ describe('rail: fleet/review reports on the merge queue (#1187)', () => {
   // tests/orchestrator/guards.test.ts, so loosening it here does not loosen
   // it anywhere — what this rail is about is that `review_requested`, the
   // one action that STARTS a review, is still present at all.
-  it('still triggers on pull_request review_requested as well — the queue arm is an addition, not a replacement', () => {
+  it('a review request still reaches fleet-review.yml — the queue arm is an addition, not a replacement', () => {
     const on = doc(FLEET_REVIEW_YML).on ?? {}
     const types = (on['pull_request'] as { types?: string[] } | undefined)?.types
     expect(types, 'fleet-review.yml lost its pull_request trigger entirely').toBeDefined()
-    expect(types).toContain('review_requested')
+    // #2815: through its own caller workflow, never as a type of this file's
+    // (see required-context-creation.test.ts for why).
+    expect(on['workflow_call'], 'fleet-review.yml is no longer callable, so no review request can reach it').toBeDefined()
+    const caller = doc(join(WORKFLOW_DIR, 'fleet-review-re-evaluate.yml')) as WorkflowDoc & { jobs?: Record<string, { uses?: string }> }
+    expect((caller.on?.['pull_request'] as { types?: string[] } | undefined)?.types).toEqual(['review_requested'])
+    expect(Object.values(caller.jobs ?? {}).map((j) => j.uses)).toEqual(['./.github/workflows/fleet-review.yml'])
   })
 
   it('every workflow producing a ruleset-required context declares merge_group — fleet-review.yml was the last one that did not', () => {
@@ -152,19 +158,33 @@ describe('rail: the context name is byte-identical `fleet/review` on both events
   // One job serves both events, so there is exactly ONE `name:` value that
   // can drift — and this is it. A rename needs a ruleset change and leaves
   // every open PR unmergeable in between (invariant 5 in the file header).
-  it('the job that reports the context is named exactly `fleet/review`', () => {
-    expect(reviewJob().name).toBe(REQUIRED_CONTEXT)
+  // #2813 made the name an expression: a `review_requested` run is named
+  // apart from the head's carrier, so the head keeps ONE `fleet/review`. The
+  // rails below therefore EVALUATE the name per event rather than read it.
+  const CARRIER_EVENTS: RunEvent[] = [
+    { event: 'merge_group', action: 'checks_requested' },
+    { event: 'pull_request', action: 'opened' },
+    { event: 'pull_request', action: 'reopened' },
+    { event: 'pull_request', action: 'synchronize' },
+  ]
+
+  it('the job that reports the context is named exactly `fleet/review` on the queue and on every head event', () => {
+    for (const e of CARRIER_EVENTS) {
+      expect(jobNameOn('fleet-review.yml', 'fleet-review', reviewJob(), e), `${e.event}.${e.action}`).toBe(REQUIRED_CONTEXT)
+    }
   })
 
   // Byte-for-byte, against the raw file rather than the parsed value: a YAML
   // quirk (a stray quote, a trailing space, a lookalike slash) that survives
-  // parsing into the same string is not what branch protection sees.
+  // parsing into the same string is not what branch protection sees. The
+  // carrier name is a literal inside the expression, so it is that literal's
+  // bytes that must be exact.
   it('the `name:` line carries the literal bytes, with nothing around them', () => {
     const text = readFileSync(FLEET_REVIEW_YML, 'utf8')
     const nameLines = text.split('\n').filter((l) => /^ {4}name: /.test(l))
-    expect(nameLines, 'no job-level name: lines found — the grep must not pass vacuously').toContain(
-      `    name: ${REQUIRED_CONTEXT}`,
-    )
+    const carrierLines = nameLines.filter((l) => l.includes(`'${REQUIRED_CONTEXT}'`))
+    expect(carrierLines, 'no job-level name: line carries the required literal — the grep must not pass vacuously').toHaveLength(1)
+    expect(carrierLines[0]).toMatch(/^ {4}name: \$\{\{ .* \}\}$/)
   })
 
   // ONE job, so one name, so the same context on both events by
@@ -173,7 +193,9 @@ describe('rail: the context name is byte-identical `fleet/review` on both events
   // does not serve, which is #848's fail-open verbatim.
   it('exactly one job in the whole workflow declares that name — never a second, event-split copy', () => {
     const jobs = doc(FLEET_REVIEW_YML).jobs
-    const producers = Object.entries(jobs).filter(([key, job]) => (job.name ?? key) === REQUIRED_CONTEXT)
+    const events: RunEvent[] = [...CARRIER_EVENTS, { event: 'pull_request', action: 'review_requested' }, { event: 'workflow_dispatch' }]
+    const producers = Object.entries(jobs)
+      .filter(([key, job]) => events.some((e) => jobNameOn('fleet-review.yml', key, job, e) === REQUIRED_CONTEXT))
     expect(producers.map(([key]) => key)).toEqual(['fleet-review'])
   })
 

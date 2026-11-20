@@ -13,7 +13,7 @@ import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { checkRoleScope, hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
-import { ServiceError } from '../services/settings'
+import { HubNotFoundError, ServiceError, serviceErrorBody } from '../services/settings'
 
 const invites = new Hono<AppEnv>()
 
@@ -219,8 +219,8 @@ invites.post('/',
     try {
       await services.settings.getHub(hubId)
     } catch (err) {
-      if (err instanceof ServiceError && err.status === 404) {
-        return c.json({ error: 'Hub not found' }, 404)
+      if (err instanceof HubNotFoundError) {
+        return c.json(serviceErrorBody(err), 404)
       }
       throw err
     }

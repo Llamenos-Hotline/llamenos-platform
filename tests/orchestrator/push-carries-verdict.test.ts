@@ -11,6 +11,7 @@ import {
 import { REPO } from '../../orchestrator/src/gh.js'
 import { CI_DIFF_FLAGS } from '../../orchestrator/src/ci.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
+import { reviewBinding } from '../../orchestrator/src/review-cache.js'
 
 /**
  * #1394: a push must never start a review. #2014: nor may it conclude green
@@ -37,28 +38,39 @@ import { claimDigest } from '../../orchestrator/src/review.js'
 const PR = '1394'
 const BRANCH = 'fix/fleet-review-not-requested'
 const CURRENT_RUN = 900
-const WORKFLOW_PATH = '.github/workflows/fleet-review.yml'
+/** Where every `review_requested` review runs, and so records (#2815). */
+const WORKFLOW_PATH = '.github/workflows/fleet-review-re-evaluate.yml'
+/** The other writer: the operator's `workflow_dispatch` of fleet-review.yml. */
+const DISPATCH_PATH = '.github/workflows/fleet-review.yml'
 const HASH = 'ab'.repeat(32)
 /** The live PR read every scenario shares (`common` below) — the title and
  *  body the gate keys the cache on alongside the tree (#2336). */
 const CLAIM = { title: 'fix: shift math', body: '' }
 const CLAIM_DIGEST = claimDigest(CLAIM)
 
-interface FakeRun { id: number; head_sha: string; html_url: string; path?: string }
+interface FakeRun { id: number; head_sha: string; html_url: string; path?: string; created_at?: string }
 interface FakeArtifact { id: number; name: string; expired: boolean }
 
-const run = (id: number, sha = `sha${id}`): FakeRun => ({ id, head_sha: sha, html_url: `https://github.com/${REPO}/actions/runs/${id}`, path: WORKFLOW_PATH })
+/** A higher id is a later run: `created_at` is derived from it, one minute apart. */
+const at = (id: number) => new Date(Date.UTC(2026, 0, 1) + id * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+const run = (id: number, sha = `sha${id}`, path = WORKFLOW_PATH): FakeRun => ({ id, head_sha: sha, html_url: `https://github.com/${REPO}/actions/runs/${id}`, path, created_at: at(id) })
 const record = (id: number, verdict: 'PASS' | 'FAIL', opts: { pr?: string; scope?: string; expired?: boolean } = {}): FakeArtifact => ({
   id, name: cacheArtifactName(opts.pr ?? PR, HASH, CLAIM_DIGEST, opts.scope, verdict), expired: opts.expired ?? false,
 })
 
-function fakeApi(runs: FakeRun[] | undefined, artifacts: Record<number, FakeArtifact[] | undefined>, failText?: string) {
+function fakeApi(
+  runs: FakeRun[] | undefined, artifacts: Record<number, FakeArtifact[] | undefined>, failText?: string,
+  dispatchRuns: FakeRun[] | 'unreadable' = [],
+) {
   const calls: string[] = []
   const deps: LastVerdictDeps = {
     pr: PR, branch: BRANCH, currentRunId: String(CURRENT_RUN), log: () => {},
     async api<T>(path: string): Promise<T | undefined> {
       calls.push(path)
-      if (path.includes('/actions/workflows/')) return runs === undefined ? undefined : ({ workflow_runs: runs } as T)
+      const listing = (list: FakeRun[] | undefined) => (list === undefined ? undefined : ({ workflow_runs: list } as T))
+      if (path.includes('/actions/workflows/fleet-review-re-evaluate.yml/')) return listing(runs)
+      if (path.includes('/actions/workflows/fleet-review.yml/')) return listing(dispatchRuns === 'unreadable' ? undefined : dispatchRuns)
+      if (path.includes('/actions/workflows/')) throw new Error(`listed an unexpected workflow: ${path}`)
       const m = /\/actions\/runs\/(\d+)\/artifacts/.exec(path)
       if (m) {
         const list = artifacts[Number(m[1])]
@@ -128,6 +140,45 @@ describe('lastEarnedVerdict — the verdict a push carries forward', () => {
     expect(last).toEqual({ kind: 'none', runsSearched: 1 })
     expect(calls.some((c) => c.includes(`/runs/${CURRENT_RUN}/`))).toBe(false)
     expect(calls.some((c) => c.includes('/runs/7/'))).toBe(false)
+  })
+
+  // #2815: a review request reviews in fleet-review-re-evaluate.yml's runs,
+  // an operator dispatch in fleet-review.yml's — one history, ordered by
+  // when each run was CREATED, never by which list it came from.
+  it('merges both writers newest-first: a later dispatch FAIL outranks an earlier review-request PASS', async () => {
+    const { deps } = fakeApi([run(4)], { 4: [record(41, 'PASS')], 5: [record(51, 'FAIL')] }, 'VERDICT: FAIL — from a dispatch', [run(5, 'sha5', DISPATCH_PATH)])
+    const last = await lastEarnedVerdict(deps)
+    if (last.kind !== 'found') throw new Error(`expected found, got ${last.kind}`)
+    expect(last.earned.verdict).toBe('FAIL')
+    expect(last.earned.headSha).toBe('sha5')
+  })
+
+  it('merges both writers newest-first: a later review-request PASS outranks an earlier dispatch FAIL', async () => {
+    const { deps } = fakeApi([run(6)], { 6: [record(61, 'PASS')], 5: [record(51, 'FAIL')] }, 'never read', [run(5, 'sha5', DISPATCH_PATH)])
+    const last = await lastEarnedVerdict(deps)
+    if (last.kind !== 'found') throw new Error(`expected found, got ${last.kind}`)
+    expect(last.earned.verdict).toBe('PASS')
+    expect(last.earned.headSha).toBe('sha6')
+  })
+
+  it('searches no deeper than the shallowest FULL page — an unread run of one writer may be the newer verdict', async () => {
+    // The re-evaluate page is full (runs 1000..1099), so runs of the other
+    // writer older than run 1000 are past the window and never searched.
+    const page = Array.from({ length: LAST_VERDICT_RUN_WINDOW }, (_, i) => run(1099 - i))
+    const empty = Object.fromEntries(page.map((r) => [r.id, [] as FakeArtifact[]]))
+    const { deps, calls } = fakeApi(page, { ...empty, 5: [record(51, 'FAIL')] }, 'never read', [run(5, 'sha5', DISPATCH_PATH)])
+    expect(await lastEarnedVerdict(deps)).toEqual({ kind: 'none', runsSearched: LAST_VERDICT_RUN_WINDOW })
+    expect(calls.some((c) => c.includes('/runs/5/'))).toBe(false)
+  })
+
+  it('unreadable when a run has no creation time to order it by', async () => {
+    const { deps } = fakeApi([{ ...run(5), created_at: undefined }], { 5: [record(51, 'PASS')] })
+    expect((await lastEarnedVerdict(deps)).kind).toBe('unreadable')
+  })
+
+  it('unreadable when EITHER writer\'s run list fails — the dispatch list may hold the FAIL', async () => {
+    const { deps } = fakeApi([run(4)], { 4: [record(41, 'PASS')] }, undefined, 'unreadable')
+    expect((await lastEarnedVerdict(deps)).kind).toBe('unreadable')
   })
 
   it('none — a PR no review was ever earned on', async () => {
@@ -228,11 +279,18 @@ interface Route { match: string; status?: number; stdout?: unknown; download?: u
 const common: Route[] = [
   { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], ...CLAIM } },
   { match: `^api repos/${REPO}/actions/artifacts\\?name=`, stdout: { artifacts: [] } },
+  // The head's check runs (#2884): by default the review App recorded nothing.
+  { match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs\\?per_page=100$`, stdout: [{ check_runs: [] }] },
 ]
 
-const runsRoute = (runs: FakeRun[] | 'fail'): Route => runs === 'fail'
-  ? { match: '/actions/workflows/fleet-review\\.yml/runs', status: 1 }
-  : { match: '/actions/workflows/fleet-review\\.yml/runs', stdout: { workflow_runs: runs } }
+/** The review-request writer's runs, and the dispatch writer's (none unless
+ *  given) — the two histories `lastEarnedVerdict` merges (#2815). */
+const runsRoute = (runs: FakeRun[] | 'fail', dispatch: FakeRun[] = []): Route[] => [
+  runs === 'fail'
+    ? { match: '/actions/workflows/fleet-review-re-evaluate\\.yml/runs', status: 1 }
+    : { match: '/actions/workflows/fleet-review-re-evaluate\\.yml/runs', stdout: { workflow_runs: runs } },
+  { match: '/actions/workflows/fleet-review\\.yml/runs', stdout: { workflow_runs: dispatch } },
+]
 const artifactsRoute = (id: number, list: FakeArtifact[]): Route =>
   ({ match: `/actions/runs/${id}/artifacts`, stdout: { artifacts: list } })
 
@@ -293,7 +351,10 @@ function reviewGate(s: Scenario): GateRun {
 /** Every `gh` call a push made is a read: `api <GET path>` or `run download`. */
 function onlyReads(calls: string[][]): void {
   for (const c of calls) {
-    const read = (c[0] === 'api' && c.length === 2) || (c[0] === 'run' && c[1] === 'download')
+    // `--paginate --slurp` only pages a GET — it never changes the method.
+    const read = (c[0] === 'api' && c.length === 2) ||
+      (c[0] === 'api' && c.length === 4 && c[1] === '--paginate' && c[2] === '--slurp') ||
+      (c[0] === 'run' && c[1] === 'download')
     expect(read, `a push made a non-read gh call: ${c.join(' ')}`).toBe(true)
   }
 }
@@ -305,7 +366,7 @@ describe('review-gate by injection — a push never starts a review, and never g
     // still not a request.
     const g = reviewGate({
       action: 'synchronize', requestedReviewer: 'llamenos-auto',
-      routes: [runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
+      routes: [...runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
     })
     expect(g.status, g.out).toBe(1)
     expect(g.outputs['outcome']).toBe('tree-changed')
@@ -322,7 +383,7 @@ describe('review-gate by injection — a push never starts a review, and never g
   // A push still never starts a review; it just no longer publishes a pass
   // for a verdict that does not exist.
   it('a push with no review requested and none ever earned: RED, because nothing judged the diff', () => {
-    const g = reviewGate({ action: 'synchronize', routes: [runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])] })
+    const g = reviewGate({ action: 'synchronize', routes: [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])] })
     expect(g.status, g.out).toBe(1)
     expect(g.outputs['outcome']).toBe('unreviewed')
     expect(g.outputs['earned_sha']).toBe('')
@@ -334,11 +395,62 @@ describe('review-gate by injection — a push never starts a review, and never g
     onlyReads(g.ghCalls)
   })
 
+  // #2884. `review-and-merge` runs the review set on the operator's machine
+  // and records its PASS as a check run authored by the review App — it cannot
+  // write the artifact this carrier reads, so the carrier concluded `unreviewed`
+  // and the required context (the worst of its carriers) stayed red under a
+  // genuine PASS. The same head, with the App's PASS on it, must end green.
+  const appCheckRun = (o: Record<string, unknown>) => ({
+    id: 901, name: 'fleet/review', status: 'completed', conclusion: 'success',
+    started_at: '2026-11-20T10:00:00Z', app: { slug: 'llamenos-fleet-review' },
+    // What the PASS judged besides the commit: the general set and THIS description.
+    external_id: reviewBinding(undefined, claimDigest(CLAIM)), ...o,
+  })
+  const headChecks = (checkRuns: unknown[]): Route =>
+    ({ match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs\\?per_page=100$`, stdout: [{ check_runs: checkRuns }] })
+
+  it('#2884: a head no review was earned on, carrying the review App\'s recorded PASS: GREEN, app-recorded, no engine', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    // Without the App's check run this is #2871's carrier exactly.
+    expect(reviewGate({ action: 'synchronize', routes: none }).outputs['outcome']).toBe('unreviewed')
+    const g = reviewGate({ action: 'synchronize', routes: [headChecks([appCheckRun({})]), ...none] })
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome']).toBe('app-recorded')
+    expect(g.out).toContain('PASS recorded by the llamenos-fleet-review App')
+    onlyReads(g.ghCalls)
+  })
+
+  it('#2884: only the review App\'s check run is believed, and its LATEST verdict decides', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    const outcome = (checkRuns: unknown[]) =>
+      reviewGate({ action: 'synchronize', routes: [headChecks(checkRuns), ...none] }).outputs['outcome']
+    // A PASS from any other author — an Actions job, another app — is not the App's.
+    expect(outcome([appCheckRun({ app: { slug: 'github-actions' } })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ app: { slug: 'attacker-app' } })])).toBe('unreviewed')
+    // A PASS bound to another review set, another description, or to nothing.
+    expect(outcome([appCheckRun({ external_id: reviewBinding(undefined, claimDigest({ title: 'x', body: 'y' })) })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ external_id: 'fleet-review:v1;set=set-0123456789ab;claim=00' })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ external_id: '' })])).toBe('unreviewed')
+    // A later failure by the App is not outvoted by its earlier pass.
+    expect(outcome([
+      appCheckRun({}),
+      appCheckRun({ id: 902, conclusion: 'failure', started_at: '2026-11-20T11:00:00Z' }),
+    ])).toBe('unreviewed')
+  })
+
+  it('#2884: a head check-run read that fails changes nothing — still unreviewed, never green', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    const failing: Route = { match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs`, status: 1 }
+    const g = reviewGate({ action: 'synchronize', routes: [failing, ...none] })
+    expect(g.status, g.out).toBe(1)
+    expect(g.outputs['outcome']).toBe('unreviewed')
+  })
+
   it('a changed diff after a FAIL: the FAIL stands, with its text and the head it was earned on, no engine', () => {
     const g = reviewGate({
       action: 'synchronize',
       routes: [
-        runsRoute([run(9), run(8, 'earnedfail8')]), artifactsRoute(9, []), artifactsRoute(8, [record(81, 'FAIL')]),
+        ...runsRoute([run(9), run(8, 'earnedfail8')]), artifactsRoute(9, []), artifactsRoute(8, [record(81, 'FAIL')]),
         { match: '^run download 8 ', download: { verdict: 'FAIL', text: 'VERDICT: FAIL — shift window off by one' } },
       ],
     })
@@ -350,14 +462,14 @@ describe('review-gate by injection — a push never starts a review, and never g
   })
 
   it('a push whose history cannot be read fails closed — it never carries a FAIL into a green', () => {
-    const g = reviewGate({ action: 'synchronize', routes: [runsRoute('fail')] })
+    const g = reviewGate({ action: 'synchronize', routes: [...runsRoute('fail')] })
     expect(g.status, g.out).toBe(1)
     expect(g.outputs['outcome']).toBe('carry-unreadable')
     onlyReads(g.ghCalls)
   })
 
   it('an explicit review request from llamenos-auto is the one path to the engine — and skips the history read', () => {
-    const g = reviewGate({ action: 'review_requested', requestedReviewer: 'llamenos-auto', routes: [runsRoute('fail')] })
+    const g = reviewGate({ action: 'review_requested', requestedReviewer: 'llamenos-auto', routes: [...runsRoute('fail')] })
     expect(g.status, g.out).toBe(0)
     expect(g.outputs['outcome']).toBe('run-engine')
     expect(g.ghCalls.some((c) => c.join(' ').includes('/actions/workflows/'))).toBe(false)
@@ -367,7 +479,7 @@ describe('review-gate by injection — a push never starts a review, and never g
     it('a push onto another tree is red exactly as for any other author', () => {
       const g = reviewGate({
         action: 'synchronize', author: 'llamenos-auto',
-        routes: [runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
+        routes: [...runsRoute([run(8, 'earnedpass8')]), artifactsRoute(8, [record(81, 'PASS')])],
       })
       expect(g.status, g.out).toBe(1)
       expect(g.outputs['outcome']).toBe('tree-changed')
@@ -432,7 +544,7 @@ describe('#2014: review-gate reuses a verdict only for the identical tree', () =
   ]
   /** The same PASS in the run history a push reads (`lastEarnedVerdict`). */
   const earnedOn = (tree: string): Route[] => [
-    runsRoute([run(JUDGED_RUN, headSha)]),
+    ...runsRoute([run(JUDGED_RUN, headSha)]),
     artifactsRoute(JUDGED_RUN, [{ id: 701, name: cacheArtifactName(PR, tree, CLAIM_DIGEST, undefined, 'PASS'), expired: false }]),
   ]
 

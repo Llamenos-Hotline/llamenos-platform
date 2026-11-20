@@ -620,6 +620,64 @@ public func FfiConverterTypeAuthToken_lower(_ value: AuthToken) -> RustBuffer {
 
 
 /**
+ * The client half of one blinded ban-digest evaluation. Send `blinded_element_hex` to the
+ * server's evaluate endpoint; keep `blind_hex` for [`ban_digest_finalize`] and never send it.
+ */
+public struct BanDigestBlind: Equatable, Hashable {
+    public let blindHex: String
+    public let blindedElementHex: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(blindHex: String, blindedElementHex: String) {
+        self.blindHex = blindHex
+        self.blindedElementHex = blindedElementHex
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BanDigestBlind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBanDigestBlind: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BanDigestBlind {
+        return
+            try BanDigestBlind(
+                blindHex: FfiConverterString.read(from: &buf), 
+                blindedElementHex: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BanDigestBlind, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.blindHex, into: &buf)
+        FfiConverterString.write(value.blindedElementHex, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBanDigestBlind_lift(_ buf: RustBuffer) throws -> BanDigestBlind {
+    return try FfiConverterTypeBanDigestBlind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBanDigestBlind_lower(_ value: BanDigestBlind) -> RustBuffer {
+    return FfiConverterTypeBanDigestBlind.lower(value)
+}
+
+
+/**
  * Device key state exposed to callers (no secret material).
  */
 public struct DeviceKeyState: Equatable, Hashable {
@@ -1199,6 +1257,77 @@ public func FfiConverterTypeEncryptedNote_lift(_ buf: RustBuffer) throws -> Encr
 #endif
 public func FfiConverterTypeEncryptedNote_lower(_ value: EncryptedNote) -> RustBuffer {
     return FfiConverterTypeEncryptedNote.lower(value)
+}
+
+
+/**
+ * A sealed shift field in wire form: the ciphertext plus one envelope per
+ * reader. Maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+public struct EncryptedShiftField: Equatable, Hashable {
+    /**
+     * hex: iv(12) || ciphertext || tag(16)
+     */
+    public let encryptedContent: String
+    /**
+     * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+     */
+    public let readerEnvelopes: [RecipientKeyEnvelope]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * hex: iv(12) || ciphertext || tag(16)
+         */encryptedContent: String, 
+        /**
+         * The content key wrapped for each reader, `pubkey` = the reader's X25519 key.
+         */readerEnvelopes: [RecipientKeyEnvelope]) {
+        self.encryptedContent = encryptedContent
+        self.readerEnvelopes = readerEnvelopes
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension EncryptedShiftField: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeEncryptedShiftField: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EncryptedShiftField {
+        return
+            try EncryptedShiftField(
+                encryptedContent: FfiConverterString.read(from: &buf), 
+                readerEnvelopes: FfiConverterSequenceTypeRecipientKeyEnvelope.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: EncryptedShiftField, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.encryptedContent, into: &buf)
+        FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.readerEnvelopes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedShiftField_lift(_ buf: RustBuffer) throws -> EncryptedShiftField {
+    return try FfiConverterTypeEncryptedShiftField.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeEncryptedShiftField_lower(_ value: EncryptedShiftField) -> RustBuffer {
+    return FfiConverterTypeEncryptedShiftField.lower(value)
 }
 
 
@@ -2352,6 +2481,83 @@ public func FfiConverterTypeCryptoError_lower(_ value: CryptoError) -> RustBuffe
     return FfiConverterTypeCryptoError.lower(value)
 }
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
+ * What a shift ciphertext is. The only choice a caller makes — it names the
+ * field being sealed, never how. A UniFFI enum on mobile.
+ */
+
+public enum ShiftFieldPurpose: Equatable, Hashable {
+    
+    /**
+     * A volunteer's reason for an availability block.
+     */
+    case availabilityReason
+    /**
+     * The note on a shift override.
+     */
+    case overrideNote
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ShiftFieldPurpose: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeShiftFieldPurpose: FfiConverterRustBuffer {
+    typealias SwiftType = ShiftFieldPurpose
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ShiftFieldPurpose {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .availabilityReason
+        
+        case 2: return .overrideNote
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ShiftFieldPurpose, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .availabilityReason:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .overrideNote:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShiftFieldPurpose_lift(_ buf: RustBuffer) throws -> ShiftFieldPurpose {
+    return try FfiConverterTypeShiftFieldPurpose.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShiftFieldPurpose_lower(_ value: ShiftFieldPurpose) -> RustBuffer {
+    return FfiConverterTypeShiftFieldPurpose.lower(value)
+}
+
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -2544,6 +2750,29 @@ public func isValidPin(pin: String) -> Bool  {
 })
 }
 /**
+ * Blind an E.164 phone number for a ban digest. The server never sees the number.
+ */
+public func banDigestBlind(phone: String)throws  -> BanDigestBlind  {
+    return try  FfiConverterTypeBanDigestBlind_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_ban_digest_blind(
+        FfiConverterString.lower(phone),$0
+    )
+})
+}
+/**
+ * Turn the server's evaluated element (hex) into the number's ban digest (128 hex chars) —
+ * the `phoneHash` a platform-ban request carries.
+ */
+public func banDigestFinalize(phone: String, blindHex: String, evaluatedElementHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_ban_digest_finalize(
+        FfiConverterString.lower(phone),
+        FfiConverterString.lower(blindHex),
+        FfiConverterString.lower(evaluatedElementHex),$0
+    )
+})
+}
+/**
  * Derive a 6-digit SAS code from an ECDH shared secret.
  */
 public func computeSasCode(sharedXHex: String)throws  -> String  {
@@ -2668,6 +2897,18 @@ public func mobileRecoveryGroupSplitPrivateKey(handle: UInt64, total: UInt8, thr
         FfiConverterUInt64.lower(handle),
         FfiConverterUInt8.lower(total),
         FfiConverterUInt8.lower(threshold),$0
+    )
+})
+}
+/**
+ * The liveness verifying key (hex Ed25519 public key) derived from a Shamir
+ * share (#2782). An enrolling client computes one per share and sends it beside
+ * the holder's share envelope; see `recovery_liveness`.
+ */
+public func mobileRecoveryLivenessPublicKey(share: ShamirShare)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_recovery_liveness_public_key(
+        FfiConverterTypeShamirShare_lower(share),$0
     )
 })
 }
@@ -3268,17 +3509,19 @@ public func mobileLabelToId(label: String)throws  -> UInt8  {
 })
 }
 /**
- * Unwrap a hub key from server-provided HPKE envelope fields and store in state.
+ * Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
  *
- * The caller provides only `enc` and `ct` from the server response. The envelope
- * version and label ID are constructed by Rust from the label registry — clients
- * never need to hardcode protocol constants.
+ * `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
+ * **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
+ * envelope version, registry `labelId`, label and AAD are fixed here, by
+ * [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
+ * loader calls — so no client hardcodes a protocol constant.
  *
- * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)` per PROTOCOL.md §2.7, which is
- * what [`crate::encryption::hpke_wrap_key`] seals a hub key under and what the
- * desktop and iOS now bind. This passed `&[]` until #1631 — so Android agreed
- * with the other two clients and with none of the spec, the crate's own
- * wrap/unwrap pair, or the interop vectors.
+ * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
+ * [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
+ * until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
+ * the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
+ * server ever stored could open on Android.
  */
 public func mobileLoadHubKey(hubId: String, enc: String, ct: String)throws   {try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_load_hub_key(
@@ -3316,6 +3559,19 @@ public func mobileOpenCase(purpose: CasePurpose, encryptedContent: String, envel
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_open_case(
         FfiConverterTypeCasePurpose_lower(purpose),
+        FfiConverterString.lower(encryptedContent),
+        FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
+    )
+})
+}
+/**
+ * Open a shift field as this device from all of its envelopes; Rust picks the
+ * one addressed to this device's X25519 key.
+ */
+public func mobileOpenShiftField(purpose: ShiftFieldPurpose, encryptedContent: String, envelopes: [RecipientKeyEnvelope])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_open_shift_field(
+        FfiConverterTypeShiftFieldPurpose_lower(purpose),
         FfiConverterString.lower(encryptedContent),
         FfiConverterSequenceTypeRecipientKeyEnvelope.lower(envelopes),$0
     )
@@ -3376,6 +3632,25 @@ public func mobileRandomBytesHex() -> String  {
 })
 }
 /**
+ * Prove this device still holds its recovery share (#2782).
+ *
+ * Opens `share_envelope` (sealed to this device under
+ * `LABEL_RECOVERY_GROUP_SHARE_WRAP`) with the device key in mobile state,
+ * derives the share's liveness key and signs the server's single-use
+ * `challenge_hex`, bound to `hub_id` and to this device's own signing pubkey —
+ * the identity the server authenticates the submission as. Returns the 64-byte
+ * proof as hex. Neither the share nor the derived key leaves Rust.
+ */
+public func mobileRecoveryShareLivenessProof(shareEnvelope: HpkeEnvelope, hubId: String, challengeHex: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(
+        FfiConverterTypeHpkeEnvelope_lower(shareEnvelope),
+        FfiConverterString.lower(hubId),
+        FfiConverterString.lower(challengeHex),$0
+    )
+})
+}
+/**
  * Seal a case ciphertext — a record's summary or fields, or a comment — as
  * this device, for this device plus `reader_pubkeys` (X25519, hex).
  *
@@ -3388,6 +3663,23 @@ public func mobileSealCase(purpose: CasePurpose, plaintext: String, readerPubkey
     return try  FfiConverterTypeEncryptedCaseCiphertext_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
     uniffi_llamenos_core_fn_func_mobile_seal_case(
         FfiConverterTypeCasePurpose_lower(purpose),
+        FfiConverterString.lower(plaintext),
+        FfiConverterSequenceString.lower(readerPubkeys),$0
+    )
+})
+}
+/**
+ * Seal an availability reason or a shift override note as this device, for
+ * this device plus `reader_pubkeys` (X25519, hex).
+ *
+ * No label and no AAD argument: `crate::shift_record` derives both from
+ * `purpose`. The result maps onto `encryptedReason`/`reasonEnvelopes` and
+ * `encryptedNote`/`noteEnvelopes` unchanged.
+ */
+public func mobileSealShiftField(purpose: ShiftFieldPurpose, plaintext: String, readerPubkeys: [String])throws  -> EncryptedShiftField  {
+    return try  FfiConverterTypeEncryptedShiftField_lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_seal_shift_field(
+        FfiConverterTypeShiftFieldPurpose_lower(purpose),
         FfiConverterString.lower(plaintext),
         FfiConverterSequenceString.lower(readerPubkeys),$0
     )
@@ -3572,6 +3864,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_is_valid_pin() != 51720) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_ban_digest_blind() != 43517) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_ban_digest_finalize() != 8758) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_compute_sas_code() != 62033) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3597,6 +3895,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_recovery_group_split_private_key() != 15169) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_recovery_liveness_public_key() != 23991) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_shamir_combine() != 20665) {
@@ -3743,7 +4044,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 63290) {
+    if (uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 48594) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647) {
@@ -3753,6 +4054,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_open_shift_field() != 64391) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_puk_create() != 309) {
@@ -3770,7 +4074,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_seal_shift_field() != 23967) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956) {

@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path'
 import {
   WORKFLOWS_DIR, loadWorkflow, getJob, getStep, resolveEnv, resolveExpressions, runShellStep,
 } from './helpers/workflow-shell'
+import { evalTemplate, truthy } from './helpers/github-expr'
+import { expressionContext } from './required-context-creation'
 
 /**
  * Rail for #2094: knope rewrites the `release` PR on every merge to main
@@ -223,12 +225,14 @@ describe('every workflow — superseded PR runs cancel, merge_group runs never d
   it.each(loaded.filter((w) => w.triggers.includes('merge_group') && w.concurrency))(
     '$file cannot cancel a merge_group run',
     ({ concurrency }) => {
+      // EVALUATED on a merge_group event, not pattern-matched: #2813 made
+      // fleet-verify's value an expression over the pull_request action too,
+      // and what matters is only what it yields on the queue.
       const cancel = concurrency?.['cancel-in-progress']
-      const safe =
-        cancel === false ||
-        cancel === 'false' ||
-        (typeof cancel === 'string' && /^\$\{\{\s*github\.event_name == 'pull_request'\s*\}\}$/.test(cancel))
-      expect(safe, `cancel-in-progress is ${String(cancel)} — a cancelled queue check ejects the entry`).toBe(true)
+      const onQueue = cancel === undefined ? false
+        : typeof cancel === 'boolean' ? cancel
+          : truthy(evalTemplate(String(cancel), expressionContext({ event: 'merge_group', action: 'checks_requested' })))
+      expect(onQueue, `cancel-in-progress is ${String(cancel)} — a cancelled queue check ejects the entry`).toBe(false)
     },
   )
 })

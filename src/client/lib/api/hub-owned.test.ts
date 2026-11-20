@@ -19,13 +19,15 @@ import { listRecords, getRecord, createRecord, deleteRecord, listEventLinkedReco
 import { listInteractions } from './interactions'
 import { listEvidence, getEvidenceMetadata } from './evidence'
 import { getCallHistory, getCallsTodayCount, getUserPresence } from './calls'
-import { listShifts, getMyShiftStatus, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
+import { listShifts, getMyShiftStatus, getMyShiftStatusIn, clockIn, sendHeartbeat, getFallbackGroup } from './shifts'
 import { listRingGroups, createRingGroup } from './ring-groups'
 import { getCustomFields } from './call-settings'
 
 let urls: string[]
 
 beforeEach(() => {
+  // Hub-scoped requests are only made under a session (#2851).
+  sessionStorage.setItem('llamenos-session-token', 'test-session')
   urls = []
   vi.stubGlobal(
     'fetch',
@@ -37,6 +39,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  sessionStorage.clear()
   vi.unstubAllGlobals()
   setActiveHub(null)
 })
@@ -74,9 +77,32 @@ const hubOwnedWrites: Array<[string, () => Promise<unknown>, string]> = [
   ['createRecord', () => createRecord({ entityTypeId: 'et-1', statusHash: 's', encryptedSummary: 'c', summaryEnvelopes: [] }), '/records'],
   ['deleteRecord', () => deleteRecord('rec-1'), '/records/rec-1'],
   ['clockIn', () => clockIn(), '/shifts/clock-in'],
-  ['sendHeartbeat', () => sendHeartbeat(), '/shifts/heartbeat'],
   ['createRingGroup', () => createRingGroup({ id: 'rg-1', encryptedName: 'n' }), '/ring-groups'],
 ]
+
+describe('sendHeartbeat (#1142)', () => {
+  // A clock-in is per hub, and the user may be clocked into several. The beat
+  // goes to the hub it names — never to whichever hub the UI is showing.
+  it('is addressed to the hub it names, whatever hub is active', async () => {
+    setActiveHub('hub-1')
+    await sendHeartbeat('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/heartbeat'])
+  })
+
+  it('does not need an active hub', async () => {
+    await sendHeartbeat('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/heartbeat'])
+  })
+})
+
+describe('getMyShiftStatusIn (#1142)', () => {
+  // The heartbeat sender asks each member hub whether the user is clocked in there.
+  it('reads the hub it names, whatever hub is active', async () => {
+    setActiveHub('hub-1')
+    await getMyShiftStatusIn('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/my-status'])
+  })
+})
 
 describe('deployment vocabulary read by hub members (#1858)', () => {
   // A hub-only member holds no global role, so the bare `/settings/custom-fields`

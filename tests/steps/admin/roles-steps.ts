@@ -6,7 +6,7 @@
  * with real Schnorr-authenticated calls. Zero empty step bodies.
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import { Given, When, Then, type RolesWorld } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { VolunteerPage } from '../../pages/index'
@@ -21,11 +21,10 @@ import {
   seedHexToPubkey,
 } from '../../api-helpers'
 
-/** Pubkey of the volunteer created by the "a volunteer exists" step (seed stashed on window). */
-async function existingVolunteerPubkey(page: import('@playwright/test').Page): Promise<string> {
-  const seed = (await page.evaluate(() => (window as unknown as Record<string, unknown>).__test_vol_nsec)) as string | undefined
-  expect(seed, 'a volunteer must exist first (see "a volunteer exists")').toBeTruthy()
-  return seedHexToPubkey(seed!)
+/** Pubkey of the volunteer created by the "a volunteer exists" step. */
+function existingVolunteerPubkey(rolesWorld: RolesWorld): string {
+  expect(rolesWorld.volunteerNsec, 'a volunteer must exist first (see "a volunteer exists")').toBeTruthy()
+  return seedHexToPubkey(rolesWorld.volunteerNsec)
 }
 
 When('I request the roles list', async ({ request, rolesWorld }) => {
@@ -131,7 +130,7 @@ Then('the role should be removed', async ({ request, rolesWorld }) => {
   expect(found).toBeUndefined()
 })
 
-When('I attempt to delete the {string} role', async ({ request }, roleName: string) => {
+When('I attempt to delete the {string} role', async ({ request, rolesWorld }, roleName: string) => {
   // Find the system role
   const roles = await listRolesViaApi(request)
   const systemRole = roles.find(r => r.name === roleName && r.isSystem)
@@ -139,22 +138,19 @@ When('I attempt to delete the {string} role', async ({ request }, roleName: stri
 
   // Attempt deletion — should fail with 403
   const result = await deleteRoleViaApi(request, systemRole!.id)
-  // Store for next step
-  await Promise.resolve() // ensure async chain
-  ;(globalThis as Record<string, unknown>).__test_delete_status = result.status
+  rolesWorld.deleteStatus = result.status
 })
 
-Then('the deletion should fail with a {int} error', async () => {
-  const status = (globalThis as Record<string, unknown>).__test_delete_status as number
-  expect(status).toBe(403)
+Then('the deletion should fail with a {int} error', async ({ rolesWorld }) => {
+  expect(rolesWorld.deleteStatus).toBe(403)
 })
 
-When('I assign the {string} role to the volunteer', async ({ page, request }, roleName: string) => {
+When('I assign the {string} role to the volunteer', async ({ page, request, rolesWorld }, roleName: string) => {
   // The old probe chain (an "assign" button, then a native <select>) matched neither:
   // users.tsx renders role changes as a Radix Select, so both isVisible() checks silently
   // returned false and no role was ever assigned. Drive the real control on the row of the
   // volunteer created by "a volunteer exists", and wait for the PATCH to succeed.
-  const pubkey = await existingVolunteerPubkey(page)
+  const pubkey = existingVolunteerPubkey(rolesWorld)
   const roles = await listRolesViaApi(request)
   const targetRole = findNamedRole(roles, roleName)
   expect(targetRole, `role "${roleName}" must exist`).toBeTruthy()
@@ -164,10 +160,10 @@ When('I assign the {string} role to the volunteer', async ({ page, request }, ro
   await VolunteerPage.changeRole(page, volunteerRow, pubkey, targetRole!)
 })
 
-Then('the volunteer should have the {string} role', async ({ page }, roleName: string) => {
+Then('the volunteer should have the {string} role', async ({ page, rolesWorld }, roleName: string) => {
   // Scoped to the specific volunteer's row badge. The old version passed as soon as ANY
   // row contained the role name, and otherwise fell back to "any row is visible".
-  const pubkey = await existingVolunteerPubkey(page)
+  const pubkey = existingVolunteerPubkey(rolesWorld)
   const volunteerRow = VolunteerPage.getRowById(page, pubkey)
   await expect(volunteerRow.getByTestId(TestIds.VOLUNTEER_ROW_ROLE_BADGE)).toContainText(roleName, { timeout: Timeouts.ELEMENT })
 })
@@ -176,24 +172,24 @@ When('I request the {string} role details', async ({ request, rolesWorld }, role
   rolesWorld.cachedRoles = await listRolesViaApi(request)
   const role = rolesWorld.cachedRoles.find(r => r.name === roleName)
   expect(role).toBeTruthy()
-  ;(globalThis as Record<string, unknown>).__test_inspected_role = role
+  rolesWorld.inspectedRole = role
 })
 
-Then('it should have {string} permission', async ({}, permission: string) => {
-  const role = (globalThis as Record<string, unknown>).__test_inspected_role as { permissions: string[] } | undefined
+Then('it should have {string} permission', async ({ rolesWorld }, permission: string) => {
+  const role = rolesWorld.inspectedRole
   expect(role).toBeTruthy()
   expect(role!.permissions).toContain(permission)
 })
 
-Then('it should not have {string} permission', async ({}, permission: string) => {
-  const role = (globalThis as Record<string, unknown>).__test_inspected_role as { permissions: string[] } | undefined
+Then('it should not have {string} permission', async ({ rolesWorld }, permission: string) => {
+  const role = rolesWorld.inspectedRole
   expect(role).toBeTruthy()
   expect(role!.permissions).not.toContain(permission)
 })
 
 // --- Feature file steps that need additional coverage ---
 
-When('I create a role with the plaintext name {string}', async ({ request }, name: string) => {
+When('I create a role with the plaintext name {string}', async ({ request, rolesWorld }, name: string) => {
   // Submit a plaintext name to the real endpoint and record the answer. The server
   // must refuse it outright — silently dropping it would leave a client believing
   // the name was kept (#2780).
@@ -203,12 +199,11 @@ When('I create a role with the plaintext name {string}', async ({ request }, nam
     permissions: ['calls:read'],
     description: `${name} role`,
   })
-  ;(globalThis as Record<string, unknown>).__test_role_create_status = status
+  rolesWorld.roleCreateStatus = status
 })
 
-Then('the server should refuse the plaintext role name', async () => {
-  const status = (globalThis as Record<string, unknown>).__test_role_create_status as number
-  expect(status).toBe(400)
+Then('the server should refuse the plaintext role name', async ({ rolesWorld }) => {
+  expect(rolesWorld.roleCreateStatus).toBe(400)
 })
 
 When('I update the role permissions', async ({ request, rolesWorld }) => {
@@ -225,28 +220,24 @@ Then('the permissions should be updated', async ({ request, rolesWorld }) => {
   expect(role!.permissions).toContain('notes:read')
 })
 
-When('I request the permissions catalog', async ({ request }) => {
-  const catalog = await getPermissionsCatalogViaApi(request)
-  ;(globalThis as Record<string, unknown>).__test_permissions_catalog = catalog
+When('I request the permissions catalog', async ({ request, rolesWorld }) => {
+  rolesWorld.permissionsCatalog = await getPermissionsCatalogViaApi(request)
 })
 
-Then('I should see all available permissions grouped by domain', async () => {
-  const catalog = (globalThis as Record<string, unknown>).__test_permissions_catalog as {
-    byDomain: Record<string, Array<{ key: string; label: string }>>
-  }
+Then('I should see all available permissions grouped by domain', async ({ rolesWorld }) => {
+  const catalog = rolesWorld.permissionsCatalog
   expect(catalog).toBeTruthy()
-  const domains = Object.keys(catalog.byDomain)
+  const domains = Object.keys(catalog!.byDomain)
   expect(domains.length).toBeGreaterThan(0)
   // Should have at least volunteers, notes, calls domains
   expect(domains.some(d => d.includes('volunteer') || d.includes('notes') || d.includes('calls'))).toBe(true)
 })
 
-When('I attempt to delete a role that does not exist', async ({ request }) => {
+When('I attempt to delete a role that does not exist', async ({ request, rolesWorld }) => {
   const result = await deleteRoleViaApi(request, 'nonexistent-role-id-12345')
-  ;(globalThis as Record<string, unknown>).__test_delete_status = result.status
+  rolesWorld.deleteStatus = result.status
 })
 
-Then('I should receive a not found error', async () => {
-  const status = (globalThis as Record<string, unknown>).__test_delete_status as number
-  expect(status).toBe(404)
+Then('I should receive a not found error', async ({ rolesWorld }) => {
+  expect(rolesWorld.deleteStatus).toBe(404)
 })

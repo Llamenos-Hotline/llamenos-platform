@@ -63,6 +63,36 @@ const uuidCallId = () => crypto.randomUUID()
 const CALLER_NUMBER = '+15557654321'
 const CALLER_LAST4 = '4321'
 
+/**
+ * How far past "now" a time-derived number on the wire can point. The APNs request carries
+ * `apns-expiration`, a decimal Unix timestamp `now + 30 s` — ten digits, read off the wall clock.
+ * Any four digits are, once in a while, a substring of such a number (`1794994321` ends in
+ * `4321`), and the wire scan below would then report a caller digit the push never carried.
+ * 120 s is the 30 s TTL with room for it to change.
+ */
+const CLOCK_HORIZON_SECONDS = 120
+
+/**
+ * Freeze `Date` (only `Date` — timers and I/O stay real) at a second just before the real one
+ * whose every timestamp over the next {@link CLOCK_HORIZON_SECONDS} lacks `digits`, so what the
+ * wire scan finds is the push's own content and not the time of day the suite happened to run.
+ *
+ * Backwards, never forwards: a ringing call is reaped as stale after `RINGING_TTL_MS` (3 min) of
+ * age, and an earlier clock can only make the call younger. The skip is at most one window of
+ * the digits in a ten-digit timestamp: 1000 s in the widest case, 0 s nearly always.
+ */
+function freezeClockClearOf(digits: string): void {
+  let nowSec = Math.floor(Date.now() / 1000)
+  const clear = () => {
+    for (let ahead = 0; ahead <= CLOCK_HORIZON_SECONDS; ahead++) {
+      if (String(nowSec + ahead).includes(digits)) return false
+    }
+    return true
+  }
+  while (!clear()) nowSec--
+  vi.useFakeTimers({ toFake: ['Date'], now: nowSec * 1000 })
+}
+
 const IOS_VOIP_TOKEN = 'ios-voip-token-0123456789abcdef'
 const NTFY_ENDPOINT = 'http://ntfy.test:80/up-voip-endpoint'
 
@@ -229,6 +259,7 @@ beforeEach(() => {
 
 afterEach(() => {
   fetchSpy.mockRestore()
+  vi.useRealTimers()
 })
 
 describe.each([
@@ -246,6 +277,7 @@ describe.each([
   })
 
   it('puts nothing the provider issued, and nothing about the caller, on APNs or ntfy', async () => {
+    freezeClockClearOf(CALLER_LAST4)
     await ringAndCollectPushes(hubId, providerCallId)
 
     // Both transports were exercised — the assertion below is not vacuous.

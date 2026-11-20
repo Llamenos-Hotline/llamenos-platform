@@ -8,9 +8,11 @@ import type {
   callPresenceResponseSchema,
 } from '@protocol/schemas/calls'
 import type { ConversationListResponse } from '@protocol/schemas/conversations'
+import type { HubKeyRecipientsResponse } from '@protocol/schemas/hubs'
 import type { HubIncidentListResponse } from '@protocol/schemas/incidents'
 import type { ShiftStatus, shiftListResponseSchema } from '@protocol/schemas/shifts'
 import type { UserListResponse } from '@protocol/schemas/users'
+import { MOCK_PIN_LOCKOUT_STORAGE_KEY } from './mocks/pin-lockout'
 
 export const ADMIN_SEED = 'f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7'
 /** @deprecated Use ADMIN_SEED */
@@ -322,9 +324,9 @@ export async function loginAsAdmin(page: Page) {
   // In serial mode the browser context is reused, so failed PIN attempts from
   // stale cached storage compound across tests. Without this reset, the mock's
   // escalating lockout triggers a 10-minute lockout after ~9 loginAsAdmin calls.
-  await page.evaluate(() => {
-    localStorage.removeItem('__test_pin_lockout_state')
-  })
+  await page.evaluate((key) => {
+    localStorage.removeItem(key)
+  }, MOCK_PIN_LOCKOUT_STORAGE_KEY)
 
   await page.evaluate((state) => {
     sessionStorage.clear()
@@ -398,14 +400,14 @@ export async function loginAsVolunteer(page: Page, seedHex: string) {
   const secretHex = seedHex
 
   await page.goto('/login')
-  await page.evaluate(() => {
+  await page.evaluate((lockoutKey) => {
     sessionStorage.clear()
     localStorage.removeItem('llamenos:llamenos-encrypted-device-keys')
     localStorage.removeItem('llamenos:llamenos-encrypted-key')
     localStorage.removeItem('llamenos-encrypted-key')
     // Reset PIN lockout counter to prevent accumulation across serial tests
-    localStorage.removeItem('__test_pin_lockout_state')
-  })
+    localStorage.removeItem(lockoutKey)
+  }, MOCK_PIN_LOCKOUT_STORAGE_KEY)
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
 
@@ -564,8 +566,8 @@ export async function resetTestState(request: APIRequestContext) {
 /**
  * The hub-scoped reads the app makes on its own, on a timer, from every page —
  * whatever the spec is about: the dashboard's live-call poll and presence list,
- * the shift status and schedule, the volunteer roster, open incidents and the
- * active conversation list.
+ * the shift status and schedule, the volunteer roster, open incidents, the
+ * active conversation list and the hub key and its recipients.
  *
  * A spec that pins a SYNTHETIC hub (`mockConfigWithHub`) names a hub the real
  * backend has never heard of, so these reads 404 on every poll for the whole
@@ -583,6 +585,12 @@ type BackgroundHubReads = {
   readonly users: UserListResponse
   readonly incidents: HubIncidentListResponse
   readonly conversations: ConversationListResponse
+  /**
+   * The hub-key lifecycle (`useHubKeys`, mounted at the root) asks who a hub's key
+   * is shared with. A hub with no members has nobody to wrap for, so the device
+   * generates and installs nothing and just waits, quietly.
+   */
+  readonly 'key/recipients': HubKeyRecipientsResponse
 }
 
 const BACKGROUND_HUB_READS: BackgroundHubReads = {
@@ -593,6 +601,9 @@ const BACKGROUND_HUB_READS: BackgroundHubReads = {
   users: { users: [] },
   incidents: { incidents: [] },
   conversations: { conversations: [], total: 0, page: 1, limit: 200 },
+  'key/recipients': {
+    generation: 0, envelopes: [], members: [], epoch: 0, rotation: null, rotationRequired: false,
+  },
 }
 
 /**
@@ -616,6 +627,67 @@ async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> 
       })
     })
   }
+
+  // The hub-key read is the one background read whose real answer is a 404 —
+  // and the 404's MESSAGE is what the client acts on. A member of an existing hub
+  // whom nobody has wrapped the key for gets "No key envelope for this user"
+  // (apps/worker/routes/hubs.ts), which the key manager reads as "not held yet".
+  // Left to reach the real backend, the synthetic hub would instead get "Hub not
+  // found", which says the hub does not exist, and the client then drops it from
+  // the membership snapshot (#2855) and loses the active hub the spec pinned.
+  await page.route(new RegExp(`/api/hubs/${hubId}/key(\\?.*)?$`), async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'No key envelope for this user' }),
+    })
+  })
+}
+
+/**
+ * Answer `GET /api/hubs/<hubId>/permissions/me` for a SYNTHETIC hub (#1101).
+ *
+ * The UI gates every admin panel on the permissions the SERVER resolves for the
+ * hub being browsed, and fails closed — nothing is offered until that hub has
+ * answered. A synthetic hub is one the real backend has never heard of, so left
+ * to reach it the read 404s ("Hub not found"), which is a real answer ("you hold
+ * nothing here") and renders no admin panel at all.
+ *
+ * What this stands in for is the answer of a hub the signed-in admin belongs to:
+ * the same permissions the backend itself reported for that admin on `/auth/me`
+ * (captured off the page's own response — nothing is hardcoded here, so the set
+ * moves with the real admin role). `/auth/me` is always read before the hub is
+ * asked, because the hub read needs the signed-in pubkey; the route simply waits
+ * on that response rather than on a clock.
+ */
+async function mockHubPermissionsMe(page: Page, hubId: string): Promise<void> {
+  let admit: (permissions: string[]) => void = () => {}
+  let held = new Promise<string[]>((resolve) => { admit = resolve })
+  let known = false
+  page.on('response', async (res) => {
+    if (new URL(res.url()).pathname !== '/api/auth/me' || res.request().method() !== 'GET' || !res.ok()) return
+    const body = (await res.json()) as { permissions?: string[] }
+    const permissions = body.permissions ?? []
+    // A later /auth/me (a re-login in the same page) replaces the answer.
+    if (known) held = Promise.resolve(permissions)
+    else { known = true; admit(permissions) }
+  })
+  await page.route(new RegExp(`/api/hubs/${hubId}/permissions/me(\\?.*)?$`), async (route) => {
+    if (route.request().method() !== 'GET') {
+      await route.fallback()
+      return
+    }
+    const permissions = await held
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ hubId, permissions }),
+    })
+  })
 }
 
 /**
@@ -631,6 +703,7 @@ async function mockBackgroundHubReads(page: Page, hubId: string): Promise<void> 
  */
 export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promise<void> {
   await mockBackgroundHubReads(page, hubId)
+  await mockHubPermissionsMe(page, hubId)
   const hub = {
     id: hubId, name: 'Test Hub', slug: 'test-hub', description: '', status: 'active',
     createdBy: 'test', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
@@ -664,28 +737,6 @@ export async function mockConfigWithHub(page: Page, hubId = 'test-hub-1'): Promi
       body: JSON.stringify({ hubs: [hub] }),
     })
   })
-}
-
-/**
- * Shared "seed failed" signal for step definitions that create a resource via a
- * backend simulation helper (e.g. simulateIncomingMessage) and then need every
- * downstream step to take one deterministic branch instead of re-probing
- * visibility with isVisible().catch(() => false) at each step. Given steps that
- * seed data should call flagSeedFailed(page) exactly once when seeding did not
- * produce the expected UI element; When/Then steps should check
- * readSeedFailedFlag(page) first and return early (after asserting a safe
- * fallback state) rather than guarding their own click/fill on a fresh probe.
- */
-type SeedFlagWindow = Window & { __test_seed_failed?: boolean }
-
-export async function flagSeedFailed(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    (window as unknown as SeedFlagWindow).__test_seed_failed = true
-  })
-}
-
-export async function readSeedFailedFlag(page: Page): Promise<boolean> {
-  return page.evaluate(() => (window as unknown as SeedFlagWindow).__test_seed_failed === true).catch(() => false)
 }
 
 /**

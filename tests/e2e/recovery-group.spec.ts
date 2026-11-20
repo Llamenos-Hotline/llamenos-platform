@@ -36,6 +36,20 @@ async function mockRecoveryGroupApis(page: import('@playwright/test').Page, cons
       body: JSON.stringify([]),
     })
   })
+  // The requests section asks for the caller's own share envelope; this admin holds
+  // none, which the server answers with its single 403 (getMyShareEnvelope → null).
+  consoleWatch.expect({
+    message: /^Failed to load resource: the server responded with a status of 403 \(Forbidden\)$/,
+    source: /\/api\/recovery-group\/shares\/my\?/,
+    reason: 'a user holding no share is a 403 by contract; getMyShareEnvelope() maps it to null',
+  })
+  await page.route('**/api/recovery-group/shares/my?*', async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Not a share holder for this hub' }),
+    })
+  })
   await page.route('**/recovery-group/sessions*', async (route) => {
     await route.fulfill({
       status: 200,
@@ -51,6 +65,7 @@ interface CreatedGroup {
   publicKeyHex: string
   shareEnvelopes: unknown[]
   commitments: string[]
+  livenessPublicKeys: string[]
 }
 
 /**
@@ -324,7 +339,7 @@ test.describe('Recovery Group - IPC Mock Verification', () => {
     await waitForInvoke(page)
     const { group } = await createGroup(page)
 
-    expect(Object.keys(group).sort()).toEqual(['commitments', 'publicKeyHex', 'shareEnvelopes'])
+    expect(Object.keys(group).sort()).toEqual(['commitments', 'livenessPublicKeys', 'publicKeyHex', 'shareEnvelopes'])
     expect(JSON.stringify(group)).not.toContain('privateKeyHex')
   })
 
@@ -438,7 +453,7 @@ test.describe('Epic C - Key Isolation & Wipe Completeness', () => {
         }
       }
       // Filter out test infrastructure keys (lockout state)
-      const deviceKeys = llamenosKeys.filter(k => !k.includes('__test_'))
+      const deviceKeys = llamenosKeys.filter(k => !k.includes('__TEST_'))
       return { deviceKeyCount: deviceKeys.length, keys: deviceKeys }
     })
 

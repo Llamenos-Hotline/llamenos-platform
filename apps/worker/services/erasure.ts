@@ -25,8 +25,9 @@ import {
   securityEvents,
   userSignalContacts,
 } from '../db/schema'
-import { ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './settings'
 import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, type HubRoleAssignment } from '../lib/hub-admin'
+import { markHubKeyRotationDue } from '../lib/hub-key'
 import { createLogger } from '../lib/logger'
 import { ERASED_ACTOR, type AuditService } from './audit'
 import { SIP_REVOCATION_EVENT } from '../telephony/registrar'
@@ -480,7 +481,7 @@ export class ErasureService {
   ): Promise<typeof erasureRequests.$inferSelect> {
     const [hub] = await this.db.select().from(hubs).where(eq(hubs.id, hubId))
     if (!hub) {
-      throw new ServiceError(404, 'Hub not found')
+      throw new HubNotFoundError()
     }
     const existing = await this.getPendingHubShred(hubId)
     if (existing) {
@@ -704,8 +705,13 @@ export class ErasureService {
       // Delete PUK envelopes addressed to the user
       await tx.delete(pukEnvelopes).where(eq(pukEnvelopes.userPubkey, userId))
 
-      // Delete hub key envelopes addressed to the user
-      await tx.delete(hubKeys).where(eq(hubKeys.recipientPubkey, userId))
+      // Delete hub key envelopes addressed to the user. Each hub whose key the
+      // user could open has to rotate it (PROTOCOL.md §2.7).
+      const revokedWraps = await tx
+        .delete(hubKeys)
+        .where(eq(hubKeys.recipientPubkey, userId))
+        .returning({ hubId: hubKeys.hubId })
+      await markHubKeyRotationDue(tx, revokedWraps.map(w => w.hubId))
 
       // Delete devices
       await tx.delete(devices).where(eq(devices.pubkey, userId))

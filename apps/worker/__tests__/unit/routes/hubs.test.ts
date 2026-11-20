@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import hubRoutes from '@worker/routes/hubs'
-import { ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/settings'
 import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { DEFAULT_ROLES } from '@shared/permissions'
 
@@ -442,7 +442,7 @@ describe('hubs routes', () => {
     })
 
     it('returns 404 when hub not found', async () => {
-      const getHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const getHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['*'],
         serviceMock: { settings: { getHub: getHubSpy } },
@@ -450,6 +450,7 @@ describe('hubs routes', () => {
 
       const res = await app.request('/hubs/nonexistent')
       expect(res.status).toBe(404)
+      expect((await res.json()).code).toBe('HUB_NOT_FOUND')
     })
 
     it('returns 403 without hubs:read permission', async () => {
@@ -514,7 +515,7 @@ describe('hubs routes', () => {
 
     // #1700: a bare catch turned the service's 404 into an unlogged 500.
     it('answers 404 when the hub does not exist (#1700)', async () => {
-      const updateHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Not found'))
+      const updateHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: { settings: { updateHub: updateHubSpy } },
@@ -527,7 +528,7 @@ describe('hubs routes', () => {
       })
 
       expect(res.status).toBe(404)
-      expect((await res.json()).error).toBe('Not found')
+      expect((await res.json()).code).toBe('HUB_NOT_FOUND')
     })
 
     it('answers 500 for an unexpected store failure', async () => {
@@ -1033,37 +1034,192 @@ describe('hubs routes', () => {
   // -------------------------------------------------------------------------
 
   describe('PUT /hubs/:hubId/key', () => {
-    it('sets hub key envelopes', async () => {
-      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue(undefined)
+    const body = {
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      expectedGeneration: 0,
+    }
+    const put = (app: Hono<AppEnv>) => app.request('/hubs/hub-1/key', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    it('sets hub key envelopes and returns the new generation', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
       const { app } = createTestApp({
         permissions: ['hubs:manage-keys'],
         serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
 
-      const res = await app.request('/hubs/hub-1/key', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          envelopes: [
-            { pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' },
-          ],
-        }),
-      })
+      const res = await put(app)
 
       expect(res.status).toBe(200)
-      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', {
-        envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
-      })
+      expect(await res.json()).toEqual({ ok: true, generation: 1 })
+      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', body)
     })
 
-    it('returns 403 without hubs:manage-keys permission', async () => {
-      const { app } = createTestApp({ permissions: ['hubs:read'] })
-      const res = await app.request('/hubs/hub-1/key', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envelopes: [] }),
+    it('answers 409 when the generation moved on, so the writer re-reads', async () => {
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: {
+          settings: {
+            setHubKeyEnvelopes: vi.fn().mockRejectedValue(new ServiceError(409, 'Hub key generation mismatch: expected 0, current 1')),
+          },
+        },
       })
+      const res = await put(app)
+      expect(res.status).toBe(409)
+    })
+
+    it('lets a hub admin whose role lacks hubs:manage-keys distribute (every hub has one)', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
+      const { app } = createTestApp({
+        permissions: ['settings:manage', 'notes:read-all'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+      const res = await put(app)
+      expect(res.status).toBe(200)
+      expect(setHubKeyEnvelopesSpy).toHaveBeenCalledWith('hub-1', body)
+    })
+
+    it('refuses a super-admin with no role in the hub (D1: super-admins read no hub)', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['*'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+      const res = await put(app)
       expect(res.status).toBe(403)
+      expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 to a member who neither manages keys nor administers the hub', async () => {
+      const setHubKeyEnvelopesSpy = vi.fn()
+      const { app } = createTestApp({
+        permissions: ['hubs:read'],
+        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+      })
+      const res = await put(app)
+      expect(res.status).toBe(403)
+      expect(setHubKeyEnvelopesSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('GET /hubs/:hubId/key/recipients', () => {
+    const answer = { generation: 2, epoch: 0, rotation: null, rotationRequired: false, envelopes: [], members: [{ pubkey: 'f'.repeat(64), encryptionPubkey: null }] }
+
+    it('answers a manager in the hub', async () => {
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({
+        permissions: ['hubs:manage-keys'],
+        serviceMock: { identity: { getHubKeyRecipients: spy } },
+      })
+      const res = await app.request('/hubs/hub-1/key/recipients')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual(answer)
+      expect(spy).toHaveBeenCalledWith('hub-1')
+    })
+
+    it('refuses a super-admin with no role in the hub', async () => {
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({ permissions: ['*'], serviceMock: { identity: { getHubKeyRecipients: spy } } })
+      const res = await app.request('/hubs/hub-1/key/recipients')
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('refuses a member without hubs:manage-keys', async () => {
+      const { app } = createTestApp({ permissions: ['hubs:read'] })
+      const res = await app.request('/hubs/hub-1/key/recipients')
+      expect(res.status).toBe(403)
+    })
+  })
+
+  describe('POST /hubs/:hubId/key/rotate', () => {
+    const body = {
+      expectedGeneration: 3,
+      envelopes: [{ pubkey: 'f'.repeat(64), enc: '1'.repeat(64), ct: 'wrap1' }],
+      rotation: { proof: 'ab'.repeat(40), check: 'cd'.repeat(40) },
+      resealed: {
+        tags: [],
+        teams: [],
+        roles: [{ from: { id: 'r1', encryptedName: 'old', encryptedDescription: null }, to: { id: 'r1', encryptedName: 'new', encryptedDescription: null } }],
+      },
+    }
+    const post = (app: Hono<AppEnv>, payload: unknown = body) => app.request('/hubs/hub-1/key/rotate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    it('rotates for a hub admin and audits it', async () => {
+      const spy = vi.fn().mockResolvedValue({ generation: 4, epoch: 1 })
+      const { app, auditLogSpy } = createTestApp({
+        permissions: ['settings:manage', 'notes:read-all'],
+        serviceMock: { identity: { rotateHubKey: spy } },
+      })
+      const res = await post(app)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ generation: 4, epoch: 1 })
+      expect(spy).toHaveBeenCalledWith('hub-1', body)
+      expect(auditLogSpy).toHaveBeenCalledWith(
+        'hubKeyRotated',
+        expect.any(String),
+        expect.objectContaining({ epoch: 1, recipients: 1 }),
+        'hub-1',
+      )
+    })
+
+    it('refuses a super-admin with no role in the hub (D1)', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['*'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const res = await post(app)
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('refuses a member who neither manages keys nor administers the hub', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['hubs:read'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const res = await post(app)
+      expect(res.status).toBe(403)
+      expect(spy).not.toHaveBeenCalled()
+    })
+
+    it('passes the service refusals through: a wrap for a non-member is 403, a stale read is 409', async () => {
+      for (const [status, message] of [
+        [403, 'Hub key rotation: a new key may be wrapped only for current members of the hub'],
+        [409, 'Hub key rotation: 1 role value(s) not re-sealed — re-read and retry'],
+      ] as const) {
+        const { app } = createTestApp({
+          permissions: ['hubs:manage-keys'],
+          serviceMock: { identity: { rotateHubKey: vi.fn().mockRejectedValue(new ServiceError(status, message)) } },
+        })
+        const res = await post(app)
+        expect(res.status).toBe(status)
+        expect(await res.json()).toEqual({ error: message })
+      }
+    })
+
+    it('rejects a body without a rotation statement', async () => {
+      const spy = vi.fn()
+      const { app } = createTestApp({ permissions: ['hubs:manage-keys'], serviceMock: { identity: { rotateHubKey: spy } } })
+      const { rotation: _omitted, ...withoutStatement } = body
+      const res = await post(app, withoutStatement)
+      expect(res.status).toBe(400)
+      expect(spy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('GET /hubs/:hubId/key/rotation', () => {
+    it('answers any member with the epoch and statement', async () => {
+      const answer = { epoch: 2, rotation: { proof: 'aa', check: 'bb' } }
+      const spy = vi.fn().mockResolvedValue(answer)
+      const { app } = createTestApp({ permissions: ['hubs:read'], serviceMock: { identity: { getHubKeyRotation: spy } } })
+      const res = await app.request('/hubs/hub-1/key/rotation')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual(answer)
+      expect(spy).toHaveBeenCalledWith('hub-1')
     })
   })
 })

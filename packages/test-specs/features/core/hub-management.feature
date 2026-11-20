@@ -20,6 +20,12 @@ Feature: Hub Management
     And the created hub should have slug "test-hub"
     And the hub should appear in the list
 
+  @backend
+  Scenario: A hub that does not exist is reported by a typed code, not by prose
+    When the admin requests a hub that does not exist
+    Then the response status should be 404
+    And the response should carry the hub-not-found code
+
   # --- UI scenarios ---
 
   @desktop @ios @android

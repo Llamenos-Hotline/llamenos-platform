@@ -13,8 +13,10 @@ import { ServerAddressScreen } from '@/components/setup/ServerAddressScreen'
 import { RelayProvider } from '@/lib/relay/context'
 import { useShiftStatus } from '@/lib/hooks'
 import { CallsProvider, useCalls } from '@/lib/calls-context'
+import { useShiftHeartbeat } from '@/lib/shift-heartbeat'
 import { IncomingCallAnnouncer } from '@/components/call/incoming-call-announcer'
 import { useAssigneeRewrap } from '@/lib/assignee-rewrap'
+import { useHubKeys } from '@/lib/hub-key-manager'
 import { CommandPalette, triggerCommandPalette } from '@/components/command-palette'
 import { KeyboardShortcutsDialog } from '@/components/keyboard-shortcuts-dialog'
 import { NoteSheet } from '@/components/note-sheet'
@@ -293,6 +295,9 @@ function RelayWrappedLayout() {
 function AuthenticatedLayout() {
   const { t } = useTranslation()
   const { isAdmin, signOut, name, sessionExpiring, sessionExpired, renewSession, hasPermission, primaryRoleName } = useAuth()
+  // A clock-in is only a true statement while something keeps telling the server
+  // we are still here; one that goes quiet stops ringing and is reaped (#1142).
+  useShiftHeartbeat(isAdmin || hasPermission('shifts:set-availability'))
   const { hotlineName, hotlineNumber, channels, currentHubId } = useConfig()
   const hasMessaging = useHasMessaging()
   const { theme, setTheme } = useTheme()
@@ -305,6 +310,9 @@ function AuthenticatedLayout() {
   // (#2046). Lives here, not on the conversations page: an assignment must be
   // served whatever screen the admin is on.
   useAssigneeRewrap()
+  // Load every member hub's key, and where this user manages a hub, share its
+  // key with members who lack it (#1042). Here for the same reason.
+  useHubKeys()
   useKeyboardShortcuts()
 
   // Close sidebar on navigation

@@ -40,6 +40,40 @@ function deps(over: Partial<ReviewLoopDeps> = {}): ReviewLoopDeps {
   }
 }
 
+describe('runReviewLoop — a runner that reached no verdict (#2889)', () => {
+  const crashedReport = (): VerifyReport => ({
+    passed: false, reasons: ['orchestrator: node-unavailable — no Node satisfying vitest'], changedFiles: [], addedLines: 0,
+    impact: 'high', impactReasons: [], testsRun: ['orchestrator'], testsPassed: false, testsRunnerCrashed: true,
+    verifiedCommit: 'a'.repeat(40),
+  })
+
+  it('is reported as a crash, never as the diff failing verification, and spends no review', async () => {
+    const log = vi.fn()
+    const d = deps({ verifyMechanical: vi.fn(async () => crashedReport()), log })
+    const result = await runReviewLoop(input, d)
+
+    expect(result).toMatchObject({ runnerCrashed: true, rounds: 1, needsHuman: false })
+    expect(result.lastReport).toEqual(crashedReport())
+    expect(d.secondOpinion).not.toHaveBeenCalled()
+    expect(d.postReview).not.toHaveBeenCalled()
+    const lines = log.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(lines).toMatch(/test runner reached no verdict on round 1 for PR 42/)
+    expect(lines).toMatch(/re-entry pass.*requests the review/)
+    expect(lines).not.toMatch(/mechanical verification failed/)
+  })
+
+  it('a red result that WAS read still ends the loop as a failed verification', async () => {
+    const log = vi.fn()
+    const d = deps({ verifyMechanical: vi.fn(async () => failingReport()), log })
+    const result = await runReviewLoop(input, d)
+
+    expect(result.finalVerdict).toBe('FAIL')
+    expect(result.needsHuman).toBe(true)
+    expect(result.runnerCrashed).toBeUndefined()
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('mechanical verification failed on round 1'))
+  })
+})
+
 describe('runReviewLoop', () => {
   it('forwards allLanes to verifyMechanical so a scope refusal can name its remedy', async () => {
     const d = deps()

@@ -3,7 +3,7 @@
  * ordering and bookkeeping rules, without PostgreSQL. The real-database
  * reproduction is apps/worker/__tests__/integration-bun/pool-deadlock.test.ts.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SQL } from 'bun'
 import { PoolGate, PoolExhaustedError, PoolReentryError, gateClient, outsideTransaction } from './pool-gate'
 
@@ -63,6 +63,69 @@ describe('PoolGate', () => {
     expect(e.message).toContain('PostgreSQL pool "unit" exhausted')
     // A timed-out waiter is gone: it is not handed a slot later.
     expect(g.snapshot().waiting).toBe(0)
+  })
+
+  describe('when the runtime fires the acquire timer early', () => {
+    // Bun fires a setTimeout(fn, ms) up to ~1ms before ms has elapsed, on the
+    // monotonic clock too (measured: 14-17 of 60 25ms timers). CI caught the
+    // gate reporting "waited 299ms" on a 300ms timeout. Node never fires early,
+    // so this tier drives the gate's clock and timers by hand: the test decides
+    // when a timer fires and what time it is when it does.
+    let clock = 0
+    let armed: Array<{ fn: () => void; ms: number }> = []
+    beforeEach(() => {
+      clock = 1_000
+      armed = []
+      vi.spyOn(performance, 'now').mockImplementation(() => clock)
+      vi.stubGlobal('setTimeout', ((fn: () => void, ms?: number) => {
+        armed.push({ fn, ms: ms ?? 0 })
+        return armed.length as unknown as ReturnType<typeof setTimeout>
+      }) as unknown as typeof setTimeout)
+      vi.stubGlobal('clearTimeout', (() => {}) as typeof clearTimeout)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    })
+    /** Fire the most recently armed timer at the current clock. */
+    const fireLatest = () => armed[armed.length - 1].fn()
+
+    it('rejects no waiter before acquireTimeoutMs, and reports a wait of at least that', async () => {
+      const g = gate(1, 300)
+      await g.acquire('holder')
+      let settled: unknown = 'pending'
+      const starved = g.acquire('starved').then(() => 'granted', (e: unknown) => e)
+      void starved.then((v) => { settled = v })
+      expect(armed.map((t) => t.ms)).toEqual([300])
+
+      clock += 299.4 // the timer fires 0.6ms short of its delay
+      fireLatest()
+      await Promise.resolve()
+      expect(settled).toBe('pending')
+      expect(g.snapshot().waiting).toBe(1)
+      expect(armed.map((t) => t.ms)).toEqual([300, 1]) // re-armed for what is left
+
+      clock += 0.6
+      fireLatest()
+      const err = await starved
+      expect(err).toBeInstanceOf(PoolExhaustedError)
+      expect((err as PoolExhaustedError).waitedMs).toBe(300)
+      expect(g.snapshot().waiting).toBe(0)
+    })
+
+    it('a connection released after an early fire, before the deadline, still reaches the waiter', async () => {
+      const g = gate(1, 300)
+      const holder = await g.acquire('holder')
+      const waiting = g.acquire('waiter')
+
+      clock += 299.4
+      fireLatest()
+      g.release(holder)
+      const lease = await waiting
+      expect(lease.label).toBe('waiter')
+      expect(g.snapshot().holders.map((h) => h.label)).toEqual(['waiter'])
+      g.release(lease)
+    })
   })
 
   it('ignores a double release', async () => {

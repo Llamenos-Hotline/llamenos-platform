@@ -17,7 +17,7 @@ export function PanicWipeIndicator() {
     // Expose a direct trigger so the panic-wipe scenario can still exercise the
     // full wipe flow (overlay + storage clear + redirect) without keyboard events.
     if (import.meta.env.PLAYWRIGHT_TEST) {
-      ;(window as unknown as Record<string, unknown>).__test__triggerPanicWipe = () => {
+      ;(window as unknown as Record<string, unknown>).__TEST_TRIGGER_PANIC_WIPE__ = () => {
         setWiping(true) // show overlay immediately (panicWipeCallback is null in test builds)
         performPanicWipe() // clear storage and schedule redirect
       }

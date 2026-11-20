@@ -1729,6 +1729,10 @@ jobs:
   #                                         desktop-rust's bounded, .deb-cached apt
   #                                         install (#2545, #2736); desktop-rust
   #                                         itself only exercises the happy path
+  #   scripts/ci/gradle-retry.test.ts       the Android jobs' dependency-resolution
+  #                                         retry (#2864): re-runs only a registry
+  #                                         miss, never a failing test or a compile
+  #                                         error
   #   scripts/ci/playwright-deps.test.ts    the Playwright jobs' OS-deps probe,
   #                                         which must not touch apt on a cache hit
   #                                         (#2736)
@@ -1786,7 +1790,7 @@ jobs:
           ran_files=$(echo "$summary" | awk '{print $5}')
           echo "repo-tests: ran $ran_tests test(s) across $ran_files file(s)."
           if [ "$ran_tests" -eq 0 ] || [ "$ran_files" -eq 0 ]; then
-            echo "::error::bun collected nothing — test:repo's path list no longer matches what is on disk"
+            echo "::error::bun collected nothing — test:repo's discovery (scripts/test-repo.ts) no longer matches what is on disk"
             exit 1
           fi
           exit "$rc"
@@ -2014,126 +2018,17 @@ jobs:
           done
           exit "$failed"
 
-      # Parses the required-env-var list straight out of
-      # apps/worker/lib/config.ts and asserts every Ansible template that
-      # renders the worker's .env carries all of them — the two role
-      # templates drifting out of sync (or a future third copy rotting
-      # unnoticed) is exactly the bug class issue #798 fixed.
-      - name: Check required env vars across templates
-        run: python3 deploy/ansible/scripts/check-required-env.py
-
-      # The other half of the same question (#1624). check-required-env.py
-      # covers vars config.ts ASSERTS — miss one and the container will not
-      # boot, so the failure is loud. This covers every var the worker merely
-      # READS: unset, each one silently takes a fallback branch, and four
-      # controls were inert on every deployed host that way
-      # (CORS_ALLOWED_ORIGINS, SIP_BRIDGE_URL, METRICS_SCRAPE_TOKEN,
-      # *_WEBHOOK_IPS). Derives the consumed set from apps/worker/ rather
-      # than a hand list, so a new var fails here until it is rendered or
-      # justified.
-      - name: Check consumed env vars are rendered
-        run: python3 scripts/check-consumed-env.py
-
-      # GF_SECURITY_ADMIN_PASSWORD="" is "unset", and an unset Grafana keeps its
-      # built-in admin/admin login. The production vars template never listed the
-      # key, preflight never asserted it and the role defaulted it to "", so a
-      # deploy shipped a default credential. Judges the shared assertion against a
-      # table of good and bad values and checks preflight and the role still call it.
-      # Sits with the env/config guards it belongs with; appending every new guard
-      # at the tail of this list makes each one conflict with the next.
-      - name: Check an empty or weak Grafana admin password cannot be deployed
-        run: python3 deploy/ansible/scripts/check-grafana-password-guard.py
-
-      # Neither `--syntax-check` nor `ansible-lint` evaluates Jinja, so a
-      # filter naming a test that does not exist — `selectattr('status',
-      # 'startswith', 'FAIL')` — is green here and raises on the target.
-      # Issue #1602 found four of them, three inside the deploy's own
-      # pass/fail gate, which therefore could never fire.
-      - name: Check Jinja select/reject test names resolve
-        run: python3 deploy/ansible/scripts/check-jinja-tests.py
-
-      # A minimal Debian image has no `cron` package, so the first
-      # ansible.builtin.cron task on a host built from one died with
-      # `Failed to find required executable "crontab"` and nothing installed it.
-      # Every file that declares a cron job now includes roles/cron first.
-      - name: Check every cron job's file installs cron first
-        run: python3 deploy/ansible/scripts/check-cron-installed.py
-
-      # The app image migrates its database on every start; the migration gate
-      # judges the migrations BEFORE that. A "pull" task that was really
-      # `compose up` started the app first, so on a fresh host the gate read a
-      # half-applied ledger and failed the first deploy, every time.
-      - name: Check nothing starts the app before the migration gate
-        run: python3 deploy/ansible/scripts/check-app-gate-ordering.py
-
-      # group_vars/ is found next to the inventory or next to the playbook. It sat
-      # at deploy/ansible/, so with the inventory kept anywhere else (the normal
-      # case for a private inventory) every playbook under playbooks/ lost it and
-      # died on "'llamenos_compose_glob' is undefined". It now lives next to the
-      # playbooks; this plays against an inventory in a different directory.
-      - name: Check group_vars resolve with the inventory outside deploy/ansible
-        run: |
-          set -euo pipefail
-          inv_dir="$(mktemp -d)"
-          printf 'all:\n  hosts:\n    localhost:\n      ansible_connection: local\n' > "$inv_dir/inventory.yml"
-          cd deploy/ansible
-          ansible-playbook -i "$inv_dir/inventory.yml" playbooks/check-group-vars-resolve.yml -e ansible_become=false
-
-      # Ansible's `succeeded` test means exactly `not failed`, and a SKIPPED
-      # task never ran, so it never failed, so it is `succeeded`. 27 checks
-      # across the smoke, preflight, security-update and kamailio paths
-      # recorded PASS for a probe that took no measurement at all (#1617).
-      # Neither --syntax-check nor ansible-lint evaluates what a Jinja
-      # expression MEANS, and this one is valid Jinja naming a real test.
-      - name: Check no result test reads a skipped task as a pass
-        run: python3 deploy/ansible/scripts/check-succeeded-as-pass.py
-
-      # dr-test.yml was a "recovery drill" that ran on the control node, looked for
-      # backup files that no longer exist, started an image that does not exist and
-      # printed PASS from ignore_errors checks -- so it could never fail, and a
-      # test that cannot fail reads as coverage. CI cannot run the drill (it needs
-      # the deployed app image and real backups); this keeps its shape honest.
-      - name: Check the DR drill can fail
-        run: python3 deploy/ansible/scripts/check-dr-test-can-fail.py
-
-      # Issue #1636: before it, the suite had three behaviours and named one.
-      # A FAIL stopped the deploy except where it quietly did not (the Kamailio
-      # probe reported NOT READY and the deploy succeeded), so "Smoke check
-      # FAILED" did not tell an operator whether anything had stopped. Every
-      # check now declares fatal or advisory. The recorder defaults an
-      # undeclared severity to fatal, so a forgotten one is too strict rather
-      # than silently advisory — this keeps the ruling readable in the playbook
-      # instead of living in that default.
-      - name: Check every smoke check declares a severity
-        run: python3 deploy/ansible/scripts/check-smoke-severity.py --list
-
-      # The rail above rejects the pattern; this proves the replacement
-      # actually records SKIPPED for a probe that did not run, PASS only when
-      # the measurement holds, and FAIL when a probe reports itself fine while
-      # measuring the wrong thing. Runs the real shared recorder against
-      # synthesized probe results in ~1s, no services needed.
-      #
-      # The end-to-end counterpart, scripts/check-smoke-verdicts.py, drives the
-      # whole smoke suite against stub binaries and real sockets — including a
-      # real TLS listener, and a bare TCP acceptor for the false green a
-      # reachability probe reports as healthy — in a private network
-      # namespace. Like
-      # scripts/check-disk-tier-guards.py it is run by hand rather than in CI;
-      # `--compare-old <ref>` replays identical fixtures against an older
-      # playbook and prints the verdicts side by side.
-      - name: Check the smoke recorder's three states
-        run: |
-          cd deploy/ansible
-          ansible-playbook playbooks/check-record-smoke-result.yml \
-            -i localhost, -c local -e ansible_become=false
-
-      # Renders the alert-rules template, then runs `promtool check rules` and
-      # the rule unit tests with the prom/prometheus image the role deploys.
-      # The WorkerStalled tests include a gauge that is never published: a
-      # rule that only fires on staleness passes everything else and misses the
-      # outage it exists for (#2323).
-      - name: Prometheus alert rules check and unit tests
-        run: deploy/ansible/roles/llamenos-prometheus/tests/check-alert-rules.sh
+      # Every ansible guard is a file in deploy/ansible/ci-guards/ (#2645), run
+      # by one step. Adding a guard is adding a file there -- NOT appending a
+      # step here: N authors appending at one anchor in this list meant N-1
+      # merge conflicts (three deploy PRs went DIRTY on the same hunk and one
+      # sat UNMERGEABLE at queue position 1 for six hours). Each guard still
+      # runs in its own log group named after it, a failure emits an
+      # `::error title=...::` annotation naming it, and every guard runs even
+      # after one fails, so a single push shows all of them. The `why` in each
+      # file carries the incident the guard exists for.
+      - name: Run ansible guards (deploy/ansible/ci-guards/)
+        run: python3 deploy/ansible/scripts/run-ci-guards.py
 
       # The justfile is every operator entry point — `just backup`,
       # `just restore`, `just deploy`. It sat un-parseable on main with
@@ -2148,67 +2043,6 @@ jobs:
 
       - name: Operator justfile parses
         run: cd deploy/ansible && just --list
-
-      # The multi-host refactor moved every service to its own Compose
-      # project under {{ app_dir }}/services/<svc>/. Day-2 operations kept
-      # pointing at a monolithic {{ app_dir }}/docker-compose.yml that the
-      # production deploy never creates, so backup, restore, update,
-      # rollback, security-update and the alert cron were all dead — and
-      # invisibly so, because none of them runs on day one (#1121).
-      # Compose paths belong in group_vars/all/compose.yml.
-      - name: No monolithic compose path outside the legacy demo role
-        run: |
-          set -euo pipefail
-          # roles/llamenos + playbooks/migrate-to-multi-host.yml are the
-          # legacy single-compose layout (deploy-demo.yml only) and the
-          # migration off it; both legitimately reference the old path.
-          if grep -rn --include='*.yml' --include='*.j2' \
-               -e '{{ app_dir }}/docker-compose.yml' \
-               -e '{{app_dir}}/docker-compose.yml' \
-               deploy/ansible \
-               | grep -v '^deploy/ansible/roles/llamenos/' \
-               | grep -v '^deploy/ansible/playbooks/migrate-to-multi-host.yml' \
-               | grep -v '^deploy/ansible/playbooks/group_vars/all/compose.yml' \
-               | grep -vE '^[^:]+:[0-9]+: *#' \
-               `# update.yml and rollback.yml still assume the monolithic` \
-               `# layout. Their blue/green and snapshot logic needs a` \
-               `# redesign, not a path swap -- tracked separately. They` \
-               `# are allowlisted so this guard protects the backup and` \
-               `# restore paths that ARE fixed, instead of being deleted.` \
-               | grep -v '^deploy/ansible/playbooks/update.yml' \
-               | grep -v '^deploy/ansible/playbooks/rollback.yml' ; then
-            echo "::error::Day-2 operations must resolve Compose files through"
-            echo "::error::group_vars/all/compose.yml, not {{ app_dir }}/docker-compose.yml"
-            echo "::error::which the production deploy never creates. See #1121."
-            exit 1
-          fi
-          echo "OK: no monolithic compose references outside the legacy demo role"
-
-      # kv_store is a Durable-Objects-era table that no migration has
-      # created for a long time. restore.yml validated against it with no
-      # ignore_errors, so the restore died before restarting the app
-      # (#1125). A validation query must reference something that exists.
-      - name: Restore paths do not reference dropped tables
-        run: |
-          set -euo pipefail
-          # Comments explaining why the old reference was wrong are fine;
-          # a live reference is not.
-          if grep -rn 'kv_store' \
-               deploy/ansible/playbooks deploy/ansible/roles deploy/ansible/templates \
-               2>/dev/null | grep -vE '^[^:]+:[0-9]+: *#'; then
-            echo "::error::A deployment playbook references kv_store, which does not exist. See #1125."
-            exit 1
-          fi
-          echo "OK: no kv_store references"
-
-      # harden.yml turns on Docker userns-remap, under which a container's root
-      # cannot read a 0700 host directory. restore.yml and test-restore.yml
-      # bind-mounted a decrypted temp directory into a container and failed
-      # there -- after restore.yml had already emptied the RustFS volume. The
-      # round trip below runs without userns-remap so cannot see the first, and
-      # proves the second behaviourally; this keeps the first from coming back.
-      - name: Check restores stream data instead of bind-mounting it
-        run: python3 deploy/ansible/scripts/check-restore-no-bind-mounts.py
 
   # ─── Backup/Restore Round Trip ────────────────────────────
   #
@@ -2339,20 +2173,32 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Read-only on a merge group (its ref is not the default branch), so what it
+      # restores is whatever android-cache-warm.yml wrote on main (#2879). That job
+      # runs the Gradle steps below, so the graph they resolve is already cached;
+      # a Gradle step added here must be added there too, or it cold-fetches from
+      # Maven Central on every group.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      # Every Gradle step below goes through gradle-retry.sh (#2864): a single
+      # registry lookup that missed (junit:junit:4.13.2, merge group
+      # 44432600870) ejected four PRs from the queue. It re-runs ONLY when
+      # Gradle's output names a dependency-resolution/transport error — a
+      # failing test, a compile error and a lint finding come back after one run.
+      # After a "Could not find" it re-runs with --refresh-dependencies, because Gradle
+      # remembers a missed jar and a plain re-run would never ask the registry again (#2866).
       - name: Run unit tests
         working-directory: apps/android
-        run: ./gradlew testDebugUnitTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh testDebugUnitTest --console=plain
 
       - name: Lint
         working-directory: apps/android
-        run: ./gradlew lintDebug --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh lintDebug --console=plain
 
       - name: Build debug APK + androidTest APK
         working-directory: apps/android
-        run: ./gradlew assembleDebug assembleDebugAndroidTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain
 
       # The JUnit XML carries each failure's full stack and the test's stdout/stderr;
       # the HTML report is the same, browsable. Only a failure needs either.
@@ -2409,9 +2255,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      # gradle-retry.sh: survives a transient registry miss (#2864); see android-build-test.
       - name: Compile every Kotlin source set (no tests run)
         working-directory: apps/android
-        run: ./gradlew assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug compileDebugUnitTestKotlin assembleDebugAndroidTest --console=plain
 
   # ─── Android Instrumented Tests (Cucumber BDD on emulator) ──
   android-e2e:
@@ -2501,6 +2348,19 @@ jobs:
           ls -la apps/android/app/src/debug/jniLibs/x86_64/libllamenos_core.so
           file apps/android/app/src/debug/jniLibs/x86_64/libllamenos_core.so
 
+      # Resolve and build everything the instrumented run needs BEFORE the
+      # emulator boots (#2870). The Gradle call inside the emulator action is not
+      # retryable on its own: a missed jar fails it, Gradle remembers the miss, and
+      # run 44513364742 (shard 0) lost a merge group to a gson 404 that
+      # gradle-retry.sh would have survived. Through gradle-retry.sh the dependency
+      # graph is resolved with the same retry + --refresh-dependencies policy as
+      # android-build-test, so the connectedDebugAndroidTest run finds it all in
+      # the Gradle cache and only installs and runs. A persistent miss now fails
+      # here, in seconds, instead of after a ten-minute emulator boot.
+      - name: Resolve and build the debug + androidTest APKs (retried on a registry miss)
+        working-directory: apps/android
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain
+
       # ── Start backend services ──────────────────────────────────
       # Android E2E tests need a running backend for hub creation,
       # authentication, and call/message simulation endpoints.
@@ -2548,7 +2408,7 @@ jobs:
         id: avd-create
         if: steps.avd-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2566,7 +2426,7 @@ jobs:
         id: avd-create-retry1
         if: steps.avd-create.outcome == 'failure'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2580,7 +2440,7 @@ jobs:
         id: avd-create-retry2
         if: steps.avd-create-retry1.outcome == 'failure'
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2699,7 +2559,7 @@ jobs:
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }})
         id: e2e-run
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2718,7 +2578,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
         run: |
-          verdict=$(python3 .github/scripts/classify-infra-failure.py android /tmp/gradle-e2e.log /tmp/android-e2e-script-started "$ANDROID_BUILD_DIR/outputs/androidTest-results")
+          # The host backend is checked HERE, after the emulator is gone: a test run
+          # whose every failure is "could not connect to 10.0.2.2" is the emulator's
+          # fault only if the backend it was reaching for is in fact up.
+          if curl -sf -m 10 -o /dev/null http://localhost:3000/api/health/live; then backend=up; else backend=down; fi
+          verdict=$(python3 .github/scripts/classify-infra-failure.py android /tmp/gradle-e2e.log /tmp/android-e2e-script-started "$ANDROID_BUILD_DIR/outputs/androidTest-results" \
+            --probe-dir "$ANDROID_BUILD_DIR/reports/m1-probe" --logcat /tmp/logcat.txt --host-backend "$backend")
           printf '%s\n' "$verdict"
           kind=$(printf '%s\n' "$verdict" | sed -n 's/^kind=//p')
           sigs=$(printf '%s\n' "$verdict" | sed -n 's/^signatures=//p')
@@ -2742,6 +2607,8 @@ jobs:
         run: |
           df -h / /tmp || true
           cp /tmp/gradle-e2e.log /tmp/gradle-e2e-attempt1.log 2>/dev/null || true
+          # Attempt 2 overwrites /tmp/logcat.txt; attempt 1's is the evidence for WHY it was retried.
+          cp /tmp/logcat.txt /tmp/logcat-attempt1.txt 2>/dev/null || true
           rm -f /tmp/android-e2e-script-started /tmp/gradle-e2e.log /tmp/gradle-e2e.exit
           adb emu kill >/dev/null 2>&1 || true
           adb kill-server >/dev/null 2>&1 || true
@@ -2751,11 +2618,16 @@ jobs:
           # start when the runner disk is full.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost || true
           df -h / || true
+          # A dependency-resolution failure leaves a remembered "Could not find" in the
+          # Gradle cache (#2870); gradle-retry.sh is the one place that knows to clear it
+          # (--refresh-dependencies on its later attempts), so re-resolve through it
+          # before spending another emulator boot. Harmless when nothing was missed.
+          ( cd apps/android && bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain )
 
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
         id: e2e-retry
         if: steps.e2e-classify.outputs.retry == 'true'
-        uses: reactivecircus/android-emulator-runner@f085ef0a201e8d974d0356a2d9de5447d10af42d # v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
           target: default
@@ -2825,6 +2697,7 @@ jobs:
             /tmp/logcat.txt
             /tmp/gradle-e2e.log
             /tmp/gradle-e2e-attempt1.log
+            /tmp/logcat-attempt1.txt
           retention-days: 7
 
   ios-build-test:
@@ -2839,7 +2712,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
-    timeout-minutes: 45
+    timeout-minutes: 81
 
     steps:
       # MANDATORY, and must stay the literal first step — same guard, same
@@ -2887,8 +2760,24 @@ jobs:
       #
       # A no-op on a GitHub-hosted runner: that VM is thrown away after the
       # job and shares nothing with anybody.
-      - name: Guard the runner's disk headroom
-        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+      #
+      # A refusal WAITS while another CI job is on this host, because that
+      # job's teardown is what returns the space (#2533). This job and
+      # ios-e2e.yml's `build` start together in every merge group and are each
+      # other's co-tenants on one physical Mac: with the bare guard this job
+      # refused at once while the sibling waited, and the group was ejected
+      # (#2470, #2518). The wait is a script shared with every other
+      # caller, not a step flag, so a caller cannot ship without it —
+      # scripts/ci/mac-runner-disk-guard-wait.test.ts fails CI on the bare
+      # guard. The job's timeout-minutes is its own 45 PLUS this step's cap;
+      # change them together.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+        run: bash scripts/ci/mac-runner-disk-guard-wait.sh
 
       # Per-runner BUN_TMPDIR before the first bun step. This job shares the
       # self-hosted Mac with ios-e2e.yml's `build`, and the two start
@@ -3036,11 +2925,16 @@ jobs:
             DEBUG_INFORMATION_FORMAT=dwarf \
             2>&1 | xcbeautify --report junit --report-path test-results/ios-unit.xml
 
+      # delete-sim, never a bare `simctl delete`: that removes the device but
+      # leaves its ~3 MB /private/var/tmp launchd_sim directory on the internal
+      # disk, one per run, forever (#2644: 2,040 of them took the host under
+      # its floor). delete-sim shuts down, deletes, then removes that directory
+      # once simctl no longer lists the device, and never fails the teardown.
+      # ios-e2e.yml's build and ui teardowns do the same.
       - name: Delete this job's simulator
         if: always()
         run: |
-          xcrun simctl shutdown "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
-          xcrun simctl delete "${{ steps.sim.outputs.udid }}" 2>/dev/null || true
+          bash scripts/ci/mac-runner-disk-guard.sh delete-sim "${{ steps.sim.outputs.udid }}"
 
       - name: Remove this job's DerivedData
         if: always()
@@ -3072,38 +2966,86 @@ jobs:
   # or booted (generic destination), no test runs. The full verdict (unit
   # tests, then UI tests) still gates in the merge queue.
   #
-  # WHERE IT RUNS — the recorded runner-cost decision:
-  #   - GitHub-hosted `macos-15`: free on this public repo, capped at 5
-  #     concurrent macOS jobs repo-wide. ios-e2e.yml's hosted build leg does
-  #     the same build-for-testing in ~4 minutes; this job takes ONE slot
-  #     for roughly that per iOS-touching PR push (XCFramework cache hit;
-  #     ~15-20 min only when packages/crypto changes and the Rust build
-  #     re-runs). PR runs are cancel-in-progress, so a re-pushed PR does
-  #     not stack slots.
-  #   - The self-hosted Mac mini was REJECTED for this job: its two runners
-  #     are the merge queue's gating capacity (#1225, #1407), and #1761's
-  #     disk guard would refuse PR checks en masse whenever the shared
-  #     volume fills — turning a cheap gate into a flaky one.
-  # The merge queue still runs the FULL ios-build-test on the Mac mini;
-  # this job changes nothing about that.
+  # WHERE IT RUNS — the self-hosted Macs, so it WAITS for capacity (#2544).
+  #   - It used to run on GitHub-hosted `macos-15` ("free, capped at 5
+  #     concurrent macOS jobs repo-wide"). The cap is the problem: a hosted
+  #     job that never gets a runner is ABANDONED after ~15 minutes with
+  #     runner_name="" and zero steps. PR #2749, job 131373494457: labels
+  #     `macos-15`, created 17:45:59, cancelled 18:02:04, no runner, 0 steps —
+  #     and `ci-status` read "ios-compile-check(abandoned) produced NO
+  #     VERDICT". That is the exact class #2748 removed from ios-e2e.yml; this
+  #     job was outside its guard. A job queued for our own runners waits.
+  #   - The old objection was capacity: the two Mac runners gate the merge
+  #     queue (#1225, #1407). Measured over 25 merge groups (2026-11-12 01:08
+  #     to 11-13 06:27) the Macs were busy 1432 runner-minutes of 3519, ~41%;
+  #     this job adds ~10 iOS-touching PR pushes a day at a few minutes each,
+  #     a few percent. PR runs are cancel-in-progress, so re-pushes do not
+  #     stack.
+  #   - The other old objection — #1761's disk guard refusing PR checks when
+  #     the shared volume fills — is now the better failure: a refusal is a
+  #     red check with a reason, an abandonment is a check with no verdict.
+  # The merge queue still runs the FULL ios-build-test on the same Macs.
+  # tests/orchestrator/guards.test.ts fails CI if any job in any workflow
+  # can again land on a hosted macOS image without an allowlisted reason.
   ios-compile-check:
     needs: changes
     if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios == 'true'
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
-    timeout-minutes: 30
+    timeout-minutes: 66
 
     steps:
+      # MANDATORY, and must stay the literal first step. Unlike ios-build-test
+      # this job runs on `pull_request` itself, so this guard is the line
+      # between a fork PR's code and a machine the operator owns. See the long
+      # note on ios-e2e.yml's `build` copy of this step.
+      - name: Refuse to run on a fork PR (self-hosted runner guard)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            echo "::error::ios-compile-check FAILED: fork-pr-guard — this job runs on a self-hosted runner and must never process a fork PR (head repo '$HEAD_REPO' != '$THIS_REPO')"
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Same guard, same reasoning as ios-build-test's copy: refuse loudly
+      # rather than let the shared volume fill and kill the runner agent.
+      # It waits for a co-tenant like ios-build-test's copy, for the same
+      # reason (#2533); the job's timeout-minutes is its own 30 PLUS the cap.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+        run: bash scripts/ci/mac-runner-disk-guard-wait.sh
+
+      # Per-runner BUN_TMPDIR and HOME: this job shares the two Macs with
+      # ios-build-test and ios-e2e.yml, and tests/guards.test.ts fails CI if
+      # either goes missing. Reasoning on ios-e2e.yml's `build` copies.
+      - name: Give bun a per-runner temp dir
+        run: |
+          mkdir -p "$RUNNER_TEMP/bun-tmp"
+          echo "BUN_TMPDIR=$RUNNER_TEMP/bun-tmp" >> "$GITHUB_ENV"
+
       - name: Setup Bun (for codegen)
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        env:
+          TMPDIR: ${{ runner.temp }}
+          HOME: ${{ runner.temp }}/bun-home
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies and run codegen
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: bun install --frozen-lockfile && bun run codegen && bun run i18n:codegen
 
       # Same key as ios-build-test, but NOT the same entries: actions/cache
@@ -3166,12 +3108,10 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      # No DerivedData cache, deliberately: the key ios-build-test uses is
-      # written by the Mac mini on Xcode 27 while this image is on Xcode 26,
-      # and restoring module caches across compiler versions fails the
-      # build for reasons that have nothing to do with the PR. A cold
-      # compile here costs the same ~4 minutes ios-e2e.yml's hosted build
-      # leg already pays.
+      # No DerivedData cache, deliberately: a restored DerivedData carries an
+      # .xctestrun from whatever build wrote it, so the bundle assertion
+      # below would pass on a stale plist without proving this compile
+      # produced anything. A fresh path under RUNNER_TEMP, removed at the end.
       - name: Compile app and every test bundle (nothing runs)
         working-directory: apps/ios
         run: |
@@ -3201,6 +3141,12 @@ jobs:
           grep -q "LlamenosTests" "$XCTESTRUN" || { echo "::error::LlamenosTests bundle missing from $XCTESTRUN"; exit 1; }
           grep -q "LlamenosUITests" "$XCTESTRUN" || { echo "::error::LlamenosUITests bundle missing from $XCTESTRUN — the #168 scheme shape"; exit 1; }
           echo "both test bundles present in $XCTESTRUN"
+
+      # A self-hosted runner keeps what a job leaves behind; ios-build-test
+      # removes its DerivedData the same way.
+      - name: Remove this job's DerivedData
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/llamenos-build"
 
   # iOS UI tests (LlamenosUITests) against a native backend — see
   # ios-e2e.yml's header for why this was dark from May to September 2026.

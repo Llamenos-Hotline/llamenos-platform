@@ -213,6 +213,9 @@
     "noEntries": "Lambaryo la mamnuucay ma jiraan. Kudar lambaryo si aad u xannibtid wacayaasha spam-ka.",
     "phoneNumber": "Lambarka Taleefanka",
     "reason": "Sababta",
+    "reentryDescription": "Xannibaadahan mar dambe ma xannibaan soo-wacayaasha. Habka loo kaydiyo xannibaadaha ayaa isbeddelay, serverkuna weligiis ma kaydin lambarrada, sidaas darteed ma beddeli karo. Mid kasta dib u xannib, kadibna meel ka saar gelitaankiisa.",
+    "reentryDismiss": "Ka saar",
+    "reentryTitle": "Xannibaadaha dib loo geliyo",
     "remove": "Ka Saar Mamnuucidda",
     "removeConfirmMessage": "Wacahan mar kale ayuu awoodi doonaa inuu gaaro khadka taleefanka. Waxa la keydiyaa oo keliya hash hal-jiho ah oo lambarka ka mid ah, sidaa darteed mar kale waad mamnuuci kartaa oo keliya haddii lambarka weli haysato. Ka saaristu waxay ku qoran tahay Diiwaanka Hubinta.",
     "removeConfirmTitle": "Mamnuucidda ma laga saaraa?",
@@ -799,6 +802,7 @@
     "callId": "Aqoonsiga Wicitaanka",
     "callIdBadge": "Wicitaan",
     "callIdPlaceholder": "Aqoonsiga wicitaanka ama tixraaca",
+    "callIdRequired": "Geli aqoonsiga wicitaanka ama tixraaca uu qoraalkan ku saabsan yahay.",
     "callWith": "Wicitaan la {{number}}",
     "chatIdBadge": "Sheeko",
     "conversationBadge": "Sheeko",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "Waad ka baxday, laakiin furayaashaada sirta ah lagama saari karin qalabkan.",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "Waad joojin doontaa helitaanka wicitaannada soo galaya.",
     "deleteConfirmTitle": "Wareeggan ma tirtiraa?",
-    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo."
+    "deleteConfirmMessage": "Mutadawwiciinta wareeggan ku jira way joojin doonaan helitaanka wicitaannada saacadaha wareeggan. Haddii wareeg kale uusan daboolin saacadahaas, wicitaannadu waxay u gudbi doonaan Kooxda Kaalmada, ama way jawaab la'aan ahaan doonaan haddii aan la dejin. Tan dib looma soo celin karo.",
+    "noAdminReader": "Qoraalkan lama keydin karo: maamule kasta oo hubkan ka tirsan ma laha qalab diiwaangashan, sidaas darteed maamule toona ma akhrin karo. U sheeg maamulaha hubka inuu qalab ku soo galo."
   },
   "shortcuts": {
     "answerCall": "Ka jawaab wicitaanka",
@@ -4157,6 +4163,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "Xaqiijinta qaybtu way fashilantay",
+    "liveness": {
+      "title": "Qaybtaada soo-celinta",
+      "description": "Caddee in qalabkani weli haysto qaybtaada soo-celinta. Qaybtaada weligeed qalabka kama baxdo; hab-ku-yaalku wuxuu hubiyaa oo kaliya saxiix lagu sameeyay.",
+      "prove": "Xaqiiji qaybtayda",
+      "proving": "Waa la xaqiijinayaa…",
+      "success": "Qaybta waa la xaqiijiyay. Maamuleyaashu waxay arki doonaan qaybtaada oo caafimaad qabta.",
+      "error": "Xaqiijinta qaybtu way fashilantay"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

@@ -1,5 +1,6 @@
 package org.llamenos.hotline.ui.admin
 
+import org.llamenos.hotline.crypto.CryptoService
 import androidx.lifecycle.SavedStateHandle
 import io.mockk.every
 import io.mockk.mockk
@@ -123,7 +124,7 @@ class AdminViewModelInvitesTest {
             it.client = OkHttpClient()
             it.ioDispatcher = UnconfinedTestDispatcher()
         }
-        return AdminViewModel(apiService, SavedStateHandle())
+        return AdminViewModel(apiService, SavedStateHandle(), CryptoService())
     }
 
     private fun seen() = requests.map { "${it.method} ${it.path}" }

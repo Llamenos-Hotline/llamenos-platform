@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { recipientEnvelopeSchema, paginationSchema } from './common'
+import { recipientEnvelopeSchema, paginationSchema, pubkeySchema } from './common'
 import { forPatch } from './patch'
 
 // --- Contact record (stored in ContactDirectoryDO) ---
@@ -65,6 +65,29 @@ export const listContactsQuerySchema = paginationSchema.extend({
 })
 
 export type ListContactsQuery = z.infer<typeof listContactsQuerySchema>
+
+// --- Envelope recipients (who a contact write must be sealed to) ---
+
+/**
+ * `GET /api/hubs/:hubId/directory/envelope-recipients`: the X25519 device keys
+ * (never an Ed25519 identity key) a client seals a contact to, per tier. Every
+ * tier contains `admin`, and the server refuses (503) to answer for a hub with
+ * no admin reader — a client MUST also refuse to seal to a set holding none.
+ *
+ * - `summary`: `encryptedSummary` — holders of `contacts:view` or `contacts:view-pii`.
+ * - `pii`: `encryptedPII` — holders of `contacts:view-pii`.
+ * - `admin`: payloads no member below an admin may read (affinity groups,
+ *   relationships): the hub's admin readers and its escrow key, no one else.
+ *
+ * Contacts have no per-record assignment, so one answer serves create and edit.
+ */
+export const contactEnvelopeRecipientsResponseSchema = z.object({
+  summary: z.array(pubkeySchema),
+  pii: z.array(pubkeySchema),
+  admin: z.array(pubkeySchema),
+})
+
+export type ContactEnvelopeRecipients = z.infer<typeof contactEnvelopeRecipientsResponseSchema>
 
 // --- Encrypted payloads (client-side only, for reference/codegen) ---
 

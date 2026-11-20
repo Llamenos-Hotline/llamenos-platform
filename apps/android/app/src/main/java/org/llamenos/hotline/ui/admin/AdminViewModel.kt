@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NoActiveHubException
-import org.llamenos.hotline.model.AddBanRequest
 import org.llamenos.protocol.SharedEntry
 import org.llamenos.hotline.model.AuditLogResponse
 import org.llamenos.hotline.model.BanEntry
@@ -46,6 +45,18 @@ import org.llamenos.hotline.model.TranscriptionSettings
 import org.llamenos.hotline.model.UpdateCustomFieldsRequest
 import org.llamenos.protocol.CreateBanBody
 import org.llamenos.protocol.PromoteBanBody
+import org.llamenos.protocol.BanDigestEvaluateBody
+import org.llamenos.protocol.BanDigestEvaluateResponse
+import org.llamenos.protocol.BanLookup
+import org.llamenos.protocol.CreatePlatformBanBody
+import org.llamenos.protocol.PlatformBanListResponse
+import org.llamenos.protocol.PlatformBanListResponseBan
+import org.llamenos.protocol.SearchBansBody
+import org.llamenos.protocol.SearchBansEvaluateBody
+import org.llamenos.protocol.SearchBansEvaluateResponse
+import org.llamenos.protocol.SearchBansResponse
+import org.llamenos.protocol.SearchBansResponseBan
+import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Member
 import org.llamenos.hotline.model.MemberDirectory
 import javax.inject.Inject
@@ -220,12 +231,12 @@ data class AdminUiState(
     val retentionError: String? = null,
     val isSavingRetention: Boolean = false,
 
-    val platformBans: List<BanEntry> = emptyList(),
+    val platformBans: List<PlatformBanListResponseBan> = emptyList(),
     val isLoadingPlatformBans: Boolean = false,
     val platformBansError: String? = null,
     val showAddPlatformBanDialog: Boolean = false,
     val platformBanSearchQuery: String = "",
-    val platformBanSearchResults: List<BanEntry> = emptyList(),
+    val platformBanSearchResults: List<SearchBansResponseBan> = emptyList(),
 )
 
 /**
@@ -298,6 +309,7 @@ private fun AdminUiState.applying(provider: TelephonyProviderConfig?): AdminUiSt
 class AdminViewModel @Inject constructor(
     private val apiService: ApiService,
     savedStateHandle: SavedStateHandle,
+    private val cryptoService: CryptoService,
 ) : ViewModel() {
 
     companion object {
@@ -1575,7 +1587,7 @@ class AdminViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingPlatformBans = true, platformBansError = null) }
             try {
-                val bansResponse = apiService.request<BanListResponse>("GET", "/api/admin/bans")
+                val bansResponse = apiService.request<PlatformBanListResponse>("GET", "/api/admin/bans")
                 _uiState.update {
                     it.copy(
                         isLoadingPlatformBans = false,
@@ -1601,12 +1613,44 @@ class AdminViewModel @Inject constructor(
         _uiState.update { it.copy(showAddPlatformBanDialog = false) }
     }
 
-    fun addPlatformBan(identifierHash: String, reason: String?) {
+    // A platform ban never carries the number (#2759). The number is blinded in the crate, the
+    // server evaluates the blinded element under the scope's ban key without learning it, and
+    // the crate finalizes the answer into the number's ban digest — the value the server
+    // matches an inbound call against (`packages/crypto/src/ban_digest.rs`).
+
+    /** The platform ban digest of one typed E.164 number. */
+    private suspend fun platformBanDigest(phone: String): String {
+        val blind = cryptoService.banDigestBlind(phone)
+        val response = apiService.request<BanDigestEvaluateResponse>(
+            "POST", "/api/admin/bans/evaluate",
+            BanDigestEvaluateBody(blindedElements = listOf(blind.blindedElementHex)),
+        )
+        val evaluated = response.evaluatedElements.singleOrNull()
+            ?: error("Ban evaluation returned ${response.evaluatedElements.size} elements for 1")
+        return cryptoService.banDigestFinalize(phone, blind.blindHex, evaluated)
+    }
+
+    /** A typed number's ban digest under every scope (no `hubID` = the platform). */
+    private suspend fun banLookups(phone: String): List<BanLookup> {
+        val blind = cryptoService.banDigestBlind(phone)
+        val response = apiService.request<SearchBansEvaluateResponse>(
+            "POST", "/api/admin/bans/search/evaluate",
+            SearchBansEvaluateBody(blindedElement = blind.blindedElementHex),
+        )
+        return response.evaluations.map {
+            BanLookup(
+                phoneHash = cryptoService.banDigestFinalize(phone, blind.blindHex, it.evaluatedElement),
+                hubID = it.hubID,
+            )
+        }
+    }
+
+    fun addPlatformBan(phone: String, reason: String?) {
         viewModelScope.launch {
             _uiState.update { it.copy(showAddPlatformBanDialog = false, platformBansError = null) }
             try {
-                val body = AddBanRequest(
-                    identifier = identifierHash,
+                val body = CreatePlatformBanBody(
+                    phoneHash = platformBanDigest(phone.trim()),
                     reason = reason?.takeIf { it.isNotBlank() },
                 )
                 apiService.requestNoContent("POST", "/api/admin/bans", body)
@@ -1634,12 +1678,14 @@ class AdminViewModel @Inject constructor(
         }
     }
 
-    fun searchPlatformBans(query: String) {
+    /** Search every hub's and the platform's ban list for a typed number, by its per-scope digests. */
+    fun searchPlatformBans(phone: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(platformBansError = null) }
             try {
-                val response = apiService.request<BanListResponse>(
-                    "GET", "/api/admin/bans/search?q=$query",
+                val response = apiService.request<SearchBansResponse>(
+                    "POST", "/api/admin/bans/search",
+                    SearchBansBody(lookups = banLookups(phone.trim())),
                 )
                 _uiState.update {
                     it.copy(platformBanSearchResults = response.bans)
@@ -1653,17 +1699,22 @@ class AdminViewModel @Inject constructor(
     }
 
     /**
-     * Promote a hub ban to platform scope. The number is entered again: a hub's ban
-     * hash is keyed to that hub, so the server cannot re-key it to the platform list
-     * without it, and it checks the number against the hub ban before adding.
+     * Promote a hub ban to platform scope. The number is entered again and digested under both
+     * the source hub's key and the platform's: the server checks the hub digest against the
+     * stored ban, so a mistyped number cannot ban someone else, and stores the platform digest.
      */
-    fun promoteBanToPlatform(banId: String, phone: String) {
+    fun promoteBanToPlatform(banId: String, sourceHubId: String, phone: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(platformBansError = null) }
             try {
+                val lookups = banLookups(phone.trim())
+                val source = lookups.firstOrNull { it.hubID == sourceHubId }
+                    ?: error("No ban key for hub $sourceHubId")
+                val platform = lookups.firstOrNull { it.hubID == null }
+                    ?: error("No platform ban key")
                 apiService.requestNoContent(
                     "POST", "/api/admin/bans/promote",
-                    PromoteBanBody(banID = banId, phone = phone.trim()),
+                    PromoteBanBody(banID = banId, phoneHash = platform.phoneHash, sourcePhoneHash = source.phoneHash),
                 )
                 loadPlatformBans()
             } catch (e: Exception) {

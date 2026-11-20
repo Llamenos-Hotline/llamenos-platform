@@ -18,7 +18,8 @@ import {
   type AppHttp, type AppHttpRequest,
 } from '../../orchestrator/src/github-app.js'
 import { fakeInstallationToken, fakeJwt, fakeOperatorPat } from './fake-credentials.js'
-import type { SecondOpinionResult } from '../../orchestrator/src/review.js'
+import { claimDigest, type SecondOpinionResult } from '../../orchestrator/src/review.js'
+import { reviewBinding, reviewSetTag } from '../../orchestrator/src/review-cache.js'
 
 const facts = (over: Partial<PrSnapshotFacts> = {}): PrSnapshotFacts => ({
   headSha: 'head111',
@@ -162,6 +163,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'PASS', text: 'VERDICT: PASS' })),
     recorderReady: vi.fn(async () => ({ ok: true as const })),
     postCheckRun: vi.fn(async () => {}),
+    refreshCarrier: vi.fn(async () => 'no carrier re-run needed: test'),
     currentHeadSha: vi.fn(async () => 'head111'),
     requiredChecks: vi.fn(async () => requiredChecks()),
     reviewSet: vi.fn(async () => ({ ok: true as const, profiles: [], fromLabels: [], reasons: [] })),
@@ -223,7 +225,7 @@ describe('runReviewAndMerge', () => {
     // #1637 — the posted summary is `composeReviewSet`'s (ci.ts), the same
     // shape the CI gate writes for the same check name: the roll-call/
     // headline line, then the reviewer's own text in full.
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', 'VERDICT: PASS\n\nVERDICT: PASS')
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', 'VERDICT: PASS\n\nVERDICT: PASS', expect.stringContaining('fleet-review:v1;set='))
     expect(outcome).toEqual({ kind: 'merged', pr: '9', headSha: 'head111' })
   })
 
@@ -247,7 +249,7 @@ describe('runReviewAndMerge', () => {
     const outcome = await runReviewAndMerge('9', deps, { fresh: true })
     expect(deps.fetchReviewCheckRuns).not.toHaveBeenCalled()
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', 'VERDICT: PASS\n\nVERDICT: PASS')
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', 'VERDICT: PASS\n\nVERDICT: PASS', expect.stringContaining('fleet-review:v1;set='))
     expect(outcome).toEqual({ kind: 'view-only', pr: '9', headSha: 'head111', reused: false })
     expect(deps.requiredChecks).not.toHaveBeenCalled()
     expect(deps.clearForQueue).not.toHaveBeenCalled()
@@ -260,8 +262,66 @@ describe('runReviewAndMerge', () => {
     })
     const outcome = await runReviewAndMerge('9', deps, { fresh: true })
     expect(outcome).toMatchObject({ kind: 'not-mergeable', pr: '9' })
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String))
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String), expect.stringContaining('fleet-review:v1;set='))
     expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  // #2884 — a PASS recorded as the App's check run is invisible to the head's
+  // Actions carrier until that carrier runs again, and the required context is
+  // the worst of the two. So a recorded PASS re-runs the carrier — freshly
+  // posted or already there — and nothing else does.
+  it('#2884: a freshly posted PASS re-runs the head\'s carrier, after posting', async () => {
+    const order: string[] = []
+    const deps = baseDeps({
+      postCheckRun: vi.fn(async () => { order.push('post') }),
+      refreshCarrier: vi.fn(async () => { order.push('refresh'); return 're-ran the carrier' }),
+    })
+    await runReviewAndMerge('9', deps, {})
+    expect(deps.refreshCarrier).toHaveBeenCalledExactlyOnceWith('head111')
+    expect(order).toEqual(['post', 'refresh'])
+  })
+
+  it('#2884: a PASS already on the head (reused) still heals a red carrier', async () => {
+    const deps = baseDeps({
+      fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
+    })
+    await runReviewAndMerge('9', deps, {})
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
+    expect(deps.refreshCarrier).toHaveBeenCalledExactlyOnceWith('head111')
+  })
+
+  it('#2884: the App\'s own PASS is reused only when bound to this review set and description', async () => {
+    const app = (external_id: string | null) => ({ id: 1, status: 'completed', conclusion: 'success', app: { slug: 'llamenos-fleet-review' }, external_id })
+    const bound = reviewBinding(reviewSetTag([]), claimDigest(facts().claim))
+    // Bound: reused, no new review, no new post.
+    const reused = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => [app(bound)]) })
+    await runReviewAndMerge('9', reused, {})
+    expect(reused.invokeReviewer).not.toHaveBeenCalled()
+    // Unbound (posted before bindings existed) or bound to something else: the gate
+    // would refuse it, so reusing it would leave the carrier red — review again and post a bound one.
+    for (const external_id of [null, '', 'fleet-review:v1;set=general;claim=00']) {
+      const deps = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => [app(external_id)]) })
+      await runReviewAndMerge('9', deps, {})
+      expect(deps.invokeReviewer, String(external_id)).toHaveBeenCalledTimes(1)
+      expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', expect.any(String), bound)
+    }
+  })
+
+  it('#2884: a FAIL or an unreadable review never re-runs the carrier', async () => {
+    for (const verdict of ['FAIL', 'UNREADABLE'] as const) {
+      const deps = baseDeps({
+        invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict, text: 'x' })),
+      })
+      await runReviewAndMerge('9', deps, {})
+      expect(deps.refreshCarrier, verdict).not.toHaveBeenCalled()
+    }
+  })
+
+  it('#2884: a verdict that could not be recorded re-runs nothing', async () => {
+    const deps = baseDeps({ postCheckRun: vi.fn(async () => { throw new Error('app down') }) })
+    const outcome = await runReviewAndMerge('9', deps, {})
+    expect(outcome.kind).toBe('review-unrecorded')
+    expect(deps.refreshCarrier).not.toHaveBeenCalled()
   })
 
   it('a prior FAIL for this head is never reused as fresh — it is reviewed again', async () => {
@@ -277,7 +337,7 @@ describe('runReviewAndMerge', () => {
       invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'UNREADABLE', text: '(no output)' })),
     })
     const outcome = await runReviewAndMerge('9', deps, { merge: true })
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'UNREADABLE', 'review unavailable: (no output)\n\n(no output)')
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'UNREADABLE', 'review unavailable: (no output)\n\n(no output)', expect.stringContaining('fleet-review:v1;set='))
     expect(outcome.kind).toBe('not-mergeable')
     expect(outcome.kind === 'not-mergeable' && outcome.reason).toContain('UNREADABLE')
     expect(deps.merge).not.toHaveBeenCalled()
@@ -680,10 +740,12 @@ function recordingCheckHttp(status = 201, body = '{"id":42}'): RecordedPost {
   }
 }
 
+const BINDING = 'fleet-review:v1;set=general;claim=0123456789abcdef0123456789abcdef'
+
 describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
   it('POSTs the verdict to this repo\'s check-runs endpoint with the INSTALLATION token', async () => {
     const { requests, http } = recordingCheckHttp()
-    await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', {
+    await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', BINDING, {
       mintToken: async () => INSTALL_TOKEN,
       http,
     })
@@ -704,7 +766,7 @@ describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
 
   it('sends the real check-run payload — name, head SHA, conclusion and the reviewer\'s own text', async () => {
     const { requests, http } = recordingCheckHttp()
-    await postReviewCheckRun('abc123', 'FAIL', 'VERDICT: FAIL — leaks a key', {
+    await postReviewCheckRun('abc123', 'FAIL', 'VERDICT: FAIL — leaks a key', BINDING, {
       mintToken: async () => INSTALL_TOKEN,
       http,
     })
@@ -713,12 +775,14 @@ describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
     expect(body['head_sha']).toBe('abc123')
     expect(body['status']).toBe('completed')
     expect(body['conclusion']).toBe('failure')
+    // #2884 — what the verdict judged besides the commit, for the gate to compare.
+    expect(body['external_id']).toBe(BINDING)
     expect((body['output'] as { summary?: string }).summary).toContain('leaks a key')
   })
 
   it('truncates an over-long summary rather than letting GitHub reject the whole post', async () => {
     const { requests, http } = recordingCheckHttp()
-    await postReviewCheckRun('abc123', 'PASS', 'x'.repeat(70_000), { mintToken: async () => INSTALL_TOKEN, http })
+    await postReviewCheckRun('abc123', 'PASS', 'x'.repeat(70_000), BINDING, { mintToken: async () => INSTALL_TOKEN, http })
     const summary = (JSON.parse(requests[0]?.body ?? '{}') as { output: { summary: string } }).output.summary
     expect(summary.length).toBeLessThan(70_000)
     expect(summary).toContain('(truncated)')
@@ -726,13 +790,13 @@ describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
 
   it('throws when GitHub refuses the post — never returns as if it had been recorded', async () => {
     const { http } = recordingCheckHttp(403, JSON.stringify({ message: 'You must authenticate via a GitHub App.' }))
-    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', { mintToken: async () => INSTALL_TOKEN, http }))
+    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', BINDING, { mintToken: async () => INSTALL_TOKEN, http }))
       .rejects.toThrow(/HTTP 403/)
   })
 
   it('throws when no token can be minted, and never reaches the endpoint', async () => {
     const { requests, http } = recordingCheckHttp()
-    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', {
+    await expect(postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', BINDING, {
       mintToken: async () => { throw new VerdictRecorderError('FLEET_REVIEW_APP_ID is not set') },
       http,
     })).rejects.toThrow(/FLEET_REVIEW_APP_ID/)
@@ -741,7 +805,7 @@ describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
 
   it('keeps the installation token out of its own error message, even when GitHub echoes it', async () => {
     const { http } = recordingCheckHttp(401, JSON.stringify({ message: `bad credential ${INSTALL_TOKEN}`, token: INSTALL_TOKEN }))
-    const e = await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', { mintToken: async () => INSTALL_TOKEN, http })
+    const e = await postReviewCheckRun('abc123', 'PASS', 'VERDICT: PASS', BINDING, { mintToken: async () => INSTALL_TOKEN, http })
       .catch((err: unknown) => err)
     expect(e).toBeInstanceOf(VerdictRecorderError)
     expect((e as Error).message).not.toContain(INSTALL_TOKEN)
@@ -936,7 +1000,7 @@ describe('runReviewAndMerge is VIEW-ONLY by default (#2742)', () => {
     const outcome = await runReviewAndMerge('9', deps, opts)
     expect(outcome).toEqual({ kind: 'view-only', pr: '9', headSha: 'head111', reused: false })
     expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', expect.any(String))
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', expect.any(String), expect.stringContaining('fleet-review:v1;set='))
     // Not merely "merge was not called": nothing on the road to a merge ran.
     expect(deps.merge).not.toHaveBeenCalled()
     expect(deps.clearForQueue).not.toHaveBeenCalled()
@@ -963,7 +1027,7 @@ describe('runReviewAndMerge is VIEW-ONLY by default (#2742)', () => {
     const deps = baseDeps({ invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'FAIL', text: 'VERDICT: FAIL' })) })
     const outcome = await runReviewAndMerge('9', deps)
     expect(outcome.kind).toBe('not-mergeable')
-    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String))
+    expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String), expect.stringContaining('fleet-review:v1;set='))
     expect(deps.merge).not.toHaveBeenCalled()
   })
 

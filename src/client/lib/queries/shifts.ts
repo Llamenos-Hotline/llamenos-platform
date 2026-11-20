@@ -1,5 +1,8 @@
 import type { DeletionConfirmed } from '@/lib/admin-deletion'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
+import type { CreateShiftOverrideBody } from '@protocol/schemas/shift-override'
+import type { CreateAvailabilityBlockBody } from '@protocol/schemas/shift-availability'
 import {
   listShifts,
   createShift,
@@ -28,6 +31,7 @@ import {
   approveShiftRequest,
   rejectShiftRequest,
   getMyShiftStatus,
+  getMyShiftStatusIn,
   type Shift,
 } from '@/lib/api'
 import { z } from 'zod'
@@ -98,6 +102,28 @@ export function useMyShiftStatus() {
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
   })
+}
+
+/**
+ * Every hub in `hubIds` the user is clocked into right now, as the server judges it
+ * (a stale clock-in is not one). A clock-in is per hub, so each member hub is read,
+ * not just the active one. Each entry is `[...myStatus, hubId]` — the very key
+ * `useMyShiftStatus` fills for the active hub — so the two share a cache and
+ * clock-in/out invalidate them together. The result keeps its identity while the
+ * set is unchanged, so an effect keyed on it does not churn.
+ */
+export function useClockedInHubIds(hubIds: readonly string[], enabled: boolean): string[] {
+  const results = useQueries({
+    queries: hubIds.map(hubId => ({
+      queryKey: [...shiftKeys.myStatus(), hubId] as const,
+      queryFn: () => getMyShiftStatusIn(hubId),
+      enabled,
+      staleTime: 30 * 1000,
+      refetchInterval: 60 * 1000,
+    })),
+  })
+  const key = hubIds.filter((_, i) => results[i]?.data?.clockedIn === true).join(',')
+  return useMemo(() => (key ? key.split(',') : []), [key])
 }
 
 export function useActiveShifts() {
@@ -293,7 +319,7 @@ export function useClockOut() {
 export function useCreateShiftOverride() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { id: string; shiftId?: string | null; date: string; type: 'cancel' | 'substitute'; userPubkeys?: string[] | null; encryptedNote?: string | null }) =>
+    mutationFn: (data: CreateShiftOverrideBody) =>
       createShiftOverride(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.all })
@@ -314,7 +340,7 @@ export function useDeleteShiftOverride() {
 export function useCreateAvailabilityBlock() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (data: { id: string; startDate: string; endDate: string; encryptedReason?: string | null }) =>
+    mutationFn: (data: CreateAvailabilityBlockBody) =>
       createAvailabilityBlock(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: shiftKeys.myAvailability() })

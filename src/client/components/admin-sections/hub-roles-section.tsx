@@ -10,6 +10,7 @@ import {
   createHubRole,
   type TemplateSummary,
 } from '@/lib/api'
+import { getActiveHub, NoActiveHubError } from '@/lib/api/client'
 import { readableRoles, sealHubRoleField } from '@/lib/role-vocabulary'
 import {
   Dialog,
@@ -99,16 +100,19 @@ export function HubRolesSection() {
 
     setImporting(true)
     try {
-      const existing = await readableRoles((await listHubRoles()).roles)
+      // Every imported role is sealed under, and created in, the same hub.
+      const hubId = getActiveHub()
+      if (!hubId) throw new NoActiveHubError('/settings/roles')
+      const existing = await readableRoles((await listHubRoles(hubId)).roles)
       const taken = new Set(existing.filter(r => r.readable).map(r => r.displayName.trim().toLowerCase()))
       let count = 0
       for (const role of rolesToImport) {
         const key = role.name.trim().toLowerCase()
         if (taken.has(key)) continue
-        await createHubRole({
+        await createHubRole(hubId, {
           permissions: role.permissions,
-          encryptedName: await sealHubRoleField(role.name),
-          ...(role.description ? { encryptedDescription: await sealHubRoleField(role.description) } : {}),
+          encryptedName: await sealHubRoleField(hubId, role.name),
+          ...(role.description ? { encryptedDescription: await sealHubRoleField(hubId, role.description) } : {}),
         })
         taken.add(key)
         count++
@@ -120,7 +124,8 @@ export function HubRolesSection() {
       }
       setImportOpen(false)
       setRefreshKey(prev => prev + 1)
-    } catch {
+    } catch (err) {
+      console.error('[roles] importing template roles failed', err)
       toast(t('common.error', { defaultValue: 'Error' }), 'error')
     } finally {
       setImporting(false)

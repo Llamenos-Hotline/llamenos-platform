@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { describeRoute, resolver, validator } from 'hono-openapi'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
@@ -13,8 +13,8 @@ import { getHubPresence } from '../services/presence'
 import { currentRingDecision } from '../services/routing-readiness'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_PRESENCE_UPDATE } from '@shared/event-kinds'
-import { requirePermission, checkPermission } from '../middleware/permission-guard'
-import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema, callRecordResponseSchema, callRecordStatusSchema, type CallRecord } from '@protocol/schemas/calls'
+import { requirePermission, requireAnyPermission, checkPermission } from '../middleware/permission-guard'
+import { callHistoryQuerySchema, callPresenceResponseSchema, banCallerBodySchema, activeCallsResponseSchema, todayCountResponseSchema, callerIdentifyResponseSchema, callActionResponseSchema, banCallResponseSchema, callHistoryResponseSchema, callRecordResponseSchema, callRecordStatusSchema, type CallRecord, type CallHistoryAccess } from '@protocol/schemas/calls'
 import { okResponseSchema } from '@protocol/schemas/common'
 import type { activeCalls, callRecords } from '../db/schema'
 import { authErrors, notFoundError } from '../openapi/helpers'
@@ -46,7 +46,9 @@ function toActiveCallResponse(row: ActiveCallRow): CallRecord {
     hubId: row.hubId ?? undefined,
     answeredBy: row.answeredBy,
     startedAt: row.startedAt.toISOString(),
-    status: callRecordStatusSchema.parse(row.status),
+    // `voicemail` is internal: a call whose caller left the queue for voicemail (#2753)
+    // is told to clients as `unanswered`, the terminal status its `call:update` carried.
+    status: callRecordStatusSchema.parse(row.status === 'voicemail' ? 'unanswered' : row.status),
     hasTranscription: row.hasTranscription ?? false,
     hasVoicemail: row.hasVoicemail ?? false,
     hasRecording: row.hasRecording ?? false,
@@ -92,7 +94,9 @@ calls.get('/active',
     const services = c.get('services')
     const hubId = pathHubId(c)
     const rows = await services.calls.getActiveCalls(hubId)
-    return c.json({ calls: rows.map(toActiveCallResponse) })
+    // A call whose caller has left the queue for voicemail (#2753) is not a call a
+    // volunteer can take or is on, and `voicemail` is not a wire status.
+    return c.json({ calls: rows.filter(row => row.status !== 'voicemail').map(toActiveCallResponse) })
   },
 )
 
@@ -214,13 +218,44 @@ calls.get('/routing',
   },
 )
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * What of this hub's finished calls the caller may read (#1342):
+ *
+ * - `calls:read-history`: all of them (`{ scope: 'all' }`).
+ * - otherwise `calls:read-own-history`: the calls they answered whose answer
+ *   time is inside the hub's volunteer access window, measured on the SERVER
+ *   clock. `own` is the bound the service applies in the same query as the hub
+ *   (never a second pass), and `access` is what the response tells the client,
+ *   so it can say "calls older than N days are no longer available to you"
+ *   instead of showing a short list that reads as lost data.
+ * - neither: `null`.
+ *
+ * Branches on permissions only — never a role.
+ */
+async function historyReadScope(c: Context<AppEnv>): Promise<
+  | { access: CallHistoryAccess; own?: { answeredBy: string; answeredSince: Date } }
+  | null
+> {
+  const permissions = c.get('permissions')
+  if (checkPermission(permissions, 'calls:read-history')) return { access: { scope: 'all' } }
+  if (!checkPermission(permissions, 'calls:read-own-history')) return null
+  const { volunteerAccessDays } = await c.get('services').settings.getCallHistoryAccess(pathHubId(c))
+  const answeredSince = new Date(Date.now() - volunteerAccessDays * DAY_MS)
+  return {
+    access: { scope: 'own', windowDays: volunteerAccessDays, availableSince: answeredSince.toISOString() },
+    own: { answeredBy: c.get('pubkey'), answeredSince },
+  }
+}
+
 calls.get('/history',
   describeRoute({
     tags: ['Calls'],
-    summary: 'Paginated call history',
+    summary: 'Paginated call history — every call of the hub, or only the caller\'s own inside the access window',
     responses: {
       200: {
-        description: 'Paginated call records',
+        description: 'Paginated call records, and which part of the history they were drawn from',
         content: {
           'application/json': {
             schema: resolver(callHistoryResponseSchema),
@@ -230,12 +265,14 @@ calls.get('/history',
       ...authErrors,
     },
   }),
-  requirePermission('calls:read-history'),
+  requireAnyPermission('calls:read-history', 'calls:read-own-history'),
   validator('query', callHistoryQuerySchema),
   async (c) => {
     const services = c.get('services')
     const hubId = pathHubId(c)
     const query = c.req.valid('query')
+    const scope = await historyReadScope(c)
+    if (!scope) return c.json({ error: 'Forbidden', required: ['calls:read-history', 'calls:read-own-history'] }, 403)
     const result = await services.calls.listCallHistory(hubId, {
       search: query.search,
       status: query.status,
@@ -243,13 +280,14 @@ calls.get('/history',
       dateTo: query.dateTo,
       page: query.page,
       limit: query.limit,
-    })
-    return c.json({
+    }, scope.own)
+    return c.json(callHistoryResponseSchema.parse({
       calls: result.calls.map(toCallRecordResponse),
       total: result.total,
       page: query.page,
       limit: query.limit,
-    })
+      access: scope.access,
+    }))
   },
 )
 
@@ -367,7 +405,13 @@ calls.get('/:callId',
     const activeCall = await services.calls.getActiveCallById(hubId, callId)
     if (activeCall) return c.json(toActiveCallResponse(activeCall))
 
-    const historyRecord = await services.calls.getCallRecord(hubId, callId)
+    // A FINISHED call is history: served only to a reader of it, under the
+    // same bound as GET /history (#1342) — every call to a holder of
+    // calls:read-history, only their own inside the access window to a holder
+    // of calls:read-own-history. Anything else reads as missing, so this route
+    // cannot be used to step past the window one id at a time.
+    const scope = await historyReadScope(c)
+    const historyRecord = scope ? await services.calls.getCallRecord(hubId, callId, scope.own) : null
     if (historyRecord) return c.json(toCallRecordResponse(historyRecord))
 
     return c.json({ error: 'Call not found' }, 404)

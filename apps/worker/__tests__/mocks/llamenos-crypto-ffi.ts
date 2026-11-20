@@ -17,6 +17,8 @@ import { sha256 as sha256Noble } from '@noble/hashes/sha2.js'
 import { hmac } from '@noble/hashes/hmac.js'
 import { gcm } from '@noble/ciphers/aes.js'
 import { concatBytes } from '@noble/hashes/utils.js'
+import { ristretto255_oprf } from '@noble/curves/ed25519.js'
+import { LABEL_BAN_KEY_DERIVE, HMAC_BAN_PREFIX } from '@shared/crypto-labels'
 
 export function randomBytes(len: number): Uint8Array {
   const out = new Uint8Array(len)
@@ -190,4 +192,31 @@ export function caseOpen(purpose: CasePurpose, secretKey: Uint8Array, sealed: En
   const label = new TextEncoder().encode(MOCK_CASE_LABEL[purpose])
   const key = hpkeOpen(secretKey, concatBytes(fromHex(env.enc), fromHex(env.ct)), label, label)
   return new TextDecoder().decode(symmetricDecrypt(key, fromHex(sealed.encryptedContent), label))
+}
+
+// ── Ban digest (RFC 9497 OPRF, ristretto255-SHA512) ─────────────────────
+// The crate (`packages/crypto/src/ban_digest.rs`) and @noble/curves both implement the RFC
+// and both are pinned to its test vectors; the real library's agreement with this one is
+// asserted under bun:ffi in `__tests__/integration-bun/ban-digest.test.ts`.
+
+/** RFC 9497 Evaluate, spelled as the interactive protocol it equals (noble types only the latter). */
+function oprfEvaluate(secretKey: Uint8Array, input: Uint8Array): Uint8Array {
+  const { blind, blinded } = ristretto255_oprf.oprf.blind(input)
+  return ristretto255_oprf.oprf.finalize(input, blind, ristretto255_oprf.oprf.blindEvaluate(secretKey, blinded))
+}
+
+function banScopeKey(banHashKey: Uint8Array, scope: string): Uint8Array {
+  if (banHashKey.length !== 32) throw new Error('BAN_HASH_KEY must be 32 bytes')
+  if (!scope) throw new Error('ban scope must not be empty')
+  return ristretto255_oprf.oprf.deriveKeyPair(banHashKey, new TextEncoder().encode(`${LABEL_BAN_KEY_DERIVE}:${scope}`)).secretKey
+}
+
+export function banDigestEvaluate(banHashKey: Uint8Array, scope: string, identifier: string): Uint8Array {
+  if (!identifier) throw new Error('caller identifier must not be empty')
+  return oprfEvaluate(banScopeKey(banHashKey, scope), new TextEncoder().encode(`${HMAC_BAN_PREFIX}${identifier}`))
+}
+
+export function banDigestBlindEvaluate(banHashKey: Uint8Array, scope: string, blinded: Uint8Array): Uint8Array {
+  if (blinded.length !== 32) throw new Error('group element must be 32 bytes')
+  return ristretto255_oprf.oprf.blindEvaluate(banScopeKey(banHashKey, scope), blinded)
 }

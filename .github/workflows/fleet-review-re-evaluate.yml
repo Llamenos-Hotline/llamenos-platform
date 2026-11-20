@@ -1,0 +1,65 @@
+# Fleet Review — re-evaluation (#2815)
+#
+# The `review_requested` arm of fleet-review.yml, in a workflow of its own.
+# Everything it does is fleet-review.yml's: this file only CALLS it, so the
+# review, the publish job and `fleet-review/refresh-carrier` are the same
+# code, judging the same event (a called workflow's `github` context is the
+# caller's — `event_name` is `pull_request`, `action` is `review_requested`).
+#
+# WHY A SEPARATE FILE. GitHub's merge-queue admission reads, per workflow,
+# only the NEWEST check suite on a head. When `review_requested` triggered
+# fleet-review.yml directly, its run was a newer fleet-review.yml suite than
+# the head's `fleet/review` carrier, and admission read that suite instead:
+# it held only `fleet/review/re-evaluate`, so `enqueuePullRequest` refused
+# with `2 of 5 required status checks are expected` (this file's twin
+# accounts for the other one) while every required check read green.
+# Measured on #2815's own heads: CLEAN before a review request, refused
+# after it, and CLEAN again when the carrier was re-run in place with no
+# review request at all. Runs of THIS file are suites of THIS workflow, so
+# fleet-review.yml keeps exactly one `pull_request` suite per head — its
+# carrier — and the re-run that refreshes it stays inside that one suite.
+#
+# Nothing here is named `fleet/review`: check runs from a called workflow
+# are named `<caller job> / <called job>`, so the required name cannot be
+# carried from this file even by accident. The rail in
+# tests/orchestrator/required-context-creation.test.ts evaluates that, and
+# fails if a workflow carrying a required context ever again triggers on an
+# action that does not move the head.
+#
+# No `labeled`/`push`/`edited`: see invariant 2 in fleet-review.yml's header.
+# No `secrets: inherit`: the two secrets fleet-review.yml reads are passed
+# by name.
+name: Fleet Review Re-evaluate
+
+on:
+  pull_request:
+    types: [review_requested]
+
+# Per PR, never cancelled: two review requests on one PR queue rather than
+# race two engine runs on `llamenos-review-box`. A distinct name from every
+# group fleet-review.yml evaluates (`fleet-review-pr-…`), so the caller and
+# the called workflow can never wait on each other.
+concurrency:
+  group: ${{ format('fleet-review-re-evaluate-pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: false
+
+permissions: {}  # deny-all; the calling job grants the ceiling below
+
+jobs:
+  re-evaluate:
+    # The CEILING for every job in fleet-review.yml, each of which sets its
+    # own, narrower `permissions:` (a called workflow can only lower them):
+    # the review job keeps `contents`/`pull-requests`/`actions`/`checks:
+    # read`, `fleet-review/publish` `pull-requests: write`, and
+    # `fleet-review/refresh-carrier` `actions: write` + `checks: read`.
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+      checks: read
+    uses: ./.github/workflows/fleet-review.yml
+    # By name, never `secrets: inherit`: exactly the two fleet-review.yml
+    # declares under `workflow_call.secrets`, and nothing else in the repo.
+    secrets:
+      FLEET_REVIEW_API_KEY: ${{ secrets.FLEET_REVIEW_API_KEY }}
+      FLEET_REVIEW_COMMENT_TOKEN: ${{ secrets.FLEET_REVIEW_COMMENT_TOKEN }}

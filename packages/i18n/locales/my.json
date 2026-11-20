@@ -213,6 +213,9 @@
     "noEntries": "ပိတ်ပင်ထားသော နံပါတ် မရှိပါ။ စပမ်းခေါ်ဆိုသူများကို ပိတ်ဆို့ရန် နံပါတ်များ ထည့်ပါ။",
     "phoneNumber": "ဖုန်းနံပါတ်",
     "reason": "အကြောင်းပြချက်",
+    "reentryDescription": "ဤပိတ်ပင်မှုများသည် ခေါ်ဆိုသူများကို မပိတ်ပင်တော့ပါ။ ပိတ်ပင်မှုများ သိမ်းဆည်းပုံ ပြောင်းလဲသွားပြီး ဆာဗာသည် နံပါတ်များကို ဘယ်တုန်းကမှ မသိမ်းထားသောကြောင့် ပြောင်း၍မရပါ။ နံပါတ်တစ်ခုချင်းစီကို ပြန်လည်ပိတ်ပင်ပြီး ၎င်း၏ မှတ်တမ်းကို ပယ်ဖျက်ပါ။",
+    "reentryDismiss": "ပယ်ဖျက်",
+    "reentryTitle": "ပြန်လည်ထည့်ရန် ပိတ်ပင်မှုများ",
     "remove": "ပိတ်ပင်ချက် ဖယ်ရှားမည်",
     "removeConfirmMessage": "ဤခေါ်ဆိုသူသည် ဟော့လိုင်းသို့ ပြန်လည်ခေါ်ဆိုနိုင်ပါလိမ့်မည်။ နံပါတ်၏ တစ်လမ်းသွား hash ကိုသာ သိမ်းထားသောကြောင့် နံပါတ်ကို ကိုင်ဆောင်ထားမှသာ ပြန်လည်ပိတ်ပင်နိုင်ပါမည်။ ဖယ်ရှားမှုကို စစ်ဆေးမှုမှတ်တမ်းတွင် မှတ်တမ်းတင်ထားပါသည်။",
     "removeConfirmTitle": "ဤပိတ်ပင်ချက်ကို ဖယ်ရှားမလား?",
@@ -799,6 +802,7 @@
     "callId": "ခေါ်ဆိုမှု ID",
     "callIdBadge": "ခေါ်ဆိုမှု",
     "callIdPlaceholder": "ခေါ်ဆိုမှု ID သို့မဟုတ် ကိုးကား",
+    "callIdRequired": "ဤမှတ်စု သက်ဆိုင်ရာ ခေါ်ဆိုမှု ID သို့မဟုတ် ကိုးကားချက်ကို ထည့်ပါ။",
     "callWith": "{{number}} နှင့် ခေါ်ဆိုမှု",
     "chatIdBadge": "ချတ်",
     "conversationBadge": "ချတ်",
@@ -1266,6 +1270,7 @@
     "emergencyFooter": "Permanently deletes all data from this device including your identity keys.",
     "encryptionPubkey": "Encryption Public Key",
     "logoutDescription": "Are you sure you want to log out? Your encrypted keys will be removed from this device.",
+    "logoutKeyRemovalFailed": "သင် ထွက်ပြီးပါပြီ၊ သို့သော် သင်၏ ကုဒ်ဝှက်ထားသော သော့များကို ဤစက်မှ ဖယ်ရှား၍ မရခဲ့ပါ။",
     "logoutTitle": "Log Out",
     "signingPubkey": "Signing Public Key",
     "biometricDesc": "Unlock with your fingerprint or face instead of typing your PIN. Your PIN still works and is never disabled.",
@@ -1572,7 +1577,8 @@
     "emptyMessage": "No shifts have been configured yet. Contact your administrator.",
     "clockOutMessage": "You will stop receiving incoming calls.",
     "deleteConfirmTitle": "ဤအလှည့်ကို ဖျက်မလား?",
-    "deleteConfirmMessage": "ဤအလှည့်ရှိ စေတနာ့ဝန်ထမ်းများသည် ၎င်း၏ အချိန်များအတွင်း ဖုန်းခေါ်ဆိုမှုများ လက်ခံရရှိတော့မည် မဟုတ်ပါ။ အခြားအလှည့်တစ်ခုက ထိုအချိန်များကို မဖုံးအုပ်ပါက ခေါ်ဆိုမှုများသည် အရန်အဖွဲ့ထံ သွားမည်ဖြစ်ပြီး အရန်အဖွဲ့ မသတ်မှတ်ထားပါက ဖြေကြားမည့်သူ မရှိဘဲ ကျန်ခဲ့မည်။ ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍ မရပါ။"
+    "deleteConfirmMessage": "ဤအလှည့်ရှိ စေတနာ့ဝန်ထမ်းများသည် ၎င်း၏ အချိန်များအတွင်း ဖုန်းခေါ်ဆိုမှုများ လက်ခံရရှိတော့မည် မဟုတ်ပါ။ အခြားအလှည့်တစ်ခုက ထိုအချိန်များကို မဖုံးအုပ်ပါက ခေါ်ဆိုမှုများသည် အရန်အဖွဲ့ထံ သွားမည်ဖြစ်ပြီး အရန်အဖွဲ့ မသတ်မှတ်ထားပါက ဖြေကြားမည့်သူ မရှိဘဲ ကျန်ခဲ့မည်။ ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍ မရပါ။",
+    "noAdminReader": "ဤစာသားကို သိမ်း၍မရပါ- ဤဟပ်၏ အက်ဒမင်တစ်ဦးမျှ မှတ်ပုံတင်ထားသော စက်မရှိသဖြင့် မည်သည့်အက်ဒမင်မျှ မဖတ်နိုင်ပါ။ ဟပ်အက်ဒမင်တစ်ဦးအား စက်တစ်ခုတွင် ဝင်ရောက်ရန် တောင်းဆိုပါ။"
   },
   "shortcuts": {
     "answerCall": "ခေါ်ဆိုမှု ဖြေမည်",
@@ -4247,6 +4253,15 @@
     "deviceUnverified": "Device not verified",
     "livenessOk": "Share verified",
     "livenessStale": "Share verification overdue",
+    "livenessFailed": "အစိတ်အပိုင်းအတည်ပြုခြင်း မအောင်မြင်ပါ",
+    "liveness": {
+      "title": "သင်၏ ပြန်လည်ရယူရေး အစိတ်အပိုင်း",
+      "description": "ဤစက်သည် သင်၏ ပြန်လည်ရယူရေး အစိတ်အပိုင်းကို ယခုထိ ကိုင်ဆောင်ထားကြောင်း သက်သေပြပါ။ သင့်အစိတ်အပိုင်းသည် စက်မှ ဘယ်သောအခါမှ မထွက်ပါ၊ ဟပ်သည် ၎င်းဖြင့်ပြုလုပ်သော လက်မှတ်ကိုသာ စစ်ဆေးသည်။",
+      "prove": "ကျွန်ုပ်၏ အစိတ်အပိုင်းကို အတည်ပြုရန်",
+      "proving": "အတည်ပြုနေသည်…",
+      "success": "အစိတ်အပိုင်းကို အတည်ပြုပြီးပါပြီ။ စီမံခန့်ခွဲသူများသည် သင့်အစိတ်အပိုင်းကို ကောင်းမွန်သည်ဟု မြင်ရပါမည်။",
+      "error": "အစိတ်အပိုင်းအတည်ပြုခြင်း မအောင်မြင်ပါ"
+    },
     "delayConfig": "Recovery waiting period (hours)",
     "emergencyFloorConfig": "Minimum urgent recovery period (hours)",
     "geoWarning": "Consider distributing recovery contacts across different regions for better security",

@@ -65,6 +65,15 @@ metrics_scrape_token: ""
 # outside that range.
 # signal_queue_retention_days: 30
 
+# ─── Clock-in liveness ───────────────────────────────────────────
+# A clock-in with no heartbeat for this many minutes stops ringing and is
+# removed from the roster (default 5; at least 90 seconds, i.e. three client
+# heartbeats). The reaper that deletes such rows runs every
+# active_shift_reap_interval_seconds (default 60; must not exceed the window).
+# The worker refuses to boot on a value outside those bounds.
+# active_shift_stale_after_minutes: 5
+# active_shift_reap_interval_seconds: 60
+
 # ─── Webhook IP allowlists ───────────────────────────────────────
 # Per-provider CIDR allowlists for inbound webhooks, rendered as
 # <PROVIDER>_WEBHOOK_IPS (apps/worker/middleware/webhook-auth.ts,

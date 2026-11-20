@@ -11,7 +11,7 @@
  * Import from here instead of directly from @tauri-apps/*.
  */
 
-import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, HKDF_CONTEXT_EXPORT, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
 import type { AdminHpkeRecipient } from './admin-recipient'
 import type { PukHpkeEnvelope } from '@protocol/schemas'
@@ -68,6 +68,8 @@ export type TauriIpcCommand =
   | 'sframe_derive_key'
   | 'hpke_unwrap_and_set_hub_key'
   | 'generate_hub_key_in_state'
+  | 'has_hub_key'
+  | 'forget_hub_key'
   | 'wrap_hub_key_for_member'
   | 'set_server_event_keys'
   | 'decrypt_hub_event'
@@ -79,8 +81,11 @@ export type TauriIpcCommand =
   | 'derive_sas'
   | 'shamir_commit'
   | 'shamir_verify'
+  | 'ban_digest_blind'
+  | 'ban_digest_finalize'
   | 'recovery_group_create'
   | 'recovery_share_contribute_from_state'
+  | 'recovery_share_liveness_proof_from_state'
   | 'recovery_group_reconstruct_from_shares'
   | 'recovery_group_decrypt'
   | 'device_import_and_load'
@@ -104,8 +109,14 @@ export type TauriIpcCommand =
   | 'net_ws_close'
   | 'take_pending_invite'
 
+// Resolved once per webview and kept: every command this module sends goes to
+// the same IPC bridge. Loaded lazily so nothing pulls in @tauri-apps until the
+// first call.
+let tauriCore: Promise<typeof import('@tauri-apps/api/core')> | null = null
+
 async function tauriInvoke<T>(cmd: TauriIpcCommand, args?: Record<string, unknown>): Promise<T> {
-  const { invoke } = await import('@tauri-apps/api/core')
+  tauriCore ??= import('@tauri-apps/api/core')
+  const { invoke } = await tauriCore
   return invoke<T>(cmd, args)
 }
 
@@ -544,45 +555,67 @@ export async function sigchainVerifyLink(
 
 // ── Hub event decryption (H2 hardening) ────────────────────────────
 
+// Every hub key operation names its hub. CryptoState holds one key per hub the
+// device belongs to — never a single "current" key, which would seal one hub's
+// data under another hub's key whenever the UI had moved on (multi-hub axiom).
+
+/** A hub-key wrap as the server stores it: hex `enc`/`ct` (PROTOCOL.md §2.7). */
+export interface HubKeyWrap {
+  enc: string
+  ct: string
+}
+
 /**
- * Unwrap an HPKE envelope containing a hub key and store it in Rust CryptoState.
- * The hub key NEVER enters JavaScript — it goes from HPKE decryption straight to state.
+ * Open this device's wrap of `hubId`'s key into Rust CryptoState. The label,
+ * registry `labelId` and AAD are fixed by the crate (`encryption::hpke_unwrap_key`
+ * under `LABEL_HUB_KEY_WRAP`); the webview passes the wire form only.
+ * The hub key NEVER enters JavaScript.
  */
-export async function hpkeUnwrapAndSetHubKey(
-  envelope: HpkeEnvelope,
-  expectedLabel: string,
-  aadHex: string,
-): Promise<void> {
+export async function hpkeUnwrapAndSetHubKey(hubId: string, wrap: HubKeyWrap): Promise<void> {
   if (useTauri) {
-    await tauriInvoke<void>('hpke_unwrap_and_set_hub_key', { envelope, expectedLabel, aadHex })
+    await tauriInvoke<void>('hpke_unwrap_and_set_hub_key', { hubId, enc: wrap.enc, ct: wrap.ct })
     return
   }
   throw new Error('WASM hpke_unwrap_and_set_hub_key not yet implemented')
 }
 
 /**
- * Generate a random 32-byte hub key and store it in Rust CryptoState.
+ * Generate a random 32-byte key for `hubId` and store it in Rust CryptoState.
  * The key NEVER enters JavaScript — only wrapped envelopes leave Rust.
  */
-export async function generateHubKeyInState(): Promise<void> {
+export async function generateHubKeyInState(hubId: string): Promise<void> {
   if (useTauri) {
-    await tauriInvoke<void>('generate_hub_key_in_state')
+    await tauriInvoke<void>('generate_hub_key_in_state', { hubId })
     return
   }
   throw new Error('WASM generate_hub_key_in_state not yet implemented')
 }
 
-/**
- * HPKE-seal the hub key stored in CryptoState for a recipient.
- * The hub key NEVER enters JavaScript — it goes from state directly to HPKE encryption.
- */
-export async function wrapHubKeyForMember(
-  recipientPubkeyHex: string,
-  label: string,
-  aadHex: string,
-): Promise<HpkeEnvelope> {
+/** Whether Rust CryptoState holds a key for `hubId`. */
+export async function hasHubKey(hubId: string): Promise<boolean> {
   if (useTauri) {
-    return tauriInvoke<HpkeEnvelope>('wrap_hub_key_for_member', { recipientPubkeyHex, label, aadHex })
+    return tauriInvoke<boolean>('has_hub_key', { hubId })
+  }
+  throw new Error('WASM has_hub_key not yet implemented')
+}
+
+/** Drop the key Rust CryptoState holds for `hubId`, if any. */
+export async function forgetHubKey(hubId: string): Promise<void> {
+  if (useTauri) {
+    await tauriInvoke<void>('forget_hub_key', { hubId })
+    return
+  }
+  throw new Error('WASM forget_hub_key not yet implemented')
+}
+
+/**
+ * Wrap `hubId`'s key, held in CryptoState, for one device's X25519 key. Returns
+ * the wire form (hex). Label and AAD are the crate's, never the caller's.
+ * The hub key NEVER enters JavaScript.
+ */
+export async function wrapHubKeyForMember(hubId: string, recipientPubkeyHex: string): Promise<HubKeyWrap> {
+  if (useTauri) {
+    return tauriInvoke<HubKeyWrap>('wrap_hub_key_for_member', { hubId, recipientPubkeyHex })
   }
   throw new Error('WASM wrap_hub_key_for_member not yet implemented')
 }
@@ -600,13 +633,13 @@ export async function setServerEventKeys(keys: Array<[number, string]>): Promise
 }
 
 /**
- * Decrypt hub event content using the hub key stored in Rust CryptoState.
+ * Decrypt hub event content using `hubId`'s key stored in Rust CryptoState.
  * The hub key NEVER enters JavaScript — decryption happens entirely in Rust.
  */
-export async function decryptHubEvent(ciphertextHex: string): Promise<string | null> {
+export async function decryptHubEvent(hubId: string, ciphertextHex: string): Promise<string | null> {
   if (useTauri) {
     try {
-      return await tauriInvoke<string>('decrypt_hub_event', { ciphertextHex })
+      return await tauriInvoke<string>('decrypt_hub_event', { hubId, ciphertextHex })
     } catch {
       return null
     }
@@ -615,26 +648,27 @@ export async function decryptHubEvent(ciphertextHex: string): Promise<string | n
 }
 
 /**
- * Encrypt a plaintext string with the hub key using label as AAD (domain separation).
- * Returns hex-encoded nonce(12) + ciphertext (AES-256-GCM).
- * Used for encrypting team/tag fields before sending to server.
+ * Encrypt a plaintext string with `hubId`'s key using label as AAD (domain separation).
+ * Returns hex-encoded nonce(12) + ciphertext (AES-256-GCM). Throws `Hub key not
+ * loaded` when this device holds no key for the hub — callers that may run before
+ * the key is loaded go through `hub-key-manager.ts`'s `encryptForHub`, which loads it.
  */
-export async function encryptHubField(plaintext: string, label: string): Promise<string> {
+export async function encryptHubField(hubId: string, plaintext: string, label: string): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('encrypt_hub_field', { plaintext, label })
+    return tauriInvoke<string>('encrypt_hub_field', { hubId, plaintext, label })
   }
   throw new Error('WASM encrypt_hub_field not yet implemented')
 }
 
 /**
- * Decrypt a hub-encrypted field using label as AAD.
+ * Decrypt a field sealed under `hubId`'s key, using label as AAD.
  * Input: hex-encoded nonce(12) + ciphertext (AES-256-GCM).
  * Returns null on failure (hub key not loaded, wrong label, or corrupted data).
  */
-export async function decryptHubField(ciphertextHex: string, label: string): Promise<string | null> {
+export async function decryptHubField(hubId: string, ciphertextHex: string, label: string): Promise<string | null> {
   if (useTauri) {
     try {
-      return await tauriInvoke<string>('decrypt_hub_field', { ciphertextHex, label })
+      return await tauriInvoke<string>('decrypt_hub_field', { hubId, ciphertextHex, label })
     } catch {
       return null
     }
@@ -1412,13 +1446,6 @@ export async function openOfflineQueue(ciphertextHex: string): Promise<string> {
   return openDeviceLocal(ciphertextHex, LABEL_OFFLINE_QUEUE)
 }
 
-/**
- * Encrypt an export payload using the hub key with HKDF_CONTEXT_EXPORT domain separation.
- * Returns hex-encoded ciphertext suitable for binary download.
- */
-export async function encryptExport(jsonString: string): Promise<string> {
-  return encryptHubField(jsonString, HKDF_CONTEXT_EXPORT)
-}
 
 
 
@@ -1615,6 +1642,26 @@ export async function shamirVerify(x: number, yHex: string, commitmentHex: strin
   throw new Error('WASM shamir verify not yet implemented')
 }
 
+/** The client half of one blinded ban-digest evaluation (#2759). Keep `blindHex`; send the element. */
+export interface BanDigestBlind {
+  blindHex: string
+  blindedElementHex: string
+}
+
+/**
+ * Blind an E.164 number for a ban digest, in Rust (`packages/crypto/src/ban_digest.rs`).
+ * Rejects anything that is not E.164 — a number with spaces would digest to something no
+ * inbound call can match.
+ */
+export async function banDigestBlind(phone: string): Promise<BanDigestBlind> {
+  return tauriInvoke<BanDigestBlind>('ban_digest_blind', { phone })
+}
+
+/** Finalize the server's evaluation of a blinded number into its ban digest (128 hex chars). */
+export async function banDigestFinalize(phone: string, blindHex: string, evaluatedElementHex: string): Promise<string> {
+  return tauriInvoke<string>('ban_digest_finalize', { phone, blindHex, evaluatedElementHex })
+}
+
 // ── H16: Recovery group key isolation (combine+decrypt stays in Rust) ──
 
 /** Result of recovery_group_create — neither the private key nor a plaintext share leaves Rust. */
@@ -1623,6 +1670,8 @@ export interface RecoveryGroupCreateResult {
   /** One HPKE envelope per holder, in `holderEncryptionPubkeys` order. */
   shareEnvelopes: HpkeEnvelope[]
   commitments: string[]
+  /** One liveness verifying key per share, same order — sent to the server as each holder's `livenessPublicKey` (#2782). */
+  livenessPublicKeys: string[]
 }
 
 /**
@@ -1677,6 +1726,28 @@ export async function recoveryShareContribute(
     })
   }
   throw new Error('WASM recovery share contribute not yet implemented')
+}
+
+/**
+ * Prove this device still holds its recovery share (#2782): Rust opens the share,
+ * derives its liveness key and signs the server's challenge, bound to `hubId` and
+ * to this device's own signing pubkey. Returns the proof (hex) for
+ * `POST /recovery-group/shares/liveness`. Neither the share nor the derived key
+ * enters JavaScript.
+ */
+export async function recoveryShareLivenessProof(
+  envelope: HpkeEnvelope,
+  hubId: string,
+  challengeHex: string,
+): Promise<string> {
+  if (useTauri) {
+    return tauriInvoke<string>('recovery_share_liveness_proof_from_state', {
+      envelope,
+      hubId,
+      challengeHex,
+    })
+  }
+  throw new Error('WASM recovery share liveness proof not yet implemented')
 }
 
 /** Encrypted share envelope for recovery group reconstruction. */

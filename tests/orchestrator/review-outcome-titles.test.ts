@@ -285,6 +285,8 @@ const OUTCOMES: readonly (readonly [string, Facts, ReviewOutcomeToken])[] = [
   // #1588: a green job on an outcome this step has no name for. It used to
   // be named `PASS:unclassified` and stay green; now the step fails it.
   ['a green run by a path with no name', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'some-new-outcome' }, 'NO-VERDICT:unclassified'],
+  // #2884: a PASS the review App recorded as a check run on this exact head.
+  ['app-recorded — review-and-merge\'s PASS, read from its check run', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'app-recorded' }, 'PASS:app-recorded'],
   ['bot-authored — an automated dependency update', { JOB_STATUS: 'success', GATE_CONCLUSION: 'success', OUTCOME: 'bot-authored' }, 'PASS:bot-authored'],
   // The knope release PR (#1944): a version-only diff on `release`, concluded
   // green with no review and its own honest name — never `PASS:reviewed`.

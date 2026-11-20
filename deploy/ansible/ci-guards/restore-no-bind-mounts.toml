@@ -1,0 +1,10 @@
+name = "Check restores stream data instead of bind-mounting it"
+run = "python3 deploy/ansible/scripts/check-restore-no-bind-mounts.py"
+why = """
+harden.yml turns on Docker userns-remap, under which a container's root cannot
+read a 0700 host directory. restore.yml and test-restore.yml bind-mounted a
+decrypted temp directory into a container and failed there -- after restore.yml
+had already emptied the RustFS volume. The backup-restore-roundtrip job runs
+without userns-remap so cannot see the first, and proves the second
+behaviourally; this keeps the first from coming back.
+"""

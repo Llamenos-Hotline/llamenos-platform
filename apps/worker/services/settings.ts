@@ -5,7 +5,7 @@
  * IVR audio, rate limits, captchas, and case number sequences.
  * All state is stored in PostgreSQL via Drizzle ORM.
  */
-import { eq, and, sql, lt, inArray, or, isNull, desc } from 'drizzle-orm'
+import { eq, and, sql, lt, inArray, or, isNull, desc, ne } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   systemSettings,
@@ -29,6 +29,7 @@ import {
   notes,
   noteReplies,
   bans,
+  banReentries,
   contactMetadata,
   auditLog,
   shifts,
@@ -94,6 +95,12 @@ import type {
   RelationshipTypeDefinition,
 } from '@protocol/schemas/entity-schema'
 import type { IvrLanguageSettings } from '@protocol/schemas/settings'
+import { HUB_NOT_FOUND_CODE, type ErrorResponse } from '@protocol/schemas/common'
+import {
+  callHistoryAccessSettingsSchema,
+  type CallHistoryAccessSettings,
+  type CallHistoryAccessSettingsPatch,
+} from '@protocol/schemas/calls'
 import type { HubChannelType } from '@protocol/schemas/provider-setup'
 import type {
   ReportTypeDefinition,
@@ -115,6 +122,7 @@ import {
   resolveTTL,
 } from '../lib/ttl'
 import { createLogger } from '../lib/logger'
+import { markHubKeyRotationDue } from '../lib/hub-key'
 import type { ProviderMediaEraser } from './provider-recordings'
 import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { withRetry, isRetryableDbError } from '../lib/retry'
@@ -153,10 +161,30 @@ export class ServiceError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** Machine-readable code clients branch on (`errorResponseSchema.code`); absent for plain errors. */
+    public readonly code?: ErrorResponse['code'],
   ) {
     super(message)
     this.name = 'ServiceError'
   }
+}
+
+/**
+ * The hub row looked up by its id is not there (#2872). The ONLY error that
+ * carries `HUB_NOT_FOUND`, the code a client forgets a hub on — throw it only
+ * from a lookup of the hub itself. An update that matched no rows, a missing
+ * resource inside a hub, and every permission refusal are plain `ServiceError`s.
+ */
+export class HubNotFoundError extends ServiceError {
+  constructor() {
+    super(404, 'Hub not found', HUB_NOT_FOUND_CODE)
+    this.name = 'HubNotFoundError'
+  }
+}
+
+/** The wire body for a `ServiceError`: its message, plus its code when it has one. */
+export function serviceErrorBody(err: ServiceError): ErrorResponse {
+  return err.code === undefined ? { error: err.message } : { error: err.message, code: err.code }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +210,15 @@ const DEFAULT_CALL_SETTINGS: CallSettings = {
   // (#1505). Do not flip this: every answered call would be written to a third
   // party's disk, and the caller-facing recording notice is driven off it.
   recordCalls: false,
+}
+
+/**
+ * A hub's stored access window, through the schema: an absent or out-of-range
+ * value reads as the default rather than as a window nobody chose.
+ */
+function parseCallHistoryAccess(stored: unknown): CallHistoryAccessSettings {
+  const parsed = callHistoryAccessSettingsSchema.safeParse(stored ?? {})
+  return parsed.success ? parsed.data : callHistoryAccessSettingsSchema.parse({})
 }
 
 /**
@@ -236,6 +273,9 @@ const ALLOWED_HUB_SETTINGS = new Set([
   'subAccountConfigId',
   'heartbeatTimeout',
   'ivrLanguages',
+  // #1342: the volunteer call-history ACCESS window. Written only by
+  // updateCallHistoryAccess (settings:manage-calls, audited with old and new).
+  'callHistoryAccess',
 ])
 
 const VALID_PROVIDER_TYPES = [
@@ -641,6 +681,60 @@ export class SettingsService {
       .set({ callSettings: updated })
       .where(eq(systemSettings.id, SINGLETON_ID))
     return updated
+  }
+
+  // =========================================================================
+  // Volunteer call-history access window (#1342)
+  // =========================================================================
+
+  /**
+   * The hub's volunteer call-history access window: how many days back a member
+   * holding only `calls:read-own-history` may read the calls they answered.
+   * The default (7 days) when the hub never set one.
+   *
+   * Access control only. It deletes nothing and is unrelated to the retention
+   * policy (`retention.ts`, services/erasure.ts): a record past a volunteer's
+   * window stays the admin system of record.
+   */
+  async getCallHistoryAccess(hubId: string): Promise<CallHistoryAccessSettings> {
+    return parseCallHistoryAccess((await this.getHubSettings(hubId)).callHistoryAccess)
+  }
+
+  /**
+   * Apply a PATCH to the hub's access window and return the window before and
+   * after, for the audit entry. A body that names nothing changes nothing.
+   *
+   * Read and write share one transaction under a per-hub advisory lock, so two
+   * concurrent changes are serialised and each audit entry's `before` is the
+   * value that change actually replaced.
+   */
+  async updateCallHistoryAccess(
+    hubId: string,
+    patch: CallHistoryAccessSettingsPatch,
+  ): Promise<{ before: CallHistoryAccessSettings; after: CallHistoryAccessSettings }> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`callHistoryAccess:${hubId}`}))`)
+      const [row] = await tx
+        .select({ settings: hubSettingsTable.settings })
+        .from(hubSettingsTable)
+        .where(eq(hubSettingsTable.hubId, hubId))
+      const before = parseCallHistoryAccess((row?.settings as Record<string, unknown> | undefined)?.callHistoryAccess)
+      const after: CallHistoryAccessSettings = {
+        ...before,
+        ...(patch.volunteerAccessDays !== undefined ? { volunteerAccessDays: patch.volunteerAccessDays } : {}),
+      }
+      const merge = { callHistoryAccess: after }
+      await tx
+        .insert(hubSettingsTable)
+        .values({ hubId, settings: merge })
+        .onConflictDoUpdate({
+          target: hubSettingsTable.hubId,
+          set: {
+            settings: sql`COALESCE(${hubSettingsTable.settings}, '{}'::jsonb) || ${hubSettingsTable.settings.mapToDriverValue(merge)}::jsonb`,
+          },
+        })
+      return { before, after }
+    })
   }
 
   // =========================================================================
@@ -2314,7 +2408,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!row) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
     return { hub: hubFromRow(row) }
   }
@@ -2328,7 +2422,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
 
     const now = new Date()
@@ -2359,7 +2453,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Not found')
+      throw new HubNotFoundError()
     }
 
     await this.db
@@ -2398,7 +2492,7 @@ export class SettingsService {
       .from(hubsTable)
       .where(eq(hubsTable.id, id))
     if (!existing) {
-      throw new ServiceError(404, 'Hub not found')
+      throw new HubNotFoundError()
     }
 
     // The server's own sealed copies first, so a blob the object store will not
@@ -2475,6 +2569,7 @@ export class SettingsService {
 
       // 4. Bans, contact metadata, audit log
       await tx.delete(bans).where(eq(bans.hubId, id))
+      await tx.delete(banReentries).where(eq(banReentries.hubId, id))
       await tx.delete(contactMetadata).where(eq(contactMetadata.hubId, id))
       await tx.delete(auditLog).where(eq(auditLog.hubId, id))
 
@@ -3009,10 +3104,15 @@ export class SettingsService {
   }
 
   /**
-   * Replace all hub-key envelopes. A caller that read the wraps earlier MUST
-   * pass `expectedGeneration`: if the generation moved on (a rotation, or a
-   * crypto-shred that destroyed the key), the cached wraps no longer describe
-   * the hub's current key and re-installing them would be a replay.
+   * Replace all hub-key envelopes — compare-and-set on the generation.
+   *
+   * `expectedGeneration` is the generation the writer read. The write succeeds
+   * only if the hub is still at it, and moves the generation forward by one in
+   * the same statement, so of two writers that read the same generation exactly
+   * one wins and the other gets a 409 and re-reads. That is what keeps two
+   * managers who each generated a first key at once from leaving the hub split
+   * between two keys, and what stops a replayed write re-installing a key a
+   * rotation or a crypto-shred replaced (the shred bumps the generation too).
    */
   async setHubKeyEnvelopes(
     hubId: string,
@@ -3022,44 +3122,55 @@ export class SettingsService {
         enc: string
         ct: string
       }>
-      expectedGeneration?: number
+      expectedGeneration: number
     },
-  ): Promise<{ ok: true }> {
-    // Validate hub exists
-    const [hub] = await this.db
-      .select()
-      .from(hubsTable)
-      .where(eq(hubsTable.id, hubId))
-    if (!hub) {
-      throw new ServiceError(404, 'Hub not found')
-    }
-    if (hub.status === 'shredded') {
-      throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
-    }
-    if (
-      data.expectedGeneration !== undefined &&
-      data.expectedGeneration !== hub.hubKeyGeneration
-    ) {
-      throw new ServiceError(
-        409,
-        `Hub key generation mismatch: expected ${data.expectedGeneration}, current ${hub.hubKeyGeneration}`,
-      )
-    }
+  ): Promise<{ ok: true; generation: number }> {
+    return this.db.transaction(async (tx) => {
+      const [bumped] = await tx
+        .update(hubsTable)
+        .set({ hubKeyGeneration: sql`${hubsTable.hubKeyGeneration} + 1` })
+        .where(and(
+          eq(hubsTable.id, hubId),
+          eq(hubsTable.hubKeyGeneration, data.expectedGeneration),
+          ne(hubsTable.status, 'shredded'),
+        ))
+        .returning({ generation: hubsTable.hubKeyGeneration })
 
-    // Replace all envelopes in a transaction
-    await this.db.transaction(async (tx) => {
-      await tx.delete(hubKeys).where(eq(hubKeys.hubId, hubId))
-      for (const envelope of data.envelopes) {
-        await tx.insert(hubKeys).values({
+      if (!bumped) {
+        const [hub] = await tx
+          .select({ status: hubsTable.status, generation: hubsTable.hubKeyGeneration })
+          .from(hubsTable)
+          .where(eq(hubsTable.id, hubId))
+        if (!hub) throw new HubNotFoundError()
+        if (hub.status === 'shredded') {
+          throw new ServiceError(409, 'Hub is shredded — hub key writes are refused')
+        }
+        throw new ServiceError(
+          409,
+          `Hub key generation mismatch: expected ${data.expectedGeneration}, current ${hub.generation}`,
+        )
+      }
+
+      const replaced = await tx
+        .delete(hubKeys)
+        .where(eq(hubKeys.hubId, hubId))
+        .returning({ recipientPubkey: hubKeys.recipientPubkey })
+      if (data.envelopes.length > 0) {
+        await tx.insert(hubKeys).values(data.envelopes.map(envelope => ({
           hubId,
           recipientPubkey: envelope.pubkey,
           enc: envelope.enc,
           ct: envelope.ct,
-        })
+        })))
       }
+      // Someone who held a wrap and is not in the new set still knows the key
+      // this set wraps: record that it has to be rotated (PROTOCOL.md §2.7).
+      const kept = new Set(data.envelopes.map(e => e.pubkey))
+      if (replaced.some(w => !kept.has(w.recipientPubkey))) {
+        await markHubKeyRotationDue(tx, [hubId])
+      }
+      return { ok: true as const, generation: bumped.generation }
     })
-
-    return { ok: true }
   }
 
   // =========================================================================

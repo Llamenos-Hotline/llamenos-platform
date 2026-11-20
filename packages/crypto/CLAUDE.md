@@ -32,6 +32,7 @@ There is no WASM build: the Playwright test build aliases the Tauri IPC layer to
 | `puk` | Per-User Key hierarchy + Cascading Lazy Key Rotation (CLKR) |
 | `auth` | Ed25519 auth token generation/verification |
 | `blind_index` | Blind indexing for server-side E2EE search (HMAC-SHA256) |
+| `ban_digest` | Ban digests — RFC 9497 OPRF (ristretto255-SHA512): clients blind a typed number, the server evaluates it blindly and matches inbound callers with `evaluate` (#2759) |
 | `provisioning` | X25519 ECDH device provisioning with signed claim and 6-digit SAS (the only SAS-code implementation in the crate) |
 | `sas` | 10-emoji SAS over two Ed25519 keys + nonce (`LABEL_SAS_DERIVE`) — a separate ceremony from the provisioning SAS |
 | `mls` | MLS group management (RFC 9420, OpenMLS 0.9) — **behind the `mls` feature, default-off** (see Feature Flags) |

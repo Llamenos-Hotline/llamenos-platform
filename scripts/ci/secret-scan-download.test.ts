@@ -1,3 +1,4 @@
+// @suite: repo
 // The `Run gitleaks` step of .github/workflows/secret-scan.yml, executed for
 // real against a local server standing in for the release host.
 //

@@ -126,3 +126,4 @@
 108	llamenos:provider-ref-key:v1
 109	llamenos:case-comment
 110	llamenos:offline-queue:v1
+111	llamenos:hub-key-rotation:v1

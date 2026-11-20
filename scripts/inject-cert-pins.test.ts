@@ -1,3 +1,4 @@
+// @suite: repo
 /**
  * Guards the injection points of scripts/inject-cert-pins.ts (#1096).
  *

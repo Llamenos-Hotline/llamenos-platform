@@ -6,7 +6,8 @@ import {
   deleteTag,
 } from '@/lib/api'
 import type { TagResponse } from '@protocol/schemas'
-import { encryptHubField, decryptHubField } from '@/lib/platform'
+import { getActiveHub, NoActiveHubError } from '@/lib/api/client'
+import { encryptForHub, decryptFromHub } from '@/lib/hub-key-manager'
 import { LABEL_TAG_ENCRYPT } from '@shared/crypto-labels'
 
 export const tagKeys = {
@@ -28,9 +29,9 @@ export interface DecryptedTag extends Omit<TagResponse, 'encryptedLabel' | 'encr
 
 async function decryptTag(tag: TagResponse): Promise<DecryptedTag> {
   const [label, category] = await Promise.all([
-    decryptHubField(tag.encryptedLabel, LABEL_TAG_ENCRYPT),
+    decryptFromHub(tag.hubId, tag.encryptedLabel, LABEL_TAG_ENCRYPT),
     tag.encryptedCategory
-      ? decryptHubField(tag.encryptedCategory, LABEL_TAG_ENCRYPT)
+      ? decryptFromHub(tag.hubId, tag.encryptedCategory, LABEL_TAG_ENCRYPT)
       : Promise.resolve(null),
   ])
   return {
@@ -73,9 +74,12 @@ export function useCreateTag() {
       color?: string
       category?: string
     }) => {
-      const encryptedLabel = await encryptHubField(label, LABEL_TAG_ENCRYPT)
+      // Sealed under the hub the request is about to be scoped to (`hp()`).
+      const hubId = getActiveHub()
+      if (!hubId) throw new NoActiveHubError('/tags')
+      const encryptedLabel = await encryptForHub(hubId, label, LABEL_TAG_ENCRYPT)
       const encryptedCategory = category
-        ? await encryptHubField(category, LABEL_TAG_ENCRYPT)
+        ? await encryptForHub(hubId, category, LABEL_TAG_ENCRYPT)
         : undefined
       return createTag({
         id: crypto.randomUUID(),
@@ -105,14 +109,16 @@ export function useUpdateTag() {
       color?: string
       category?: string | null
     }) => {
+      const hubId = getActiveHub()
+      if (!hubId) throw new NoActiveHubError(`/tags/${id}`)
       const encryptedLabel = label !== undefined
-        ? await encryptHubField(label, LABEL_TAG_ENCRYPT)
+        ? await encryptForHub(hubId, label, LABEL_TAG_ENCRYPT)
         : undefined
       const encryptedCategory =
         category === null
           ? null
           : category !== undefined
-            ? await encryptHubField(category, LABEL_TAG_ENCRYPT)
+            ? await encryptForHub(hubId, category, LABEL_TAG_ENCRYPT)
             : undefined
       return updateTag(id, { encryptedLabel, color, encryptedCategory })
     },

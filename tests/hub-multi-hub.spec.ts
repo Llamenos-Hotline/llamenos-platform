@@ -1,4 +1,5 @@
 import { test, expect } from './console-guard'
+import { HUB_NOT_FOUND_CODE } from '@protocol/schemas/common'
 import { loginAsAdmin, mockConfigWithHub, navigateViaSpa, Timeouts } from './helpers'
 
 /**
@@ -28,7 +29,7 @@ async function mockMultiHubApis(
     const hub = hubs[hubId]
 
     if (!hub) {
-      await route.fulfill({ status: 404, body: 'Hub not found' })
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }) })
       return
     }
 
@@ -64,7 +65,7 @@ async function mockMultiHubApis(
     const hub = hubs[hubId]
 
     if (!hub) {
-      await route.fulfill({ status: 404, body: 'Hub not found' })
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }) })
       return
     }
 
@@ -85,7 +86,7 @@ async function mockMultiHubApis(
     const hub = hubs[hubId]
 
     if (!hub) {
-      await route.fulfill({ status: 404, body: 'Hub not found' })
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Hub not found', code: HUB_NOT_FOUND_CODE }) })
       return
     }
 

@@ -86,6 +86,33 @@ export const hubs = pgTable('hubs', {
    */
   hubKeyGeneration: integer('hub_key_generation').notNull().default(0),
   /**
+   * Which hub KEY the wraps hold, as distinct from which envelope SET
+   * (`hub_key_generation`, which a plain re-distribution also moves). 0 for the
+   * hub's first key; a rotation (`rotateHubKey`, PROTOCOL.md §2.7) moves it on
+   * by one, in the same transaction that installs the new key's wraps. A client
+   * holding the key of an older epoch knows its key was rotated out.
+   */
+  hubKeyEpoch: integer('hub_key_epoch').notNull().default(0),
+  /**
+   * The rotation statement that introduced the current epoch
+   * (`hubKeyRotationStatementSchema`, PROTOCOL.md §2.7): `proof` sealed by the
+   * rotating device under the PREVIOUS key, `check` under the new one, both
+   * under `LABEL_HUB_KEY_ROTATION`. A member's device adopts the new key only
+   * once `proof` opens under the key it already holds — so a key the server
+   * chose is never adopted. Both null until the first rotation.
+   */
+  hubKeyRotationProof: text('hub_key_rotation_proof'),
+  hubKeyRotationCheck: text('hub_key_rotation_check'),
+  /**
+   * Set, in the same transaction, whenever someone who held a wrap of the
+   * current key stops holding one — a member leaves the hub, is erased, or a
+   * re-distribution drops them. While set, the current key is known to anyone
+   * who has left, and a manager's device must rotate it (`rotateHubKey`, which
+   * clears it). The departed member's wrap is gone by then, so this flag is
+   * the only record that a departure happened.
+   */
+  hubKeyRotationDue: boolean('hub_key_rotation_due').notNull().default(false),
+  /**
    * The hub's optional escrow (recovery) key: an X25519 public key, 64 lowercase
    * hex, whose secret the hub's admins hold offline. A member of every reader
    * set of this hub (PROTOCOL §2.4.2, operator decisions D1 and A7). Set and

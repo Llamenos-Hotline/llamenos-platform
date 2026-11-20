@@ -10,7 +10,7 @@
  * Behavioral depth: Hard assertions, no if(visible) guards.
  */
 import { expect } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import { Given, When, Then, type AdminWorld } from '../fixtures'
 import { TestIds, navTestIdMap } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 
@@ -130,7 +130,7 @@ Then('I should be able to navigate to all tabs:', async ({ page }, dataTable) =>
 })
 
 /** Run one crypto operation in the page and record whether it was rejected. */
-async function attemptCryptoOp(page: import('@playwright/test').Page, op: 'token' | 'encrypt') {
+async function attemptCryptoOp(page: import('@playwright/test').Page, adminWorld: AdminWorld, op: 'token' | 'encrypt') {
   await page.waitForFunction(() => !!(window as unknown as Record<string, unknown>).__TEST_PLATFORM, { timeout: Timeouts.AUTH })
   const rejected = await page.evaluate(async (which) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
@@ -145,25 +145,20 @@ async function attemptCryptoOp(page: import('@playwright/test').Page, op: 'token
       return true
     }
   }, op)
-  await page.evaluate((r) => {
-    (window as unknown as Record<string, unknown>).__test_crypto_rejected = r
-  }, rejected)
+  adminWorld.cryptoRejected = rejected
 }
 
 // The old versions of these three steps were empty ("handled in crypto steps"),
 // so "Crypto operations blocked when locked" passed without attempting anything.
 
-When('I attempt to create an auth token', async ({ page }) => {
-  await attemptCryptoOp(page, 'token')
+When('I attempt to create an auth token', async ({ page, adminWorld }) => {
+  await attemptCryptoOp(page, adminWorld, 'token')
 })
 
-When('I attempt to encrypt a note', async ({ page }) => {
-  await attemptCryptoOp(page, 'encrypt')
+When('I attempt to encrypt a note', async ({ page, adminWorld }) => {
+  await attemptCryptoOp(page, adminWorld, 'encrypt')
 })
 
-Then('it should throw a CryptoException', async ({ page }) => {
-  const rejected = await page.evaluate(
-    () => (window as unknown as Record<string, unknown>).__test_crypto_rejected,
-  )
-  expect(rejected, 'a locked crypto service must reject the operation').toBe(true)
+Then('it should throw a CryptoException', async ({ adminWorld }) => {
+  expect(adminWorld.cryptoRejected, 'a locked crypto service must reject the operation').toBe(true)
 })

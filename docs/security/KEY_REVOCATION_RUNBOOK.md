@@ -479,7 +479,7 @@ A recovery group holds K-of-N Shamir shares of a user's PUK seed, enabling accou
    - `shareCommitments[]` — SHA-256 commitments
    - `sigchainLinkHash` — binds this enrollment to a specific PUK generation
 
-7. **Notify holders**: Each holder receives their envelope and commits a liveness proof (signed Ed25519 message, label: `LABEL_RECOVERY_LIVENESS_PROOF`) periodically to prove they still have access to their share.
+7. **Notify holders**: Each holder receives their envelope and proves liveness (Recovery Requests → "Verify my share"): their device signs a fresh server challenge with a key derived from the share itself (`LABEL_RECOVERY_LIVENESS_PROOF`, #2782). Rotation replaces every holder's liveness key, so each holder must prove again before the admin view shows them as healthy.
 
 8. **Decommission old group**: Old share envelopes should be explicitly invalidated in the database.
 

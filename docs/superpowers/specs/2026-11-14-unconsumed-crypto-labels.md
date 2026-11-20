@@ -49,12 +49,13 @@ PR per data class. The issues below are those PRs' briefs.
 | **S2, by design / already tracked** | 1 | `HMAC_EVENT_TYPE` (type = plaintext `entityTypeId`; meaning leaks via #2191) |
 | **S1: under another label, and the label is wrong for the data** | 2 | `LABEL_TRANSCRIPTION` (#2781) · `LABEL_EVENT_DETAILS` (iOS path; #1683) |
 | **S1: under another label, correctly separated** | 12 | `HKDF_CONTEXT_NOTES`, `HMAC_SUBSCRIBER`, `RECOVERY_SALT`, `LABEL_SERVER_NOSTR_KEY`, `LABEL_SERVER_NOSTR_KEY_INFO`, `LABEL_SERVER_NOSTR_SIGNING_KEY`, `LABEL_SERVER_NOSTR_SIGNING_KEY_INFO`, `HMAC_CONTACT_NAME`, `NOSTR_EVENT_TAG`, `LABEL_PROVISION_PREFIX`, `LABEL_LOCKDOWN_INTENT`, `LABEL_FIREHOSE_REPORT_WRAP` |
-| **S3: not built** | 9 | `LABEL_SHIFT_SCHEDULE`¹, `LABEL_CROSS_HUB_SHARE`, `HMAC_CONTACT_TAG`, `HMAC_CASE_CATEGORY`, `LABEL_ITEMS_KEY_EXPORT`, `LABEL_NOTE_EPOCH_KEY`, `LABEL_HUB_PTK_PREV_GEN`, `LABEL_MLS_PROVISION`, `LABEL_RECOVERY_LIVENESS_PROOF` (#2782: the endpoint is live and accepts any proof) |
+| **S3: not built** | 8 | `LABEL_SHIFT_SCHEDULE`¹, `LABEL_CROSS_HUB_SHARE`, `HMAC_CONTACT_TAG`, `HMAC_CASE_CATEGORY`, `LABEL_ITEMS_KEY_EXPORT`, `LABEL_NOTE_EPOCH_KEY`, `LABEL_HUB_PTK_PREV_GEN`, `LABEL_MLS_PROVISION` |
+| **Consumed since** | 1 | `LABEL_RECOVERY_LIVENESS_PROOF` (#2782: share-derived liveness proofs, verified by the server) |
 
 ¹ The field `LABEL_SHIFT_SCHEDULE` names does not exist, but two security documents claim it is
 E2EE; see its row.
 
-Total: 7 + 1 + 2 + 12 + 9 = 31.
+Total: 7 + 1 + 2 + 12 + 8 + 1 = 31 (counted when written; one has since been consumed).
 
 ## Per-label table
 
@@ -98,7 +99,7 @@ the JSON).
 | `LABEL_HUB_PTK_PREV_GEN` · 49 | S3 | `derive_hub_ptk` exists (`packages/crypto/src/mls.rs:324-331`, `LABEL_HUB_PTK`). No generation chain or rotation wrap exists. |
 | `LABEL_MLS_PROVISION` · 52 | S3 | MLS key packages are generated (`mls.rs:130`) and are public by design. No sealed MLS provisioning bundle exists. |
 | `RECOVERY_SALT` · 22 | S1, vestigial | The recovery key derives through HKDF with a random per-backup salt and `LABEL_BACKUP_HKDF_INFO` (`packages/crypto/src/backup.rs:54,282`), not a fixed PBKDF2 salt. **Test misuse:** `tests/steps/backend/recovery-group.steps.ts:134,438,454,467` pass the raw literal `'llamenos:recovery'` when building fake share and PUK-seed envelopes. That is a raw label string, and the wrong label for those wraps (`LABEL_RECOVERY_GROUP_SHARE_WRAP`, `LABEL_RECOVERY_PUK_SEED_WRAP`). The fixtures are opaque to the server, so nothing breaks, but they model the wrong construction. |
-| `LABEL_RECOVERY_LIVENESS_PROOF` · 76 | S3 on clients, **live endpoint accepts anything: #2782** | `submitLivenessProof` (`apps/worker/services/recovery-group.ts:1085-1117`) never reads `proof` (the schema is `z.string()`). No client calls `submitShareLivenessProof` (iOS `APIService.swift:999`, Android `ApiService.kt:559`). Three admin UIs show `lastLivenessProof` as holder health. |
+| `LABEL_RECOVERY_LIVENESS_PROOF` · 76 | **Consumed (#2782)** | Was: `submitLivenessProof` never read `proof`. Now `packages/crypto/src/recovery_liveness.rs` uses it as the HKDF info deriving each share's liveness key and as the prefix of the signed challenge message; the server verifies through `ffi_recovery_liveness_verify`. |
 
 ### Server identity, transport, provisioning, lockdown, blasts
 

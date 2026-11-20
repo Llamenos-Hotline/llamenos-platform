@@ -305,6 +305,17 @@ When("the caller's queue wait ends without an answer", async ({ request, world }
   })
 })
 
+When('the caller finishes leaving a voicemail', async ({ request, world }) => {
+  const s = signed(world)
+  const res = await deliver(request, s.secret, `/api/telephony/voicemail-recording?hub=${s.hubId}&callSid=${s.callSid}&lang=en`, {
+    status: 'completed',
+    // With a handle the server deletes the audio at the provider, as it does for a real
+    // one; a recording it cannot address is kept as residue and blocks deleting the hub.
+    recordingSid: `RE-${s.callSid}`,
+  })
+  expect(res.status, `/voicemail-recording: ${res.body}`).toBe(200)
+})
+
 When('the caller hangs up while queued', async ({ request, world }) => {
   const s = signed(world)
   s.queueExit = await deliver(request, s.secret, `/api/telephony/queue-exit?hub=${s.hubId}&callSid=${s.callSid}&lang=en`, {
@@ -473,6 +484,23 @@ Then('the call is in progress and answered by the volunteer whose leg was bridge
   expect(call.answeredBy).toBe(volunteerAt(world, winner!.volunteer).pubkey)
 })
 
+Then('the call is no longer ringing and nobody is on it', async ({ request, world }) => {
+  const s = signed(world)
+  const call = await callFromApi(request, s)
+  expect(call.status, 'a caller who left the queue for voicemail must not read as ringing').not.toBe('ringing')
+  expect(call.status).toBe('unanswered')
+  expect(call.answeredBy).toBeNull()
+  // Still the live row — the voicemail is being recorded on it — but not an answerable one.
+  expect(await TestDB.getActiveCallRouting(s.callSid!)).not.toBeNull()
+})
+
+Then("the hub's active calls do not list the call", async ({ request, world }) => {
+  const s = signed(world)
+  const { status, data } = await apiGet<{ calls: Array<{ id: string }> }>(request, `/hubs/${s.hubId}/calls/active`)
+  expect(status).toBe(200)
+  expect(data.calls.map(c => c.id)).not.toContain(s.callSid)
+})
+
 Then('the call is still ringing with nobody on it', async ({ request, world }) => {
   const call = await callFromApi(request, signed(world))
   expect(call.status).toBe('ringing')
@@ -521,6 +549,12 @@ Then('the hub audit log records volunteer {int} answering the call', async ({ re
   const { entries } = await listAuditLogViaApi(request, { hubId, limit: 100 })
   const answered = entries.filter(e => e.action === 'callAnswered')
   expect(answered.map(e => e.actorPubkey), 'callAnswered entries').toEqual([volunteerAt(world, index).pubkey])
+})
+
+Then('the hub audit log does not record the call being answered', async ({ request, world }) => {
+  const { hubId } = signed(world)
+  const { entries } = await listAuditLogViaApi(request, { hubId, limit: 100 })
+  expect(entries.some(e => e.action === 'callAnswered'), `actions: ${entries.map(e => e.action).join(', ')}`).toBe(false)
 })
 
 Then('the hub audit log records the call as missed', async ({ request, world }) => {

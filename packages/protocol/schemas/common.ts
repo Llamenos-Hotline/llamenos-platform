@@ -77,6 +77,27 @@ export const errorResponseSchema = z.object({
 
 export type ErrorResponse = z.infer<typeof errorResponseSchema>
 
+/**
+ * The machine-readable `code` of the one answer that means "this hub does not
+ * exist" (#2872). It is what a client may act on by forgetting the hub; the
+ * `error` prose beside it is for people and may be reworded or translated freely.
+ *
+ * Only a lookup of the hub row by its id that finds nothing may carry it. A 403
+ * (you cannot see this hub), a 404 for something inside a hub, and an update that
+ * matched no rows all lack it — and a client must require status 404 AND this code,
+ * so an authorization change can never be read as the hub being gone.
+ */
+export const HUB_NOT_FOUND_CODE = 'HUB_NOT_FOUND' as const
+
+/** The one value of `code` that means the hub is gone — a named type so mobile codegen names it. */
+export const hubNotFoundCodeSchema = z.enum([HUB_NOT_FOUND_CODE])
+
+/** `errorResponseSchema` narrowed to the hub-is-gone answer; its `code` is mandatory. */
+export const hubNotFoundResponseSchema = errorResponseSchema.extend({
+  code: hubNotFoundCodeSchema,
+})
+export type HubNotFoundResponse = z.infer<typeof hubNotFoundResponseSchema>
+
 /** Paginated response metadata — used across domains */
 export const paginatedMeta = {
   total: z.number(),

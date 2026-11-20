@@ -806,6 +806,21 @@ readersFor(hub, purpose) =
 |----------------|--------------------------------------------|-------------------|
 | `admin`        | `settings:manage` + `notes:read-all` (the admin minimum) | D1 |
 | `call-history` | `calls:read-history`                       | D2 |
+| `shift-overrides` | `shifts:manage-overrides`              | #2778 |
+
+**Subject readers.** Some records are additionally sealed to the one member
+they are *about*. A subject reader purpose maps to permissions in
+`SUBJECT_READER_PURPOSE_PERMISSIONS` (`packages/shared/permissions.ts`), and its
+reader set is the subject's own registered X25519 device keys, present only
+when the subject holds those permissions through their roles in the record's
+hub (same candidate filter as above). It is never a set of all holders, so it
+is not a value of `GET /api/hubs/:hubId/readers?purpose=`, and it is not part of
+the escrow-setter requirement. It only ever ADDS to a hub-wide set; it does not
+replace one.
+
+| Subject purpose    | Subject                          | Permissions held in the hub | Operator decision |
+|--------------------|----------------------------------|-----------------------------|-------------------|
+| `call-history-own` | the volunteer who answered a call | `calls:read-own-history`   | D3 (#1342) |
 
 Rules:
 
@@ -886,7 +901,13 @@ No part of the caller's number is on this list: the last four digits are not sto
 
 #### Algorithm
 
-Same envelope pattern as per-message encryption but using `LABEL_CALL_META` and admin-only recipients. A call record has no hub, so the server seals it to the transitional instance key `ADMIN_DECRYPTION_PUBKEY` alone (in no hub reader set, §2.4.2); super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
+Same envelope pattern as per-message encryption but using `LABEL_CALL_META`. Every call belongs to a hub (#2460), and when it ends the server seals its record, per call, to the union (deduplicated) of (§2.4.2):
+
+- the hub's `admin` reader set, plus the transitional instance key `ADMIN_DECRYPTION_PUBKEY` (in no reader set);
+- the hub's `call-history` reader set (holders of `calls:read-history`, D2);
+- the `call-history-own` subject readers: the answering volunteer's own devices, when they hold `calls:read-own-history` in the hub (D3, #1342). No other volunteer's.
+
+The wire field keeps its name, `adminEnvelopes`; each envelope names the key it is sealed to, so a reader finds its own by `pubkey`. Readers are fixed when the call ends. Super-admins are never recipients (the admin invariant in §4.15 is the one definition of who an admin is and who reads):
 
 ```
 encryptCallRecordForStorage(metadata_object, admin_x25519_pubkey_hexes[]):
@@ -1000,81 +1021,123 @@ decryptStoredKey(pin):
 
 ### 2.7 Hub Key Management
 
-Each hub has a random symmetric key used for hub-wide broadcast encryption. The hub key is NOT derived from any identity key -- it is pure random bytes.
+Each hub has a random symmetric key. It seals the hub's tag and team labels, the names of the hub's own roles (`LABEL_HUB_ROLE_ENCRYPT`; §4 "Roles (PBAC)") and note exports, and is the key `decrypt_hub_event` uses. The hub key is NOT derived from any identity key -- it is pure random bytes.
+
+A device holds **one key per hub it belongs to**, keyed by hub id (desktop `CryptoState::hub_keys`, mobile `hub_keys` in the crate's FFI state). Never a single "current" key: a user can be a member of several hubs at once, and a single slot would seal one hub's data under whichever hub's key was loaded last.
 
 #### Key Generation
 
 ```
-hub_key = crypto.getRandomValues(new Uint8Array(32))
-// 32 random bytes
+hub_key = random(32)   // in Rust, on a manager's device; never leaves Rust
 ```
+
+A manager generates a hub's key only when the hub holds **no wrap for anyone** (`GET /api/hubs/:hubId/key/recipients` returns `envelopes: []`). Generating while a key exists would replace the key every other member holds.
 
 #### Distribution
 
-The hub key is wrapped individually for each hub member using HPKE. Clients compute envelopes and upload them via `PUT /api/hubs/:hubId/key`:
+Wraps are HPKE (§2.2) under `LABEL_HUB_KEY_WRAP`, in the wire encoding (hex `enc`/`ct`). The label, its registry `labelId` and the AAD are fixed by the crate -- `encryption::hpke_wrap_key` / `hpke_unwrap_key` -- which every platform calls; no client passes them:
 
 ```
-wrapHubKeyForMembers(hub_key[32], member_x25519_pubkey_hexes[]):
-
-  envelopes = []
-  for each member_x25519_pubkey_hex in member_x25519_pubkey_hexes:
-    sealed = HPKE.Seal(
-      recipientPk = hex_to_bytes(member_x25519_pubkey_hex),
-      plaintext   = hub_key,
-      info        = UTF-8("llamenos:hub-key-wrap"),
-      aad         = UTF-8("llamenos:hub-key-wrap:key-wrap")
-    )
-    envelopes.push({
-      pubkey: member_x25519_pubkey_hex,   // 64 hex chars
-      enc:    hex(sealed[0..32]),
-      ct:     hex(sealed[32..])
-    })
-  return envelopes
-```
-
-Members fetch their envelope from `GET /api/hubs/:hubId/key` and unwrap:
-
-```
-unwrapHubKey(envelope: RecipientEnvelope, device_x25519_secret_key[32]):
-  enc_bytes = hex_to_bytes(envelope.enc)
-  ct_bytes  = hex_to_bytes(envelope.ct)
-  return HPKE.Open(
-    recipientSk = device_x25519_secret_key,
-    enc         = enc_bytes,
-    ciphertext  = ct_bytes,
+wrap(hub_key[32], member_device_x25519_pubkey_hex):
+  sealed = HPKE.Seal(
+    recipientPk = hex_to_bytes(member_device_x25519_pubkey_hex),
+    plaintext   = hub_key,
     info        = UTF-8("llamenos:hub-key-wrap"),
     aad         = UTF-8("llamenos:hub-key-wrap:key-wrap")
   )
-  // Returns hub_key: 32 bytes
+  return { enc: hex(sealed.enc), ct: hex(sealed.ct) }
 ```
+
+An envelope is **sealed to** the member's device X25519 key and **filed under** the member's Ed25519 user pubkey -- `{ pubkey: <user pubkey>, enc, ct }` -- because that is the identity the server authenticates and `GET /key` looks the wrap up by. (Sealing to the Ed25519 key "works" and opens for nobody, #1021.) One wrap per user: a user with several devices can open it on one of them, which is the single-device pilot's model.
+
+`GET /api/hubs/:hubId/key/recipients` -- requires `hubs:manage-keys` **or hub admin, in the hub's own roles**. A super-admin with no role in the hub is refused (D1). Hub admin counts because the invariant guarantees every hub one, and nothing guarantees a `hubs:manage-keys` holder: a new hub's founder gets the smallest role that confers hub-admin. Read in one snapshot:
+
+```
+{ generation: int,              // hubs.hub_key_generation, the envelope set's version
+  epoch:      int,              // hubs.hub_key_epoch: which KEY the wraps hold (0, +1 per rotation)
+  rotation:   { proof, check } | null,   // the statement that introduced `epoch` (Key Rotation)
+  envelopes:  RecipientEnvelope[],   // every wrap held, for current members
+  members:    [{ pubkey, encryptionPubkey | null }],   // device key to wrap for
+  rotationRequired: bool,       // someone who held the current key has left
+  sealed?:    { tags, teams, roles } }   // present iff rotationRequired: every hub-sealed value
+```
+
+`PUT /api/hubs/:hubId/key` -- `{ envelopes, expectedGeneration }`, same authority. A **compare-and-set**: it succeeds only if the hub is still at `expectedGeneration`, replaces the set, and moves the generation forward by one in the same statement; otherwise **409**. So of two managers who each generated a first key at once, exactly one key is installed, and the loser drops its key and loads the winner's. A shred also moves the generation, so a replayed write cannot re-install a destroyed key. Hub-key writes are never queued for offline replay.
+
+A distributor re-sends the existing `envelopes` unchanged and adds wraps only for members who lack one, so distributing never takes anyone's access away. It wraps the key **it already holds**, never one re-opened from what the server returns at that moment: anyone can seal a key to a device's public key, so re-opening the server's copy would let a server swap in a key it chose. A held key is never replaced -- except by a rotation the device has verified (Key Rotation, below). A distributor first confirms that the key it holds opens the current `rotation.check` (it holds this epoch's key), and distributes nothing while `rotationRequired`: the key a departed member still knows is not handed to anyone new.
+
+Members fetch their wrap from `GET /api/hubs/:hubId/key` (404 when none) and open it:
+
+```
+unwrap(envelope, device_x25519_secret_key[32]):
+  return HPKE.Open(recipientSk = device_x25519_secret_key,
+                   enc = hex_to_bytes(envelope.enc), ciphertext = hex_to_bytes(envelope.ct),
+                   info = UTF-8("llamenos:hub-key-wrap"),
+                   aad  = UTF-8("llamenos:hub-key-wrap:key-wrap"))
+  // hub_key: 32 bytes, held in Rust under the hub id
+```
+
+**Desktop lifecycle** (`src/client/lib/hub-key-manager.ts`): for every member hub, on sign-in, on a membership change and on every relay (re)connect -- load; if nobody holds a key and this user manages the hub, generate and wrap for every member with a device key; adopt a rotation that replaced the held key; if this user manages the hub, rotate the key if `rotationRequired`, then add wraps for members who lack one. The same sync runs right after an admin action that can make someone leave a hub (a role change, deactivation, deletion). A hub this user is no longer a member of has its key dropped from CryptoState. Creating a hub generates its key at once. Sealing a hub field loads the key on demand and refuses (`HubKeyUnavailableError`) rather than write anything the hub cannot read -- there is no plaintext fallback. A member who joins while no manager's device is online cannot read hub-sealed data until one comes online; that is inherent to a zero-knowledge distribution.
+
+**Trust.** The device keys a distributor wraps for come from the server's device registry, as for every envelope in §2.4.1. Until the user sigchain is wired, a client cannot verify them independently: a server that lists a key it holds for a member receives the hub key.
 
 #### Hub-Wide Encryption / Decryption
 
 ```
-encryptForHub(plaintext_string, hub_key[32]):
+encryptForHub(plaintext_string, hub_key[32], label):
   nonce = random(12)
-  cipher = AES-256-GCM(hub_key, nonce)
-  ciphertext = cipher.encrypt(UTF-8(plaintext_string))
+  ciphertext = AES-256-GCM(hub_key, nonce, aad = UTF-8(label)).encrypt(UTF-8(plaintext_string))
   return hex(nonce || ciphertext)
 
-decryptFromHub(packed_hex, hub_key[32]):
+decryptFromHub(packed_hex, hub_key[32], label):
   data = hex_to_bytes(packed_hex)
-  nonce = data[0..12]
-  ciphertext = data[12..]
-  cipher = AES-256-GCM(hub_key, nonce)
-  plaintext = cipher.decrypt(ciphertext)
-  return UTF-8_decode(plaintext)
+  return UTF-8_decode(AES-256-GCM(hub_key, data[0..12], aad = UTF-8(label)).decrypt(data[12..]))
 ```
 
 #### Key Rotation
 
-On member departure:
+When someone who held a hub's key leaves, the key is replaced with a fresh one that is wrapped for the remaining members only, and everything the hub holds sealed under the old key is re-sealed under the new one. The departed member is not among the new wraps, so nothing sealed afterwards -- and nothing the server holds afterwards -- opens for them.
 
-1. Generate a new random hub key.
-2. Wrap it for all **remaining** members (excluding the departed member).
-3. Store new envelopes via `PUT /api/hubs/:hubId/key`.
-4. Re-encrypt any hub-scoped data with the new key.
-5. Distribute via `GET /api/hubs/:hubId/key`.
+**Trigger (server).** Every path that takes a wrap away from someone who held one sets `hubs.hub_key_rotation_due` in the same transaction: removal from the hub (`IdentityService.removeHubRole`), erasure (`ErasureService`), and a `PUT /key` whose new set drops a previous holder. With the wrap deleted, the flag is the only record that the departure happened. `rotationRequired` in `GET /key/recipients` is that flag **or** a wrap still held by someone who is no longer an actionable member (deactivated, deleted, signing key revoked) -- either way someone outside the hub knows the current key.
+
+**Rotation (a manager's device).** A manager whose device holds the current key, on seeing `rotationRequired`:
+
+```
+new_key   = random(32)                         // in Rust, a staging CryptoState slot; never derived
+envelopes = [ wrap(new_key, m.encryptionPubkey) for m in members if m.encryptionPubkey ]
+resealed  = for each value v in `sealed`:  { from: v, to: encryptForHub(decryptFromHub(v, old_key, L), new_key, L) }
+                                           // L = the value's own label; a value that does not open
+                                           // under old_key is carried unchanged
+check     = encryptForHub(JSON{ hubId, epoch: epoch + 1 },        new_key, LABEL_HUB_KEY_ROTATION)
+proof     = encryptForHub(JSON{ hubId, epoch: epoch + 1, check }, old_key, LABEL_HUB_KEY_ROTATION)
+POST /api/hubs/:hubId/key/rotate { expectedGeneration, envelopes, rotation: { proof, check }, resealed }
+```
+
+`POST /api/hubs/:hubId/key/rotate` -- same authority as `PUT /key`, one transaction, refusing with no trace left:
+
+- **409** unless the hub is still at `expectedGeneration` (the same compare-and-set as `PUT /key`), and not shredded.
+- **403** for a wrap addressed to anyone who is not a current member -- the departed member above all.
+- **409** unless the wraps address **exactly** the current members that have a device key. A rotation cannot drop anyone, so it cannot orphan the hub's content from an admin.
+- **409** unless `resealed` names every tag, team and hub-role value the hub holds (locked for the transaction), each `from` identical to what is stored -- otherwise a value would be left under a key nobody holds.
+
+On success it replaces the wraps and the values, moves the generation and `hubs.hub_key_epoch` on by one, stores `{ proof, check }`, clears the flag, and audits `hubKeyRotated`. The client never distributes while a rotation is due, and rotates before it distributes.
+
+**Adoption (every member's device).** `GET /api/hubs/:hubId/key/rotation` (any member) returns `{ epoch, rotation: { proof, check } | null }`. A device holding a key:
+
+```
+if epoch == 0 or rotation == null:          held key is current
+elif open(check, held_key) == {hubId, epoch}: held key is current
+elif open(proof, held_key) == {hubId, epoch, check}:
+    open this device's wrap (GET /key) into a staging slot
+    adopt it only if open(check, staged_key) == {hubId, epoch}
+else:                                         unverifiable -- keep the held key, adopt nothing
+```
+
+The server has never held a hub key, so it cannot write a `proof` that opens under the old key, nor a `check` that opens under a key of its own choosing: a device never adopts a key the server picked. A device that is two or more rotations behind cannot verify the chain and keeps its key until its next unlock, when it loads its wrap exactly as on first load. A value that does not open under the held key prompts an adoption, and a device confirms its key is current before it seals anything new (`encryptForHub` refuses to seal under a rotated-out key).
+
+**What rotation does not do.** It cannot take back what a departed member already copied: values they read before leaving, and anything they kept under the old key. It removes their access to everything stored or sealed after it. Until a manager's device runs it, the old key stays current -- the removing admin's device rotates at once, but a departure by an instance admin with no role in the hub (D1) waits for a hub admin's device to come online. And the trust caveat above applies here too: a server that lists a device key it holds for a member is given the new key, and a departed member who colluded with the server could write a `proof` (they know the old key); neither gives the server anything the device-registry trust does not already.
+
+**Not yet on mobile (#2831).** iOS and Android load the current key at unlock and do not adopt a rotation within a session: a mobile device that was unlocked across a rotation cannot open re-sealed values until its next unlock, and an iOS tag written in that window is sealed under the old key. Android's hub-switch refresh also replaces a held key with whatever wrap the server returns, without the verification above.
 
 ### 2.8 WebSocket Event Encryption
 
@@ -1176,20 +1239,37 @@ hashIP(ip_string, hmac_secret_hex):
 
 #### Ban Hashing
 
-The server stores a hash of a number **only if that number is banned**. A caller who is not banned is hashed transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+The server stores a digest of a number **only if that number is banned**. A caller who is not banned is digested transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+
+The digest is an oblivious PRF (RFC 9497, mode `0x00` OPRF, suite `ristretto255-SHA512`), implemented once in `packages/crypto/src/ban_digest.rs` (#2759). Two parties compute it:
+
+- **The server**, from a caller identifier it already holds (an inbound call; a call's sealed number when a volunteer bans from the call), with `Evaluate`.
+- **An admin's client**, for a number the admin types, without the server ever receiving it: the client `Blind`s the number, the server `BlindEvaluate`s the blinded element (§4.47 `/evaluate`, `/search/evaluate`), and the client `Finalize`s the answer. No client holds the key, so nobody with the stored digests but not `BAN_HASH_KEY` can enumerate the (small) phone-number space offline; the evaluate endpoints are the only oracle, and they are permission-checked, rate-limited and audited.
 
 ```
-banHash(phone_e164, scope, ban_hash_key_hex):
+banDigest(identifier, scope, ban_hash_key_hex):
   // scope = the hub id, or the literal "platform"
-  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(ban_hash_key_hex),
-                          salt = "",
-                          info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope),
-                          len  = 32)
-  input = UTF-8(HMAC_BAN_PREFIX + phone_e164)
-  return hex(HMAC-SHA256(scope_key, input))
+  sk_scope = OPRF.DeriveKeyPair(seed = hex_to_bytes(ban_hash_key_hex),
+                                info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope)).skS
+  input    = UTF-8(HMAC_BAN_PREFIX + identifier)
+  return hex(OPRF.Evaluate(sk_scope, input))        // 64 bytes -> 128 hex chars
+
+client, for a typed number (refused unless E.164 `^\+\d{7,15}$`; never normalised):
+  (blind, blindedElement) = OPRF.Blind(input)       // send hex(blindedElement), 32 bytes
+  evaluatedElement        = <server: OPRF.BlindEvaluate(sk_scope, blindedElement)>
+  phoneHash               = hex(OPRF.Finalize(input, blind, evaluatedElement))
 ```
 
-A hub's hash cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again (§4.47). Neither the ban store nor any ban response carries digits of the number.
+`phoneHash` is the one name of this value on every platform and in every body and response. A hub's digest cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again, digested under both scopes (§4.47). Neither the ban store nor any ban request or response carries digits of the number.
+
+**Key continuity and re-entry (#2829).** A stored digest is valid only under the `BAN_HASH_KEY` it was made with, and it can never be recomputed: the server did not keep the number, and that is the point of the OPRF. Two things therefore end a ban's enforcement, and neither may happen silently:
+
+- the digest scheme changed (the HMAC → OPRF switch), or
+- `BAN_HASH_KEY` is not the key the stored digests were made under (a key file lost and regenerated, or restored wrongly).
+
+The server records `banKeyFingerprint(key) = hex(OPRF.Evaluate(DeriveKeyPair(seed, "LABEL_BAN_KEY_DERIVE:ban-key-fingerprint"), "llamenos:ban-key-fingerprint:v1"))` in `ban_key_check` and compares it at every boot (`RecordsService.reconcileBanKey`). A different key makes the server **refuse to boot**, naming the operator's way out: restore the original key, or — when the replacement is deliberate — boot once with `BAN_KEY_REPLACED_ACK=<the new key's fingerprint>`. A first boot with no recorded fingerprint and bans already stored is the scheme change. In both acknowledged cases every ban is **moved** from `bans` to `ban_reentries` in one transaction: its digest is dropped, and only the non-identifying context (when, by whom, the admin's note, the cause) is kept. No migration re-digests a ban and no row is left in `bans` that reads as enforced and matches nothing; keeping the old HMAC column to match on either is not an option, as it is the enumerable value the OPRF replaces.
+
+The retired bans reach the admin through the list they already read: `GET /hubs/:hubId/bans` and `GET /admin/bans` carry `reentries[]` (`banReentryResponseSchema`: `id`, `reason`, `bannedBy`, `bannedAt`, `cause` = `digest-scheme` | `key-replaced`, `retiredAt`), and `DELETE …/bans/reentries/:id` (`bans:delete` / `bans:delete-platform`, audited `banReentryDismissed`) removes one once its number is banned again.
 
 #### Messaging Thread Hashing
 
@@ -1514,6 +1594,49 @@ Case records and comments written before #2499 by desktop or Android
 (`LABEL_MESSAGE`, no AAD) and comments written by Android (sealed as notes) do not
 open under this construction. Pre-production: no migration or fallback reader is
 provided.
+
+### 2.19 Availability Reasons and Shift Override Notes
+
+Two shift rows carry a sentence a person typed: an availability block's **reason**
+(`encryptedReason`, why a volunteer cannot take shifts) and a shift override's
+**note** (`encryptedNote`, why a shift is cancelled or who covers it). Both are
+client-sealed with the §2.18 construction, differing only in the label:
+
+| Purpose | Label | Registry `labelId` |
+|---------|-------|--------------------|
+| availability reason | `LABEL_AVAILABILITY_REASON` (`llamenos:availability-reason`) | 81 |
+| override note | `LABEL_SHIFT_OVERRIDE_NOTE` (`llamenos:shift-override-note`) | 84 |
+
+On the wire each is one object, `SealedShiftField`, or `null` when there is no text:
+
+```
+SealedShiftField = { "encryptedContent": hex, "envelopes": RecipientEnvelope[] (≥ 1) }
+  encryptedContent = hex(iv(12) || AES-256-GCM(content_key, plaintext, aad = UTF-8(label)) || tag(16))
+  envelope.ct      = HPKE(info = label, aad = UTF-8(label + ":key-wrap")).Seal(content_key)
+```
+
+A bare string is **refused** (400). Both fields used to be `z.string()` and the only
+writer (iOS) sent the typed text, so two columns named `encrypted_*` held plaintext
+(#2777, #2778); the migration that introduced envelopes scrubbed every such value.
+The server stores the object as two columns (`encrypted_reason` + `reason_envelopes`,
+`encrypted_note` + `note_envelopes`) and returns it unchanged; a row with only one of
+the two reads as `null`.
+
+**Readers.** The sealing device is always a reader. The others are the hub's
+`admin` reader set (§2.4.2) — and, for an override note, the `shift-overrides` set,
+whose holders can list overrides without being admins. An availability reason is
+sealed to admins only: the route that lists every block requires `shifts:manage`,
+which only a `shifts:*` or `*` wildcard grants, so admins are exactly who can read
+reasons today; a reason is never sealed to every hub member. A client with no
+`admin` reader refuses to write. The server refuses (422) a field whose envelopes
+name no admin recipient, and 503 when the hub has no admin recipient at all (§4.7
+write guard, `assertAdminCanRead`). The note is never written to the audit log.
+
+**Where the decision lives.** `packages/crypto/src/shift_record.rs`, reached through
+an operation that takes a purpose (`availability-reason`, `override-note`) and no
+label or AAD: `mobile_seal_shift_field` / `mobile_open_shift_field` on iOS and
+Android. A reason opens as no note and a note as no reason, and neither opens as a
+case ciphertext. Desktop and Android do not collect either field yet.
 
 ---
 
@@ -1993,6 +2116,20 @@ Response: { "ok": true }
 
 Hub-scoped: All shift endpoints are also available at `/api/hubs/:hubId/shifts/*`.
 
+**Clock-in, heartbeat and who rings (#1142).** A call rings the volunteers who are *scheduled now* **and** *clocked in* to that hub (`scheduled_now ∩ clocked_in`); when that set is empty the hub's fallback group rings. A clock-in only counts while its heartbeat is fresh:
+
+```
+POST /api/hubs/:hubId/shifts/clock-in
+POST /api/hubs/:hubId/shifts/clock-out
+POST /api/hubs/:hubId/shifts/heartbeat
+Permission: shifts:set-availability
+Response: { "ok": true }   (heartbeat: 404 when not clocked in, or when the clock-in is already stale)
+```
+
+- A clock-in is per hub; a user may hold several at once and each is judged on its own. A client sends a heartbeat to **every** hub it is clocked into, every 30 s (`ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS`, `packages/shared/active-shift-liveness.ts`). It learns which hubs those are from `GET /api/hubs/:hubId/shifts/my-status` (`clockedIn`) on each member hub, and never beats a hub that status reports it is not clocked into: a heartbeat is a liveness signal for a clock-in that exists, and the 404 it would get is a refusal, not a probe. A 404 or 403 to a beat is final for that clock-in — the client stops beating that hub until `my-status` reports a fresh clock-in.
+- A clock-in whose last heartbeat is older than the server's stale window (default 5 min, `ACTIVE_SHIFT_STALE_AFTER_MINUTES`; at least three heartbeats) is **stale**: it is not rung, not shown as clocked in (`my-status`, the admin roster) and not counted as coverage. A heartbeat does not revive a stale clock-in; the volunteer clocks in again.
+- A scheduler worker deletes stale rows every `ACTIVE_SHIFT_REAP_INTERVAL_SECONDS` (default 60) and audits each as `shiftClockOut` with `reason: heartbeat_stale`.
+
 ### 4.7 Notes
 
 All note endpoints require `notes:read-own` baseline. Clients must encrypt notes before sending (Section 2.3).
@@ -2050,9 +2187,27 @@ GET /api/calls/presence
 Permission: calls:read-presence
 Response: { "volunteers": [...] }
 
-GET /api/calls/history?page=1&limit=50&search=&dateFrom=&dateTo=
-Permission: calls:read-history
-Response: { "calls": EncryptedCallRecord[], "total": number }
+GET /api/hubs/:hubId/calls/history?page=1&limit=50&search=&status=&dateFrom=&dateTo=
+Permission: calls:read-history or calls:read-own-history
+Response: { "calls": EncryptedCallRecord[], "total": number, "page": number, "limit": number,
+            "access": { "scope": "all" }
+                    | { "scope": "own", "windowDays": number, "availableSince": ISO-8601 } }
+// calls:read-history: every finished call of the hub, scope "all".
+// Otherwise calls:read-own-history (#1342): only the calls the caller answered whose answer time
+// is at or after availableSince = server now − the hub's volunteerAccessDays, bounded in the same
+// query as the hub and the filters (total and pages describe exactly that set). `access` is always
+// present: a client with scope "own" says "calls older than <windowDays> days are no longer
+// available to you" rather than presenting a short list as the whole history.
+// The window is ACCESS CONTROL, not cryptographic expiry: the volunteer's device key is in the
+// record's envelope (§2.5), so a record already fetched stays decryptable after the window
+// passes. Nothing is deleted; the record stays the admin system of record.
+
+GET /api/hubs/:hubId/calls/:callId
+Permission: calls:read-active
+Response: CallRecord
+// A live call, or a finished one under the same bound as /history: any finished call to a holder
+// of calls:read-history, only the caller's own inside the window to a holder of
+// calls:read-own-history, otherwise 404 (as for an unknown id).
 
 POST /api/calls/:callId/answer
 Permission: calls:answer
@@ -2396,6 +2551,19 @@ PATCH /api/settings/call
 Permission: settings:manage
 Body: partial CallSettings
 Response: { "ok": true }
+
+GET /api/hubs/:hubId/settings/call-history-access
+Permission: settings:manage-calls
+Response: { "volunteerAccessDays": number }   // CallHistoryAccessSettings; 7 when never set
+
+PATCH /api/hubs/:hubId/settings/call-history-access
+Permission: settings:manage-calls
+Body: { "volunteerAccessDays"?: integer 1..365 }   // forPatch: an omitted key changes nothing
+Response: { "volunteerAccessDays": number }
+// Hub-only: there is no platform value. The volunteer call-history ACCESS window (#1342) — how
+// far back a holder of only calls:read-own-history is served their own calls. It is not data
+// retention and never deletes. A change is audited (`callHistoryAccessUpdated`) with
+// oldVolunteerAccessDays and newVolunteerAccessDays.
 ```
 
 #### IVR Languages
@@ -2726,6 +2894,16 @@ GET /api/hubs/:hubId
 Auth: Required (membership checked)
 Response: { "hub": Hub }
 
+GET /api/hubs/:hubId/permissions/me
+Auth: Required (membership checked; 404 unknown hub, 403 no role in it)
+Response: { "hubId": string, "permissions": string[] }
+// The caller's own permissions IN this hub: exactly the set `hubContext` authorises the request with
+// (that hub's role assignment, plus a super-admin's globals). `/auth/me` returns only the account-wide
+// union, which describes no single hub, and `/settings/users/:id/effective-permissions` needs a GLOBAL
+// `users:read` that a member whose roles are all hub-scoped does not hold. Clients gate what they RENDER
+// for the hub being browsed on this; it is browsing context only and never gates call, relay or
+// notification handling, which span every member hub (#1101).
+
 PATCH /api/hubs/:hubId
 Permission: system:manage-hubs
 Body: partial Hub
@@ -2769,16 +2947,37 @@ Response: { "ok": true }
 GET /api/hubs/:hubId/key
 Auth: Required (hub member)
 Response: { "envelope": RecipientKeyEnvelope }
-// Returns only the requesting user's envelope
+// Returns only the requesting user's envelope; 404 when the hub holds none for them (§2.7)
+
+GET /api/hubs/:hubId/key/recipients
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB (a global super-admin's `*` does not count)
+Response: { "generation": int, "epoch": int, "rotation": { "proof", "check" } | null,
+            "envelopes": RecipientKeyEnvelope[], "members": [{ "pubkey", "encryptionPubkey": hex64 | null }],
+            "rotationRequired": bool, "sealed"?: { "tags": [...], "teams": [...], "roles": [...] } }
+// HubKeyRecipientsResponse, read in one snapshot (§2.7). 409 for a shredded hub.
 
 PUT /api/hubs/:hubId/key
-Permission: system:manage-hubs
-Body: { "envelopes": RecipientKeyEnvelope[] }
-Response: { "ok": true }
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB
+Body: { "envelopes": RecipientKeyEnvelope[], "expectedGeneration": int }
+Response: { "ok": true, "generation": int }  // HubKeySetResponse
+// Compare-and-set (§2.7): 409 when the hub is no longer at expectedGeneration, or is shredded.
 
-GET /api/hubs/:hubId/readers?purpose=admin|call-history
+GET /api/hubs/:hubId/key/rotation
 Auth: Required (hub member)
-Response: { "hubId": string, "purpose": "admin" | "call-history", "recipients": hex64[] }  // HubReadersResponse
+Response: { "epoch": int, "rotation": { "proof": hex, "check": hex } | null }  // HubKeyRotationResponse
+// The statement a device verifies under the key it holds before adopting a rotated key (§2.7 Key Rotation).
+
+POST /api/hubs/:hubId/key/rotate
+Authority: hubs:manage-keys OR hub admin, held through roles IN THIS HUB
+Body: { "expectedGeneration": int, "envelopes": RecipientEnvelope[], "rotation": { "proof", "check" },
+        "resealed": { "tags": [{ from, to }], "teams": [{ from, to }], "roles": [{ from, to }] } }
+Response: { "generation": int, "epoch": int }  // HubKeyRotateResponse
+// One transaction (§2.7 Key Rotation): 409 on a stale generation, a member left out, a value not
+// re-sealed or changed since the read, or a shredded hub; 403 for a wrap addressed to a non-member.
+
+GET /api/hubs/:hubId/readers?purpose=admin|call-history|shift-overrides
+Auth: Required (hub member)
+Response: { "hubId": string, "purpose": "admin" | "call-history" | "shift-overrides", "recipients": hex64[] }  // HubReadersResponse
 // The hub's reader set for the purpose (§2.4.2): X25519 device keys of every member holding the
 // purpose's permissions in this hub's own role assignments, then the hub escrow key. Never an Ed25519
 // identity key, never ADMIN_DECRYPTION_PUBKEY, never a super-admin's device unless it holds the
@@ -3102,6 +3301,11 @@ Hub-only: there is no unscoped `/api/contacts` (#2395).
 E2EE contact directory with affinity groups and relationships. Mounted at `/api/directory`. Hub-scoped only.
 
 ```
+GET    /api/hubs/:hubId/directory/envelope-recipients
+Permission: contacts:view | contacts:create | contacts:edit | contacts:manage-relationships | contacts:manage-groups
+Response: { "summary": hex[], "pii": hex[], "admin": hex[] }
+Errors: 503 when the hub has no admin reader (no admin device registered and no escrow key)
+
 GET    /api/hubs/:hubId/directory
 Permission: contacts:view
 Query: ?page=&limit=&contactTypeHash=
@@ -3201,6 +3405,16 @@ GET    /api/hubs/:hubId/directory/groups/:groupId/members
 Permission: contacts:view
 Response: { "members": GroupMember[] }
 ```
+
+**Contact readers (#2741).** `GET /api/hubs/:hubId/directory/envelope-recipients` names the X25519 device keys a client seals a contact write to, per tier, so that no client guesses. Like every records recipients route it is hub-only: a hub-only member holds no global role, and a call outside `/hubs/:hubId` is `404` — there is no hubless reader set. Every entry is a registered device's X25519 key or the hub's escrow key, never an Ed25519 identity key, and the tiers are decided by the permissions a member holds IN THAT HUB (their hub role assignments only — a global super-admin's `*` is a reader of no hub), never by a role id or name:
+
+| Tier | Seals | Readers |
+|------|-------|---------|
+| `summary` | `encryptedSummary` | holders of `contacts:view` or `contacts:view-pii`, plus `admin` |
+| `pii` | `encryptedPII` | holders of `contacts:view-pii`, plus `admin` |
+| `admin` | payloads no member below an admin may read (affinity groups, relationships) | holders of the admin minimum (`settings:manage` + `notes:read-all`), plus the hub's escrow key |
+
+`contacts:search` alone is not a reader: it finds a contact, it does not read it. The hub's escrow key is a member of every tier (§2.4.2); setting it therefore requires holding `contacts:view` and `contacts:view-pii` in the hub as well. Contacts have no per-record assignment, so one answer serves create and edit. Every tier contains `admin`: when the hub has no admin reader the server answers `503` rather than name a set without one, and a client MUST refuse to seal to a set holding none. A failed lookup falls back to the sealing device plus the admin key and never to another key (the same contract as §4.31 records).
 
 ### 4.31 Records
 
@@ -3902,30 +4116,46 @@ Permission: bans:read-platform
 Query: ?limit=&offset=
 Response: { "bans": PlatformBan[], "total": number }
 
+POST   /api/admin/bans/evaluate
+Permission: bans:create-platform    // rate-limited per admin; audited (platformBanDigestsEvaluated)
+Body: { "blindedElements": string[] (1..100, 64-hex ristretto255 elements) }
+Response: { "evaluatedElements": string[] }   // in request order, under the platform key
+// 400 for an element that is not a valid group element; 429 when rate-limited.
+
 POST   /api/admin/bans
 Permission: bans:create-platform
-Body: { "phone": string (E.164), "reason": string }
+Body: { "phoneHash": string (128-hex ban digest, §2.10), "reason"?: string }
 Response: { "ok": true }
+// A plaintext "phone" is refused (400): the server never receives the number.
 
 POST   /api/admin/bans/bulk
 Permission: bans:create-platform
-Body: { "phones": string[], "reason": string }
+Body: { "phoneHashes": string[] (1..500), "reason"?: string }
 Response: { "ok": true, "count": number }
 
 DELETE /api/admin/bans/:id
 Permission: bans:delete-platform
 Response: { "ok": true }
 
-GET    /api/admin/bans/search
+POST   /api/admin/bans/search/evaluate
+Permission: bans:read-platform      // rate-limited per admin; audited (platformBanSearchEvaluated)
+Body: { "blindedElement": string }
+Response: { "evaluations": [{ "hubId"?: string, "evaluatedElement": string }] }
+// One per scope: no hubId = the platform, then every hub.
+
+POST   /api/admin/bans/search
 Permission: bans:read-platform
-Query: ?phone=<E.164>
-Response: { "bans": PlatformBan[] }
+Body: { "lookups": [{ "hubId"?: string, "phoneHash": string }] (1..1000) }
+Response: { "bans": [{ id, hubId: string | null, phoneHash, reason, bannedBy, bannedAt }] }
+// Each digest only selects rows of its own scope.
 
 POST   /api/admin/bans/promote
 Permission: bans:create-platform
-Body: { "banId": string, "phone": string (E.164) }
+Body: { "banId": string, "sourcePhoneHash": string, "phoneHash": string }
 Response: { "ok": true }
-// The number is entered again (§2.10): it must hash to the hub ban being promoted, else 400.
+// The number is entered again and digested under the source hub's key and the platform's (§2.10).
+// sourcePhoneHash must equal the stored hub ban, else 400 — a mistyped number cannot ban someone
+// else. phoneHash is what the platform ban stores. The server cannot link the two digests itself.
 ```
 
 ### 4.48 Platform Settings
@@ -4029,6 +4259,9 @@ Body: { hubId, threshold, totalShares, groupPublicKey, shareEnvelopes, shareComm
         rewrappedUserEnvelopes: [{ userPubkey, envelope }] }
 Response: { "ok": true }
 Atomic: replaces the group and re-wraps every user envelope in one transaction.
+Each shareEnvelopes entry (enroll and rotate) is
+  { holderPubkey, shareEnvelope, livenessPublicKey: hex64 }
+where livenessPublicKey is derived from that holder's share — see "Share liveness proofs".
 
 GET  /api/recovery-group/sessions?hubId=<uuid>
 Permission: recovery:view (and membership of the hub)
@@ -4062,10 +4295,15 @@ Auth: Required
 Body: { "hubId": uuid, "envelope": string }
 Response: { "ok": true }
 
+POST /api/recovery-group/shares/liveness/challenge
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid }
+Response: { "challenge": hex64, "expiresAt": iso8601 }   (single use, 5 minutes)
+
 POST /api/recovery-group/shares/liveness
-Permission: recovery:hold-share
-Body: { "hubId": uuid, "proof": string }
-Response: { "ok": true }
+Permission: recovery:hold-share (and current hub membership + enrollment)
+Body: { "hubId": uuid, "challenge": hex64, "proof": hex128 }
+Response: { "ok": true, "verifiedAt": iso8601 }
 
 GET  /api/recovery-group/shares/my?hubId=<uuid>
 Permission: recovery:hold-share (and current hub membership + enrollment)
@@ -4082,6 +4320,35 @@ longer a member of the hub, was never enrolled, or the hub has no recovery
 group, so the route cannot be used to probe enrollment. A holder cannot take part
 in recovery without this route: it is the only way to get the envelope they must
 open to produce a `contribute` payload.
+
+**Share liveness proofs** (#2782) let a holder demonstrate, before any recovery
+is needed, that they can still produce their share — without the share, or
+anything that narrows it, reaching the server. Defined in
+`packages/crypto/src/recovery_liveness.rs`:
+
+```
+seed      = HKDF-SHA256(ikm = x || y, salt = none, info = LABEL_RECOVERY_LIVENESS_PROOF, L = 32)
+(sk, pk)  = Ed25519 keypair from seed            // pk = the holder's livenessPublicKey
+message   = UTF-8(LABEL_RECOVERY_LIVENESS_PROOF) || 0x00
+            || u32be(len(hubId)) || UTF-8(hubId)
+            || u32be(len(holderPubkey)) || UTF-8(holderPubkey)
+            || challenge (32 bytes)
+proof     = Ed25519.sign(sk, message)
+```
+
+The enrolling client computes `livenessPublicKey` per share at split time (the
+share commitment cannot serve: a hash commitment is checkable only by a holder
+of the share). `holderPubkey` is the authenticated caller's signing pubkey. The
+server consumes the challenge atomically before verifying, so a challenge is
+single-use whatever the outcome. An unknown, expired, reused or other-hub
+challenge is `409` and changes nothing. A proof that does not verify is `403`:
+it clears the holder's `lastLivenessProof` and records `lastLivenessFailure`
+(both in `shareHolderLiveness`), so a holder who cannot produce their share
+never reads as healthy. A share row enrolled without a liveness key gets `409`
+from the challenge endpoint until the group is rotated. Clients sign inside
+Rust (`recovery_share_liveness_proof_from_state` on desktop,
+`mobile_recovery_share_liveness_proof` on iOS/Android): the share is opened
+and used without entering the webview, Swift or Kotlin.
 
 ### 4.51 Teams
 
@@ -5789,6 +6056,7 @@ resolvePermissions(role_ids[], all_role_definitions[]):
 | `calls:read-active` | See active calls (caller info redacted) |
 | `calls:read-active-full` | See active calls with full caller info |
 | `calls:read-history` | View call history |
+| `calls:read-own-history` | View the calls you answered, within the hub access window (#1342) |
 | `calls:read-presence` | View volunteer presence |
 | `calls:read-recording` | Listen to call recordings |
 | `calls:debug` | Debug call state |

@@ -10,28 +10,24 @@
  * and the assertions include that the number is NOT on the page or in the API.
  */
 import { expect, type Page } from '@playwright/test'
-import { Given, When, Then } from '../fixtures'
+import { Given, When, Then, type BanWorld } from '../fixtures'
 import { TestIds } from '../../test-ids'
 import { Timeouts } from '../../helpers'
 import { listBansViaApi } from '../../api-helpers'
 
-type TestWindow = Record<string, unknown>
-
-/** Remember the ban reason / numbers a scenario used; rows are located by reason. */
-async function remember(page: Page, key: string, value: unknown): Promise<void> {
-  await page.evaluate(([k, v]) => { (window as unknown as TestWindow)[k as string] = v }, [key, value] as const)
-    .catch(async () => {
-      // Context destroyed due to navigation — wait for page to settle and retry
-      await page.waitForLoadState('domcontentloaded')
-      await page.evaluate(([k, v]) => { (window as unknown as TestWindow)[k as string] = v }, [key, value] as const)
-    })
+/** The phone the scenario's add step recorded — absent means the Given/When never ran. */
+function recordedPhone(banWorld: BanWorld): string {
+  expect(banWorld.phone, 'scenario did not record the phone it banned').toBeTruthy()
+  return banWorld.phone as string
 }
 
-async function recalled<T>(page: Page, key: string): Promise<T> {
-  const value = (await page.evaluate((k) => (window as unknown as TestWindow)[k], key)) as T | undefined
-  expect(value, `scenario did not record ${key}`).toBeTruthy()
-  return value as T
+/** The reason the scenario's add step recorded — ban rows are located by reason. */
+function recordedReason(banWorld: BanWorld): string {
+  expect(banWorld.reason, 'scenario did not record the reason it banned under').toBeTruthy()
+  return banWorld.reason as string
 }
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const banRow = (page: Page, reason: string) => page.getByTestId(TestIds.BAN_ROW).filter({ hasText: reason })
 
@@ -57,11 +53,11 @@ Then('I should see bans or the {string} message', async ({ page }, emptyMsg: str
   }
 })
 
-When('I fill in the phone number', async ({ page }) => {
+When('I fill in the phone number', async ({ page, banWorld }) => {
   const phone = `+1212${Date.now().toString().slice(-7)}`
   await page.getByLabel(/phone/i).fill(phone)
   await page.getByLabel(/phone/i).blur()
-  await remember(page, '__test_ban_phone', phone)
+  banWorld.phone = phone
 })
 
 When('I fill in the phone number with {string}', async ({ page }, phone: string) => {
@@ -69,9 +65,9 @@ When('I fill in the phone number with {string}', async ({ page }, phone: string)
   await page.getByLabel(/phone/i).blur()
 })
 
-Then('the phone number should appear in the ban list', async ({ page, backendRequest: request, workerHub }) => {
-  const phone = await recalled<string>(page, '__test_ban_phone')
-  const reason = await recalled<string>(page, '__test_ban_reason')
+Then('the phone number should appear in the ban list', async ({ page, backendRequest: request, workerHub, banWorld }) => {
+  const phone = recordedPhone(banWorld)
+  const reason = recordedReason(banWorld)
 
   // UI: the ban is listed by its reason, and the number is nowhere on the row.
   await expect(banRow(page, reason).first()).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -84,15 +80,15 @@ Then('the phone number should appear in the ban list', async ({ page, backendReq
   expect(found).not.toHaveProperty('phone')
 })
 
-When('I add a ban with reason {string}', async ({ page }, reason: string) => {
+When('I add a ban with reason {string}', async ({ page, banWorld }, reason: string) => {
   await page.getByTestId(TestIds.BAN_ADD_BTN).click()
   const phone = `+1212${Date.now().toString().slice(-7)}`
   await page.getByLabel(/phone/i).fill(phone)
   await page.getByLabel(/phone/i).blur()
   await page.getByLabel(/reason/i).fill(reason)
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
-  await remember(page, '__test_ban_phone', phone)
-  await remember(page, '__test_ban_reason', reason)
+  banWorld.phone = phone
+  banWorld.reason = reason
 })
 
 Then('the ban entry should contain the current year', async ({ page }) => {
@@ -101,7 +97,7 @@ Then('the ban entry should contain the current year', async ({ page }) => {
   await expect(row.first()).toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Given('a ban exists', async ({ page, backendRequest: request, workerHub }) => {
+Given('a ban exists', async ({ page, backendRequest: request, workerHub, banWorld }) => {
   const reason = 'Test ban'
   await page.getByTestId(TestIds.BAN_ADD_BTN).click()
   const phone = `+1212${Date.now().toString().slice(-7)}`
@@ -117,12 +113,12 @@ Given('a ban exists', async ({ page, backendRequest: request, workerHub }) => {
   const bans = await listBansViaApi(request, workerHub)
   expect(bans.find(b => b.reason === reason)).toBeTruthy()
 
-  await remember(page, '__test_ban_phone', phone)
-  await remember(page, '__test_ban_reason', reason)
+  banWorld.phone = phone
+  banWorld.reason = reason
 })
 
-When('I click {string} on the ban', async ({ page }, buttonText: string) => {
-  const reason = await recalled<string>(page, '__test_ban_reason')
+When('I click {string} on the ban', async ({ page, banWorld }, buttonText: string) => {
+  const reason = recordedReason(banWorld)
   const row = banRow(page, reason)
   if (buttonText.toLowerCase() === 'remove' || buttonText.toLowerCase() === 'delete') {
     await row.getByTestId(TestIds.BAN_REMOVE_BTN).click()
@@ -146,8 +142,8 @@ Then('the dialog should close', async ({ page }) => {
   await expect(page.getByTestId(TestIds.CONFIRM_DIALOG)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
 })
 
-Then('the ban should no longer appear in the list', async ({ page, backendRequest: request, workerHub }) => {
-  const reason = await recalled<string>(page, '__test_ban_reason')
+Then('the ban should no longer appear in the list', async ({ page, backendRequest: request, workerHub, banWorld }) => {
+  const reason = recordedReason(banWorld)
 
   // UI verification
   await expect(banRow(page, reason)).not.toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -157,8 +153,8 @@ Then('the ban should no longer appear in the list', async ({ page, backendReques
   expect(bans.find(b => b.reason === reason)).toBeUndefined()
 })
 
-Then('the ban should still appear in the list', async ({ page, backendRequest: request, workerHub }) => {
-  const reason = await recalled<string>(page, '__test_ban_reason')
+Then('the ban should still appear in the list', async ({ page, backendRequest: request, workerHub, banWorld }) => {
+  const reason = recordedReason(banWorld)
 
   // UI verification
   await expect(banRow(page, reason)).toBeVisible({ timeout: Timeouts.ELEMENT })
@@ -176,7 +172,7 @@ Then('the phone number input should not be visible', async ({ page }) => {
   await expect(page.getByLabel(/phone/i)).not.toBeVisible({ timeout: 3000 })
 })
 
-When('I add two bans with different phone numbers', async ({ page }) => {
+When('I add two bans with different phone numbers', async ({ page, banWorld }) => {
   const phone1 = `+1212${Date.now().toString().slice(-7)}`
   // Small delay to ensure unique timestamp
   const phone2 = `+1212${(Date.now() + 1).toString().slice(-7)}`
@@ -195,25 +191,31 @@ When('I add two bans with different phone numbers', async ({ page }) => {
   await page.getByTestId(TestIds.FORM_SAVE_BTN).click()
   await expect(banRow(page, 'Reason 2')).toBeVisible({ timeout: Timeouts.ELEMENT })
 
-  await remember(page, '__test_ban_phones', [phone1, phone2])
+  banWorld.phones = [phone1, phone2]
+  banWorld.reasons = ['Reason 1', 'Reason 2']
 })
 
-Then('both phone numbers should appear in the ban list', async ({ page, backendRequest: request, workerHub }) => {
-  const phones = (await page.evaluate(() => (window as unknown as TestWindow).__test_ban_phones)) as string[] | undefined
+Then('both phone numbers should appear in the ban list', async ({ page, backendRequest: request, workerHub, banWorld }) => {
+  const phones = banWorld.phones
   // The add/import step records the two numbers it banned. If it did not, there is
   // nothing to verify and the scenario must fail (the old branch fell back to
   // "the ban page loaded").
   expect(phones ?? [], 'the add/import step must record the phones it banned').toHaveLength(2)
 
-  // The two bans were made in this scenario's own hub, so the list holds exactly
-  // two, neither carrying a number.
-  const bans = await listBansViaApi(request, workerHub)
+  // The hub is the worker's, shared with every other scenario that worker runs, so the
+  // scenario's two bans are the ones filed under its own reasons — never the hub's total.
+  // A bulk import files both numbers under the one reason it was given.
+  const reasons = banWorld.reasons ?? [recordedReason(banWorld), recordedReason(banWorld)]
+  // UI first: it polls until the import/add has landed, so the API read below cannot race it.
+  const rows = page.getByTestId(TestIds.BAN_ROW).filter({ hasText: new RegExp([...new Set(reasons)].map(escapeRegExp).join('|')) })
+  await expect(rows).toHaveCount(2, { timeout: Timeouts.ELEMENT })
+
+  // API: exactly those two, neither carrying a number.
+  const bans = (await listBansViaApi(request, workerHub)).filter(b => reasons.includes(b.reason))
   expect(bans).toHaveLength(2)
   for (const ban of bans) expect(ban).not.toHaveProperty('phone')
 
-  // UI: two rows, none showing either number's digits.
-  const rows = page.getByTestId(TestIds.BAN_ROW)
-  await expect(rows).toHaveCount(2, { timeout: Timeouts.ELEMENT })
+  // None of the rows shows either number's digits.
   const text = (await rows.allInnerTexts()).join(' ').replace(/\D/g, '')
   for (const phone of phones!) expect(text).not.toContain(phone.replace(/\D/g, '').slice(-7))
 })

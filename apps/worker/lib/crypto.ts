@@ -6,9 +6,11 @@ import {
   hmacSha256,
   sha256,
   randomBytes,
+  banDigestEvaluate,
+  banDigestBlindEvaluate,
 } from '@llamenos/crypto/ffi'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, HMAC_BAN_PREFIX, LABEL_BAN_KEY_DERIVE, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
+import { LABEL_MESSAGE, LABEL_CALL_META, LABEL_CONTACT_ID, LABEL_STORAGE_CREDENTIAL_WRAP, LABEL_AUDIT_USER_KEY_WRAP, LABEL_AUDIT_USER_KEY_SERVER_SEAL, LABEL_AUDIT_DETAILS, HMAC_PHONE_PREFIX, HMAC_IP_PREFIX, LABEL_CALLER_NUMBER_SEAL, LABEL_CALL_RECORDING_SEAL } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import { assertNeverScope, hubScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'
 
@@ -39,10 +41,9 @@ export function hashPhone(phone: string, secret: string): string {
 }
 
 /**
- * The HKDF info suffix of a scope's ban key. A hub's suffix is its hub id and the
- * platform's is the literal `platform`; both are unchanged from before the scope
- * was named (#2463), so every stored hash still matches. M2's organization scope
- * needs a suffix no hub id can equal (e.g. `org:<id>`), and must be added here.
+ * The key-derivation suffix of a scope's ban key. A hub's suffix is its hub id and the
+ * platform's is the literal `platform`. M2's organization scope needs a suffix no hub id
+ * can equal (e.g. `org:<id>`), and must be added here.
  */
 function banKeyScope(scope: OwnerScope): string {
   switch (scope.kind) {
@@ -56,19 +57,43 @@ function banKeyScope(scope: OwnerScope): string {
 }
 
 /**
- * Hash of a BANNED number under one scope's key: HMAC(HKDF(BAN_HASH_KEY, scope), number).
+ * The ban digest of a caller identifier under one scope's key (#2759) — RFC 9497 OPRF
+ * (ristretto255-SHA512) `Evaluate`, keyed by `DeriveKeyPair(BAN_HASH_KEY, LABEL_BAN_KEY_DERIVE:scope)`,
+ * over `HMAC_BAN_PREFIX || identifier`. The construction lives in `packages/crypto/src/ban_digest.rs`.
  *
- * Only numbers an admin banned are ever hashed this way and stored. A caller who
- * has not been banned is hashed here transiently to be compared against the ban
- * list and the digest is dropped, so the server keeps no deterministic
- * identifier for an ordinary caller. The per-scope key means a hub's ban hashes
- * cannot be compared with another hub's, with the platform list, or with any
- * other hash of the same number. BAN_HASH_KEY is a file-only secret (never in
- * the DB, `.env` or a config backup), so a database dump alone confirms nothing.
+ * Two parties compute the same value:
+ * - the server, here, from a number it already holds — an inbound caller, or a call's
+ *   sealed number when a volunteer bans from the call;
+ * - an admin's client, for a number the admin types, by blinding it and asking the server to
+ *   `banBlindEvaluate` it. The server never sees that number, and no client holds the key —
+ *   so a phone-number space, small as it is, cannot be enumerated offline by anyone who has
+ *   the stored column but not BAN_HASH_KEY.
+ *
+ * Only numbers that were banned are ever stored this way. A caller who has not been banned is
+ * digested transiently to be compared against the ban list and the digest is dropped. The
+ * per-scope key means a hub's digests cannot be compared with another hub's or the platform's.
+ * BAN_HASH_KEY is a file-only secret (never in the DB, `.env` or a config backup).
  */
-export function banHash(phone: string, scope: OwnerScope, banHashKey: string): string {
-  const scopeKey = hkdfSha256(hexToBytes(banHashKey), new Uint8Array(0), utf8ToBytes(`${LABEL_BAN_KEY_DERIVE}:${banKeyScope(scope)}`), 32)
-  return bytesToHex(hmacSha256(scopeKey, utf8ToBytes(`${HMAC_BAN_PREFIX}${phone}`)))
+export function banHash(identifier: string, scope: OwnerScope, banHashKey: string): string {
+  return bytesToHex(banDigestEvaluate(hexToBytes(banHashKey), banKeyScope(scope), identifier))
+}
+
+/**
+ * Evaluate a client's blinded number (hex, 32 bytes) under one scope's ban key — the server half
+ * of the oblivious ban digest. Returns the evaluated element (hex). Throws on a malformed element.
+ */
+export function banBlindEvaluate(blindedElementHex: string, scope: OwnerScope, banHashKey: string): string {
+  return bytesToHex(banDigestBlindEvaluate(hexToBytes(banHashKey), banKeyScope(scope), hexToBytes(blindedElementHex)))
+}
+
+/**
+ * A fingerprint of BAN_HASH_KEY, stored beside the ban digests so a boot can tell the key it
+ * was handed is the key they were made under (#2829). It is the digest of a fixed public
+ * string under a key derived for this purpose alone — a scope no hub id or ban uses — so it
+ * says nothing about the key or about any ban, and it is not a digest of any number.
+ */
+export function banKeyFingerprint(banHashKey: string): string {
+  return bytesToHex(banDigestEvaluate(hexToBytes(banHashKey), 'ban-key-fingerprint', 'llamenos:ban-key-fingerprint:v1'))
 }
 
 /** One ban-list lookup: a number hashed under one scope's key, matched only against that scope's rows. */
