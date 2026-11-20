@@ -105,6 +105,8 @@ const services: Services = createServices(db, {
     DEV_RESET_SECRET: process.env.DEV_RESET_SECRET || undefined,
     E2E_TEST_SECRET: process.env.E2E_TEST_SECRET || undefined,
     SIGNAL_QUEUE_RETENTION_DAYS: process.env.SIGNAL_QUEUE_RETENTION_DAYS || undefined,
+    ACTIVE_SHIFT_STALE_AFTER_MINUTES: process.env.ACTIVE_SHIFT_STALE_AFTER_MINUTES || undefined,
+    ACTIVE_SHIFT_REAP_INTERVAL_SECONDS: process.env.ACTIVE_SHIFT_REAP_INTERVAL_SECONDS || undefined,
   },
 })
 console.log('[llamenos] Services initialized')

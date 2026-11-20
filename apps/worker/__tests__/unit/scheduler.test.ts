@@ -70,6 +70,11 @@ vi.mock('@worker/lib/incident-closer-worker', () => ({
   stopIncidentCloserWorker: vi.fn(),
 }))
 
+vi.mock('@worker/lib/active-shift-reaper-worker', () => ({
+  startActiveShiftReaperWorker: vi.fn(),
+  stopActiveShiftReaperWorker: vi.fn(),
+}))
+
 import { startBlastWorker, stopBlastWorker } from '@worker/lib/blast-delivery-worker'
 import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib/blast-scheduled-poller'
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
@@ -89,6 +94,7 @@ import {
 } from '@worker/lib/provider-recording-sweep-worker'
 import { startIncidentChecksWorker, stopIncidentChecksWorker } from '@worker/lib/incident-checks-worker'
 import { startIncidentCloserWorker, stopIncidentCloserWorker } from '@worker/lib/incident-closer-worker'
+import { startActiveShiftReaperWorker, stopActiveShiftReaperWorker } from '@worker/lib/active-shift-reaper-worker'
 
 /**
  * Every worker the scheduler owns, with the dependency whose absence used to
@@ -109,6 +115,7 @@ const WORKERS = [
   { name: 'provider recording sweep', start: startProviderRecordingSweepWorker, stop: stopProviderRecordingSweepWorker, dep: 'providerMedia' },
   { name: 'incident checks', start: startIncidentChecksWorker, stop: stopIncidentChecksWorker, dep: 'incidents' },
   { name: 'incident closer', start: startIncidentCloserWorker, stop: stopIncidentCloserWorker, dep: 'incidents' },
+  { name: 'active shift reaper', start: startActiveShiftReaperWorker, stop: stopActiveShiftReaperWorker, dep: 'activeShiftsService' },
 ] as const
 
 /** Distinguishable sentinels, so a mis-wired field is visible in the assertion. */
@@ -122,6 +129,7 @@ function serviceDeps(): TaskSchedulerServiceDeps {
     identityService: { __svc: 'identity' } as never,
     hubShred: { __svc: 'hubShred' } as never,
     callsService: { __svc: 'calls' } as never,
+    activeShiftsService: { __svc: 'activeShifts' } as never,
     incidents: { __svc: 'incidents', setNotifier: vi.fn() } as never,
   }
 }
@@ -179,6 +187,17 @@ describe('TaskScheduler', () => {
       const d = deps()
       scheduler.start(d)
       expect(startStaleCallReaperWorker).toHaveBeenCalledWith(d.callsService)
+    })
+
+    // #1142: `cleanupStale` had no caller, so ghost clock-ins accumulated forever.
+    it('hands the active-shift reaper the active-shifts service and the audit log (#1142)', () => {
+      const { scheduler } = setup()
+      const d = deps()
+      scheduler.start(d)
+      expect(startActiveShiftReaperWorker).toHaveBeenCalledWith({
+        activeShifts: d.activeShiftsService,
+        auditService: d.auditService,
+      })
     })
 
     it('hands the erasure expiry worker the hub shred executor (#1566)', () => {

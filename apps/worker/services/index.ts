@@ -40,7 +40,7 @@ import { ProviderRecordingsService } from './provider-recordings'
 import { CallRecordingsService } from './call-recordings'
 import { RingGroupsService } from './ring-groups'
 import { ShiftOverridesService } from './shift-overrides'
-import { ActiveShiftsService } from './active-shifts'
+import { ActiveShiftsService, parseActiveShiftLiveness } from './active-shifts'
 import { ShiftAvailabilityService } from './shift-availability'
 import { ShiftRequestsService } from './shift-requests'
 import { RecoveryGroupService } from './recovery-group'
@@ -218,7 +218,9 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     callRecordings,
     ringGroups: new RingGroupsService(db),
     shiftOverrides: new ShiftOverridesService(db),
-    activeShifts: new ActiveShiftsService(db),
+    // Liveness window + reap period from the environment, validated against the
+    // heartbeat period clients send at (#1142). A bad value stops the boot.
+    activeShifts: new ActiveShiftsService(db, parseActiveShiftLiveness(opts?.env)),
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
     recoveryGroup: new RecoveryGroupService(db, settings, audit),
@@ -273,6 +275,7 @@ export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDe
     identityService: services.identity,
     hubShred: services.hubShred,
     callsService: services.calls,
+    activeShiftsService: services.activeShifts,
     incidents: services.incidents,
   }
 }

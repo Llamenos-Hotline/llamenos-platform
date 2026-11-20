@@ -60,6 +60,10 @@ import {
   startIncidentCloserWorker,
   stopIncidentCloserWorker,
 } from '../lib/incident-closer-worker'
+import {
+  startActiveShiftReaperWorker,
+  stopActiveShiftReaperWorker,
+} from '../lib/active-shift-reaper-worker'
 import type { ProviderMediaEraser } from './provider-recordings'
 import type { IncidentNotifier, IncidentService } from './incidents'
 import type { RetentionService } from './retention'
@@ -68,6 +72,7 @@ import type { AuditService } from './audit'
 import type { IdentityService } from './identity'
 import type { HubShredService } from './hub-shred'
 import type { CallsService } from './calls'
+import type { ActiveShiftsService } from './active-shifts'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.scheduler')
@@ -93,6 +98,7 @@ export const SCHEDULER_WORKER_NAMES = [
   'provider-recording-sweep',
   'incident-checks',
   'incident-closer',
+  'active-shift-reaper',
 ] as const
 
 export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
@@ -116,6 +122,7 @@ export type TaskSchedulerServiceDeps = {
   identityService: IdentityService
   hubShred: HubShredService
   callsService: CallsService
+  activeShiftsService: ActiveShiftsService
   incidents: IncidentService
 }
 
@@ -261,6 +268,14 @@ export class TaskScheduler {
     startIncidentCloserWorker(deps.incidents)
     started.push('incident-closer')
 
+    // Stale clock-in reaper: a clock-in whose heartbeat stopped is removed from
+    // the roster instead of living in `active_shifts` forever (#1142).
+    startActiveShiftReaperWorker({
+      activeShifts: deps.activeShiftsService,
+      auditService: deps.auditService,
+    })
+    started.push('active-shift-reaper')
+
     this.startedWorkers = started
 
     const missing = SCHEDULER_WORKER_NAMES.filter((name) => !started.includes(name))
@@ -295,6 +310,7 @@ export class TaskScheduler {
     stopProviderRecordingSweepWorker()
     stopIncidentChecksWorker()
     stopIncidentCloserWorker()
+    stopActiveShiftReaperWorker()
 
     logger.info('Stopped')
   }
