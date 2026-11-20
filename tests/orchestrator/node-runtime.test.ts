@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   candidateNodeBinaries, nodeSatisfies, resolveVitestNode, vitestNodeRange, withNodeOnPath,
 } from '../../orchestrator/src/node-runtime.js'
@@ -46,9 +46,14 @@ describe('resolving the Node the test runner runs on (#2889)', () => {
   }
   const afterAll = (): void => { while (cleanup.length > 0) rmSync(cleanup.pop() as string, { recursive: true, force: true }) }
 
+  /** `table` maps a candidate to its `--version`; a shim reports the real
+   *  binary it resolves to, here under `/real/node-<version>/bin`. */
   const versions = (table: Record<string, string>) => ({
     candidates: async () => Object.keys(table),
-    probe: async (bin: string) => table[bin],
+    probe: async (bin: string) => {
+      const version = table[bin]
+      return version === undefined ? undefined : { version, execPath: `/real/node-${version}/bin/node` }
+    },
   })
 
   it('reads the range from the trusted vitest, and is silent when there is none', async () => {
@@ -59,13 +64,13 @@ describe('resolving the Node the test runner runs on (#2889)', () => {
     } finally { afterAll() }
   })
 
-  it('skips the distro Node 18 on PATH and takes the one the operator\'s shell uses', async () => {
+  it('skips the distro Node 18 on PATH and takes the one the operator\'s shell uses — by its REAL directory, never the shim\'s', async () => {
     try {
       const wt = worktreeWithVitest({ node: VITEST_RANGE })
       const r = await resolveVitestNode(wt, {}, versions({
         '/usr/bin/node': 'v18.19.1', '/home/op/.volta/bin/node': 'v24.21.0',
       }))
-      expect(r).toEqual({ ok: true, binDir: '/home/op/.volta/bin', version: 'v24.21.0' })
+      expect(r).toEqual({ ok: true, binDir: '/real/node-v24.21.0/bin', version: 'v24.21.0' })
     } finally { afterAll() }
   })
 
@@ -105,6 +110,19 @@ describe('resolving the Node the test runner runs on (#2889)', () => {
       // Newest nvm install first.
       expect(found.indexOf(join(home, '.nvm', 'versions', 'node', 'v22.1.0', 'bin', 'node')))
         .toBeLessThan(found.indexOf(join(home, '.nvm', 'versions', 'node', 'v20.5.0', 'bin', 'node')))
+    } finally { afterAll() }
+  })
+
+  it('the real probe asks a node binary what it is, and reports the real executable', async () => {
+    try {
+      const wt = worktreeWithVitest({ node: '>=1.0.0' })
+      const r = await resolveVitestNode(wt, {}, { candidates: async () => [process.execPath] })
+      expect(r.ok).toBe(true)
+      if (!r.ok) return
+      expect(r.version).toBe(process.version)
+      expect(r.binDir).toBe(dirname(process.execPath))
+      const none = await resolveVitestNode(wt, {}, { candidates: async () => ['/nonexistent/node'] })
+      expect(none.ok).toBe(false)
     } finally { afterAll() }
   })
 

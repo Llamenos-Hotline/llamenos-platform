@@ -131,28 +131,35 @@ export async function candidateNodeBinaries(env: NodeJS.ProcessEnv, home = homed
   return [...new Set(out)]
 }
 
-/** `node --version` of one binary, or `undefined` when it will not run. */
-async function probeNodeVersion(bin: string): Promise<string | undefined> {
+/** What one `node` binary reports about itself. `execPath` is the REAL
+ *  executable: a version manager's `node` is a shim, and its directory also
+ *  holds shims for every other tool it manages (`~/.volta/bin/bun` hangs
+ *  rather than running the real bun), so only the real binary's own directory
+ *  is ever put on the runner's `PATH`. */
+export interface NodeIdentity { version: string; execPath: string }
+
+async function probeNode(bin: string): Promise<NodeIdentity | undefined> {
   try {
     // HOME/VOLTA_HOME: a version manager's shim finds its toolchain through
     // them. Nothing else of the caller's environment is handed to a probe.
     const probeEnv: NodeJS.ProcessEnv = { PATH: dirname(bin), HOME: homedir() }
     if (process.env['VOLTA_HOME'] !== undefined) probeEnv['VOLTA_HOME'] = process.env['VOLTA_HOME']
-    const { stdout } = await execFileAsync(bin, ['--version'], { timeout: 15_000, env: probeEnv })
-    const v = stdout.trim()
-    return parseTriple(v) === undefined ? undefined : v
+    const { stdout } = await execFileAsync(bin, ['-p', 'process.version + "\\n" + process.execPath'], { timeout: 15_000, env: probeEnv })
+    const [version, execPath] = stdout.trim().split('\n')
+    if (version === undefined || execPath === undefined || parseTriple(version) === undefined || execPath.length === 0) return undefined
+    return { version, execPath }
   } catch {
     return undefined
   }
 }
 
 export type NodeResolution =
-  | { ok: true; /** A directory to put FIRST on the runner's `PATH`; `undefined` when no range could be checked. */ binDir: string | undefined; version?: string }
+  | { ok: true; /** The real node's own directory, to put FIRST on the runner's `PATH`; `undefined` when no range could be checked. */ binDir: string | undefined; version?: string }
   | { ok: false; reason: string }
 
 export interface NodeResolutionDeps {
   candidates?: (env: NodeJS.ProcessEnv) => Promise<string[]>
-  probe?: (bin: string) => Promise<string | undefined>
+  probe?: (bin: string) => Promise<NodeIdentity | undefined>
 }
 
 /**
@@ -174,15 +181,15 @@ export async function resolveVitestNode(
   const range = await vitestNodeRange(worktree)
   if (range === undefined) return { ok: true, binDir: undefined }
 
-  const probe = deps.probe ?? probeNodeVersion
+  const probe = deps.probe ?? probeNode
   const found: string[] = []
   for (const bin of await (deps.candidates ?? candidateNodeBinaries)(env)) {
-    const version = await probe(bin)
-    if (version === undefined) continue
-    const fits = nodeSatisfies(version, range)
+    const identity = await probe(bin)
+    if (identity === undefined) continue
+    const fits = nodeSatisfies(identity.version, range)
     if (fits === undefined) return { ok: true, binDir: undefined }
-    if (fits) return { ok: true, binDir: dirname(bin), version }
-    found.push(`${version} (${bin})`)
+    if (fits) return { ok: true, binDir: dirname(identity.execPath), version: identity.version }
+    found.push(`${identity.version} (${bin})`)
   }
   return {
     ok: false,

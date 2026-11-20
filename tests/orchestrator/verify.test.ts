@@ -1454,7 +1454,7 @@ describe('verifyMechanical chooses the Node the runner runs on (#2889)', () => {
     const { dir, ran } = repoWithEngines(`printf '%s' '${vitestJson()}' > "$OUT"; exit 0`)
     const report = await verifyMechanical({
       worktree: dir, branch: 'main', lane: fleetLane,
-      nodeResolution: { candidates: async () => ['/usr/bin/node'], probe: async () => 'v18.19.1' },
+      nodeResolution: { candidates: async () => ['/usr/bin/node'], probe: async () => ({ version: 'v18.19.1', execPath: '/usr/bin/node' }) },
     })
     expect(report.passed).toBe(false)
     expect(report.testsPassed).toBe(false)
@@ -1468,11 +1468,11 @@ describe('verifyMechanical chooses the Node the runner runs on (#2889)', () => {
     const { dir, sawPath } = repoWithEngines(`printf '%s' '${vitestJson()}' > "$OUT"; exit 0`)
     const report = await verifyMechanical({
       worktree: dir, branch: 'main', lane: fleetLane,
-      nodeResolution: { candidates: async () => ['/usr/bin/node', '/opt/volta/bin/node'], probe: async (b) => (b === '/usr/bin/node' ? 'v18.19.1' : 'v24.21.0') },
+      nodeResolution: { candidates: async () => ['/usr/bin/node', '/opt/volta/bin/node'], probe: async (b) => (b === '/usr/bin/node' ? { version: 'v18.19.1', execPath: '/usr/bin/node' } : { version: 'v24.21.0', execPath: '/opt/node-24/bin/node' }) },
     })
     expect(report.passed).toBe(true)
     expect(report.testsRunnerCrashed).toBeUndefined()
-    expect(readFileSync(sawPath, 'utf8').startsWith(`/opt/volta/bin${delimiter}`)).toBe(true)
+    expect(readFileSync(sawPath, 'utf8').startsWith(`/opt/node-24/bin${delimiter}`)).toBe(true)
   })
 
   it('a runner that dies is a crash; a red result that was read is a red head, not a crash', async () => {
