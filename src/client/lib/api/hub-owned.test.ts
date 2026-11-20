@@ -77,9 +77,23 @@ const hubOwnedWrites: Array<[string, () => Promise<unknown>, string]> = [
   ['createRecord', () => createRecord({ entityTypeId: 'et-1', statusHash: 's', encryptedSummary: 'c', summaryEnvelopes: [] }), '/records'],
   ['deleteRecord', () => deleteRecord('rec-1'), '/records/rec-1'],
   ['clockIn', () => clockIn(), '/shifts/clock-in'],
-  ['sendHeartbeat', () => sendHeartbeat(), '/shifts/heartbeat'],
   ['createRingGroup', () => createRingGroup({ id: 'rg-1', encryptedName: 'n' }), '/ring-groups'],
 ]
+
+describe('sendHeartbeat (#1142)', () => {
+  // A clock-in is per hub, and the user may be clocked into several. The beat
+  // goes to the hub it names — never to whichever hub the UI is showing.
+  it('is addressed to the hub it names, whatever hub is active', async () => {
+    setActiveHub('hub-1')
+    await sendHeartbeat('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/heartbeat'])
+  })
+
+  it('does not need an active hub', async () => {
+    await sendHeartbeat('hub-2')
+    expect(urls).toEqual(['/api/hubs/hub-2/shifts/heartbeat'])
+  })
+})
 
 describe('deployment vocabulary read by hub members (#1858)', () => {
   // A hub-only member holds no global role, so the bare `/settings/custom-fields`
