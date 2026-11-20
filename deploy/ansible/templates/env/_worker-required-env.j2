@@ -150,6 +150,22 @@ SIP_BRIDGE_URL=http://sip-bridge:3000
 SIGNAL_QUEUE_RETENTION_DAYS={{ signal_queue_retention_days }}
 {% endif %}
 {#
+  ACTIVE_SHIFT_STALE_AFTER_MINUTES / ACTIVE_SHIFT_REAP_INTERVAL_SECONDS — when
+  a clock-in stops ringing, and how often the reaper deletes it (apps/worker/
+  services/active-shifts.ts; #1142). A clock-in is the volunteer's consent to
+  be rung and the heartbeat is the only evidence they are still there, so one
+  with no heartbeat for the window neither rings nor counts as coverage. The
+  worker refuses to boot on a window under three client heartbeats (90s) or a
+  reap interval longer than the window. Only emitted when set, so the defaults
+  (5 minutes, 60 seconds) stay the code's single source of truth.
+#}
+{% if (active_shift_stale_after_minutes | default('')) | string | length > 0 %}
+ACTIVE_SHIFT_STALE_AFTER_MINUTES={{ active_shift_stale_after_minutes }}
+{% endif %}
+{% if (active_shift_reap_interval_seconds | default('')) | string | length > 0 %}
+ACTIVE_SHIFT_REAP_INTERVAL_SECONDS={{ active_shift_reap_interval_seconds }}
+{% endif %}
+{#
   <PROVIDER>_WEBHOOK_IPS — the webhook IP allowlist (#1622). The var name is
   built at runtime from the provider name in middleware/webhook-auth.ts,
   middleware/webhook-ip-allowlist.ts and messaging/router.ts, so there is no

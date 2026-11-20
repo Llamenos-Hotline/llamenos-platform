@@ -88,6 +88,10 @@ export interface Env {
   MESSAGING_HASH_KEY: string
   /** Days to retain sent/dead Signal queue rows before the daily purge (default: 30). */
   SIGNAL_QUEUE_RETENTION_DAYS?: string
+  /** Minutes without a heartbeat before a clock-in stops ringing and is reaped (default: 5; at least 3 heartbeats). */
+  ACTIVE_SHIFT_STALE_AFTER_MINUTES?: string
+  /** Seconds between runs of the stale clock-in reaper (default: 60; at most the stale window). */
+  ACTIVE_SHIFT_REAP_INTERVAL_SECONDS?: string
   METRICS_SCRAPE_TOKEN?: string
   E2E_TEST_SECRET?: string
   DEV_RESET_SECRET?: string

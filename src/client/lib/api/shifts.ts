@@ -1,5 +1,5 @@
 import { DeletionConfirmed } from '@/lib/admin-deletion'
-import { request, activeHubPath } from './client'
+import { request, activeHubPath, hubPath } from './client'
 import type { CreateShiftBody, FallbackGroup } from '@protocol/schemas/shifts'
 import type { Shift, ShiftStatus } from '@protocol/schemas'
 import type { CreateShiftOverrideBody, ShiftOverride, ShiftOverrideListResponse } from '@protocol/schemas/shift-override'
@@ -11,6 +11,16 @@ export type { Shift, ShiftStatus }
 
 export async function getMyShiftStatus() {
   return request<ShiftStatus>(activeHubPath('/shifts/my-status'))
+}
+
+/**
+ * The user's shift state in an explicit hub, whichever hub the UI is showing. A
+ * clock-in is per hub, so anything that must act on every clock-in the user holds
+ * (the heartbeat sender) reads each member hub rather than only the active one
+ * (multi-hub axiom).
+ */
+export async function getMyShiftStatusIn(hubId: string) {
+  return request<ShiftStatus>(hubPath(hubId, '/shifts/my-status'))
 }
 
 // --- Shifts (admin only) ---
@@ -60,8 +70,14 @@ export async function clockOut() {
   return request<{ ok: true }>(activeHubPath('/shifts/clock-out'), { method: 'POST' })
 }
 
-export async function sendHeartbeat() {
-  return request<{ ok: true }>(activeHubPath('/shifts/heartbeat'), { method: 'POST' })
+/**
+ * Tell `hubId` this clocked-in client is still here. Takes the hub explicitly:
+ * a clock-in is per hub and the user may be clocked into several at once, so the
+ * heartbeat must reach each of them whichever hub the UI is showing (multi-hub
+ * axiom). Answers 404 when the user is not (or is no longer) clocked in there.
+ */
+export async function sendHeartbeat(hubId: string) {
+  return request<{ ok: true }>(hubPath(hubId, '/shifts/heartbeat'), { method: 'POST' })
 }
 
 export async function listActiveShifts() {

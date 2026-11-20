@@ -2116,6 +2116,20 @@ Response: { "ok": true }
 
 Hub-scoped: All shift endpoints are also available at `/api/hubs/:hubId/shifts/*`.
 
+**Clock-in, heartbeat and who rings (#1142).** A call rings the volunteers who are *scheduled now* **and** *clocked in* to that hub (`scheduled_now ∩ clocked_in`); when that set is empty the hub's fallback group rings. A clock-in only counts while its heartbeat is fresh:
+
+```
+POST /api/hubs/:hubId/shifts/clock-in
+POST /api/hubs/:hubId/shifts/clock-out
+POST /api/hubs/:hubId/shifts/heartbeat
+Permission: shifts:set-availability
+Response: { "ok": true }   (heartbeat: 404 when not clocked in, or when the clock-in is already stale)
+```
+
+- A clock-in is per hub; a user may hold several at once and each is judged on its own. A client sends a heartbeat to **every** hub it is clocked into, every 30 s (`ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS`, `packages/shared/active-shift-liveness.ts`). It learns which hubs those are from `GET /api/hubs/:hubId/shifts/my-status` (`clockedIn`) on each member hub, and never beats a hub that status reports it is not clocked into: a heartbeat is a liveness signal for a clock-in that exists, and the 404 it would get is a refusal, not a probe. A 404 or 403 to a beat is final for that clock-in — the client stops beating that hub until `my-status` reports a fresh clock-in.
+- A clock-in whose last heartbeat is older than the server's stale window (default 5 min, `ACTIVE_SHIFT_STALE_AFTER_MINUTES`; at least three heartbeats) is **stale**: it is not rung, not shown as clocked in (`my-status`, the admin roster) and not counted as coverage. A heartbeat does not revive a stale clock-in; the volunteer clocks in again.
+- A scheduler worker deletes stale rows every `ACTIVE_SHIFT_REAP_INTERVAL_SECONDS` (default 60) and audits each as `shiftClockOut` with `reason: heartbeat_stale`.
+
 ### 4.7 Notes
 
 All note endpoints require `notes:read-own` baseline. Clients must encrypt notes before sending (Section 2.3).
