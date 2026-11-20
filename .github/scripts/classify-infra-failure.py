@@ -212,31 +212,12 @@ ANDROID_INFRA_LINES = (
     # runner (shards 1-3 of the same run passed):
     #   Could not HEAD 'https://repo.maven.apache.org/maven2/...jar'. Received
     #   status code 429 from server: Too Many Requests
-    # Only the throttle and server-side statuses.
+    # Only the throttle and server-side statuses: a 404 (an artifact that does
+    # not exist -- a bad version bump) or a 401/403 is the build's own fault and
+    # stays genuine.
     ("dependency-repo-unavailable",
      re.compile(r"Could not (?:HEAD|GET) 'https?://[^']+'\. Received status code (?:429|5\d\d) from server")),
 )
-# The WHOLE dependency-resolution class (#2870), read from the same pattern file
-# scripts/ci/gradle-retry.sh greps, so the two cannot drift apart: `Could not
-# find <artifact>` (a 404 Gradle then remembers), `Failed to transform ... to
-# match attributes`, `Could not resolve all files`, and the transport errors.
-# Run 44513364742 shard 0 printed
-#   > Could not find gson-2.8.9.jar (com.google.code.gson:gson:2.8.9).
-# and this classifier answered "no infrastructure signature". A 404 for an
-# artifact that really does not exist (a bad version bump) lands here too and
-# costs exactly one retry: the retry step re-resolves through gradle-retry.sh,
-# fails the same way, and the shard fails with "a failure that survives a retry
-# is not a flake". It is never softened into a pass.
-GRADLE_RESOLUTION_PATTERNS_FILE = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "gradle-resolution.patterns"
-
-
-def dependency_resolution_regex() -> "re.Pattern[str]":
-    """Read lazily: the iOS verbs never need the file, and a missing one must
-    fail the Android verdict loudly rather than quietly match nothing."""
-    lines = [ln for ln in GRADLE_RESOLUTION_PATTERNS_FILE.read_text(encoding="utf-8").splitlines() if ln.strip()]
-    if not lines:
-        raise RuntimeError(f"{GRADLE_RESOLUTION_PATTERNS_FILE} holds no patterns")
-    return re.compile("|".join(f"(?:{ln})" for ln in lines))
 # A per-test failure line Gradle prints for connected tests:
 # `Feature > scenario[Pixel_5(AVD) - 14] FAILED`, and the summary sentence.
 ANDROID_TEST_FAILED_RE = re.compile(r"^\S.* > .*\[[^\]]*\] FAILED\s*$", re.MULTILINE)
@@ -375,8 +356,6 @@ def classify_android(log: str, marker_exists: bool, results_dir: Path | None, pr
                 "detail": f"{what}, every one rooted in a connect failure to {ANDROID_TEST_HOST} while the host backend is live: {_summarise(causes)}"}
 
     sigs = [name for name, rx in ANDROID_INFRA_LINES if rx.search(log)]
-    if dependency_resolution_regex().search(log):
-        sigs.append("dependency-resolution-failed")
     if not sigs:
         return genuine("no infrastructure signature in the Gradle output")
     return {"kind": "infra", "signatures": ",".join(sigs), "retest": "",

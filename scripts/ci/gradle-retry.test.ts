@@ -189,6 +189,37 @@ describe('gradle-retry.sh', () => {
     expect(r.out).toMatch(/::error title=[^:]*failed on all 3 attempts/)
   })
 
+  // One definition of "a resolution failure" (#2870): the retry decision is read from the pattern
+  // files, not from a regex inlined in the script. A pattern file that classifies nothing must make
+  // the same Gradle output non-retryable; a missing one must be refused, never treated as "no match".
+  test('what is retried is whatever gradle-resolution.patterns says, not an inline regex (#2870)', () => {
+    const empty = join(dir, 'none.patterns')
+    writeFileSync(empty, 'zzz-never-matches\n')
+    const r = run(['resolve-miss'], undefined, { GRADLE_RESOLUTION_PATTERNS: empty })
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(1)
+    expect(r.out).toContain('no dependency-resolution error — not retrying')
+  })
+
+  test('which failures need --refresh-dependencies is whatever gradle-cached-miss.patterns says (#2870)', () => {
+    const none = join(dir, 'none.patterns')
+    writeFileSync(none, 'zzz-never-matches\n')
+    const r = run(['jar-miss', 'jar-miss', 'jar-miss'], undefined, { GRADLE_CACHED_MISS_PATTERNS: none, GRADLE_RETRY_ATTEMPTS: '3' })
+    expect(r.invocations).toHaveLength(3)
+    expect(r.invocations.some((c) => c.includes('--refresh-dependencies'))).toBe(false)
+  })
+
+  test('a missing or empty pattern file is a hard error, never "nothing matches" (#2870)', () => {
+    const empty = join(dir, 'empty.patterns')
+    writeFileSync(empty, '')
+    for (const env of [{ GRADLE_RESOLUTION_PATTERNS: join(dir, 'absent.patterns') }, { GRADLE_CACHED_MISS_PATTERNS: empty }]) {
+      const r = run(['ok'], undefined, env)
+      expect(r.code).toBe(2)
+      expect(r.invocations).toHaveLength(0)
+      expect(r.out).toContain('is missing or empty')
+    }
+  })
+
   test('no Gradle arguments is a usage error, not a bare ./gradlew', () => {
     const r = run(['ok'], [])
     expect(r.code).toBe(2)
