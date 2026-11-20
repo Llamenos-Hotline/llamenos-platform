@@ -135,6 +135,7 @@ android {
         //   src/debug/jniLibs/   — test-kdf params (x86_64 emulator)
         //   src/release/jniLibs/ — production params (arm64-v8a + armeabi-v7a)
         // Gradle discovers these automatically — no explicit config needed.
+        // src/main/jniLibs is deliberately empty: refuseMainJniLibs fails the build if it is not.
         getByName("test") {
             // See copyProductionNetworkSecurityConfig below: the debug build variant
             // (which `testDebugUnitTest` runs against) overrides network_security_config.xml
@@ -235,9 +236,45 @@ val copyFeatureFiles by tasks.registering(Copy::class) {
     into("src/androidTest/assets/features/platform/mobile")
 }
 
+// AGP merges `src/main/jniLibs` into EVERY variant. Native crypto lives in the build-type source
+// sets (`src/debug/jniLibs` test-kdf x86_64, `src/release/jniLibs` production arm) since #355,
+// and nothing in the repo writes `src/main/jniLibs` any more. A leftover copy (a pre-#355
+// checkout) is not a harmless stray: when the build-type copy is missing (a fresh worktree where
+// `worktree-setup --android` never ran, a failed build-mobile.sh) the stale `main/` library is
+// packaged into the APK without a word, so a build that should die with UnsatisfiedLinkError
+// instead ships crypto from before the HPKE/v3 migrations. Refuse it rather than gitignore it:
+// an ignored directory is exactly the one nobody sees.
+abstract class RefuseMainJniLibs : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val staleLibs: ConfigurableFileCollection
+
+    @TaskAction
+    fun check() {
+        val found = staleLibs.files.sorted()
+        if (found.isNotEmpty()) {
+            throw GradleException(
+                "src/main/jniLibs must not hold native libraries — AGP packages it into every " +
+                    "build variant, so a stale copy silently replaces a missing build-type library. " +
+                    "Found: ${found.joinToString { it.absolutePath }}. " +
+                    "Delete src/main/jniLibs and build the real ones into src/debug/jniLibs " +
+                    "(test-kdf, x86_64) and src/release/jniLibs (production, arm64-v8a + armeabi-v7a): " +
+                    "`bun run worktree-setup --android` or packages/crypto/scripts/build-mobile.sh android.",
+            )
+        }
+    }
+}
+
+val refuseMainJniLibs by tasks.registering(RefuseMainJniLibs::class) {
+    group = "verification"
+    description = "Fails if src/main/jniLibs holds a native library (it would be packaged into every variant)."
+    staleLibs.from(fileTree("src/main/jniLibs") { include("**/*.so") })
+}
+
 tasks.named("preBuild") {
     dependsOn(copyTestVectors)
     dependsOn(copyFeatureFiles)
+    dependsOn(refuseMainJniLibs)
 }
 
 // Copy the production (release-variant) network_security_config.xml into test resources so
