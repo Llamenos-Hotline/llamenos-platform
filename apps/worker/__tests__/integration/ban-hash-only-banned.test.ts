@@ -10,6 +10,8 @@
  *     does not match in another hub.
  *  3. Promoting a hub ban to the platform needs the number again; a different
  *     number is refused, and the promoted ban then matches in every hub.
+ *  6. Platform bans never receive the number (#2759): the test acts as a client,
+ *     blinding the number, having the route evaluate it, and finalizing the digest.
  *  4. Banning a live caller opens the number from `caller_number_sealed`, and the
  *     sealed copy is gone once the call ends.
  *  5. The ban list carries a handle, a reason and a date: no number, masked or not.
@@ -33,6 +35,7 @@ import platformBansRoutes from '../../routes/platform-bans'
 import callsRoutes from '../../routes/calls'
 import type { AppEnv, Env } from '../../types'
 import { freshHubDb } from './hub-shred-helpers'
+import { banDigestBlind, banDigestFinalize } from '../../../../tests/mocks/ban-digest-mock'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
@@ -82,6 +85,27 @@ function appFor(route: Hono<AppEnv>, mount: string, hubId?: string, pubkey = ADM
 
 const post = (app: Hono<AppEnv>, path: string, body: unknown) =>
   app.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+/** A number's platform ban digest, computed as every client does: blind, evaluate, finalize. */
+async function platformDigest(platform: Hono<AppEnv>, phone: string): Promise<string> {
+  const blind = banDigestBlind(phone)
+  const res = await post(platform, '/admin/bans/evaluate', { blindedElements: [blind.blindedElementHex] })
+  expect(res.status).toBe(200)
+  const { evaluatedElements } = await res.json() as { evaluatedElements: string[] }
+  return banDigestFinalize(phone, blind.blindHex, evaluatedElements[0]!)
+}
+
+/** A number's digest under every scope (no `hubId` = the platform), for search and promote. */
+async function scopedLookups(platform: Hono<AppEnv>, phone: string): Promise<{ hubId?: string; phoneHash: string }[]> {
+  const blind = banDigestBlind(phone)
+  const res = await post(platform, '/admin/bans/search/evaluate', { blindedElement: blind.blindedElementHex })
+  expect(res.status).toBe(200)
+  const { evaluations } = await res.json() as { evaluations: { hubId?: string; evaluatedElement: string }[] }
+  return evaluations.map(({ hubId, evaluatedElement }) => {
+    const phoneHash = banDigestFinalize(phone, blind.blindHex, evaluatedElement)
+    return hubId === undefined ? { phoneHash } : { hubId, phoneHash }
+  })
+}
 
 /** Every row of every table, as text — what a dump of the database would show. */
 async function dumpDatabase(): Promise<string> {
@@ -188,7 +212,8 @@ describe('a banned number matches at hub scope and at platform scope', () => {
 
   it('a platform ban matches in every hub, and platform and hub hashes of one number differ', async () => {
     const platform = appFor(platformBansRoutes, '/admin/bans')
-    const res = await post(platform, '/admin/bans', { phone: OTHER, reason: 'known abuser' })
+    expect((await post(platform, '/admin/bans', { phone: OTHER, reason: 'plaintext' })).status).toBe(400)
+    const res = await post(platform, '/admin/bans', { phoneHash: await platformDigest(platform, OTHER), reason: 'known abuser' })
     expect(res.status).toBe(200)
 
     for (const hubId of ['hub-a', 'hub-b', 'hub-c']) {
@@ -204,7 +229,7 @@ describe('a banned number matches at hub scope and at platform scope', () => {
     for (const id of ['hub-a', 'hub-b']) {
       await fresh.db.insert(schema.hubs).values({ id, name: id, slug: id, createdBy: ADMIN }).onConflictDoNothing()
     }
-    const res = await platform.request(`/admin/bans/search?phone=${encodeURIComponent(BANNED)}`)
+    const res = await post(platform, '/admin/bans/search', { lookups: await scopedLookups(platform, BANNED) })
     expect(res.status).toBe(200)
     const { bans } = await res.json() as { bans: Array<{ hubId: string | null }> }
     expect(bans.map(b => b.hubId)).toEqual(['hub-a'])
@@ -230,12 +255,23 @@ describe('promoting a hub ban to the platform requires the number again', () => 
     const [source] = await fresh.db.select().from(schema.bans).where(eq(schema.bans.hubId, 'hub-a'))
     expect(source).toBeTruthy()
 
+    // The search evaluation walks the hubs table for the hub scopes.
+    await fresh.db.insert(schema.hubs).values({ id: 'hub-a', name: 'hub-a', slug: 'hub-a', createdBy: ADMIN }).onConflictDoNothing()
     const platform = appFor(platformBansRoutes, '/admin/bans')
+    const promoteBody = async (phone: string) => {
+      const lookups = await scopedLookups(platform, phone)
+      return {
+        banId: source!.id,
+        sourcePhoneHash: lookups.find((l) => l.hubId === 'hub-a')!.phoneHash,
+        phoneHash: lookups.find((l) => l.hubId === undefined)!.phoneHash,
+      }
+    }
     expect((await post(platform, '/admin/bans/promote', { banId: source!.id })).status).toBe(400)
-    expect((await post(platform, '/admin/bans/promote', { banId: source!.id, phone: ORDINARY })).status).toBe(400)
+    expect((await post(platform, '/admin/bans/promote', { banId: source!.id, phone: BANNED })).status).toBe(400)
+    expect((await post(platform, '/admin/bans/promote', await promoteBody(ORDINARY))).status).toBe(400)
     expect(await services.records.checkBan(callBanLookup(BANNED, 'hub-b', BAN_HASH_KEY))).toBe(false)
 
-    expect((await post(platform, '/admin/bans/promote', { banId: source!.id, phone: BANNED })).status).toBe(200)
+    expect((await post(platform, '/admin/bans/promote', await promoteBody(BANNED))).status).toBe(200)
     for (const hubId of ['hub-b', 'hub-c']) {
       expect(await services.records.checkBan(callBanLookup(BANNED, hubId, BAN_HASH_KEY))).toBe(true)
     }

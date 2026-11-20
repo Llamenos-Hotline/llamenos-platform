@@ -30,7 +30,7 @@ struct PlatformBansView: View {
         }
         .searchable(
             text: $viewModel.platformBanSearchQuery,
-            prompt: NSLocalizedString("platform_bans_search_placeholder", comment: "Search bans...")
+            prompt: NSLocalizedString("ban_list_phone_number", comment: "Phone Number")
         )
         .onSubmit(of: .search) {
             Task { await viewModel.searchPlatformBans() }
@@ -91,18 +91,21 @@ struct PlatformBansView: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(NSLocalizedString("admin_ban_hash_label", comment: "Identifier Hash"))
+                        Text(NSLocalizedString("ban_list_phone_number", comment: "Phone Number"))
                             .font(.brand(.caption))
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
 
+                        // Only the number's ban digest is ever sent (#2759, AdminViewModel).
                         TextField(
-                            NSLocalizedString("admin_ban_hash_placeholder", comment: "SHA-256 hash"),
-                            text: $viewModel.newBanIdentifierHash
+                            NSLocalizedString("ban_list_phone_number", comment: "Phone Number"),
+                            text: $viewModel.newPlatformBanPhone
                         )
                         .font(.brandMono(.body))
+                        .keyboardType(.phonePad)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("platform-ban-phone-input")
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -133,7 +136,7 @@ struct PlatformBansView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(NSLocalizedString("cancel", comment: "Cancel")) {
-                        viewModel.newBanIdentifierHash = ""
+                        viewModel.newPlatformBanPhone = ""
                         viewModel.newBanReason = ""
                         viewModel.showAddPlatformBanSheet = false
                     }
@@ -143,7 +146,7 @@ struct PlatformBansView: View {
                         Task { await viewModel.addPlatformBan() }
                     }
                     .fontWeight(.semibold)
-                    .disabled(viewModel.newBanIdentifierHash.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(viewModel.newPlatformBanPhone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

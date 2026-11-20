@@ -1239,20 +1239,37 @@ hashIP(ip_string, hmac_secret_hex):
 
 #### Ban Hashing
 
-The server stores a hash of a number **only if that number is banned**. A caller who is not banned is hashed transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+The server stores a digest of a number **only if that number is banned**. A caller who is not banned is digested transiently to be compared with the ban lists and the digest is dropped. `BAN_HASH_KEY` is a file-only secret (never in the database, `.env` or a config backup).
+
+The digest is an oblivious PRF (RFC 9497, mode `0x00` OPRF, suite `ristretto255-SHA512`), implemented once in `packages/crypto/src/ban_digest.rs` (#2759). Two parties compute it:
+
+- **The server**, from a caller identifier it already holds (an inbound call; a call's sealed number when a volunteer bans from the call), with `Evaluate`.
+- **An admin's client**, for a number the admin types, without the server ever receiving it: the client `Blind`s the number, the server `BlindEvaluate`s the blinded element (§4.47 `/evaluate`, `/search/evaluate`), and the client `Finalize`s the answer. No client holds the key, so nobody with the stored digests but not `BAN_HASH_KEY` can enumerate the (small) phone-number space offline; the evaluate endpoints are the only oracle, and they are permission-checked, rate-limited and audited.
 
 ```
-banHash(phone_e164, scope, ban_hash_key_hex):
+banDigest(identifier, scope, ban_hash_key_hex):
   // scope = the hub id, or the literal "platform"
-  scope_key = HKDF-SHA256(ikm  = hex_to_bytes(ban_hash_key_hex),
-                          salt = "",
-                          info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope),
-                          len  = 32)
-  input = UTF-8(HMAC_BAN_PREFIX + phone_e164)
-  return hex(HMAC-SHA256(scope_key, input))
+  sk_scope = OPRF.DeriveKeyPair(seed = hex_to_bytes(ban_hash_key_hex),
+                                info = UTF-8(LABEL_BAN_KEY_DERIVE + ":" + scope)).skS
+  input    = UTF-8(HMAC_BAN_PREFIX + identifier)
+  return hex(OPRF.Evaluate(sk_scope, input))        // 64 bytes -> 128 hex chars
+
+client, for a typed number (refused unless E.164 `^\+\d{7,15}$`; never normalised):
+  (blind, blindedElement) = OPRF.Blind(input)       // send hex(blindedElement), 32 bytes
+  evaluatedElement        = <server: OPRF.BlindEvaluate(sk_scope, blindedElement)>
+  phoneHash               = hex(OPRF.Finalize(input, blind, evaluatedElement))
 ```
 
-A hub's hash cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again (§4.47). Neither the ban store nor any ban response carries digits of the number.
+`phoneHash` is the one name of this value on every platform and in every body and response. A hub's digest cannot be re-keyed to another scope: promoting a hub ban to the platform needs the number again, digested under both scopes (§4.47). Neither the ban store nor any ban request or response carries digits of the number.
+
+**Key continuity and re-entry (#2829).** A stored digest is valid only under the `BAN_HASH_KEY` it was made with, and it can never be recomputed: the server did not keep the number, and that is the point of the OPRF. Two things therefore end a ban's enforcement, and neither may happen silently:
+
+- the digest scheme changed (the HMAC → OPRF switch), or
+- `BAN_HASH_KEY` is not the key the stored digests were made under (a key file lost and regenerated, or restored wrongly).
+
+The server records `banKeyFingerprint(key) = hex(OPRF.Evaluate(DeriveKeyPair(seed, "LABEL_BAN_KEY_DERIVE:ban-key-fingerprint"), "llamenos:ban-key-fingerprint:v1"))` in `ban_key_check` and compares it at every boot (`RecordsService.reconcileBanKey`). A different key makes the server **refuse to boot**, naming the operator's way out: restore the original key, or — when the replacement is deliberate — boot once with `BAN_KEY_REPLACED_ACK=<the new key's fingerprint>`. A first boot with no recorded fingerprint and bans already stored is the scheme change. In both acknowledged cases every ban is **moved** from `bans` to `ban_reentries` in one transaction: its digest is dropped, and only the non-identifying context (when, by whom, the admin's note, the cause) is kept. No migration re-digests a ban and no row is left in `bans` that reads as enforced and matches nothing; keeping the old HMAC column to match on either is not an option, as it is the enumerable value the OPRF replaces.
+
+The retired bans reach the admin through the list they already read: `GET /hubs/:hubId/bans` and `GET /admin/bans` carry `reentries[]` (`banReentryResponseSchema`: `id`, `reason`, `bannedBy`, `bannedAt`, `cause` = `digest-scheme` | `key-replaced`, `retiredAt`), and `DELETE …/bans/reentries/:id` (`bans:delete` / `bans:delete-platform`, audited `banReentryDismissed`) removes one once its number is banned again.
 
 #### Messaging Thread Hashing
 
@@ -4085,30 +4102,46 @@ Permission: bans:read-platform
 Query: ?limit=&offset=
 Response: { "bans": PlatformBan[], "total": number }
 
+POST   /api/admin/bans/evaluate
+Permission: bans:create-platform    // rate-limited per admin; audited (platformBanDigestsEvaluated)
+Body: { "blindedElements": string[] (1..100, 64-hex ristretto255 elements) }
+Response: { "evaluatedElements": string[] }   // in request order, under the platform key
+// 400 for an element that is not a valid group element; 429 when rate-limited.
+
 POST   /api/admin/bans
 Permission: bans:create-platform
-Body: { "phone": string (E.164), "reason": string }
+Body: { "phoneHash": string (128-hex ban digest, §2.10), "reason"?: string }
 Response: { "ok": true }
+// A plaintext "phone" is refused (400): the server never receives the number.
 
 POST   /api/admin/bans/bulk
 Permission: bans:create-platform
-Body: { "phones": string[], "reason": string }
+Body: { "phoneHashes": string[] (1..500), "reason"?: string }
 Response: { "ok": true, "count": number }
 
 DELETE /api/admin/bans/:id
 Permission: bans:delete-platform
 Response: { "ok": true }
 
-GET    /api/admin/bans/search
+POST   /api/admin/bans/search/evaluate
+Permission: bans:read-platform      // rate-limited per admin; audited (platformBanSearchEvaluated)
+Body: { "blindedElement": string }
+Response: { "evaluations": [{ "hubId"?: string, "evaluatedElement": string }] }
+// One per scope: no hubId = the platform, then every hub.
+
+POST   /api/admin/bans/search
 Permission: bans:read-platform
-Query: ?phone=<E.164>
-Response: { "bans": PlatformBan[] }
+Body: { "lookups": [{ "hubId"?: string, "phoneHash": string }] (1..1000) }
+Response: { "bans": [{ id, hubId: string | null, phoneHash, reason, bannedBy, bannedAt }] }
+// Each digest only selects rows of its own scope.
 
 POST   /api/admin/bans/promote
 Permission: bans:create-platform
-Body: { "banId": string, "phone": string (E.164) }
+Body: { "banId": string, "sourcePhoneHash": string, "phoneHash": string }
 Response: { "ok": true }
-// The number is entered again (§2.10): it must hash to the hub ban being promoted, else 400.
+// The number is entered again and digested under the source hub's key and the platform's (§2.10).
+// sourcePhoneHash must equal the stored hub ban, else 400 — a mistyped number cannot ban someone
+// else. phoneHash is what the platform ban stores. The server cannot link the two digests itself.
 ```
 
 ### 4.48 Platform Settings

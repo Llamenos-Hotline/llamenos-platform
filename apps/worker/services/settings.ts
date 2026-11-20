@@ -29,6 +29,7 @@ import {
   notes,
   noteReplies,
   bans,
+  banReentries,
   contactMetadata,
   auditLog,
   shifts,
@@ -2568,6 +2569,7 @@ export class SettingsService {
 
       // 4. Bans, contact metadata, audit log
       await tx.delete(bans).where(eq(bans.hubId, id))
+      await tx.delete(banReentries).where(eq(banReentries.hubId, id))
       await tx.delete(contactMetadata).where(eq(contactMetadata.hubId, id))
       await tx.delete(auditLog).where(eq(auditLog.hubId, id))
 

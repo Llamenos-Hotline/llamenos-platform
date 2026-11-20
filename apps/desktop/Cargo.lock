@@ -2707,6 +2707,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "base64 0.22.1",
+ "curve25519-dalek",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "hex",

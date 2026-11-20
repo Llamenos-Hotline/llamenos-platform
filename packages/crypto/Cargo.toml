@@ -13,6 +13,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 # Ed25519 signing
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 
+# ristretto255 for the RFC 9497 OPRF behind ban digests (ban_digest.rs). Already in the
+# graph via ed25519-dalek; named directly so the crate owns the group it uses.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+
 # X25519 key agreement
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 

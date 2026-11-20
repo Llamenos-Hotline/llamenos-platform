@@ -245,6 +245,9 @@ pub fn run() {
             // Shamir secret sharing (only stateless verification — split/combine are internal)
             crypto::shamir_commit,
             crypto::shamir_verify,
+            // Ban digest (#2759): blind/finalize a typed number; the server never sees it
+            crypto::ban_digest_blind,
+            crypto::ban_digest_finalize,
             // H16: Recovery group key isolation (combine+decrypt in Rust only)
             crypto::recovery_group_create,
             crypto::recovery_share_contribute_from_state,

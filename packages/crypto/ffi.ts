@@ -99,6 +99,24 @@ const lib = dlopen(LIB_PATH, {
     ],
     returns: FFIType.i32,
   },
+  ffi_ban_digest_evaluate: {
+    args: [
+      FFIType.ptr, FFIType.u64, // BAN_HASH_KEY (32)
+      FFIType.ptr, FFIType.u64, // scope (UTF-8)
+      FFIType.ptr, FFIType.u64, // caller identifier (UTF-8)
+      FFIType.ptr, FFIType.u64, // out (64)
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_ban_digest_blind_evaluate: {
+    args: [
+      FFIType.ptr, FFIType.u64, // BAN_HASH_KEY (32)
+      FFIType.ptr, FFIType.u64, // scope (UTF-8)
+      FFIType.ptr, FFIType.u64, // blinded element (32)
+      FFIType.ptr, FFIType.u64, // out (32)
+    ],
+    returns: FFIType.i32,
+  },
 })
 
 class CryptoError extends Error {
@@ -375,4 +393,38 @@ export function caseOpen(
   )
   if (written < 0) checkResult(written)
   return new TextDecoder().decode(out.subarray(0, written))
+}
+
+/**
+ * The ban digest (64 bytes) of a caller identifier the server already holds, under one scope's key —
+ * RFC 9497 OPRF `Evaluate` (`packages/crypto/src/ban_digest.rs`). Equal to what a client gets
+ * from blinding the same number, `banDigestBlindEvaluate`, and finalizing.
+ */
+export function banDigestEvaluate(banHashKey: Uint8Array, scope: string, identifier: string): Uint8Array {
+  const scopeBytes = new TextEncoder().encode(scope)
+  const phoneBytes = new TextEncoder().encode(identifier)
+  const out = new Uint8Array(64)
+  checkResult(lib.symbols.ffi_ban_digest_evaluate(
+    ptr(banHashKey), banHashKey.length,
+    ptr(scopeBytes), scopeBytes.length,
+    ptr(phoneBytes), phoneBytes.length,
+    ptr(out), out.length,
+  ))
+  return out
+}
+
+/**
+ * Evaluate a client's blinded element (32 bytes) under one scope's key — RFC 9497 OPRF
+ * `BlindEvaluate`. The server learns nothing about the number behind it.
+ */
+export function banDigestBlindEvaluate(banHashKey: Uint8Array, scope: string, blinded: Uint8Array): Uint8Array {
+  const scopeBytes = new TextEncoder().encode(scope)
+  const out = new Uint8Array(32)
+  checkResult(lib.symbols.ffi_ban_digest_blind_evaluate(
+    ptr(banHashKey), banHashKey.length,
+    ptr(scopeBytes), scopeBytes.length,
+    ptr(blinded), blinded.length,
+    ptr(out), out.length,
+  ))
+  return out
 }

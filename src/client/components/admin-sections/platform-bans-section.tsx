@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { listPlatformBans } from '@/lib/api'
-import type { PlatformBan } from '@protocol/schemas'
+import type { BanReentry, PlatformBan } from '@protocol/schemas'
 import { PlatformBansSection as PlatformBansSectionInner } from '@/components/admin-settings/platform-bans-section'
 
 export function PlatformBansSection() {
@@ -10,12 +10,13 @@ export function PlatformBansSection() {
   const { toast } = useToast()
   const [bans, setBans] = useState<PlatformBan[]>([])
   const [total, setTotal] = useState(0)
+  const [reentries, setReentries] = useState<BanReentry[]>([])
   const [loading, setLoading] = useState(true)
 
   function loadBans() {
     setLoading(true)
     listPlatformBans()
-      .then(({ bans, total }) => { setBans(bans); setTotal(total) })
+      .then(({ bans, total, reentries }) => { setBans(bans); setTotal(total); setReentries(reentries) })
       .catch(() => toast(t('common.error'), 'error'))
       .finally(() => setLoading(false))
   }
@@ -28,6 +29,7 @@ export function PlatformBansSection() {
     <PlatformBansSectionInner
       bans={bans}
       total={total}
+      reentries={reentries}
       onRefresh={loadBans}
       expanded={true}
       onToggle={() => {}}

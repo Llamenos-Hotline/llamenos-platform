@@ -41,6 +41,8 @@ const EXCLUDED_SCHEMAS = new Set([
   // Primitive validator schemas — string refinements, not standalone types
   'pubkeySchema',
   'e164PhoneSchema',
+  'banDigestSchema',
+  'banDigestElementSchema',
   'eciesPubkeySchema',
   'uuidSchema',
   'isoDateSchema',

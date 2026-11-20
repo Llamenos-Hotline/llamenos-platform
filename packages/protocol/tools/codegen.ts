@@ -218,6 +218,11 @@ const REFERENCED_BY_NAME = new Set([
   // (`SharedEncryptedReason`, even on the override's `encryptedNote`). It is
   // `SealedShiftField` — its own schema's name — wherever it appears.
   'SealedShiftField',
+  // #2759 — a search's per-scope lookups and evaluations. Without this the array items take
+  // the bare property names `Lookup` and `Evaluation`, which say nothing about bans and sit
+  // one unrelated schema away from being renamed under the mobile clients.
+  'BanLookup',
+  'BanScopeEvaluation',
 ])
 
 /**

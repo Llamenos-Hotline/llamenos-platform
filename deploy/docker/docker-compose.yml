@@ -90,6 +90,10 @@ services:
       # Optional: the invite page's "Get the app" link — an absolute https:// URL
       # (the app refuses to boot on anything else). Empty: no download link.
       - APP_DOWNLOAD_URL=${APP_DOWNLOAD_URL:-}
+      # Set ONLY to acknowledge a deliberately replaced ban-hash-key (#2829): the app
+      # refuses to boot on a key other than the one the stored bans were made under, and
+      # its refusal prints this value. Remove it after the one boot.
+      - BAN_KEY_REPLACED_ACK=${BAN_KEY_REPLACED_ACK:-}
       # Signal notification sidecar (profile: signal)
       # Points at the sidecar the `signal` profile starts. Keeping this
       # default is what makes `--profile signal` work without extra operator

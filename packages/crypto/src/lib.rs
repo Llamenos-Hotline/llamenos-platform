@@ -44,6 +44,9 @@ pub mod sframe;
 // === KDF parameters (shared across device_keys + encryption) ===
 pub mod kdf_params;
 
+// === Ban digest: RFC 9497 OPRF over ristretto255 (#2759) ===
+pub mod ban_digest;
+
 // === Stable modules (curve-independent) ===
 pub mod blind_index;
 pub mod errors;

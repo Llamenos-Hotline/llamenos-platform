@@ -260,6 +260,40 @@ describe('server startup: one role per secret', () => {
   }, BOOT_TIMEOUT_MS * 2)
 })
 
+describe('server startup: the ban list and the ban key agree (#2829)', () => {
+  const REPLACED_KEY_FILE = path.join(SECRET_DIR, 'ban-hash-key-replaced')
+  writeFileSync(REPLACED_KEY_FILE, `${'9'.repeat(64)}\n`)
+
+  it('moves bans the new digest cannot match to the re-entry list, then refuses a replaced key unless it is acknowledged', async () => {
+    const url = await freshMigratedDatabase()
+    // What the HMAC-era release left behind: a 64-hex digest and no recorded key.
+    await withDb(url, (sql) => sql`
+      INSERT INTO bans (id, hub_id, phone_hash, reason, banned_by, banned_at)
+      VALUES ('legacy', NULL, ${'1a'.repeat(32)}, 'coordinated spam', ${ADMIN_PUBKEY}, '2026-10-02T12:00:00Z')`)
+
+    await bootServer(url, ADMIN_PUBKEY)
+    await withDb(url, async (sql) => {
+      expect(await sql`SELECT 1 FROM bans`).toHaveLength(0)
+      const reentries = await sql<{ reason: string; cause: string }[]>`SELECT reason, cause FROM ban_reentries`
+      expect(reentries).toEqual([{ reason: 'coordinated spam', cause: 'digest-scheme' }])
+    })
+
+    // A restart with the same key is quiet.
+    await bootServer(url, ADMIN_PUBKEY)
+
+    // The key file was lost and regenerated: the server will not serve a ban list that matches nothing.
+    const replaced = { extraEnv: { BAN_HASH_KEY_FILE: REPLACED_KEY_FILE } }
+    const refusal = await bootServer(url, ADMIN_PUBKEY, replaced).then(() => null, (e: unknown) => e as Error)
+    expect(refusal?.message).toMatch(/BAN_HASH_KEY is not the key the stored bans were made under/)
+    const fingerprint = refusal?.message.match(/BAN_KEY_REPLACED_ACK=([0-9a-f]+)/)?.[1]
+    expect(fingerprint).toMatch(/^[0-9a-f]{128}$/)
+
+    // The operator names the new key's fingerprint: the replacement is deliberate.
+    await bootServer(url, ADMIN_PUBKEY, { extraEnv: { ...replaced.extraEnv, BAN_KEY_REPLACED_ACK: fingerprint! } })
+    await bootServer(url, ADMIN_PUBKEY, replaced)
+  }, BOOT_TIMEOUT_MS * 5)
+})
+
 describe('server startup initialisation', () => {
   it('a never-seeded database boots with the configured admin and the default roles', async () => {
     const url = await freshMigratedDatabase()

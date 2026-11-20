@@ -32,6 +32,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -45,9 +49,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.llamenos.hotline.R
-import org.llamenos.hotline.model.BanEntry
-import org.llamenos.hotline.model.identifierHash
-import org.llamenos.hotline.model.id
 
 @Composable
 fun PlatformBansTab(
@@ -55,9 +56,10 @@ fun PlatformBansTab(
     modifier: Modifier = Modifier,
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    var addIdentifierHash by remember { mutableStateOf("") }
+    // The admin types a number; only its ban digest is ever sent (#2759, AdminViewModel).
+    var addPhone by remember { mutableStateOf("") }
     var addReason by remember { mutableStateOf("") }
-    var banToRemove by remember { mutableStateOf<BanEntry?>(null) }
+    var banToRemove by remember { mutableStateOf<PlatformBanRow?>(null) }
 
     // Removing a platform ban re-admits the caller on every hub: ask first (#2540). The dialog is
     // the only thing that mints the confirmation `removePlatformBan` requires, and the list and
@@ -66,7 +68,7 @@ fun PlatformBansTab(
         DeletionConfirmed.Dialog(
             action = AdminDeletion.PLATFORM_BAN,
             targetId = ban.id,
-            subject = listOfNotNull(ban.identifierHash.take(16) + "...", ban.reason.takeIf { it.isNotBlank() })
+            subject = listOfNotNull(ban.phoneHash.take(16) + "...", ban.reason?.takeIf { it.isNotBlank() })
                 .joinToString(" · "),
             onConfirmed = {
                 banToRemove = null
@@ -84,13 +86,14 @@ fun PlatformBansTab(
             text = {
                 Column {
                     OutlinedTextField(
-                        value = addIdentifierHash,
-                        onValueChange = { addIdentifierHash = it },
-                        label = { Text(stringResource(R.string.platform_bans_search_placeholder)) },
+                        value = addPhone,
+                        onValueChange = { addPhone = it },
+                        label = { Text(stringResource(R.string.ban_list_phone_number)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .testTag("platform-ban-hash-input"),
+                            .testTag("platform-ban-phone-input"),
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
@@ -107,11 +110,11 @@ fun PlatformBansTab(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        viewModel.addPlatformBan(addIdentifierHash, addReason)
-                        addIdentifierHash = ""
+                        viewModel.addPlatformBan(addPhone, addReason)
+                        addPhone = ""
                         addReason = ""
                     },
-                    enabled = addIdentifierHash.isNotBlank(),
+                    enabled = E164.matches(addPhone.trim()),
                     modifier = Modifier.testTag("confirm-platform-ban"),
                 ) {
                     Text(stringResource(R.string.platform_bans_create_button))
@@ -152,11 +155,18 @@ fun PlatformBansTab(
             OutlinedTextField(
                 value = uiState.platformBanSearchQuery,
                 onValueChange = { viewModel.setPlatformBanSearchQuery(it) },
-                label = { Text(stringResource(R.string.platform_bans_search_placeholder)) },
+                label = { Text(stringResource(R.string.ban_list_phone_number)) },
                 leadingIcon = {
                     Icon(Icons.Filled.Search, contentDescription = null)
                 },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = {
+                        val phone = uiState.platformBanSearchQuery.trim()
+                        if (E164.matches(phone)) viewModel.searchPlatformBans(phone)
+                    },
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -215,7 +225,7 @@ fun PlatformBansTab(
                             modifier = Modifier.testTag("platform-ban-search-results"),
                         ) {
                             items(
-                                items = uiState.platformBanSearchResults,
+                                items = uiState.platformBanSearchResults.map { PlatformBanRow(it.id, it.phoneHash, it.reason) },
                                 key = { it.id },
                             ) { ban ->
                                 PlatformBanCard(
@@ -235,7 +245,7 @@ fun PlatformBansTab(
                             .testTag("platform-bans-list"),
                     ) {
                         items(
-                            items = uiState.platformBans,
+                            items = uiState.platformBans.map { PlatformBanRow(it.id, it.phoneHash, it.reason) },
                             key = { it.id },
                         ) { ban ->
                             PlatformBanCard(
@@ -268,9 +278,15 @@ fun PlatformBansTab(
     }
 }
 
+/** E.164, as the crate requires: a number typed any other way digests to something no call matches. */
+private val E164 = Regex("^\\+\\d{7,15}$")
+
+/** One platform-ban row, from the list (`PlatformBanListResponseBan`) or a search result. */
+private data class PlatformBanRow(val id: String, val phoneHash: String, val reason: String?)
+
 @Composable
 private fun PlatformBanCard(
-    ban: BanEntry,
+    ban: PlatformBanRow,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -299,7 +315,7 @@ private fun PlatformBanCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = ban.identifierHash.take(16) + "...",
+                    text = ban.phoneHash.take(16) + "...",
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

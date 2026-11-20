@@ -145,6 +145,11 @@ spec:
             - name: APP_DOWNLOAD_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.app.env.BAN_KEY_REPLACED_ACK }}
+            {{- /* One-boot acknowledgement of a deliberately replaced ban-hash-key (#2829). */}}
+            - name: BAN_KEY_REPLACED_ACK
+              value: {{ . | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /api/health/live

@@ -1176,6 +1176,39 @@ class CryptoService @Inject constructor() {
             }
         }
 
+    // ---- Ban digest (#2759) ----
+
+    /**
+     * Blind an E.164 number for a ban digest (RFC 9497 OPRF, `packages/crypto/src/ban_digest.rs`).
+     * Send [org.llamenos.core.BanDigestBlind.blindedElementHex] to the server's evaluate endpoint
+     * and keep [org.llamenos.core.BanDigestBlind.blindHex] for [banDigestFinalize]: the number
+     * itself never leaves the device. Throws for anything that is not E.164.
+     */
+    suspend fun banDigestBlind(phone: String): org.llamenos.core.BanDigestBlind =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.banDigestBlind(phone = phone)
+            } catch (e: Exception) {
+                throw CryptoException("Ban digest blind failed: ${e.message}", e)
+            }
+        }
+
+    /** Finalize the server's evaluated element into the number's ban digest (128 hex chars). */
+    suspend fun banDigestFinalize(phone: String, blindHex: String, evaluatedElementHex: String): String =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.banDigestFinalize(
+                    phone = phone,
+                    blindHex = blindHex,
+                    evaluatedElementHex = evaluatedElementHex,
+                )
+            } catch (e: Exception) {
+                throw CryptoException("Ban digest finalize failed: ${e.message}", e)
+            }
+        }
+
     // ---- Recovery Group ----
 
     suspend fun recoveryGroupGenerateKeypair(): RecoveryGroupKeypair =

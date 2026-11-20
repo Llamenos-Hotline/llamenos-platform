@@ -19,7 +19,7 @@ Feature: Platform-Wide Ban Management
   Scenario: Create platform ban dialog opens on button click
     When I navigate to the admin "platform-bans" section
     And I click the platform bans create button
-    Then I should see a dialog for entering phone hash and reason
+    Then I should see a dialog for entering a phone number and reason
 
   Scenario: Search functionality is available
     When I navigate to the admin "platform-bans" section

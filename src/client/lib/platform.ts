@@ -81,6 +81,8 @@ export type TauriIpcCommand =
   | 'derive_sas'
   | 'shamir_commit'
   | 'shamir_verify'
+  | 'ban_digest_blind'
+  | 'ban_digest_finalize'
   | 'recovery_group_create'
   | 'recovery_share_contribute_from_state'
   | 'recovery_share_liveness_proof_from_state'
@@ -1602,6 +1604,26 @@ export async function shamirVerify(x: number, yHex: string, commitmentHex: strin
     return tauriInvoke<boolean>('shamir_verify', { x, yHex, commitmentHex })
   }
   throw new Error('WASM shamir verify not yet implemented')
+}
+
+/** The client half of one blinded ban-digest evaluation (#2759). Keep `blindHex`; send the element. */
+export interface BanDigestBlind {
+  blindHex: string
+  blindedElementHex: string
+}
+
+/**
+ * Blind an E.164 number for a ban digest, in Rust (`packages/crypto/src/ban_digest.rs`).
+ * Rejects anything that is not E.164 — a number with spaces would digest to something no
+ * inbound call can match.
+ */
+export async function banDigestBlind(phone: string): Promise<BanDigestBlind> {
+  return tauriInvoke<BanDigestBlind>('ban_digest_blind', { phone })
+}
+
+/** Finalize the server's evaluation of a blinded number into its ban digest (128 hex chars). */
+export async function banDigestFinalize(phone: string, blindHex: string, evaluatedElementHex: string): Promise<string> {
+  return tauriInvoke<string>('ban_digest_finalize', { phone, blindHex, evaluatedElementHex })
 }
 
 // ── H16: Recovery group key isolation (combine+decrypt stays in Rust) ──

@@ -121,17 +121,43 @@ describe('bans routes', () => {
       const listBansSpy = vi.fn().mockResolvedValue({
         bans: [{ phoneHash: 'f'.repeat(64), reason: 'Spam', bannedBy: 'admin', bannedAt: new Date().toISOString() }],
       })
+      const reentry = { id: 'r1', reason: 'Threats', bannedBy: 'admin', bannedAt: new Date().toISOString(), cause: 'digest-scheme', retiredAt: new Date().toISOString() }
+      const listReentriesSpy = vi.fn().mockResolvedValue([reentry])
       const { app } = createTestApp({
         permissions: ['bans:read'],
         hubId: 'hub-1',
-        serviceMock: { records: { listBans: listBansSpy } },
+        serviceMock: { records: { listBans: listBansSpy, listBanReentries: listReentriesSpy } },
       })
 
       const res = await app.request('/bans')
       expect(res.status).toBe(200)
       const json = await res.json()
       expect(json.bans).toHaveLength(1)
+      // Bans that no longer enforce are in the same response: a defence that went quiet is never invisible (#2829).
+      expect(json.reentries).toEqual([reentry])
       expect(listBansSpy).toHaveBeenCalledWith(hubScope('hub-1'))
+      expect(listReentriesSpy).toHaveBeenCalledWith(hubScope('hub-1'))
+    })
+
+    it('dismisses a re-entry in its own hub, audited, and answers 404 for one it does not hold', async () => {
+      const dismiss = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+      const auditLogSpy = vi.fn().mockResolvedValue(undefined)
+      const { app } = createTestApp({
+        permissions: ['bans:delete'],
+        hubId: 'hub-1',
+        serviceMock: { records: { dismissBanReentry: dismiss } },
+        auditLogSpy,
+      })
+      expect((await app.request('/bans/reentries/r1', { method: 'DELETE' })).status).toBe(200)
+      expect(dismiss).toHaveBeenCalledWith(hubScope('hub-1'), 'r1')
+      expect(auditLogSpy).toHaveBeenCalledTimes(1)
+      expect((await app.request('/bans/reentries/r2', { method: 'DELETE' })).status).toBe(404)
+      expect(auditLogSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('dismissing a re-entry needs bans:delete', async () => {
+      const { app } = createTestApp({ permissions: ['bans:read'], serviceMock: { records: { dismissBanReentry: vi.fn() } } })
+      expect((await app.request('/bans/reentries/r1', { method: 'DELETE' })).status).toBe(403)
     })
 
     it('requires bans:read permission', async () => {

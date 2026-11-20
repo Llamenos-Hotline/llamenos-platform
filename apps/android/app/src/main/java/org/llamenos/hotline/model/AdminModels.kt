@@ -46,16 +46,6 @@ typealias InvitesListResponse = org.llamenos.protocol.InviteListResponse
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Request body for adding a ban via POST /api/admin/bans.
- * Client-specific shape — uses `identifier` (pre-hashed on client).
- */
-@Serializable
-data class AddBanRequest(
-    val identifier: String,
-    val reason: String? = null,
-)
-
-/**
  * Response wrapper from POST /api/invites.
  * The server answers 201 with `{"invite": {...}}` (identity.createInvite
  * returns the invite wrapped), matching the desktop client's `res.invite`.
