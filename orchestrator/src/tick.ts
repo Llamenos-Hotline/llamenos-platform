@@ -305,6 +305,19 @@ function verificationFieldFor(report: VerifyReport | undefined): Pick<RunRecord,
   return { verification: { failedSha: sha, runnerCrashed: report?.testsRunnerCrashed === true } }
 }
 
+/**
+ * The ledger outcome of a verification that did not pass (#2889). A red result
+ * that was READ is the diff failing: REJECTED, which spends the item's attempt
+ * budget and feeds the failure breaker. A runner that reached no verdict is the
+ * fleet's own plumbing — a host whose Node cannot start vitest killed every
+ * orchestrator PR this way — so it is UNVERIFIED, exactly like a review that
+ * never got a verdict (#870): outside the budget and the breakers, and still
+ * carrying `verification` so the re-entry pass owes the head another run.
+ */
+function failedVerificationOutcome(report: VerifyReport | undefined): 'REJECTED' | 'UNVERIFIED' {
+  return report?.testsRunnerCrashed === true ? 'UNVERIFIED' : 'REJECTED'
+}
+
 /** Best-effort: a comment that cannot be posted must not change the outcome
  *  already decided, or the recorded ledger row. */
 async function commentVerificationFailedOnPr(
@@ -374,7 +387,8 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
 
     if (!report.passed) {
       deps.record({
-        ...base, outcome: 'REJECTED', branch: head.branch, pr, note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`),
+        ...base, outcome: failedVerificationOutcome(report), branch: head.branch, pr,
+        note: truncateNote(`${REENTRY_NOTE_PREFIX} ${trace}`),
         ...verificationFieldFor(report),
       })
       await commentVerificationFailedOnPr(deps, pr, report, true)
@@ -524,14 +538,17 @@ async function runLiveDispatch(
         const reasons = verifyReport?.reasons ?? []
         await deps.commentOnIssue(
           item.id,
-          `Mechanical verification failed after ${loop.rounds} round(s):\n- ${reasons.join('\n- ')}`,
+          loop.runnerCrashed === true
+            ? `The test runner reached no verdict after ${loop.rounds} round(s) — this is the fleet's own ` +
+              `infrastructure, not a finding about the work, and no review was requested yet:\n- ${reasons.join('\n- ')}`
+            : `Mechanical verification failed after ${loop.rounds} round(s):\n- ${reasons.join('\n- ')}`,
         )
         // #2738: the PR itself says so. The issue comment above is where the
         // fleet reports to the ITEM; a person looking at the PR saw an
         // ordinary open PR awaiting review.
         await commentVerificationFailedOnPr(deps, pr, verifyReport, false)
         final = {
-          ...base, outcome: 'REJECTED', branch, pr,
+          ...base, outcome: failedVerificationOutcome(verifyReport), branch, pr,
           note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({ report: verifyReport })}`),
           ...verificationFieldFor(verifyReport),
         }

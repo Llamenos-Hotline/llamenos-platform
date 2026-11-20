@@ -7,6 +7,7 @@ import {
   MAX_REENTRIES_PER_SHA,
 } from '../../orchestrator/src/reverify.js'
 import { tick, type TickDeps } from '../../orchestrator/src/tick.js'
+import { failedAttemptsIn } from '../../orchestrator/src/ledger.js'
 import { buildGateTrace } from '../../orchestrator/src/trace.js'
 import { judgeTargetRun } from '../../orchestrator/src/verify.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
@@ -186,11 +187,71 @@ describe('the original failure is visible on the PR itself (#2738)', () => {
     })
     await tick(d)
     expect(d.commentOnIssue).toHaveBeenCalled()
+    // #2889: a runner that reached no verdict is not the diff failing — it is
+    // recorded UNVERIFIED, outside the attempt budget and the breakers.
     expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
-      outcome: 'REJECTED', verification: { failedSha: NEW, runnerCrashed: true },
+      outcome: 'UNVERIFIED', verification: { failedSha: NEW, runnerCrashed: true },
     }))
+    expect(d.record).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED' }))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringMatching(/no review was requested[\s\S]*runner-exit/))
     expect(d.commentOnPr).toHaveBeenCalledWith('55', expect.stringContaining('crashed before producing a result'))
+  })
+})
+
+describe('a crashed suite is not an adverse verdict, and does not end the review loop (#2889)', () => {
+  const crashedReport: VerifyReport = {
+    passed: false, reasons: ['orchestrator: runner-exit — the test runner exited 1 and wrote no result file'],
+    changedFiles: ['orchestrator/src/x.ts'], addedLines: 1, impact: 'high', impactReasons: ['orchestrator/'],
+    testsRun: ['orchestrator'], testsPassed: false, testsRunnerCrashed: true, verifiedCommit: NEW,
+  }
+  const unverifiedCrash = (sha: string, ts = 1): RunRecord =>
+    row({
+      ts, outcome: 'UNVERIFIED', note: `rounds=1 scope=pass impact=high tests=orchestrator:crash review=not-run sha=${sha}`,
+      verification: { failedSha: sha, runnerCrashed: true },
+    })
+
+  it('the re-entry pass reads an UNVERIFIED crash row, and still bounds the retries per head', () => {
+    expect(latestMechanicalRejection([unverifiedCrash(OLD)], '7')).toMatchObject({ sha: OLD, runnerCrashed: true })
+    expect(assessOpenPr([unverifiedCrash(OLD)], '7', OLD)).toEqual({ kind: 'runner-crash', failedSha: OLD })
+    expect(assessOpenPr([unverifiedCrash(OLD, 1), unverifiedCrash(OLD, 2)], '7', OLD).kind).toBe('abandoned')
+    // The crash was on an older commit: the move is what it was waiting for.
+    expect(assessOpenPr([unverifiedCrash(OLD)], '7', NEW)).toEqual({ kind: 'head-moved', failedSha: OLD, headSha: NEW })
+  })
+
+  it('a crash costs the item no attempt — three of them leave its budget untouched', () => {
+    const crashes = [unverifiedCrash(OLD, 1), unverifiedCrash(OLD, 2), unverifiedCrash(OLD, 3)]
+    expect(failedAttemptsIn(crashes, '7')).toBe(0)
+    // The same three as red results DO exhaust it: the distinction is the point.
+    expect(failedAttemptsIn([rejected(OLD, 'fail', 1), rejected(OLD, 'fail', 2), rejected(OLD, 'fail', 3)], '7')).toBe(3)
+  })
+
+  it('end to end: round 1 crashes, the next pass re-runs the SAME head and requests the review', async () => {
+    const recorded: RunRecord[] = []
+    const log = vi.fn()
+    const first = deps({
+      readLedger: () => [],
+      findOpenPr: async () => undefined,
+      dispatch: vi.fn(async () => ({ outcome: 'SUCCESS' as const, branch: 'fleet/infra/7', pr: '55', worktree: '/wt' })),
+      verifyMechanical: vi.fn(async () => crashedReport),
+      record: vi.fn((r: RunRecord) => { recorded.push(r) }),
+      log,
+    })
+    await tick(first)
+    const terminal = recorded.filter((r) => r.outcome !== 'DISPATCHED')
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0]).toMatchObject({ outcome: 'UNVERIFIED', verification: { failedSha: NEW, runnerCrashed: true } })
+    expect(first.secondOpinion).not.toHaveBeenCalled()
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/mechanical verification failed/)
+
+    // The next pass: same head, a ledger holding exactly what the first wrote.
+    const second = deps({
+      readLedger: () => recorded,
+      prHead: vi.fn(async () => ({ sha: NEW, branch: 'fleet/infra/7' })),
+    })
+    await tick(second)
+    expect(second.verifyOpenPrHead).toHaveBeenCalledWith(expect.objectContaining({ pr: '55', headSha: NEW }))
+    expect(second.requestReviewOnNewHead).toHaveBeenCalledWith('55', 'fleet/infra/7')
+    expect(second.dispatch).not.toHaveBeenCalled()
   })
 })
 
