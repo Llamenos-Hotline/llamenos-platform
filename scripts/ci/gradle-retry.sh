@@ -73,6 +73,14 @@
 # seconds. settings.gradle.kts was untouched and every one of those jars is on
 # Central; the same cache restore passed on a sibling PR minutes earlier.
 #
+# A PARTIALLY RESTORED cache (module metadata intact, some files-2.1 jars gone) is
+# not a separate case, measured against the same Gradle 9.4.0 (#2871): with a live
+# registry Gradle notices the missing file and re-downloads it even on a plain run,
+# so that state alone never produces "Could not find"; the failure needs the
+# registry to miss the jar too, and then it is the remembered-miss case above —
+# attempt 1 "Could not find", attempt 2 with --refresh-dependencies re-downloads
+# the jar and resolves. Discarding the restored Gradle home is not needed.
+#
 # So once an attempt fails with an authoritative "Could not find", every later
 # attempt runs with --refresh-dependencies, which drops the remembered miss. It
 # is NOT used for a transport error (timeout, reset, DNS): Gradle does not cache
@@ -84,7 +92,7 @@
 # WHAT IS RETRIED
 # ---------------
 # Only a failure whose Gradle output names a resolution/transport error
-# (RESOLUTION_PATTERN below). A compile error, a failing test, a lint finding
+# (gradle-resolution.patterns). A compile error, a failing test, a lint finding
 # and a Gradle configuration error all exit non-zero WITHOUT matching it and are
 # returned immediately, after exactly one run, with Gradle's own exit status.
 # A genuinely missing dependency (a typo in libs.versions.toml) also matches, is
@@ -120,9 +128,21 @@ RATE_REPO_RETRIES="${GRADLE_RATE_LIMIT_REPO_MAX_RETRIES:-2}"
 REPO_INITIAL_BACKOFF_MS=500
 RATE_REPO_INITIAL_BACKOFF_MS=5000
 
-# A transport or resolution failure, as Gradle prints it. Deliberately specific:
-# a bare "Could not" would also match "Could not compile", which is a real error.
-RESOLUTION_PATTERN='Could not resolve |Could not find |Could not GET |Could not HEAD |Could not download |Could not get resource|Could not resolve all (files|dependencies)|Read timed out|Connect timed out|Connection (reset|refused)|Remote host terminated|Premature end of Content-Length|Received status code 5[0-9][0-9]|Received status code 429|Temporary failure in name resolution|Network is unreachable|UnknownHostException|SSLHandshakeException|Unable to tunnel'
+# What counts as a resolution/transport failure, and which of those Gradle
+# REMEMBERS, live in two pattern files beside this script (one ERE per line) so
+# there is ONE definition of the class (#2870). Deliberately specific: a bare
+# "Could not" would also match "Could not compile", which is a real error. Never
+# inline a copy of either list here or anywhere else: implementations that
+# disagree is how android-e2e came to call a missed gson jar "not an
+# infrastructure signature". .github/scripts/classify-infra-failure.py still
+# carries its own, narrower regex; it moves onto these files in #2875's follow-up
+# (that directory is in no lane's scope, so it cannot ride with this change).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESOLUTION_PATTERNS="${GRADLE_RESOLUTION_PATTERNS:-$HERE/gradle-resolution.patterns}"
+CACHED_MISS_PATTERNS="${GRADLE_CACHED_MISS_PATTERNS:-$HERE/gradle-cached-miss.patterns}"
+for f in "$RESOLUTION_PATTERNS" "$CACHED_MISS_PATTERNS"; do
+  [ -s "$f" ] || { echo "gradle-retry: pattern file ${f} is missing or empty" >&2; exit 2; }
+done
 
 gh_escape_data() {
   local s="$1"
@@ -152,7 +172,7 @@ trap 'rm -rf "$WORK"' EXIT
 # find or fetch, before the generic "Could not resolve all files" wrapper.
 first_failure() {
   { grep -m1 -E 'Could not (find|GET|HEAD|download|get resource) |timed out|reset|refused|status code' "$1" \
-      || grep -m1 -E "$RESOLUTION_PATTERN" "$1"; } | sed -E 's/^[[:space:]>*-]+//' | cut -c1-240
+      || grep -m1 -E -f "$RESOLUTION_PATTERNS" "$1"; } | sed -E 's/^[[:space:]>*-]+//' | cut -c1-240
 }
 
 REPORTS=()
@@ -187,7 +207,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     exit 0
   fi
 
-  if ! grep -qE "$RESOLUTION_PATTERN" "$log"; then
+  if ! grep -qE -f "$RESOLUTION_PATTERNS" "$log"; then
     # Not a registry problem: a compile error, a failing test, a lint finding.
     # Retrying would only hide a flake or double the time to a real failure.
     echo "gradle-retry: Gradle exited ${rc} with no dependency-resolution error — not retrying."
@@ -196,7 +216,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
 
   REPORTS+=("attempt ${attempt}: $(first_failure "$log")")
   # An authoritative miss is what Gradle remembers; only that needs the refresh.
-  if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE 'Could not find ' "$log"; then
+  if [ "${#REFRESH[@]}" -eq 0 ] && grep -qE -f "$CACHED_MISS_PATTERNS" "$log"; then
     REFRESH=(--refresh-dependencies)
   fi
   # The registry told us to slow down. Back off hard, and stop Gradle's own

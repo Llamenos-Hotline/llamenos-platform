@@ -2348,6 +2348,19 @@ jobs:
           ls -la apps/android/app/src/debug/jniLibs/x86_64/libllamenos_core.so
           file apps/android/app/src/debug/jniLibs/x86_64/libllamenos_core.so
 
+      # Resolve and build everything the instrumented run needs BEFORE the
+      # emulator boots (#2870). The Gradle call inside the emulator action is not
+      # retryable on its own: a missed jar fails it, Gradle remembers the miss, and
+      # run 44513364742 (shard 0) lost a merge group to a gson 404 that
+      # gradle-retry.sh would have survived. Through gradle-retry.sh the dependency
+      # graph is resolved with the same retry + --refresh-dependencies policy as
+      # android-build-test, so the connectedDebugAndroidTest run finds it all in
+      # the Gradle cache and only installs and runs. A persistent miss now fails
+      # here, in seconds, instead of after a ten-minute emulator boot.
+      - name: Resolve and build the debug + androidTest APKs (retried on a registry miss)
+        working-directory: apps/android
+        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain
+
       # ── Start backend services ──────────────────────────────────
       # Android E2E tests need a running backend for hub creation,
       # authentication, and call/message simulation endpoints.
@@ -2605,6 +2618,11 @@ jobs:
           # start when the runner disk is full.
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost || true
           df -h / || true
+          # A dependency-resolution failure leaves a remembered "Could not find" in the
+          # Gradle cache (#2870); gradle-retry.sh is the one place that knows to clear it
+          # (--refresh-dependencies on its later attempts), so re-resolve through it
+          # before spending another emulator boot. Harmless when nothing was missed.
+          ( cd apps/android && bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain )
 
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
         id: e2e-retry

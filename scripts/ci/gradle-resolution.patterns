@@ -1,0 +1,22 @@
+Could not resolve [^ ]
+Could not find [^ ]
+Could not GET [^ ]
+Could not HEAD [^ ]
+Could not download [^ ]
+Could not get resource
+Could not resolve all (files|dependencies)
+Plugin .* was not found in any of the following sources
+could not resolve plugin artifact
+Failed to transform .* to match attributes
+Read timed out
+Connect timed out
+Connection (reset|refused)
+Remote host terminated
+Premature end of Content-Length
+Received status code 5[0-9][0-9]
+Received status code 429
+Temporary failure in name resolution
+Network is unreachable
+UnknownHostException
+SSLHandshakeException
+Unable to tunnel

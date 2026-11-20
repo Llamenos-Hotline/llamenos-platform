@@ -5586,6 +5586,44 @@ BUILD FAILED in 39s
       expect(v.kind, v.detail).toBe('genuine')
     })
 
+    it('#2870: every Gradle invocation in a workflow goes through gradle-retry.sh, except the emulator run, which the shard retry owns', () => {
+      const wfDir = join(process.cwd(), '.github', 'workflows')
+      const bare: string[] = []
+      for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {
+        readFileSync(join(wfDir, f), 'utf8').split('\n').forEach((l, i) => {
+          if (l.trim().startsWith('#') || !/\.\/gradlew\b/.test(l)) return
+          if (l.includes('connectedDebugAndroidTest')) return // the emulator run: classified, retried a whole shard at a time, after the pre-resolve step
+          bare.push(`${f}:${i + 1}: ${l.trim()}`)
+        })
+      }
+      expect(bare).toEqual([])
+    })
+
+    // The job #2853 was first ejected from, on `Could not find junit:junit:4.13.2`. The workflow-wide guard above
+    // would also catch a bare ./gradlew here, but it cannot say the steps EXIST: a refactor that moved them into
+    // a composite action would leave it green and the job unprotected.
+    it('#2870: android-build-test runs its unit tests, lint and APK build through gradle-retry.sh', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const start = ci.indexOf('\n  android-build-test:')
+      expect(start, 'android-build-test job missing').toBeGreaterThan(0)
+      const job = ci.slice(start, ci.indexOf('\n  android-compile-check:', start))
+      for (const task of ['testDebugUnitTest', 'lintDebug', 'assembleDebug assembleDebugAndroidTest']) {
+        expect(job, `${task} must go through gradle-retry.sh`).toContain(`gradle-retry.sh ${task}`)
+      }
+    })
+
+    it('#2870: android-e2e resolves and builds through gradle-retry.sh BEFORE the emulator boots, and the retry does too', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const firstEmulator = job.indexOf('reactivecircus/android-emulator-runner')
+      const preResolve = job.indexOf('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+      expect(preResolve, 'pre-resolve step missing').toBeGreaterThan(0)
+      // The AVD-snapshot step also uses the emulator action: the pre-resolve must precede ALL of them.
+      expect(preResolve).toBeLessThan(firstEmulator)
+      const prep = job.slice(job.indexOf('Prepare the infrastructure retry'), job.indexOf('infrastructure retry\n', job.indexOf('Prepare the infrastructure retry')))
+      expect(prep).toContain('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+    })
+
     // ── #2657: an emulator with no default route reaches the tests as ConnectException, not as an
     // emulator-level line. Evidence is the ROOT CAUSE of every failure, not a log pattern. ──
     const noRoute = {

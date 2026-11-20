@@ -297,7 +297,7 @@ jobs:
       # extract nothing and report an empty, green analysis.
       - name: Build (traced)
         working-directory: apps/android
-        run: ./gradlew --no-daemon --no-build-cache compileDebugKotlin --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh --no-daemon --no-build-cache compileDebugKotlin --console=plain
 
       # upload: never — see the header: a staged configuration on main would
       # neutralise the required gate on every PR.
