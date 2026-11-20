@@ -11,6 +11,7 @@ import {
 import { REPO } from '../../orchestrator/src/gh.js'
 import { CI_DIFF_FLAGS } from '../../orchestrator/src/ci.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
+import { reviewBinding } from '../../orchestrator/src/review-cache.js'
 
 /**
  * #1394: a push must never start a review. #2014: nor may it conclude green
@@ -401,7 +402,9 @@ describe('review-gate by injection — a push never starts a review, and never g
   // genuine PASS. The same head, with the App's PASS on it, must end green.
   const appCheckRun = (o: Record<string, unknown>) => ({
     id: 901, name: 'fleet/review', status: 'completed', conclusion: 'success',
-    started_at: '2026-11-20T10:00:00Z', app: { slug: 'llamenos-fleet-review' }, ...o,
+    started_at: '2026-11-20T10:00:00Z', app: { slug: 'llamenos-fleet-review' },
+    // What the PASS judged besides the commit: the general set and THIS description.
+    external_id: reviewBinding(undefined, claimDigest(CLAIM)), ...o,
   })
   const headChecks = (checkRuns: unknown[]): Route =>
     ({ match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs\\?per_page=100$`, stdout: [{ check_runs: checkRuns }] })
@@ -424,6 +427,10 @@ describe('review-gate by injection — a push never starts a review, and never g
     // A PASS from any other author — an Actions job, another app — is not the App's.
     expect(outcome([appCheckRun({ app: { slug: 'github-actions' } })])).toBe('unreviewed')
     expect(outcome([appCheckRun({ app: { slug: 'attacker-app' } })])).toBe('unreviewed')
+    // A PASS bound to another review set, another description, or to nothing.
+    expect(outcome([appCheckRun({ external_id: reviewBinding(undefined, claimDigest({ title: 'x', body: 'y' })) })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ external_id: 'fleet-review:v1;set=set-0123456789ab;claim=00' })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ external_id: '' })])).toBe('unreviewed')
     // A later failure by the App is not outvoted by its earlier pass.
     expect(outcome([
       appCheckRun({}),

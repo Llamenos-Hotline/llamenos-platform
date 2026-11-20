@@ -4,7 +4,7 @@ import {
   type ReviewGateDeps,
 } from '../../orchestrator/src/ci.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
-import type { ReviewCache } from '../../orchestrator/src/review-cache.js'
+import { reviewBinding, reviewSetTag, type ReviewCache } from '../../orchestrator/src/review-cache.js'
 import {
   appRecordedVerdictFrom, readAppRecordedVerdict, REVIEW_RECORDER_APP_SLUG, type AppRecordedVerdict,
 } from '../../orchestrator/src/review-app-verdict.js'
@@ -27,49 +27,66 @@ const HEAD = 'b578ec7db5ba0123456789abcdef0123456789ab'
 const TREE = 'a'.repeat(40)
 const CLAIM = { title: 't', body: 'b' }
 
+const CLAIM_HEX = claimDigest(CLAIM)
+const BINDING = reviewBinding(undefined, CLAIM_HEX)
+
 const run = (o: Partial<HeadCheckRun> & { id: number }): HeadCheckRun => ({
   name: 'fleet/review', status: 'completed', conclusion: 'success',
-  startedAt: '2026-11-20T10:00:00Z', appSlug: REVIEW_RECORDER_APP_SLUG, ...o,
+  startedAt: '2026-11-20T10:00:00Z', appSlug: REVIEW_RECORDER_APP_SLUG, externalId: BINDING, ...o,
 })
 
 describe('appRecordedVerdictFrom — which check run is believed', () => {
   it('believes the review App\'s completed success on this head', () => {
-    expect(appRecordedVerdictFrom([run({ id: 1 })], HEAD)).toEqual({ kind: 'pass', checkRunId: 1, url: `check run 1 on ${HEAD}` })
+    expect(appRecordedVerdictFrom([run({ id: 1 })], HEAD, BINDING)).toEqual({ kind: 'pass', checkRunId: 1, url: `check run 1 on ${HEAD}` })
   })
 
   it('never believes a check run by another author — the name is not a capability', () => {
     for (const slug of ['github-actions', 'some-other-app', 'llamenos-fleet-review-evil']) {
-      expect(appRecordedVerdictFrom([run({ id: 1, appSlug: slug })], HEAD).kind, slug).toBe('none')
+      expect(appRecordedVerdictFrom([run({ id: 1, appSlug: slug })], HEAD, BINDING).kind, slug).toBe('none')
     }
-    expect(appRecordedVerdictFrom([run({ id: 1, appSlug: '(no app)' })], HEAD).kind).toBe('none')
+    expect(appRecordedVerdictFrom([run({ id: 1, appSlug: '(no app)' })], HEAD, BINDING).kind).toBe('none')
   })
 
   it('ignores another check name and a run still in flight', () => {
-    expect(appRecordedVerdictFrom([run({ id: 1, name: 'fleet/verify' })], HEAD).kind).toBe('none')
-    expect(appRecordedVerdictFrom([run({ id: 1, status: 'in_progress', conclusion: null })], HEAD).kind).toBe('none')
+    expect(appRecordedVerdictFrom([run({ id: 1, name: 'fleet/verify' })], HEAD, BINDING).kind).toBe('none')
+    expect(appRecordedVerdictFrom([run({ id: 1, status: 'in_progress', conclusion: null })], HEAD, BINDING).kind).toBe('none')
   })
 
   it('the LATEST decides: a later failure is not outvoted by an earlier pass', () => {
     const v = appRecordedVerdictFrom([
       run({ id: 1, startedAt: '2026-11-20T10:00:00Z' }),
       run({ id: 2, conclusion: 'failure', startedAt: '2026-11-20T11:00:00Z' }),
-    ], HEAD)
+    ], HEAD, BINDING)
     expect(v.kind).toBe('none')
     // …and a later pass supersedes an earlier failure.
     expect(appRecordedVerdictFrom([
       run({ id: 1, conclusion: 'failure', startedAt: '2026-11-20T10:00:00Z' }),
       run({ id: 2, startedAt: '2026-11-20T11:00:00Z' }),
-    ], HEAD).kind).toBe('pass')
+    ], HEAD, BINDING).kind).toBe('pass')
+  })
+
+  it('REVIEW SET / DESCRIPTION BINDING: a PASS that judged something else is not believed', () => {
+    const profiled = reviewBinding(reviewSetTag(['crypto-security-reviewer']), CLAIM_HEX)
+    expect(profiled).not.toBe(BINDING)
+    // The PASS ran the general reviewer alone; the gate now requires a crypto profile.
+    expect(appRecordedVerdictFrom([run({ id: 1 })], HEAD, profiled).kind).toBe('none')
+    // …and the reverse: a PASS for a wider set still names a different binding — exact match only.
+    expect(appRecordedVerdictFrom([run({ id: 1, externalId: profiled })], HEAD, BINDING).kind).toBe('none')
+    // The description changed after the review.
+    expect(appRecordedVerdictFrom([run({ id: 1 })], HEAD, reviewBinding(undefined, claimDigest({ title: 't', body: 'edited' }))).kind).toBe('none')
+    // Posted before bindings existed: no tag at all.
+    expect(appRecordedVerdictFrom([run({ id: 1, externalId: '' })], HEAD, BINDING).kind).toBe('none')
+    expect(appRecordedVerdictFrom([run({ id: 1, externalId: undefined })], HEAD, BINDING).kind).toBe('none')
   })
 
   it('no check runs at all is none, not a pass', () => {
-    expect(appRecordedVerdictFrom([], HEAD).kind).toBe('none')
+    expect(appRecordedVerdictFrom([], HEAD, BINDING).kind).toBe('none')
   })
 
   it('a read that throws is unreadable — "could not look" is never a pass', async () => {
-    const v = await readAppRecordedVerdict(HEAD, () => {}, async () => { throw new Error('HTTP 502') })
+    const v = await readAppRecordedVerdict(HEAD, BINDING, () => {}, async () => { throw new Error('HTTP 502') })
     expect(v.kind).toBe('unreadable')
-    const ok = await readAppRecordedVerdict(HEAD, () => {}, async () => [run({ id: 4 })])
+    const ok = await readAppRecordedVerdict(HEAD, BINDING, () => {}, async () => [run({ id: 4 })])
     expect(ok.kind).toBe('pass')
   })
 })
@@ -142,9 +159,22 @@ describe('the carrier reads the App\'s recorded PASS (#2884)', () => {
     expect(appRecordedVerdict).not.toHaveBeenCalled()
   })
 
-  it('claimDigest is unaffected — the cache key still carries the description', async () => {
-    const o = await gate({ app: { kind: 'pass', checkRunId: 7, url: 'u' } })
-    expect(o.cacheKey.claimDigest).toBe(claimDigest(CLAIM))
+  it('asks for the PASS bound to the set and description the gate reads NOW', async () => {
+    const asked: string[] = []
+    const rec = async (b: string): Promise<AppRecordedVerdict> => { asked.push(b); return { kind: 'none', reason: 'x' } }
+    await gate({ appRecordedVerdict: rec })
+    await gate({
+      appRecordedVerdict: rec,
+      reviewSet: async () => ({ ok: true, profiles: ['crypto-security-reviewer'], fromLabels: [], reasons: [] }),
+    })
+    expect(asked).toEqual([BINDING, reviewBinding(reviewSetTag(['crypto-security-reviewer']), CLAIM_HEX)])
+  })
+
+  it('is not consulted when the description could not be read — no claim, no binding, no PASS', async () => {
+    const appRecordedVerdict = vi.fn(async (): Promise<AppRecordedVerdict> => ({ kind: 'pass', checkRunId: 7, url: 'u' }))
+    const o = await gate({ prClaim: async () => undefined, appRecordedVerdict })
+    expect(o.kind).toBe('unreviewed')
+    expect(appRecordedVerdict).not.toHaveBeenCalled()
   })
 })
 

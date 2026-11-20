@@ -6,7 +6,7 @@ import type { VerifyInput, VerifyReport } from './verify.js'
 import { changedFilesFrom } from './verify.js'
 import { claimDigest, finalLine, outOfScopeFindings, requiredAdditionalReviewers, type PrClaim, type SecondOpinionInput, type SecondOpinionResult, type EngineFailureKind, type PartialReview } from './review.js'
 import {
-  diffHash, hasCacheKey, isTreeSha, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
+  diffHash, hasCacheKey, isClaimDigest, isTreeSha, reviewBinding, reviewSetTag, type CachedVerdict, type EarnedVerdict, type LastVerdictLookup, type ReviewCache, type ReviewCacheKey,
 } from './review-cache.js'
 import { join } from 'node:path'
 import { buildGateTrace } from './trace.js'
@@ -1957,8 +1957,11 @@ export interface ReviewGateDeps {
    * for the head's tree, and only a `pass` changes anything: `none` and
    * `unreadable` fall through to exactly the verdict this gate would have
    * reached without it. Omitted, the gate behaves as it did before.
+   * Called with the BINDING this head's PASS must carry — the review set and
+   * the PR description as the gate reads them now (`reviewBinding`) — so a PASS
+   * that judged a narrower set, or another description, is never believed.
    */
-  appRecordedVerdict?: (() => Promise<AppRecordedVerdict>) | undefined
+  appRecordedVerdict?: ((binding: string) => Promise<AppRecordedVerdict>) | undefined
   /**
    * The BASE checkout's `knope.toml` text — what `releasePrShape` reads the
    * list of knope-versioned files from. Absent or failing means no release
@@ -2214,10 +2217,10 @@ export async function decideReviewGate(deps: ReviewGateDeps): Promise<ReviewGate
     // carriers — stayed red under a recorded PASS. Consulted after the
     // cache, so a FAIL cached for this tree and description still wins, and
     // only a PASS changes anything: every other answer falls through.
-    if (deps.appRecordedVerdict !== undefined) {
+    if (deps.appRecordedVerdict !== undefined && isClaimDigest(cacheKey.claimDigest)) {
       let recorded: AppRecordedVerdict
       try {
-        recorded = await deps.appRecordedVerdict()
+        recorded = await deps.appRecordedVerdict(reviewBinding(reviewSetTag(set.profiles), cacheKey.claimDigest))
       } catch (e) {
         recorded = { kind: 'unreadable', reason: e instanceof Error ? e.message : String(e) }
       }

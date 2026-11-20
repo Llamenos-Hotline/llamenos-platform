@@ -620,6 +620,13 @@ carrier concludes `unreviewed` again). After posting a PASS, `review-and-merge`
 re-runs the head's failed carrier (`review-carrier-refresh.ts`) with the
 operator's own `gh` credentials — it needs `actions: write`, which the App
 deliberately does not have — and logs whether it did.
+The PASS is also **bound** to what it judged: `review-and-merge` writes the
+review-set tag and the PR description's digest into the check run's
+`external_id` (`reviewBinding`, `review-cache.ts`), and the carrier believes a
+run only when that tag equals the binding it computes from the live PR. A
+profile label added, or a description edited, after the review makes the PASS
+stale for the gate (and for `review-and-merge`'s own reuse, which then reviews
+again); a PASS posted before bindings existed is treated the same way.
 
 Each invocation mints a fresh installation token (RS256 App JWT → installation
 token → one POST) and keeps no copy of it. A missing, mis-permissioned or

@@ -22,12 +22,14 @@ import {
 } from './review-and-merge-guards.js'
 import type { VerifyReport } from './verify.js'
 import {
-  buildReviewPrompt, exportReviewSnapshot, invokeVerifierEngine, reviewPrimaryEngine, toSecondOpinion,
+  buildReviewPrompt, claimDigest, exportReviewSnapshot, invokeVerifierEngine, reviewPrimaryEngine, toSecondOpinion,
   type PrClaim,
   DEFAULT_MAX_TURNS, HIGH_IMPACT_MAX_TURNS, DEFAULT_TIMEOUT_MS, HIGH_IMPACT_TIMEOUT_MS,
   type ReviewRunEngine, type SecondOpinionResult, type ReviewSnapshot,
 } from './review.js'
 import type { ReviewDiffPlan } from './review-diff.js'
+import { REVIEW_RECORDER_APP_SLUG } from './review-app-verdict.js'
+import { reviewBinding, reviewSetTag } from './review-cache.js'
 import { describeCarrierRefresh, liveCarrierRefreshDeps, refreshFailedCarriers } from './review-carrier-refresh.js'
 
 const execFileAsync = promisify(execFile)
@@ -101,6 +103,10 @@ export interface CheckRunInfo {
   id: number
   status: string
   conclusion: string | null
+  /** The creating app — `review-app-verdict.ts` trusts the slug, never the name. */
+  app?: { slug?: string } | null
+  /** The verdict's binding (`reviewBinding`) when the review App posted it. */
+  external_id?: string | null
 }
 
 interface CheckRunsResponse { total_count: number; check_runs: CheckRunInfo[] }
@@ -133,8 +139,15 @@ export async function fetchReviewCheckRuns(sha: string): Promise<CheckRunInfo[] 
  * it was ever posted against, until a genuinely new head earns a genuinely
  * new PASS.
  */
-export function hasSuccessfulReview(checkRuns: CheckRunInfo[] | undefined): boolean {
-  return checkRuns?.some((c) => c.conclusion === 'success') ?? false
+export function hasSuccessfulReview(checkRuns: CheckRunInfo[] | undefined, binding?: string): boolean {
+  // A PASS the review App recorded is reusable only when it is BOUND to the
+  // review set and description this run would judge now (#2884): the gate
+  // refuses an unbound one (`appRecordedVerdictFrom`), so reusing it here
+  // would skip the review and leave a head the carrier still cannot clear.
+  // Any other author's green (the Actions job's own) is the gate's verdict
+  // already, and counts as it always did.
+  return checkRuns?.some((c) => c.conclusion === 'success' &&
+    (binding === undefined || c.app?.slug !== REVIEW_RECORDER_APP_SLUG || c.external_id === binding)) ?? false
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +477,7 @@ export async function postReviewCheckRun(
   sha: string,
   verdict: ReviewVerdict,
   text: string,
+  binding: string,
   opts: PostCheckRunOptions = {},
 ): Promise<void> {
   const summary = text.length > CHECK_RUN_SUMMARY_MAX
@@ -474,6 +488,10 @@ export async function postReviewCheckRun(
     head_sha: sha,
     status: 'completed',
     conclusion: checkRunConclusion(verdict),
+    // What this verdict judged besides the commit — the review set and the PR
+    // description — so the gate can refuse it for a head whose set or
+    // description has since changed (`reviewBinding`, #2884).
+    external_id: binding,
     output: { title: CHECK_RUN_TITLES[verdict], summary },
   })
   const token = await (opts.mintToken ?? mintInstallationToken)()
@@ -671,7 +689,7 @@ export interface ReviewAndMergeDeps {
    *  millisecond rather than a whole `opus` review. */
   recorderReady(): Promise<RecorderReadiness>
   /** Throws on every failure — there is no "posted it, probably" return. */
-  postCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void>
+  postCheckRun(sha: string, verdict: ReviewVerdict, text: string, binding: string): Promise<void>
   /** #2884 — after a PASS is on the head (posted now, or already there), have
    *  the head's Actions `fleet/review` carrier run again so the required
    *  context reads it instead of staying red under a recorded PASS. Resolves
@@ -846,9 +864,10 @@ async function processPr(pr: string, deps: ReviewAndMergeDeps, opts: ReviewAndMe
   // `fresh` (#2726/#2725) never consults the cache: the head's existing green
   // is exactly what is in doubt (e.g. judged by an engine that could not read
   // the whole diff), and reusing it would reuse the verdict being questioned.
+  const binding = reviewBinding(reviewSetTag(reviewSet.profiles), claimDigest(facts.claim))
   const cachedCheckRuns = opts.fresh === true ? undefined : await deps.fetchReviewCheckRuns(facts.headSha)
   let reused = false
-  if (hasSuccessfulReview(cachedCheckRuns)) {
+  if (hasSuccessfulReview(cachedCheckRuns, binding)) {
     deps.log(
       `review-and-merge: PR ${pr} head ${facts.headSha} already carries a successful ${REVIEW_JOB} ` +
       'check-run — reusing it, no new review',
@@ -896,7 +915,7 @@ async function processPr(pr: string, deps: ReviewAndMergeDeps, opts: ReviewAndMe
     // name composing differently would be a verdict that means one thing
     // from CI and another from here.
     try {
-      await deps.postCheckRun(facts.headSha, composed.verdict, composed.summary)
+      await deps.postCheckRun(facts.headSha, composed.verdict, composed.summary, binding)
     } catch (e) {
       // The verdict existed and is now unrecorded. Said plainly, with a
       // non-zero exit, and never as "posted" — the log line below is
@@ -1002,7 +1021,7 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     resolveProfile: (name) => resolveReviewerLabel(name, join(repoRoot, AGENT_REGISTRY_DIR)),
     invokeProfileReviewer: runProfileReview,
     recorderReady: async () => checkVerdictRecorder(),
-    postCheckRun: (sha, verdict, text) => postReviewCheckRun(sha, verdict, text),
+    postCheckRun: (sha, verdict, text, binding) => postReviewCheckRun(sha, verdict, text, binding),
     refreshCarrier: async (sha) => {
       try {
         return describeCarrierRefresh(await refreshFailedCarriers(sha, liveCarrierRefreshDeps(log)), sha)

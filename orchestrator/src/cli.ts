@@ -1851,7 +1851,7 @@ async function runReviewGate(): Promise<number> {
     // The PASS `review-and-merge` recorded as a check run by the review App
     // on this head (#2884) — asked on the same republish-only path, after
     // the cache, before this gate would fail closed `unreviewed`.
-    appRecordedVerdict: () => readAppRecordedVerdict(ctx.headSha, ciLog),
+    appRecordedVerdict: (binding) => readAppRecordedVerdict(ctx.headSha, binding, ciLog),
     // Same field `reviewRequestFor` consumed above — the gate uses it to
     // recognise an automated dependency PR by identity, not by branch name.
     prAuthor: event.prAuthor,
@@ -2013,7 +2013,7 @@ async function runReviewGate(): Promise<number> {
     process.stdout.write(
       `${REVIEW_JOB}: PASS recorded by the ${REVIEW_RECORDER_APP_SLUG} App on this exact head — ${outcome.url}\n` +
       `  - written by \`review-and-merge\`, which runs the same review set locally; republished here, not re-run.\n` +
-      `  - it judges this head's commit; it carries no digest of the PR title and description.\n`,
+      `  - bound to this head's commit, review set and PR description: a change to any of them is not covered.\n`,
     )
   }
   if (outcome.kind === 'low-tier') {

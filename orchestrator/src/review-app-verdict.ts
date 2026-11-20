@@ -37,14 +37,18 @@ import { defaultMissingChecksDeps, type HeadCheckRun } from './missing-checks.js
  * check run carrying it. An Actions job's own `fleet/review` is `github-actions`
  * and is never believed here (it is the carrier itself).
  *
- * WHAT IT DOES NOT COVER. A check run is keyed on the head SHA, so the PASS
- * judges exactly that commit's tree — the same freshness `review-and-merge`
- * itself already applies before it reuses one (`hasSuccessfulReview`). It
- * carries no title/body digest, so unlike a cached artifact it cannot
- * notice a description edited after the review. The reviewer was told to
- * FAIL a description that misstates the diff, so that is a real, narrower
- * guarantee than the artifact's — and a head whose artifact verdict exists
- * (a cached FAIL for this tree and description) is consulted FIRST and wins.
+ * WHAT THE VERDICT IS BOUND TO. A check run is keyed on the head SHA, so the
+ * PASS judges exactly that commit's tree. It must also be bound to what ELSE
+ * the cache's key binds a verdict to — the review SET and the PR's title and
+ * description (`claimDigest`, #2336) — or a profile label added, or a
+ * description edited, after the review would ride a PASS that never judged
+ * it. So `review-and-merge` writes both into the check run's `external_id`
+ * (`reviewBinding`, review-cache.ts), and the gate believes a run only when that tag equals
+ * the binding it computes NOW from the live PR. A run with no binding (one
+ * posted before this existed) or another one is not believed, and
+ * `review-and-merge` does not reuse it either — it reviews again and posts a
+ * bound one. A head whose artifact verdict exists (a cached FAIL for this
+ * tree and description) is consulted FIRST and wins.
  */
 
 /** The GitHub App that records `review-and-merge`'s verdict. Public by
@@ -74,7 +78,7 @@ export type AppRecordedVerdict =
  * flight is not a verdict and is ignored, and so is every check run whose
  * name or author is not exactly the one this trusts.
  */
-export function appRecordedVerdictFrom(runs: readonly HeadCheckRun[], headSha: string): AppRecordedVerdict {
+export function appRecordedVerdictFrom(runs: readonly HeadCheckRun[], headSha: string, binding: string): AppRecordedVerdict {
   const mine = runs.filter((r) =>
     r.name === REVIEW_JOB && r.appSlug === REVIEW_RECORDER_APP_SLUG && r.status === 'completed')
   if (mine.length === 0) {
@@ -89,17 +93,25 @@ export function appRecordedVerdictFrom(runs: readonly HeadCheckRun[], headSha: s
         `${latest.conclusion ?? '(none)'}, which is not a pass`,
     }
   }
+  // Bound to what it judged, or not believed: see "WHAT THE VERDICT IS BOUND TO".
+  if (latest.externalId !== binding) {
+    return {
+      kind: 'none',
+      reason: `the ${REVIEW_RECORDER_APP_SLUG} App's PASS on ${headSha} is bound to [${latest.externalId ?? ''}], not to ` +
+        `this PR's review set and description [${binding}] — it judged something else, or was recorded before bindings existed`,
+    }
+  }
   return { kind: 'pass', checkRunId: latest.id, url: `check run ${latest.id} on ${headSha}` }
 }
 
 /** Live wiring: the read-only head read `missing-checks` already owns, covered
  *  by the `checks: read` the review job already holds. */
 export async function readAppRecordedVerdict(
-  headSha: string, log: (msg: string) => void,
+  headSha: string, binding: string, log: (msg: string) => void,
   fetchCheckRuns: (sha: string) => Promise<HeadCheckRun[]> = defaultMissingChecksDeps().fetchCheckRuns,
 ): Promise<AppRecordedVerdict> {
   try {
-    return appRecordedVerdictFrom(await fetchCheckRuns(headSha), headSha)
+    return appRecordedVerdictFrom(await fetchCheckRuns(headSha), headSha, binding)
   } catch (e) {
     const reason = `could not read the ${REVIEW_JOB} check runs on ${headSha}: ${describeGhFailure(e)}`
     log(reason)
