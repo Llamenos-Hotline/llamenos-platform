@@ -28,6 +28,7 @@ import {
   type ReviewRunEngine, type SecondOpinionResult, type ReviewSnapshot,
 } from './review.js'
 import type { ReviewDiffPlan } from './review-diff.js'
+import { describeCarrierRefresh, liveCarrierRefreshDeps, refreshFailedCarriers } from './review-carrier-refresh.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -671,6 +672,12 @@ export interface ReviewAndMergeDeps {
   recorderReady(): Promise<RecorderReadiness>
   /** Throws on every failure — there is no "posted it, probably" return. */
   postCheckRun(sha: string, verdict: ReviewVerdict, text: string): Promise<void>
+  /** #2884 — after a PASS is on the head (posted now, or already there), have
+   *  the head's Actions `fleet/review` carrier run again so the required
+   *  context reads it instead of staying red under a recorded PASS. Resolves
+   *  to a line for the log and NEVER throws: the verdict is recorded
+   *  whether or not the re-run could be requested. */
+  refreshCarrier(sha: string): Promise<string>
   currentHeadSha(pr: string): Promise<string | undefined>
   requiredChecks(pr: string): Promise<RequiredCheck[] | undefined>
   /** #1158 — the reviews this PR needs, so the command can refuse rather
@@ -909,6 +916,15 @@ async function processPr(pr: string, deps: ReviewAndMergeDeps, opts: ReviewAndMe
     }
   }
 
+  // #2884: the PASS is on this head now, as a check run the Actions carrier
+  // could not see — and on a head whose carrier already concluded
+  // `unreviewed`, the required context is the worst of the two, so the
+  // recorded PASS alone does not open the route this command exists to be.
+  // Re-run the carrier so it reads the PASS. Reached only on a PASS (every
+  // other verdict returned above), on the fresh AND the reused path alike: a
+  // head whose PASS was posted by an earlier run is exactly the state to heal.
+  deps.log(`review-and-merge: ${await deps.refreshCarrier(facts.headSha)}`)
+
   // The opt-in gate. Everything above is review-and-record; nothing below
   // this line runs unless the caller asked to merge (#2742).
   if (!merge) {
@@ -987,6 +1003,13 @@ export function defaultReviewAndMergeDeps(repoRoot: string, log: (msg: string) =
     invokeProfileReviewer: runProfileReview,
     recorderReady: async () => checkVerdictRecorder(),
     postCheckRun: (sha, verdict, text) => postReviewCheckRun(sha, verdict, text),
+    refreshCarrier: async (sha) => {
+      try {
+        return describeCarrierRefresh(await refreshFailedCarriers(sha, liveCarrierRefreshDeps(log)), sha)
+      } catch (e) {
+        return describeCarrierRefresh({ kind: 'not-refreshed', why: e instanceof Error ? e.message : String(e) }, sha)
+      }
+    },
     currentHeadSha: async (pr) => (await ghJson<{ headRefOid: string }>(['pr', 'view', pr, '--json', 'headRefOid']))?.headRefOid,
     requiredChecks: readRequiredChecks,
     reviewSet: async (pr, changedFiles) => {

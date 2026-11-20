@@ -162,6 +162,7 @@ function baseDeps(over: Partial<ReviewAndMergeDeps> = {}): ReviewAndMergeDeps {
     invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict: 'PASS', text: 'VERDICT: PASS' })),
     recorderReady: vi.fn(async () => ({ ok: true as const })),
     postCheckRun: vi.fn(async () => {}),
+    refreshCarrier: vi.fn(async () => 'no carrier re-run needed: test'),
     currentHeadSha: vi.fn(async () => 'head111'),
     requiredChecks: vi.fn(async () => requiredChecks()),
     reviewSet: vi.fn(async () => ({ ok: true as const, profiles: [], fromLabels: [], reasons: [] })),
@@ -262,6 +263,47 @@ describe('runReviewAndMerge', () => {
     expect(outcome).toMatchObject({ kind: 'not-mergeable', pr: '9' })
     expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'FAIL', expect.any(String))
     expect(deps.merge).not.toHaveBeenCalled()
+  })
+
+  // #2884 — a PASS recorded as the App's check run is invisible to the head's
+  // Actions carrier until that carrier runs again, and the required context is
+  // the worst of the two. So a recorded PASS re-runs the carrier — freshly
+  // posted or already there — and nothing else does.
+  it('#2884: a freshly posted PASS re-runs the head\'s carrier, after posting', async () => {
+    const order: string[] = []
+    const deps = baseDeps({
+      postCheckRun: vi.fn(async () => { order.push('post') }),
+      refreshCarrier: vi.fn(async () => { order.push('refresh'); return 're-ran the carrier' }),
+    })
+    await runReviewAndMerge('9', deps, {})
+    expect(deps.refreshCarrier).toHaveBeenCalledExactlyOnceWith('head111')
+    expect(order).toEqual(['post', 'refresh'])
+  })
+
+  it('#2884: a PASS already on the head (reused) still heals a red carrier', async () => {
+    const deps = baseDeps({
+      fetchReviewCheckRuns: vi.fn(async () => [{ id: 1, status: 'completed', conclusion: 'success' }]),
+    })
+    await runReviewAndMerge('9', deps, {})
+    expect(deps.postCheckRun).not.toHaveBeenCalled()
+    expect(deps.refreshCarrier).toHaveBeenCalledExactlyOnceWith('head111')
+  })
+
+  it('#2884: a FAIL or an unreadable review never re-runs the carrier', async () => {
+    for (const verdict of ['FAIL', 'UNREADABLE'] as const) {
+      const deps = baseDeps({
+        invokeReviewer: vi.fn(async (): Promise<SecondOpinionResult> => ({ verdict, text: 'x' })),
+      })
+      await runReviewAndMerge('9', deps, {})
+      expect(deps.refreshCarrier, verdict).not.toHaveBeenCalled()
+    }
+  })
+
+  it('#2884: a verdict that could not be recorded re-runs nothing', async () => {
+    const deps = baseDeps({ postCheckRun: vi.fn(async () => { throw new Error('app down') }) })
+    const outcome = await runReviewAndMerge('9', deps, {})
+    expect(outcome.kind).toBe('review-unrecorded')
+    expect(deps.refreshCarrier).not.toHaveBeenCalled()
   })
 
   it('a prior FAIL for this head is never reused as fresh — it is reviewed again', async () => {

@@ -611,6 +611,16 @@ attacker could do is post a check-run conclusion — it cannot read this
 repository's code, merge, push, or touch issues or pull requests. See issue
 #1483 for the creation steps.
 
+**The App's slug is a trust anchor (#2884).** The head's Actions `fleet/review`
+carrier believes a recorded PASS only from a check run whose `app.slug` is
+exactly `llamenos-fleet-review` (`REVIEW_RECORDER_APP_SLUG`,
+`review-app-verdict.ts`) — a check run's name is not a capability, the App that
+created it is. Renaming the App therefore silently turns this route off (the
+carrier concludes `unreviewed` again). After posting a PASS, `review-and-merge`
+re-runs the head's failed carrier (`review-carrier-refresh.ts`) with the
+operator's own `gh` credentials — it needs `actions: write`, which the App
+deliberately does not have — and logs whether it did.
+
 Each invocation mints a fresh installation token (RS256 App JWT → installation
 token → one POST) and keeps no copy of it. A missing, mis-permissioned or
 unparseable key is a hard refusal with the remedy named — never a silent

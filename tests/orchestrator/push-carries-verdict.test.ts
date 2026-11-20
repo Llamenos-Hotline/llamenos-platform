@@ -278,6 +278,8 @@ interface Route { match: string; status?: number; stdout?: unknown; download?: u
 const common: Route[] = [
   { match: `^api repos/${REPO}/pulls/${PR}$`, stdout: { labels: [], ...CLAIM } },
   { match: `^api repos/${REPO}/actions/artifacts\\?name=`, stdout: { artifacts: [] } },
+  // The head's check runs (#2884): by default the review App recorded nothing.
+  { match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs\\?per_page=100$`, stdout: [{ check_runs: [] }] },
 ]
 
 /** The review-request writer's runs, and the dispatch writer's (none unless
@@ -348,7 +350,10 @@ function reviewGate(s: Scenario): GateRun {
 /** Every `gh` call a push made is a read: `api <GET path>` or `run download`. */
 function onlyReads(calls: string[][]): void {
   for (const c of calls) {
-    const read = (c[0] === 'api' && c.length === 2) || (c[0] === 'run' && c[1] === 'download')
+    // `--paginate --slurp` only pages a GET — it never changes the method.
+    const read = (c[0] === 'api' && c.length === 2) ||
+      (c[0] === 'api' && c.length === 4 && c[1] === '--paginate' && c[2] === '--slurp') ||
+      (c[0] === 'run' && c[1] === 'download')
     expect(read, `a push made a non-read gh call: ${c.join(' ')}`).toBe(true)
   }
 }
@@ -387,6 +392,51 @@ describe('review-gate by injection — a push never starts a review, and never g
     expect(g.out).toContain('not a rejection of the code')
     expect(g.out).toContain('request a review from')
     onlyReads(g.ghCalls)
+  })
+
+  // #2884. `review-and-merge` runs the review set on the operator's machine
+  // and records its PASS as a check run authored by the review App — it cannot
+  // write the artifact this carrier reads, so the carrier concluded `unreviewed`
+  // and the required context (the worst of its carriers) stayed red under a
+  // genuine PASS. The same head, with the App's PASS on it, must end green.
+  const appCheckRun = (o: Record<string, unknown>) => ({
+    id: 901, name: 'fleet/review', status: 'completed', conclusion: 'success',
+    started_at: '2026-11-20T10:00:00Z', app: { slug: 'llamenos-fleet-review' }, ...o,
+  })
+  const headChecks = (checkRuns: unknown[]): Route =>
+    ({ match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs\\?per_page=100$`, stdout: [{ check_runs: checkRuns }] })
+
+  it('#2884: a head no review was earned on, carrying the review App\'s recorded PASS: GREEN, app-recorded, no engine', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    // Without the App's check run this is #2871's carrier exactly.
+    expect(reviewGate({ action: 'synchronize', routes: none }).outputs['outcome']).toBe('unreviewed')
+    const g = reviewGate({ action: 'synchronize', routes: [headChecks([appCheckRun({})]), ...none] })
+    expect(g.status, g.out).toBe(0)
+    expect(g.outputs['outcome']).toBe('app-recorded')
+    expect(g.out).toContain('PASS recorded by the llamenos-fleet-review App')
+    onlyReads(g.ghCalls)
+  })
+
+  it('#2884: only the review App\'s check run is believed, and its LATEST verdict decides', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    const outcome = (checkRuns: unknown[]) =>
+      reviewGate({ action: 'synchronize', routes: [headChecks(checkRuns), ...none] }).outputs['outcome']
+    // A PASS from any other author — an Actions job, another app — is not the App's.
+    expect(outcome([appCheckRun({ app: { slug: 'github-actions' } })])).toBe('unreviewed')
+    expect(outcome([appCheckRun({ app: { slug: 'attacker-app' } })])).toBe('unreviewed')
+    // A later failure by the App is not outvoted by its earlier pass.
+    expect(outcome([
+      appCheckRun({}),
+      appCheckRun({ id: 902, conclusion: 'failure', started_at: '2026-11-20T11:00:00Z' }),
+    ])).toBe('unreviewed')
+  })
+
+  it('#2884: a head check-run read that fails changes nothing — still unreviewed, never green', () => {
+    const none = [...runsRoute([run(8), run(7)]), artifactsRoute(8, []), artifactsRoute(7, [])]
+    const failing: Route = { match: `^api --paginate --slurp repos/${REPO}/commits/[0-9a-f]+/check-runs`, status: 1 }
+    const g = reviewGate({ action: 'synchronize', routes: [failing, ...none] })
+    expect(g.status, g.out).toBe(1)
+    expect(g.outputs['outcome']).toBe('unreviewed')
   })
 
   it('a changed diff after a FAIL: the FAIL stands, with its text and the head it was earned on, no engine', () => {
