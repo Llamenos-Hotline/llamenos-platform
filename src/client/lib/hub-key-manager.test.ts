@@ -285,7 +285,7 @@ describe('hub key lifecycle', () => {
 
     it('is reported once by the mounted lifecycle — across remounts and relay reconnects — and never as an error', { timeout: 60_000 }, async () => {
       let relay: 'connected' | 'disconnected' = 'connected'
-      vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => true }) }))
+      vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasAccountPermission: () => true }) }))
       vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
       vi.doMock('./relay/context', () => ({ useRelayState: () => relay }))
       const admin = await device('admin', { manager: true })
@@ -310,7 +310,7 @@ describe('hub key lifecycle', () => {
   })
 
   it('says when the walk over the member hubs has ended — not before the hook is mounted, not while it runs', { timeout: 60_000 }, async () => {
-    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => true }) }))
+    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasAccountPermission: () => true }) }))
     vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
     vi.doMock('./relay/context', () => ({ useRelayState: () => 'connected' }))
     try {
@@ -337,7 +337,7 @@ describe('hub key lifecycle', () => {
   })
 
   it('a member who cannot manage keys never asks who the key is shared with (a read only a manager is allowed)', { timeout: 60_000 }, async () => {
-    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasPermission: () => false }) }))
+    vi.doMock('./auth', () => ({ useAuth: () => ({ isAuthenticated: true, hasAccountPermission: () => false }) }))
     vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
     vi.doMock('./relay/context', () => ({ useRelayState: () => 'connected' }))
     try {
@@ -448,6 +448,57 @@ describe('hub key lifecycle', () => {
     // no longer a member, so it has no key to hold.
     expect(await departing.hubKeys.adoptHubKeyRotation(HUB)).toBe('not-held')
     expect(await departing.platform.hasHubKey(HUB)).toBe(false)
+  })
+
+  describe('an admin of this hub who is browsing a DIFFERENT hub (multi-hub axiom: the active hub is browsing context only)', () => {
+    // In the hub being browsed this user is a plain member, so the per-hub
+    // `hasPermission` grants nothing; the account-wide union (they manage HUB)
+    // still says so. Key upkeep acts on every member hub, so it must read the latter.
+    beforeEach(() => {
+      vi.spyOn(console, 'info').mockImplementation(() => {})
+      vi.doMock('./auth', () => ({
+        useAuth: () => ({
+          isAuthenticated: true,
+          hasPermission: () => false,
+          hasAccountPermission: () => true,
+        }),
+      }))
+      vi.doMock('./member-hubs', () => ({ useMemberHubIds: () => [HUB] }))
+      vi.doMock('./relay/context', () => ({ useRelayState: () => 'connected' }))
+    })
+
+    afterEach(() => {
+      vi.doUnmock('./auth')
+      vi.doUnmock('./member-hubs')
+      vi.doUnmock('./relay/context')
+      vi.restoreAllMocks()
+    })
+
+    it('still rotates the key when the mount finds a departure the hub has not rotated for', { timeout: 60_000 }, async () => {
+      const { admin, staying, departing } = await hubWithSharedKey()
+      server.remove(departing.me)
+
+      const mounted = renderHook(() => admin.hubKeys.useHubKeys())
+      await admin.hubKeys.hubKeysSettled()
+      mounted.unmount()
+
+      expect(server.rotations).toBe(1)
+      expect([...server.wraps.keys()].sort()).toEqual([admin.me, staying.me].sort())
+    })
+
+    it('still rotates the key when an admin action that removes a member resyncs the hubs', { timeout: 60_000 }, async () => {
+      const { admin, departing } = await hubWithSharedKey()
+      const mounted = renderHook(() => admin.hubKeys.useHubKeys())
+      await admin.hubKeys.hubKeysSettled()
+      expect(server.rotations).toBe(0)
+
+      server.remove(departing.me)
+      await admin.hubKeys.resyncHubKeys()
+      mounted.unmount()
+
+      expect(server.rotations).toBe(1)
+      expect(server.wraps.has(departing.me)).toBe(false)
+    })
   })
 
   it('without a departure there is nothing to rotate', { timeout: 60_000 }, async () => {

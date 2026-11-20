@@ -10,6 +10,7 @@ import { getRecoveryGroup } from './recovery'
 import { updateDirectoryContact } from './directory'
 import { initUpload, completeUpload, getFileEnvelopes } from './files'
 import { createHubRole, createRole, deleteHubRole, listHubRoles, listRoles, updateHubRole } from './roles'
+import { getMyHubPermissions } from './hubs'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
 import { confirmDeletionThroughDialog } from '../admin-deletion.test-helpers'
 
@@ -43,6 +44,15 @@ afterEach(() => {
   sessionStorage.clear()
   vi.unstubAllGlobals()
   setActiveHub(null)
+})
+
+describe('hub permissions', () => {
+  it('reads the caller\'s permissions on the hub-owned route, naming the hub explicitly', async () => {
+    // #1101: the route exists only under /hubs/:hubId (hubContext decides the answer),
+    // and the hub asked about is the argument — not whichever hub is active.
+    await getMyHubPermissions('hub-9')
+    expect(calls).toEqual([{ method: 'GET', url: '/api/hubs/hub-9/permissions/me' }])
+  })
 })
 
 describe('recovery group', () => {
