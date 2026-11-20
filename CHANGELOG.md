@@ -210,6 +210,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.21 (2026-11-20)
+
+### Fixes
+
+- hub-is-gone is a typed HUB_NOT_FOUND code, not an English 404 message (#2873)
+- refuse a stale src/main/jniLibs in the build (#2854)
+
 ## 0.21.20 (2026-11-19)
 
 ### Features
