@@ -2712,7 +2712,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
-    timeout-minutes: 45
+    timeout-minutes: 81
 
     steps:
       # MANDATORY, and must stay the literal first step — same guard, same
@@ -2760,8 +2760,24 @@ jobs:
       #
       # A no-op on a GitHub-hosted runner: that VM is thrown away after the
       # job and shares nothing with anybody.
-      - name: Guard the runner's disk headroom
-        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+      #
+      # A refusal WAITS while another CI job is on this host, because that
+      # job's teardown is what returns the space (#2533). This job and
+      # ios-e2e.yml's `build` start together in every merge group and are each
+      # other's co-tenants on one physical Mac: with the bare guard this job
+      # refused at once while the sibling waited, and the group was ejected
+      # (#2470, #2518). The wait is a script shared with every other
+      # caller, not a step flag, so a caller cannot ship without it —
+      # scripts/ci/mac-runner-disk-guard-wait.test.ts fails CI on the bare
+      # guard. The job's timeout-minutes is its own 45 PLUS this step's cap;
+      # change them together.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+        run: bash scripts/ci/mac-runner-disk-guard-wait.sh
 
       # Per-runner BUN_TMPDIR before the first bun step. This job shares the
       # self-hosted Mac with ios-e2e.yml's `build`, and the two start
@@ -2977,7 +2993,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
-    timeout-minutes: 30
+    timeout-minutes: 66
 
     steps:
       # MANDATORY, and must stay the literal first step. Unlike ios-build-test
@@ -3001,8 +3017,15 @@ jobs:
 
       # Same guard, same reasoning as ios-build-test's copy: refuse loudly
       # rather than let the shared volume fill and kill the runner agent.
-      - name: Guard the runner's disk headroom
-        run: bash scripts/ci/mac-runner-disk-guard.sh guard
+      # It waits for a co-tenant like ios-build-test's copy, for the same
+      # reason (#2533); the job's timeout-minutes is its own 30 PLUS the cap.
+      - name: Guard the runner's disk headroom (wait out a co-tenant)
+        timeout-minutes: 36
+        env:
+          DISK_WAIT_MAX_MIN: "35"
+          DISK_WAIT_POLL_SEC: "60"
+          DISK_GUARD_ATTEMPT_MAX_SEC: "90"
+        run: bash scripts/ci/mac-runner-disk-guard-wait.sh
 
       # Per-runner BUN_TMPDIR and HOME: this job shares the two Macs with
       # ios-build-test and ios-e2e.yml, and tests/guards.test.ts fails CI if
