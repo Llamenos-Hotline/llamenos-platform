@@ -37,6 +37,11 @@ case "$mode" in
     echo "> Could not resolve all files for configuration ':app:debugUnitTestRuntimeClasspath'."
     echo "   > Could not GET 'https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.pom'. Received status code 429 from server: Too Many Requests"
     echo "BUILD FAILED in 46s"; exit 1 ;;
+  plugin-miss)
+    echo "* What went wrong:"
+    echo "Plugin [id: 'com.google.dagger.hilt.android', version: '2.59.2', apply: false] was not found in any of the following sources:"
+    echo "- Plugin Repositories (could not resolve plugin artifact 'com.google.dagger.hilt.android:com.google.dagger.hilt.android.gradle.plugin:2.59.2')"
+    echo "BUILD FAILED in 840ms"; exit 1 ;;
   timeout) echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Read timed out"; echo "BUILD FAILED"; exit 1 ;;
   test-fail) echo "> Task :app:testDebugUnitTest FAILED"; echo "FooTest > bar FAILED"; echo "BUILD FAILED in 2m"; exit 1 ;;
   compile-fail) echo "e: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar"; echo "BUILD FAILED"; exit 1 ;;
@@ -122,6 +127,14 @@ describe('gradle-retry.sh', () => {
     expect(r.out).toMatch(/::warning title=[^:]*recovered on attempt 2/)
     expect(r.out).toContain('junit:junit:4.13.2')
     expect(readFileSync(summary, 'utf8')).toContain('transient failure survived')
+  })
+
+  // Run 44695746293 (android-compile-check): attempt 1 "Could not find <jar>", attempt 2 (refreshed) failed on a
+  // PLUGIN fetch, which Gradle words differently. The script called it "no dependency-resolution error" and quit.
+  test('a plugin that could not be resolved is a resolution failure, retried like any other', () => {
+    const r = run(['plugin-miss', 'ok'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
   })
 
   test('a transport timeout is retried too', () => {
@@ -212,7 +225,7 @@ describe('gradle-retry.sh', () => {
   test('a missing or empty pattern file is a hard error, never "nothing matches" (#2870)', () => {
     const empty = join(dir, 'empty.patterns')
     writeFileSync(empty, '')
-    for (const env of [{ GRADLE_RESOLUTION_PATTERNS: join(dir, 'absent.patterns') }, { GRADLE_CACHED_MISS_PATTERNS: empty }]) {
+    for (const env of <Record<string, string>[]>[{ GRADLE_RESOLUTION_PATTERNS: join(dir, 'absent.patterns') }, { GRADLE_CACHED_MISS_PATTERNS: empty }]) {
       const r = run(['ok'], undefined, env)
       expect(r.code).toBe(2)
       expect(r.invocations).toHaveLength(0)

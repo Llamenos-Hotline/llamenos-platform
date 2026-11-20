@@ -5,6 +5,8 @@ Could not HEAD [^ ]
 Could not download [^ ]
 Could not get resource
 Could not resolve all (files|dependencies)
+Plugin .* was not found in any of the following sources
+could not resolve plugin artifact
 Failed to transform .* to match attributes
 Read timed out
 Connect timed out
