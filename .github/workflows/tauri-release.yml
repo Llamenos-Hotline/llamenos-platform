@@ -808,7 +808,17 @@ jobs:
       - name: Install AWS CLI
         if: steps.channel.outputs.configured == 'true'
         run: |
-          curl -sSf "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "$RUNNER_TEMP/awscliv2.zip"
+          # Bounded retries, as in ci.yml's "Install just" (#2904): one network
+          # blip must not fail the upload, and a download fault must read as
+          # one rather than as an `unzip` error on a truncated file.
+          if ! curl --fail --no-progress-meter --location \
+            --connect-timeout 15 --max-time 120 \
+            --retry 4 --retry-all-errors \
+            -o "$RUNNER_TEMP/awscliv2.zip" \
+            "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"; then
+            echo "::error::could not download the AWS CLI, so the RustFS upload DID NOT RUN. This is not a finding; re-run the job once the download recovers."
+            exit 1
+          fi
           unzip -q "$RUNNER_TEMP/awscliv2.zip" -d "$RUNNER_TEMP"
           sudo "$RUNNER_TEMP/aws/install" --update
           aws --version
