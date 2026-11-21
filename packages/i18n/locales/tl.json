@@ -2076,6 +2076,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "Kulang sa encryption library ang bersyong ito ng app, kaya hindi masuri ang iyong PIN. Hindi mali ang iyong PIN. I-install muli ang app o makipag-ugnayan sa suporta.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "errors": {

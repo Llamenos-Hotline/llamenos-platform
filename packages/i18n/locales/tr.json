@@ -4059,6 +4059,7 @@
     "biometricPinMismatch": "Biyometrik kilit açma başarısız oldu. PIN'inizi girin.",
     "httpNotAllowed": "Güvenli olmayan HTTP bağlantılarına izin verilmez. HTTPS adresi kullanın.",
     "pinLockoutDuration": "Çok fazla başarısız deneme. {{seconds}} saniye sonra yeniden deneyin.",
+    "nativeCryptoMissing": "Uygulamanın bu sürümünde şifreleme kitaplığı eksik, bu yüzden PIN'iniz doğrulanamıyor. PIN'iniz yanlış değil. Uygulamayı yeniden yükleyin veya destekle iletişime geçin.",
     "pinWiped": "Çok fazla başarısız PIN denemesi. Güvenliğiniz için bu cihazdaki tüm anahtarlar silindi."
   },
   "call": {

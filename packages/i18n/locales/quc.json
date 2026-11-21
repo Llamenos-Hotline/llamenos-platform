@@ -4262,6 +4262,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "Re app re' man k'o ta ri biblioteca re ewal tz'ib'. Man kakwin ta kajikib'ax ri PIN awech. Ri PIN awech man ütz ta. Tatikib'a chik ri app o tak'utuj tob'anik pa ri soporte.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "unlock": {

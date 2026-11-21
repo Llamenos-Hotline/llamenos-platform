@@ -2076,6 +2076,7 @@
     "biometricPinMismatch": "Mở khóa sinh trắc học thất bại. Hãy nhập mã PIN.",
     "httpNotAllowed": "Không cho phép kết nối HTTP không an toàn. Hãy dùng địa chỉ HTTPS.",
     "pinLockoutDuration": "Thử sai quá nhiều lần. Hãy thử lại sau {{seconds}} giây.",
+    "nativeCryptoMissing": "Bản dựng ứng dụng này thiếu thư viện mã hóa nên không thể kiểm tra mã PIN của bạn. Mã PIN của bạn không sai. Hãy cài đặt lại ứng dụng hoặc liên hệ bộ phận hỗ trợ.",
     "pinWiped": "Nhập sai mã PIN quá nhiều lần. Để bảo vệ bạn, tất cả khóa trên thiết bị này đã bị xóa."
   },
   "errors": {

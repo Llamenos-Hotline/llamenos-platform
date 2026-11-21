@@ -2003,6 +2003,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "This build of the app is missing its encryption library, so your PIN can't be checked. Your PIN is not wrong. Reinstall the app or contact support.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "errors": {
