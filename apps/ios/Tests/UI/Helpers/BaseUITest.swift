@@ -25,9 +25,18 @@ class BaseUITest: XCTestCase {
         return Self.classHubIds[key] ?? ""
     }
 
+    /// The admin that founds every class hub is registered as a reader once per test process,
+    /// before the first hub: see `TestAdminAPI.registerDevice`. A `static let` runs once, thread-safely.
+    private static let adminDeviceRegistered: Void = TestAdminAPI.registerDevice(baseURL: BaseUITest.hubURLFromEnvironment)
+
+    private static var hubURLFromEnvironment: String {
+        ProcessInfo.processInfo.environment["TEST_HUB_URL"] ?? "http://127.0.0.1:3000"
+    }
+
     override class func setUp() {
         super.setUp()
         let key = String(describing: self)
+        _ = BaseUITest.adminDeviceRegistered
         let hubId = createClassHub()
         hubLock.lock()
         classHubIds[key] = hubId
@@ -73,8 +82,7 @@ class BaseUITest: XCTestCase {
     /// Create a fresh isolated hub for this test class.
     /// Called once per class in `class func setUp()` — not per test method.
     private class func createClassHub() -> String {
-        let hubURL = ProcessInfo.processInfo.environment["TEST_HUB_URL"]
-            ?? "http://127.0.0.1:3000"
+        let hubURL = BaseUITest.hubURLFromEnvironment
         let className = String(describing: self)
         let hubName = "ios-\(className)-\(Int(Date().timeIntervalSince1970 * 1000))"
         // POST /api/hubs — the route an operator uses — not /api/test-create-hub.

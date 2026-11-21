@@ -19,6 +19,7 @@ import org.junit.runner.RunWith
 import org.llamenos.hotline.FakeBiometricKeyStore
 import org.llamenos.hotline.InMemoryKeyValueStore
 import org.llamenos.hotline.api.InviteRepository
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.screenshots.ScreenshotTestApp
@@ -71,6 +72,7 @@ class SessionLockEffectTest {
             mockk<InviteRepository>(relaxed = true),
             mockk<DeviceRegistrationManager>(relaxed = true),
             mockk<PushRegistrationManager>(relaxed = true),
+            mockk<WebSocketService>(relaxed = true),
         )
     }
 

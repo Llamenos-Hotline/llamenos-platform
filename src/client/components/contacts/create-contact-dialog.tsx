@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Plus, Trash2, Loader2 } from 'lucide-react'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 interface IdentifierRow {
   tempId: string
@@ -53,7 +54,7 @@ const IDENTIFIER_TYPES: Array<{ value: IdentifierType; label: string }> = [
 
 export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateContactDialogProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
 
@@ -114,9 +115,8 @@ export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateCon
     try {
       // Build reader pubkeys for E2EE envelopes
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       // Encrypt contact summary (displayName + contactType + tags)
       const summary: DirectoryContactSummary = {
@@ -165,7 +165,7 @@ export function CreateContactDialog({ open, onOpenChange, onCreated }: CreateCon
     } finally {
       setSaving(false)
     }
-  }, [displayName, contactType, identifiers, hasDeviceKey, publicKey, adminDecryptionPubkey, toast, t, onCreated, handleClose])
+  }, [displayName, contactType, identifiers, hasDeviceKey, publicKey, toast, t, onCreated, handleClose])
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>

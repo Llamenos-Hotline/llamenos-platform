@@ -30,8 +30,10 @@ vi.mock('@/lib/api', () => ({
   }),
 }))
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ hasDeviceKey: true, publicKey: 'pk-self', adminDecryptionPubkey: 'pk-admin' }),
+  useAuth: () => ({ hasDeviceKey: true, publicKey: 'pk-self' }),
 }))
+// The hub's admin reader set (#1035).
+vi.mock('@/lib/admin-recipient', () => ({ activeHubAdminReaders: async () => ['pk-admin'] }))
 const toastFns = vi.hoisted(() => ({ value: undefined as unknown as { toast: (m: string, t?: string) => void } }))
 vi.mock('@/lib/toast', () => ({ useToast: () => toastFns.value }))
 toastFns.value = { toast: () => {} }

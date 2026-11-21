@@ -9,6 +9,12 @@
  * only when an admin goes looking, which for a crisis hotline is during an
  * escalation or an audit.
  *
+ * #1035 — WHO the admins are is the hub's answer: the hub's admin reader set
+ * (`GET /hubs/:hubId/readers?purpose=admin`, every hub admin's registered
+ * device and its escrow key), not one env-configured key that a
+ * wizard-bootstrapped deployment does not have and that only one admin could
+ * ever hold. A note is sealed to EVERY one of them.
+ *
  * These tests assert on the two things a reader can observe:
  *
  *   1. what reaches the API — the note is not written at all when no admin
@@ -26,6 +32,8 @@ import { render, fireEvent, cleanup } from '@testing-library/react'
 
 const AUTHOR_PUB = 'aa'.repeat(32)
 const ADMIN_PUB = 'bb'.repeat(32)
+const SECOND_ADMIN_PUB = 'cc'.repeat(32)
+const HUB = 'hub-1'
 const NOTE_TEXT = 'Caller is safe; follow up tomorrow.'
 
 const mocks = vi.hoisted(() => ({
@@ -37,7 +45,8 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
   close: vi.fn(),
   clearDraft: vi.fn(),
-  auth: { hasDeviceKey: true, publicKey: 'aa'.repeat(32), isAdmin: false, adminDecryptionPubkey: '' },
+  getHubReaders: vi.fn(),
+  auth: { hasDeviceKey: true, publicKey: 'aa'.repeat(32), isAdmin: false },
 }))
 
 vi.mock('react-i18next', () => ({
@@ -81,8 +90,10 @@ vi.mock('@/lib/api', () => ({
   updateNote: mocks.updateNote,
   getCallHistory: mocks.getCallHistory,
   getCustomFields: mocks.getCustomFields,
+  getHubReaders: mocks.getHubReaders,
+  NoActiveHubError: class NoActiveHubError extends Error {},
   // A call note is filed to the call's own hub, falling back to the active one.
-  getActiveHub: () => null,
+  getActiveHub: () => HUB,
 }))
 
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
@@ -92,7 +103,8 @@ import { NoteSheet } from '../note-sheet'
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  mocks.auth = { hasDeviceKey: true, publicKey: AUTHOR_PUB, isAdmin: false, adminDecryptionPubkey: '' }
+  mocks.auth = { hasDeviceKey: true, publicKey: AUTHOR_PUB, isAdmin: false }
+  mocks.getHubReaders.mockResolvedValue({ hubId: HUB, purpose: 'admin', recipients: [] })
   mocks.getCustomFields.mockResolvedValue({ fields: [] })
   mocks.getCallHistory.mockResolvedValue({ calls: [] })
   mocks.createNote.mockResolvedValue({ note: { id: 'note-1' } })
@@ -116,9 +128,14 @@ async function saveNote() {
   await new Promise(resolve => setTimeout(resolve, 0))
 }
 
-describe('#1468 — note filing requires a real admin recipient', () => {
-  it('refuses to write the note when the deployment has no admin decryption key', async () => {
-    mocks.auth.adminDecryptionPubkey = ''
+/** The hub's admin reader set, as `GET /hubs/:hubId/readers?purpose=admin` serves it. */
+function hubAdmins(recipients: string[]) {
+  mocks.getHubReaders.mockResolvedValue({ hubId: HUB, purpose: 'admin', recipients })
+}
+
+describe('#1468 / #1035 — a note is sealed to every admin of its hub, or not written', () => {
+  it("refuses to write the note when the hub has no admin reader (a wizard deployment's state before #1034)", async () => {
+    hubAdmins([])
     await saveNote()
 
     // The old `adminDecryptionPubkey || authorPub` wrote it here, wrapped
@@ -130,29 +147,30 @@ describe('#1468 — note filing requires a real admin recipient', () => {
     expect(mocks.clearDraft).not.toHaveBeenCalled()
   })
 
-  it('refuses when the admin decryption key is present but not a 32-byte hex key', async () => {
-    mocks.auth.adminDecryptionPubkey = 'not-a-key'
+  it('refuses when the served reader keys are not 32-byte hex keys', async () => {
+    hubAdmins(['not-a-key'])
     await saveNote()
 
     expect(mocks.createNote).not.toHaveBeenCalled()
     expect(mocks.toast).toHaveBeenCalledWith('notes.noAdminRecipient', 'error')
   })
 
-  it('writes the note with the admin envelope addressed to the admin, not the author', async () => {
-    mocks.auth.adminDecryptionPubkey = ADMIN_PUB
+  it("seals one admin envelope per admin of the call's hub — the second admin included — and none to the author", async () => {
+    hubAdmins([ADMIN_PUB, SECOND_ADMIN_PUB])
     await saveNote()
 
+    // The reader set of the hub the note is filed to, for the admin purpose.
+    expect(mocks.getHubReaders).toHaveBeenCalledWith(HUB, 'admin')
     expect(mocks.encryptNote).toHaveBeenCalledTimes(1)
     const [, authorPubkey, adminPubkeys] = mocks.encryptNote.mock.calls[0] as [string, string, string[]]
     expect(authorPubkey).toBe(AUTHOR_PUB)
-    expect(adminPubkeys).toEqual([ADMIN_PUB])
+    expect(adminPubkeys).toEqual([ADMIN_PUB, SECOND_ADMIN_PUB])
     // The author's key must never appear as an admin recipient.
     expect(adminPubkeys).not.toContain(AUTHOR_PUB)
 
     expect(mocks.createNote).toHaveBeenCalledTimes(1)
-    const body = mocks.createNote.mock.calls[0][0] as {
-      adminEnvelopes: Array<{ pubkey: string }>
-    }
-    expect(body.adminEnvelopes.map(e => e.pubkey)).toEqual([ADMIN_PUB])
+    const [body, hubId] = mocks.createNote.mock.calls[0] as [{ adminEnvelopes: Array<{ pubkey: string }> }, string]
+    expect(hubId).toBe(HUB)
+    expect(body.adminEnvelopes.map(e => e.pubkey)).toEqual([ADMIN_PUB, SECOND_ADMIN_PUB])
   })
 })

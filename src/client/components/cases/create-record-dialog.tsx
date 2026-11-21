@@ -41,7 +41,7 @@ export function CreateRecordDialog({
   defaultEntityTypeId,
 }: CreateRecordDialogProps) {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey } = useAuth()
   const { toast } = useToast()
 
   const [entityTypes, setEntityTypes] = useState<EntityTypeDefinition[]>([])
@@ -116,7 +116,6 @@ export function CreateRecordDialog({
         entityTypeId: selectedType.id,
         assignedTo,
         authorPubkey: publicKey,
-        adminDecryptionPubkey,
       })
 
       // Encrypt summary (title + description + status + severity)
@@ -177,7 +176,7 @@ export function CreateRecordDialog({
     }
   }, [
     selectedType, title, description, fieldValues,
-    hasDeviceKey, publicKey, adminDecryptionPubkey,
+    hasDeviceKey, publicKey,
     toast, t, resetForm, onOpenChange, onCreated,
   ])
 

@@ -517,10 +517,7 @@ class M1CapabilityProbe {
         // The server seals an inbound message to the admin key and to the ASSIGNED user's
         // registered device keys, so assign the conversation first, then let a second message in.
         val sender = "+15555550188"
-        fun inbound(text: String) = backdoor(
-            "deviceRegistered", "test-simulate/incoming-message",
-            """{"senderNumber":"$sender","body":"$text","channel":"sms","hubId":"$hub"}""",
-        )
+        fun inbound(text: String) = inboundMessage("deviceRegistered", hub, sender, text)
         val conversationId = json.parseToJsonElement(inbound("probe-device-first")).jsonObject["conversationId"]!!.jsonPrimitive.content
         adminApi("deviceRegistered", "PATCH", "/api/hubs/$hub/conversations/$conversationId", """{"assignedTo":"$pubkey"}""")
         inbound("probe-device-second")
@@ -558,10 +555,7 @@ class M1CapabilityProbe {
         val onServer = pollFor(15_000) { userDeviceKeys(pubkey).any { it == x25519 } }
         check(onServer) { fail("deviceRelaunch", "the server no longer holds the app's key after a relaunch") }
 
-        backdoor(
-            "deviceRelaunch", "test-simulate/incoming-message",
-            """{"senderNumber":"+15555550188","body":"probe-device-after-relaunch","channel":"sms","hubId":"$hub"}""",
-        )
+        inboundMessage("deviceRelaunch", hub, "+15555550188", "probe-device-after-relaunch")
         val sealedAfter = json.parseToJsonElement(
             adminApi("deviceRelaunch", "GET", "/api/hubs/$hub/conversations/$conversationId/messages"),
         ).jsonObject["messages"]!!.jsonArray.count { m ->
@@ -577,10 +571,7 @@ class M1CapabilityProbe {
         val (pubkey, hub) = enrollViaInvite("conversations", "probe-conv")
         ensureActiveHub("conversations", hub)
         val body = "probe-sms-${System.currentTimeMillis()}"
-        backdoor(
-            "conversations", "test-simulate/incoming-message",
-            """{"senderNumber":"+15555550199","body":"$body","channel":"sms","hubId":"$hub"}""",
-        )
+        inboundMessage("conversations", hub, "+15555550199", body)
 
         tapTab("nav-conversations")
         val cardAppeared = pollFor(20_000) { tagsWithPrefix("conversation-card-").isNotEmpty() }
@@ -882,6 +873,7 @@ class M1CapabilityProbe {
             }
 
     private fun createHub(name: String): String {
+        ensureAdminReady("setup")
         val body = backdoor("setup", "test-create-hub", """{"name":"$name-${System.currentTimeMillis()}"}""")
         return json.parseToJsonElement(body).jsonObject["id"]!!.jsonPrimitive.content
     }
@@ -893,14 +885,44 @@ class M1CapabilityProbe {
 
     /**
      * A request signed by the test admin (CI's fixed `ADMIN_SEED`, whose pubkey is the
-     * server's `ADMIN_PUBKEY`). Makes sure the admin is registered first.
+     * server's `ADMIN_PUBKEY`). Makes sure the admin is ready first ([ensureAdminReady]).
      */
     private fun adminApi(flow: String, method: String, path: String, body: String? = null): String {
-        if (!adminReady) {
-            val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(ADMIN_SEED, 0u, "GET", "/")
-            backdoor(flow, "test-promote-admin", """{"pubkey":"${token.pubkey}"}""")
-            adminReady = true
-        }
+        ensureAdminReady(flow)
+        return http(flow, method, path, body, "ADMIN", adminHeaders(method, path))
+    }
+
+    /**
+     * The test admin as a hub admin that can READ: registered as a user, holding a registered
+     * device key. Idempotent, and the one place that makes it so.
+     *
+     * The server seals inbound content to `readersFor(hub, 'admin')` — the registered device keys
+     * of the hub's admins — and refuses with a 503 when that set is empty
+     * ("this hub has no admin able to read it"). `test-create-hub` founds every hub the probe
+     * builds with this admin, but a founder with no registered device reads nothing, so a hub of
+     * only that is the hub the refusal exists to reject. The desktop registers its device on
+     * unlock and the setup wizard before it founds the hub (#1034); this is the same step, taken
+     * through the same `POST /api/devices/register` a real client uses. Nothing here relaxes the
+     * server: the probe supplies the admin a real hub always has.
+     *
+     * Called before any hub is created ([createHub]) and before any inbound message
+     * ([inboundMessage]), so no flow can reach the server with an unreadable hub.
+     */
+    private fun ensureAdminReady(flow: String) {
+        if (adminReady) return
+        val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(ADMIN_SEED, 0u, "GET", "/")
+        backdoor(flow, "test-promote-admin", """{"pubkey":"${token.pubkey}"}""")
+        val path = "/api/devices/register"
+        http(
+            flow, "POST", path,
+            """{"platform":"android","pushToken":"test-device-probe-admin","wakeKeyPublic":"$ADMIN_X25519","ed25519Pubkey":"${token.pubkey}","x25519Pubkey":"$ADMIN_X25519","deviceName":"m1-probe admin"}""",
+            "ADMIN", adminHeaders("POST", path),
+        )
+        adminReady = true
+    }
+
+    /** `Authorization` for a request signed by the test admin, plus the dev-surface secret. */
+    private fun adminHeaders(method: String, path: String): HttpURLConnection.() -> Unit = {
         val token = org.llamenos.core.mobileCreateAuthTokenFromSigningKey(
             ADMIN_SEED, System.currentTimeMillis().toULong(), method, path,
         )
@@ -909,18 +931,25 @@ class M1CapabilityProbe {
             token.nonce?.let { append(""","nonce":"$it"""") }
             append('}')
         }
-        return http(flow, method, path, body, "ADMIN") {
-            setRequestProperty("Authorization", "Bearer $auth")
-            // The probe's seeding traffic is ordinary API traffic, and every flow seeds as the
-            // SAME admin pubkey, so it all lands in one `write` bucket: 30 requests / 60s
-            // (middleware/rate-limit.ts RATE_LIMIT_TIERS.write, keyed by pubkey). Without this
-            // header the gate's own setup throttles itself once the ratchet grows past a
-            // handful of flows, and the symptom is `POST /api/invites -> 429` in enrollment —
-            // indistinguishable from an app regression, and "fixed" by deleting a flow.
-            // `devSurfaceRequestAuthorized` (lib/dev-surfaces.ts) exempts a request presenting
-            // the dev-surface secret for exactly this reason; `backdoor` already relies on it.
-            setRequestProperty("X-Test-Secret", testSecret)
-        }
+        setRequestProperty("Authorization", "Bearer $auth")
+        // The probe's seeding traffic is ordinary API traffic, and every flow seeds as the
+        // SAME admin pubkey, so it all lands in one `write` bucket: 30 requests / 60s
+        // (middleware/rate-limit.ts RATE_LIMIT_TIERS.write, keyed by pubkey). Without this
+        // header the gate's own setup throttles itself once the ratchet grows past a
+        // handful of flows, and the symptom is `POST /api/invites -> 429` in enrollment —
+        // indistinguishable from an app regression, and "fixed" by deleting a flow.
+        // `devSurfaceRequestAuthorized` (lib/dev-surfaces.ts) exempts a request presenting
+        // the dev-surface secret for exactly this reason; `backdoor` already relies on it.
+        setRequestProperty("X-Test-Secret", testSecret)
+    }
+
+    /**
+     * An inbound message through the messaging simulator (BACKDOOR: no client sends one). The
+     * admin is made a reader first, so the server has a key to seal it to — see [ensureAdminReady].
+     */
+    private fun inboundMessage(flow: String, hub: String, sender: String, text: String): String {
+        ensureAdminReady(flow)
+        return backdoor(flow, "test-simulate/incoming-message", """{"senderNumber":"$sender","body":"$text","channel":"sms","hubId":"$hub"}""")
     }
 
     /** The X25519 keys of the devices the server holds for [pubkey], read with a request the app itself signs. */
@@ -988,5 +1017,14 @@ class M1CapabilityProbe {
 
         /** CI's test admin (`tests/helpers.ts` ADMIN_SEED → `TEST_ADMIN_PUBKEY`). */
         const val ADMIN_SEED = "f54a5851e9372b87810a8e60cdd2e7cfd80b6e31c7af18188f7db106ceda8be7"
+
+        /**
+         * The X25519 key that same admin is addressed by (CI's `TEST_ADMIN_DECRYPTION_PUBKEY`): the
+         * device key it registers, so inbound content is sealed to a key `ADMIN_SEED` can open.
+         * `tests/crypto-helpers.ts` `adminHpkeRecipient()` derives it and asserts it equals the
+         * one `scripts/bootstrap-admin.ts` derives, which `ci.yml` and `scripts/android-parallel-e2e.sh`
+         * pin — a different key from the Ed25519 signing pubkey (#1283).
+         */
+        const val ADMIN_X25519 = "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
     }
 }
