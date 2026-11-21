@@ -79,7 +79,7 @@ import {
   defaultMissingChecksDeps, diagnosePrHead,
   type Carrier, type HeadDiagnosis, type MissingChecksDeps,
 } from './missing-checks.js'
-import { QUEUE_CLEARED_LABEL, REVIEW_JOB, laneIdFromBranch, reviewOutcomeFromAnnotations, reviewOutcomeToken, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
+import { QUEUE_CLEARED_LABEL, REVIEW_JOB, REVIEW_REQUEST_LOGIN, laneIdFromBranch, reviewTriggerLogins, reviewOutcomeFromAnnotations, reviewOutcomeToken, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
 import { parseQueueBranch } from './queue-sweep.js'
 
 // ---------------------------------------------------------------------------
@@ -522,6 +522,54 @@ export function diagnosePrWhy(facts: PrWhyFacts): PrWhyReport {
   return done()
 }
 
+/**
+ * Who a review may be requested from on THIS PR, and what to do when that is
+ * not enough (#2850). `reviewTriggerLogins` is the one statement of the rule:
+ * `llamenos-auto` on every PR it did not write, the operator on a PR it DID
+ * write — GitHub refuses a review request from a PR's own author (422 "Review
+ * cannot be requested from pull request author"), and since every worker PR is
+ * authored by `llamenos-auto` that is the NORMAL case, not an edge. A remedy
+ * naming `llamenos-auto` there cannot be executed, and pr-why's whole value is
+ * that its output is trusted without checking.
+ *
+ * When the stand-in is the operator, the request may be un-re-emittable: they
+ * are a CODEOWNER of most paths, so GitHub re-adds a removed request instantly
+ * and no `review_requested` event fires (#1471). The fallback that works is a
+ * `workflow_dispatch` of the review workflow on the PR's head branch — its
+ * check run never reaches the PR's rollup, but its cache write does (#2884),
+ * so re-running the `pull_request` carrier afterwards republishes the verdict.
+ */
+export function reviewAsker(s: Pick<PrState, 'authorLogin' | 'headRefName'>): { login: string; authorIsReviewer: boolean } {
+  const [login] = reviewTriggerLogins({ prAuthor: s.authorLogin, branch: s.headRefName })
+  return { login, authorIsReviewer: login !== REVIEW_REQUEST_LOGIN }
+}
+
+/** The fallback for a request GitHub will not re-emit — see `reviewAsker`. */
+function dispatchFallback(s: Pick<PrState, 'number' | 'headRefName'>): string {
+  return `gh workflow run fleet-review.yml --ref ${s.headRefName} -f pr_number=${s.number}, then re-run the pull_request ` +
+    `${REVIEW_JOB} carrier so it republishes the verdict that run cached (the dispatch's own check run never reaches the PR's rollup)`
+}
+
+/** "request a review" — from whoever may actually be asked on this PR. */
+function requestReviewRemedy(s: Pick<PrState, 'number' | 'authorLogin' | 'headRefName'>): string {
+  const { login, authorIsReviewer } = reviewAsker(s)
+  if (!authorIsReviewer) return `request a review from ${login} on #${s.number}`
+  return `request a review from ${login} on #${s.number} (${s.authorLogin} authored this PR, and GitHub refuses a review request from ` +
+    `the author, so ${REVIEW_REQUEST_LOGIN} cannot be asked); if ${login} is already a requested reviewer the request cannot be ` +
+    `re-emitted (#1471) — run ${dispatchFallback(s)}`
+}
+
+/** Re-triggering the review of a head whose last verdict covers another tree. */
+function cycleReviewRemedy(s: Pick<PrState, 'number' | 'authorLogin' | 'headRefName'>): string {
+  const { login, authorIsReviewer } = reviewAsker(s)
+  if (!authorIsReviewer) {
+    return `cycle the review REQUEST (remove and re-request ${login} on #${s.number}); gh run rerun only re-executes the cache lookup and stamps the red carrier as the newest`
+  }
+  return `${s.authorLogin} authored #${s.number}, and GitHub refuses a review request from a PR's author, so ${REVIEW_REQUEST_LOGIN} cannot be ` +
+    `re-requested — run ${dispatchFallback(s)}; or cycle the request for ${login} (remove and re-request), which GitHub undoes ` +
+    `at once when ${login} is a CODEOWNER of a touched path (#1471). gh run rerun alone only re-executes the cache lookup and stamps the red carrier as the newest`
+}
+
 function checkVerdicts(facts: PrWhyFacts, s: PrState, v: Verdict[]): void {
   if (!facts.checks.ok) {
     v.push(unknown('the required checks', facts.checks.reason))
@@ -549,7 +597,7 @@ function checkVerdicts(facts: PrWhyFacts, s: PrState, v: Verdict[]): void {
           name: 'review-never-requested',
           severity: 'blocker',
           evidence: [`no ${REVIEW_JOB} carrier on the head and every run on it has finished`, 'requested_reviewers is empty — a push never starts a review'],
-          remedy: `request a review from llamenos-auto on #${s.number}`,
+          remedy: requestReviewRemedy(s),
         })
       } else {
         absent.push(ctx.name)
@@ -613,7 +661,7 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
       name: 'review-verdict-stale-by-tree',
       severity: 'blocker',
       evidence: [...evidence, 'the last PASS judged another tree; only a requested review earns a verdict for this one'],
-      remedy: `cycle the review REQUEST (remove and re-request llamenos-auto on #${s.number}); gh run rerun only re-executes the cache lookup and stamps the red carrier as the newest`,
+      remedy: cycleReviewRemedy(s),
     })
     return
   }
@@ -627,7 +675,7 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
       severity: 'blocker',
       evidence: [...evidence, `the diff changes a shipped client's TLS trust anchors and no trust-anchor approver has signed off on head ${s.headRefOid}`],
       remedy: `the operator checks the trust-anchor values on #${s.number} and signs off on head ${s.headRefOid} as the run's ` +
-        'summary describes, then re-requests review from llamenos-auto; a push voids the sign-off',
+        `summary describes, then re-requests review from ${reviewAsker(s).login}; a push voids the sign-off`,
     })
     return
   }
@@ -636,7 +684,7 @@ function reviewCheckVerdict(facts: PrWhyFacts, s: PrState, counted: Carrier[], v
       name: 'review-never-requested',
       severity: 'blocker',
       evidence: [...evidence, 'requested_reviewers is empty — a push never starts a review, and a re-run republishes the same no-verdict'],
-      remedy: `request a review from llamenos-auto on #${s.number}`,
+      remedy: requestReviewRemedy(s),
     })
     return
   }

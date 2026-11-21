@@ -312,9 +312,50 @@ describe('fleet/review verdicts — read from the outcome annotation, not output
     reviewRuns: { ok: true, value: [reviewRun({ conclusion: 'failure', outcome: { read: true, message: outcome }, ...over })] },
   })
   it('review-verdict-stale-by-tree: NO-VERDICT:tree-changed', () => {
-    const r = expectVerdict(facts({ state: approvedByOwner, ...redReview('NO-VERDICT:tree-changed — the last PASS judged another tree') }), 'review-verdict-stale-by-tree')
+    // A PR someone else authored: GitHub accepts a request from llamenos-auto.
+    const r = expectVerdict(facts({ state: { ...approvedByOwner, authorLogin: 'some-human' }, ...redReview('NO-VERDICT:tree-changed — the last PASS judged another tree') }), 'review-verdict-stale-by-tree')
     expect(r.verdicts[0]?.remedy).toContain('REQUEST')
     expect(r.verdicts[0]?.remedy).toContain('gh run rerun only re-executes the cache lookup')
+  })
+  // #2850: GitHub refuses a review request from a PR's own author (422), and
+  // every worker PR is authored by llamenos-auto — so the remedy on those must
+  // never tell the reader to (re-)request llamenos-auto.
+  describe('the remedy is executable by the PR\'s author (#2850)', () => {
+    const stale = redReview('NO-VERDICT:tree-changed — the last PASS judged another tree')
+    const humanAuthored = { authorLogin: 'some-human', headRefName: 'feat/y' }
+    const workerAuthored = { authorLogin: 'llamenos-auto', headRefName: 'fleet/infra/2850' }
+
+    it('llamenos-auto authored → names the workflow_dispatch route on the PR\'s own head branch, never a request to llamenos-auto', () => {
+      const remedy = expectVerdict(facts({ state: { ...approvedByOwner, ...workerAuthored }, ...stale }), 'review-verdict-stale-by-tree').verdicts[0]?.remedy ?? ''
+      expect(remedy).toContain('gh workflow run fleet-review.yml --ref fleet/infra/2850 -f pr_number=4242')
+      expect(remedy).toContain('rhonda-rodododo')
+      expect(remedy).not.toContain('re-request llamenos-auto')
+    })
+    it('another author → keeps the remove-and-re-request text, with no dispatch', () => {
+      const remedy = expectVerdict(facts({ state: { ...approvedByOwner, ...humanAuthored }, ...stale }), 'review-verdict-stale-by-tree').verdicts[0]?.remedy ?? ''
+      expect(remedy).toContain('remove and re-request llamenos-auto on #4242')
+      expect(remedy).not.toContain('gh workflow run')
+    })
+    it('the release PR on a non-operator author may ask either login → llamenos-auto is first', () => {
+      const remedy = expectVerdict(facts({ state: { ...approvedByOwner, authorLogin: 'github-actions[bot]', headRefName: 'release' }, ...stale }), 'review-verdict-stale-by-tree').verdicts[0]?.remedy ?? ''
+      expect(remedy).toContain('re-request llamenos-auto')
+    })
+    it('review-never-requested names rhonda-rodododo (not llamenos-auto) on a llamenos-auto PR', () => {
+      const f = facts({ state: { ...approvedByOwner, ...workerAuthored }, ...redReview('NO-VERDICT:unreviewed — no review has ever been earned') })
+      const remedy = expectVerdict(f, 'review-never-requested').verdicts[0]?.remedy ?? ''
+      expect(remedy).toContain('request a review from rhonda-rodododo on #4242')
+      expect(remedy).not.toContain('request a review from llamenos-auto')
+    })
+    it('review-never-requested keeps llamenos-auto on a PR someone else wrote', () => {
+      const f = facts({ state: { ...approvedByOwner, ...humanAuthored }, ...redReview('NO-VERDICT:unreviewed — no review has ever been earned') })
+      expect(expectVerdict(f, 'review-never-requested').verdicts[0]?.remedy).toBe('request a review from llamenos-auto on #4242')
+    })
+    it('sign-off-pending re-requests from the asker the PR can actually ask', () => {
+      const f = facts({ state: { ...approvedByOwner, ...workerAuthored }, ...redReview('NO-VERDICT:sign-off-pending — trust anchors') })
+      const remedy = expectVerdict(f, 'review-awaits-trust-approval').verdicts[0]?.remedy ?? ''
+      expect(remedy).toContain('re-requests review from rhonda-rodododo')
+      expect(remedy).not.toContain('re-requests review from llamenos-auto')
+    })
   })
   it('flips: a REJECTED outcome is required-check-failing, not stale-by-tree', () => {
     const f = facts({ state: approvedByOwner, ...redReview('REJECTED:reviewed — a reviewer rejected it') })
