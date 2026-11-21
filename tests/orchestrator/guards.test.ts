@@ -727,7 +727,9 @@ describe('rail: pr-why is read-only (#2469)', () => {
     // #2490: `reviewOutcomeFromAnnotations` is the ONE reader of the
     // fleet/review outcome annotation, pure — shared with board so the two
     // cannot drift on where the token lives.
-    './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'laneIdFromBranch', 'reviewOutcomeFromAnnotations', 'reviewOutcomeToken', 'type CheckRunAnnotation', 'type ReviewOutcomeRead'],
+    // #2850: `reviewTriggerLogins` (pure) is the one statement of who a review
+    // may be requested from, so a remedy never names the PR's own author.
+    './ci.js': ['QUEUE_CLEARED_LABEL', 'REVIEW_JOB', 'REVIEW_REQUEST_LOGIN', 'laneIdFromBranch', 'reviewOutcomeFromAnnotations', 'reviewOutcomeToken', 'reviewTriggerLogins', 'type CheckRunAnnotation', 'type ReviewOutcomeRead'],
     // #2480: the queue-branch grammar, pure — shared so the two cannot drift.
     './queue-sweep.js': ['parseQueueBranch'],
   }
