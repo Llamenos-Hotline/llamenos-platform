@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
 import {

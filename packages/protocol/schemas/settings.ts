@@ -381,12 +381,17 @@ export const ivrAudioRecordingSchema = z.object({
 
 export type IvrAudioRecording = z.infer<typeof ivrAudioRecordingSchema>
 
-export const ivrAudioPromptsResponseSchema = z.object({
-  prompts: z.array(z.object({
-    type: z.string(),
-    languages: z.array(z.string()),
-  })),
+/**
+ * `GET /settings/ivr-audio` — the recordings held in one scope (a hub's own, or
+ * the platform defaults). It was declared as `{ prompts: [{ type, languages }] }`,
+ * a shape the server never sent and no client reads: `{ recordings }` is what
+ * `SettingsService.getIvrAudioList` returns and the desktop settings page decodes (#2710).
+ */
+export const ivrAudioListResponseSchema = z.object({
+  recordings: z.array(ivrAudioRecordingSchema),
 })
+
+export type IvrAudioListResponse = z.infer<typeof ivrAudioListResponseSchema>
 
 export const successResponseSchema = z.object({
   success: z.boolean(),
@@ -419,8 +424,27 @@ export const migrationStatusResponseSchema = z.object({
   note: z.string(),
 })
 
+/**
+ * The periodic-cleanup counters (`CleanupMetrics`, apps/worker/lib/ttl.ts): one
+ * number per kind of row swept, plus when the last sweep ran. Declared as a
+ * record of numbers it rejected `lastCleanupAt` — an ISO timestamp, or null
+ * before the first sweep — so `GET /settings/cleanup-metrics` failed its own
+ * schema as soon as a cleanup had run (#2710).
+ */
+export const cleanupMetricsSchema = z.object({
+  captchaChallengesDeleted: z.number(),
+  rateLimitEntriesDeleted: z.number(),
+  expiredSessionsDeleted: z.number(),
+  provisionRoomsDeleted: z.number(),
+  expiredInvitesCleaned: z.number(),
+  webauthnChallengesDeleted: z.number(),
+  staleFileUploadsDeleted: z.number(),
+  completedBlastQueuesDeleted: z.number(),
+  lastCleanupAt: z.string().nullable(),
+})
+
 export const cleanupMetricsResponseSchema = z.object({
-  settings: z.record(z.string(), z.number()),
+  settings: cleanupMetricsSchema,
   identity: z.record(z.string(), z.number()),
   conversation: z.record(z.string(), z.number()),
 })

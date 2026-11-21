@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { routeRateLimitClient } from '../lib/route-rate-limit'
 import { isValidE164, checkRateLimit } from '../lib/helpers'

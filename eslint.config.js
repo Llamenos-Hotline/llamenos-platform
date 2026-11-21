@@ -268,6 +268,23 @@ export default tseslint.config(
       'local/no-inline-api-shape': 'error',
     },
   },
+  // One request validator (#2710): hono-openapi's own `validator()` answers a malformed
+  // request with `{ success, data, error: Issue[] }` — an array where every route declares
+  // `errorResponseSchema.error: string`, and the request echoed back. The worker mounts
+  // `validator` from apps/worker/openapi/validator.ts, which answers in the declared shape.
+  {
+    files: ['apps/worker/**/*.ts'],
+    ignores: ['apps/worker/openapi/validator.ts', 'apps/worker/__tests__/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: 'hono-openapi',
+          importNames: ['validator'],
+          message: "Import `validator` from apps/worker/openapi/validator.ts: hono-openapi's own answers a 400 in a shape no route declares (#2710).",
+        }],
+      }],
+    },
+  },
   // Pre-existing debt from before this rule existed (see report.md for the full inventory).
   // Downgraded to `warn` — not disabled — so `bun run lint` stays informative on these files
   // without blocking unrelated PRs on a cleanup that isn't theirs to do.

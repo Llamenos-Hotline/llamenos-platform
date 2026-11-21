@@ -335,7 +335,7 @@ export function enforceDeclaredResponses(): MiddlewareHandler {
     const mode = declaredResponseMode(c)
     const violation = await checkDeclaredResponse(c, { report: mode !== 'off' })
     if (!violation) return
-    const known = await knownViolation(violation, c.res)
+    const known = knownViolation(violation)
     if (known) {
       logger.warn('Response does not satisfy its declared schema (known)', { ...violation, issue: known.issue })
       return

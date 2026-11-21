@@ -10,7 +10,8 @@
  * POST   /api/signal-notification/digest/run      — trigger digest (admin only)
  */
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { authErrors } from '../openapi/helpers'
 import { okResponseSchema } from '@protocol/schemas/common'

@@ -66,3 +66,13 @@ Feature: OpenAPI Specification & Documentation
       | get    | /hubs/{hubId}/conversations |
       | get    | /blasts           |
       | post   | /blasts           |
+
+  # The declared-response check (apps/worker/openapi/declared-responses.ts) judges only the
+  # requests a scenario happens to make, so a route no scenario reads was never held to its
+  # schema — GET /settings/ivr-audio and GET /blasts/:id/stats declared shapes they never sent
+  # and nothing failed (#2710). This reads every one.
+  @backend
+  Scenario: Every readable endpoint answers the shape its OpenAPI spec declares
+    When I fetch the OpenAPI spec
+    And an admin reads every GET endpoint the spec declares a JSON response for
+    Then no endpoint answered with a response its declared schema rejects

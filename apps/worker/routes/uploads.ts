@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
 import { uploadInitBodySchema, uploadInitResponseSchema, chunkUploadResponseSchema, uploadCompleteResponseSchema, uploadStatusResponseSchema } from '@protocol/schemas/uploads'

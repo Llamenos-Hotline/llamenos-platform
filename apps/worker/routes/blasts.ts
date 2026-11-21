@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
-import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
+import { listBlastsQuerySchema, listSubscribersQuerySchema, listDeliveriesQuerySchema, createBlastBodySchema, updateBlastBodySchema, scheduleBlastBodySchema, importSubscribersBodySchema, updateBlastSettingsBodySchema, blastResponseSchema, blastEnvelopeResponseSchema, subscriberStatsResponseSchema, blastStatsSchema, blastSettingsResponseSchema, subscriberListResponseSchema, blastListResponseSchema, blastDeliveryListResponseSchema, importSubscribersResponseSchema, blastDeliveryResponseSchema } from '@protocol/schemas/blasts'
 import type { BlastContent, MultiBlastContent } from '@shared/types'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
@@ -480,7 +481,7 @@ blasts.get('/:id/stats',
     responses: {
       200: {
         description: 'Blast delivery stats',
-        content: { 'application/json': { schema: resolver(subscriberStatsResponseSchema) } },
+        content: { 'application/json': { schema: resolver(blastStatsSchema) } },
       },
       ...authErrors,
     },

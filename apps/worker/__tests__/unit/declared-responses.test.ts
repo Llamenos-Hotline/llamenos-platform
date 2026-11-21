@@ -188,15 +188,17 @@ describe('enforceDeclaredResponses', () => {
     expect(res.status).toBe(200)
   })
 
-  it('passes the validator\'s own 400 (a ledgered cause) but not a route\'s own non-conforming 400', async () => {
+  it('holds a 400 to its declared shape — the library validator default is no longer excused (#2710)', async () => {
     const r = new Hono()
     const declared400 = { 400: { description: 'bad', content: { 'application/json': { schema: resolver(z.object({ error: z.string() })) } } } }
     r.post('/v', describeRoute({ responses: declared400 }), c => c.json({ data: {}, error: [{ message: 'x' }], success: false }, 400))
     r.post('/own', describeRoute({ responses: declared400 }), c => c.json({ error: { nested: true } }, 400))
+    r.post('/ok', describeRoute({ responses: declared400 }), c => c.json({ error: 'bad' }, 400))
     const app = appWith(r)
     const post = (path: string) => app.app.request(path, { method: 'POST', headers: { [DECLARED_RESPONSE_CHECK_HEADER]: 'enforce' } }, { ENVIRONMENT: 'development' })
-    expect((await post('/api/hubs/h1/things/v')).status).toBe(400)
+    expect((await post('/api/hubs/h1/things/v')).status).toBe(500)
     expect((await post('/api/hubs/h1/things/own')).status).toBe(500)
+    expect((await post('/api/hubs/h1/things/ok')).status).toBe(400)
   })
 
   it('still catches a violation after the OpenAPI document was generated', async () => {

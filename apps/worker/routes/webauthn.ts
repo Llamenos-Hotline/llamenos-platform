@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import type { AppEnv, WebAuthnCredential } from '../types'
 import { uint8ArrayToBase64URL, checkRateLimit } from '../lib/helpers'

@@ -12,7 +12,9 @@ export const meResponseSchema = z.object({
   pubkey: pubkeySchema,
   roles: z.array(z.string()),
   permissions: z.array(z.string()),
-  primaryRole: z.object({ id: z.string(), name: z.string(), slug: z.string() }).nullable(),
+  // `name` is null for every custom role: its name is sealed (`encryptedName`) and
+  // the server holds no plaintext — same as `roleResponseSchema.name` (#2710).
+  primaryRole: z.object({ id: z.string(), name: z.string().nullable(), slug: z.string() }).nullable(),
   name: z.string(),
   transcriptionEnabled: z.boolean(),
   spokenLanguages: z.array(z.string()),
