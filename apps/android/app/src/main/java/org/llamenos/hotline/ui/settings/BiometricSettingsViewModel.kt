@@ -183,7 +183,9 @@ class BiometricSettingsViewModel @Inject constructor(
             is CryptoException -> PIN_ERROR_INCORRECT
             is NativeCryptoLibraryMissingException -> PIN_ERROR_NATIVE_CRYPTO_MISSING
             else -> {
-                Log.e(TAG, "Biometric enrollment failed for a reason other than the PIN", e)
+                // Class name only: a deserialization failure's message can quote the stored key
+                // record, and nothing derived from key material belongs in logcat.
+                Log.e(TAG, "Biometric enrollment failed for a reason other than the PIN: ${e::class.java.simpleName}")
                 PIN_ERROR_INTERNAL
             }
         }
