@@ -75,7 +75,11 @@ function walk(root: string, rel: string): string[] {
     if (WALK_SKIP.has(e.name)) continue
     const child = rel.length === 0 ? e.name : `${rel}/${e.name}`
     if (e.isDirectory()) out.push(...walk(root, child))
-    else if (e.isFile()) out.push(child)
+    // A tracked symlink (root AGENTS.md -> CLAUDE.md) is one `git ls-files` entry
+    // and one archive member, but `isFile()` is false for a link — so the export
+    // walk lost it while the git path kept it, and a test that passed locally
+    // failed in fleet/verify (#2894). A symlink is a file here, never descended.
+    else if (e.isFile() || e.isSymbolicLink()) out.push(child)
   }
   return out
 }
