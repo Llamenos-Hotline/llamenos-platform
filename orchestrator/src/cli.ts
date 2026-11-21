@@ -53,6 +53,8 @@ import {
   deleteLocalBranch,
   resolveWedgeForDispatch,
   salvageInventory,
+  retireObsoleteSalvage,
+  type SalvageInventoryEntry,
   type SettleTarget,
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
@@ -60,6 +62,7 @@ import { tick, type TickDeps, type TickResult, type SettleInput, type DispatchOu
 import { claimReentry, linkTrustedModules } from './reverify.js'
 import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
+import { salvageLine, summarizeSalvage } from './salvage-report.js'
 import { deriveItemStatus, renderItemStatus, type PrFacts, type PrState } from './status.js'
 import { runBoard } from './board.js'
 import { runMissingChecks } from './missing-checks.js'
@@ -456,21 +459,22 @@ export async function doctor(deps: DoctorDeps = {}): Promise<number> {
   // "could not look" must never render identically to "holds nothing".
   const salvage = await salvageInventory(REPO_ROOT)
   if (salvage.length > 0) {
-    const withWork = salvage.filter((s) => s.realFiles !== undefined && s.realFiles > 0)
-    const unreadable = salvage.filter((s) => s.realFiles === undefined)
+    const sum = summarizeSalvage(salvage)
     warnings++
-    process.stdout.write(
-      ` WARN  ${salvage.length} salvage branch(es) present — ` +
-      `${withWork.length} holding real work, ${unreadable.length} unreadable\n`,
-    )
-    for (const s of withWork) {
+    process.stdout.write(` WARN  ${salvageLine(salvage, 0)}\n`)
+    for (const e of sum.withWork) {
       process.stdout.write(
-        `        ${s.branch}: ${s.realFiles} real file(s) beyond origin/main` +
-        `${s.hasWorktree ? ' (worktree attached)' : ''} — rebase and PR it, or discard it\n`,
+        `        ${e.branch}: ${e.realFiles} real file(s) beyond origin/main` +
+        `${e.hasWorktree ? ' (worktree attached)' : ''}` +
+        `${e.pushed === false ? ' — LOCAL ONLY: git push origin ' + e.branch : ''}` +
+        ' — rebase and PR it, or discard it\n',
       )
     }
-    for (const s of unreadable) {
-      process.stdout.write(`        ${s.branch}: could not diff against origin/main — inspect by hand\n`)
+    for (const e of sum.unreadable) {
+      process.stdout.write(`        ${e.branch}: could not diff against origin/main — inspect by hand\n`)
+    }
+    if (sum.obsoleteKept > 0) {
+      process.stdout.write(`        ${sum.obsoleteKept} obsolete branch(es) hold nothing main lacks; the next tick pass retires them\n`)
     }
   }
 
@@ -1141,6 +1145,7 @@ async function runTick(): Promise<number> {
     record: append,
     log,
   }
+  const salvageNote = await maintainSalvage()
   const r = await tick(deps)
   log(JSON.stringify(r))
 
@@ -1150,6 +1155,10 @@ async function runTick(): Promise<number> {
   process.stdout.write(
     `ran: ${r.ran} attempted: ${r.attempted} failed: ${r.failed} shadowed: ${r.shadowed} rejections: ${r.rejections.length}\n`,
   )
+
+  // Issue #2699: the standing backlog of salvage branches, once per pass, next
+  // to the numbers an operator already reads.
+  if (salvageNote.length > 0) process.stdout.write(`${salvageNote}\n`)
 
   // R3: tick() never throws — an aborted: 'error' pass is the CLI's first and
   // only chance to make an operator-visible distinction between "a quiet
@@ -1165,6 +1174,27 @@ async function runTick(): Promise<number> {
     process.stdout.write(`halted: ${r.haltReason ?? 'unknown'}\n`)
   }
   return 0
+}
+
+/**
+ * Issue #2699: the per-pass salvage housekeeping. Retires the branches that
+ * provably hold nothing (`retireObsoleteSalvage`) and returns the one-line
+ * state of what is left, so the backlog is visible without anyone knowing to
+ * look for it. Best-effort: a failure here is logged and must never cost the
+ * dispatch pass, which is why it returns a string and never throws.
+ */
+async function maintainSalvage(): Promise<string> {
+  try {
+    const before = await salvageInventory(REPO_ROOT)
+    const retired = await retireObsoleteSalvage(REPO_ROOT, before, log)
+    const gone = new Set(retired.map((e) => e.branch))
+    const note = salvageLine(before.filter((e) => !gone.has(e.branch)), retired.length)
+    if (note.length > 0) log(note)
+    return note
+  } catch (e) {
+    log(`salvage: inventory failed: ${errMsg(e)}`)
+    return ''
+  }
 }
 
 function status(): number {
@@ -1412,6 +1442,8 @@ export function digestInputFrom(
   // that predates G1) keeps compiling and rendering an empty section rather
   // than being forced to thread a live `gh` result through.
   awaitingHuman: RunRecord[] = [],
+  // Issue #2699: the salvage backlog, read live by the caller.
+  salvage: SalvageInventoryEntry[] | undefined = undefined,
 ): DigestInput {
   return {
     halted,
@@ -1420,6 +1452,7 @@ export function digestInputFrom(
     lanes,
     recentRuns,
     awaitingHuman,
+    salvage,
     rejections: lastTick?.rejections ?? [],
     dependency,
     // R3/digest hardening: tick() reports `aborted: 'source-unreadable'`
@@ -1486,6 +1519,7 @@ async function runDigest(hoursArg?: string): Promise<number> {
     dependency,
     REPO_ROOT,
     awaitingHuman,
+    await salvageInventory(REPO_ROOT),
   )
   const body = renderDigest(input)
   // Issue #838: journal/stdout output is unchanged by this fix — this is the

@@ -1060,7 +1060,9 @@ The rules now:
   the lane dispatches fresh. A wedge holding real work — committed on the
   salvage branch or uncommitted in the worktree — refuses WITHOUT launching
   a worker and is recorded as the distinct `WEDGED` ledger outcome, naming
-  the worktree and salvage branch, with `needs-human` applied.
+  the worktree and salvage branch. (Since #2737 no `needs-human` label is
+  written for a wedge — the skip is re-derived every pass and ends with the
+  worktree; only a salvage that *failed* still labels.)
 - **`WEDGED` never feeds the consecutive-failure breaker.** Three identical
   refusals are one stuck condition, not three failures. It does count toward
   the per-item attempt limit (the wedge is the item's own lane state), and
@@ -1070,6 +1072,27 @@ The rules now:
   which hold real work (a diff against `origin/main` with artifact paths
   filtered out), and which have a worktree attached. Branches that cannot be
   diffed are named as unreadable, never silently counted as empty.
+- **The backlog is reported where the fleet's state is already read (#2699).**
+  Every tick pass prints one `salvage: N branch(es) — …` line (and logs it),
+  `doctor` lists each branch holding work, and the digest carries a
+  `## Salvage branches` section — count, per-branch issue and file count, and
+  which ones exist on the dispatch host's disk **only** (no copy on `origin`,
+  one disk failure from lost; back one up with `git push origin <branch>`).
+  Push state is read from `origin` and is reported as unknown, never as
+  "pushed", when origin cannot be asked. Inventory reads `refs/heads/salvage/`
+  — the trailing slash matters: the ref glob `refs/heads/salvage/*` misses
+  every nested `salvage/fleet/<lane>/<n>` branch.
+- **A branch that provably holds nothing retires itself (#2699).** Each tick
+  pass deletes a salvage branch when every path it changes beyond its
+  merge-base already has, on `origin/main`, the content the branch has (no
+  commits of its own, or its change landed by a squash merge) and no worktree
+  is attached. The delete is compare-and-swap on the sha that was read and is
+  logged with that sha, so the commits stay recoverable from the reflog. A
+  branch that cannot be compared is never retired. Branches with real work, and
+  artifact-only branches, are still never touched — those remain an operator
+  decision. The fleet does not push salvage branches for you: bulk-publishing
+  old unreviewed work is the operator's call, which is why the unpushed ones
+  are surfaced instead.
 
 ## systemd timer
 

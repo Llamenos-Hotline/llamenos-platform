@@ -543,15 +543,63 @@ export async function salvageBranchContent(
   repoRoot: string,
   branch: string,
 ): Promise<{ real: string[]; artifacts: string[] } | undefined> {
+  const paths = await salvageBranchPaths(repoRoot, branch)
+  if (paths === undefined) return undefined
   try {
-    const mergeBase = (await run('git', ['-C', repoRoot, 'merge-base', 'origin/main', branch])).trim()
-    const diff = await run('git', ['-C', repoRoot, 'diff', '--name-only', '-z', '--no-renames', `${mergeBase}..${branch}`])
-    const paths = diff.split('\0').filter((p) => p.length > 0)
     const ignored = await ignoredPathsAmong(repoRoot, paths)
     return {
       real: paths.filter((p) => !ignored.has(p)),
       artifacts: paths.filter((p) => ignored.has(p)),
     }
+  } catch {
+    return undefined
+  }
+}
+
+/** Every path `branch` changes beyond its merge-base with `origin/main`;
+ *  `undefined` when the comparison cannot be made. */
+async function salvageBranchPaths(repoRoot: string, branch: string): Promise<string[] | undefined> {
+  try {
+    const mergeBase = (await run('git', ['-C', repoRoot, 'merge-base', 'origin/main', branch])).trim()
+    const diff = await run('git', ['-C', repoRoot, 'diff', '--name-only', '-z', '--no-renames', `${mergeBase}..${branch}`])
+    return diff.split('\0').filter((p) => p.length > 0)
+  } catch {
+    return undefined
+  }
+}
+
+/** Paths per `git diff -- <paths>` call, so a 700-file salvage cannot exceed
+ *  the argv limit. */
+const OBSOLETE_PATHSPEC_CHUNK = 200
+
+/**
+ * Issue #2699: whether `branch` provably holds nothing — every path it changes
+ * beyond its merge-base already has, on `origin/main`, exactly the content the
+ * branch has. That is true of a branch with no commits of its own, of one
+ * whose change landed by a squash merge (the branch's commits are not
+ * ancestors of main, so `git branch --merged` says nothing), and of one whose
+ * every edit main has since made identically. Deleting such a branch loses no
+ * byte that main does not already carry.
+ *
+ * `undefined` when it cannot be established — no `origin/main`, an unreadable
+ * branch, a failed diff. The caller fails CLOSED: "could not look" is never
+ * "nothing there". Real work, or an artifact the branch carries that main does
+ * not, makes this `false`; a path main has since changed to something else
+ * makes it `false` too, because then the branch may hold a decision main
+ * reversed and a human should see it.
+ */
+export async function isSalvageBranchObsolete(repoRoot: string, branch: string): Promise<boolean | undefined> {
+  const paths = await salvageBranchPaths(repoRoot, branch)
+  if (paths === undefined) return undefined
+  try {
+    for (let i = 0; i < paths.length; i += OBSOLETE_PATHSPEC_CHUNK) {
+      const chunk = paths.slice(i, i + OBSOLETE_PATHSPEC_CHUNK)
+      const differing = await run('git', [
+        '--literal-pathspecs', '-C', repoRoot, 'diff', '--name-only', '--no-renames', 'origin/main', branch, '--', ...chunk,
+      ])
+      if (differing.trim().length > 0) return false
+    }
+    return true
   } catch {
     return undefined
   }
@@ -623,36 +671,85 @@ export async function resolveWedgeForDispatch(repoRoot: string, fleetBranch: str
 
 export interface SalvageInventoryEntry {
   branch: string
+  /** The commit the branch points at — what `retireObsoleteSalvage` deletes
+   *  against, so a branch that moved since it was read is left alone. */
+  sha: string
   /** Whether a worktree is currently attached to this salvage branch. */
   hasWorktree: boolean
+  /** The issue this branch was salvaged for, parsed from its name. */
+  itemId?: string
   /** Real (non-artifact) files beyond origin/main. `undefined` when the
    *  comparison could not be made — reported as "unreadable", never as
    *  "empty". */
   realFiles?: number
   artifactFiles?: number
+  /** `isSalvageBranchObsolete`: it holds nothing main does not already have.
+   *  `undefined` when that could not be established. */
+  obsolete?: boolean
+  /** Whether origin already has every commit of this branch. `undefined` when
+   *  origin could not be asked — never read as "pushed" and never as "not". */
+  pushed?: boolean
+}
+
+/** The item id a salvage branch was cut for: the trailing digits of the fleet
+ *  branch it names (`fleet/desktop/1008`, or the older `fleet-desktop-1008`). */
+export function salvageItemId(branch: string): string | undefined {
+  const fleet = salvagedFleetBranch(branch)
+  return fleet === undefined ? undefined : /(\d+)$/.exec(fleet)?.[1]
+}
+
+/** branch → sha for every `refs/heads/salvage/` ref on origin; `undefined`
+ *  when origin could not be reached. */
+async function originSalvageRefs(repoRoot: string): Promise<Map<string, string> | undefined> {
+  try {
+    const out = await run('git', ['-C', repoRoot, 'ls-remote', '--heads', 'origin', 'refs/heads/salvage/*'], { timeout: 60_000 })
+    const refs = new Map<string, string>()
+    for (const line of out.split('\n')) {
+      const [sha, ref] = line.trim().split(/\s+/)
+      if (sha !== undefined && ref !== undefined && ref.startsWith('refs/heads/')) refs.set(ref.slice('refs/heads/'.length), sha)
+    }
+    return refs
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether `local` is contained in what origin holds under the same name. */
+async function isPushed(repoRoot: string, local: string, remote: string | undefined): Promise<boolean> {
+  if (remote === undefined) return false
+  if (remote === local) return true
+  try {
+    await run('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', local, remote])
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
- * The `doctor` half of #1755: every local `salvage/*` branch, classified by
- * whether it holds real work. 39 of these accrued on the dispatch host with
- * no signal at all; 32 held nothing but the test-seed artifact and 7 held
- * completed work — a report that names the second group is what makes the
- * difference visible before the branches cost more to rebase than they save.
- * Never throws: a doctor that crashes on one unreadable branch reports
- * nothing about the other 38.
+ * Every local salvage branch, classified. 39 of these accrued on the dispatch
+ * host with no signal at all in #1755 (32 held nothing but the test-seed
+ * artifact, 7 held completed work); #2699 found 61, 48 of them on this one
+ * disk and nowhere else. Read from `refs/heads/salvage/` — the trailing slash
+ * matters, because `refs/heads/salvage/*` as a ref glob misses every nested
+ * `salvage/fleet/<lane>/<n>` branch, which is most of them.
+ * Never throws: an inventory that crashes on one unreadable branch reports
+ * nothing about the other 60.
  */
 export async function salvageInventory(repoRoot: string): Promise<SalvageInventoryEntry[]> {
-  let branches: string[]
+  let branches: { branch: string; sha: string }[]
   try {
-    branches = (await run('git', ['-C', repoRoot, 'branch', '--list', 'salvage/*', '--format=%(refname:short)']))
-      .split('\n').map((b) => b.trim()).filter((b) => b.length > 0)
+    branches = (await run('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname:short)%09%(objectname)', 'refs/heads/salvage/']))
+      .split('\n')
+      .map((l) => l.trim().split('\t'))
+      .flatMap(([branch, sha]) => (branch !== undefined && branch.length > 0 && sha !== undefined ? [{ branch, sha }] : []))
   } catch {
     return []
   }
   if (branches.length === 0) return []
 
-  // One worktree listing serves every branch — `git worktree list` per
-  // branch would ask the same question N times.
+  // One worktree listing and one `ls-remote` serve every branch — asking
+  // either per branch would put the same question N times.
   const attached = new Set<string>()
   try {
     const wt = await run('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'])
@@ -660,16 +757,49 @@ export async function salvageInventory(repoRoot: string): Promise<SalvageInvento
       if (line.startsWith('branch ')) attached.add(line.slice('branch '.length).trim().replace(/^refs\/heads\//, ''))
     }
   } catch { /* treated as none attached */ }
+  const remote = await originSalvageRefs(repoRoot)
 
   const entries: SalvageInventoryEntry[] = []
-  for (const branch of branches) {
+  for (const { branch, sha } of branches) {
     const content = await salvageBranchContent(repoRoot, branch)
     entries.push({
       branch,
+      sha,
       hasWorktree: attached.has(branch),
+      itemId: salvageItemId(branch),
       realFiles: content?.real.length,
       artifactFiles: content?.artifacts.length,
+      obsolete: await isSalvageBranchObsolete(repoRoot, branch),
+      pushed: remote === undefined ? undefined : await isPushed(repoRoot, sha, remote.get(branch)),
     })
   }
   return entries
+}
+
+/**
+ * Issue #2699: retires the salvage branches that provably hold nothing — the
+ * cheap half of the backlog. A branch is deleted only when it is obsolete
+ * (`isSalvageBranchObsolete`) AND no worktree is attached to it, and the
+ * delete is compare-and-swap on the sha that was read, so a branch that moved
+ * in between is left alone. The commits stay recoverable through the reflog.
+ * Never throws, and a failed delete leaves the branch standing and says so.
+ * Returns the branches actually deleted.
+ */
+export async function retireObsoleteSalvage(
+  repoRoot: string,
+  entries: SalvageInventoryEntry[],
+  log: (msg: string) => void = () => {},
+): Promise<SalvageInventoryEntry[]> {
+  const retired: SalvageInventoryEntry[] = []
+  for (const e of entries) {
+    if (e.obsolete !== true || e.hasWorktree) continue
+    try {
+      await run('git', ['-C', repoRoot, 'update-ref', '-d', `refs/heads/${e.branch}`, e.sha])
+      retired.push(e)
+      log(`salvage: retired ${e.branch} (${e.sha.slice(0, 9)}) — every path it changes already has main's content`)
+    } catch (err) {
+      log(`salvage: could not retire ${e.branch}: ${errMsg(err)}`)
+    }
+  }
+  return retired
 }
