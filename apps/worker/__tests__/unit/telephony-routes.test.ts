@@ -23,6 +23,7 @@ import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib
 import { checkWebhookReplay } from '@worker/services/webhook-replay'
 import metricsRoutes from '@worker/routes/metrics'
 import { resetWebhookRejectionDamping } from '@worker/telephony/webhook-rejection'
+import { _setLoggerConfigForTests } from '@worker/lib/logger'
 
 // Mock webhook replay protection — unit tests have no database
 vi.mock('@worker/services/webhook-replay', () => ({
@@ -1115,6 +1116,51 @@ describe('Telephony routes', () => {
     })
   })
 
+  describe('the webhook log line (#2627)', () => {
+    it('never writes a call token, a signature tag or any unlisted query value', async () => {
+      const lines: string[] = []
+      const out = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { lines.push(String(chunk)); return true })
+      _setLoggerConfigForTests({
+        minLevel: 'trace',
+        namespaces: ['*'],
+        rateLimits: {
+          trace: Infinity, debug: Infinity, info: Infinity, warn: Infinity, error: Infinity, fatal: Infinity,
+        },
+        stripStacks: true,
+      })
+      try {
+        const app = await createTestApp(adapter, services)
+        await app.request('/api/telephony/call-status?callToken=bearer-secret-123&sig=tag-secret-456&hub=hub-1&lang=es&other=leak-789', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'CallStatus=ringing',
+        })
+      } finally {
+        out.mockRestore()
+        _setLoggerConfigForTests({
+          minLevel: 'info',
+          namespaces: ['*'],
+          rateLimits: { trace: 50, debug: 100, info: 200, warn: 500, error: Infinity, fatal: Infinity },
+          stripStacks: true,
+        })
+      }
+      const received = lines.find(l => l.includes('Webhook received'))
+      expect(received).toBeDefined()
+      const entry = JSON.parse(received!) as { query: string }
+      // Allowlisted values stay (they are routing context, not credentials)…
+      expect(entry.query).toContain('hub=hub-1')
+      expect(entry.query).toContain('lang=es')
+      // …everything else is named but never valued.
+      expect(entry.query).toContain('callToken=[redacted]')
+      expect(entry.query).toContain('sig=[redacted]')
+      expect(entry.query).toContain('other=[redacted]')
+      const everything = lines.join('')
+      for (const secret of ['bearer-secret-123', 'tag-secret-456', 'leak-789']) {
+        expect(everything).not.toContain(secret)
+      }
+    })
+  })
+
   describe('POST /call-status', () => {
     it('ends call on completed status', async () => {
       services.calls.resolveCallToken = vi.fn().mockResolvedValue({
@@ -1180,17 +1226,58 @@ describe('Telephony routes', () => {
     })
 
     it('does not end call on ringing status', async () => {
-      services.calls.resolveCallToken = vi.fn().mockResolvedValue(null)
+      services.calls.resolveCallToken = vi.fn().mockResolvedValue({
+        callSid: 'CA-parent',
+        volunteerPubkey: 'pk-vol-1',
+        hubId: 'hub-1',
+      })
       adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'ringing' })
 
       const app = await createTestApp(adapter, services)
-      const res = await app.request('/api/telephony/call-status?parentCallSid=CA-parent', {
+      const res = await app.request('/api/telephony/call-status?callToken=token-abc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'CallStatus=ringing',
       })
       expect(res.status).toBe(200)
       expect(services.calls.endCall).not.toHaveBeenCalled()
+    })
+
+    // #2627: with no usable token the call — and so its hub — is NOT taken from
+    // the query. Plivo's signature leaves the query out and Bandwidth's Basic
+    // auth binds none of the request (telephony-webhook-query-authentication),
+    // so a `parentCallSid` there is the sender's to choose.
+    describe('a status callback with no usable call token (#2627)', () => {
+      const aliens = [
+        ['no token at all, a parentCallSid in the query', '?parentCallSid=CA-someone-elses'],
+        ['an unknown token, a parentCallSid in the query', '?callToken=token-gone&parentCallSid=CA-someone-elses'],
+      ] as const
+
+      for (const [name, query] of aliens) {
+        it(`reads no call, no hub and ends nothing: ${name}`, async () => {
+          services.calls.resolveCallToken = vi.fn().mockResolvedValue(null)
+          services.calls.getHubIdForCall = vi.fn().mockResolvedValue('hub-victim')
+          services.calls.getActiveCalls = vi.fn().mockResolvedValue([
+            { callId: 'CA-someone-elses', answeredBy: 'pk-vol-9', startedAt: new Date().toISOString() },
+          ])
+          adapter.parseCallStatusWebhook = vi.fn().mockResolvedValue({ status: 'completed' })
+
+          const app = await createTestApp(adapter, services)
+          const res = await app.request(`/api/telephony/call-status${query}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'CallStatus=completed',
+          })
+
+          expect(res.status).toBe(200)
+          expect(services.calls.getHubIdForCall).not.toHaveBeenCalled()
+          expect(services.calls.getActiveCalls).not.toHaveBeenCalled()
+          expect(services.calls.endCall).not.toHaveBeenCalled()
+          expect(services.audit.log).not.toHaveBeenCalled()
+          // Nor does it pick which hub's credentials vouch for the request.
+          expect(getHubTelephonyFromService).not.toHaveBeenCalled()
+        })
+      }
     })
 
     it('handles busy/no-answer/failed statuses', async () => {

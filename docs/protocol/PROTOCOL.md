@@ -3117,7 +3117,7 @@ and it stores `encryptedNsec` as an opaque column.
 
 ### 4.20 Telephony Webhooks
 
-These endpoints are called by telephony providers (Twilio, SignalWire, etc.), not by clients. Each request is validated by the provider's webhook signature, not Llamenos auth. Hub routing is via `?hub=<hubId>` query parameter — except `/call-recording`, whose callback carries none: its hub is resolved from the call (`active_calls`, then `call_records`), and its signature is validated with THAT hub's adapter, the one its recording is then fetched and deleted through (#2309).
+These endpoints are called by telephony providers (Twilio, SignalWire, etc.), not by clients. Each request is validated by the provider's webhook signature, not Llamenos auth. Hub routing is via `?hub=<hubId>` query parameter — except `/call-recording`, whose callback carries none: its hub is resolved from the call (`active_calls`, then `call_records`), and its signature is validated with THAT hub's adapter, the one its recording is then fetched and deleted through (#2309). `/call-status` and `/user-answer` carry none either, and their hub is resolved from the leg's opaque `callToken` ONLY: a status callback with no usable token is answered `200` and acted on not at all — the call SID is never taken from the query, because Plivo's signature leaves the query out and Bandwidth's Basic auth binds no part of the request (#2627). Query values other than an allowlist (`hub`, `lang`, `forceLang`, `auto`, `round`) are never written to the log.
 
 ```
 POST /api/telephony/incoming
