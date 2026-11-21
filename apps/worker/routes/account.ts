@@ -6,7 +6,7 @@
  */
 
 import { Hono } from 'hono'
-import { validator } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { lockdownCompleteBodySchema } from '@protocol/schemas/devices'
 import { requireFreshAuth } from '../middleware/require-fresh-auth'

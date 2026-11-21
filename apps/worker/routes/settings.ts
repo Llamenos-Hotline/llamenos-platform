@@ -1,7 +1,8 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { Hono, type Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { requirePermission, checkPermission } from '../middleware/permission-guard'
@@ -30,7 +31,7 @@ import {
   customFieldsListResponseSchema,
   roleListResponseSchema,
   reportTypeListResponseSchema,
-  ivrAudioPromptsResponseSchema,
+  ivrAudioListResponseSchema,
   successResponseSchema,
   permissionsCatalogResponseSchema,
   migrationStatusResponseSchema,
@@ -919,7 +920,7 @@ scoped.get('/ivr-audio',
         description: 'IVR audio prompt metadata',
         content: {
           'application/json': {
-            schema: resolver(ivrAudioPromptsResponseSchema),
+            schema: resolver(ivrAudioListResponseSchema),
           },
         },
       },

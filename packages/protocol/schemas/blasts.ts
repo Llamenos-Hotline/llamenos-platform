@@ -55,6 +55,20 @@ const blastContentResponseSchema = z.union([
 
 // --- Response schemas ---
 
+/**
+ * A blast's delivery tally — what `GET /blasts/:id/stats` answers and what a
+ * blast carries as `stats`. `GET /blasts/:id/stats` used to declare
+ * `subscriberStatsResponseSchema` (a different thing: subscribers by channel),
+ * so every call failed its own schema (#2710).
+ */
+export const blastStatsSchema = z.object({
+  totalRecipients: z.number(),
+  sent: z.number(),
+  delivered: z.number(),
+  failed: z.number(),
+  optedOut: z.number(),
+})
+
 export const blastResponseSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -70,13 +84,7 @@ export const blastResponseSchema = z.object({
   cancelledAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
-  stats: z.object({
-    totalRecipients: z.number(),
-    sent: z.number(),
-    delivered: z.number(),
-    failed: z.number(),
-    optedOut: z.number(),
-  }).optional(),
+  stats: blastStatsSchema.optional(),
 })
 
 export type Blast = z.infer<typeof blastResponseSchema>

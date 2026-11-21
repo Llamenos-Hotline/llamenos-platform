@@ -22,7 +22,8 @@
  *   GET    /user-envelope/:hubId    — Retrieve wrapped PUK seed envelope (session-scoped)
  */
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'

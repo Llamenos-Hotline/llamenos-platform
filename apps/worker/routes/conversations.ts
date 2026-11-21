@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv, EncryptedMessage } from '../types'
 import type { MessagingChannelType } from '@shared/types'
 import { routeOutboundMessage } from '../messaging/delivery-router'

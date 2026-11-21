@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { createMiddleware } from 'hono/factory'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { scoreVolunteers } from '../lib/assignment-scorer'
 import { getMessagingAdapterFromService } from '../lib/service-factories'

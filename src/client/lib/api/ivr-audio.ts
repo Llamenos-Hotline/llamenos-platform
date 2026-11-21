@@ -1,7 +1,7 @@
 import { request, getAuthHeaders, notifyAuthExpired, notifyApiActivity, ApiError, NetworkError } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
-import type { IvrAudioRecording } from '@protocol/schemas'
+import type { IvrAudioListResponse, IvrAudioRecording } from '@protocol/schemas'
 import { toIvrPromptWav } from '../ivr-wav'
 
 export type { IvrAudioRecording }
@@ -9,7 +9,7 @@ export type { IvrAudioRecording }
 // --- IVR Audio ---
 
 export async function listIvrAudio() {
-  return request<{ recordings: IvrAudioRecording[] }>('/settings/ivr-audio')
+  return request<IvrAudioListResponse>('/settings/ivr-audio')
 }
 
 /**

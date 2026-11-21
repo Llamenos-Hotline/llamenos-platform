@@ -1,7 +1,8 @@
 import { safeFetch } from '../lib/safe-fetch'
 import { isAllowedOAuthRedirectUrl } from '../lib/redirect-guard'
 import { Hono, type Context } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { resolveTargetHub } from '../lib/hub-scope'
@@ -23,6 +24,7 @@ import {
   webhookUrlsResponseSchema,
 } from '@protocol/schemas/provider-setup'
 import { okResponseSchema } from '@protocol/schemas/common'
+import { telephonyProviderTypeSchema } from '@protocol/schemas/settings'
 import { getProviderCapability } from '../services/provider-setup/registry'
 import { ProviderApiError } from '../services/provider-setup/types'
 import { SignalRegistrationError } from '../services/provider-setup/signal-registration'
@@ -525,15 +527,16 @@ providerSetup.get('/status/:provider',
       ...authErrors,
     },
   }),
+  // The path names the provider the answer is about, and the answer says it back as
+  // `provider`: an unknown name is a bad request, not a status whose `provider` is
+  // not one (#2710).
+  validator('param', z.object({ provider: telephonyProviderTypeSchema })),
   async (c) => {
-    const provider = c.req.param('provider')
+    const { provider } = c.req.valid('param')
     const services = c.get('services')
     const hubId = c.get('hubId')
 
-    const result = await services.providerSetup.getProviderStatus(
-      provider as Parameters<typeof services.providerSetup.getProviderStatus>[0],
-      hubId,
-    )
+    const result = await services.providerSetup.getProviderStatus(provider, hubId)
     return c.json(result)
   },
 )

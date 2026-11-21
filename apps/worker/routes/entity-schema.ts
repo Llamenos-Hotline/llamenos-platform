@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { resolveTargetHub } from '../lib/hub-scope'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'
