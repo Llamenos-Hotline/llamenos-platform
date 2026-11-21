@@ -45,6 +45,22 @@ import javax.inject.Singleton
 class ApiException(val code: Int, override val message: String) : Exception("HTTP $code: $message")
 
 /**
+ * A request was made with no hub URL configured: the device is signed out (logout wipes it)
+ * or has not finished enrolling, so there is no server to talk to (#2745).
+ *
+ * An [IOException] on purpose. "Nothing to connect to" is a connectivity failure of exactly
+ * the kind every [ApiService] caller already has to survive, and the callers that cannot
+ * report it to a user — the singletons on the application scope, where an uncaught exception
+ * takes the whole process down — already catch [IOException] around every call. It used to be
+ * a bare [IllegalStateException], which no such caller expected: a relay reconnect or
+ * incident doorbell landing after logout crashed the app (#2743). Typing it as an I/O failure
+ * closes that for every present and future call path, rather than one catch list at a time.
+ *
+ * Thrown before any socket is opened, so a write is never queued for offline replay.
+ */
+class HubNotConfiguredException : IOException("Hub URL not configured")
+
+/**
  * A hub-owned resource was requested with no hub active, and the server has said which
  * hubs the user belongs to: there is nothing to browse. See [ApiService.activeHubPath].
  */
@@ -64,20 +80,6 @@ class HubMembershipPendingException : IllegalStateException("Hub membership not 
  */
 class HubMembershipUnavailableException(cause: Exception) :
     IllegalStateException(cause.message ?: "Hub membership unavailable", cause)
-
-/**
- * A request was made while this device holds no hub URL: it was never enrolled, or its
- * identity has just been destroyed (logout, panic wipe, remote wipe) while background work
- * — a relay reconnect's re-read, a doorbell fetch — was still running.
- *
- * That is a state the app passes through on every logout, not a programming error, so it is
- * an [IOException]: like a dropped connection, the request never reached a server, and every
- * caller already degrades on that ("unavailable, state unchanged"). It is thrown before any
- * request is built, so it is never queued for offline replay. As a bare
- * `IllegalStateException` no caller modelled it, and a request racing logout crashed the
- * app from the application scope (the M1 probe's `logout` flow, #2527).
- */
-class HubNotConfiguredException : IOException("Hub URL not configured")
 
 /**
  * Request tag for public endpoints that prove identity in their body or not at all
@@ -226,7 +228,8 @@ class ApiService @Inject constructor(
      * @param signed false for public endpoints; see [UnsignedRequest]
      * @return Deserialized response of type T
      * @throws ApiException on non-2xx responses
-     * @throws IOException on network errors
+     * @throws IOException on network errors, and [HubNotConfiguredException] (an [IOException])
+     *   when there is no hub URL
      */
     suspend inline fun <reified T> request(
         method: String,
@@ -580,6 +583,8 @@ class ApiService @Inject constructor(
     /**
      * Get the configured hub URL from secure storage.
      * Lazily configures certificate pinning on first call or when the hub URL changes.
+     *
+     * @throws HubNotConfiguredException when no hub URL is stored
      */
     @PublishedApi
     internal fun getBaseUrl(): String {
