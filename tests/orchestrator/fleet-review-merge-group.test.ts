@@ -555,6 +555,38 @@ describe('rail: the merge-queue arm publishes the constituent PR\'s real verdict
     expect(status).toBe(0)
   })
 
+  // #2816. `completed_at` has one-second precision, so two carriers on one head tie
+  // routinely; `sort_by` is stable, so `last` was whichever the API listed last and
+  // the PASS-or-FAIL decision was made by chance (#2895's ejection).
+  it.each([['success first', ['success', 'failure']], ['failure first', ['failure', 'success']]])(
+    'two carriers that disagree and tie on completed_at are refused as ambiguous, in either API order (%s)',
+    (_label, order) => {
+      const { status, output, reason } = runArm({
+        checkRuns: order.map((conclusion, i) => checkRun({ conclusion, completed_at: '2026-09-20T11:49:38Z', html_url: `https://github.com/o/r/runs/${i}` })),
+      })
+      expect(status).toBe(1)
+      expect(reason).toBe('queue-pr-review-ambiguous')
+      expect(output).toContain('queue-pr-review-ambiguous')
+      expect(output).toContain('disagree')
+    })
+
+  it('two carriers that agree and tie are a pass — the tie only matters when it hides a disagreement', () => {
+    const { status } = runArm({
+      checkRuns: [checkRun({ completed_at: '2026-09-20T11:49:38Z' }), checkRun({ completed_at: '2026-09-20T11:49:38Z' })],
+    })
+    expect(status).toBe(0)
+  })
+
+  it('a disagreement that does NOT tie is still decided by the latest, as before', () => {
+    const { status } = runArm({
+      checkRuns: [
+        checkRun({ conclusion: 'failure', completed_at: '2026-09-20T11:49:37Z' }),
+        checkRun({ conclusion: 'success', completed_at: '2026-09-20T11:49:38Z' }),
+      ],
+    })
+    expect(status).toBe(0)
+  })
+
   it('FAILS when the PR head carries no fleet/review at all — never "no review needed"', () => {
     const { status, output } = runArm({ checkRuns: [] })
     expect(status).toBe(1)

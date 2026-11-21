@@ -73,6 +73,17 @@ export const REVIEW_JOB = 'fleet/review'
  * and concludes — the head keeps exactly one `fleet/review`.
  */
 export const REVIEW_RECORDED_JOB = `${REVIEW_JOB}/recorded`
+/**
+ * The check a review REQUEST is evaluated on (#2813/#2815): the caller job
+ * `re-evaluate` in fleet-review-re-evaluate.yml, then the called workflow's
+ * `fleet/review/re-evaluate` job. It carries no required name, so its result
+ * never gates anything — which is why a failure HERE (a host problem) leaves
+ * the carrier still reading its earlier `NO-VERDICT:*`, and the board must
+ * read this check to tell "the gate could not ask" from "the code is wrong".
+ * tests/orchestrator/required-context-creation.test.ts pins this to what the
+ * workflows evaluate to.
+ */
+export const REVIEW_RE_EVALUATE_CHECK = `re-evaluate / ${REVIEW_JOB}/re-evaluate`
 
 /**
  * The display name of the mandatory non-author review (`secondOpinion`),

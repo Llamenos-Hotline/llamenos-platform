@@ -976,6 +976,22 @@ jobs:
           # The LATEST completed run, never "any of them passed": a
           # re-requested review that found a problem after an earlier pass
           # must block the queue, not be outvoted by the run it supersedes.
+          #
+          # `completed_at` has one-second precision, so two carriers on one head
+          # tie routinely (#2895: a FAIL and a PASS, both completed at 11:49:38Z)
+          # and `sort_by`'s stability made `last` whatever order the API listed
+          # them — a PASS-or-FAIL decision made by chance. Ties are therefore
+          # broken on `started_at` then the check run's id, and a tie that hides
+          # a DISAGREEMENT (the newest completed_at shared by runs that conclude
+          # differently) is refused, loudly, rather than resolved: the head has
+          # two carriers of one required context, which is itself the defect.
+          latest_at="$(printf '%s' "$completed" | jq -r 'last | .completed_at')"
+          tied="$(printf '%s' "$completed" | jq -c --arg at "$latest_at" '[.[] | select(.completed_at == $at) | .conclusion] | unique')"
+          if [ "$(printf '%s' "$tied" | jq -r 'length')" != "1" ]; then
+            echo "::error::fleet/review FAILED: queue-pr-review-ambiguous — PR #$pr's head $pr_head carries two completed fleet/review check runs that disagree ($tied) and finished in the same second ($latest_at), so there is no latest to judge on; refusing to pick one by API order. A head must carry exactly one fleet/review (#2816): request a review cycle (remove, then re-add the reviewer) so one carrier is refreshed, then re-queue."
+            refuse queue-pr-review-ambiguous
+          fi
+          completed="$(printf '%s' "$completed" | jq -c 'sort_by([.completed_at, (.started_at // ""), .id])')"
           conclusion="$(printf '%s' "$completed" | jq -r 'last | .conclusion')"
           run_url="$(printf '%s' "$completed" | jq -r 'last | .html_url')"
           if [ "$conclusion" != "success" ]; then

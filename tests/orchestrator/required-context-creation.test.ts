@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRepublishOnlyEvent, REVIEW_GATE_STANDING, REVIEW_REPUBLISH_ACTIONS, reviewGateFailsClosed } from '../../orchestrator/src/ci'
+import { isRepublishOnlyEvent, REVIEW_RE_EVALUATE_CHECK, REVIEW_GATE_STANDING, REVIEW_REPUBLISH_ACTIONS, reviewGateFailsClosed } from '../../orchestrator/src/ci'
 import { parse as parseYaml } from 'yaml'
 import { postReviewCheckRun } from '../../orchestrator/src/review-and-merge'
 import {
@@ -283,6 +283,7 @@ describe('one carrier per (head, required context) — #2813', () => {
       if (j === undefined) throw new Error(`no ${job} in ${file}`)
       const full = `re-evaluate / ${jobNameOn(file, job, j, { event: 'pull_request', action: 'review_requested' })}`
       expect(full).toBe(expected)
+      if (file === 'fleet-review.yml') expect(full).toBe(REVIEW_RE_EVALUATE_CHECK)
       expect(RULESET_REQUIRED_CONTEXTS as readonly string[]).not.toContain(full)
     }
   })

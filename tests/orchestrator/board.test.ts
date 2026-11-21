@@ -9,7 +9,7 @@ import {
   type BranchGate, type BranchRuleset, type CheckState,
 } from '../../orchestrator/src/board.js'
 import {
-  VERIFY_JOB, REVIEW_JOB, REVIEW_OUTCOME_ANNOTATION, reviewOutcomeFromAnnotations, type CheckRunAnnotation,
+  VERIFY_JOB, REVIEW_JOB, REVIEW_RE_EVALUATE_CHECK, REVIEW_OUTCOME_ANNOTATION, reviewOutcomeFromAnnotations, type CheckRunAnnotation,
 } from '../../orchestrator/src/ci.js'
 import liveNoVerdictUnreviewed from './fixtures/board/fleet-review-no-verdict-unreviewed.json'
 
@@ -960,17 +960,70 @@ describe('classifyPr — REQUEST_REVIEW, the #1760 born-dead state', () => {
       expect(c.failingContexts).toContain(REVIEW_JOB)
     })
 
-  it('a red NO-VERDICT:unreviewed with a PENDING reviewer stays on the rerun tree — somebody HAS asked', () => {
+  // #2816. After #2813 a review request is evaluated by `re-evaluate / fleet/review/re-evaluate`
+  // while the carrier keeps reading what it last concluded. When that evaluation could not run,
+  // the carrier still says `NO-VERDICT:unreviewed` — and the step that wrote it is the gate's
+  // DECISION step, which `classifyReviewFailure` calls `substantive`. Reading that as "the code
+  // needs fixing" blames the diff for the host.
+  const unreviewed = (over: Partial<PrCheckContext> = {}) => reviewCheck({
+    state: 'FAIL',
+    reviewOutcome: { read: true, message: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one' },
+    reviewFailureKind: 'substantive',
+    runAttempt: 1,
+    ...over,
+  })
+  const reEvaluate = (state: CheckState) => ctx(REVIEW_RE_EVALUATE_CHECK, state)
+
+  it('#2816: a red NO-VERDICT:unreviewed whose re-evaluation FAILED is the gate being unable to ask — never NEEDS_FIX', () => {
+    const c = classify(pr({ checks: [...cheapPassChecks(), unreviewed(), reEvaluate('FAIL')], reviewRequests: ['llamenos-auto'] }))
+    expect(c.action).not.toBe('NEEDS_FIX')
+    expect(c.action).toBe('REQUEST_REVIEW')
+    expect(c.reason).toContain('could not ask')
+    expect(c.reason).toContain('not a finding about the code')
+    expect(c.failingContexts).toContain(REVIEW_JOB)
+  })
+
+  it('#2816: a NO-VERDICT:unreviewed carrier with a pending reviewer and NO re-evaluation on the head is a request that never fired', () => {
+    const c = classify(pr({ checks: [...cheapPassChecks(), unreviewed()], reviewRequests: ['llamenos-auto'] }))
+    expect(c.action).toBe('REQUEST_REVIEW')
+    expect(c.reason).toMatch(/nothing re-evaluated this head/)
+  })
+
+  it('#2816: a re-evaluation still in flight is WAITING, not a verdict of any kind', () => {
+    const c = classify(pr({ checks: [...cheapPassChecks(), unreviewed(), reEvaluate('PENDING')], reviewRequests: ['llamenos-auto'] }))
+    expect(c.action).toBe('WAITING')
+  })
+
+  it('#2816: a re-evaluation that PASSED while the carrier still reads NO-VERDICT is a carrier to re-run, not a fix', () => {
+    const c = classify(pr({ checks: [...cheapPassChecks(), unreviewed(), reEvaluate('PASS')], reviewRequests: ['llamenos-auto'] }))
+    expect(c.action).toBe('RERUN_REVIEW')
+    expect(c.reason).toContain('carrier')
+  })
+
+  it.each(['NO-VERDICT:tree-changed', 'NO-VERDICT:carry-unreadable', 'NO-VERDICT:not-requested'])(
+    '#2816: %s is an absent verdict too — never a substantive NEEDS_FIX, with or without a pending reviewer', (token) => {
+      for (const reviewRequests of [[] as string[], ['llamenos-auto']]) {
+        const c = classify(pr({
+          checks: [...cheapPassChecks(), unreviewed({ reviewOutcome: { read: true, message: `${token} — no verdict covers this head` } })],
+          reviewRequests,
+        }))
+        expect(c.action, `${token} ${JSON.stringify(reviewRequests)}`).toBe('REQUEST_REVIEW')
+      }
+    })
+
+  it('#2816: a genuine finding is still NEEDS_FIX — only the absent-verdict tokens are carved out', () => {
     const c = classify(pr({
       checks: [...cheapPassChecks(), reviewCheck({
-        state: 'FAIL',
-        reviewOutcome: { read: true, message: 'NO-VERDICT:unreviewed — no review has ever been earned on this PR and a push never starts one' },
-        reviewFailureKind: 'infrastructure',
-        runAttempt: 1,
-      })],
+        state: 'FAIL', reviewFailureKind: 'substantive', runAttempt: 1,
+        reviewOutcome: { read: true, message: 'REJECTED:reviewed — the reviewer found a problem' },
+      }), reEvaluate('FAIL')],
       reviewRequests: ['llamenos-auto'],
     }))
-    expect(c.action).toBe('RERUN_REVIEW')
+    expect(c.action).toBe('NEEDS_FIX')
+  })
+
+  it('#2816: the re-evaluation check name is the one the workflows really produce', () => {
+    expect(REVIEW_RE_EVALUATE_CHECK).toBe('re-evaluate / fleet/review/re-evaluate')
   })
 
   it('any OTHER red outcome with an empty request list keeps the old tree — the remedy there IS a rerun', () => {

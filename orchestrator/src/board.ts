@@ -3,7 +3,7 @@ import { checkHalt } from './killswitch.js'
 import { isQuotaHaltReason } from './circuit.js'
 import { REPO, gh, ghJson, describeGhFailure } from './gh.js'
 import { isReviewerLabel } from './specialist.js'
-import { REVIEW_JOB, reviewOutcomeToken, reviewOutcomeFromAnnotations, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
+import { REVIEW_JOB, REVIEW_RE_EVALUATE_CHECK, reviewOutcomeToken, reviewOutcomeFromAnnotations, type CheckRunAnnotation, type ReviewOutcomeRead } from './ci.js'
 
 /**
  * `llamenos-fleet board` — the deterministic gate decision table.
@@ -457,6 +457,17 @@ function requiredContextState(onHead: PrCheckContext[], name: string): CheckStat
  */
 export interface WorkflowStep { name: string; conclusion: string | null }
 
+/**
+ * The `fleet/review` outcomes that say "the gate holds no verdict for THIS
+ * head" — an absence to be filled by a review request, never a finding about
+ * the code (#2816). Each is written by the gate's decision step, which is why
+ * `classifyReviewFailure` calls the failure `substantive`; the distinction the
+ * board needs is the token, not the step.
+ */
+const ABSENT_VERDICT_TOKENS: readonly string[] = [
+  'NO-VERDICT:unreviewed', 'NO-VERDICT:not-requested', 'NO-VERDICT:tree-changed', 'NO-VERDICT:carry-unreadable',
+]
+
 /** Steps whose failure is a DECISION, never a flake — see above. */
 const DECIDED_REVIEW_STEPS: readonly string[] = ['Review', 'Decide whether to run the review engine']
 
@@ -760,10 +771,7 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
     )
   }
   const reviewToken = review.reviewOutcome?.read === true ? reviewOutcomeToken(review.reviewOutcome.message) : undefined
-  if (
-    (reviewToken === 'NO-VERDICT:unreviewed' || reviewToken === 'NO-VERDICT:not-requested') &&
-    pr.reviewRequests.length === 0
-  ) {
+  if (reviewToken !== undefined && ABSENT_VERDICT_TOKENS.includes(reviewToken) && pr.reviewRequests.length === 0) {
     return {
       action: 'REQUEST_REVIEW',
       reason: `fleet/review is ${reviewToken} and no review has ever been requested (requested_reviewers ` +
@@ -784,6 +792,38 @@ export function classifyPr(pr: PrFact, gate: BranchGate): PrClassification {
       reason: `fleet/review is ${reviewToken}: the diff changes a shipped client's TLS trust anchors and lands only ` +
         `once the operator checks the values and signs off on head ${pr.headRefOid}, then re-requests the review — ` +
         'no code change or rerun clears it, and a push voids the sign-off',
+      failingContexts: [REVIEW_JOB],
+    }
+  }
+
+  // #2816: the carrier holds NO VERDICT for this head, and a reviewer IS asked.
+  // The step that wrote the token is the gate's DECISION step, which
+  // `classifyReviewFailure` files under `substantive` — and "the code needs
+  // fixing" is exactly what an absent verdict is not. Since #2813 a request is
+  // evaluated on its OWN check (`REVIEW_RE_EVALUATE_CHECK`) while the carrier
+  // keeps its earlier conclusion, so when a host problem fails that
+  // evaluation the carrier still reads `unreviewed` and the PR used to be
+  // reported as a rejected diff. Derived from what is on the head, never
+  // guessed: the evaluation's own state says which of the four this is.
+  if (reviewToken !== undefined && ABSENT_VERDICT_TOKENS.includes(reviewToken)) {
+    const reEvaluation = onHead.find((c) => c.name === REVIEW_RE_EVALUATE_CHECK)
+    const absent = `fleet/review is ${reviewToken}: the gate holds no verdict for this head, which is not a finding about the code`
+    if (reEvaluation?.state === 'PENDING') {
+      return { action: 'WAITING', reason: `${absent}; the request is being evaluated (${REVIEW_RE_EVALUATE_CHECK} is in flight)`, failingContexts: [] }
+    }
+    if (reEvaluation?.state === 'PASS') {
+      return {
+        action: 'RERUN_REVIEW',
+        reason: `${absent}; ${REVIEW_RE_EVALUATE_CHECK} succeeded, so the carrier was not refreshed — re-run the head's ` +
+          'fleet/review carrier so it reads the verdict the re-evaluation recorded',
+        failingContexts: [],
+      }
+    }
+    return {
+      action: 'REQUEST_REVIEW',
+      reason: reEvaluation === undefined
+        ? `${absent}; a reviewer is requested but nothing re-evaluated this head (a request that fired before the head moved is not re-sent on a push) — cycle the request (remove, then re-add the reviewer)`
+        : `${absent}; ${REVIEW_RE_EVALUATE_CHECK} failed, so the gate could not ask — an infrastructure failure, not a rejection — cycle the request (remove, then re-add the reviewer) once the host is healthy`,
       failingContexts: [REVIEW_JOB],
     }
   }
