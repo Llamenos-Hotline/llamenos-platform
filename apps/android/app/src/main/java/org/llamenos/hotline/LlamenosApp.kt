@@ -5,6 +5,7 @@ import dagger.hilt.android.HiltAndroidApp
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NetworkMonitor
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.service.ShiftHeartbeat
 import org.llamenos.hotline.telephony.LinphoneService
 import javax.inject.Inject
 
@@ -16,6 +17,7 @@ class LlamenosApp : Application() {
     @Inject lateinit var offlineQueue: OfflineQueue
     @Inject lateinit var apiService: ApiService
     @Inject lateinit var linphoneService: LinphoneService
+    @Inject lateinit var shiftHeartbeat: ShiftHeartbeat
 
     override fun onCreate() {
         super.onCreate()
@@ -29,6 +31,9 @@ class LlamenosApp : Application() {
         offlineQueue.apiService = apiService
         apiService.offlineQueue = offlineQueue
         offlineQueue.startMonitoring()
+
+        // Keep every clock-in alive while the device is unlocked (#2886)
+        shiftHeartbeat.start()
 
         // Upload pending crash logs if user has consented (fire-and-forget)
         crashReporter.uploadPendingInBackground()

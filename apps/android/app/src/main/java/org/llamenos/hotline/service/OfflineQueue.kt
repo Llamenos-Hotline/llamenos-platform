@@ -128,9 +128,14 @@ class OfflineQueue @Inject constructor(
      * @param path API path (e.g., "/api/notes")
      * @param method HTTP method (POST, PUT, PATCH, DELETE)
      * @param body JSON-serialized request body, or null
-     * @return The queued operation ID
+     * @return The queued operation ID, or null when the operation is a liveness signal that
+     *   must not be replayed (see [isLivenessSignal])
      */
-    fun enqueue(path: String, method: String, body: String?): String {
+    fun enqueue(path: String, method: String, body: String?): String? {
+        // A heartbeat says "still here, now". Replayed after a reconnect it would say it about a
+        // moment that has passed, and against a clock-in that has since gone stale it can only be
+        // refused (#2886). The sender simply beats again on its next tick.
+        if (isLivenessSignal(path)) return null
         val op = QueuedOperation(
             id = UUID.randomUUID().toString(),
             type = classifyOperation(path, method),
@@ -300,6 +305,9 @@ class OfflineQueue @Inject constructor(
 
         /** Write methods eligible for offline queueing. */
         private val QUEUEABLE_METHODS = setOf("POST", "PUT", "PATCH", "DELETE")
+
+        /** Whether [path] is a shift heartbeat (`POST /api/hubs/{hubId}/shifts/heartbeat`), which is never queued. */
+        fun isLivenessSignal(path: String): Boolean = path.endsWith("/shifts/heartbeat")
 
         /** Whether an HTTP method is a write operation eligible for queueing. */
         fun isQueueableMethod(method: String): Boolean =
