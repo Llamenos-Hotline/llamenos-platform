@@ -171,7 +171,7 @@ class ReportsViewModelCryptoLabelTest {
 
     @Test
     fun `searchLocations fails soft to an empty list when the request errors`() = runTest {
-        // No hub URL configured -> ApiService.getBaseUrl() throws IllegalStateException.
+        // No hub URL configured -> ApiService.getBaseUrl() throws HubNotConfiguredException.
         // The location picker must never surface this as a crash or an error state —
         // a misconfigured/unreachable geocoding provider should just show no suggestions.
         val vm = makeViewModel()
