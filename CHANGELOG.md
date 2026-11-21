@@ -210,6 +210,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.24 (2026-11-21)
+
+### Fixes
+
+- an unconfigured hub is a typed IOException, so app-scope collectors cannot crash on it (#2895)
+- every route answers the shape it declares — one validator 400, four stale schemas, a route fix, and a sweep that holds every GET to its schema (#2898)
+
 ## 0.21.23 (2026-11-20)
 
 ### Fixes
