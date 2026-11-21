@@ -2,7 +2,8 @@
 // (super-admin vs member-filtered) and hub construction logic cannot be
 // expressed in factory config. All CRUD handlers remain hand-written.
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv, Env } from '../types'
 import type { Services } from '../services'
 import { requirePermission, requireAnyPermission } from '../middleware/permission-guard'

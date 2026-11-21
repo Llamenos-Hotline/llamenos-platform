@@ -7,7 +7,8 @@
  * middleware, optional validator middleware, and audit logging.
  */
 import { Hono, type Context } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { ZodTypeAny } from 'zod'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'

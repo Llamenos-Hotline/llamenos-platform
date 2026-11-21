@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { auth } from '../middleware/auth'
 import { rateLimit } from '../middleware/rate-limit'

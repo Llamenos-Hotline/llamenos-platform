@@ -22,12 +22,15 @@ export interface KnownViolation {
   issue: number
 }
 
-/** Owns what has not been split out to an issue of its own — today, the validator 400 below. */
-const TRACKING_ISSUE = 2521
-
 export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
   { method: 'POST', route: '/api/hubs/:hubId/blasts', status: 201, issue: 2572 },
   { method: 'POST', route: '/api/hubs/:hubId/blasts/:id/send', status: 200, issue: 2572 },
+  // The reads of the same blast content shape (#2572): measured by the every-GET sweep
+  // (core/openapi-spec.feature) once it covered routes no scenario read.
+  { method: 'GET', route: '/api/blasts', status: 200, issue: 2572 },
+  { method: 'GET', route: '/api/blasts/:id', status: 200, issue: 2572 },
+  { method: 'GET', route: '/api/hubs/:hubId/blasts', status: 200, issue: 2572 },
+  { method: 'GET', route: '/api/hubs/:hubId/blasts/:id', status: 200, issue: 2572 },
   { method: 'GET', route: '/api/hubs/:hubId/notes/:id/replies', status: 200, issue: 2300 },
   { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/register', status: 200, issue: 2571 },
   { method: 'POST', route: '/api/hubs/:hubId/provider-setup/signal/verify', status: 200, issue: 2571 },
@@ -36,32 +39,8 @@ export const KNOWN_VIOLATIONS: readonly KnownViolation[] = [
   { method: 'POST', route: '/api/provider-setup/signal/verify', status: 200, issue: 2571 },
 ]
 
-/**
- * One cause, not one route: `validator()`'s default hook answers a body that
- * fails its schema with `{ data, error: Issue[], success: false }`, while every
- * route declares its 400 as `errorResponseSchema` (`error: string`). Matched
- * by that body shape, so a route's OWN 400 that violates its schema is still
- * caught.
- */
-export const VALIDATOR_400: { issue: number } = { issue: TRACKING_ISSUE }
-
-function isValidatorFailureBody(body: unknown): boolean {
-  if (typeof body !== 'object' || body === null) return false
-  const b = body as { success?: unknown; error?: unknown }
-  return b.success === false && Array.isArray(b.error)
-}
-
 /** The ledger entry covering `violation`, if any. */
-export async function knownViolation(violation: ResponseViolation, res: Response): Promise<{ issue: number } | undefined> {
-  const entry = KNOWN_VIOLATIONS.find(k =>
+export function knownViolation(violation: ResponseViolation): { issue: number } | undefined {
+  return KNOWN_VIOLATIONS.find(k =>
     k.method === violation.method && k.route === violation.route && k.status === violation.status)
-  if (entry) return entry
-  if (violation.status === 400) {
-    try {
-      if (isValidatorFailureBody(await res.clone().json())) return VALIDATOR_400
-    } catch {
-      return undefined
-    }
-  }
-  return undefined
 }

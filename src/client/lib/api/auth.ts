@@ -46,5 +46,5 @@ export async function logout() {
 }
 
 export async function getMe() {
-  return request<{ pubkey: string; roles: string[]; permissions: string[]; primaryRole: { id: string; name: string; slug: string } | null; name: string; transcriptionEnabled: boolean; spokenLanguages: string[]; uiLanguage: string; profileCompleted: boolean; onBreak: boolean; callPreference: 'phone' | 'browser' | 'both'; webauthnRequired: boolean; webauthnRegistered: boolean; adminDecryptionPubkey: string; serverEventKeyHex?: string; serverEventKeyPrevHex?: string; eventKeyEpoch?: number; eventKeyEpochDuration?: number }>('/auth/me')
+  return request<{ pubkey: string; roles: string[]; permissions: string[]; primaryRole: { id: string; name: string | null; slug: string } | null; name: string; transcriptionEnabled: boolean; spokenLanguages: string[]; uiLanguage: string; profileCompleted: boolean; onBreak: boolean; callPreference: 'phone' | 'browser' | 'both'; webauthnRequired: boolean; webauthnRegistered: boolean; adminDecryptionPubkey: string; serverEventKeyHex?: string; serverEventKeyPrevHex?: string; eventKeyEpoch?: number; eventKeyEpochDuration?: number }>('/auth/me')
 }

@@ -8,7 +8,8 @@
 
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { rateLimit } from '../middleware/rate-limit'

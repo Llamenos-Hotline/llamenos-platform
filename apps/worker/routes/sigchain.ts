@@ -5,7 +5,8 @@
  * POST /api/users/:targetPubkey/sigchain — Append a signed link (self only).
  */
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { checkPermission } from '../middleware/permission-guard'
 import { authErrors } from '../openapi/helpers'

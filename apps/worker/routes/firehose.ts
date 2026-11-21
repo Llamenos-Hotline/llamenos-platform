@@ -3,7 +3,8 @@
  * notification opt-outs, and agent lifecycle control.
  */
 import { Hono } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import type { AppEnv } from '../types'
 import { requirePermission } from '../middleware/permission-guard'
 import { LABEL_FIREHOSE_AGENT_SEAL } from '@shared/crypto-labels'

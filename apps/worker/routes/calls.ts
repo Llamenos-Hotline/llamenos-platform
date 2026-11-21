@@ -1,5 +1,6 @@
 import { Hono, type Context } from 'hono'
-import { describeRoute, resolver, validator } from 'hono-openapi'
+import { describeRoute, resolver } from 'hono-openapi'
+import { validator } from '../openapi/validator'
 import { z } from 'zod'
 import type { AppEnv } from '../types'
 import { hangUpCallerLeg } from '../services/call-hangup'
