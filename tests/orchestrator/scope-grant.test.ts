@@ -225,6 +225,30 @@ describe('refireReviewRequest — a label does not trigger the gate, a fresh req
     expect((await refireReviewRequest({ pr: '2633', headRefName: 'fleet/backend/2633' }, deps)).kind).toBe('failed')
   })
 
+  // #2722: an unreadable pre-count used to return `unverified` BEFORE any
+  // DELETE/POST, after the labels were already applied — a PR with the grant in
+  // place and no fresh review_requested for the gate to re-read them on.
+  it('an unreadable pre-count still DELETEs and POSTs, and reports unverified (attempted), not refused', async () => {
+    const calls: string[] = []
+    const deps: ReviewRequestAtOpenDeps = {
+      readPr: async () => ({ author: 'a-human', requestedReviewers: ['llamenos-auto'] }),
+      countReviewRequestedEvents: async () => undefined,
+      postRequestedReviewer: async (_p, l) => { calls.push(`post:${l}`) },
+      deleteRequestedReviewer: async (_p, l) => { calls.push(`delete:${l}`) },
+      log: () => {},
+    }
+    const out = await refireReviewRequest({ pr: '2633', headRefName: 'fleet/backend/2633' }, deps)
+    expect(out.kind).toBe('unverified')
+    expect(calls).toEqual(['delete:llamenos-auto', 'post:llamenos-auto'])
+  })
+
+  it('a readable pre-count with an unreadable post-count is unverified too — unreadable is not "did not fire"', async () => {
+    let reads = 0
+    const { deps } = fakeReview({ pending: [], counts: [0] })
+    deps.countReviewRequestedEvents = async () => (reads++ === 0 ? 0 : undefined)
+    expect((await refireReviewRequest({ pr: '2633', headRefName: 'fleet/backend/2633' }, deps)).kind).toBe('unverified')
+  })
+
   it('refuses a PR reference it cannot build an api path from', async () => {
     const { deps, calls } = fakeReview({ pending: [], counts: [0, 1] })
     expect((await refireReviewRequest({ pr: 'https://example.com/x/pull/1', headRefName: 'fleet/backend/1' }, deps)).kind).toBe('failed')
@@ -251,6 +275,8 @@ describe('grantScopeThenRequestReview — a granted PR always ends with a review
     eventsNeverAdvance?: boolean
     /** Event reads fail AFTER the first write landed — the write succeeded, the confirmation could not look. */
     countUnreadableAfterWrite?: boolean
+    /** Event reads fail until the first write lands — the pre-count the re-fire used to refuse on (#2722). */
+    countUnreadableBeforeWrite?: boolean
   }) {
     const reviewers = new Set(o.pending)
     let events = 1
@@ -258,7 +284,8 @@ describe('grantScopeThenRequestReview — a granted PR always ends with a review
     const calls: string[] = []
     const reviewDeps: ReviewRequestAtOpenDeps = {
       readPr: async () => ({ author: 'a-human', requestedReviewers: [...reviewers] }),
-      countReviewRequestedEvents: async () => (o.countUnreadableAfterWrite && posts > 0 ? undefined : events),
+      countReviewRequestedEvents: async () =>
+        (o.countUnreadableAfterWrite && posts > 0) || (o.countUnreadableBeforeWrite && posts === 0) ? undefined : events,
       postRequestedReviewer: async (_p, l) => {
         posts += 1
         calls.push(`post:${l}`)
@@ -313,6 +340,27 @@ describe('grantScopeThenRequestReview — a granted PR always ends with a review
     expect(out.review).toEqual({ kind: 'already-pending', reviewer: REVIEWER })
     expect(gh.eventCount()).toBe(2)
     expect(gh.calls).toEqual([`delete:${REVIEWER}`, `post:${REVIEWER}`])
+  })
+
+  it('#2722: pre-count unreadable — the re-fire is still made, so the labels land WITH a fresh review_requested', async () => {
+    const gh = fakeGitHub({ pending: [REVIEWER], countUnreadableBeforeWrite: true })
+    const out = await run(gh)
+    expect(out.grant).toMatchObject({ kind: 'granted', refired: false })
+    // The stale run's request was cycled: a new event exists for the gate to re-read the labels on.
+    expect(gh.eventCount()).toBe(2)
+    expect(gh.calls).toEqual([`delete:${REVIEWER}`, `post:${REVIEWER}`])
+    // ...and the fall-through is a no-op, never a second event on the single review runner.
+    expect(out.review).toEqual({ kind: 'already-pending', reviewer: REVIEWER })
+    expect([...gh.reviewers]).toEqual([REVIEWER])
+  })
+
+  it('#2722: pre-count unreadable AND the re-fire POST throws — the fall-through still leaves a reviewer', async () => {
+    const gh = fakeGitHub({ pending: [REVIEWER], countUnreadableBeforeWrite: true, postThrowsOn: [1] })
+    const out = await run(gh)
+    expect(out.grant).toMatchObject({ kind: 'granted', refired: false })
+    expect(out.review?.kind).toBe('requested')
+    expect([...gh.reviewers]).toEqual([REVIEWER])
+    expect(gh.eventCount()).toBe(2)
   })
 
   it('event count never advances (CODEOWNER re-add): reviewer is pending, so the fall-through does not re-cycle it', async () => {
