@@ -8,7 +8,8 @@ import {
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { REVIEW_JOB } from '../../orchestrator/src/ci.js'
+import { REVIEW_JOB, REVIEW_RECORDED_JOB } from '../../orchestrator/src/ci.js'
+import { RULESET_REQUIRED_CONTEXTS } from './required-context-creation'
 import {
   MAX_ATTEMPTS_PER_SHA, acquireInFlight, nestedInVerification, recordAttempt, IN_VERIFICATION_ENV,
 } from '../../orchestrator/src/review-and-merge-guards.js'
@@ -291,7 +292,7 @@ describe('runReviewAndMerge', () => {
   })
 
   it('#2884: the App\'s own PASS is reused only when bound to this review set and description', async () => {
-    const app = (external_id: string | null) => ({ id: 1, status: 'completed', conclusion: 'success', app: { slug: 'llamenos-fleet-review' }, external_id })
+    const app = (external_id: string | null) => ({ id: 1, name: REVIEW_RECORDED_JOB, status: 'completed', conclusion: 'success', app: { slug: 'llamenos-fleet-review' }, external_id })
     const bound = reviewBinding(reviewSetTag([]), claimDigest(facts().claim))
     // Bound: reused, no new review, no new post.
     const reused = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => [app(bound)]) })
@@ -305,6 +306,14 @@ describe('runReviewAndMerge', () => {
       expect(deps.invokeReviewer, String(external_id)).toHaveBeenCalledTimes(1)
       expect(deps.postCheckRun).toHaveBeenCalledWith('head111', 'PASS', expect.any(String), bound)
     }
+  })
+
+  it('#2816: a PASS the App posted under the REQUIRED name is not a recorded verdict — it was a second carrier, and the gate never reads it', async () => {
+    const bound = reviewBinding(reviewSetTag([]), claimDigest(facts().claim))
+    const legacy = { id: 1, name: REVIEW_JOB, status: 'completed', conclusion: 'success', app: { slug: 'llamenos-fleet-review' }, external_id: bound }
+    const deps = baseDeps({ fetchReviewCheckRuns: vi.fn(async () => [legacy]) })
+    await runReviewAndMerge('9', deps, {})
+    expect(deps.invokeReviewer).toHaveBeenCalledTimes(1)
   })
 
   it('#2884: a FAIL or an unreadable review never re-runs the carrier', async () => {
@@ -771,7 +780,12 @@ describe('postReviewCheckRun authenticates as the GitHub App (#1483)', () => {
       http,
     })
     const body = JSON.parse(requests[0]?.body ?? '{}') as Record<string, unknown>
-    expect(body['name']).toBe(REVIEW_JOB)
+    // #2816: NOT the required name. The App is a second app, and the ruleset accepts
+    // any app, so a `fleet/review` posted here is a second carrier of the required
+    // context on the head — the gate's own carrier reads this run and concludes.
+    expect(body['name']).toBe(REVIEW_RECORDED_JOB)
+    expect(body['name']).not.toBe(REVIEW_JOB)
+    expect(RULESET_REQUIRED_CONTEXTS as readonly string[]).not.toContain(body['name'])
     expect(body['head_sha']).toBe('abc123')
     expect(body['status']).toBe('completed')
     expect(body['conclusion']).toBe('failure')

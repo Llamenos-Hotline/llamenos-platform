@@ -1050,7 +1050,7 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // `pull_request: review_requested` and `workflow_dispatch` must not match.
     //
     // #2806 widened the republish-only arm from `synchronize` alone to
-    // `REVIEW_REPUBLISH_ACTIONS` (opened, reopened, synchronize). The hosted
+    // `REVIEW_REPUBLISH_ACTIONS` (opened, synchronize). The hosted
     // list here must be EXACTLY that set: one action more and an
     // engine-capable event could land on a hosted runner; one fewer and a
     // republish queues on the review box in front of real reviews.
@@ -1639,9 +1639,11 @@ describe('rail: fleet/review runs once per review request, not on every push', (
     expect(pullRequestBlock.length, 'pull_request trigger sub-block not found').toBeGreaterThan(0)
     expect(pullRequestBlock, 'fleet-verify.yml must spell out pull_request types — a bare trigger silently excludes review_requested')
       .toMatch(/\n {4}types:\s*\[[^\]]*\]/)
-    for (const type of ['opened', 'synchronize', 'reopened']) {
+    for (const type of ['opened', 'synchronize']) {
       expect(pullRequestBlock, `fleet-verify.yml must trigger on pull_request "${type}"`).toContain(type)
     }
+    // #2816: a reopen over an unchanged head is a second `fleet/verify` carrier.
+    expect(pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? '', 'reopened in fleet-verify.yml\'s own types is a second carrier (#2816)').not.toContain('reopened')
     expect(pullRequestBlock.match(/\n {4}types:.*/)?.[0] ?? '', 'review_requested in fleet-verify.yml\'s own types shadows its carrier (#2815)').not.toContain('review_requested')
   })
 
@@ -1672,7 +1674,7 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // synthetic commit at all, and a required context that never reports
   // leaves every entry at `AWAITING_CHECKS` forever.
   //
-  // #2806 added `opened` and `reopened`, on exactly `synchronize`'s terms:
+  // #2806 added `opened` (#2816 took `reopened` away again), on exactly `synchronize`'s terms:
   // republish-only (`REVIEW_REPUBLISH_ACTIONS`), so they cannot reach the
   // engine either. `opened` was banned because it "re-enters through
   // CODEOWNERS"; it does not when no entry owns a touched path, and #2805 sat
@@ -1681,7 +1683,7 @@ describe('rail: fleet/review runs once per review request, not on every push', (
   // stops creating the context.
   it('fleet-review.yml triggers on pull_request (the republish-only actions), workflow_call (review_requested, #2815), workflow_dispatch AND merge_group, and NEVER push', () => {
     const onBlock = fleetReviewYaml().split(/\njobs:\n/)[0] ?? ''
-    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*opened\s*,\s*reopened\s*,\s*synchronize\s*\]/)
+    expect(onBlock).toMatch(/\n {2}pull_request:\n {4}types:\s*\[\s*opened\s*,\s*synchronize\s*\]/)
     expect(onBlock).toMatch(/\n {2}workflow_dispatch:/)
     // The review request arrives through the caller, and ONLY a review
     // request: never a label, an edit or a push (the every-label and
@@ -3554,11 +3556,11 @@ describe('rail: a push republishes a verdict and never starts one (#1284)', () =
     expect(decision.requested).toBe(false)
   })
 
-  // #2806: `opened` and `reopened` joined the republish-only set so the
+  // #2806: `opened` joined the republish-only set so the
   // required context exists on a PR nobody requested a review for. They must
   // be exactly as unable to start a review as a push is.
-  it('an open or reopen is republish-only too, and never a review request even naming a trigger login', () => {
-    for (const action of ['opened', 'reopened']) {
+  it('an open is republish-only too, and never a review request even naming a trigger login', () => {
+    for (const action of ['opened']) {
       const e = { ...push, action, requestedReviewer: REVIEW_REQUEST_LOGIN }
       expect(isRepublishOnlyEvent(e), action).toBe(true)
       const decision = reviewRequestFor(e)

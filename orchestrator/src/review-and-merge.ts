@@ -8,7 +8,7 @@ import {
   type AppHttp, type RecorderReadiness,
 } from './github-app.js'
 import {
-  composeReviewSet, decideReviewSet, reviewTriggerLogins, laneIdFromBranch, GENERAL_REVIEWER, REVIEW_JOB,
+  composeReviewSet, decideReviewSet, reviewTriggerLogins, laneIdFromBranch, GENERAL_REVIEWER, REVIEW_JOB, REVIEW_RECORDED_JOB,
   REVIEW_REQUEST_LOGIN, QUEUE_CLEARED_LABEL, type ReviewSetDecision,
 } from './ci.js'
 import {
@@ -103,6 +103,8 @@ export interface CheckRunInfo {
   id: number
   status: string
   conclusion: string | null
+  /** The check run's name — the review App's verdict is believed only under `REVIEW_RECORDED_JOB`. */
+  name?: string
   /** The creating app — `review-app-verdict.ts` trusts the slug, never the name. */
   app?: { slug?: string } | null
   /** The verdict's binding (`reviewBinding`) when the review App posted it. */
@@ -111,9 +113,12 @@ export interface CheckRunInfo {
 
 interface CheckRunsResponse { total_count: number; check_runs: CheckRunInfo[] }
 
+const checkRunsPath = (sha: string, name: string) =>
+  `repos/${REPO}/commits/${sha}/check-runs?check_name=${encodeURIComponent(name)}`
+
 /**
- * Reads every `fleet/review`-named check-run recorded against this exact
- * commit — never a time window, never the PR number, exactly as
+ * Reads every `fleet/review`-named check-run, and every `fleet/review/recorded`
+ * one (the review App's, #2816), recorded against this exact commit — never a time window, never the PR number, exactly as
  * `review-cache.ts`'s own module comment argues for its artifact cache: a
  * rebase changes the head SHA, so a stale review can never be mistaken for a
  * fresh one, and a re-run of this command on an UNCHANGED head always finds
@@ -125,10 +130,12 @@ interface CheckRunsResponse { total_count: number; check_runs: CheckRunInfo[] }
  * direction every other cache in this fleet takes.
  */
 export async function fetchReviewCheckRuns(sha: string): Promise<CheckRunInfo[] | undefined> {
-  const data = await ghJson<CheckRunsResponse>([
-    'api', `repos/${REPO}/commits/${sha}/check-runs?check_name=${encodeURIComponent(REVIEW_JOB)}`,
-  ])
-  return data?.check_runs
+  const [carriers, recorded] = await Promise.all([REVIEW_JOB, REVIEW_RECORDED_JOB].map((name) =>
+    ghJson<CheckRunsResponse>(['api', checkRunsPath(sha, name)])))
+  // Either read failing is "could not look", which must read the same as no
+  // check run at all — never as a PASS found on the other name alone.
+  if (carriers === undefined || recorded === undefined) return undefined
+  return [...carriers.check_runs, ...recorded.check_runs]
 }
 
 /**
@@ -145,9 +152,12 @@ export function hasSuccessfulReview(checkRuns: CheckRunInfo[] | undefined, bindi
   // refuses an unbound one (`appRecordedVerdictFrom`), so reusing it here
   // would skip the review and leave a head the carrier still cannot clear.
   // Any other author's green (the Actions job's own) is the gate's verdict
-  // already, and counts as it always did.
+  // already, and counts as it always did. The App's own is believed only under
+  // the name the gate reads (#2816): one posted as `fleet/review` before that
+  // was a second carrier, and the carrier never reads it.
   return checkRuns?.some((c) => c.conclusion === 'success' &&
-    (binding === undefined || c.app?.slug !== REVIEW_RECORDER_APP_SLUG || c.external_id === binding)) ?? false
+    (c.app?.slug !== REVIEW_RECORDER_APP_SLUG ||
+      (c.name === REVIEW_RECORDED_JOB && (binding === undefined || c.external_id === binding)))) ?? false
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +494,7 @@ export async function postReviewCheckRun(
     ? `${text.slice(0, CHECK_RUN_SUMMARY_MAX)}\n\n… (truncated)`
     : text
   const body = JSON.stringify({
-    name: REVIEW_JOB,
+    name: REVIEW_RECORDED_JOB,
     head_sha: sha,
     status: 'completed',
     conclusion: checkRunConclusion(verdict),
@@ -495,7 +505,7 @@ export async function postReviewCheckRun(
     output: { title: CHECK_RUN_TITLES[verdict], summary },
   })
   const token = await (opts.mintToken ?? mintInstallationToken)()
-  const what = `recording the ${REVIEW_JOB} verdict for ${sha}`
+  const what = `recording the ${REVIEW_RECORDED_JOB} verdict for ${sha}`
   const res = await appApiRequest(opts.http ?? fetchAppHttp, {
     method: 'POST',
     url: `${GITHUB_API}/repos/${REPO}/check-runs`,

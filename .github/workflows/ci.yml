@@ -31,7 +31,11 @@ on:
   push:
     # `desktop` only — NOT `main`, see the header comment (#1830).
     branches: [desktop]
+  # `opened`/`synchronize` ONLY, never the bare default (which adds `reopened`):
+  # a reopen over an unchanged head would put a second `ci-status` carrier on it
+  # (#2816). A reopen is covered by carriers-on-reopen.yml.
   pull_request:
+    types: [opened, synchronize]
   # The merge queue's own ref. Neither `fleet/verify` (fleet-verify.yml) nor
   # `fleet/review` (fleet-review.yml) is defined in THIS file any more — see
   # the "Fleet gates" comment below — but `ci-status`, this file's own

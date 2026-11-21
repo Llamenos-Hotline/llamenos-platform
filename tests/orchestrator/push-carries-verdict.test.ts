@@ -401,7 +401,7 @@ describe('review-gate by injection — a push never starts a review, and never g
   // and the required context (the worst of its carriers) stayed red under a
   // genuine PASS. The same head, with the App's PASS on it, must end green.
   const appCheckRun = (o: Record<string, unknown>) => ({
-    id: 901, name: 'fleet/review', status: 'completed', conclusion: 'success',
+    id: 901, name: 'fleet/review/recorded', status: 'completed', conclusion: 'success',
     started_at: '2026-11-20T10:00:00Z', app: { slug: 'llamenos-fleet-review' },
     // What the PASS judged besides the commit: the general set and THIS description.
     external_id: reviewBinding(undefined, claimDigest(CLAIM)), ...o,

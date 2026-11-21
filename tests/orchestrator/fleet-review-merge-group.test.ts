@@ -164,7 +164,6 @@ describe('rail: the context name is byte-identical `fleet/review` on both events
   const CARRIER_EVENTS: RunEvent[] = [
     { event: 'merge_group', action: 'checks_requested' },
     { event: 'pull_request', action: 'opened' },
-    { event: 'pull_request', action: 'reopened' },
     { event: 'pull_request', action: 'synchronize' },
   ]
 

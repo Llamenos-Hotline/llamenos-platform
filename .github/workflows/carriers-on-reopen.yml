@@ -1,0 +1,84 @@
+# Carriers on reopen (#2816)
+#
+# A reopened PR creates NO carrier of any required context, on purpose.
+#
+# `reopened` used to trigger every carrier workflow (`ci-status`, `gitleaks`,
+# `CodeQL`, `fleet/verify`, `fleet/review`). On a PR reopened over the head it
+# was closed on — the usual case — that put a SECOND carrier of all five
+# contexts on a head that already had one, and when the two disagreed
+# admission judged whichever it pleased: a green, reviewed PR unmergeable
+# behind a stale red copy (#2813; #2815 named `reopened` as the residual it
+# left). The carrier workflows now trigger on `opened` and `synchronize` only.
+#
+# That leaves exactly one case `reopened` used to cover: the branch moved
+# while the PR was closed. GitHub fires no `synchronize` for a closed PR, so
+# the new head has no carrier, and a required context that does not exist is
+# never satisfied — the PR reads BLOCKED with every visible check green and
+# nothing says why (#2806). Nothing can create those carriers from here — a
+# workflow cannot start another one on a PR head, and a `workflow_dispatch`
+# run is not associated with the pull request (#1471) — so this job's only
+# work is to refuse out loud: it fails, names the missing contexts and the
+# remedy (a push), so the head is never silently empty. When every required
+# context already has a carrier (in flight counts: it will conclude), it
+# passes and does nothing.
+#
+# Not a required context, and never named after one: tests/orchestrator/
+# required-context-creation.test.ts fails if any job runs on `reopened` under a
+# required name, or if no workflow here says what a reopened head is missing.
+name: Carriers on reopen
+
+on:
+  pull_request:
+    types: [reopened]
+
+# Per PR; a newer reopen supersedes an older one — it carries no required name.
+concurrency:
+  group: ${{ format('carriers-on-reopen-pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: true
+
+permissions: {}  # deny-all; the job below sets its own
+
+jobs:
+  carriers-present:
+    name: carriers/reopened
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read   # the ruleset read
+      checks: read     # the head's check runs
+    steps:
+      - name: Every required context has a carrier on the reopened head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          # Both reads fail the job when they fail: "could not look" is never
+          # "nothing is missing".
+          if ! rules="$(gh api "repos/$REPO/rules/branches/$BASE_REF" \
+            --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | .[]' 2>&1)"; then
+            echo "::error::carriers/reopened FAILED: could not read the ruleset for $BASE_REF, so the required contexts are unknown: $rules" >&2
+            exit 1
+          fi
+          if [ -z "$rules" ]; then
+            echo "::error::carriers/reopened FAILED: the ruleset for $BASE_REF lists no required status check — refusing a vacuous pass" >&2
+            exit 1
+          fi
+          if ! present="$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-runs?filter=latest&per_page=100" \
+            --jq '.check_runs[].name' 2>&1)"; then
+            echo "::error::carriers/reopened FAILED: could not read the check runs on $HEAD_SHA: $present" >&2
+            exit 1
+          fi
+          missing=""
+          while IFS= read -r context; do
+            if ! printf '%s\n' "$present" | grep -qxF -- "$context"; then
+              missing="$missing \`$context\`"
+            fi
+          done <<<"$rules"
+          if [ -n "$missing" ]; then
+            echo "::error::carriers/reopened FAILED: head $HEAD_SHA carries no check run named${missing} — the branch moved while this PR was closed, or a carrier was never created. A reopen creates no carrier on purpose (#2816: it would be a second one on an unchanged head), and GitHub sends no synchronize for a closed PR, so nothing will create them. Push a commit to the branch (for example git commit --allow-empty) and every required context is created for the new head." >&2
+            exit 1
+          fi
+          echo "every required context already has a carrier on $HEAD_SHA — a reopen adds none"
