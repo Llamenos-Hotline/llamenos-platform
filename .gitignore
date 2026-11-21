@@ -106,3 +106,7 @@ tests/load/*.json
 # Local hash keys (scripts/lib/server-hash-keys.sh) and compose secret files
 .dev-secrets/
 deploy/docker/secrets/
+
+# Python bytecode (a compiled copy of .github/scripts/classify-infra-failure.py was committed, #2875)
+__pycache__/
+*.pyc
