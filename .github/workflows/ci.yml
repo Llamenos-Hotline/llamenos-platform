@@ -2035,10 +2035,47 @@ jobs:
       # Ansible `{{ x | default(y) }}` expressions embedded in recipes
       # and `restore` defined twice, so all of them failed immediately
       # (#1125). Nothing checked, because nothing ran it.
+      #
+      # The release tarball is fetched over the network, so the step has to
+      # tell a download fault from a verdict (#2904). One connectivity blip
+      # here (`curl: (28) Failed to connect to github.com port 443`) ejected
+      # an unrelated backend PR from the merge queue, and the old
+      # `curl | tar` pipe reported it as `gzip: unexpected end of file` --
+      # blaming the archive for a network fault. So: bounded retries, the
+      # body goes to a file (never straight into tar), the file is checked
+      # against a pinned SHA-256 before it is extracted, and a failure to
+      # obtain the tool says the check DID NOT RUN. It still fails closed.
+      # The digest is the one casey/just publishes in the release's
+      # SHA256SUMS; bump both lines together.
       - name: Install just
+        env:
+          JUST_VERSION: 1.42.4
+          JUST_SHA256: 678efc1cfbd5fa5a88375daa7e2f3864a049d6d63a0296df925a2ae5f516cb56
         run: |
-          curl -fsSL https://github.com/casey/just/releases/download/1.42.4/just-1.42.4-x86_64-unknown-linux-musl.tar.gz \
-            | tar xz -C /usr/local/bin just
+          set -euo pipefail
+          dl_dir="$(mktemp -d)"
+          tarball="${dl_dir}/just.tar.gz"
+
+          # Bounded: 5 attempts over about 15 s of backoff, each capped at
+          # 15 s to connect and 60 s overall (the unbounded default waited
+          # 134 s on a dead connect). Output goes to -o, so curl truncates
+          # it between attempts. --no-progress-meter rather than --silent,
+          # which would hide "Will retry" from the log.
+          if ! curl --fail --no-progress-meter --location \
+            --connect-timeout 15 --max-time 60 \
+            --retry 4 --retry-all-errors \
+            -o "${tarball}" \
+            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"; then
+            echo "::error::could not download the just ${JUST_VERSION} binary, so the operator justfile check DID NOT RUN. This is not a finding; re-run the job once the download recovers."
+            exit 1
+          fi
+          if ! echo "${JUST_SHA256}  ${tarball}" | sha256sum --check --strict --status -; then
+            echo "::error::the downloaded just ${JUST_VERSION} tarball does not match JUST_SHA256 (truncated or tampered download), so the operator justfile check DID NOT RUN. This is not a finding about the justfile."
+            exit 1
+          fi
+
+          tar -xzf "${tarball}" -C "${dl_dir}" just
+          sudo install -m 0755 "${dl_dir}/just" /usr/local/bin/just
           just --version
 
       - name: Operator justfile parses
