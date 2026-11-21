@@ -2076,6 +2076,7 @@
     "biometricPinMismatch": "生物识别解锁失败。请输入您的PIN码。",
     "httpNotAllowed": "不允许使用不安全的 HTTP 连接。请使用 HTTPS 地址。",
     "pinLockoutDuration": "失败次数过多。请在 {{seconds}} 秒后重试。",
+    "nativeCryptoMissing": "此版本的应用缺少加密库，因此无法验证您的 PIN。您的 PIN 并没有错。请重新安装应用或联系支持人员。",
     "pinWiped": "PIN码错误次数过多。为保障您的安全，此设备上的所有密钥均已被清除。"
   },
   "errors": {

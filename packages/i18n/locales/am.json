@@ -4135,6 +4135,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "ይህ የመተግበሪያው ግንባታ የምስጠራ ቤተ-መጽሐፍት ስለሌለው ፒን ቁጥርዎን ማረጋገጥ አይቻልም። ፒን ቁጥርዎ ስህተት አይደለም። መተግበሪያውን እንደገና ይጫኑ ወይም ድጋፍን ያነጋግሩ።",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "recovery": {

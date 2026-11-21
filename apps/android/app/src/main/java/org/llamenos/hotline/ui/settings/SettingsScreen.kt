@@ -352,6 +352,9 @@ fun SettingsScreen(
                     errorMessage = when (biometricState.pinError) {
                         BiometricSettingsViewModel.PIN_ERROR_INCORRECT -> stringResource(R.string.error_pin_incorrect)
                         BiometricSettingsViewModel.PIN_ERROR_NO_IDENTITY -> stringResource(R.string.error_no_stored_keys)
+                        BiometricSettingsViewModel.PIN_ERROR_NATIVE_CRYPTO_MISSING ->
+                            stringResource(R.string.error_native_crypto_missing)
+                        BiometricSettingsViewModel.PIN_ERROR_INTERNAL -> stringResource(R.string.error_pin_internal)
                         else -> null
                     },
                     enabled = !biometricState.verifyingPin,

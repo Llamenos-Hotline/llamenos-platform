@@ -4350,6 +4350,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "ဤအက်ပ်ဗားရှင်းတွင် စာဝှက်ခြင်းစာကြည့်တိုက် မပါဝင်သဖြင့် သင့် PIN ကို စစ်ဆေး၍ မရပါ။ သင့် PIN မှာ မှားယွင်းခြင်း မဟုတ်ပါ။ အက်ပ်ကို ပြန်လည်ထည့်သွင်းပါ သို့မဟုတ် ပံ့ပိုးမှုအဖွဲ့ကို ဆက်သွယ်ပါ။",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "select": {

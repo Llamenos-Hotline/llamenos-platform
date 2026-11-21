@@ -1,5 +1,7 @@
 package org.llamenos.hotline
 
+import io.mockk.coEvery
+import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -14,8 +16,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.NativeCryptoLibraryMissingException
 import org.llamenos.hotline.ui.settings.BiometricSettingsViewModel
 
 /**
@@ -57,9 +61,9 @@ class BiometricSettingsViewModelTest {
         val deviceId = "test-device-id"
         cryptoService.setTestKeyState(signingPubkey, encryptionPubkey, deviceId)
         // A syntactically valid StoredKeyData blob — cryptoService.unlockWithPin
-        // will hard-fail on the native lib (JVM unit test), which is exactly
-        // the "wrong PIN" branch these tests exercise deliberately. Enrollment
-        // tests that need PIN verification to succeed use [succeedPinCheck].
+        // will hard-fail on the native lib (JVM unit test) with
+        // NativeCryptoLibraryMissingException. Tests that need a genuine wrong
+        // PIN mock CryptoService to throw CryptoException instead.
         keyValueStore.store(
             KeystoreService.KEY_ENCRYPTED_KEYS,
             """{"salt":"$pin","nonce":"n","ciphertext":"c","signingPubkeyHex":"$signingPubkey","encryptionPubkeyHex":"$encryptionPubkey","deviceId":"$deviceId"}""",
@@ -98,20 +102,65 @@ class BiometricSettingsViewModelTest {
     }
 
     @Test
-    fun `beginEnrollment with a wrong PIN reports an error and issues no cipher`() = runTest {
+    fun `beginEnrollment with a wrong PIN reports an incorrect PIN and issues no cipher`() = runTest {
         seedIdentity("123456")
-        val vm = createViewModel()
+        val rejectingCrypto = mockk<CryptoService>()
+        coEvery { rejectingCrypto.unlockWithPin(any(), any()) } throws
+            CryptoException("Decryption failed: incorrect PIN")
+        val vm = BiometricSettingsViewModel(rejectingCrypto, keyValueStore, biometricKeyStore)
 
-        // No native crypto library in a JVM unit test, so cryptoService.unlockWithPin
-        // always throws — this is indistinguishable from "wrong PIN" from the caller's
-        // perspective, and is exactly the path this test wants to exercise: enrollment
-        // must never proceed without the PIN having verified against the real decrypt.
         vm.beginEnrollment("000000")
 
         val state = vm.uiState.value
         assertEquals(BiometricSettingsViewModel.PIN_ERROR_INCORRECT, state.pinError)
         assertNull(state.enrollCipher)
         assertFalse(biometricKeyStore.hasBiometricPIN())
+    }
+
+    @Test
+    fun `beginEnrollment without the native library reports the missing library, not an incorrect PIN`() = runTest {
+        seedIdentity("123456")
+        val vm = createViewModel()
+
+        // Real CryptoService: the JVM genuinely cannot load llamenos_core, so this drives the
+        // actual UnsatisfiedLinkError -> NativeCryptoLibraryMissingException path (#1278, #2702).
+        vm.beginEnrollment("123456")
+
+        val state = vm.uiState.value
+        assertEquals(BiometricSettingsViewModel.PIN_ERROR_NATIVE_CRYPTO_MISSING, state.pinError)
+        assertNull(state.enrollCipher)
+        assertFalse(state.isVerifyingPin)
+        assertFalse(biometricKeyStore.hasBiometricPIN())
+    }
+
+    @Test
+    fun `beginEnrollment with an unreadable key record reports an internal error, not an incorrect PIN`() = runTest {
+        keyValueStore.store(KeystoreService.KEY_ENCRYPTED_KEYS, "this is not json")
+        val vm = createViewModel()
+
+        vm.beginEnrollment("123456")
+
+        val state = vm.uiState.value
+        assertEquals(BiometricSettingsViewModel.PIN_ERROR_INTERNAL, state.pinError)
+        assertNull(state.enrollCipher)
+    }
+
+    @Test
+    fun `classifyEnrollmentFailure maps only a CryptoException to an incorrect PIN`() {
+        assertEquals(
+            BiometricSettingsViewModel.PIN_ERROR_INCORRECT,
+            BiometricSettingsViewModel.classifyEnrollmentFailure(CryptoException("x")),
+        )
+        assertEquals(
+            BiometricSettingsViewModel.PIN_ERROR_NATIVE_CRYPTO_MISSING,
+            BiometricSettingsViewModel.classifyEnrollmentFailure(
+                NativeCryptoLibraryMissingException("missing", UnsatisfiedLinkError()),
+            ),
+        )
+        assertEquals(
+            BiometricSettingsViewModel.PIN_ERROR_INTERNAL,
+            BiometricSettingsViewModel.classifyEnrollmentFailure(IllegalStateException("boom")),
+        )
     }
 
     @Test
@@ -129,7 +178,7 @@ class BiometricSettingsViewModelTest {
     fun `cancelEnrollment clears the pending cipher and error`() = runTest {
         seedIdentity("123456")
         val vm = createViewModel()
-        vm.beginEnrollment("000000") // wrong PIN in this JVM test, sets pinError
+        vm.beginEnrollment("000000") // no native library in this JVM test, sets pinError
 
         vm.cancelEnrollment()
 
