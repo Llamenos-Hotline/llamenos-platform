@@ -3,6 +3,8 @@ package org.llamenos.hotline.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,11 +13,13 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import org.llamenos.hotline.crypto.BiometricKeyInvalidatedException
 import org.llamenos.hotline.crypto.BiometricKeyStore
+import org.llamenos.hotline.crypto.CryptoException
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.EncryptedDeviceKeys
 import org.llamenos.hotline.crypto.KeyValueStore
 import org.llamenos.hotline.crypto.KeystoreService
+import org.llamenos.hotline.crypto.NativeCryptoLibraryMissingException
 import org.llamenos.hotline.ui.auth.StoredKeyData
 import javax.crypto.Cipher
 import javax.inject.Inject
@@ -130,10 +134,12 @@ class BiometricSettingsViewModel @Inject constructor(
                 pendingPin = pin
                 val cipher = biometricKeyStore.getBiometricEncryptCipher()
                 _uiState.update { it.copy(isVerifyingPin = false, enrollCipher = cipher) }
-            } catch (_: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 pendingPin = null
                 _uiState.update {
-                    it.copy(isVerifyingPin = false, pinError = PIN_ERROR_INCORRECT, enrollCipher = null)
+                    it.copy(isVerifyingPin = false, pinError = classifyEnrollmentFailure(e), enrollCipher = null)
                 }
             }
         }
@@ -167,6 +173,26 @@ class BiometricSettingsViewModel @Inject constructor(
 
     companion object {
         /**
+         * Maps a failure from [beginEnrollment] to the marker that tells the user what
+         * actually went wrong. Only [CryptoException] — what [CryptoService.unlockWithPin]
+         * throws when the PIN does not decrypt the stored keys — means "wrong PIN". A
+         * missing native crypto library or an unreadable key record is not the user's
+         * mistake, and telling them it is sends them retrying a PIN that was right.
+         */
+        internal fun classifyEnrollmentFailure(e: Exception): String = when (e) {
+            is CryptoException -> PIN_ERROR_INCORRECT
+            is NativeCryptoLibraryMissingException -> PIN_ERROR_NATIVE_CRYPTO_MISSING
+            else -> {
+                // Class name only: a deserialization failure's message can quote the stored key
+                // record, and nothing derived from key material belongs in logcat.
+                Log.e(TAG, "Biometric enrollment failed for a reason other than the PIN: ${e::class.java.simpleName}")
+                PIN_ERROR_INTERNAL
+            }
+        }
+
+        private const val TAG = "BiometricSettingsVM"
+
+        /**
          * Markers used by [BiometricSettingsUiState.statusMessage] /
          * [BiometricSettingsUiState.pinError]. The Settings screen maps
          * these to localized string resources rather than the view model
@@ -176,5 +202,7 @@ class BiometricSettingsViewModel @Inject constructor(
         const val INVALIDATED_MESSAGE = "biometric_invalidated"
         const val PIN_ERROR_INCORRECT = "pin_incorrect"
         const val PIN_ERROR_NO_IDENTITY = "no_stored_identity"
+        const val PIN_ERROR_NATIVE_CRYPTO_MISSING = "native_crypto_missing"
+        const val PIN_ERROR_INTERNAL = "internal"
     }
 }

@@ -4130,6 +4130,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "Ev guhertoya sepanê pirtûkxaneya şîfrekirinê tune ye, ji ber vê PIN-a te nayê kontrolkirin. PIN-a te ne şaş e. Sepanê ji nû ve saz bike an bi piştgiriyê re têkilî deyne.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "actionSave": "Tomar bike",

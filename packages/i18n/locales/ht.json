@@ -2076,6 +2076,7 @@
     "biometricPinMismatch": "Deblokaj byometrik la echwe. Antre PIN ou.",
     "httpNotAllowed": "Koneksyon HTTP ki pa an sekirite pa otorize. Sèvi ak yon adrès HTTPS.",
     "pinLockoutDuration": "Twòp tantativ ki echwe. Eseye ankò nan {{seconds}} segonn.",
+    "nativeCryptoMissing": "Vèsyon aplikasyon sa a pa gen bibliyotèk chifreman li, kidonk nou pa ka verifye PIN ou. PIN ou a pa move. Reyinstale aplikasyon an oswa kontakte sipò.",
     "pinWiped": "Twòp tantativ PIN ki echwe. Pou sekirite ou, tout kle ki sou aparèy sa a efase."
   },
   "errors": {

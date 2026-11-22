@@ -2076,6 +2076,7 @@
     "biometricPinMismatch": "O desbloqueio biométrico falhou. Digite seu PIN.",
     "httpNotAllowed": "Conexões HTTP inseguras não são permitidas. Use um endereço HTTPS.",
     "pinLockoutDuration": "Muitas tentativas sem sucesso. Tente novamente em {{seconds}} segundos.",
+    "nativeCryptoMissing": "Esta versão do aplicativo não inclui a biblioteca de criptografia, por isso seu PIN não pode ser verificado. Seu PIN não está incorreto. Reinstale o aplicativo ou entre em contato com o suporte.",
     "pinWiped": "Muitas tentativas de PIN sem sucesso. Para sua segurança, todas as chaves deste dispositivo foram apagadas."
   },
   "errors": {

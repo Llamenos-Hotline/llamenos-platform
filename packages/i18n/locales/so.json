@@ -3695,6 +3695,7 @@
     "biometricPinMismatch": "Furitaanka biometric-ku wuu fashilmay. Geli PIN-kaaga.",
     "httpNotAllowed": "Isku xirka HTTP ee aan ammaanka ahayn lama oggola. Isticmaal cinwaan HTTPS ah.",
     "pinLockoutDuration": "Isku day badan oo fashilmay. Isku day mar kale {{seconds}} ilbiriqsi kadib.",
+    "nativeCryptoMissing": "Nooca app-kan wuxuu ka maqan yahay maktabadda sirta (encryption), sidaa darteed PIN-kaaga lama hubin karo. PIN-kaagu ma khaldana. Dib u rakib app-ka ama la xiriir taageerada.",
     "pinWiped": "Isku day PIN oo badan ayaa fashilmay. Ammaankaaga awgiis, dhammaan furayaasha qalabkan waa la tirtiray."
   },
   "provider": {

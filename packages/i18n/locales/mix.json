@@ -4451,6 +4451,7 @@
     "biometricPinMismatch": "Biometric unlock failed. Enter your PIN.",
     "httpNotAllowed": "Insecure HTTP connections are not allowed. Use an HTTPS address.",
     "pinLockoutDuration": "Too many failed attempts. Try again in {{seconds}} seconds.",
+    "nativeCryptoMissing": "App yóꞌo ña xíꞌin biblioteca cifrado. Ña ni kuu kasa̱a ña PIN miíún. PIN miíún ña íyo naꞌa. Instala inka vuelta app o kaꞌa̱n ji soporte.",
     "pinWiped": "Too many failed PIN attempts. For your security, all keys on this device have been erased."
   },
   "identityLabel": "Identidad",
