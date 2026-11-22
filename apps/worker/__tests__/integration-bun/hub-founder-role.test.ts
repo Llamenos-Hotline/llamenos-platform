@@ -91,10 +91,9 @@ describe('POST /hubs founder role is resolved by permission', () => {
     const customId = `role-lead-${suite}`
     await db.insert(roles).values({
       id: customId,
-      slug: `lead-${suite}`,
+      slug: customId,
       permissions: ['settings:manage', 'notes:read-all', 'users:read'],
       isDefault: false,
-      description: 'a hub-defined admin role',
     })
     createdRoles.push(customId)
 

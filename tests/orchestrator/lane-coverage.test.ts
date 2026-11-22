@@ -131,13 +131,15 @@ describe('.github/scripts/ — assigned to infra and withheld from grants (#2875
   const SCRIPTS = [
     '.github/scripts/check-action-pins.test.ts',
     '.github/scripts/check-action-pins.ts',
+    '.github/scripts/check-local-paths.py',
     '.github/scripts/classify-infra-failure.py',
     '.github/scripts/detect-changed-platforms.sh',
     '.github/scripts/gh-read.sh',
     '.github/scripts/is-release-bump.sh',
+    '.github/scripts/test_check_local_paths.py',
   ]
 
-  it('the six scripts are tracked (so the assertions below are about real files)', () => {
+  it('the scripts are tracked (so the assertions below are about real files)', () => {
     for (const f of SCRIPTS) expect(tracked, f).toContain(f)
   })
 

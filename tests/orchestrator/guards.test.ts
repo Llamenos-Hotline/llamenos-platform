@@ -1949,12 +1949,36 @@ describe('rail: fleet/review runs once per review request, not on every push', (
       return namesAnEvent && !ifLine.includes('merge_group')
     }
 
+    // Jobs that are `pull_request`-only BY DESIGN (#2916): they judge a property of
+    // the PR itself (its author, its commits' identities) that a `merge_group`
+    // event does not carry, and every commit the queue lands was already judged on
+    // the PR's own head. They are skipped on the queue, not missing from it — a job
+    // skipped by its `if:` resolves, and `ci-status` counts `skipped` as a pass
+    // (asserted below), so nothing waits on a status that never reports. Each entry
+    // must be EXACTLY `pull_request`-only, so this list cannot quietly widen into
+    // "any job may skip the queue".
+    const PULL_REQUEST_ONLY_BY_DESIGN: Record<string, string> = {
+      authorship: "${{ github.event_name == 'pull_request' }}",
+    }
+
     const offenders: string[] = []
     for (const job of required) {
       const ifLine = jobLevelIf(jobBlock(yaml, job))
+      if (job in PULL_REQUEST_ONLY_BY_DESIGN) {
+        if (ifLine !== PULL_REQUEST_ONLY_BY_DESIGN[job]) offenders.push(`${job}: exempt only as ${PULL_REQUEST_ONLY_BY_DESIGN[job]}, found: ${ifLine}`)
+        continue
+      }
       if (excludesMergeGroup(ifLine)) offenders.push(`${job}: if: ${ifLine}`)
     }
     expect(offenders, `required job(s) whose if: excludes merge_group:\n${offenders.join('\n')}`).toEqual([])
+
+    // The exemption is only sound while a skipped job reads as a pass.
+    const statusBlock = jobBlock(yaml, 'ci-status')
+    expect(statusBlock).toMatch(/success\|skipped\) ;;/)
+    for (const job of Object.keys(PULL_REQUEST_ONLY_BY_DESIGN)) {
+      expect(required, `${job} is exempted above but is not in ci-status's needs`).toContain(job)
+      expect(statusBlock).toContain(`check_job "${job}" "\${{ needs.${job}.result }}"`)
+    }
   })
 })
 

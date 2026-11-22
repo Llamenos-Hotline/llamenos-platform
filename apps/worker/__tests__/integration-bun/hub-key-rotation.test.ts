@@ -110,8 +110,8 @@ async function expectRefused(body: HubKeyRotateBody, status: number) {
 beforeAll(async () => {
   await db.insert(hubs).values({ id: hubId, name: 'Rotation hub', slug: hubId, createdBy: 'integration-test' })
   await db.insert(roles).values([
-    { id: adminRole, name: 'Rotation admin', slug: adminRole, permissions: [...HUB_ADMIN_PERMISSIONS] },
-    { id: memberRole, name: 'Rotation member', slug: memberRole, permissions: ['notes:read-own'] },
+    { id: adminRole, slug: adminRole, permissions: [...HUB_ADMIN_PERMISSIONS] },
+    { id: memberRole, slug: memberRole, permissions: ['notes:read-own'] },
     { id: sealedRole, hubId, slug: sealedRole, permissions: ['notes:read-own'], encryptedName: 'sealed-role-name' },
   ])
   await db.insert(users).values([
