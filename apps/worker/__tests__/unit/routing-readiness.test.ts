@@ -32,12 +32,16 @@ function makeServices(opts: {
 }): Services {
   const { hubs = [], shifts = {}, fallback = {}, getHubsThrows = false, voiceOff = [] } = opts
   return {
-    settings: {
+    hubs: {
       getHubs: vi.fn(async () => {
         if (getHubsThrows) throw new Error('postgres is down')
         return { hubs }
       }),
+    },
+    callSettings: {
       getFallbackGroup: vi.fn(async (hubId: string) => ({ userPubkeys: fallback[hubId] ?? [] })),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn(async (hubId: string) => !voiceOff.includes(hubId)),
     },
     shifts: {
@@ -199,9 +203,13 @@ function makeRingServices(opts: {
       }),
       listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(clockedIn)),
     },
-    settings: {
+    callSettings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: fallback }),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(voiceEnabled),
     },
     identity: { getUsers: vi.fn().mockResolvedValue({ users }) },

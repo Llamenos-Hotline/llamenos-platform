@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 import conversationsRouter from '../../routes/conversations'
 import reportsRouter from '../../routes/reports'
 import notesRouter from '../../routes/notes'

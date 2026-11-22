@@ -15,7 +15,7 @@ import { rateLimit } from '@worker/middleware/rate-limit'
 
 function makeApp(checkApiRateLimit: ReturnType<typeof vi.fn>, env: Record<string, string> = {}) {
   const app = new Hono<AppEnv>()
-  const services = { settings: { checkApiRateLimit } }
+  const services = { rateLimits: { checkApiRateLimit } }
 
   app.use('*', async (c, next) => {
     c.set('services', services as never)

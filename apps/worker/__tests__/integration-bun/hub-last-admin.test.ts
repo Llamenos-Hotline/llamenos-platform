@@ -23,7 +23,8 @@ import '../../db/pg-array-patch'
 import { createDatabase, outsideTransaction } from '../../db'
 import { hubs, users, roles, notes, erasureRequests, reEncryptionJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
-import { SettingsService, ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { ErasureService } from '../../services/erasure'
 import { AuditService } from '../../services/audit'
 import { RecordsService } from '../../services/records'
@@ -42,7 +43,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const erasure = new ErasureService(db)
 const audit = new AuditService(db)
 
@@ -64,7 +65,7 @@ async function makeUser(label: string, extra: Partial<typeof users.$inferInsert>
 /** A hub made the supported way: createHub with its founding admin. */
 async function makeHub(label: string, founder: string, roleIds = ['role-hub-admin']): Promise<string> {
   const id = nextId(`hub-${label}`)
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -119,7 +120,7 @@ describe('hub creation always yields an admin', () => {
       id, name: 'orphan', slug: id, status: 'active' as const, timezone: 'UTC', createdBy: 'ghost',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }
-    await expect(settings.createHub(hub, { pubkey: nextId('pk-ghost'), roleIds: ['role-hub-admin'] }))
+    await expect(settings.hubs.createHub(hub, { pubkey: nextId('pk-ghost'), roleIds: ['role-hub-admin'] }))
       .rejects.toMatchObject({ status: 404 })
     expect(await db.select({ id: hubs.id }).from(hubs).where(eq(hubs.id, id))).toEqual([])
   })
@@ -128,7 +129,7 @@ describe('hub creation always yields an admin', () => {
     const founder = await makeUser('founder-volunteer')
     const id = nextId('hub-volunteer-founder')
     await expect(
-      settings.createHub(
+      settings.hubs.createHub(
         {
           id, name: 'x', slug: id, status: 'active', timezone: 'UTC', createdBy: founder,
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -308,7 +309,7 @@ describe('changing a role definition cannot strip a hub of its last admin', () =
     createdRoles.push(roleId)
     const admin = await makeUser('role-edit-admin')
     const hubId = await makeHub('role-edit', admin, [roleId])
-    await expectRefused(() => settings.updateRole(roleId, { permissions: ['notes:read-own'] }))
+    await expectRefused(() => settings.roles.updateRole(roleId, { permissions: ['notes:read-own'] }))
     const [row] = await db.select({ permissions: roles.permissions }).from(roles).where(eq(roles.id, roleId))
     expect(row?.permissions).toContain('settings:manage')
     expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
@@ -322,7 +323,7 @@ describe('changing a role definition cannot strip a hub of its last admin', () =
     createdRoles.push(roleId)
     const admin = await makeUser('role-del-admin')
     await makeHub('role-del', admin, [roleId])
-    await expectRefused(() => settings.deleteRole(roleId))
+    await expectRefused(() => settings.roles.deleteRole(roleId))
     expect(await db.select({ id: roles.id }).from(roles).where(eq(roles.id, roleId))).toHaveLength(1)
   })
 
@@ -336,7 +337,7 @@ describe('changing a role definition cannot strip a hub of its last admin', () =
     const hubId = await makeHub('role-ok', founder)
     const viaCustom = await makeUser('role-ok-custom')
     await identity.setHubRole({ pubkey: viaCustom, hubId, roleIds: [roleId] })
-    await settings.updateRole(roleId, { permissions: ['notes:read-own'] })
+    await settings.roles.updateRole(roleId, { permissions: ['notes:read-own'] })
     expect(await listHubsWithoutAdmin(db, [hubId])).toEqual([])
   })
 })
@@ -457,7 +458,7 @@ describe('concurrent role edits and admin removals cannot strand a hub', () => {
     })
     await demotion.entered
 
-    const outcome = settings
+    const outcome = settings.roles
       .updateRole(roleX, { permissions: ['notes:read-own'] })
       .then(() => 'committed' as const, (err: unknown) => err)
     try {
@@ -481,8 +482,8 @@ describe('concurrent role edits and admin removals cannot strand a hub', () => {
       // Alternate which role edit (update / delete) meets which removal
       // (demote / remove / deactivate), and which side starts first.
       const strip = i % 2 === 0
-        ? () => settings.updateRole(roleX, { permissions: ['notes:read-own'] })
-        : () => settings.deleteRole(roleX)
+        ? () => settings.roles.updateRole(roleX, { permissions: ['notes:read-own'] })
+        : () => settings.roles.deleteRole(roleX)
       const removeY = [
         () => identity.setHubRole({ pubkey: y, hubId, roleIds: ['role-volunteer'] }),
         () => identity.removeHubRole({ pubkey: y, hubId }),
@@ -575,7 +576,7 @@ describe('a role-definition guard decides from one view of the users', () => {
 
     const spy = { fired: () => false }
     await db.transaction(async tx => {
-      const hooked = afterFirstUsersRead(tx, async () => { await settings.purgeHub(hubId, new CallRecordingsService(db, undefined, undefined)) })
+      const hooked = afterFirstUsersRead(tx, async () => { await settings.hubs.purgeHub(hubId, new CallRecordingsService(db, undefined, undefined)) })
       spy.fired = hooked.fired
       await assertRoleChangeKeepsAdmins(hooked.tx, bystanderRoleId, null)
     })

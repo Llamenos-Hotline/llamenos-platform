@@ -149,7 +149,7 @@ describe('devSurfaceSecretPresented', () => {
 })
 
 describe('destructiveResetRefusal — the service-level reset gate', () => {
-  // `IdentityService.reset`, `SettingsService.reset`, `ContactsService.reset`
+  // `IdentityService.reset`, `SettingsBootstrapService.reset`, `ContactsService.reset`
   // and `CasesService.reset` all ask this. Before #1604 they asked DEMO_MODE +
   // DEMO_MODE_CONFIRM instead, with an `ENVIRONMENT === 'development'` escape
   // hatch that needed no secret at all.

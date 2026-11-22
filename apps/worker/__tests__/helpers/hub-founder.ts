@@ -6,7 +6,7 @@ const randomHex32 = () => Array.from(crypto.getRandomValues(new Uint8Array(32)),
 /**
  * Insert a user to found a test hub with.
  *
- * `SettingsService.createHub` creates a hub together with its first admin and
+ * `HubService.createHub` creates a hub together with its first admin and
  * refuses to create one otherwise (#2126), so fixtures that only need "a hub"
  * need a founder to hand it.
  *

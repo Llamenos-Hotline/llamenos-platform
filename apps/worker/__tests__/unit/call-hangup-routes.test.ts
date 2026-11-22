@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import calls from '@worker/routes/calls'
 import { MockTelephonyAdapter } from '@worker/telephony/mock'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { sealCallerNumber } from '@worker/lib/crypto'
 import type { AppEnv } from '@worker/types'
 

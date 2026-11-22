@@ -117,9 +117,13 @@ function ringRoster() {
         }],
       }),
     },
-    settings: {
+    callSettings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
     },
   }

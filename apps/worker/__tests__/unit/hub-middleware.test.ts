@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types/infra'
 import { hubContext, requireHubPermission, checkHubPermission } from '@worker/middleware/hub'
-import { HubNotFoundError, ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/service-error'
 import { HUB_NOT_FOUND_CODE, hubNotFoundResponseSchema } from '@protocol/schemas/common'
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ const allRoles = [
 function createApp(user: Record<string, unknown>, hubExists = true) {
   const app = new Hono<AppEnv>()
   const services = {
-    settings: {
+    hubs: {
       getHub: vi.fn().mockImplementation(async (id: string) => {
         if (!hubExists) throw new HubNotFoundError()
         return { id, name: 'Test Hub' }
@@ -114,7 +114,7 @@ describe('hubContext middleware', () => {
 
   it('carries the hub-gone code whatever the prose says', async () => {
     const { app, services } = createApp(makeUser(), true)
-    services.settings.getHub.mockRejectedValue(
+    services.hubs.getHub.mockRejectedValue(
       Object.assign(new HubNotFoundError(), { message: 'reworded entirely' }),
     )
     app.use('/hub/:hubId', hubContext)
@@ -127,7 +127,7 @@ describe('hubContext middleware', () => {
 
   it('does not answer hub-gone for a 404 that is not the hub row lookup', async () => {
     const { app, services } = createApp(makeUser(), true)
-    services.settings.getHub.mockRejectedValue(new ServiceError(404, 'Hub not found'))
+    services.hubs.getHub.mockRejectedValue(new ServiceError(404, 'Hub not found'))
     app.use('/hub/:hubId', hubContext)
     app.get('/hub/:hubId', (c) => c.json({ ok: true }))
     app.onError((err, c) => c.json({ error: err.message }, err instanceof ServiceError ? (err.status as 404) : 500))

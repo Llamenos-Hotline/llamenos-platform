@@ -97,7 +97,7 @@ async function ensureHub(hubId: string): Promise<void> {
   const [existing] = await fresh.db.select({ id: schema.hubs.id }).from(schema.hubs).where(eq(schema.hubs.id, hubId))
   if (existing) return
   const now = new Date().toISOString()
-  await services.settings.createHub(
+  await services.hubs.createHub(
     { id: hubId, name: hubId, slug: hubId, status: 'active', createdBy: 'a'.repeat(64), createdAt: now, updatedAt: now } as never,
     await insertHubFounder(fresh.db),
   )
@@ -603,7 +603,7 @@ describe('an opt-out is a fact about the identifier, not a subscriber row (#2286
     const providerSend = vi.fn().mockResolvedValue({ success: true, externalId: 'SM-blast' })
     await processBlastBatch({
       blastsService: services.blasts,
-      settingsService: services.settings,
+      messagingConfigService: services.messagingConfig,
       resolveAdapter: async () => guardOutbound(
         { channelType: 'sms', sendMessage: providerSend, sendMediaMessage: providerSend } as unknown as MessagingAdapter,
         services.messagingSuppression,

@@ -80,7 +80,7 @@ let numberCounter = 0
 async function createHub(opts: { phone?: boolean } = {}): Promise<{ id: string; phone: string | undefined }> {
   const id = `hub-rt-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
   const phone = opts.phone === false ? undefined : `+1555${String(7000000 + ++numberCounter)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -214,18 +214,18 @@ describe('routing/nobody_would_ring (#2330)', () => {
 
   it('a hub that has switched voice off receives no calls, so expects no coverage — until it is switched back on', async () => {
     const hub = await createHub()
-    await services.settings.updateHubSettings(hub.id, { channels: { voice: false, signal: true } })
+    await services.hubSettings.updateHubSettings(hub.id, { channels: { voice: false, signal: true } })
     await services.incidents.runChecks()
     expect(await openIncident(hub.id, 'routing')).toBeNull()
 
-    await services.settings.updateHubSettings(hub.id, { channels: { voice: true, signal: true } })
+    await services.hubSettings.updateHubSettings(hub.id, { channels: { voice: true, signal: true } })
     await services.incidents.runChecks()
     expect((await openIncident(hub.id, 'routing'))!.counts).toEqual({ nobody_would_ring: 1 })
   })
 
   it('a fallback group naming an available volunteer would ring — no incident', async () => {
     const hub = await createHub()
-    await services.settings.setFallbackGroup({ userPubkeys: [await volunteerOf(hub.id)] }, hub.id)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [await volunteerOf(hub.id)] }, hub.id)
     await services.incidents.runChecks()
     expect(await openIncident(hub.id, 'routing')).toBeNull()
   })
@@ -234,7 +234,7 @@ describe('routing/nobody_would_ring (#2330)', () => {
     const hub = await createHub()
     const pubkey = await volunteerOf(hub.id)
     await fresh.db.update(schema.users).set({ onBreak: true }).where(eq(schema.users.pubkey, pubkey))
-    await services.settings.setFallbackGroup({ userPubkeys: [pubkey] }, hub.id)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [pubkey] }, hub.id)
     await services.incidents.runChecks()
     expect((await openIncident(hub.id, 'routing'))!.counts).toEqual({ nobody_would_ring: 1 })
   })
@@ -258,7 +258,7 @@ describe('routing/no_answers (#2330)', () => {
   /** A hub whose fallback group would ring, so only the answer outcomes can open anything. */
   async function staffedHub() {
     const hub = await createHub()
-    await services.settings.setFallbackGroup({ userPubkeys: [await volunteerOf(hub.id)] }, hub.id)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [await volunteerOf(hub.id)] }, hub.id)
     return hub
   }
 

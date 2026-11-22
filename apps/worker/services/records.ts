@@ -15,7 +15,7 @@ import {
   contactMetadata,
 } from '../db/schema'
 import type { AuditService } from './audit'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import type { ScopedBanHash } from '../lib/crypto'
 import { scopeColumns, scopeWhere } from '../lib/owner-scope'
 import { assertNeverScope, PLATFORM_SCOPE, type OwnerScope } from '@shared/owner-scope'

@@ -1,6 +1,6 @@
 /**
  * Periodic cleanup worker — runs IdentityService.cleanup() and
- * SettingsService.runCleanup() on an interval, plus the API rate-limit
+ * TtlCleanupService.runCleanup() on an interval, plus the API rate-limit
  * fixed-window purge.
  *
  * All three were implemented, unit-tested, and documented as "intended to
@@ -11,7 +11,8 @@
  * issue #1127.
  */
 import type { IdentityService } from '../services/identity'
-import type { SettingsService } from '../services/settings'
+import type { TtlCleanupService } from '../services/ttl-cleanup'
+import type { RateLimitService } from '../services/rate-limits'
 import { createLogger } from './logger'
 import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
 
@@ -25,7 +26,8 @@ export const CLEANUP_INTERVAL_MS = WORKER_TICK_INTERVAL_MS['periodic-cleanup']
 
 export interface PeriodicCleanupWorkerOpts {
   identityService: IdentityService
-  settingsService: SettingsService
+  ttlCleanupService: TtlCleanupService
+  rateLimitService: RateLimitService
 }
 
 let intervalId: ReturnType<typeof setInterval> | null = null
@@ -45,7 +47,7 @@ export async function runPeriodicCleanup(opts: PeriodicCleanupWorkerOpts): Promi
   }
 
   try {
-    const result = await opts.settingsService.runCleanup()
+    const result = await opts.ttlCleanupService.runCleanup()
     logger.info('Settings cleanup pass complete', {
       rateLimitEntriesDeleted: result.rateLimitEntriesDeleted,
       captchaChallengesDeleted: result.captchaChallengesDeleted,
@@ -55,7 +57,7 @@ export async function runPeriodicCleanup(opts: PeriodicCleanupWorkerOpts): Promi
   }
 
   try {
-    await opts.settingsService.clearExpiredApiRateLimits()
+    await opts.rateLimitService.clearExpiredApiRateLimits()
   } catch (err) {
     logger.error('API rate limit purge failed', { error: err })
   }

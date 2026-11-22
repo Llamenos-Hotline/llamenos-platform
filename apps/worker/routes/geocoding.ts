@@ -42,11 +42,11 @@ geocoding.post('/autocomplete',
   validator('json', autocompleteBodySchema),
   async (c) => {
     const pubkey = c.get('pubkey')
-    const limited = await checkRateLimit(c.get('services').settings, `geocoding:auto:${pubkey}`, 60)
+    const limited = await checkRateLimit(c.get('services').rateLimits, `geocoding:auto:${pubkey}`, 60)
     if (limited) return c.json({ error: 'Rate limited' }, 429)
 
     const { query, limit } = c.req.valid('json')
-    const config = await c.get('services').settings.getGeocodingConfigAdmin()
+    const config = await c.get('services').platformSettings.getGeocodingConfigAdmin()
     const adapter = createGeocodingAdapter(config)
     const results = await adapter.autocomplete(query, { limit })
     return c.json(results)
@@ -65,11 +65,11 @@ geocoding.post('/geocode',
   validator('json', geocodeBodySchema),
   async (c) => {
     const pubkey = c.get('pubkey')
-    const limited = await checkRateLimit(c.get('services').settings, `geocoding:fwd:${pubkey}`, 20)
+    const limited = await checkRateLimit(c.get('services').rateLimits, `geocoding:fwd:${pubkey}`, 20)
     if (limited) return c.json({ error: 'Rate limited' }, 429)
 
     const { address } = c.req.valid('json')
-    const config = await c.get('services').settings.getGeocodingConfigAdmin()
+    const config = await c.get('services').platformSettings.getGeocodingConfigAdmin()
     const adapter = createGeocodingAdapter(config)
     const result = await adapter.geocode(address)
     return c.json(result)
@@ -88,11 +88,11 @@ geocoding.post('/reverse',
   validator('json', reverseBodySchema),
   async (c) => {
     const pubkey = c.get('pubkey')
-    const limited = await checkRateLimit(c.get('services').settings, `geocoding:rev:${pubkey}`, 20)
+    const limited = await checkRateLimit(c.get('services').rateLimits, `geocoding:rev:${pubkey}`, 20)
     if (limited) return c.json({ error: 'Rate limited' }, 429)
 
     const { lat, lon } = c.req.valid('json')
-    const config = await c.get('services').settings.getGeocodingConfigAdmin()
+    const config = await c.get('services').platformSettings.getGeocodingConfigAdmin()
     const adapter = createGeocodingAdapter(config)
     const result = await adapter.reverse(lat, lon)
     return c.json(result)

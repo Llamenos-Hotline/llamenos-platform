@@ -53,7 +53,7 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
     start: () =>
       startBlastWorker({
         blastsService: { getSendingBlasts: async () => [] } as never,
-        settingsService: {} as never,
+        messagingConfigService: {} as never,
         resolveAdapter: async () => null as never,
         resolveIdentifier: async () => null,
       }),
@@ -68,7 +68,7 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
       startRetentionPurgeWorker({
         retentionService: {} as never,
         auditService: {} as never,
-        settingsService: { getPlatformSettings: async () => ({ retentionPurge: { enabled: false } }) } as never,
+        platformSettingsService: { getPlatformSettings: async () => ({ retentionPurge: { enabled: false } }) } as never,
         providerMedia: {} as never,
       }),
     stop: stopRetentionPurgeWorker,
@@ -100,8 +100,10 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
     start: () =>
       startPeriodicCleanupWorker({
         identityService: { cleanup: async () => ({}) } as never,
-        settingsService: {
+        ttlCleanupService: {
           runCleanup: async () => ({ rateLimitEntriesDeleted: 0, captchaChallengesDeleted: 0 }),
+        } as never,
+        rateLimitService: {
           clearExpiredApiRateLimits: async () => undefined,
         } as never,
       }),

@@ -4,7 +4,7 @@
  */
 import type { RetentionService } from '../services/retention'
 import type { AuditService } from '../services/audit'
-import type { SettingsService } from '../services/settings'
+import type { PlatformSettingsService } from '../services/platform-settings'
 import type { ProviderMediaEraser } from '../services/provider-recordings'
 import { createLogger } from './logger'
 import { trackWorkerTick, WORKER_TICK_INTERVAL_MS } from '../metrics/worker-liveness'
@@ -20,7 +20,7 @@ let lastPurgeDate: string | null = null
 interface RetentionPurgeWorkerOpts {
   retentionService: RetentionService
   auditService: AuditService
-  settingsService: SettingsService
+  platformSettingsService: PlatformSettingsService
   /** Deletes purged calls' recordings at the provider first (#2297). */
   providerMedia: ProviderMediaEraser
 }
@@ -32,7 +32,7 @@ export function startRetentionPurgeWorker(opts: RetentionPurgeWorkerOpts): void 
 
   const check = () =>
     trackWorkerTick('retention-purge', async () => {
-      const platformSettings = await opts.settingsService.getPlatformSettings()
+      const platformSettings = await opts.platformSettingsService.getPlatformSettings()
       const retentionPurge = (platformSettings as Record<string, unknown>)
         .retentionPurge as
         | { cronHourUtc?: number; enabled?: boolean }

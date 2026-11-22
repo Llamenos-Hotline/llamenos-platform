@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import userRoutes from '@worker/routes/users'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import { resolveHubDefaultMemberRoles } from '@worker/lib/hub-default-role'
 

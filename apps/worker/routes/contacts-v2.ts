@@ -31,7 +31,7 @@ import {
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import {
   mergeContactsBodySchema,
@@ -617,7 +617,7 @@ contactsV2.get('/:id/cases',
 
     // Entity types resolve the human-readable label; status is stored as the
     // raw status value, which the type maps to a label.
-    const { entityTypes } = await services.settings.getEntityTypes(hubId)
+    const { entityTypes } = await services.entitySchema.getEntityTypes(hubId)
     const typeById = new Map(entityTypes.map((et) => [et.id, et]))
 
     const cases = links.map((l) => {

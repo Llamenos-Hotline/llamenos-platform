@@ -46,7 +46,7 @@ import {
 } from '../../db/schema'
 import { ErasureService } from '../../services/erasure'
 import { ConversationsService } from '../../services/conversations'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { BlastsService } from '../../services/blasts'
 
 const DATABASE_URL =
@@ -56,7 +56,7 @@ const DATABASE_URL =
 const db = createDatabase(DATABASE_URL)
 const erasure = new ErasureService(db)
 const conversationsService = new ConversationsService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 // The messaging hash key: the subscribe keyword clears the sender's opt-out record, which is keyed by it.
 const blasts = new BlastsService(db, undefined, undefined, 'b'.repeat(64))
 
@@ -262,7 +262,7 @@ describe('ConversationsService.addFileRecipient grants a usable envelope (#1595)
   })
 })
 
-describe('SettingsService.updateHubUsage stores a usage array (#1595)', () => {
+describe('HubSettingsService.updateHubUsage stores a usage array (#1595)', () => {
   it('accepts a multi-entry usage array and reads it back unchanged', async () => {
     const hubId = await freshHub('usage')
     const usage = [
@@ -272,10 +272,10 @@ describe('SettingsService.updateHubUsage stores a usage array (#1595)', () => {
 
     // Binding the array itself compiled to `($1, $2)::jsonb` — Postgres
     // rejected it outright with "cannot cast type record to jsonb".
-    const returned = await settings.updateHubUsage(hubId, usage)
+    const returned = await settings.hubSettings.updateHubUsage(hubId, usage)
     expect(returned).toEqual(usage)
 
-    const stored = await settings.getHubSettings(hubId)
+    const stored = await settings.hubSettings.getHubSettings(hubId)
     expect(stored.usage).toEqual(usage)
 
     const [shape] = await db.execute<{ t: string }>(sql`
@@ -292,22 +292,22 @@ describe('SettingsService.updateHubUsage stores a usage array (#1595)', () => {
     // column's own declared type and is fine), the second takes the
     // ON CONFLICT branch, which is where the array reached a bare parameter
     // position and was stored as a single object instead of an array.
-    await settings.updateHubUsage(hubId, usage)
-    await settings.updateHubUsage(hubId, usage)
+    await settings.hubSettings.updateHubUsage(hubId, usage)
+    await settings.hubSettings.updateHubUsage(hubId, usage)
 
     const [shape] = await db.execute<{ t: string }>(sql`
       SELECT jsonb_typeof(settings->'usage') AS t FROM hub_settings WHERE hub_id = ${hubId}
     `)
     expect(shape!.t).toBe('array')
-    expect((await settings.getHubSettings(hubId)).usage).toEqual(usage)
+    expect((await settings.hubSettings.getHubSettings(hubId)).usage).toEqual(usage)
   })
 
   it('leaves the other hub settings keys alone', async () => {
     const hubId = await freshHub('usage-merge')
-    await settings.updateHubSettings(hubId, { hubName: 'Keep Me' })
-    await settings.updateHubUsage(hubId, [{ month: '2026-04', year: 2026 }])
+    await settings.hubSettings.updateHubSettings(hubId, { hubName: 'Keep Me' })
+    await settings.hubSettings.updateHubUsage(hubId, [{ month: '2026-04', year: 2026 }])
 
-    const stored = await settings.getHubSettings(hubId)
+    const stored = await settings.hubSettings.getHubSettings(hubId)
     expect(stored.hubName).toBe('Keep Me')
     expect(stored.usage).toEqual([{ month: '2026-04', year: 2026 }])
   })

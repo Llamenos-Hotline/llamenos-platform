@@ -47,7 +47,7 @@ import { bytesToHex, hexToBytes } from '../../shared/encoding'
 import * as schema from '../../../apps/worker/db/schema'
 import type { Database } from '../../../apps/worker/db'
 import { CasesService } from '../../../apps/worker/services/cases'
-import { SettingsService } from '../../../apps/worker/services/settings'
+import { EntitySchemaService } from '../../../apps/worker/services/entity-schema'
 
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 const OUT = resolve(import.meta.dir, '../tests/fixtures/case-record-vectors.json')
@@ -101,12 +101,12 @@ try {
   client = new SQL({ url: urlFor(DB_NAME), max: 2 })
   const db = drizzle({ client, schema }) as unknown as Database
   const cases = new CasesService(db)
-  const settings = new SettingsService(db)
+  const entitySchema = new EntitySchemaService(db)
 
   const hubId = crypto.randomUUID()
   const author = READER_PUBKEYS[0]
   await db.insert(schema.hubs).values({ id: hubId, name: 'Vectors', slug: `vectors-${Date.now()}`, createdBy: author })
-  const entityType = await settings.createEntityType({
+  const entityType = await entitySchema.createEntityType({
     hubId,
     name: 'vector_case',
     label: 'Vector Case',

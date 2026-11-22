@@ -21,7 +21,7 @@ import {
 import { platformSettingsSchema } from '@protocol/schemas/platform-settings'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
-import { ServiceError, serviceErrorBody } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/service-error'
 import { PLATFORM_INCIDENT_PERMISSION } from '../services/incidents-categories'
 import { getConnectionManager } from '../lib/ws-manager'
 import { revokeVolunteerSipIdentity } from '../telephony/registrar'
@@ -545,7 +545,7 @@ erasure.patch(
     const body = c.req.valid('json')
 
     const platform = platformSettingsSchema.parse(
-      await services.settings.getPlatformSettings(),
+      await services.platformSettings.getPlatformSettings(),
     )
     await services.erasure.upsertConfig(
       hubId,

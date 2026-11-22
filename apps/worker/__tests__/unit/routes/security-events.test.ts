@@ -25,7 +25,7 @@ function validEvent(overrides: Record<string, unknown> = {}) {
 function makeServices(overrides: { rateLimited?: boolean; alertThrottled?: boolean; admins?: string[] } = {}) {
   const { rateLimited = false, alertThrottled = false, admins = ['a'.repeat(64)] } = overrides
   return {
-    settings: {
+    rateLimits: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: rateLimited }),
       checkApiRateLimit: vi.fn().mockResolvedValue({ limited: alertThrottled, retryAfterSeconds: 0 }),
     },
@@ -120,7 +120,7 @@ describe('POST /security-events (unauthenticated client submission)', () => {
     app = createApp(services)
     const res = await post(app, { events: [validEvent()] })
     expect(res.status).toBe(202)
-    await vi.waitFor(() => expect(services.settings.checkApiRateLimit).toHaveBeenCalled())
+    await vi.waitFor(() => expect(services.rateLimits.checkApiRateLimit).toHaveBeenCalled())
     expect(services.identity.emitSecurityEvent).toHaveBeenCalledTimes(1)
     expect(services.userNotifications.sendAlert).not.toHaveBeenCalled()
   })
@@ -143,7 +143,7 @@ describe('POST /security-events (unauthenticated client submission)', () => {
 
     it('keys the rate limit on a hash of the IP, never the raw IP', async () => {
       await post(app, { events: [validEvent()] }, { 'X-Forwarded-For': '203.0.113.9' })
-      const [{ key, maxPerMinute }] = services.settings.checkRateLimit.mock.calls[0]
+      const [{ key, maxPerMinute }] = services.rateLimits.checkRateLimit.mock.calls[0]
       expect(key).toMatch(/^security-events-submit:[0-9a-f]+$/)
       expect(key).not.toContain('203.0.113.9')
       expect(maxPerMinute).toBe(5)
@@ -165,7 +165,7 @@ describe('POST /security-events (unauthenticated client submission)', () => {
       })
 
       expect(res.status).toBe(429)
-      expect(services.settings.checkRateLimit).toHaveBeenCalledTimes(1)
+      expect(services.rateLimits.checkRateLimit).toHaveBeenCalledTimes(1)
       expect(services.identity.emitSecurityEvent).not.toHaveBeenCalled()
     })
 
@@ -178,8 +178,8 @@ describe('POST /security-events (unauthenticated client submission)', () => {
         'X-Test-Client-Address': '10.99.1.1',
       })
 
-      const [{ key: real }] = services.settings.checkRateLimit.mock.calls[0]
-      const [{ key: named }] = services.settings.checkRateLimit.mock.calls[1]
+      const [{ key: real }] = services.rateLimits.checkRateLimit.mock.calls[0]
+      const [{ key: named }] = services.rateLimits.checkRateLimit.mock.calls[1]
       expect(named).not.toBe(real)
       expect(named).toMatch(/^security-events-submit:[0-9a-f]+$/)
       expect(named).not.toContain('10.99.1.1')
@@ -191,8 +191,8 @@ describe('POST /security-events (unauthenticated client submission)', () => {
       await post(app, { events: [validEvent()] }, { 'X-Test-Client-Address': '10.99.1.1' })
       await post(app, { events: [validEvent()] }, { 'X-Test-Client-Address': '10.99.1.2' })
 
-      const [{ key: first }] = services.settings.checkRateLimit.mock.calls[0]
-      const [{ key: second }] = services.settings.checkRateLimit.mock.calls[1]
+      const [{ key: first }] = services.rateLimits.checkRateLimit.mock.calls[0]
+      const [{ key: second }] = services.rateLimits.checkRateLimit.mock.calls[1]
       expect(second).toBe(first)
     })
 

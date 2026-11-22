@@ -46,7 +46,7 @@ auth.post('/login',
     // end-to-end harness say WHICH client it is, so each scenario gets its own
     // bucket, but the 5/min inside that bucket still binds.
     const ipKey = `auth-login:${routeRateLimitClient(c)}`
-    const limited = await checkRateLimit(services.settings, ipKey, 5)
+    const limited = await checkRateLimit(services.rateLimits, ipKey, 5)
     if (limited) {
       return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
     }
@@ -55,7 +55,7 @@ auth.post('/login',
 
     // Per-pubkey failed attempt tracking — prevents targeted brute force
     const pubkeyKey = `auth-login-pk:${body.pubkey.slice(0, 16)}`
-    const pubkeyLimited = await checkRateLimit(services.settings, pubkeyKey, 5)
+    const pubkeyLimited = await checkRateLimit(services.rateLimits, pubkeyKey, 5)
     if (pubkeyLimited) {
       return c.json({ error: 'Too many login attempts. Try again later.' }, 429)
     }
@@ -107,7 +107,7 @@ auth.post('/bootstrap',
     const services = c.get('services')
 
     // Rate limit bootstrap by client — always enforced (security audit Epic A)
-    const limited = await checkRateLimit(services.settings, `auth-bootstrap:${routeRateLimitClient(c)}`, 3)
+    const limited = await checkRateLimit(services.rateLimits, `auth-bootstrap:${routeRateLimitClient(c)}`, 3)
     if (limited) {
       return c.json({ error: 'Too many attempts. Try again later.' }, 429)
     }
@@ -351,7 +351,7 @@ auth.patch('/me/transcription',
     const body = c.req.valid('json')
     // If volunteer is trying to disable, check if admin allows opt-out
     if (!body.enabled && !checkPermission(permissions, 'settings:manage-transcription')) {
-      const transSettings = await services.settings.getTranscriptionSettings()
+      const transSettings = await services.callSettings.getTranscriptionSettings()
       if (!transSettings.allowUserOptOut) {
         return c.json({ error: 'Transcription opt-out is not allowed' }, 403)
       }

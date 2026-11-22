@@ -678,7 +678,7 @@ describe('evidence is bound to the path hub (#2461)', () => {
   })
 
   it('evidence whose record no longer exists is in no hub', async () => {
-    const { ServiceError } = await import('@worker/services/settings')
+    const { ServiceError } = await import('@worker/services/service-error')
     const { app, mockCases } = makeApp()
     mockCases.get.mockRejectedValue(new ServiceError(404, 'Record not found'))
     const res = await app.request('/evidence/ev-1')

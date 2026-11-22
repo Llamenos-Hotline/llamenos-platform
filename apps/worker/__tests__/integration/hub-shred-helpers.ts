@@ -26,7 +26,7 @@ import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { encryptMessageForStorage } from '../../lib/crypto'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import { AuditService } from '../../services/audit'
 import { ErasureService } from '../../services/erasure'
@@ -134,10 +134,9 @@ export async function expectNoteReadable(
   expect(plain).toBe(expectedPlaintext)
 }
 
-export interface FreshHubDb {
+export interface FreshHubDb extends SettingsDomainServices {
   db: Database
   raw: ReturnType<typeof postgres>
-  settings: SettingsService
   identity: IdentityService
   audit: AuditService
   erasure: ErasureService
@@ -190,7 +189,7 @@ export function freshHubDb(name: string): FreshHubDb {
   const dbRef: FreshHubDb = {
     db: undefined as unknown as Database,
     raw: undefined as unknown as ReturnType<typeof postgres>,
-    settings: undefined as unknown as SettingsService,
+    ...({} as SettingsDomainServices),
     identity: undefined as unknown as IdentityService,
     audit: undefined as unknown as AuditService,
     erasure: undefined as unknown as ErasureService,
@@ -235,7 +234,6 @@ export function freshHubDb(name: string): FreshHubDb {
       // serialized by a toDriver (e.g. the test-jsonb vitest alias).
       const serializers = (sql as unknown as { options: { serializers: Record<string, (v: unknown) => unknown> } }).options.serializers
       serializers['3802'] = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v))
-      const settings = new SettingsService(db)
       const identity = new IdentityService(db)
       const audit = new AuditService(db)
       const erasure = new ErasureService(db, {
@@ -244,7 +242,7 @@ export function freshHubDb(name: string): FreshHubDb {
       })
       dbRef.db = db
       dbRef.raw = sql
-      dbRef.settings = settings
+      Object.assign(dbRef, createSettingsDomain(db))
       dbRef.identity = identity
       dbRef.audit = audit
       dbRef.erasure = erasure

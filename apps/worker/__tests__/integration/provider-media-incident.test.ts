@@ -83,7 +83,7 @@ beforeEach(async () => {
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-pmi-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,

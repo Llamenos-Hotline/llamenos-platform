@@ -34,21 +34,34 @@ function createTestApp(opts: {
   return app
 }
 
-function createMockServices(overrides: { settings?: Record<string, unknown>; identity?: Record<string, unknown> } = {}) {
+type MockServiceOverrides = Partial<
+  Record<'messagingConfig' | 'providerConfig' | 'setupState' | 'hubs' | 'identity', Record<string, unknown>>
+>
+
+function createMockServices(overrides: MockServiceOverrides = {}) {
   return {
-    settings: {
+    messagingConfig: {
       getEnabledChannels: vi.fn().mockResolvedValue({
         voice: true, sms: true, whatsapp: true, signal: true, rcs: true, telegram: true, reports: true,
       }),
+      ...(overrides.messagingConfig || {}),
+    },
+    providerConfig: {
       getTelephonyProvider: vi.fn().mockResolvedValue({ phoneNumber: '+15559876543' }),
+      ...(overrides.providerConfig || {}),
+    },
+    setupState: {
       getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
+      ...(overrides.setupState || {}),
+    },
+    hubs: {
       getHubs: vi.fn().mockResolvedValue({
         hubs: [
           { id: 'hub-1', name: 'Main Hub', status: 'active' as const },
           { id: 'hub-2', name: 'Inactive Hub', status: 'inactive' as const },
         ],
       }),
-      ...(overrides.settings || {}),
+      ...(overrides.hubs || {}),
     },
     identity: {
       hasAdmin: vi.fn().mockResolvedValue({ hasAdmin: true }),
@@ -86,7 +99,7 @@ describe('config route', () => {
 
     it('falls back to env phone number when telephony provider fails', async () => {
       const services = createMockServices({
-        settings: {
+        providerConfig: {
           getTelephonyProvider: vi.fn().mockRejectedValue(new Error('DB error')),
         },
       })
@@ -100,7 +113,7 @@ describe('config route', () => {
 
     it('defaults channels to all-disabled when getEnabledChannels fails', async () => {
       const services = createMockServices({
-        settings: {
+        messagingConfig: {
           getEnabledChannels: vi.fn().mockRejectedValue(new Error('DB error')),
         },
       })
@@ -116,7 +129,7 @@ describe('config route', () => {
 
     it('defaults setupCompleted to true when getSetupState fails', async () => {
       const services = createMockServices({
-        settings: {
+        setupState: {
           getSetupState: vi.fn().mockRejectedValue(new Error('DB error')),
         },
       })
@@ -174,7 +187,7 @@ describe('config route', () => {
       // Several active hubs with the full field set the leak carried: name,
       // slug, description, createdBy, timestamps.
       const services = createMockServices({
-        settings: {
+        hubs: {
           getHubs: vi.fn().mockResolvedValue({
             hubs: [
               { id: 'hub-1', name: 'Northern Chapter', slug: 'northern', description: 'secret', status: 'active' as const, createdBy: 'f'.repeat(64), createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' },
@@ -203,7 +216,7 @@ describe('config route', () => {
       // The hub roster is not merely filtered out of the response — it is never
       // fetched, so there is nothing to leak by a later refactor.
       const getHubs = vi.fn()
-      const services = createMockServices({ settings: { getHubs } })
+      const services = createMockServices({ hubs: { getHubs } })
       const app = createTestApp({ services })
 
       const res = await app.request('/')
@@ -301,7 +314,7 @@ describe('config route', () => {
     // them: the thing they were about does not exist.
     it('does not report a demoMode field', async () => {
       const services = createMockServices({
-        settings: {
+        setupState: {
           getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
         },
       })

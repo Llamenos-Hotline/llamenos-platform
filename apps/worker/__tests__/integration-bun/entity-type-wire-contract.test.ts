@@ -23,7 +23,7 @@ import { z } from 'zod'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { entityTypeDefinitions, hubs } from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { entityTypeDefinitionSchema } from '@protocol/schemas/entity-schema'
 
 const DATABASE_URL =
@@ -31,7 +31,7 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const createdHubIds: string[] = []
 
@@ -67,8 +67,8 @@ function baseBody(hubId: string, name: string, extra: Record<string, unknown> = 
 describe('entity-types wire contract', () => {
   it('emits every key the OUTPUT schema requires (what the Swift/Kotlin codegen reads)', async () => {
     const hubId = await freshHub('contract')
-    await settings.createEntityType(baseBody(hubId, 'contract_type'))
-    const { entityTypes } = await settings.getEntityTypes(hubId)
+    await settings.entitySchema.createEntityType(baseBody(hubId, 'contract_type'))
+    const { entityTypes } = await settings.entitySchema.getEntityTypes(hubId)
     expect(entityTypes).toHaveLength(1)
 
     const outputSchema = z.toJSONSchema(entityTypeDefinitionSchema, { io: 'output' }) as {
@@ -87,23 +87,23 @@ describe('entity-types wire contract', () => {
   it('stores notifyContactsOnStatusChange on create, returns it, and honours PATCH', async () => {
     const hubId = await freshHub('notify')
 
-    const off = await settings.createEntityType(baseBody(hubId, 'notify_default'))
+    const off = await settings.entitySchema.createEntityType(baseBody(hubId, 'notify_default'))
     expect(off.notifyContactsOnStatusChange).toBe(false)
 
-    const on = await settings.createEntityType(
+    const on = await settings.entitySchema.createEntityType(
       baseBody(hubId, 'notify_on', { notifyContactsOnStatusChange: true }),
     )
     expect(on.notifyContactsOnStatusChange).toBe(true)
-    expect((await settings.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(true)
+    expect((await settings.entitySchema.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(true)
 
-    const flipped = await settings.updateEntityType(on.id, { notifyContactsOnStatusChange: false })
+    const flipped = await settings.entitySchema.updateEntityType(on.id, { notifyContactsOnStatusChange: false })
     expect(flipped.notifyContactsOnStatusChange).toBe(false)
-    expect((await settings.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(false)
+    expect((await settings.entitySchema.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(false)
 
     // A PATCH that does not mention the flag must not reset it.
-    const set = await settings.updateEntityType(on.id, { notifyContactsOnStatusChange: true })
+    const set = await settings.entitySchema.updateEntityType(on.id, { notifyContactsOnStatusChange: true })
     expect(set.notifyContactsOnStatusChange).toBe(true)
-    const untouched = await settings.updateEntityType(on.id, { label: 'renamed' })
+    const untouched = await settings.entitySchema.updateEntityType(on.id, { label: 'renamed' })
     expect(untouched.notifyContactsOnStatusChange).toBe(true)
   })
 })

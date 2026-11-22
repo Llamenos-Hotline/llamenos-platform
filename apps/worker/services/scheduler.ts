@@ -6,7 +6,10 @@
  */
 import type { Database } from '../db'
 import type { BlastsService } from './blasts'
-import type { SettingsService } from './settings'
+import type { TtlCleanupService } from './ttl-cleanup'
+import type { RateLimitService } from './rate-limits'
+import type { PlatformSettingsService } from './platform-settings'
+import type { MessagingConfigService } from './messaging-config'
 import {
   startBlastWorker,
   stopBlastWorker,
@@ -115,7 +118,10 @@ export type SchedulerWorkerName = (typeof SCHEDULER_WORKER_NAMES)[number]
  */
 export type TaskSchedulerServiceDeps = {
   blastsService: BlastsService
-  settingsService: SettingsService
+  ttlCleanupService: TtlCleanupService
+  rateLimitService: RateLimitService
+  platformSettingsService: PlatformSettingsService
+  messagingConfigService: MessagingConfigService
   retentionService: RetentionService
   auditService: AuditService
   erasureService: ErasureService
@@ -183,7 +189,7 @@ export class TaskScheduler {
     // is listed here always runs. A missing one cannot reach this method.
     startBlastWorker({
       blastsService: deps.blastsService,
-      settingsService: deps.settingsService,
+      messagingConfigService: deps.messagingConfigService,
       resolveAdapter: deps.resolveAdapter,
       resolveIdentifier: deps.resolveIdentifier,
       onProgress: deps.onBlastProgress,
@@ -197,7 +203,7 @@ export class TaskScheduler {
     startRetentionPurgeWorker({
       retentionService: deps.retentionService,
       auditService: deps.auditService,
-      settingsService: deps.settingsService,
+      platformSettingsService: deps.platformSettingsService,
       providerMedia: deps.providerMedia,
     })
     started.push('retention-purge')
@@ -224,13 +230,14 @@ export class TaskScheduler {
 
     // Periodic cleanup: IdentityService.cleanup() (sessions, WebAuthn
     // challenges, provision rooms, invite codes, auth nonces) and
-    // SettingsService.runCleanup() (rate limits, CAPTCHA challenges) plus
+    // TtlCleanupService.runCleanup() (rate limits, CAPTCHA challenges) plus
     // the API rate-limit fixed-window purge. See issue #1127 — auth_nonces
     // gained one row per authenticated request with nothing ever deleting
     // expired ones until this worker existed.
     startPeriodicCleanupWorker({
       identityService: deps.identityService,
-      settingsService: deps.settingsService,
+      ttlCleanupService: deps.ttlCleanupService,
+      rateLimitService: deps.rateLimitService,
     })
     started.push('periodic-cleanup')
 

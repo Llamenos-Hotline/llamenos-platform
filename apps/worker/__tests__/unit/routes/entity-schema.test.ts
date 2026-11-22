@@ -44,7 +44,7 @@ function createTestApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('services', {
-      settings: serviceMock.settings || {},
+      ...serviceMock,
       audit: { log: auditLogSpy },
     } as unknown as AppEnv['Variables']['services'])
     c.set('allRoles', [])
@@ -95,7 +95,7 @@ describe('entity-schema routes', () => {
       const getCaseManagementEnabledSpy = vi.fn().mockResolvedValue({ enabled: true })
       const { app } = createTestApp({
         permissions: ['settings:read'],
-        serviceMock: { settings: { getCaseManagementEnabled: getCaseManagementEnabledSpy } },
+        serviceMock: { hubSettings: { getCaseManagementEnabled: getCaseManagementEnabledSpy } },
       })
 
       const res = await app.request('/cms/case-management')
@@ -120,7 +120,7 @@ describe('entity-schema routes', () => {
       const setCaseMgmtSpy = vi.fn().mockResolvedValue({ enabled: true })
       const { app, auditLogSpy } = createTestApp({
         permissions: ['settings:manage-cms'],
-        serviceMock: { settings: { setCaseManagementEnabled: setCaseMgmtSpy } },
+        serviceMock: { hubSettings: { setCaseManagementEnabled: setCaseMgmtSpy } },
       })
 
       const res = await app.request('/cms/case-management', {
@@ -162,7 +162,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['settings:read'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+        serviceMock: { entitySchema: { getEntityTypes: getEntityTypesSpy } },
       })
 
       const res = await app.request('/cms/entity-types')
@@ -175,7 +175,7 @@ describe('entity-schema routes', () => {
       const getEntityTypesSpy = vi.fn().mockResolvedValue({ entityTypes: [] })
       const { app } = createTestApp({
         permissions: ['cases:read-own'],
-        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+        serviceMock: { entitySchema: { getEntityTypes: getEntityTypesSpy } },
       })
 
       const res = await app.request('/cms/entity-types')
@@ -188,7 +188,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['settings:read'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+        serviceMock: { entitySchema: { getEntityTypes: getEntityTypesSpy } },
       })
 
       const res = await app.request('/cms/entity-types?hubId=hub-2')
@@ -200,7 +200,7 @@ describe('entity-schema routes', () => {
       const getEntityTypesSpy = vi.fn().mockResolvedValue({ entityTypes: [] })
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+        serviceMock: { entitySchema: { getEntityTypes: getEntityTypesSpy } },
       })
 
       const res = await app.request('/cms/entity-types?hubId=hub-2')
@@ -213,7 +213,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['settings:read'],
         hubId: 'hub-3',
-        serviceMock: { settings: { getEntityTypes: getEntityTypesSpy } },
+        serviceMock: { entitySchema: { getEntityTypes: getEntityTypesSpy } },
       })
 
       const res = await app.request('/cms/entity-types')
@@ -243,7 +243,7 @@ describe('entity-schema routes', () => {
         permissions: ['cases:manage-types'],
         hubId: 'hub-1',
         serviceMock: {
-          settings: {
+          entitySchema: {
             createEntityType: createEntityTypeSpy,
             getEntityTypes: vi.fn(),
           },
@@ -296,7 +296,7 @@ describe('entity-schema routes', () => {
       const { app, auditLogSpy } = createTestApp({
         permissions: ['cases:manage-types'],
         serviceMock: {
-          settings: { updateEntityType: updateEntityTypeSpy },
+          entitySchema: { updateEntityType: updateEntityTypeSpy },
         },
       })
 
@@ -331,7 +331,7 @@ describe('entity-schema routes', () => {
       const deleteEntityTypeSpy = vi.fn().mockResolvedValue({ ok: true })
       const { app } = createTestApp({
         permissions: ['cases:manage-types'],
-        serviceMock: { settings: { deleteEntityType: deleteEntityTypeSpy } },
+        serviceMock: { entitySchema: { deleteEntityType: deleteEntityTypeSpy } },
       })
 
       const res = await app.request('/cms/entity-types/et-1', { method: 'DELETE' })
@@ -370,7 +370,7 @@ describe('entity-schema routes', () => {
       })
       const { app } = createTestApp({
         permissions: ['settings:read'],
-        serviceMock: { settings: { getAppliedTemplates: getAppliedTemplatesSpy } },
+        serviceMock: { templateState: { getAppliedTemplates: getAppliedTemplatesSpy } },
       })
 
       const res = await app.request('/cms/templates')
@@ -461,14 +461,20 @@ describe('entity-schema routes', () => {
         permissions: ['cases:manage-types'],
         hubId: 'hub-1',
         serviceMock: {
-          settings: {
+          entitySchema: {
             getEntityTypes: getEntityTypesSpy,
-            getCmsReportTypes: getCmsReportTypesSpy,
             getRelationshipTypes: getRelationshipTypesSpy,
             bulkSetEntityTypes: bulkSetEntityTypesSpy,
             bulkSetRelationshipTypes: bulkSetRelationshipTypesSpy,
+          },
+          reportTypes: {
+            getCmsReportTypes: getCmsReportTypesSpy,
+          },
+          templateState: {
             getAppliedTemplates: getAppliedTemplatesSpy,
             setAppliedTemplates: setAppliedTemplatesSpy,
+          },
+          hubSettings: {
             setCaseManagementEnabled: setCaseMgmtSpy,
           },
         },
@@ -522,7 +528,7 @@ describe('entity-schema routes', () => {
       const createRoleSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { createRole: createRoleSpy } },
+        serviceMock: { roles: { createRole: createRoleSpy } },
       })
       const res = await app.request('/cms/roles/from-template', {
         method: 'POST',
@@ -546,7 +552,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['settings:read'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getHubSettings: getHubSettingsSpy } },
+        serviceMock: { hubSettings: { getHubSettings: getHubSettingsSpy } },
       })
 
       const res = await app.request('/cms/auto-assignment')
@@ -561,7 +567,7 @@ describe('entity-schema routes', () => {
       const { app, auditLogSpy } = createTestApp({
         permissions: ['cases:manage'],
         hubId: 'hub-1',
-        serviceMock: { settings: { updateHubSettings: updateHubSettingsSpy } },
+        serviceMock: { hubSettings: { updateHubSettings: updateHubSettingsSpy } },
       })
 
       const res = await app.request('/cms/auto-assignment', {
@@ -590,7 +596,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['settings:read'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getCmsReportTypes: getCmsReportTypesSpy } },
+        serviceMock: { reportTypes: { getCmsReportTypes: getCmsReportTypesSpy } },
       })
 
       const res = await app.request('/cms/report-types')
@@ -611,7 +617,7 @@ describe('entity-schema routes', () => {
       const { app } = createTestApp({
         permissions: ['reports:read-types'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getCmsReportTypes: getCmsReportTypesSpy } },
+        serviceMock: { reportTypes: { getCmsReportTypes: getCmsReportTypesSpy } },
       })
 
       const res = await app.request('/cms/report-types')

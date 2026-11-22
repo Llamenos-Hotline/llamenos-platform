@@ -38,7 +38,7 @@ import '../../db/pg-array-patch'
 import { openDatabase, closeDatabase, type Database } from '../../db'
 import type { Services } from '../../services'
 import { ShiftsService } from '../../services/shifts'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { warnOnUnroutableHubs } from '../../services/routing-readiness'
 
 const DATABASE_URL =
@@ -73,7 +73,7 @@ async function seedHubs(): Promise<void> {
 
 /** The two services the boot check reads, wired as services/index.ts wires them, on `db`. */
 function servicesOn(db: Database): Services {
-  return { shifts: new ShiftsService(db), settings: new SettingsService(db) } as unknown as Services
+  return { shifts: new ShiftsService(db), ...createSettingsDomain(db) } as unknown as Services
 }
 
 /** Resolve with `work`, or fail after `ms` with what the database was doing — never hang. */

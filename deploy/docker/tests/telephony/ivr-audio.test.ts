@@ -104,13 +104,13 @@ describe('/settings/ivr-audio/:promptType/:language', () => {
   // Mounted as under /hubs/:hubId, where an operator manages their own hub's prompts;
   // the global mount's refusals are in routes/settings.test.ts and the integration-bun suite.
   const HUB = 'hub-1'
-  function app(settings: Record<string, unknown>, permissions = ['settings:manage-ivr']) {
+  function app(ivrSettings: Record<string, unknown>, permissions = ['settings:manage-ivr']) {
     const app = new Hono<AppEnv>()
     app.use('*', async (c, next) => {
       c.set('hubId', HUB)
       c.set('pubkey', 'a'.repeat(64))
       c.set('permissions', permissions)
-      c.set('services', { settings, audit: { log: vi.fn() } } as unknown as AppEnv['Variables']['services'])
+      c.set('services', { ivrSettings, audit: { log: vi.fn() } } as unknown as AppEnv['Variables']['services'])
       c.set('allRoles', [])
       await next()
     })
@@ -186,7 +186,7 @@ describe('public IVR media — what a provider fetches during a call (#1325, #13
 
   it('plays an upload through the URL minted for the call', async () => {
     const getEffectiveIvrAudio = vi.fn().mockResolvedValue({ audio: Buffer.from(stored).toString('base64'), size: stored.byteLength })
-    const res = await app({ settings: { getEffectiveIvrAudio } }).request(await mintedUrl('greeting', 'fr'))
+    const res = await app({ ivrSettings: { getEffectiveIvrAudio } }).request(await mintedUrl('greeting', 'fr'))
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('audio/wav')
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(stored)
@@ -195,7 +195,7 @@ describe('public IVR media — what a provider fetches during a call (#1325, #13
 
   it('answers every refusal with the same 404, and touches storage only for a valid signature', async () => {
     const getEffectiveIvrAudio = vi.fn().mockResolvedValue(null)
-    const media = app({ settings: { getEffectiveIvrAudio } })
+    const media = app({ ivrSettings: { getEffectiveIvrAudio } })
     const valid = new URL(await mintedUrl('greeting', 'fr'))
     const expired = await mintedUrl('greeting', 'fr', Date.now() - 3 * 86_400_000)
     const noExpiry = `http://app:3000${signIvrMediaPath(SECRET, '/api/ivr-audio/greeting/fr')}`

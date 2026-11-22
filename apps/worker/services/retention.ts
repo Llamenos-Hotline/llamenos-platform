@@ -13,7 +13,7 @@ import {
   notes,
   auditLog,
 } from '../db/schema'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import type { AuditService } from './audit'
 import type { ProviderMediaEraser } from './provider-recordings'
 import { createLogger } from '../lib/logger'

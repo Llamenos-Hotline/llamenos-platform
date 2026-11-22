@@ -5,7 +5,7 @@ import { banHash, sealCallerNumber } from '@worker/lib/crypto'
 import { hubScope } from '@shared/owner-scope'
 import type { AppEnv } from '@worker/types'
 import type { activeCalls, callRecords } from '@worker/db/schema'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { cancelLosingLegs, canAnswerInApp } from '@worker/services/ringing'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
@@ -158,13 +158,15 @@ function makeMockAuditService() {
   }
 }
 
-function makeMockSettingsService() {
+function makeMockSettingsDomain() {
   return {
-    getTelephonyProvider: vi.fn().mockResolvedValue(null),
-    getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
-    isHubChannelEnabled: vi.fn().mockResolvedValue(true),
-    getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
-    getCallHistoryAccess: vi.fn().mockResolvedValue({ volunteerAccessDays: 7 }),
+    providerConfig: { getTelephonyProvider: vi.fn().mockResolvedValue(null) },
+    callSettings: {
+      getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+      getCallHistoryAccess: vi.fn().mockResolvedValue({ volunteerAccessDays: 7 }),
+    },
+    messagingConfig: { isHubChannelEnabled: vi.fn().mockResolvedValue(true) },
+    roles: { getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }) },
   }
 }
 
@@ -205,7 +207,7 @@ function makeServices(overrides: Record<string, unknown> = {}) {
     cases: makeMockCasesService(),
     records: makeMockRecordsService(),
     audit: makeMockAuditService(),
-    settings: makeMockSettingsService(),
+    ...makeMockSettingsDomain(),
     ...makeRingRoster(['a'.repeat(64)]),
     ...overrides,
   }
@@ -479,16 +481,16 @@ describe('Calls Routes', () => {
       it('asks the service for the caller\'s own calls since the window opened, on the server clock', async () => {
         const callsSvc = makeMockCallsService()
         callsSvc.listCallHistory.mockResolvedValue({ calls: [callRecordRow({ callId: 'mine', answeredBy: SELF })], total: 1, hasMore: false })
-        const settings = makeMockSettingsService()
-        settings.getCallHistoryAccess.mockResolvedValue({ volunteerAccessDays: 3 })
-        const services = makeServices({ calls: callsSvc, settings })
+        const settings = makeMockSettingsDomain()
+        settings.callSettings.getCallHistoryAccess.mockResolvedValue({ volunteerAccessDays: 3 })
+        const services = makeServices({ calls: callsSvc, ...settings })
         const { app } = createTestApp({ permissions: ['calls:read-own-history'], pubkey: SELF, services })
 
         const before = Date.now()
         const res = await app.request('/history?limit=10')
         const after = Date.now()
         expect(res.status).toBe(200)
-        expect(settings.getCallHistoryAccess).toHaveBeenCalledWith('hub-1')
+        expect(settings.callSettings.getCallHistoryAccess).toHaveBeenCalledWith('hub-1')
 
         const [hubArg, , own] = callsSvc.listCallHistory.mock.calls[0] as [string, unknown, { answeredBy: string; answeredSince: Date }]
         expect(hubArg).toBe('hub-1')

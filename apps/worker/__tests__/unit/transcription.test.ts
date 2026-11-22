@@ -9,7 +9,7 @@ vi.mock('@worker/lib/crypto', () => ({
 
 import { encryptMessageForStorage } from '@worker/lib/crypto'
 import { maybeTranscribe } from '@worker/services/transcription'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 
 describe('transcription', () => {
   function setup() {
@@ -22,7 +22,7 @@ describe('transcription', () => {
     } as any
 
     const services = {
-      settings: {
+      callSettings: {
         getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: true }),
       },
       identity: {
@@ -83,7 +83,7 @@ describe('transcription', () => {
 
     it('returns early when transcription disabled globally', async () => {
       const { env, services, run } = setup()
-      services.settings.getTranscriptionSettings.mockResolvedValue({ globalEnabled: false })
+      services.callSettings.getTranscriptionSettings.mockResolvedValue({ globalEnabled: false })
 
       await run()
       expect(env.AI.run).not.toHaveBeenCalled()

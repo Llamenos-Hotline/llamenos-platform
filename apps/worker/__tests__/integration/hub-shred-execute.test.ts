@@ -40,7 +40,7 @@ const EXECUTOR = 'ab'.repeat(32)
 
 async function createHub(): Promise<string> {
   const id = `hub-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,

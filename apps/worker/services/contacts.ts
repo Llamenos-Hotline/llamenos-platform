@@ -23,7 +23,7 @@ import { createLogger } from '../lib/logger'
 const logger = createLogger('contacts-service')
 import type { MergeContactsBody } from '@protocol/schemas/contact-merge'
 import type { BulkContactAction, BulkCreateContactBody } from '@protocol/schemas/contact-bulk'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import type { CreateContactBody, UpdateContactBody } from '@protocol/schemas/contacts-v2'
 import type {

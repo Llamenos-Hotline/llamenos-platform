@@ -15,7 +15,8 @@ vi.mock('@worker/middleware/rate-limit', () => ({
 }))
 
 import provisioningRoutes from '@worker/routes/provisioning'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
+import { settingsDomainMock } from '../../helpers/settings-domain-mock'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -56,8 +57,9 @@ function createTestApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', ['*'])
     c.set('services', {
+      ...settingsDomainMock(makeSettingsMock()),
+      ...serviceMock,
       identity: serviceMock.identity || {},
-      settings: serviceMock.settings || makeSettingsMock(),
       audit: { log: vi.fn().mockResolvedValue(undefined) },
     } as unknown as AppEnv['Variables']['services'])
     c.set('allRoles', [])
@@ -163,7 +165,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock(),
+          ...settingsDomainMock(makeSettingsMock()),
         },
       })
 
@@ -178,7 +180,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: vi.fn() },
-          settings: makeSettingsMock(),
+          ...settingsDomainMock(makeSettingsMock()),
         },
       })
 
@@ -193,9 +195,9 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock({
+          ...settingsDomainMock(makeSettingsMock({
             peekApiRateLimit: vi.fn().mockResolvedValue({ limited: true, retryAfterSeconds: 600 }),
-          }),
+          })),
         },
       })
 
@@ -214,7 +216,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock({ peekApiRateLimit }),
+          ...settingsDomainMock(makeSettingsMock({ peekApiRateLimit })),
         },
       })
 
@@ -233,7 +235,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock({ checkApiRateLimit }),
+          ...settingsDomainMock(makeSettingsMock({ checkApiRateLimit })),
         },
       })
 
@@ -248,7 +250,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock({ checkApiRateLimit }),
+          ...settingsDomainMock(makeSettingsMock({ checkApiRateLimit })),
         },
       })
 
@@ -267,7 +269,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock({ checkApiRateLimit }),
+          ...settingsDomainMock(makeSettingsMock({ checkApiRateLimit })),
         },
       })
 
@@ -285,7 +287,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { getProvisionRoom: getProvisionRoomSpy },
-          settings: makeSettingsMock(),
+          ...settingsDomainMock(makeSettingsMock()),
         },
       })
 
@@ -309,7 +311,7 @@ describe('provisioning routes', () => {
         pubkey: 'a'.repeat(64),
         serviceMock: {
           identity: { setProvisionPayload: setProvisionPayloadSpy },
-          settings: makeSettingsMock(),
+          ...settingsDomainMock(makeSettingsMock()),
         },
       })
 
@@ -338,7 +340,7 @@ describe('provisioning routes', () => {
       const { app } = createTestApp({
         serviceMock: {
           identity: { setProvisionPayload: vi.fn() },
-          settings: makeSettingsMock(),
+          ...settingsDomainMock(makeSettingsMock()),
         },
       })
 

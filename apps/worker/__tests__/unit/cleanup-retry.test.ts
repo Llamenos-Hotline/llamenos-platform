@@ -1,7 +1,7 @@
 /**
  * Unit tests for retry + circuit breaker integration in cleanup methods.
  *
- * Verifies that SettingsService.runCleanup() and IdentityService.cleanup()
+ * Verifies that TtlCleanupService.runCleanup() and IdentityService.cleanup()
  * use withRetry (exponential backoff) and a circuit breaker (fail-fast after
  * N consecutive failures). Both utilities are mocked so tests run
  * synchronously without actual delays or DB connections.
@@ -53,9 +53,9 @@ vi.mock('@worker/lib/logger', () => ({
 // ---------------------------------------------------------------------------
 
 async function importServices() {
-  const { SettingsService } = await import('@worker/services/settings')
+  const { TtlCleanupService } = await import('@worker/services/ttl-cleanup')
   const { IdentityService } = await import('@worker/services/identity')
-  return { SettingsService, IdentityService }
+  return { TtlCleanupService, IdentityService }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +122,10 @@ function createMockDb() {
 }
 
 // ---------------------------------------------------------------------------
-// SettingsService.runCleanup()
+// TtlCleanupService.runCleanup()
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
+describe('TtlCleanupService.runCleanup() — retry + circuit breaker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Default: circuit passes through to withRetry
@@ -135,9 +135,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   })
 
   it('calls getCircuitBreaker with name "settings-cleanup"', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await svc.runCleanup()
 
@@ -147,9 +147,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   })
 
   it('calls getCircuitBreaker with failureThreshold 5', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await svc.runCleanup()
 
@@ -159,9 +159,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   })
 
   it('executes cleanup through circuitBreaker.execute()', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await svc.runCleanup()
 
@@ -169,9 +169,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   })
 
   it('wraps cleanup in withRetry with maxAttempts 3', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await svc.runCleanup()
 
@@ -182,9 +182,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   })
 
   it('passes isRetryable predicate to withRetry', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await svc.runCleanup()
 
@@ -197,9 +197,9 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
   it('propagates CircuitOpenError when circuit is open', async () => {
     mockCircuitExecute.mockRejectedValue(new CircuitOpenError('settings-cleanup'))
 
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await expect(svc.runCleanup()).rejects.toThrow(CircuitOpenError)
   })
@@ -208,17 +208,17 @@ describe('SettingsService.runCleanup() — retry + circuit breaker', () => {
     const dbError = new Error('deadlock detected')
     mockWithRetry.mockRejectedValue(dbError)
 
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     await expect(svc.runCleanup()).rejects.toThrow('deadlock detected')
   })
 
   it('returns metrics on success', async () => {
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
 
     const result = await svc.runCleanup()
 
@@ -352,9 +352,9 @@ describe('Cleanup circuit breaker — onStateChange alert', () => {
     mockCircuitExecute.mockImplementation((fn: () => Promise<unknown>) => fn())
     mockWithRetry.mockImplementation((fn: () => Promise<unknown>) => fn())
 
-    const { SettingsService } = await importServices()
+    const { TtlCleanupService } = await importServices()
     const db = createMockDb()
-    const svc = new SettingsService(db as never)
+    const svc = new TtlCleanupService(db as never)
     await svc.runCleanup()
 
     expect(capturedCallback).toBeDefined()

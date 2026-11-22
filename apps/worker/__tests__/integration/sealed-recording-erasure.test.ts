@@ -27,7 +27,7 @@ afterAll(fresh.teardown, 60_000)
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-sr-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -73,7 +73,7 @@ function refuseDeletionOf(hubId: string, callIds: string[]): () => void {
   return () => fresh.useBlobStorage({ delete: async () => {} })
 }
 
-describe('SettingsService.deleteHub — sealed call recordings', () => {
+describe('HubService.deleteHub — sealed call recordings', () => {
   it('deletes the sealed audio from object storage, not just the call rows', async () => {
     const hubId = await createHub()
     const otherHub = await createHub()
@@ -83,7 +83,7 @@ describe('SettingsService.deleteHub — sealed call recordings', () => {
     expect(await blobExists(hubId, 'ended-call')).toBe(true)
     expect(await blobExists(hubId, 'live-call')).toBe(true)
 
-    await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
+    await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
 
     expect(await rowCount(hubId)).toBe(0)
     expect(await blobExists(hubId, 'ended-call'), 'the audio of a finished call is gone from storage').toBe(false)
@@ -97,7 +97,7 @@ describe('SettingsService.deleteHub — sealed call recordings', () => {
     await callWithSealedRecording(hubId, 'stuck')
     const recover = refuseDeletionOf(hubId, ['stuck'])
 
-    const refusal = await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia).catch((err: unknown) => err)
+    const refusal = await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia).catch((err: unknown) => err)
     expect(refusal).toBeInstanceOf(SealedRecordingDeleteError)
     expect((refusal as SealedRecordingDeleteError).failures.map(f => f.callId)).toEqual(['stuck'])
 
@@ -111,7 +111,7 @@ describe('SettingsService.deleteHub — sealed call recordings', () => {
     expect(stuck.hasRecording, 'the flag that names the surviving blob is still set').toBe(true)
 
     recover()
-    await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
+    await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
     expect(await blobExists(hubId, 'stuck'), 'the retry finds and deletes the survivor').toBe(false)
     expect(await rowCount(hubId)).toBe(0)
   })

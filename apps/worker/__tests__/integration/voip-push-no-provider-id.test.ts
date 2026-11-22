@@ -156,7 +156,7 @@ function everythingSent(): string {
 
 async function createHub(): Promise<string> {
   const id = `hub-${nextId()}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id, name: `Hub ${id}`, slug: id, status: 'active', createdBy: 'integration-test',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   } as never, await insertHubFounder(db))
@@ -237,7 +237,7 @@ beforeAll(async () => {
   sql = postgres(urlFor(DB_NAME), { max: 4 })
   db = drizzle(sql, { schema }) as unknown as Database
   services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
-  await services.settings.ensureInit()
+  await services.settingsBootstrap.ensureInit()
 }, 180_000)
 
 afterAll(async () => {

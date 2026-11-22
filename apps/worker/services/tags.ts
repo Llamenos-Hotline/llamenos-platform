@@ -8,7 +8,7 @@
 import { eq, and } from 'drizzle-orm'
 import type { Database } from '../db'
 import { tags } from '../db/schema'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 
 // ---------------------------------------------------------------------------
 // Row type

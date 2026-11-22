@@ -160,10 +160,10 @@ describe('the setup wizard provisions a hub admin who reads inbound messages (#1
       await registerDevice(admin)
       adminRegistered = true
     }
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     if (hubs.length > 0) return hubs[0].id
     expect((await completeSetup(admin)).status).toBe(200)
-    return (await services.settings.getHubs()).hubs[0].id
+    return (await services.hubs.getHubs()).hubs[0].id
   }
 
   it('refuses to found the hub until the setup admin has registered a device key', async () => {
@@ -171,7 +171,7 @@ describe('the setup wizard provisions a hub admin who reads inbound messages (#1
 
     const refused = await completeSetup(admin)
     expect(refused.status).toBe(409)
-    expect((await services.settings.getHubs()).hubs).toEqual([])
+    expect((await services.hubs.getHubs()).hubs).toEqual([])
 
     // What the desktop wizard does before it completes setup.
     const hubId = await wizardHub()
@@ -219,7 +219,7 @@ describe('an inbound message no hub admin can read is refused, never dropped (#1
     const id = `hub-no-reader-${Math.random().toString(36).slice(2, 8)}`
     const founder = await insertHubFounder(fresh.db)
     await fresh.db.delete(schema.devices).where(eq(schema.devices.pubkey, founder.pubkey))
-    await services.settings.createHub({
+    await services.hubs.createHub({
       id, name: id, slug: id, status: 'active', phoneNumber: '',
       createdBy: 'integration-test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     } as never, founder)

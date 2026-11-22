@@ -52,7 +52,7 @@ vi.mock('hono-openapi', () => ({
 }))
 
 import invitesRoutes from '@worker/routes/invites'
-import { HubNotFoundError, ServiceError, serviceErrorBody } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError, serviceErrorBody } from '@worker/services/service-error'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,13 +95,17 @@ function createApp(
       revokeInvite: vi.fn().mockResolvedValue(undefined),
       getInvites: vi.fn().mockResolvedValue({ invites: [] }),
     },
-    settings: {
+    rateLimits: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
-      // One active hub: the R1 shape, and what lets an invite that names no
-      // hub still resolve to one.
+    },
+    hubs: {
       getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', status: 'active' }] }),
       getHub: vi.fn().mockResolvedValue({ id: 'hub-1', status: 'active' }),
+    },
+    templateState: {
       getAppliedTemplates: vi.fn().mockResolvedValue({ appliedTemplates: [] }),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: allRoles }),
     },
     audit: {},
@@ -304,7 +308,7 @@ describe('invites routes', () => {
 
     it('refuses to mint a hub-less invite when the hub is ambiguous', async () => {
       const { app, services } = createApp(['*'])
-      services.settings.getHubs.mockResolvedValue({
+      services.hubs.getHubs.mockResolvedValue({
         hubs: [{ id: 'hub-a', status: 'active' }, { id: 'hub-b', status: 'active' }],
       })
 
@@ -324,7 +328,7 @@ describe('invites routes', () => {
         ['*'],
         { pubkey: 'creator-pk', roles: ['role-hub-admin'], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-hub-admin'] }] },
       )
-      services.settings.getHubs.mockResolvedValue({
+      services.hubs.getHubs.mockResolvedValue({
         hubs: [{ id: 'hub-a', status: 'active' }, { id: 'hub-b', status: 'active' }],
       })
 
@@ -345,7 +349,7 @@ describe('invites routes', () => {
       // would produce a user with no membership — so it is never minted, and
       // the setup wizard invites only once it has created the hub.
       const { app, services } = createApp(['*'])
-      services.settings.getHubs.mockResolvedValue({ hubs: [] })
+      services.hubs.getHubs.mockResolvedValue({ hubs: [] })
 
       const res = await app.request('/invites', {
         method: 'POST',
@@ -362,7 +366,7 @@ describe('invites routes', () => {
         ['*'],
         { pubkey: 'creator-pk', roles: [], hubRoles: [{ hubId: 'hub-b', roleIds: ['role-hub-admin'] }] },
       )
-      services.settings.getHubs.mockResolvedValue({
+      services.hubs.getHubs.mockResolvedValue({
         hubs: [{ id: 'hub-a', status: 'active' }, { id: 'hub-b', status: 'active' }],
       })
       const res = await app.request('/invites', {
@@ -379,7 +383,7 @@ describe('invites routes', () => {
 
     it('rejects an invite naming a hub that does not exist', async () => {
       const { app, services } = createApp(['*'])
-      services.settings.getHub.mockRejectedValue(new HubNotFoundError())
+      services.hubs.getHub.mockRejectedValue(new HubNotFoundError())
 
       const res = await app.request('/invites', {
         method: 'POST',
@@ -509,7 +513,7 @@ describe('invites routes', () => {
 
     it('refuses an invite before any hub exists, whoever asks', async () => {
       const { app, services } = createApp([], HUB_ADMIN_OF_HUB_1)
-      services.settings.getHubs.mockResolvedValue({ hubs: [] })
+      services.hubs.getHubs.mockResolvedValue({ hubs: [] })
 
       const res = await app.request('/invites', {
         method: 'POST',

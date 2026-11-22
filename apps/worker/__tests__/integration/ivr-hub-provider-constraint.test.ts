@@ -1,7 +1,7 @@
 /**
  * Hub-scoped IVR speakability constraint against real PostgreSQL (#1260).
  *
- * `SettingsService.getHubTelephonyProvider` used to read the row itself and
+ * `ProviderConfigService.getHubTelephonyProvider` used to read the row itself and
  * `JSON.parse(row.credentials)`. Every writer stores ciphertext and the
  * provider type lives in the `provider_type` COLUMN, so it returned null for
  * every configured hub. The IVR speakability check then fell through to the
@@ -39,7 +39,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 const DATABASE_URL =
@@ -58,11 +58,11 @@ function urlFor(name: string): string {
 
 let sql: ReturnType<typeof postgres>
 let db: Database
-let settings: SettingsService
+let settings: SettingsDomainServices
 
 /** Store a provider row exactly as ProviderSetup.configure does. */
 async function configureProvider(providerType: string, hubId: string | null): Promise<void> {
-  await settings.upsertProviderConfig({
+  await settings.providerConfig.upsertProviderConfig({
     hubId,
     providerType,
     credentials: OPAQUE_CIPHERTEXT,
@@ -75,7 +75,7 @@ async function configureProvider(providerType: string, hubId: string | null): Pr
 }
 
 async function createHub(id: string): Promise<void> {
-  await settings.createHub({
+  await settings.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -106,7 +106,7 @@ beforeAll(async () => {
 
   sql = postgres(urlFor(DB_NAME), { max: 4 })
   db = drizzle(sql, { schema }) as unknown as Database
-  settings = new SettingsService(db)
+  settings = createSettingsDomain(db)
 }, 180_000)
 
 afterAll(async () => {
@@ -129,7 +129,7 @@ describe('getHubTelephonyProvider reads a really-stored row', () => {
     await createHub(hubId)
     await configureProvider('telnyx', hubId)
 
-    const config = await settings.getHubTelephonyProvider(hubId)
+    const config = await settings.providerConfig.getHubTelephonyProvider(hubId)
 
     expect(config).not.toBeNull()
     expect(config!.type).toBe('telnyx')
@@ -138,7 +138,7 @@ describe('getHubTelephonyProvider reads a really-stored row', () => {
   it('returns null only when the hub really has no provider row', async () => {
     const hubId = 'hub-no-provider'
     await createHub(hubId)
-    expect(await settings.getHubTelephonyProvider(hubId)).toBeNull()
+    expect(await settings.providerConfig.getHubTelephonyProvider(hubId)).toBeNull()
   })
 })
 
@@ -152,7 +152,7 @@ describe('updateIvrLanguages constrains by the HUB provider, not the global one'
     await configureProvider('telnyx', hubId)
 
     await expect(
-      settings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId),
+      settings.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -161,7 +161,7 @@ describe('updateIvrLanguages constrains by the HUB provider, not the global one'
     await createHub(hubId)
     await configureProvider('telnyx', hubId)
 
-    const result = await settings.updateIvrLanguages({ enabledLanguages: ['en', 'es'] }, hubId)
+    const result = await settings.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'es'] }, hubId)
     expect(result.enabledLanguages).toEqual(['en', 'es'])
   })
 
@@ -171,7 +171,7 @@ describe('updateIvrLanguages constrains by the HUB provider, not the global one'
     await configureProvider('twilio', null)
 
     // Twilio speaks 'vi', so the same list the telnyx hub rejects is accepted here.
-    const result = await settings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
+    const result = await settings.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
     expect(result.enabledLanguages).toEqual(['en', 'vi'])
   })
 })
@@ -190,7 +190,7 @@ describe('getIvrLanguageSettings flags languages nobody in the hub speaks', () =
   it('counts enabled languages with no speaker among the hub members, and nothing else', async () => {
     const hubId = 'hub-coverage'
     await createHub(hubId)
-    await settings.updateIvrLanguages({ enabledLanguages: ['en', 'es', 'ar'] }, hubId)
+    await settings.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'es', 'ar'] }, hubId)
 
     // Only 'en' is spoken by an active member of THIS hub. 'es' is spoken by a
     // member of another hub and 'ar' by a deactivated member of this one —
@@ -199,7 +199,7 @@ describe('getIvrLanguageSettings flags languages nobody in the hub speaks', () =
     await addUser('cov-other-hub', { hubId: 'hub-elsewhere', spoken: ['es'] })
     await addUser('cov-inactive', { hubId, spoken: ['ar'], active: false })
 
-    const result = await settings.getIvrLanguageSettings(hubId)
+    const result = await settings.ivrSettings.getIvrLanguageSettings(hubId)
 
     expect(result).toEqual({ enabledLanguages: ['en', 'es', 'ar'], uncoveredLanguageCount: 2 })
   })
@@ -207,12 +207,12 @@ describe('getIvrLanguageSettings flags languages nobody in the hub speaks', () =
   it('drops the count as members start speaking the language', async () => {
     const hubId = 'hub-coverage-fills'
     await createHub(hubId)
-    await settings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
+    await settings.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'vi'] }, hubId)
     await addUser('fill-en', { hubId, spoken: ['en'] })
-    expect((await settings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(1)
+    expect((await settings.ivrSettings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(1)
 
     await addUser('fill-vi', { hubId, spoken: ['en', 'vi'] })
-    expect((await settings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(0)
+    expect((await settings.ivrSettings.getIvrLanguageSettings(hubId)).uncoveredLanguageCount).toBe(0)
   })
 })
 
@@ -222,7 +222,7 @@ describe('updateIvrLanguages refuses a menu longer than the keypad', () => {
     await createHub(hubId)
     const eleven = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru', 'hi']
 
-    await expect(settings.updateIvrLanguages({ enabledLanguages: eleven }, hubId)).rejects.toMatchObject({
+    await expect(settings.ivrSettings.updateIvrLanguages({ enabledLanguages: eleven }, hubId)).rejects.toMatchObject({
       status: 400,
       message: expect.stringContaining('at most 10 languages'),
     })

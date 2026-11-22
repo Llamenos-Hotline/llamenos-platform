@@ -36,7 +36,7 @@ const EXECUTOR = 'ab'.repeat(32)
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -193,7 +193,7 @@ describe('hub isolation', () => {
   it('cannot be undone by replaying a cached hub-key envelope write', async () => {
     const hubId = await createHub()
     await seedHubKey(hubId)
-    const { generation } = await fresh.settings.getHubKeyEnvelopes(hubId)
+    const { generation } = await fresh.hubKeys.getHubKeyEnvelopes(hubId)
     const cached = await fresh.db
       .select()
       .from(schema.hubKeys)
@@ -202,7 +202,7 @@ describe('hub isolation', () => {
     await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
 
     await expect(
-      fresh.settings.setHubKeyEnvelopes(hubId, {
+      fresh.hubKeys.setHubKeyEnvelopes(hubId, {
         expectedGeneration: generation,
         envelopes: cached.map((r) => ({ pubkey: r.recipientPubkey, enc: r.enc, ct: r.ct })),
       }),

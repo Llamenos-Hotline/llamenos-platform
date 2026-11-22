@@ -55,7 +55,7 @@ function baseConfig(overrides: Partial<MessagingConfig>): MessagingConfig {
 function makeServices(config: MessagingConfig) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(config) },
+    hubs: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }) }, messagingConfig: { getMessagingConfig: vi.fn().mockResolvedValue(config) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),

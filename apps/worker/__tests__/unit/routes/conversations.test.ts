@@ -5,7 +5,7 @@ import conversationsRoute from '@worker/routes/conversations'
 import * as wsEvents from '@worker/lib/ws-events'
 import * as serviceFactories from '@worker/lib/service-factories'
 import * as metrics from '@worker/routes/metrics'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import type { conversations as conversationsTable, messages as messagesTable } from '@worker/db/schema'
 import { conversationListResponseSchema, messageListResponseSchema } from '@protocol/schemas/conversations'
 
@@ -123,8 +123,10 @@ function createTestApp(opts: {
       getCurrentVolunteers: vi.fn().mockResolvedValue([pubkey]),
     },
     audit: mockAuditService,
-    settings: {
+    providerConfig: {
       getTelephonyProvider: vi.fn().mockResolvedValue({ phoneNumber: '+1555000000' }),
+    },
+    messagingConfig: {
       getMessagingConfig: vi.fn().mockResolvedValue({ enabledChannels: ['sms', 'whatsapp', 'signal'], sms: { enabled: true } }),
     },
   }
@@ -522,7 +524,7 @@ describe('conversations route', () => {
             // `smsContentMode` defaults to 'notification-only' (the carrier is
             // handed a generic line, not the reply); 'full' is what lets the
             // adapter boundary show the reply text itself.
-            settings: {
+            messagingConfig: {
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['sms', 'whatsapp', 'signal', 'rcs'],
                 smsContentMode: 'full',

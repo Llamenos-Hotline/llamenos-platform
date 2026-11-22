@@ -92,8 +92,8 @@ describe('resolveTemplateDefaultMemberRoles', () => {
 describe('resolveHubDefaultMemberRoles', () => {
   it('grants nothing when the server has applied no template', async () => {
     const deps = {
-      getAppliedTemplates: async () => ({ appliedTemplates: [] }),
-      getRoles: async () => ({ roles }),
+      templateState: { getAppliedTemplates: async () => ({ appliedTemplates: [] }) },
+      roles: { getRoles: async () => ({ roles }) },
     }
     await expect(resolveHubDefaultMemberRoles(deps, 'hub-1')).resolves.toEqual([])
   })
@@ -102,8 +102,8 @@ describe('resolveHubDefaultMemberRoles', () => {
     // appliedTemplates is untyped JSONB; a malformed row must not throw on the
     // invite-creation path.
     const deps = {
-      getAppliedTemplates: async () => ({ appliedTemplates: [null, 'oops', { noTemplateId: 1 }] }),
-      getRoles: async () => ({ roles }),
+      templateState: { getAppliedTemplates: async () => ({ appliedTemplates: [null, 'oops', { noTemplateId: 1 }] }) },
+      roles: { getRoles: async () => ({ roles }) },
     }
     await expect(resolveHubDefaultMemberRoles(deps, 'hub-1')).resolves.toEqual([])
   })
@@ -113,8 +113,8 @@ describe('resolveHubDefaultMemberRoles', () => {
     // declares defaultMemberRole yet, so "no role unless chosen" is the live
     // behaviour this pins (#1446).
     const deps = {
-      getAppliedTemplates: async () => ({ appliedTemplates: [{ templateId: 'general-hotline' }] }),
-      getRoles: async () => ({ roles }),
+      templateState: { getAppliedTemplates: async () => ({ appliedTemplates: [{ templateId: 'general-hotline' }] }) },
+      roles: { getRoles: async () => ({ roles }) },
     }
     await expect(resolveHubDefaultMemberRoles(deps, 'hub-1')).resolves.toEqual([])
   })

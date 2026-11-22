@@ -4,6 +4,7 @@
  * Tests: permission enforcement (notes:read-own gate), rate limiting,
  * autocomplete, forward geocode, reverse geocode.
  */
+import { settingsDomainMock } from '../../helpers/settings-domain-mock'
 import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
@@ -48,7 +49,6 @@ function makeApp(opts: {
   const mockSettings = {
     getGeocodingConfigAdmin: vi.fn().mockResolvedValue({ provider: 'nominatim' }),
     checkRateLimit: vi.fn().mockResolvedValue(false),
-    ...(services.settings as Record<string, unknown> ?? {}),
   }
 
   // Override factory to return our mock adapter
@@ -59,7 +59,7 @@ function makeApp(opts: {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('services', {
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       ...(services as Record<string, unknown>),
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')

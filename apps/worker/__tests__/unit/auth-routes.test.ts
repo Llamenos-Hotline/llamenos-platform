@@ -138,13 +138,15 @@ function createApp() {
         requireForUsers: false,
       }),
     },
-    settings: {
+    roles: {
       getRoles: vi.fn().mockResolvedValue({
         roles: [
           { id: 'role-volunteer', name: 'Volunteer', slug: 'volunteer', permissions: ['calls:answer'] },
           { id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'] },
         ],
       }),
+    },
+    callSettings: {
       getTranscriptionSettings: vi.fn().mockResolvedValue({ allowUserOptOut: true }),
     },
     activeShifts: {
@@ -161,7 +163,7 @@ function createApp() {
     c.set('pubkey', user.pubkey as never)
     c.set('user', user as never)
     c.set('permissions', permissions as never)
-    c.set('allRoles', (await services.settings.getRoles()).roles as never)
+    c.set('allRoles', (await services.roles.getRoles()).roles as never)
     // What the real auth middleware stores for a session-authenticated request.
     const sessionHeader = c.req.header('Authorization')
     if (sessionHeader?.startsWith('Session ')) c.set('sessionToken', sessionHeader.slice(8).trim() as never)
@@ -626,7 +628,7 @@ describe('auth routes', () => {
 
     it('denies opt-out when admin disallows it', async () => {
       const { app, services } = createApp()
-      services.settings.getTranscriptionSettings.mockResolvedValue({ allowUserOptOut: false })
+      services.callSettings.getTranscriptionSettings.mockResolvedValue({ allowUserOptOut: false })
 
       const res = await app.request('/auth/me/transcription', {
         method: 'PATCH',
@@ -641,7 +643,7 @@ describe('auth routes', () => {
 
     it('allows opt-out when admin permits it', async () => {
       const { app, services } = createApp()
-      services.settings.getTranscriptionSettings.mockResolvedValue({ allowUserOptOut: true })
+      services.callSettings.getTranscriptionSettings.mockResolvedValue({ allowUserOptOut: true })
 
       const res = await app.request('/auth/me/transcription', {
         method: 'PATCH',

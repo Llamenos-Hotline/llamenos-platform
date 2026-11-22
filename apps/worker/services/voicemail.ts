@@ -82,7 +82,7 @@ async function transcribeVoicemail(params: {
   recordingSid: string
 }): Promise<void> {
   const { env, services, adapter, hubId, callSid, recordingSid } = params
-  const { globalEnabled } = await services.settings.getTranscriptionSettings()
+  const { globalEnabled } = await services.callSettings.getTranscriptionSettings()
   if (!globalEnabled) return
 
   // Voicemails: envelope encryption for the admins of the call's hub only — the

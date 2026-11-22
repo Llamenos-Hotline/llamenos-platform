@@ -4,7 +4,7 @@ import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import type { Services } from '@worker/services'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { getIvrVoiceCatalogForProvider } from '@worker/telephony/ivr-voice-catalogs'
 // Ensure the crypto FFI mock is loaded before any code that imports @llamenos/crypto/ffi.
 // The real ffi.ts uses bun:ffi to load a native .so — unavailable in the Vitest environment.
@@ -66,20 +66,34 @@ function makeMockAdapter(overrides?: Partial<TelephonyAdapter>): TelephonyAdapte
 
 function makeServices(): Services {
   return {
-    settings: {
+    providerConfig: {
       getTelephonyProvider: vi.fn().mockResolvedValue(null),
       getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
+    },
+    hubs: {
       getHubByPhone: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    ivrSettings: {
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
       resolveIvrVoiceCatalog: vi.fn().mockResolvedValue({ state: 'unconfigured' }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+    },
+    spamSettings: {
       getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false, rateLimitEnabled: false, maxCallsPerMinute: 5, blockDurationMinutes: 30, overLimitAction: 'message' }),
+    },
+    rateLimits: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
+    },
+    captcha: {
       storeCaptcha: vi.fn().mockResolvedValue(undefined),
       submitCaptcha: vi.fn().mockResolvedValue({ outcome: 'pass' }),
+    },
+    callSettings: {
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
-      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: false }),
     },
     records: {
@@ -441,7 +455,7 @@ describe('Telephony routes', () => {
       })
 
       it('rejects the call before greeting or ringing, and tells the hub through a channel-disabled incident', async () => {
-        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        services.messagingConfig.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
         const app = await createTestApp(adapter, services)
 
         const res = await app.request('/api/telephony/incoming', incomingCall())
@@ -449,7 +463,7 @@ describe('Telephony routes', () => {
         expect(await res.text()).toContain('<Reject')
         expect(adapter.rejectCall).toHaveBeenCalled()
         expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
-        expect(services.settings.isHubChannelEnabled).toHaveBeenCalledWith('hub-1', 'voice')
+        expect(services.messagingConfig.isHubChannelEnabled).toHaveBeenCalledWith('hub-1', 'voice')
         // The kind is the channel; there is no argument that could carry the caller, the called number or the call sid.
         expect(services.incidents.signal).toHaveBeenCalledTimes(1)
         expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'channel-disabled', 'voice')
@@ -466,7 +480,7 @@ describe('Telephony routes', () => {
       })
 
       it('still tracks the provider call log for deletion, since the provider keeps one for a refused call too', async () => {
-        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        services.messagingConfig.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
         adapter.deleteCallLog = vi.fn()
         const app = await createTestApp(adapter, services)
 
@@ -476,7 +490,7 @@ describe('Telephony routes', () => {
       })
 
       it('fails open when the switch cannot be read: the call is answered, not turned away', async () => {
-        services.settings.isHubChannelEnabled = vi.fn().mockRejectedValue(new Error('postgres is down'))
+        services.messagingConfig.isHubChannelEnabled = vi.fn().mockRejectedValue(new Error('postgres is down'))
         const app = await createTestApp(adapter, services)
 
         const res = await app.request('/api/telephony/incoming', incomingCall())
@@ -486,7 +500,7 @@ describe('Telephony routes', () => {
       })
 
       it('is still rejected when the incident cannot be recorded', async () => {
-        services.settings.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
+        services.messagingConfig.isHubChannelEnabled = vi.fn().mockResolvedValue(false)
         services.incidents.signal = vi.fn().mockRejectedValue(new Error('incident store down'))
         const app = await createTestApp(adapter, services)
 
@@ -520,7 +534,7 @@ describe('Telephony routes', () => {
       })
 
       it('rejects the call unanswered, records nothing, and makes the refusal visible', async () => {
-        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
+        services.hubs.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
         const series = 'llamenos_call_unrouted_total{called_number="unmatched"}'
         const before = await counter(series)
         const app = await createTestApp(adapter, services)
@@ -549,14 +563,14 @@ describe('Telephony routes', () => {
         const res = await incoming(app)
 
         expect(await res.text()).toContain('<Reject')
-        expect(services.settings.getHubByPhone).not.toHaveBeenCalled()
+        expect(services.hubs.getHubByPhone).not.toHaveBeenCalled()
         expect(adapter.handleLanguageMenu).not.toHaveBeenCalled()
         expect(services.incidents.signalPlatform).toHaveBeenCalledWith('routing', 'unrouted_number')
         expect(await counter(series)).toBe(before + 1)
       })
 
       it('still refuses the call when the incident cannot be recorded', async () => {
-        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
+        services.hubs.getHubByPhone = vi.fn().mockRejectedValue(new ServiceError(404, 'No hub for this number'))
         services.incidents.signalPlatform = vi.fn().mockRejectedValue(new Error('db down'))
         const app = await createTestApp(adapter, services)
 
@@ -570,7 +584,7 @@ describe('Telephony routes', () => {
       it('does not mistake a failed hub lookup for an unrouted number', async () => {
         // A database error is not "no hub owns this number": the call is
         // neither refused as unrouted nor served without a hub.
-        services.settings.getHubByPhone = vi.fn().mockRejectedValue(new Error('connection reset'))
+        services.hubs.getHubByPhone = vi.fn().mockRejectedValue(new Error('connection reset'))
         const app = await createTestApp(adapter, services)
 
         const res = await incoming(app)
@@ -606,7 +620,7 @@ describe('Telephony routes', () => {
       expect(services.calls.endCall).not.toHaveBeenCalled()
       expect(services.calls.markVoicemail).not.toHaveBeenCalled()
       expect(services.providerRecordings.track).not.toHaveBeenCalled()
-      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
+      expect(services.captcha.submitCaptcha).not.toHaveBeenCalled()
     })
   })
 
@@ -673,13 +687,13 @@ describe('Telephony routes', () => {
     })
 
     it('builds the greeting with the recording notice when the hub records', async () => {
-      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+      services.callSettings.getCallSettings = vi.fn().mockResolvedValue({
         queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
       })
       const res = await selectLanguage()
       expect(res.status).toBe(200)
       expect(noticeArg()).toBe(true)
-      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+      expect(services.callSettings.getCallSettings).toHaveBeenCalledWith('hub-1')
     })
 
     it('uses forceLang query param when provided', async () => {
@@ -705,8 +719,8 @@ describe('Telephony routes', () => {
         digits = '',
         hubLanguages = ['en', 'es'],
       ) => {
-        services.settings.getIvrLanguages = vi.fn().mockResolvedValue({ enabledLanguages: hubLanguages })
-        services.settings.resolveIvrVoiceCatalog = vi.fn().mockResolvedValue({
+        services.ivrSettings.getIvrLanguages = vi.fn().mockResolvedValue({ enabledLanguages: hubLanguages })
+        services.ivrSettings.resolveIvrVoiceCatalog = vi.fn().mockResolvedValue({
           state: 'resolved',
           catalog: getIvrVoiceCatalogForProvider(provider),
         })
@@ -752,8 +766,8 @@ describe('Telephony routes', () => {
     // and every one of them raises a spam incident (rule V).
     describe('over the per-number limit', () => {
       const overLimit = async (overLimitAction: 'reject' | 'message' | 'voicemail', voiceCaptchaEnabled = false) => {
-        services.settings.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
-        services.settings.getSpamSettings = vi.fn().mockResolvedValue({
+        services.rateLimits.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
+        services.spamSettings.getSpamSettings = vi.fn().mockResolvedValue({
           voiceCaptchaEnabled,
           rateLimitEnabled: true,
           maxCallsPerMinute: 5,
@@ -797,7 +811,7 @@ describe('Telephony routes', () => {
 
       it('never issues a CAPTCHA to an over-limit caller, even with the hub\'s CAPTCHA on', async () => {
         await overLimit('message', true)
-        expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+        expect(services.captcha.storeCaptcha).not.toHaveBeenCalled()
       })
 
       it('the incident signal carries no caller number and no call SID', async () => {
@@ -816,8 +830,8 @@ describe('Telephony routes', () => {
     })
 
     it('reads spam settings and scopes the rate-limit window to the called hub (#1051)', async () => {
-      services.settings.checkRateLimit = vi.fn().mockResolvedValue({ limited: false })
-      services.settings.getSpamSettings = vi.fn().mockResolvedValue({
+      services.rateLimits.checkRateLimit = vi.fn().mockResolvedValue({ limited: false })
+      services.spamSettings.getSpamSettings = vi.fn().mockResolvedValue({
         voiceCaptchaEnabled: false,
         rateLimitEnabled: true,
         maxCallsPerMinute: 5,
@@ -829,13 +843,13 @@ describe('Telephony routes', () => {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
       })
-      expect(services.settings.getSpamSettings).toHaveBeenCalledWith('hub-1')
-      const [{ key }] = (services.settings.checkRateLimit as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(services.spamSettings.getSpamSettings).toHaveBeenCalledWith('hub-1')
+      const [{ key }] = (services.rateLimits.checkRateLimit as ReturnType<typeof vi.fn>).mock.calls[0]
       expect(key).toMatch(/^phone:hub-1:/)
     })
 
     it('returns CAPTCHA gather when voice CAPTCHA enabled', async () => {
-      services.settings.getSpamSettings = vi.fn().mockResolvedValue({
+      services.spamSettings.getSpamSettings = vi.fn().mockResolvedValue({
         voiceCaptchaEnabled: true,
         rateLimitEnabled: false,
         maxCallsPerMinute: 5,
@@ -852,7 +866,7 @@ describe('Telephony routes', () => {
         body: 'CallSid=CA-lang&From=%2B15551111111&Digits=2',
       })
       expect(res.status).toBe(200)
-      expect(services.settings.storeCaptcha).toHaveBeenCalledWith(
+      expect(services.captcha.storeCaptcha).toHaveBeenCalledWith(
         expect.objectContaining({ callSid: 'CA-lang' }),
       )
       const handleCallArgs = (adapter.handleIncomingCall as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -860,8 +874,8 @@ describe('Telephony routes', () => {
     })
 
     it('does not start parallel ringing when rate limited', async () => {
-      services.settings.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
-      services.settings.getSpamSettings = vi.fn().mockResolvedValue({
+      services.rateLimits.checkRateLimit = vi.fn().mockResolvedValue({ limited: true })
+      services.spamSettings.getSpamSettings = vi.fn().mockResolvedValue({
         voiceCaptchaEnabled: false,
         rateLimitEnabled: true,
         maxCallsPerMinute: 5,
@@ -896,7 +910,7 @@ describe('Telephony routes', () => {
       expect(res.status).toBe(200)
       expect(await res.text()).toContain('<Reject')
       expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
-      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
+      expect(services.captcha.submitCaptcha).not.toHaveBeenCalled()
       expect(services.incidents.signal).toHaveBeenCalledWith('hub-1', 'spam', 'ban_match')
     })
 
@@ -904,7 +918,7 @@ describe('Telephony routes', () => {
       const res = await submit()
       expect(res.status).toBe(200)
       expect(await res.text()).toContain('<Enqueue')
-      expect(services.settings.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '1234' })
+      expect(services.captcha.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '1234' })
       const params = (adapter.handleCaptchaResponse as ReturnType<typeof vi.fn>).mock.calls[0][0]
       expect(params).toMatchObject({ outcome: 'pass', callSid: 'CA-captcha', callerLanguage: 'en', hubId: 'hub-1' })
       expect(params).not.toHaveProperty('expectedDigits')
@@ -912,7 +926,7 @@ describe('Telephony routes', () => {
     })
 
     it.each(['retry', 'repeat'] as const)('%s re-challenges with the same digits and does not ring or signal', async (outcome) => {
-      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome, digitsToSpeak: '4821', round: 1 })
+      services.captcha.submitCaptcha = vi.fn().mockResolvedValue({ outcome, digitsToSpeak: '4821', round: 1 })
       const res = await submit()
       expect(res.status).toBe(200)
       expect(adapter.handleCaptchaResponse).toHaveBeenCalledWith(
@@ -924,7 +938,7 @@ describe('Telephony routes', () => {
     })
 
     it.each(['fail', 'timeout'] as const)('%s goes to voicemail — never a silent drop — and signals the incident', async (outcome) => {
-      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome })
+      services.captcha.submitCaptcha = vi.fn().mockResolvedValue({ outcome })
       const res = await submit('Digits=0000&From=%2B15551111111')
       expect(res.status).toBe(200)
       expect(adapter.handleCaptchaResponse).not.toHaveBeenCalled()
@@ -936,9 +950,9 @@ describe('Telephony routes', () => {
 
     it('a timeout arrives with no digits and is submitted as such', async () => {
       adapter.parseCaptchaWebhook = vi.fn().mockResolvedValue({ digits: '', callerNumber: '+15551111111' })
-      services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+      services.captcha.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
       await submit('CallSid=CA-captcha&From=%2B15551111111')
-      expect(services.settings.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '' })
+      expect(services.captcha.submitCaptcha).toHaveBeenCalledWith({ callSid: 'CA-captcha', digits: '' })
     })
 
     // Twilio and Plivo post byte-identical bodies for two timeouts on one call;
@@ -953,15 +967,15 @@ describe('Telephony routes', () => {
         return true
       })
       try {
-        services.settings.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+        services.captcha.submitCaptcha = vi.fn().mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
         const body = 'CallSid=CA-captcha&From=%2B15551111111'
         await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=0')
         await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=1')
-        expect(services.settings.submitCaptcha).toHaveBeenCalledTimes(2)
+        expect(services.captcha.submitCaptcha).toHaveBeenCalledTimes(2)
 
         const replay = await submit(body, 'hub=hub-1&callSid=CA-captcha&lang=en&round=1')
         expect(await replay.text()).toBe('OK')
-        expect(services.settings.submitCaptcha).toHaveBeenCalledTimes(2)
+        expect(services.captcha.submitCaptcha).toHaveBeenCalledTimes(2)
       } finally {
         vi.mocked(checkWebhookReplay).mockReset()
         vi.mocked(checkWebhookReplay).mockResolvedValue(true)
@@ -1066,7 +1080,7 @@ describe('Telephony routes', () => {
 
     it('does not record when the hub has recording explicitly disabled', async () => {
       validToken()
-      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+      services.callSettings.getCallSettings = vi.fn().mockResolvedValue({
         queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: false,
       })
       const res = await answer()
@@ -1076,14 +1090,14 @@ describe('Telephony routes', () => {
 
     it('records only when the hub has turned recording on', async () => {
       validToken()
-      services.settings.getCallSettings = vi.fn().mockResolvedValue({
+      services.callSettings.getCallSettings = vi.fn().mockResolvedValue({
         queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: true,
       })
       const res = await answer()
       expect(res.status).toBe(200)
       expect(recordCallArg()).toBe(true)
       // Read for this hub, not globally: hub A's choice must not record hub B.
-      expect(services.settings.getCallSettings).toHaveBeenCalledWith('hub-1')
+      expect(services.callSettings.getCallSettings).toHaveBeenCalledWith('hub-1')
     })
 
     it('refuses a leg that lost the answer race: no bridge, no audit, no event, no leg cancellation', async () => {

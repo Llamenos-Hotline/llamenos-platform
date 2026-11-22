@@ -103,7 +103,7 @@ async function platformRouting() {
 let hubCounter = 0
 async function createHub(phoneNumber: string, status: 'active' | 'suspended' = 'active'): Promise<string> {
   const id = `hub-unrouted-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id, name: `Hub ${id}`, slug: id, status, phoneNumber,
     createdBy: 'integration-test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   } as never, await insertHubFounder(fresh.db))
@@ -162,7 +162,7 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
     // The setup wizard's provider step: the platform configuration (no hub),
     // carrying the hotline number. TWILIO_PHONE_NUMBER is deliberately unset.
     const hotline = '+15550100004'
-    await services.settings.upsertProviderConfig({
+    await services.providerConfig.upsertProviderConfig({
       hubId: null,
       providerType: 'twilio',
       credentials: null,
@@ -195,7 +195,7 @@ describe('the day-1 path: the wizard-configured number reaches the default hub (
     }, { ...ENV, HOTLINE_NAME: 'Day One' })
     expect(done.status).toBe(200)
 
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     expect(hubs).toHaveLength(1)
     expect(hubs[0].phoneNumber).toBe(hotline)
 
@@ -213,7 +213,7 @@ describe('a user who is a member of no hub is never rung (#2460)', () => {
     const outsider = `${'0abc'}${'d'.repeat(60)}`
     await fresh.db.insert(schema.users).values({ pubkey: outsider, displayName: 'Member of no hub', hubRoles: [] })
     // Nobody is on shift, so the hub's fallback group is what would ring.
-    await services.settings.setFallbackGroup({ userPubkeys: [outsider] }, hubId)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [outsider] }, hubId)
 
     const result = await startParallelRinging('CA-outsider', '+15550109998', 'http://localhost', ENV as never, services, hubId)
 

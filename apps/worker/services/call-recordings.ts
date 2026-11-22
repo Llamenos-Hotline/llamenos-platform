@@ -32,7 +32,7 @@ import type { TelephonyAdapter } from '../telephony/adapter'
 import { openCallRecording, sealCallRecording } from '../lib/crypto'
 import { maybeTranscribe } from './transcription'
 import { createLogger } from '../lib/logger'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 
 const logger = createLogger('services.call-recordings')
 

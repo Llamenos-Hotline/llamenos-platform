@@ -41,7 +41,8 @@ import { auditLog, hubs, users } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { CasesService } from '../../services/cases'
 import { IdentityService } from '../../services/identity'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import usersRoutes from '../../routes/users'
 import type { AppEnv } from '../../types'
@@ -56,7 +57,7 @@ const audit = new AuditService(db)
 const identity = new IdentityService(db)
 const svc = {
   identity,
-  settings: new SettingsService(db),
+  ...createSettingsDomain(db),
   audit,
   cases: new CasesService(db),
 }

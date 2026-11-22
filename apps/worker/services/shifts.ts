@@ -8,7 +8,7 @@
 import { eq, and, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { shifts, pushRemindersSent, hubs } from '../db/schema'
-import { HubNotFoundError, ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './service-error'
 import { permissionGranted } from '@shared/permissions'
 
 /** Validate HH:MM format (00:00-23:59) */

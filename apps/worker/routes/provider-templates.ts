@@ -101,7 +101,7 @@ providerTemplatesRoute.post('/',
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
 
-    const limited = await checkRateLimit(services.settings, `provider-template-create:${pubkey}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `provider-template-create:${pubkey}`, 5)
     if (limited) {
       return c.json({ error: 'Rate limit exceeded' }, 429)
     }

@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import systemRoutes from '@worker/routes/system'
+import { settingsDomainMock } from '../../helpers/settings-domain-mock'
 
 // ---------------------------------------------------------------------------
 // Test app factory
@@ -73,7 +74,7 @@ function makeApp(opts: {
       identity: mockIdentity,
       shifts: mockShifts,
       activeShifts: mockActiveShifts,
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       ...services,
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')

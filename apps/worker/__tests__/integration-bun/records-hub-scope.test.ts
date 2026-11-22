@@ -42,7 +42,8 @@ import { createDatabase } from '../../db'
 import { caseInteractions, caseRecords, conversations, entityTypeDefinitions, hubs, reportCases } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { CasesService } from '../../services/cases'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import recordsRoutes from '../../routes/records'
 import type { AppEnv } from '../../types'
@@ -55,7 +56,7 @@ const DATABASE_URL =
 const db = createDatabase(DATABASE_URL)
 const audit = new AuditService(db)
 const svc = {
-  settings: new SettingsService(db),
+  ...createSettingsDomain(db),
   audit,
   cases: new CasesService(db),
   // The auto-assign branch of convert-from-report reads these; the entity type
@@ -168,8 +169,8 @@ async function seedHub(hubId: string, owner: Actor, numbers: string[], sealedTo:
 beforeAll(async () => {
   // The cross-hub list is the deployment's opt-in (#2605): these cases are about
   // WHICH hubs it reaches once sharing is on, so the switch is set explicitly.
-  priorCrossHub = (await svc.settings.getCrossHubSharingEnabled()).enabled
-  await svc.settings.setCrossHubSharingEnabled({ enabled: true })
+  priorCrossHub = (await svc.platformSettings.getCrossHubSharingEnabled()).enabled
+  await svc.platformSettings.setCrossHubSharingEnabled({ enabled: true })
   for (const [id, owner] of [[HUB_A, ADMIN_A], [HUB_B, ADMIN_B]] as const) {
     await db.insert(hubs).values({ id, name: id, slug: id, createdBy: owner.pubkey })
   }
@@ -177,7 +178,7 @@ beforeAll(async () => {
   // to hub B (or were sealed there as a reader) and are not entitled to it now.
   // That is the case that distinguishes "the envelope says so" from "the
   // caller may read this hub".
-  hubAType = (await svc.settings.createEntityType({
+  hubAType = (await svc.entitySchema.createEntityType({
     hubId: HUB_A, name: 'scope_a', label: 'scope_a', labelPlural: 'scope_as', category: 'case',
     statuses: [{ value: 'open', label: 'Open', order: 0 }], defaultStatus: 'open', closedStatuses: [],
     fields: [], numberingEnabled: false,
@@ -198,7 +199,7 @@ afterAll(async () => {
   await db.delete(conversations).where(inArray(conversations.hubId, ids))
   await db.delete(entityTypeDefinitions).where(inArray(entityTypeDefinitions.hubId, ids))
   await db.delete(hubs).where(inArray(hubs.id, ids))
-  await svc.settings.setCrossHubSharingEnabled({ enabled: priorCrossHub })
+  await svc.platformSettings.setCrossHubSharingEnabled({ enabled: priorCrossHub })
 })
 
 const recordHubs = (json: Record<string, unknown>) =>

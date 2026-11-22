@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 
 const VALID_ENVELOPE = {
   pubkey: 'a'.repeat(64),

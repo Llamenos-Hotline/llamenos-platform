@@ -43,7 +43,7 @@ import { ShiftsService } from '../../services/shifts'
 import { ActiveShiftsService, DEFAULT_ACTIVE_SHIFT_LIVENESS } from '../../services/active-shifts'
 import { runActiveShiftReap } from '../../lib/active-shift-reaper-worker'
 import type { AuditService } from '../../services/audit'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import { CallsService } from '../../services/calls'
 import { resolveRingableVolunteers } from '../../services/ringing'
@@ -72,7 +72,7 @@ let db: Database
 let services: Services
 let shiftsService: ShiftsService
 let activeShiftsService: ActiveShiftsService
-let settingsService: SettingsService
+let settings: SettingsDomainServices
 
 const createdHubs: string[] = []
 
@@ -144,16 +144,16 @@ beforeAll(async () => {
 
   shiftsService = new ShiftsService(db)
   activeShiftsService = new ActiveShiftsService(db)
-  settingsService = new SettingsService(db)
+  settings = createSettingsDomain(db)
 
   // Seeds the roles table; without roles, `resolveHubPermissions` grants nobody
   // access to any hub and the resolver would reject everyone for the wrong reason.
-  await settingsService.ensureInit()
+  await settings.settingsBootstrap.ensureInit()
 
   services = {
     shifts: shiftsService,
     activeShifts: activeShiftsService,
-    settings: settingsService,
+    ...settings,
     identity: new IdentityService(db),
     calls: new CallsService(db),
   } as unknown as Services
@@ -227,7 +227,7 @@ describe('a stale clock-in does not ring', () => {
     await makeMember(PK_BOTH, hub)
     await makeMember(PK_FALLBACK, hub)
     await schedule(hub, [PK_BOTH])
-    await settingsService.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
+    await settings.callSettings.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
     await activeShiftsService.clockIn(PK_BOTH, hub)
     expect(await wouldRing(hub)).toEqual([PK_BOTH])
 

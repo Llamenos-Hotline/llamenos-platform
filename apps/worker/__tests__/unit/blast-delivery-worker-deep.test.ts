@@ -30,9 +30,9 @@ describe('BlastDeliveryWorker', () => {
         markDeliveryFailed: vi.fn(),
         markDeliveryOptedOut: vi.fn(),
       } as unknown as BlastDeliveryWorkerDeps['blastsService'],
-      settingsService: {
+      messagingConfigService: {
         getMessagingConfig: vi.fn().mockResolvedValue({ smsContentMode: 'notification-only' }),
-      } as unknown as BlastDeliveryWorkerDeps['settingsService'],
+      } as unknown as BlastDeliveryWorkerDeps['messagingConfigService'],
       resolveAdapter: vi.fn().mockResolvedValue({
         sendMessage: vi.fn().mockResolvedValue({ success: true, externalId: 'ext-1' }),
         sendMediaMessage: vi.fn().mockResolvedValue({ success: true, externalId: 'ext-2' }),

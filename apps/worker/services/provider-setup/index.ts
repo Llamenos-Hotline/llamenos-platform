@@ -12,14 +12,14 @@ import type {
   WebhookUrlsResponse,
 } from '@protocol/schemas/provider-setup'
 import { buildProviderWebhookUrls } from '../../lib/provider-webhook-urls'
-import { SettingsService } from '../settings'
+import { ProviderConfigService } from '../provider-config'
 import { getProviderCapability, hasCapability } from './registry'
 import { encryptCredentials, decryptCredentials } from './crypto'
 import type { WebhookUrls, ConnectionTestResult, SipTrunkConfig, SipTrunkRequest } from './types'
 import { ProviderApiError } from './types'
 
 export class ProviderSetup {
-  private readonly settings: SettingsService
+  private readonly providerConfig: ProviderConfigService
 
   constructor(
     private readonly db: Database,
@@ -27,7 +27,7 @@ export class ProviderSetup {
     /** Public webhook origin — see `webhookOrigin` in lib/provider-webhook-urls.ts. */
     private readonly webhookOrigin: string,
   ) {
-    this.settings = new SettingsService(db)
+    this.providerConfig = new ProviderConfigService(db)
   }
 
   async configure(
@@ -43,7 +43,7 @@ export class ProviderSetup {
 
     const encryptedCreds = encryptCredentials(credentials, this.serverKek)
 
-    await this.settings.upsertProviderConfig({
+    await this.providerConfig.upsertProviderConfig({
       hubId: hubId ?? null,
       providerType: provider,
       credentials: encryptedCreds,
@@ -84,7 +84,7 @@ export class ProviderSetup {
     const creds = decryptCredentials(config.credentials, this.serverKek)
     const result = await impl.testConnection(creds)
 
-    await this.settings.upsertProviderConfig({
+    await this.providerConfig.upsertProviderConfig({
       id: config.id,
       hubId: config.hubId,
       providerType: config.providerType,
@@ -107,7 +107,7 @@ export class ProviderSetup {
 
     const config = await this.getProviderConfigRow(provider, hubId)
     if (config) {
-      await this.settings.upsertProviderConfig({
+      await this.providerConfig.upsertProviderConfig({
         id: config.id,
         hubId: config.hubId,
         providerType: config.providerType,
@@ -142,7 +142,7 @@ export class ProviderSetup {
     const config = await this.getProviderConfigRow(provider, hubId)
     if (config) {
       const existing = (config.phoneNumbers as string[]) || []
-      await this.settings.upsertProviderConfig({
+      await this.providerConfig.upsertProviderConfig({
         id: config.id,
         hubId: config.hubId,
         providerType: config.providerType,
@@ -232,7 +232,7 @@ export class ProviderSetup {
 
     const encryptedCreds = encryptCredentials(credentials, this.serverKek)
 
-    await this.settings.upsertProviderConfig({
+    await this.providerConfig.upsertProviderConfig({
       hubId: hubId ?? null,
       providerType: stateRow.provider,
       credentials: encryptedCreds,

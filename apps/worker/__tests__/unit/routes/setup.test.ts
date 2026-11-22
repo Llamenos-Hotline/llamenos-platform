@@ -11,6 +11,7 @@ import type { AppEnv } from '@worker/types'
 import setupRoutes from '@worker/routes/setup'
 import { validateExternalUrl } from '@worker/lib/ssrf-guard'
 import * as signalRegistration from '@worker/messaging/signal/registration'
+import { settingsDomainMock } from '../../helpers/settings-domain-mock'
 
 // Mock Signal registration functions
 vi.mock('@worker/messaging/signal/registration', () => ({
@@ -69,7 +70,7 @@ function makeApp(opts: {
     c.set('permissions', permissions)
     c.set('services', {
       audit: { log: auditLog },
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       identity: mockIdentity,
       ...(services as Record<string, unknown>),
     } as unknown as AppEnv['Variables']['services'])

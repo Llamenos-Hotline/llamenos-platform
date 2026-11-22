@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import hubRoutes from '@worker/routes/hubs'
-import { HubNotFoundError, ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/service-error'
 import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { DEFAULT_ROLES } from '@shared/permissions'
 
@@ -49,12 +49,14 @@ function createTestApp(opts: {
 
   const mockAuditService = { log: auditLogSpy }
 
-  const settingsMock = (serviceMock.settings || {}) as Record<string, unknown>
+  const hubsMock = (serviceMock.hubs || {}) as Record<string, unknown>
   const services: Record<string, unknown> = {
-    settings: {
+    // every settings-domain service a test mocks (hubKeys, hubStorage, ...)
+    ...serviceMock,
+    hubs: {
       // hubContext looks the hub up first
       getHub: vi.fn().mockImplementation(async (id: string) => ({ hub: { id, name: id, status: 'active' } })),
-      ...settingsMock,
+      ...hubsMock,
     },
     identity: serviceMock.identity || {},
     audit: mockAuditService,
@@ -131,7 +133,7 @@ describe('hubs routes', () => {
 
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { getHubs: getHubsSpy } },
+        serviceMock: { hubs: { getHubs: getHubsSpy } },
       })
 
       const res = await app.request('/hubs')
@@ -153,7 +155,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubs: getHubsSpy } },
+        serviceMock: { hubs: { getHubs: getHubsSpy } },
       })
 
       const res = await app.request('/hubs')
@@ -171,7 +173,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [],
-        serviceMock: { settings: { getHubs: getHubsSpy } },
+        serviceMock: { hubs: { getHubs: getHubsSpy } },
       })
 
       const res = await app.request('/hubs')
@@ -189,7 +191,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['reports:create', 'reports:read-own'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
-        serviceMock: { settings: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
+        serviceMock: { hubs: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
       })
 
       const res = await app.request('/hubs')
@@ -202,7 +204,7 @@ describe('hubs routes', () => {
         permissions: ['reports:create'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-test'] }],
         serviceMock: {
-          settings: {
+          hubs: {
             getHubs: vi.fn().mockResolvedValue({
               hubs: [
                 { id: 'hub-1', name: 'Hub 1', status: 'active' },
@@ -224,7 +226,7 @@ describe('hubs routes', () => {
         permissions: ['hubs:read'],
         globalRoles: ['role-hub-admin'],
         userHubRoles: [],
-        serviceMock: { settings: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
+        serviceMock: { hubs: { getHubs: vi.fn().mockResolvedValue({ hubs: [{ id: 'hub-1', name: 'Hub 1', status: 'active' }] }) } },
       })
 
       const res = await app.request('/hubs')
@@ -242,7 +244,7 @@ describe('hubs routes', () => {
       const createHubSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
 
       const res = await app.request('/hubs', {
@@ -262,7 +264,7 @@ describe('hubs routes', () => {
       const createHubSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
       const post = (body: unknown) => app.request('/hubs', {
         method: 'POST',
@@ -285,7 +287,7 @@ describe('hubs routes', () => {
       const createHubSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
 
       const res = await app.request('/hubs', {
@@ -303,7 +305,7 @@ describe('hubs routes', () => {
       const createHubSpy = vi.fn().mockResolvedValue(undefined)
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
 
       const res = await app.request('/hubs', {
@@ -337,7 +339,7 @@ describe('hubs routes', () => {
       const setHubRoleSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy }, identity: { setHubRole: setHubRoleSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy }, identity: { setHubRole: setHubRoleSpy } },
       })
 
       await app.request('/hubs', {
@@ -361,7 +363,7 @@ describe('hubs routes', () => {
       const createHubSpy = vi.fn().mockRejectedValue(new ServiceError(404, 'Hub founder not found'))
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
 
       const res = await app.request('/hubs', {
@@ -380,7 +382,7 @@ describe('hubs routes', () => {
       )
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { createHub: createHubSpy } },
+        serviceMock: { hubs: { createHub: createHubSpy } },
       })
 
       const res = await app.request('/hubs', {
@@ -404,7 +406,7 @@ describe('hubs routes', () => {
       })
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { getHub: getHubSpy } },
+        serviceMock: { hubs: { getHub: getHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1')
@@ -420,7 +422,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHub: getHubSpy } },
+        serviceMock: { hubs: { getHub: getHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1')
@@ -434,7 +436,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHub: getHubSpy } },
+        serviceMock: { hubs: { getHub: getHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1')
@@ -445,7 +447,7 @@ describe('hubs routes', () => {
       const getHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { getHub: getHubSpy } },
+        serviceMock: { hubs: { getHub: getHubSpy } },
       })
 
       const res = await app.request('/hubs/nonexistent')
@@ -469,7 +471,7 @@ describe('hubs routes', () => {
       const updateHubSpy = vi.fn().mockResolvedValue({ hub: { id: 'hub-1', name: 'Updated' } })
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { updateHub: updateHubSpy } },
+        serviceMock: { hubs: { updateHub: updateHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1', {
@@ -488,7 +490,7 @@ describe('hubs routes', () => {
       const updateHubSpy = vi.fn().mockResolvedValue({ hub: { id: 'hub-1', name: 'Updated' } })
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { updateHub: updateHubSpy } },
+        serviceMock: { hubs: { updateHub: updateHubSpy } },
       })
       const patch = (body: unknown) => app.request('/hubs/hub-1', {
         method: 'PATCH',
@@ -518,7 +520,7 @@ describe('hubs routes', () => {
       const updateHubSpy = vi.fn().mockRejectedValue(new HubNotFoundError())
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { updateHub: updateHubSpy } },
+        serviceMock: { hubs: { updateHub: updateHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1', {
@@ -535,7 +537,7 @@ describe('hubs routes', () => {
       const updateHubSpy = vi.fn().mockRejectedValue(new Error('connection reset'))
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
-        serviceMock: { settings: { updateHub: updateHubSpy } },
+        serviceMock: { hubs: { updateHub: updateHubSpy } },
       })
 
       const res = await app.request('/hubs/hub-1', {
@@ -752,7 +754,7 @@ describe('hubs routes', () => {
             removeHubRole: vi.fn().mockResolvedValue(undefined),
             getUserInternal: getUserInternalSpy,
           },
-          settings: { getTelephonyProvider: getTelephonyProviderSpy },
+          providerConfig: { getTelephonyProvider: getTelephonyProviderSpy },
         },
       })
 
@@ -774,7 +776,7 @@ describe('hubs routes', () => {
               hubRoles: [{ hubId: 'hub-2', roleIds: ['role-test'] }],
             }),
           },
-          settings: { getTelephonyProvider: getTelephonyProviderSpy },
+          providerConfig: { getTelephonyProvider: getTelephonyProviderSpy },
         },
       })
 
@@ -803,8 +805,10 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
-          settings: {
+          hubs: {
             deleteHub: deleteHubSpy,
+          },
+          hubStorage: {
             getHubStorageCredentials: getHubStorageCredentialsSpy,
           },
           identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
@@ -827,7 +831,7 @@ describe('hubs routes', () => {
       const { app, auditLogSpy } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
-          settings: { deleteHub: deleteHubSpy, getHubStorageCredentials: getHubStorageCredentialsSpy },
+          hubs: { deleteHub: deleteHubSpy }, hubStorage: { getHubStorageCredentials: getHubStorageCredentialsSpy },
           identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
           callRecordings: {
             eraseForHub: vi.fn().mockRejectedValue(new SealedRecordingDeleteError('hub-1', [
@@ -872,9 +876,13 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
-          settings: {
+          hubs: {
             deleteHub: vi.fn().mockImplementation(async () => { order.push('deleteHub') }),
+          },
+          hubStorage: {
             getHubStorageCredentials: vi.fn().mockResolvedValue(undefined),
+          },
+          providerConfig: {
             getTelephonyProvider: getTelephonyProviderSpy,
           },
           identity: { getUsers: getUsersSpy, getUserInternal: getUserInternalSpy },
@@ -894,8 +902,10 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
-          settings: {
+          hubs: {
             deleteHub: deleteHubSpy,
+          },
+          hubStorage: {
             getHubStorageCredentials: vi.fn().mockResolvedValue(undefined),
           },
           identity: { getUsers: vi.fn().mockRejectedValue(new Error('db down')) },
@@ -915,8 +925,10 @@ describe('hubs routes', () => {
         permissions: ['system:manage-hubs'],
         env: { STORAGE_MANAGER: { destroyHub } },
         serviceMock: {
-          settings: {
+          hubs: {
             deleteHub,
+          },
+          hubStorage: {
             getHubStorageCredentials: vi.fn().mockResolvedValue({ userName: 'hub-user' }),
           },
           identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
@@ -933,7 +945,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['system:manage-hubs'],
         serviceMock: {
-          settings: {
+          hubs: {
             deleteHub: vi.fn().mockRejectedValue(new ServiceError(502, 'Hub deletion refused: caller audio is still held')),
           },
           identity: { getUsers: vi.fn().mockResolvedValue({ users: [] }) },
@@ -966,7 +978,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
       })
 
       const res = await app.request('/hubs/hub-1/key')
@@ -982,7 +994,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
       })
 
       const res = await app.request('/hubs/hub-1/key')
@@ -994,7 +1006,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
       })
 
       const res = await app.request('/hubs/hub-1/key')
@@ -1006,7 +1018,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
       })
 
       const res = await app.request('/hubs/hub-1/key')
@@ -1020,7 +1032,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:read'],
         userHubRoles: [{ hubId: 'hub-1', roleIds: ['role-volunteer'] }],
-        serviceMock: { settings: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { getHubKeyEnvelopes: getHubKeyEnvelopesSpy } },
       })
 
       const res = await app.request('/hubs/hub-1/key')
@@ -1048,7 +1060,7 @@ describe('hubs routes', () => {
       const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
       const { app } = createTestApp({
         permissions: ['hubs:manage-keys'],
-        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
 
       const res = await put(app)
@@ -1062,7 +1074,7 @@ describe('hubs routes', () => {
       const { app } = createTestApp({
         permissions: ['hubs:manage-keys'],
         serviceMock: {
-          settings: {
+          hubKeys: {
             setHubKeyEnvelopes: vi.fn().mockRejectedValue(new ServiceError(409, 'Hub key generation mismatch: expected 0, current 1')),
           },
         },
@@ -1075,7 +1087,7 @@ describe('hubs routes', () => {
       const setHubKeyEnvelopesSpy = vi.fn().mockResolvedValue({ ok: true, generation: 1 })
       const { app } = createTestApp({
         permissions: ['settings:manage', 'notes:read-all'],
-        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
       const res = await put(app)
       expect(res.status).toBe(200)
@@ -1086,7 +1098,7 @@ describe('hubs routes', () => {
       const setHubKeyEnvelopesSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['*'],
-        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
       const res = await put(app)
       expect(res.status).toBe(403)
@@ -1097,7 +1109,7 @@ describe('hubs routes', () => {
       const setHubKeyEnvelopesSpy = vi.fn()
       const { app } = createTestApp({
         permissions: ['hubs:read'],
-        serviceMock: { settings: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
+        serviceMock: { hubKeys: { setHubKeyEnvelopes: setHubKeyEnvelopesSpy } },
       })
       const res = await put(app)
       expect(res.status).toBe(403)

@@ -95,7 +95,7 @@ reports.get('/',
       if (!canReadAll) {
         return c.json({ error: 'Forbidden', required: 'reports:read-all' }, 403)
       }
-      const { reportTypes } = await services.settings.getCmsReportTypes(hubId)
+      const { reportTypes } = await services.reportTypes.getCmsReportTypes(hubId)
       const conversionTypeIds = new Set(
         reportTypes.filter(rt => rt.allowCaseConversion).map(rt => rt.id),
       )
@@ -218,7 +218,7 @@ reports.get('/categories',
   async (c) => {
     const services = c.get('services')
     try {
-      const result = await services.settings.getReportCategories()
+      const result = await services.reportTypes.getReportCategories()
       return c.json(result)
     } catch {
       return c.json({ categories: [] })
@@ -247,7 +247,7 @@ reports.get('/types',
   async (c) => {
     const services = c.get('services')
     try {
-      let { reportTypes } = await services.settings.getReportTypes()
+      let { reportTypes } = await services.reportTypes.getReportTypes()
       // Filter out archived types for non-admin callers
       const permissions = c.get('permissions')
       const isAdmin = checkPermission(permissions, 'settings:manage-fields')

@@ -39,7 +39,7 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { conversations, deviceVerifications, devices, hubs, messages, users } from '../../db/schema'
 import { ConversationsService } from '../../services/conversations'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../../lib/hpke-recipient'
 
 const DATABASE_URL =

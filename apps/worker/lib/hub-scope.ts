@@ -10,7 +10,7 @@ import type { Context } from 'hono'
 import { createMiddleware } from 'hono/factory'
 import type { AppEnv } from '../types'
 import type { Services } from '../services'
-import { ServiceError, serviceErrorBody } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/service-error'
 import { findRole, hasAnyHubAccess, hasHubPermission, isSuperAdmin, permissionGranted, resolveHubPermissions, resolvePermissions, roleUsableIn, type Role } from '@shared/permissions'
 
 export type TargetHub =

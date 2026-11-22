@@ -12,7 +12,7 @@ import { resolveCallerLanguage } from '../telephony/ivr-menu'
 import { callBanLookup, callerRateLimitDigest, getClientIp, sealCallerNumber } from '../lib/crypto'
 import { detectLanguageFromPhone, languageFromDigit, DEFAULT_LANGUAGE } from '@shared/languages'
 import { audit } from '../services/audit'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { startParallelRinging, cancelLosingLegs } from '../services/ringing'
 import { processCallRecording } from '../services/call-recordings'
 import { processVoicemailRecording } from '../services/voicemail'
@@ -41,7 +41,7 @@ const logger = createLogger('telephony')
 async function audioUrlsFor(c: Context<AppEnv>, hubId: string) {
   const origin = new URL(c.req.url).origin
   return {
-    ...(await buildAudioUrlMap(c.get('services').settings, origin, c.env.HMAC_SECRET, hubId)),
+    ...(await buildAudioUrlMap(c.get('services').ivrSettings, origin, c.env.HMAC_SECRET, hubId)),
     ...holdMusicEntry(origin),
   }
 }
@@ -134,7 +134,7 @@ async function refuseLiveCall(
         callerNumberSealed: sealCallerNumber(call.callerNumber, call.callSid, c.env.SERVER_KEK),
         status: 'ringing',
       })
-      const callSettings = await services.settings.getCallSettings(call.hubId)
+      const callSettings = await services.callSettings.getCallSettings(call.hubId)
       return adapter.handleVoicemail({
         callSid: call.callSid,
         callerLanguage: call.callerLanguage,
@@ -172,9 +172,9 @@ telephony.use('*', webhookAuth({
  */
 async function getHubAdapter(env: Env, services: Services, hubId: string | undefined): Promise<TelephonyAdapter | null> {
   if (hubId) {
-    return getHubTelephonyFromService(env, services.settings, hubId)
+    return getHubTelephonyFromService(env, services.providerConfig, hubId)
   }
-  return getTelephonyFromService(env, services.settings)
+  return getTelephonyFromService(env, services.providerConfig)
 }
 
 /**
@@ -185,7 +185,7 @@ async function getHubAdapter(env: Env, services: Services, hubId: string | undef
 async function hubForCalledNumber(services: Services, calledNumber: string | undefined): Promise<string | null> {
   if (!calledNumber) return null
   try {
-    const { hub } = await services.settings.getHubByPhone(calledNumber)
+    const { hub } = await services.hubs.getHubByPhone(calledNumber)
     return hub.id
   } catch (err) {
     if (err instanceof ServiceError && err.status === 404) return null
@@ -231,7 +231,7 @@ async function webhookHub(
   if (!hubId) {
     logger.error(`Telephony webhook ${route} names no hub — refused (#2460)`)
     incCounter('llamenos_telephony_hubless_webhook_total', { route })
-    const platform = (await getTelephonyFromService(c.env, services.settings))!
+    const platform = (await getTelephonyFromService(c.env, services.providerConfig))!
     return { refused: telephonyResponse(platform.hangupResponse()) }
   }
   return { hubId, adapter: (await getHubAdapter(c.env, services, hubId))! }
@@ -269,13 +269,13 @@ async function rejectionHub(
   const services = c.get('services')
   try {
     if (hubId) {
-      const { hub } = await services.settings.getHub(hubId)
+      const { hub } = await services.hubs.getHub(hubId)
       return hub.id
     }
     if (!bodyBounded || !new URL(c.req.url).pathname.endsWith('/incoming')) return undefined
     const { calledNumber } = await adapter.parseIncomingWebhook(c.req.raw)
     if (!calledNumber) return undefined
-    const { hub } = await services.settings.getHubByPhone(calledNumber)
+    const { hub } = await services.hubs.getHubByPhone(calledNumber)
     return hub.id
   } catch {
     return undefined
@@ -506,7 +506,7 @@ telephony.post('/incoming',
   providerAuthMonitor.recordAccepted(hubId)
 
   // Use hub-scoped adapter for all subsequent operations
-  const adapter = (await getHubTelephonyFromService(c.env, services.settings, hubId)) ?? deliveringAdapter
+  const adapter = (await getHubTelephonyFromService(c.env, services.providerConfig, hubId)) ?? deliveringAdapter
 
   // #2309: the provider now keeps a log record of this call, naming the
   // caller's number. Where its API can delete one, it is tracked from the first
@@ -529,7 +529,7 @@ telephony.post('/incoming',
     return telephonyResponse(adapter.rejectCall())
   }
 
-  const { enabledLanguages } = await services.settings.getIvrLanguages(hubId)
+  const { enabledLanguages } = await services.ivrSettings.getIvrLanguages(hubId)
 
   const response = await adapter.handleLanguageMenu({
     callSid,
@@ -572,7 +572,7 @@ telephony.post('/language-selected',
   }
 
   // Get hub's ordered language list for digit-to-language mapping
-  const { enabledLanguages: hubLanguages } = await services.settings.getIvrLanguages(hubId)
+  const { enabledLanguages: hubLanguages } = await services.ivrSettings.getIvrLanguages(hubId)
 
   // Every source of the caller's language — forced, phone-prefix, digit —
   // resolves against what the provider answering this hub can actually speak
@@ -582,7 +582,7 @@ telephony.post('/language-selected',
   const digitLanguage = forceLang || isAuto ? undefined : languageFromDigit(digits, hubLanguages)
   const detectedLanguage = detectLanguageFromPhone(callerNumber)
   const candidates = forceLang ? [forceLang] : [digitLanguage, detectedLanguage]
-  const catalogResolution = await services.settings.resolveIvrVoiceCatalog(hubId)
+  const catalogResolution = await services.ivrSettings.resolveIvrVoiceCatalog(hubId)
   if (catalogResolution.state === 'unsupported') {
     logger.warn('No IVR voice catalog for the configured telephony provider — caller language is not checked against what it can speak (#679)', {
       providerType: catalogResolution.providerType,
@@ -595,11 +595,11 @@ telephony.post('/language-selected',
   // Spam settings and the per-caller rate-limit window are per hub: a caller
   // dialling hub A must not consume hub B's budget, and each hub's toggles
   // apply only to its own calls.
-  const spamSettings = await services.settings.getSpamSettings(hubId)
+  const spamSettings = await services.spamSettings.getSpamSettings(hubId)
 
   let rateLimited = false
   if (spamSettings.rateLimitEnabled) {
-    const rlResult = await services.settings.checkRateLimit({
+    const rlResult = await services.rateLimits.checkRateLimit({
       key: `phone:${hubId}:${callerRateLimitDigest(callerNumber)}`,
       maxPerMinute: spamSettings.maxCallsPerMinute,
     })
@@ -623,14 +623,14 @@ telephony.post('/language-selected',
     crypto.getRandomValues(buf)
     captchaDigits = String(1000 + (((buf[0] << 8) | buf[1]) % 9000))
     // Store expected digits server-side (not in callback URL)
-    await services.settings.storeCaptcha({ callSid, expected: captchaDigits })
+    await services.captcha.storeCaptcha({ callSid, expected: captchaDigits })
   }
 
   // #1505: whether this hub records answered calls. Read here so the greeting can
   // disclose it to the caller BEFORE they are connected — the same setting is read
   // again at /user-answer to decide whether to actually record, so a caller can
   // never be recorded on a call where they were not told.
-  const { recordCalls } = await services.settings.getCallSettings(hubId)
+  const { recordCalls } = await services.callSettings.getCallSettings(hubId)
 
   const audioUrls = await audioUrlsFor(c, hubId)
   const response = await adapter.handleIncomingCall({
@@ -686,7 +686,7 @@ telephony.post('/captcha',
 
   // Classified server-side against the stored challenge (constant-time); the
   // adapter only renders the outcome. No digits = the gather timed out.
-  const result = await services.settings.submitCaptcha({ callSid, digits })
+  const result = await services.captcha.submitCaptcha({ callSid, digits })
   incCounter('llamenos_voice_captcha_total', { outcome: result.outcome })
   const speechUrl = await speechUrlFor(c, adapter)
 
@@ -804,7 +804,7 @@ telephony.post('/user-answer',
   // #1505: provider-side recording is opt-in per hub and OFF by default. The
   // caller was told in the greeting (/language-selected reads the same setting),
   // so recording here without disclosure is not reachable.
-  const { recordCalls } = await services.settings.getCallSettings(hubId)
+  const { recordCalls } = await services.callSettings.getCallSettings(hubId)
   const response = await adapter.handleCallAnswered({
     parentCallSid,
     callbackUrl: origin,
@@ -855,7 +855,7 @@ telephony.post('/call-status',
     // none is looked up from the URL. Answered 200 so the provider stops
     // retrying; nothing is read, written or published.
     logger.warn('Call status without a usable call token — ignored')
-    return telephonyResponse((await getTelephonyFromService(c.env, services.settings))!.emptyResponse())
+    return telephonyResponse((await getTelephonyFromService(c.env, services.providerConfig))!.emptyResponse())
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId))!
@@ -916,7 +916,7 @@ telephony.all('/wait-music', validateWebhook, async (c) => {
     ? (await adapter.parseQueueWaitWebhook(c.req.raw)).queueTime
     : 0
   const audioUrls = await audioUrlsFor(c, hubId)
-  const callSettings = await services.settings.getCallSettings(hubId)
+  const callSettings = await services.callSettings.getCallSettings(hubId)
   const response = await adapter.handleWaitMusic(
     lang,
     audioUrls,
@@ -980,7 +980,7 @@ telephony.post('/queue-exit', validateWebhook, async (c) => {
   if (queueResult === 'leave' || queueResult === 'queue-full' || queueResult === 'error') {
     const audioUrls = await audioUrlsFor(c, hubId)
     const origin = new URL(c.req.url).origin
-    const callSettings = await services.settings.getCallSettings(hubId)
+    const callSettings = await services.callSettings.getCallSettings(hubId)
     const response = await adapter.handleVoicemail({
       callSid,
       callerLanguage: lang,
@@ -1016,7 +1016,7 @@ telephony.post('/voicemail-complete', validateWebhook, async (c) => {
  */
 async function refuseOrphanRecording(c: Context<AppEnv>, parentCallSid: string): Promise<Response> {
   const services = c.get('services')
-  const adapter = (await getTelephonyFromService(c.env, services.settings))!
+  const adapter = (await getTelephonyFromService(c.env, services.providerConfig))!
   const { status, recordingSid } = await adapter.parseRecordingWebhook(c.req.raw)
   logger.error('Call recording for a call with no record — it belongs to no hub (#2460)', { parentCallSid, status })
   if (status !== 'completed') return telephonyResponse(adapter.emptyResponse())

@@ -1,7 +1,8 @@
 import type { SendMessageParams, SendResult, MessagingAdapter } from './adapter'
 import type { MessagingChannelType } from '@shared/types'
 import { getMessagingAdapterFromService } from '../lib/service-factories'
-import type { SettingsService } from '../services/settings'
+import type { MessagingConfigService } from '../services/messaging-config'
+import type { ProviderConfigService } from '../services/provider-config'
 import { createLogger } from '../lib/logger'
 import type { OutboundSuppression } from './suppression-guard'
 import { safeFetch } from '../lib/safe-fetch'
@@ -14,7 +15,8 @@ const logger = createLogger('delivery-router')
 const NOTIFICATION_ONLY_MESSAGE = 'You have a new secure message. Open Llamenos to view it.'
 
 export interface DeliveryRouterDeps {
-  settingsService: SettingsService
+  messagingConfig: MessagingConfigService
+  providerConfig: ProviderConfigService
   /** The opt-out record every adapter checks before it sends. */
   suppression: OutboundSuppression
   notifierUrl?: string
@@ -45,7 +47,7 @@ async function resolveChannelAdapter(
   channel: MessagingChannelType,
 ): Promise<MessagingAdapter> {
   try {
-    return await getMessagingAdapterFromService(channel, deps.settingsService, deps.suppression)
+    return await getMessagingAdapterFromService(channel, deps, deps.suppression)
   } catch (err) {
     if (deps.env && isUnconfiguredChannelError(err) && devSurfacesEnabled(deps.env)) {
       logger.warn(`${channel} not configured — simulated provider accepting the send (dev-surface host)`)
@@ -108,7 +110,7 @@ export async function routeOutboundMessage(
   deps: DeliveryRouterDeps,
   params: RoutedSendParams
 ): Promise<{ result: SendResult; actualChannel: MessagingChannelType }> {
-  const config = await deps.settingsService.getMessagingConfig()
+  const config = await deps.messagingConfig.getMessagingConfig()
   const preferSignal = config.preferSignalDelivery ?? true
   const smsMode = config.smsContentMode ?? 'notification-only'
 
@@ -129,7 +131,7 @@ export async function routeOutboundMessage(
       try {
         const signalAdapter = await getMessagingAdapterFromService(
           'signal',
-          deps.settingsService,
+          deps,
           deps.suppression,
         )
         const sendParams: SendMessageParams = {

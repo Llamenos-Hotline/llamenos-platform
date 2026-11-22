@@ -27,7 +27,7 @@
  * device registered a moment later must not turn a correct write into a 422.
  */
 import type { Services } from '../services'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { transitionalInstanceRecipient, type AdminKeyEnv } from './hpke-recipient'
 import { createLogger } from './logger'
 

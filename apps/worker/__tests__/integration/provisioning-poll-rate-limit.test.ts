@@ -37,7 +37,8 @@ vi.mock('@worker/middleware/auth', () => ({
 }))
 
 import provisioningRoutes from '../../routes/provisioning'
-import { SettingsService, ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import type { AppEnv } from '../../types'
 
@@ -96,7 +97,7 @@ beforeAll(async () => {
   })
   const db = drizzle({ client: testSql, schema }) as unknown as Database
 
-  const settings = new SettingsService(db)
+  const settings = createSettingsDomain(db)
   const identity = new IdentityService(db)
 
   app = new Hono<AppEnv>()
@@ -108,7 +109,7 @@ beforeAll(async () => {
   })
   app.use('*', async (c, next) => {
     c.set('services', {
-      settings,
+      ...settings,
       identity,
       audit: { log: vi.fn().mockResolvedValue(undefined) },
     } as unknown as AppEnv['Variables']['services'])

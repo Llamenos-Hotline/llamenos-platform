@@ -1,7 +1,7 @@
 /**
  * Rate limiter atomicity — real PostgreSQL (#1492).
  *
- * `SettingsService.checkRateLimit` was read-modify-write: SELECT the timestamp
+ * `RateLimitService.checkRateLimit` was read-modify-write: SELECT the timestamp
  * array, filter it in JS, append, then upsert the whole array back. Two
  * concurrent requests on the same key both read the same array, both append
  * their own timestamp, and the second write overwrites the first — so N
@@ -32,7 +32,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { Hono } from 'hono'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { rateLimit, RATE_LIMIT_TIERS } from '../../middleware/rate-limit'
 import type { AppEnv } from '../../types'
 
@@ -70,7 +70,7 @@ const JSONB_TYPE = {
 
 let adminSql: ReturnType<typeof postgres>
 let testSql: ReturnType<typeof postgres>
-let settings: SettingsService
+let settings: SettingsDomainServices
 
 beforeAll(async () => {
   adminSql = postgres(DATABASE_URL, { max: 1 })
@@ -85,7 +85,7 @@ beforeAll(async () => {
     types: { jsonb: JSONB_TYPE },
   })
   const db = drizzle({ client: testSql, schema }) as unknown as Database
-  settings = new SettingsService(db)
+  settings = createSettingsDomain(db)
 })
 
 afterAll(async () => {
@@ -119,7 +119,7 @@ async function ageStoredTimestamps(key: string, ms: number): Promise<void> {
   `
 }
 
-describe('SettingsService.checkRateLimit under concurrency (#1492)', () => {
+describe('RateLimitService.checkRateLimit under concurrency (#1492)', () => {
   it('admits exactly maxPerMinute of N simultaneous requests on one key', async () => {
     const max = 5
     const n = 20
@@ -127,7 +127,7 @@ describe('SettingsService.checkRateLimit under concurrency (#1492)', () => {
 
     const results = await Promise.all(
       Array.from({ length: n }, () =>
-        settings.checkRateLimit({ key, maxPerMinute: max }),
+        settings.rateLimits.checkRateLimit({ key, maxPerMinute: max }),
       ),
     )
 
@@ -143,7 +143,7 @@ describe('SettingsService.checkRateLimit under concurrency (#1492)', () => {
     // First burst consumes the budget.
     const first = await Promise.all(
       Array.from({ length: max }, () =>
-        settings.checkRateLimit({ key, maxPerMinute: max }),
+        settings.rateLimits.checkRateLimit({ key, maxPerMinute: max }),
       ),
     )
     expect(first.filter((r) => !r.limited)).toHaveLength(max)
@@ -151,7 +151,7 @@ describe('SettingsService.checkRateLimit under concurrency (#1492)', () => {
     // Everything in a second concurrent burst is over budget.
     const second = await Promise.all(
       Array.from({ length: 10 }, () =>
-        settings.checkRateLimit({ key, maxPerMinute: max }),
+        settings.rateLimits.checkRateLimit({ key, maxPerMinute: max }),
       ),
     )
     expect(second.every((r) => r.limited)).toBe(true)
@@ -161,40 +161,40 @@ describe('SettingsService.checkRateLimit under concurrency (#1492)', () => {
     const max = 5
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
-        settings.checkRateLimit({ key: `invite-redeem:ip-${i}`, maxPerMinute: max }),
+        settings.rateLimits.checkRateLimit({ key: `invite-redeem:ip-${i}`, maxPerMinute: max }),
       ),
     )
     expect(results.every((r) => !r.limited)).toBe(true)
   })
 })
 
-describe('SettingsService.checkRateLimit sequential semantics (unchanged)', () => {
+describe('RateLimitService.checkRateLimit sequential semantics (unchanged)', () => {
   it('admits maxPerMinute then limits, and recovers after the window', async () => {
     const max = 5
     const key = 'invite-redeem:sequential'
 
     for (let i = 0; i < max; i++) {
-      const r = await settings.checkRateLimit({ key, maxPerMinute: max })
+      const r = await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })
       expect(r.limited).toBe(false)
     }
 
-    const over = await settings.checkRateLimit({ key, maxPerMinute: max })
+    const over = await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })
     expect(over.limited).toBe(true)
 
     // Window expiry: once the recorded timestamps fall outside the 60s window
     // the budget is restored.
     await ageStoredTimestamps(key, 61_000)
-    const afterWindow = await settings.checkRateLimit({ key, maxPerMinute: max })
+    const afterWindow = await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })
     expect(afterWindow.limited).toBe(false)
   })
 
   it('does not overcount — one request consumes exactly one unit', async () => {
     const key = 'webauthn:overcount'
 
-    await settings.checkRateLimit({ key, maxPerMinute: 5 })
+    await settings.rateLimits.checkRateLimit({ key, maxPerMinute: 5 })
     expect(await storedCount(key)).toBe(1)
 
-    await settings.checkRateLimit({ key, maxPerMinute: 5 })
+    await settings.rateLimits.checkRateLimit({ key, maxPerMinute: 5 })
     expect(await storedCount(key)).toBe(2)
   })
 
@@ -204,24 +204,24 @@ describe('SettingsService.checkRateLimit sequential semantics (unchanged)', () =
 
     // Three requests, aged past the window.
     for (let i = 0; i < 3; i++) {
-      await settings.checkRateLimit({ key, maxPerMinute: max })
+      await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })
     }
     await ageStoredTimestamps(key, 61_000)
 
     // Budget is fully restored: max more requests are admitted, then limited.
     for (let i = 0; i < max; i++) {
-      const r = await settings.checkRateLimit({ key, maxPerMinute: max })
+      const r = await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })
       expect(r.limited).toBe(false)
     }
-    expect((await settings.checkRateLimit({ key, maxPerMinute: max })).limited).toBe(true)
+    expect((await settings.rateLimits.checkRateLimit({ key, maxPerMinute: max })).limited).toBe(true)
   })
 
   it('rejects invalid keys and bounds before touching the database', async () => {
     await expect(
-      settings.checkRateLimit({ key: 'bad key!', maxPerMinute: 5 }),
+      settings.rateLimits.checkRateLimit({ key: 'bad key!', maxPerMinute: 5 }),
     ).rejects.toThrow(/Invalid rate limit key/)
     await expect(
-      settings.checkRateLimit({ key: 'ok:1', maxPerMinute: 0 }),
+      settings.rateLimits.checkRateLimit({ key: 'ok:1', maxPerMinute: 0 }),
     ).rejects.toThrow(/maxPerMinute/)
   })
 })
@@ -230,7 +230,7 @@ describe('rateLimit() tier middleware against real PostgreSQL', () => {
   function makeApp() {
     const app = new Hono<AppEnv>()
     app.use('*', async (c, next) => {
-      c.set('services', { settings } as unknown as AppEnv['Variables']['services'])
+      c.set('services', settings as unknown as AppEnv['Variables']['services'])
       await next()
     })
     app.use('/strict', rateLimit('strict'))

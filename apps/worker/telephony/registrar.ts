@@ -533,7 +533,7 @@ export async function listReachableVolunteerEndpoints(
 
 /** The slice of the service registry the registrar hooks need. */
 export interface RegistrarServices {
-  settings: {
+  providerConfig: {
     getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   }
   identity?: {
@@ -584,7 +584,7 @@ export async function revokeVolunteerSipIdentity(
 ): Promise<void> {
   let config: TelephonyProviderConfig | null = null
   try {
-    config = await services.settings.getTelephonyProvider(serverKek)
+    config = await services.providerConfig.getTelephonyProvider(serverKek)
   } catch (err) {
     logger.error('SIP revocation: could not read telephony provider config', { pubkey, err })
     return

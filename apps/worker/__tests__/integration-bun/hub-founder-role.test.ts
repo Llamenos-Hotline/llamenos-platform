@@ -23,7 +23,8 @@ import { eq, inArray } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs, roles, users } from '../../db/schema'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { administersHub, adminStateOf, listAdminPubkeys, loadRoleCatalog } from '../../lib/hub-admin'
 import { DEFAULT_ROLES } from '@shared/permissions'
 
@@ -32,7 +33,7 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const rand = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('')
@@ -53,7 +54,7 @@ async function makeFounder(): Promise<string> {
 async function foundHub(founder: string): Promise<{ id: string }> {
   const id = `hub-founder-role-${suite}-${counter++}`
   const now = new Date().toISOString()
-  await settings.createHub({ id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
+  await settings.hubs.createHub({ id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
   createdHubs.push(id)
   return { id }
 }
@@ -120,7 +121,7 @@ describe('POST /hubs founder role is resolved by permission', () => {
       const founder = await makeFounder()
       const id = `hub-founder-role-${suite}-none`
       const now = new Date().toISOString()
-      const err = await settings
+      const err = await settings.hubs
         .createHub({ id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: founder, createdAt: now, updatedAt: now }, { pubkey: founder })
         .then(() => null, (e: unknown) => e)
       expect(err).toBeInstanceOf(ServiceError)

@@ -23,7 +23,7 @@ import { createDatabase } from '../../db'
 import { conversations, devices, hubs, messages, users } from '../../db/schema'
 import { ConversationsService, InboundUnreadableError } from '../../services/conversations'
 import { IdentityService } from '../../services/identity'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
@@ -35,7 +35,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const conversationsService = new ConversationsService(db, 'b'.repeat(64))
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -58,7 +58,7 @@ async function hubWithAdminDevice(withDevice: boolean) {
   const deviceKey = bytesToHex(x25519.getPublicKey(secret))
   if (withDevice) await db.insert(devices).values({ pubkey, platform: 'desktop', x25519Pubkey: deviceKey })
   const id = `hub-1034-${suite}-${counter++}`
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: id, slug: id, status: 'active', timezone: 'UTC', createdBy: pubkey,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

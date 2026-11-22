@@ -47,7 +47,7 @@ hubOnboardRoute.post('/',
     const pubkey = c.get('pubkey')
     const hubId = c.get('hubId')!
 
-    const limited = await checkRateLimit(services.settings, `hub-onboard-start:${pubkey}`, 10)
+    const limited = await checkRateLimit(services.rateLimits, `hub-onboard-start:${pubkey}`, 10)
     if (limited) {
       return c.json({ error: 'Rate limit exceeded' }, 429)
     }
@@ -201,7 +201,7 @@ hubOnboardRoute.put('/quotas',
     const hubId = c.get('hubId')!
     const body = c.req.valid('json')
 
-    const quotas = await services.settings.updateHubQuotas(hubId, body)
+    const quotas = await services.hubSettings.updateHubQuotas(hubId, body)
     return c.json({ quotas })
   },
 )

@@ -96,7 +96,7 @@ export async function resolveRingableVolunteers(
   // #2384), so nobody is a ring target for it: its roster is not coverage. This
   // is the one place that says so, so presence, the answer route and the
   // routing diagnostic agree with the ringing path.
-  if (!(await services.settings.isHubChannelEnabled(hubId, 'voice'))) return null
+  if (!(await services.messagingConfig.isHubChannelEnabled(hubId, 'voice'))) return null
 
   const scheduledPubkeys = await services.shifts.getCurrentVolunteers(hubId)
 
@@ -111,7 +111,7 @@ export async function resolveRingableVolunteers(
   // to the hub's fallback group rather than drop the call. Not gated on
   // clocking in: see the note above.
   if (onShiftPubkeys.length === 0) {
-    const fallback = await services.settings.getFallbackGroup(hubId)
+    const fallback = await services.callSettings.getFallbackGroup(hubId)
     onShiftPubkeys = fallback.userPubkeys
     usedFallback = true
   }
@@ -137,7 +137,7 @@ export async function resolveRingableVolunteers(
   // fallback group naming a user from another hub would push "a caller is waiting"
   // to someone with no business in this hub. Every call belongs to a hub (#2460),
   // so this check has no exemption.
-  const { roles: allRoles } = await services.settings.getRoles()
+  const { roles: allRoles } = await services.roles.getRoles()
   const hasHubAccess = (v: RingableUser) =>
     resolveHubPermissions(v.roles ?? [], v.hubRoles ?? [], allRoles, hubId).length > 0
 
@@ -154,7 +154,7 @@ export async function resolveRingableVolunteers(
   // group with the same availability rules before giving up. The fallback is
   // meant for exactly this case, not only for an empty intersection.
   if (available.length === 0 && !usedFallback) {
-    const fallback = await services.settings.getFallbackGroup(hubId)
+    const fallback = await services.callSettings.getFallbackGroup(hubId)
     available = pickAvailable(fallback.userPubkeys)
     usedFallback = true
     logger.info('On-shift volunteers unavailable — tried fallback group', {
@@ -229,7 +229,7 @@ export async function resolveInAppRingTargets(
   if (candidates.length === 0) return []
 
   try {
-    const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
+    const config = await resolveHubTelephonyConfig(env, services.providerConfig, hubId)
     if (config?.type !== 'asterisk') return []
 
     // The PBX is the only authority on who is registered.
@@ -280,7 +280,7 @@ export async function canAnswerInApp(
   hubId: string,
   volunteer: RingableUser,
 ): Promise<boolean> {
-  const config = await resolveHubTelephonyConfig(env, services.settings, hubId)
+  const config = await resolveHubTelephonyConfig(env, services.providerConfig, hubId)
   if (config && isMockProviderConfig(config)) return true
   if (!wantsInApp(volunteer)) return false
   return (await resolveInAppRingTargets(env, services, hubId, [volunteer])).length > 0
@@ -316,7 +316,7 @@ export async function cancelLosingLegs(
   }
   if (legSids.length === 0) return
   try {
-    const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
+    const adapter = await getHubTelephonyFromService(env, services.providerConfig, hubId)
     if (!adapter) return
     await adapter.cancelRinging(legSids, winnerLegSid)
   } catch (err) {
@@ -414,7 +414,7 @@ export async function startParallelRinging(
     // the in-app endpoints registered on our own PBX. Both go through the one
     // adapter call, so both land in the one first-pickup-wins leg registry.
     if (toRingPhone.length > 0 || appTargets.length > 0) {
-      const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
+      const adapter = await getHubTelephonyFromService(env, services.providerConfig, hubId)
       if (!adapter) return { ringing: true, volunteersNotified: available.length }
 
       // CRIT-W2: Generate opaque single-use call tokens per volunteer.

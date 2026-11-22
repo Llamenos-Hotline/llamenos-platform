@@ -271,7 +271,7 @@ export const DEV_SURFACE_CLIENT_ADDRESS_HEADER = 'X-Test-Client-Address'
 /**
  * Shape a simulated address must have to be honoured: IPv4, IPv6 and short
  * opaque labels, nothing that could enlarge a rate-limit key beyond what a real
- * address produces. `SettingsService.checkRateLimit` validates key length and
+ * address produces. `RateLimitService.checkRateLimit` validates key length and
  * charset of its own accord; this is the earlier, narrower gate so a malformed
  * value is ignored rather than turned into a key that is rejected downstream.
  */
@@ -297,7 +297,7 @@ export function devSurfaceSimulatedClientAddress(
 
 /**
  * Why a DESTRUCTIVE SERVICE-LEVEL RESET must be refused, or `null` when it may
- * proceed. `IdentityService.reset`, `SettingsService.reset`,
+ * proceed. `IdentityService.reset`, `SettingsBootstrapService.reset`,
  * `ContactsService.reset` and `CasesService.reset` all ask this one function.
  *
  * It is the conjunction `devSurfaceRequestAuthorized` already names — the HOST

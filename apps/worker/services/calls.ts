@@ -15,7 +15,7 @@ import type { Database } from '../db'
 import { activeCalls, callRecords, callTokens, type CallRingSet } from '../db/schema'
 import { encryptCallRecordForStorage, openCallerNumber } from '../lib/crypto'
 import { createLogger } from '../lib/logger'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { recordCallAnswered, recordCallInbound } from '../routes/metrics'
 import type { SealedRecordingEraser } from './call-recordings'
 

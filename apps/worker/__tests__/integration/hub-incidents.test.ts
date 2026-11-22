@@ -55,7 +55,7 @@ function recorder(): IncidentNotifier & { sent: Sent[] } {
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-inc-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,

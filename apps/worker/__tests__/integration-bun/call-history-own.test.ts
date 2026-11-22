@@ -29,7 +29,7 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { callRecords, devices, hubs, roles, users } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { CallsService } from '../../services/calls'
 import { subjectReadersFor } from '../../lib/readers'
 import { x25519 } from '@noble/curves/ed25519.js'
@@ -42,7 +42,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const rand = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('')
@@ -83,7 +83,7 @@ async function makePerson(label: string, extra: Partial<typeof users.$inferInser
 
 async function makeHub(label: string, founder: Person): Promise<string> {
   const id = nextId(`hub-${label}`)
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder.pubkey,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
@@ -266,24 +266,24 @@ describe('the hub\'s access window setting', () => {
   it('defaults to 7 days, and a PATCH naming nothing changes nothing (#1643)', async () => {
     const founder = await makePerson('win-founder')
     const hubId = await makeHub('win', founder)
-    expect(await settings.getCallHistoryAccess(hubId)).toEqual({ volunteerAccessDays: CALL_HISTORY_ACCESS_DAYS_DEFAULT })
+    expect(await settings.callSettings.getCallHistoryAccess(hubId)).toEqual({ volunteerAccessDays: CALL_HISTORY_ACCESS_DAYS_DEFAULT })
 
-    const set = await settings.updateCallHistoryAccess(hubId, { volunteerAccessDays: 30 })
+    const set = await settings.callSettings.updateCallHistoryAccess(hubId, { volunteerAccessDays: 30 })
     expect(set).toEqual({ before: { volunteerAccessDays: 7 }, after: { volunteerAccessDays: 30 } })
 
-    const noop = await settings.updateCallHistoryAccess(hubId, {})
+    const noop = await settings.callSettings.updateCallHistoryAccess(hubId, {})
     expect(noop).toEqual({ before: { volunteerAccessDays: 30 }, after: { volunteerAccessDays: 30 } })
 
     // An unrelated hub-settings write does not touch it either.
-    await settings.updateCallSettings({ queueTimeoutSeconds: 60 }, hubId)
-    expect(await settings.getCallHistoryAccess(hubId)).toEqual({ volunteerAccessDays: 30 })
+    await settings.callSettings.updateCallSettings({ queueTimeoutSeconds: 60 }, hubId)
+    expect(await settings.callSettings.getCallHistoryAccess(hubId)).toEqual({ volunteerAccessDays: 30 })
   })
 
   it('is per hub', async () => {
     const founder = await makePerson('win2-founder')
     const hubA = await makeHub('win2-a', founder)
     const hubB = await makeHub('win2-b', founder)
-    await settings.updateCallHistoryAccess(hubA, { volunteerAccessDays: 2 })
-    expect((await settings.getCallHistoryAccess(hubB)).volunteerAccessDays).toBe(CALL_HISTORY_ACCESS_DAYS_DEFAULT)
+    await settings.callSettings.updateCallHistoryAccess(hubA, { volunteerAccessDays: 2 })
+    expect((await settings.callSettings.getCallHistoryAccess(hubB)).volunteerAccessDays).toBe(CALL_HISTORY_ACCESS_DAYS_DEFAULT)
   })
 })

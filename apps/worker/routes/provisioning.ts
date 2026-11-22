@@ -5,7 +5,7 @@ import type { AppEnv } from '../types'
 import { auth } from '../middleware/auth'
 import { rateLimit } from '../middleware/rate-limit'
 import { publicErrors, authErrors } from '../openapi/helpers'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { createLogger } from '../lib/logger'
 import { okResponseSchema } from '@protocol/schemas/common'
 import { createRoomBodySchema, roomPayloadBodySchema, provisionRoomResponseSchema, provisionRoomStatusResponseSchema } from '@protocol/schemas/provisioning'
@@ -93,7 +93,7 @@ provisioning.get('/rooms/:id',
     // before any room lookup. Fail open on store errors — rate limiting is
     // defense-in-depth, matching the tier middleware's failure policy.
     try {
-      const peek = await services.settings.peekApiRateLimit(
+      const peek = await services.rateLimits.peekApiRateLimit(
         failureKey,
         PROVISION_ROOM_MAX_FAILURES,
         PROVISION_ROOM_WINDOW_MS,
@@ -115,7 +115,7 @@ provisioning.get('/rooms/:id',
       // are not guesses at the token and never count.
       if (err instanceof ServiceError && err.status === 403) {
         try {
-          await services.settings.checkApiRateLimit(
+          await services.rateLimits.checkApiRateLimit(
             failureKey,
             PROVISION_ROOM_MAX_FAILURES,
             PROVISION_ROOM_WINDOW_MS,

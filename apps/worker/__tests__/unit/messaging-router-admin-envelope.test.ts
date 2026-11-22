@@ -111,7 +111,7 @@ function setup(hubAdminReaders: string[]) {
 
   const services = {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(null) },
+    hubs: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }) }, messagingConfig: { getMessagingConfig: vi.fn().mockResolvedValue(null) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),

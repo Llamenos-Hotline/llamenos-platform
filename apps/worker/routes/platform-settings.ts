@@ -32,7 +32,7 @@ platformSettings.get(
   requirePermission('system:manage-instance'),
   async (c) => {
     const services = c.get('services')
-    const settings = await services.settings.getPlatformSettings()
+    const settings = await services.platformSettings.getPlatformSettings()
     return c.json({ settings })
   },
 )
@@ -61,7 +61,7 @@ platformSettings.patch(
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
 
-    const updated = await services.settings.updatePlatformSettings(
+    const updated = await services.platformSettings.updatePlatformSettings(
       body as Record<string, unknown>,
     )
 

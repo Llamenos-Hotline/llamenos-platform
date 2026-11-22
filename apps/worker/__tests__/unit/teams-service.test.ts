@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TeamsService } from '../../services/teams'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 
 // ---------------------------------------------------------------------------
 // Row helpers

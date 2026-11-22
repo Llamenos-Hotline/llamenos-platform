@@ -17,7 +17,7 @@ import { startParallelRinging } from './ringing'
 import { callBanLookup } from '../lib/crypto'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL } from '@shared/event-kinds'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { processVoicemailRecording, type VoicemailRecordingOutcome } from './voicemail'
 import { createLogger } from '../lib/logger'
 
@@ -45,7 +45,7 @@ export async function simulateIncomingCall(params: {
 
   // Only a hub that has selected the mock provider may be simulated against —
   // never inject fake calls into a hub wired to a real provider.
-  const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
+  const adapter = await getHubTelephonyFromService(env, services.providerConfig, hubId)
   if (!(adapter instanceof MockTelephonyAdapter)) {
     return { ok: false, status: 409, code: 'mock-not-enabled' }
   }
@@ -119,7 +119,7 @@ export async function simulateVoicemail(params: {
   if (!callId.startsWith(MOCK_CALL_SID_PREFIX)) {
     return { ok: false, status: 409, code: 'not-a-simulated-call' }
   }
-  const adapter = await getHubTelephonyFromService(env, services.settings, hubId)
+  const adapter = await getHubTelephonyFromService(env, services.providerConfig, hubId)
   if (!(adapter instanceof MockTelephonyAdapter)) {
     return { ok: false, status: 409, code: 'mock-not-enabled' }
   }

@@ -24,7 +24,8 @@ import { createDatabase } from '../../db'
 import { devices, hubs, roles, users } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { IdentityService } from '../../services/identity'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import contactsRoutes from '../../routes/contacts-v2'
 import { hpkeRecipientPubkey } from '../../lib/hpke-recipient'
@@ -42,9 +43,9 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const audit = new AuditService(db)
-const services = { identity, settings, audit }
+const services = { identity, ...settings, audit }
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const rand = Array.from(crypto.getRandomValues(new Uint8Array(4)), b => b.toString(16).padStart(2, '0')).join('')
@@ -73,7 +74,7 @@ async function makePerson(
 
 async function makeHub(label: string, founder: Person): Promise<string> {
   const id = nextId(`hub-${label}`)
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder.pubkey,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

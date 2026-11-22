@@ -52,7 +52,7 @@ function makeApp() {
     c.set('hubId', HUB)
     c.set('services', {
       signalRegistration,
-      settings: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
+      rateLimits: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
       audit: { log: vi.fn().mockResolvedValue(undefined) },
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')

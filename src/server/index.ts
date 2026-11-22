@@ -119,7 +119,7 @@ console.log('[llamenos] Services initialized')
 // on every boot against an existing database. Mode-specific seeding (the
 // sample cast, a pre-completed setup) stays with the dev-surface flows that own it.
 // A failure here must stop the boot: a server without roles cannot authorise.
-await services.settings.ensureInit()
+await services.settingsBootstrap.ensureInit()
 await services.identity.ensurePlatformAdmin()
 console.log('[llamenos] Default settings, roles and platform admin ensured')
 
@@ -288,10 +288,10 @@ services.scheduler.start({
   ...schedulerServiceDeps(services),
   // #2297: provider-held caller audio is deleted through the hub's own adapter.
   providerMedia: services.providerRecordings.eraser((hubId) =>
-    getHubTelephonyFromService(env as unknown as Env, services.settings, hubId)),
+    getHubTelephonyFromService(env as unknown as Env, services.providerConfig, hubId)),
   resolveAdapter: async (channel: MessagingChannelType) => {
     try {
-      return await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression)
+      return await getMessagingAdapterFromService(channel, services, services.messagingSuppression)
     } catch {
       return null
     }
@@ -303,7 +303,7 @@ services.scheduler.start({
   incidentNotifier: new IncidentDelivery({
     env: env as unknown as Env,
     identity: services.identity,
-    settings: services.settings,
+    roles: services.roles,
     shifts: services.shifts,
     userNotifications: services.userNotifications,
   }),
@@ -370,7 +370,7 @@ async function lookupUserHubs(pubkey: string): Promise<{ hubs: string[] } | null
   const user = await services.identity.getUserInternal(pubkey)
   if (!user || !user.active) return null
   // Get all hubs and filter to those the user is a member of
-  const { hubs } = await services.settings.getHubs()
+  const { hubs } = await services.hubs.getHubs()
   // User's hubRoles indicate hub membership
   const memberHubIds = (user.hubRoles ?? []).map(hr => hr.hubId)
   const activeHubIds = hubs

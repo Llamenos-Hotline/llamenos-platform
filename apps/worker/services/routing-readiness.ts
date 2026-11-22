@@ -50,8 +50,8 @@ export async function hubRoutingReadiness(
 ): Promise<HubRoutingReadiness> {
   const [{ shifts }, fallback, voiceEnabled] = await Promise.all([
     services.shifts.list(hubId),
-    services.settings.getFallbackGroup(hubId),
-    services.settings.isHubChannelEnabled(hubId, 'voice'),
+    services.callSettings.getFallbackGroup(hubId),
+    services.messagingConfig.isHubChannelEnabled(hubId, 'voice'),
   ])
 
   const rostered = new Set<string>()
@@ -77,7 +77,7 @@ export async function hubRoutingReadiness(
 export async function warnOnUnroutableHubs(services: Services): Promise<HubRoutingReadiness[]> {
   let unroutable: HubRoutingReadiness[] = []
   try {
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     const active = hubs.filter(h => h.status === 'active')
     const readiness = await Promise.all(active.map(h => hubRoutingReadiness(services, h.id)))
     unroutable = readiness.filter(r => r.voiceEnabled && !r.canEverRing)
@@ -189,7 +189,7 @@ export const ROUTING_NO_ANSWER_MIN_INBOUND = 3
 
 /**
  * Can this hub receive a call at all? Only an active hub with a number is
- * routed to (`SettingsService.getHubByPhone`); a hub without one — mid-setup,
+ * routed to (`HubService.getHubByPhone`); a hub without one — mid-setup,
  * or messaging-only — expects no calls, so neither check has anything to say.
  *
  * Nor does a hub that has switched voice off (#2393): the webhook refuses its
@@ -197,10 +197,10 @@ export const ROUTING_NO_ANSWER_MIN_INBOUND = 3
  * not a hotline that cannot answer. Without this, every voice-off hub holds a
  * standing `notify` incident that pages the fallback desk for nothing.
  */
-async function hubTakesCalls(services: Pick<Services, 'settings'>, hubId: string): Promise<boolean> {
-  const { hub } = await services.settings.getHub(hubId)
+async function hubTakesCalls(services: Pick<Services, 'hubs' | 'messagingConfig'>, hubId: string): Promise<boolean> {
+  const { hub } = await services.hubs.getHub(hubId)
   if (hub.status !== 'active' || !hub.phoneNumber) return false
-  return services.settings.isHubChannelEnabled(hubId, 'voice')
+  return services.messagingConfig.isHubChannelEnabled(hubId, 'voice')
 }
 
 /**
@@ -249,7 +249,7 @@ export async function nobodyWouldRingCount(services: Services, hubId: string): P
  * the age is how long ago the oldest of them started.
  */
 export async function noAnswersCount(
-  services: Pick<Services, 'settings' | 'calls'>,
+  services: Pick<Services, 'hubs' | 'messagingConfig' | 'calls'>,
   hubId: string,
   now: Date,
 ): Promise<IncidentCheckResult> {

@@ -19,7 +19,7 @@
  * there is no second reset path to keep in step with the first.
  */
 import type { Services } from './index'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import {
   SAMPLE_ADMIN_AUDIT_ACTIONS,
   SAMPLE_CALLS,
@@ -113,8 +113,8 @@ export async function seedSampleDataset(
   }
 
   // ── Replace: dropping the hub cascades through every hub-scoped table ─────
-  await services.settings.ensureInit({ ENVIRONMENT: env.ENVIRONMENT })
-  await services.settings.purgeHub(hubId, services.callRecordings)
+  await services.settingsBootstrap.ensureInit({ ENVIRONMENT: env.ENVIRONMENT })
+  await services.hubs.purgeHub(hubId, services.callRecordings)
   // purgeHub also removes users that belonged only to that hub — put the sample accounts back
   await services.identity.ensureSampleAccounts(accounts)
 
@@ -130,12 +130,12 @@ export async function seedSampleDataset(
     createdAt: ago(24 * 14).toISOString(),
     updatedAt: now.toISOString(),
   }
-  await services.settings.createHub(hub, { pubkey: cast.admin.pubkey, roleIds: ['role-hub-admin'] })
+  await services.hubs.createHub(hub, { pubkey: cast.admin.pubkey, roleIds: ['role-hub-admin'] })
   for (const account of accounts) {
     const roleIds = account.roleIds.includes('role-super-admin') ? ['role-hub-admin'] : account.roleIds
     await services.identity.setHubRole({ pubkey: account.pubkey, hubId, roleIds })
   }
-  await services.settings.setCaseManagementEnabled({ enabled: true }, hubId)
+  await services.hubSettings.setCaseManagementEnabled({ enabled: true }, hubId)
 
   // ── Shifts: a recurring 7-day schedule ────────────────────────────────────
   for (const shift of SAMPLE_SHIFTS) {
@@ -224,7 +224,7 @@ export async function seedSampleDataset(
   }
 
   // ── Cases with a timeline ─────────────────────────────────────────────────
-  const entityType = await services.settings.createEntityType({
+  const entityType = await services.entitySchema.createEntityType({
     ...SAMPLE_ENTITY_TYPE,
     statuses: [...SAMPLE_ENTITY_TYPE.statuses],
     closedStatuses: [...SAMPLE_ENTITY_TYPE.closedStatuses],
@@ -240,7 +240,7 @@ export async function seedSampleDataset(
       JSON.stringify({ title: sampleCase.title, description: sampleCase.description, status: statusLabel(sampleCase.status) }),
       [cast.admin, cast.maria, cast.james],
     )
-    const { number: caseNumber } = await services.settings.generateCaseNumber({
+    const { number: caseNumber } = await services.entitySchema.generateCaseNumber({
       prefix: SAMPLE_ENTITY_TYPE.numberPrefix,
       hubId,
     })
@@ -298,7 +298,7 @@ export async function seedSampleDataset(
   }
 
   // ── One conversation per configured messaging channel ────────────────────
-  const enabled = await services.settings.getEnabledChannels(env)
+  const enabled = await services.messagingConfig.getEnabledChannels(env)
   const channels = (Object.keys(SAMPLE_CONVERSATIONS) as MessagingChannelType[]).filter(c => enabled[c])
   for (const channel of channels) {
     const sample = SAMPLE_CONVERSATIONS[channel]

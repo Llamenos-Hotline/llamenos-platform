@@ -83,7 +83,7 @@ function freshPubkey(): string {
 
 async function createHub(): Promise<string> {
   const id = `hub-${nextId()}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -218,7 +218,7 @@ beforeAll(async () => {
   services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
 
   // Roles must exist before permissions resolve, same as at boot.
-  await services.settings.ensureInit()
+  await services.settingsBootstrap.ensureInit()
 }, 180_000)
 
 afterAll(async () => {
@@ -325,7 +325,7 @@ describe('GET /calls/presence against the production service registry', () => {
 
   it('reports the fallback group when nobody is on shift — that is who the call reaches', async () => {
     const fallback = await createVolunteer(hubId)
-    await services.settings.setFallbackGroup({ userPubkeys: [fallback] }, hubId)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [fallback] }, hubId)
 
     const presence = await getHubPresence(services, hubId)
 
@@ -377,7 +377,7 @@ describe('hubRoutingReadiness against the production service registry', () => {
   it('a fallback group alone makes a hub routable', async () => {
     const hubId = await createHub()
     const pubkey = await createVolunteer(hubId)
-    await services.settings.setFallbackGroup({ userPubkeys: [pubkey] }, hubId)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [pubkey] }, hubId)
 
     const readiness = await hubRoutingReadiness(services, hubId)
 
@@ -435,7 +435,7 @@ describe('GET /calls/routing — the ring decision, against the production servi
 
   it('reports that the fallback group is carrying the hotline', async () => {
     const fallback = await createVolunteer(hubId)
-    await services.settings.setFallbackGroup({ userPubkeys: [fallback] }, hubId)
+    await services.callSettings.setFallbackGroup({ userPubkeys: [fallback] }, hubId)
 
     const { body } = await getRoutingViaRoute(hubId)
 

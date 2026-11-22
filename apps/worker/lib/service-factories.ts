@@ -23,16 +23,16 @@ import { createLogger } from './logger'
 const logger = createLogger('service-factories')
 
 /**
- * Create a TelephonyAdapter from SettingsService (service-based version).
+ * Create a TelephonyAdapter from ProviderConfigService (service-based version).
  * Reads config via direct service call; falls back to env vars for Twilio.
  */
 export async function getTelephonyFromService(
   env: Env,
-  settingsService: {
+  providerConfig: {
     getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
 ): Promise<TelephonyAdapter | null> {
-  return (await getPlatformTelephony(env, settingsService))?.adapter ?? null
+  return (await getPlatformTelephony(env, providerConfig))?.adapter ?? null
 }
 
 /**
@@ -49,7 +49,7 @@ export interface ResolvedTelephony {
 /** The platform adapter and the provider type it was built from (env-var fallback: Twilio). */
 async function getPlatformTelephony(
   env: Env,
-  settingsService: {
+  providerConfig: {
     getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
   },
 ): Promise<ResolvedTelephony | null> {
@@ -59,7 +59,7 @@ async function getPlatformTelephony(
     // adapter is built from ciphertext and every provider call fails. The
     // structural type used to omit this parameter entirely, which made the
     // omission unrepresentable at the call site rather than merely missed.
-    const config = await settingsService.getTelephonyProvider(env.SERVER_KEK)
+    const config = await providerConfig.getTelephonyProvider(env.SERVER_KEK)
     if (config) return { adapter: createAdapterFromConfig(config, webhookBaseUrl, env), source: 'platform', provider: config.type }
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
@@ -82,8 +82,8 @@ async function getPlatformTelephony(
   return null
 }
 
-/** The settings reads a hub's telephony configuration is resolved from. */
-interface TelephonySettingsReader {
+/** The provider-config reads a hub's telephony configuration is resolved from. */
+interface TelephonyProviderReader {
   getHubTelephonyProvider(hubId: string, serverKek?: string): Promise<TelephonyProviderConfig | null>
   getTelephonyProvider(serverKek?: string): Promise<TelephonyProviderConfig | null>
 }
@@ -107,12 +107,12 @@ interface TelephonySettingsReader {
  */
 export async function resolveHubTelephonyConfig(
   env: Env,
-  settingsService: TelephonySettingsReader,
+  providerConfig: TelephonyProviderReader,
   hubId: string,
 ): Promise<TelephonyProviderConfig | null> {
   if (hubId !== '') {
     try {
-      const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
+      const config = await providerConfig.getHubTelephonyProvider(hubId, env.SERVER_KEK)
       if (config) return config
     } catch (e) {
       if (e instanceof MockTelephonyRefusedError) {
@@ -123,7 +123,7 @@ export async function resolveHubTelephonyConfig(
     }
   }
   try {
-    return await settingsService.getTelephonyProvider(env.SERVER_KEK)
+    return await providerConfig.getTelephonyProvider(env.SERVER_KEK)
   } catch (e) {
     if (e instanceof MockTelephonyRefusedError) {
       logger.error('Mock telephony provider refused', { reason: e.reason })
@@ -140,10 +140,10 @@ export async function resolveHubTelephonyConfig(
  */
 export async function getHubTelephonyFromService(
   env: Env,
-  settingsService: TelephonySettingsReader,
+  providerConfig: TelephonyProviderReader,
   hubId: string,
 ): Promise<TelephonyAdapter | null> {
-  return (await resolveHubTelephony(env, settingsService, hubId))?.adapter ?? null
+  return (await resolveHubTelephony(env, providerConfig, hubId))?.adapter ?? null
 }
 
 /**
@@ -153,7 +153,7 @@ export async function getHubTelephonyFromService(
  */
 export async function resolveHubTelephony(
   env: Env,
-  settingsService: TelephonySettingsReader,
+  providerConfig: TelephonyProviderReader,
   hubId: string,
 ): Promise<ResolvedTelephony | null> {
   const webhookBaseUrl = env.WEBHOOK_BASE_URL ?? ''
@@ -162,7 +162,7 @@ export async function resolveHubTelephony(
       // This is the path real call handling uses (services/ringing.ts:172),
       // so a per-hub provider that resolves but never decrypts is the same
       // silent fallback as not resolving at all.
-      const config = await settingsService.getHubTelephonyProvider(hubId, env.SERVER_KEK)
+      const config = await providerConfig.getHubTelephonyProvider(hubId, env.SERVER_KEK)
       if (config) return { adapter: createAdapterFromConfig(config, webhookBaseUrl, env), source: 'hub', provider: config.type }
     } catch (e) {
       if (e instanceof MockTelephonyRefusedError) {
@@ -172,17 +172,18 @@ export async function resolveHubTelephony(
       logger.warn('getHubTelephonyProvider failed for hub, falling back to global', { error: e })
     }
   }
-  return getPlatformTelephony(env, settingsService)
+  return getPlatformTelephony(env, providerConfig)
 }
 
+/** The two configuration services a messaging adapter is built from: the channel config, and the provider an SMS channel rides on. */
 type MessagingSettingsSource = {
-  getMessagingConfig(): Promise<MessagingConfig>
-  getTelephonyProvider(): Promise<TelephonyProviderConfig | null>
+  messagingConfig: { getMessagingConfig(): Promise<MessagingConfig> }
+  providerConfig: { getTelephonyProvider(): Promise<TelephonyProviderConfig | null> }
 }
 
 /**
  * Get a MessagingAdapter for the specified channel (service-based version).
- * Uses SettingsService instead of DO stubs.
+ * Uses the settings services instead of DO stubs.
  *
  * `suppression` is required, not optional: this is the one place adapters are
  * built, and every adapter it returns refuses to send to an identifier that opted
@@ -191,19 +192,19 @@ type MessagingSettingsSource = {
  */
 export async function getMessagingAdapterFromService(
   channel: MessagingChannelType,
-  settingsService: MessagingSettingsSource,
+  settingsSource: MessagingSettingsSource,
   suppression: OutboundSuppression,
   webhookBaseUrl = '',
 ): Promise<MessagingAdapter> {
-  return guardOutbound(await createMessagingAdapter(channel, settingsService, webhookBaseUrl), suppression)
+  return guardOutbound(await createMessagingAdapter(channel, settingsSource, webhookBaseUrl), suppression)
 }
 
 async function createMessagingAdapter(
   channel: MessagingChannelType,
-  settingsService: MessagingSettingsSource,
+  settingsSource: MessagingSettingsSource,
   webhookBaseUrl: string,
 ): Promise<MessagingAdapter> {
-  const config = await settingsService.getMessagingConfig()
+  const config = await settingsSource.messagingConfig.getMessagingConfig()
   if (!config || !config.enabledChannels.includes(channel)) {
     throw new Error(`${channel} channel is not enabled`)
   }
@@ -211,7 +212,7 @@ async function createMessagingAdapter(
   switch (channel) {
     case 'sms': {
       if (!config.sms?.enabled) throw new Error('SMS is not enabled')
-      const telConfig = await settingsService.getTelephonyProvider()
+      const telConfig = await settingsSource.providerConfig.getTelephonyProvider()
       if (!telConfig) throw new Error('SMS requires a configured telephony provider')
       return createSMSAdapter(telConfig, config.sms, webhookBaseUrl)
     }

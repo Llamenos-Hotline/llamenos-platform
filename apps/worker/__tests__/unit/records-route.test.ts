@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import recordsRouter from '../../routes/records'
+import { settingsDomainMock } from '../helpers/settings-domain-mock'
 
 // ---------------------------------------------------------------------------
 // Schema-valid test data helpers
@@ -122,7 +123,7 @@ function makeApp(opts: {
     c.set('services', {
       audit: mockAudit,
       cases: mockCases,
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       identity: mockIdentity,
       shifts: mockShifts,
     } as unknown as AppEnv['Variables']['services'])
