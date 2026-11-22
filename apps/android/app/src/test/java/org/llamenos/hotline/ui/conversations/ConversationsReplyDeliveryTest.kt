@@ -62,6 +62,14 @@ class ConversationsReplyDeliveryTest {
     /** What the carrier answers: `sent`, or `failed` when the provider rejects the message. */
     private var carrierOutcome = "sent"
 
+    /** The conversation's assignee: an account (Ed25519 signing) pubkey, as the server sends it. */
+    private var assignee: String? = null
+
+    /** The reader keys the app asked the crypto layer to seal a reply to. */
+    private val sealedTo = mutableListOf<List<String>>()
+
+    private fun assignedToJson() = assignee?.let { ""","assignedTo":"$it"""" } ?: ""
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -70,7 +78,7 @@ class ConversationsReplyDeliveryTest {
                 json(
                     """{"conversations":[{"id":"conv-1","channelType":"sms","contactIdentifierHash":"${"9f".repeat(32)}",
                     |"createdAt":"2026-10-20T10:00:00.000Z","updatedAt":"2026-10-20T10:05:00.000Z","messageCount":0,
-                    |"status":"active"}],"total":1,"page":1,"limit":20}""".trimMargin(),
+                    |"status":"active"${assignedToJson()}}],"total":1,"page":1,"limit":20}""".trimMargin(),
                 )
             },
             Route("GET", "/api/hubs/:hubId/conversations/:id/messages") {
@@ -112,7 +120,8 @@ class ConversationsReplyDeliveryTest {
         every { webSocketService.typedEvents } returns MutableSharedFlow()
         val cryptoService = mockk<CryptoService>(relaxed = true)
         coEvery { cryptoService.decryptMessage(any(), any()) } returns "we hear you"
-        coEvery { cryptoService.encryptMessage(any(), any()) } returns EncryptedMessage(
+        every { cryptoService.encryptionPubkeyHex } returns OWN_ENCRYPTION_KEY
+        coEvery { cryptoService.encryptMessage(any(), capture(sealedTo)) } returns EncryptedMessage(
             ciphertextHex = "a1b2c3d4",
             envelopes = listOf(RecipientEnvelope(pubkey = "ab".repeat(32), enc = "cd".repeat(32), ct = "ef01")),
         )
@@ -120,7 +129,9 @@ class ConversationsReplyDeliveryTest {
             apiService = server.apiService,
             cryptoService = cryptoService,
             webSocketService = webSocketService,
-            sessionState = mockk<SessionState>(relaxed = true),
+            sessionState = mockk<SessionState>(relaxed = true).also {
+                every { it.adminPubkeys } returns listOf(ADMIN_ENCRYPTION_KEY)
+            },
             activeHubState = server.activeHubState,
         )
     }
@@ -203,4 +214,35 @@ class ConversationsReplyDeliveryTest {
             assertTrue(vm.uiState.value.messages.isEmpty())
         }
 
+    /**
+     * #2552: `assignedTo` is the assignee's Ed25519 signing pubkey. HPKE accepts any 32
+     * bytes as an X25519 point, so sealing to it succeeds and yields an envelope nobody can
+     * open — and the recipient set differs from iOS's (#1512). A reply is sealed to this
+     * device and the admins only; the assignee's other devices get theirs via re-wrap.
+     */
+    @Test
+    fun `a reply is never sealed to the assignee's signing key`() =
+        runTest(UnconfinedTestDispatcher()) {
+            assignee = ASSIGNEE_SIGNING_KEY
+            val vm = viewModel()
+            advanceUntilIdle()
+            vm.openConversation(vm.uiState.value.conversations.single())
+            advanceUntilIdle()
+            assertEquals(ASSIGNEE_SIGNING_KEY, vm.uiState.value.selectedConversation?.assignedTo)
+
+            vm.sendReply("We hear you.")
+            advanceUntilIdle()
+
+            assertEquals(
+                "readers must be this device + admins, as on iOS",
+                listOf(listOf(OWN_ENCRYPTION_KEY, ADMIN_ENCRYPTION_KEY)),
+                sealedTo.toList(),
+            )
+        }
+
+    private companion object {
+        val OWN_ENCRYPTION_KEY = "11".repeat(32)
+        val ADMIN_ENCRYPTION_KEY = "22".repeat(32)
+        val ASSIGNEE_SIGNING_KEY = "33".repeat(32)
+    }
 }

@@ -305,12 +305,17 @@ class ConversationsViewModel @Inject constructor(
 
             try {
                 sessionState.ensureAdminPubkeyLoaded(apiService)
-                // Collect reader pubkeys: self + assigned volunteer (if different) + admins
+                // Reader pubkeys (X25519 encryption keys): this device + admins.
+                //
+                // NOT the assignee: `conversation.assignedTo` is the assignee's Ed25519
+                // signing (auth) pubkey, not a key a message can be sealed to. The HPKE
+                // seal accepts any 32 bytes as an X25519 point, so passing it succeeds and
+                // writes an envelope no one holds the private half of (#2552). Another
+                // device of the assignee reads this reply through its own registered key's
+                // envelope, which the server adds (assignee re-wrap, #1512). iOS does the
+                // same.
                 val readerPubkeys = buildList {
                     cryptoService.encryptionPubkeyHex?.let { add(it) }
-                    conversation.assignedTo?.let { volunteerPub ->
-                        if (volunteerPub != cryptoService.encryptionPubkeyHex) add(volunteerPub)
-                    }
                     // Include admin pubkeys so admins can decrypt messages
                     sessionState.adminPubkeys.forEach { adminPub ->
                         if (adminPub !in this) add(adminPub)
