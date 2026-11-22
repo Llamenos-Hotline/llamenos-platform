@@ -21,11 +21,10 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `hub_shred_schema_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

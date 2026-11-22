@@ -40,10 +40,9 @@ import type { Services } from '../../services'
 import { ShiftsService } from '../../services/shifts'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { warnOnUnroutableHubs } from '../../services/routing-readiness'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 /** Hubs this suite creates. Each costs 3 queries in the boot check. */
 const HUBS = 16

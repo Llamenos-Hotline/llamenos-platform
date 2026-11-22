@@ -23,10 +23,9 @@ import * as schema from '../../db/schema'
 import { ContactsService } from '../../services/contacts'
 import { VALID_ENVELOPE } from '../helpers/openapi-validation'
 import { createContactBodySchema, updateContactBodySchema } from '@protocol/schemas/contacts-v2'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_contacts_noindex_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

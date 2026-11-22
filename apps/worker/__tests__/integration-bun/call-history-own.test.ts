@@ -35,10 +35,9 @@ import { subjectReadersFor } from '../../lib/readers'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { SUBJECT_READER_PURPOSE_PERMISSIONS } from '@shared/permissions'
 import { CALL_HISTORY_ACCESS_DAYS_DEFAULT } from '@protocol/schemas/calls'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)

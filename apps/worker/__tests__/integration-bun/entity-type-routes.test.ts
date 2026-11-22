@@ -33,10 +33,9 @@ import { hubContext } from '../../middleware/hub'
 import entitySchemaRoutes, { hubEntitySchemaRoutes } from '../../routes/entity-schema'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, resolvePermissions, type Role } from '@shared/permissions'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const settings = createSettingsDomain(db)

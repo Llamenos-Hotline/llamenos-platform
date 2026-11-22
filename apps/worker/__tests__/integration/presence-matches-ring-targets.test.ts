@@ -52,13 +52,12 @@ import { currentRingDecision, hubRoutingReadiness } from '../../services/routing
 import { resolveRingableVolunteers } from '../../services/ringing'
 import callsRoutes from '../../routes/calls'
 import type { AppEnv } from '../../types'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `presence_ring_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)

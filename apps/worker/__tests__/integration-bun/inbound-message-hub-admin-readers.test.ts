@@ -28,10 +28,9 @@ import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_MESSAGE } from '@shared/crypto-labels'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)

@@ -14,15 +14,14 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { CallsService } from '../../services/calls'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 // CallsService seals §2.5 metadata via lib/crypto (#1684), which loads the
 // Rust library through bun:ffi — unavailable under Vitest's Node runtime.
 // Same mock the other integration suites use.
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_callhist_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

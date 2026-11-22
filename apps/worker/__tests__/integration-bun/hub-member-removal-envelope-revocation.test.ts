@@ -37,10 +37,9 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs, hubKeys, users, notes, envelopeRevocationJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)

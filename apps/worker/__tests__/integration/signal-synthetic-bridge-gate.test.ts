@@ -65,10 +65,9 @@ vi.mock('../../lib/safe-fetch', () => ({
 }))
 
 import { SignalRegistrationService } from '../../services/provider-setup/signal-registration'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_signalsynth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

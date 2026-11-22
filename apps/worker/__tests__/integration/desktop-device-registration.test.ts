@@ -26,11 +26,10 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { IdentityService } from '../../services/identity'
 import { registerDeviceBodySchema } from '@protocol/schemas/devices'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `desktop_device_registration_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

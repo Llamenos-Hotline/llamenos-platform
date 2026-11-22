@@ -39,10 +39,9 @@ vi.mock('@worker/services/webhook-replay', () => ({
 }))
 vi.mock('@worker/db', () => ({ getDb: vi.fn().mockReturnValue({}) }))
 import { getTelephonyFromService, getHubTelephonyFromService } from '@worker/lib/service-factories'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_calltoken_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

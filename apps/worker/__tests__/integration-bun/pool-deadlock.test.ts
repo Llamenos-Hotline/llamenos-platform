@@ -34,10 +34,9 @@ import { auditLog, auditUserKeys, conversations, hubs } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { ConversationsService } from '../../services/conversations'
 import { ErasureService } from '../../services/erasure'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 /** Smaller than WRITERS: the deadlock needs writers >= pool size. */
 const POOL = 3

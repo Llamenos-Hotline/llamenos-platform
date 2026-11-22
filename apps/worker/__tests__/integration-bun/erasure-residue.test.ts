@@ -23,10 +23,9 @@ import { createSettingsDomain } from '../../services/settings-domain'
 import { ErasureService } from '../../services/erasure'
 import { AuditService } from '../../services/audit'
 import { SIP_REVOCATION_EVENT } from '../../telephony/registrar'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)

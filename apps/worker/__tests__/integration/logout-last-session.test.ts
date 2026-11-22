@@ -29,10 +29,9 @@ import { activeShifts, hubs, sessions, users } from '../../db/schema'
 import { ActiveShiftsService } from '../../services/active-shifts'
 import { IdentityService } from '../../services/identity'
 import { MAX_SESSION_LIFETIME_MS, SESSION_DURATION_MS } from '../../lib/session-renewal'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 const pk = (name: string) => `${name}${RUN}`.padEnd(64, '0').slice(0, 64)

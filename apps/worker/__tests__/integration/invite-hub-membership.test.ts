@@ -28,11 +28,10 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `invite_hub_membership_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
