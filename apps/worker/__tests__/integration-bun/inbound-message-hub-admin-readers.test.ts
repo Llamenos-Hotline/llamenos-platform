@@ -16,15 +16,14 @@
  * not "a message was stored" but "the admin's device secret OPENS it".
  */
 import { describe, it, expect, afterAll } from 'bun:test'
-import { inArray } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { x25519 } from '@noble/curves/ed25519.js'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { conversations, devices, hubs, messages, users } from '../../db/schema'
-import { ConversationsService } from '../../services/conversations'
+import { ConversationsService, InboundUnreadableError } from '../../services/conversations'
 import { IdentityService } from '../../services/identity'
 import { SettingsService } from '../../services/settings'
-import { transitionalInstanceRecipient } from '../../lib/hpke-recipient'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
@@ -71,8 +70,9 @@ async function hubWithAdminDevice(withDevice: boolean) {
 }
 
 async function receive(hubId: string) {
-  // The wizard-bootstrapped environment: neither admin key is set.
-  const adminRecipients = await identity.listAdminEnvelopeRecipients(transitionalInstanceRecipient({}), hubId)
+  // The reader set the webhook resolves: the hub's own admin readers — never an
+  // env key, so a wizard-bootstrapped deployment (neither set) works.
+  const adminRecipients = await identity.readersFor(hubId, 'admin')
   const sender = `+1555${Math.floor(1000000 + Math.random() * 8999999)}`
   const result = await conversationsService.handleIncoming(
     { channelType: 'sms', externalId: `ext-${suite}-${counter++}`, senderIdentifier: sender, body: PLAINTEXT, timestamp: new Date().toISOString() },
@@ -110,10 +110,10 @@ describe('inbound message on a deployment with no admin env keys (#1034)', () =>
     expect(plaintext).toBe(PLAINTEXT)
   })
 
-  it('is still stored, unreadable and without throwing, when the hub admin has registered no device', async () => {
+  it('is REFUSED, and nothing is stored, when the hub admin has registered no device', async () => {
     const { hubId } = await hubWithAdminDevice(false)
-    const message = await receive(hubId)
-    expect(message.readerEnvelopes).toEqual([])
-    expect(message.encryptedContent).toBe('')
+    await expect(receive(hubId)).rejects.toBeInstanceOf(InboundUnreadableError)
+    const rows = await db.select({ id: conversations.id }).from(conversations).where(eq(conversations.hubId, hubId))
+    expect(rows).toEqual([])
   })
 })

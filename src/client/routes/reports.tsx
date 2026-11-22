@@ -29,6 +29,7 @@ import {
   FileText, Plus, Lock, Send, Loader2, Clock,
   CheckCircle2, AlertCircle, UserCheck, X, Paperclip,
 } from 'lucide-react'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 
 export const Route = createFileRoute('/reports')({
   component: ReportsPage,
@@ -38,7 +39,7 @@ const NO_REPORTS: Report[] = []
 
 function ReportsPage() {
   const { t } = useTranslation()
-  const { hasDeviceKey, publicKey, isAdmin, hasPermission, adminDecryptionPubkey } = useAuth()
+  const { hasDeviceKey, publicKey, isAdmin, hasPermission } = useAuth()
   const { toast } = useToast()
 
   const hubId = useActiveHubId()
@@ -139,9 +140,8 @@ function ReportsPage() {
     try {
       // Build reader list: current user + admin decryption pubkey
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const encrypted = await encryptMessage(replyText.trim(), readerPubkeys)
 
@@ -156,16 +156,15 @@ function ReportsPage() {
     } finally {
       setSending(false)
     }
-  }, [selectedId, replyText, hasDeviceKey, publicKey, adminDecryptionPubkey, toast, t])
+  }, [selectedId, replyText, hasDeviceKey, publicKey, toast, t])
 
   const handleFileUploadComplete = useCallback(async (fileIds: string[]) => {
     if (!selectedId || !hasDeviceKey || !publicKey) return
     try {
       // Build reader list: current user + admin decryption pubkey
       const readerPubkeys = [publicKey]
-      if (adminDecryptionPubkey && adminDecryptionPubkey !== publicKey) {
-        readerPubkeys.push(adminDecryptionPubkey)
-      }
+      // Every admin of the hub, not one env-configured key (#1035).
+      readerPubkeys.push(...await activeHubAdminReaders())
 
       const placeholder = t('reports.filesAttached', { defaultValue: '[Files attached]', count: fileIds.length })
       const encrypted = await encryptMessage(placeholder, readerPubkeys)
@@ -180,7 +179,7 @@ function ReportsPage() {
     } catch {
       toast(t('reports.sendError', { defaultValue: 'Failed to send message' }), 'error')
     }
-  }, [selectedId, hasDeviceKey, publicKey, adminDecryptionPubkey, toast, t])
+  }, [selectedId, hasDeviceKey, publicKey, toast, t])
 
   const handleReportCreated = useCallback((reportId: string) => {
     // Refresh reports list and select the new one. `reload` sets loading, so the

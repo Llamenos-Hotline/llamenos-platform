@@ -2,10 +2,8 @@ import React, { useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '@/lib/toast'
 import { useAuth } from '@/lib/auth'
-import { prepareEvidenceUpload } from '@/lib/evidence-upload'
-import { chunkedUpload } from '@/lib/chunked-upload'
+import { uploadCaseEvidence } from '@/lib/case-writes'
 import {
-  uploadEvidence,
   type EvidenceMetadata,
   type EvidenceClassification,
 } from '@/lib/api'
@@ -79,6 +77,8 @@ const CHUNK_SIZE = 1024 * 1024 // 1 MB
 
 export interface EvidenceUploadDialogProps {
   recordId: string
+  /** The record's own hub (`record.hubId`): evidence is sealed to its admins and filed in it. */
+  hubId: string
   open: boolean
   onOpenChange: (open: boolean) => void
   onUploadComplete: (evidence: EvidenceMetadata) => void
@@ -87,6 +87,7 @@ export interface EvidenceUploadDialogProps {
 
 export function EvidenceUploadDialog({
   recordId,
+  hubId,
   open,
   onOpenChange,
   onUploadComplete,
@@ -94,7 +95,7 @@ export function EvidenceUploadDialog({
 }: EvidenceUploadDialogProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
-  const { publicKey, adminDecryptionPubkey } = useAuth()
+  const { publicKey } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [selectedFile, setSelectedFile] = useState<globalThis.File | null>(null)
@@ -156,43 +157,19 @@ export function EvidenceUploadDialog({
     setProgress(0)
 
     try {
-      // 1. Encrypt the file content client-side (HPKE-wrapped per reader) —
-      // the server must never see plaintext evidence. Recipients are every
-      // reader the case record was opened to, plus this device and the
-      // admin decryption key, deduped — mirrors encryptFile() call sites in
-      // FileUpload.tsx / entity-file-field.tsx.
-      const recipients = Array.from(new Set([
-        ...readerPubkeys,
-        ...(publicKey ? [publicKey] : []),
-        ...(adminDecryptionPubkey ? [adminDecryptionPubkey] : []),
-      ]))
-      // sizeBytes and integrityHash are derived from the CIPHERTEXT: a hash or
-      // length of the plaintext stored next to the ciphertext would let the
-      // server (or anyone with its DB) confirm a guessed file without decrypting.
-      const { encrypted, sizeBytes, integrityHash } = await prepareEvidenceUpload(selectedFile, recipients)
-      setProgress(15)
-
-      // 2–4. Upload the ENCRYPTED content as a file of this case record. The
-      // record — not a conversation — is the file's parent (#2462).
-      const { fileId } = await chunkedUpload({
-        encrypted,
-        owner: { kind: 'case_record', caseRecordId: recordId },
-        chunkSize: CHUNK_SIZE,
-        onProgress: (completed, total) => setProgress(20 + Math.round((completed / total) * 70)),
-      })
-      setProgress(95)
-
-      // 5. Register as evidence
-      const evidenceResult = await uploadEvidence(recordId, {
-        fileId,
-        filename: selectedFile.name,
-        mimeType: selectedFile.type || 'application/octet-stream',
-        sizeBytes,
+      // The file is encrypted client-side to every reader the case record was
+      // opened to, this device, and every admin of the RECORD's hub — then
+      // uploaded and registered as evidence in that hub. The server never sees
+      // plaintext evidence.
+      const evidenceResult = await uploadCaseEvidence({
+        record: { id: recordId, hubId },
+        file: selectedFile,
+        authorPubkey: publicKey,
+        readerPubkeys,
         classification,
-        integrityHash,
-        source: 'volunteer_upload',
+        chunkSize: CHUNK_SIZE,
+        onProgress: setProgress,
       })
-      setProgress(100)
 
       onUploadComplete(evidenceResult)
       resetState()
@@ -201,7 +178,7 @@ export function EvidenceUploadDialog({
     } finally {
       setUploading(false)
     }
-  }, [selectedFile, publicKey, adminDecryptionPubkey, readerPubkeys, recordId, classification, onUploadComplete, resetState, t, toast])
+  }, [selectedFile, publicKey, readerPubkeys, recordId, hubId, classification, onUploadComplete, resetState, t, toast])
 
   const selectedIcon = CLASSIFICATION_OPTIONS.find(c => c.value === classification)?.icon ?? File
 

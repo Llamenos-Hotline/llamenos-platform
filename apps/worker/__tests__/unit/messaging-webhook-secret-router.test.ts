@@ -55,12 +55,13 @@ function baseConfig(overrides: Partial<MessagingConfig>): MessagingConfig {
 function makeServices(config: MessagingConfig) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([]) },
     settings: { getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }), getMessagingConfig: vi.fn().mockResolvedValue(config) },
     blasts: {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
     },
+    // The hub's admin reader set (#1034): one hub admin with a registered device.
+    identity: { readersFor: vi.fn().mockResolvedValue(['ad'.repeat(32)]) },
     conversations: {
       handleIncoming: vi.fn().mockResolvedValue({ conversationId: 'c', messageId: 'm', isNew: false, status: 'active' }),
       getById: vi.fn().mockResolvedValue({ id: 'c', assignedTo: null, channelType: 'telegram' }),

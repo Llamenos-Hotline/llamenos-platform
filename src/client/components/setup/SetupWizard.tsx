@@ -10,6 +10,7 @@ import {
   setActiveHub,
 } from '@/lib/api'
 import * as keyManager from '@/lib/key-manager'
+import { ensureDeviceRegistered } from '@/lib/device-registration'
 import type { ChannelType } from '@shared/types'
 import type { TelephonyProviderConfig, WhatsAppConfig, SignalConfig } from '@shared/types'
 import { Card } from '@/components/ui/card'
@@ -196,6 +197,13 @@ export function SetupWizard({ needsBootstrap = false }: { needsBootstrap?: boole
   async function handleComplete() {
     setSaving(true)
     try {
+      // The hub this creates is founded by this admin, and they are its READER
+      // only through this device's registered encryption key (#1034): inbound
+      // messages, notes and reports are sealed to the hub admins' devices. The
+      // server refuses to found the hub without one, so register it first —
+      // explicitly, not on the unlock effect's schedule. `false` means the key
+      // is locked: there is nothing to register, and completing would fail.
+      if (!(await ensureDeviceRegistered())) throw new Error('device key locked')
       await completeSetup()
       sessionStorage.removeItem('bootstrapComplete')
       // Activate the hub `POST /api/setup/complete` just created. Read from the

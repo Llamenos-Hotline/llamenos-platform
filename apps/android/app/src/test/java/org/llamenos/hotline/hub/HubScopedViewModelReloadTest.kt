@@ -55,7 +55,7 @@ import org.llamenos.hotline.ui.triage.TriageViewModel
  * [UnconfinedTestDispatcher] so that all IO dispatches run synchronously in the test scheduler.
  *
  * With a relaxed-mock [KeyValueStore] that returns `null` for [KeystoreService.KEY_HUB_URL],
- * [ApiService.getBaseUrl] throws [IllegalStateException]. The ViewModel's try-catch receives this
+ * [ApiService.getBaseUrl] throws [org.llamenos.hotline.api.HubNotConfiguredException]. The ViewModel's try-catch receives this
  * exception and updates the UI state (loading=false, error="Hub URL not configured"). This leaves
  * the list fields at their initial `emptyList()` values, which makes each hub load cycle produce
  * distinct [StateFlow] emissions observable to the test.
@@ -63,7 +63,7 @@ import org.llamenos.hotline.ui.triage.TriageViewModel
  * Each hub-scoped load follows the pattern:
  * 1. ViewModel sets a loading flag (`isLoading`, `isRefreshing`, etc.) to `true` — a [StateFlow]
  *    emission distinct from the current state.
- * 2. ViewModel calls `apiService.request<T>(...)` — throws [IllegalStateException] synchronously
+ * 2. ViewModel calls `apiService.request<T>(...)` — throws [org.llamenos.hotline.api.HubNotConfiguredException] synchronously
  *    (no real IO; [ApiService.ioDispatcher] is [UnconfinedTestDispatcher]).
  * 3. ViewModel catches the exception, sets loading flag to `false` and error message — another
  *    distinct [StateFlow] emission.
@@ -129,7 +129,7 @@ class HubScopedViewModelReloadTest {
      * synchronously within the test scheduler (no real IO thread pool).
      *
      * The [KeyValueStore] mock returns `null` for all keys, causing [ApiService.getBaseUrl] to
-     * throw [IllegalStateException]. ViewModels catch this via their try-catch blocks and update
+     * throw [org.llamenos.hotline.api.HubNotConfiguredException]. ViewModels catch this via their try-catch blocks and update
      * their UI state with an error, leaving list fields at `emptyList()` — which ensures the
      * next hub change can produce `isLoading=true` (a distinct emission).
      */
