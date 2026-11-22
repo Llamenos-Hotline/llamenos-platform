@@ -192,10 +192,10 @@ Rules:
   `users.roles` is never consulted, so a super-admin's `*` reaches no hub.
 - **The instance-wide `ADMIN_DECRYPTION_PUBKEY` is in no reader set** (D1: "the
   global `ADMIN_DECRYPTION_PUBKEY` ... [is] removed. A platform-wide decryption
-  key contradicts zero knowledge."). Until every client seals to the reader set,
-  the write guard (§4.7) still *accepts* an envelope addressed to it, as a
-  separately named transitional recipient; it is never returned by
-  `readersFor` and is removed once clients seal to `GET /api/hubs/:hubId/readers`.
+  key contradicts zero knowledge."). Desktop, iOS and Android
+  now all seal to the reader set; the write guard (§4.7) still *accepts* an
+  envelope addressed to it, as a separately named transitional recipient, only
+  until that guard is removed. It is never returned by `readersFor`.
 - **The escrow key** is an optional X25519 public key whose secret the hub's
   admins hold offline (D1: "an optional per-hub escrow/recovery key controlled
   by the hub"). It reads every purpose (A7). It is set, rotated and removed
@@ -219,6 +219,19 @@ Clients obtain a hub's set from `GET /api/hubs/:hubId/readers?purpose=<purpose>`
 (§4.15), for the record's own hub — never the active hub, if they differ — and
 seal the author's own device in addition. The purpose is a closed enum: a
 client never names a permission.
+
+What a client does with the answer is decided once, in `packages/crypto`
+(`readers::resolve_admin_readers`, exported to iOS and Android as
+`mobileResolveAdminReaders`; desktop applies the same rule in `hubAdminReaders`):
+each entry is trimmed and lowercased, an entry that is not 64 lowercase hex
+characters is dropped and never repaired, duplicates are removed (first wins,
+server order kept), and an empty result is the error `NoAdminReader` — the write
+is refused and the user's input kept, never sealed to the author alone and never
+to a substitute key (the author's own key and `ADMIN_DECRYPTION_PUBKEY`
+included). The mobile clients no longer read `adminDecryptionPubkey` from
+`/api/auth/me` for any hub content: notes, note replies, reports, conversation
+replies, case summaries and comments, events, contacts and entity file fields are
+sealed to the full `admin` set of the hub they are written in.
 
 Clients take this list as the server serves it. A malicious server could list a
 key of its own; verifying each device key against its owner's sigchain (§2.11)
