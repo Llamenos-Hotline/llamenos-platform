@@ -181,6 +181,7 @@ export const HIGH_IMPACT_PATHS: readonly string[] = [
   'scripts/test-ios.sh',
   'scripts/test-orchestrator.sh',
   'scripts/test-worker.sh',
+  'scripts/test-worker-integration-bun.sh',
   'scripts/android-parallel-e2e.sh',
   'scripts/lib/',
 
