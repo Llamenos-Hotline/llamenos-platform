@@ -2092,6 +2092,122 @@ mod tests {
         mobile_lock();
     }
 
+    /// A hub-key rotation (#1042) from the survivor's and the departed member's
+    /// side, over the wire encoding the server stores (#1090).
+    ///
+    /// A member who stays holds K1 in Rust until it reloads. After the admin
+    /// rotates to K2 — wrapped for the survivor only — K1 cannot open K2
+    /// content, so the survivor only reads post-rotation events once it
+    /// refetches its envelope and calls `mobile_load_hub_key` again. A device
+    /// the rotation excluded can open neither the survivor's K2 envelope nor
+    /// K2 content. This pins the contract Android's refetch relies on: loading
+    /// a second key for the same hub id REPLACES the first.
+    #[test]
+    fn survivor_reads_post_rotation_events_only_after_reloading_the_hub_key() {
+        use aes_gcm::{
+            aead::{Aead, KeyInit, Payload},
+            Aes256Gcm, Nonce,
+        };
+        // What a hub member publishes: nonce(12) || ciphertext+tag, AAD LABEL_HUB_EVENT.
+        let seal_event = |key: &[u8; 32], json: &str| {
+            let mut nonce = [0u8; 12];
+            getrandom::getrandom(&mut nonce).unwrap();
+            let ct = Aes256Gcm::new_from_slice(key)
+                .unwrap()
+                .encrypt(
+                    Nonce::from_slice(&nonce),
+                    Payload {
+                        msg: json.as_bytes(),
+                        aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
+                    },
+                )
+                .unwrap();
+            hex::encode([nonce.as_slice(), ct.as_slice()].concat())
+        };
+        let label = crate::labels::LABEL_HUB_KEY_WRAP;
+
+        mobile_lock();
+        let _ = mobile_generate_and_load("rot-survivor".into(), "12345678".into()).unwrap();
+        let survivor = mobile_get_device_state().unwrap();
+        let (departed_secret, _) = hpke_envelope::generate_x25519_keypair();
+
+        let mut k1 = [0u8; 32];
+        let mut k2 = [0u8; 32];
+        getrandom::getrandom(&mut k1).unwrap();
+        getrandom::getrandom(&mut k2).unwrap();
+
+        // Before rotation: both members hold K1 and read K1 events.
+        let k1_for_survivor =
+            crate::encryption::hpke_wrap_key(&k1, &survivor.encryption_pubkey_hex, label).unwrap();
+        mobile_load_hub_key("hub-rot".into(), k1_for_survivor.enc, k1_for_survivor.ct).unwrap();
+        let before = seal_event(&k1, r#"{"type":"before"}"#);
+        assert_eq!(
+            mobile_decrypt_hub_event(before, "hub-rot".into()).unwrap(),
+            r#"{"type":"before"}"#
+        );
+
+        // Rotation: K2, wrapped for the survivor only.
+        let after = seal_event(&k2, r#"{"type":"after"}"#);
+        let k2_for_survivor =
+            crate::encryption::hpke_wrap_key(&k2, &survivor.encryption_pubkey_hex, label).unwrap();
+
+        // The survivor still holding K1 cannot read K2 content — the bug.
+        assert!(
+            mobile_decrypt_hub_event(after.clone(), "hub-rot".into()).is_err(),
+            "a stale K1 opened K2 content"
+        );
+        assert!(mobile_decrypt_hub_event_trial(after.clone()).is_err());
+
+        // Refetch + reload replaces K1 with K2 under the same hub id, and the
+        // survivor now reads post-rotation content.
+        mobile_load_hub_key(
+            "hub-rot".into(),
+            k2_for_survivor.enc.clone(),
+            k2_for_survivor.ct.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            mobile_decrypt_hub_event(after.clone(), "hub-rot".into()).unwrap(),
+            r#"{"type":"after"}"#
+        );
+        let trial = mobile_decrypt_hub_event_trial(after.clone()).unwrap();
+        assert_eq!(
+            trial,
+            vec!["hub-rot".to_string(), r#"{"type":"after"}"#.to_string()]
+        );
+
+        // The departed device: it cannot open the survivor's K2 envelope, and
+        // holds only K1, which opens nothing written after the rotation.
+        assert!(
+            crate::encryption::hpke_unwrap_key(
+                &crate::encryption::KeyEnvelope {
+                    enc: k2_for_survivor.enc,
+                    ct: k2_for_survivor.ct,
+                },
+                &departed_secret,
+                label,
+            )
+            .is_err(),
+            "a device excluded from the rotation opened the survivor's K2 envelope"
+        );
+        assert!(
+            Aes256Gcm::new_from_slice(&k1)
+                .unwrap()
+                .decrypt(
+                    Nonce::from_slice(&hex::decode(&after).unwrap()[..12]),
+                    Payload {
+                        msg: &hex::decode(&after).unwrap()[12..],
+                        aad: crate::labels::LABEL_HUB_EVENT.as_bytes(),
+                    },
+                )
+                .is_err(),
+            "the departed member's K1 opened K2 content"
+        );
+
+        mobile_clear_hub_keys();
+        mobile_lock();
+    }
+
     /// The iOS tag screens seal and open through these two exports; the hub key
     /// must come from MobileState by hub id, and a hub with no key must fail
     /// rather than seal under some default.
