@@ -4797,5 +4797,13 @@
     "push": "There is activity on your hotline that needs a look.",
     "signalAlert": "Hotline alert — {{category}}: {{state}}. Open the app for details.",
     "title": "Active incidents"
-  }
+  },
+  "_same_as_en": [
+    "erasure.admin.envelopeRevocationJobs",
+    "erasure.admin.noEnvelopeRevocationJobs",
+    "erasure.envelopeRevocationComplete",
+    "erasure.envelopeRevocationFailed",
+    "erasure.envelopeRevocationProcessed",
+    "erasure.envelopeRevocationProgress"
+  ]
 }
