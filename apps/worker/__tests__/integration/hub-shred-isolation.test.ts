@@ -66,9 +66,11 @@ async function seedUser(hubIds: string[]): Promise<{ pubkey: string }> {
     generation: 1,
     envelope: { v: 3, labelId: 1, enc: 'cHVr', ct: 'ZW52ZWxvcGU' },
   })
+  // A custom role's slug is its id (roles_custom_role_has_no_plaintext, #2787).
+  const roleId = `role-${u.pubkey.slice(0, 8)}`
   const [role] = await fresh.db
     .insert(schema.roles)
-    .values({ id: `role-${u.pubkey.slice(0, 8)}`, slug: `slug-${u.pubkey.slice(0, 8)}` })
+    .values({ id: roleId, slug: roleId })
     .returning()
   await fresh.db.insert(schema.userRoleEnvelopes).values({
     roleId: role!.id,

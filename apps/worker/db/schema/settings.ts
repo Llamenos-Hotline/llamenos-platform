@@ -203,6 +203,12 @@ export const roles = pgTable('roles', {
     'roles_hub_role_is_sealed',
     sql`${t.hubId} IS NULL OR ${t.encryptedName} IS NOT NULL`,
   ),
+  // #2787: the database refuses what SettingsService already never writes (#2780).
+  // Only a seeded default carries a plaintext name; a custom role has none.
+  check(
+    'roles_custom_role_has_no_plaintext',
+    sql`${t.isDefault} IS TRUE OR (${t.name} IS NULL AND ${t.description} = '' AND ${t.slug} = ${t.id})`,
+  ),
   index('roles_hub_id_idx').on(t.hubId),
 ])
 
