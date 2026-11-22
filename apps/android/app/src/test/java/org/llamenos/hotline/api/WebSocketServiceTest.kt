@@ -297,6 +297,43 @@ class WebSocketServiceTest {
         assertTrue(service.syncMemberHubs(listOf("hub-a", "hub-b", "hub-c")))
     }
 
+    // ---- A closed socket's late frames (#2527) ----
+
+    private fun bareService() = WebSocketService(
+        cryptoService = mockk<CryptoService>(relaxed = true),
+        keystoreService = mockk<KeyValueStore>(relaxed = true),
+        hubActivityService = HubActivityService(),
+        apiService = mockk<ApiService>(relaxed = true),
+    )
+
+    /**
+     * Logout closes the relay while a handshake may still be in flight; the closed socket
+     * goes on delivering what the server sent before its close frame. Acting on that
+     * `authenticated` reply announced CONNECTED for the destroyed identity, and the
+     * incident listener's re-read then crashed the app (the M1 probe's `logout` flow).
+     */
+    @Test
+    fun `an authenticated reply on a socket closed by disconnect is ignored`() {
+        val service = bareService()
+        val closedSocket = service.currentSocketGeneration
+        service.disconnect()
+
+        service.handleSocketMessage(closedSocket, """{"type":"authenticated","hubs":["hub-a"]}""")
+
+        assertEquals(WebSocketService.ConnectionState.DISCONNECTED, service.connectionState.value)
+        // Still unauthenticated: a membership change waits for the next real handshake.
+        assertFalse(service.syncMemberHubs(listOf("hub-a")))
+    }
+
+    @Test
+    fun `an authenticated reply on the current socket connects`() {
+        val service = bareService()
+
+        service.handleSocketMessage(service.currentSocketGeneration, """{"type":"authenticated","hubs":["hub-a"]}""")
+
+        assertEquals(WebSocketService.ConnectionState.CONNECTED, service.connectionState.value)
+    }
+
     // ---- Relay URL resolution (defect 1: was hard-coded to /relay) ----
 
     @Test

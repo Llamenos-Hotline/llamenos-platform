@@ -232,7 +232,7 @@ export const VERDICT_NAMES = [
   'queued-unmergeable', 'queued-ok',
   'required-check-failing', 'review-verdict-stale-by-tree', 'review-never-requested', 'review-awaits-trust-approval',
   'required-context-absent',
-  'changes-requested', 'codeowner-approval-missing', 'approvals-missing', 'behind',
+  'changes-requested', 'codeowner-approval-missing', 'codeowner-approval-vacuous', 'approvals-missing', 'behind',
   'automerge-stale', 'not-queued', 'fleet-queue-guard-unsatisfied', 'required-check-pending', 'blocked-unexplained', 'check-carrier-ambiguous',
 ] as const
 export type VerdictName = (typeof VERDICT_NAMES)[number]
@@ -742,9 +742,30 @@ function reviewVerdicts(facts: PrWhyFacts, s: PrState, v: Verdict[]): void {
     v.push(unknown('the changed files', `read ${facts.files.value.length} of ${s.changedFiles} — cannot prove no code-owned path is touched`))
     return
   }
-  const unapproved = facts.files.value
+  const owned = facts.files.value
     .map((path) => ({ path, owners: codeOwnersOf(owners, path) }))
-    .filter((p) => p.owners.length > 0 && !p.owners.some((o) => !o.includes('/') && approvers.has(o)))
+    .filter((p) => p.owners.length > 0)
+  // GitHub never asks the PR's author to review their own change, and does
+  // not block on a path whose every owner IS the author: the requirement is
+  // vacuously satisfied (#2897 — #2893, #2891 and #2890 all merged this way
+  // with zero approving reviews). Such a path is not a missing approval; a
+  // path with ANY other owner still is, because that owner can approve.
+  const vacuous = owned.filter((p) => p.owners.every((o) => o === s.authorLogin))
+  const required = owned.filter((p) => !p.owners.every((o) => o === s.authorLogin))
+  if (vacuous.length > 0) {
+    const shownVacuous = vacuous.slice(0, 5).map((p) => p.path)
+    if (vacuous.length > 5) shownVacuous.push(`(+${vacuous.length - 5} more)`)
+    v.push({
+      name: 'codeowner-approval-vacuous',
+      severity: 'note',
+      evidence: [
+        `${vacuous.length} owned path(s) have the PR author (@${s.authorLogin}) as their only owner: ${shownVacuous.join('; ')}`,
+        'GitHub treats require_code_owner_review as satisfied when no non-author owner exists — this does not block the merge',
+      ],
+      remedy: 'none — and no human review is recorded for these paths, since the only possible reviewer is the author',
+    })
+  }
+  const unapproved = required.filter((p) => !p.owners.some((o) => !o.includes('/') && approvers.has(o)))
   if (unapproved.length === 0) return
   const shown = unapproved.slice(0, 5).map((p) => `${p.path} → ${p.owners.map((o) => `@${o}`).join(' ')}`)
   if (unapproved.length > 5) shown.push(`(+${unapproved.length - 5} more)`)

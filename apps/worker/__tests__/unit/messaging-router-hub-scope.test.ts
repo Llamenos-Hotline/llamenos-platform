@@ -55,7 +55,6 @@ function makeAdapter(): MessagingAdapter {
 function makeServices() {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([]) },
     settings: {
       getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }),
       getMessagingConfig: vi.fn().mockResolvedValue(null),
@@ -66,6 +65,8 @@ function makeServices() {
       handleSubscriberKeyword: vi.fn().mockResolvedValue(undefined),
       getBlastSettings: vi.fn().mockResolvedValue({ subscribeKeyword: 'JOIN' }),
     },
+    // The hub's admin reader set (#1034): one hub admin with a registered device.
+    identity: { readersFor: vi.fn().mockResolvedValue(['ad'.repeat(32)]) },
     conversations: {
       handleIncoming: vi.fn().mockResolvedValue({
         conversationId: 'conv-1140',

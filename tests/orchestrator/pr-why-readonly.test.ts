@@ -76,11 +76,13 @@ beforeEach(() => {
 
 describe('pr-why\'s whole default path is read-only', () => {
   it('runs end to end on the default deps and reaches a verdict', async () => {
-    // 2470 is a draft touching owned apps/worker/lib/ paths with no approval.
+    // 2470 is a draft touching apps/worker/lib/ paths whose only owner is its
+    // author — GitHub does not block on those (#2897), so only the draft blocks.
     expect(await runPrWhy(['2470'])).toBe(1)
     const out = (process.stdout.write as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('')
     expect(out).toContain('draft')
-    expect(out).toContain('codeowner-approval-missing')
+    expect(out).toContain('codeowner-approval-vacuous')
+    expect(out).not.toContain('codeowner-approval-missing')
   })
 
   it('spawns nothing but gh, and every gh argv is a read', async () => {

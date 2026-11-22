@@ -30,6 +30,9 @@ fun DeviceWipeEffect(
     val context = LocalContext.current
     LaunchedEffect(webSocketService) {
         webSocketService.deviceWipes.collect { command: DeviceWipeCommand ->
+            // The relay goes first, as on logout: nothing it delivers after this point may
+            // act for the identity being destroyed.
+            webSocketService.disconnect()
             wipeLocalState(context, keystoreService, cryptoService)
             onWiped(command.reason)
         }

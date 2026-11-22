@@ -38,8 +38,10 @@ services:
     # rebuild. Cache import is a soft dependency: a missing/unreachable tag
     # falls back to a normal build rather than failing the job. The ref
     # below is the literal form of `ghcr.io/${{ github.repository }}`
-    # *lowercased* (the same public GHCR package release.yml's docker-stable
-    # job already publishes real images to). Compose has no expression
+    # *lowercased* (the same GHCR package release.yml's docker-stable job
+    # already publishes real images to). It is imported ANONYMOUSLY, so that
+    # package must be public; when it is not, the import 401s and the build
+    # runs cold (#2628) — docker-buildcache.yml's last step fails loudly then. Compose has no expression
     # context to derive it from, so this is a hand-maintained mirror of the
     # producer's tag in docker-buildcache.yml — a rail in
     # tests/orchestrator/ghcr-image-ref-lowercase.test.ts fails if the two

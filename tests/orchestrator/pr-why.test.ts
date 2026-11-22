@@ -217,8 +217,53 @@ describe('codeowner-approval-missing', () => {
   it('flips: the owner approves → gone (and a BLOCKED PR with nothing found is blocked-unexplained, never clean)', () => {
     expect(names(facts({ state: approvedByOwner }))).toEqual(['blocked-unexplained'])
   })
-  it('flips: the owner is the author — self-approval never counts', () => {
-    expect(names(facts({ state: { ...approvedByOwner, authorLogin: OWNER } }))).toContain('codeowner-approval-missing')
+  it('flips: a non-author owner exists and has not approved → blocker (self-approval never counts)', () => {
+    const f = facts({
+      codeOwners: { ok: true, value: [{ pattern: 'packages/crypto/', owners: [OWNER, 'second-owner'] }] },
+      state: { ...approvedByOwner, authorLogin: OWNER },
+    })
+    expect(names(f)).toContain('codeowner-approval-missing')
+  })
+  // #2897 — GitHub does not block where the PR's author is the path's only owner.
+  it('the author is the SOLE owner of every changed path → no blocker, only a vacuous note (#2897)', () => {
+    const r = expectVerdict(facts({ state: { authorLogin: OWNER } }), 'codeowner-approval-vacuous')
+    expect(r.verdicts.map((x) => x.name)).not.toContain('codeowner-approval-missing')
+    const note = r.verdicts.find((x) => x.name === 'codeowner-approval-vacuous')
+    expect(note?.severity).toBe('note')
+    expect(note?.evidence.join(' ')).toContain(OWNED_FILE)
+  })
+  it('sole-owner author with no other blocker is blocked-unexplained, never a fabricated codeowner blocker', () => {
+    expect(names(facts({ state: { authorLogin: OWNER } }))).toEqual(['codeowner-approval-vacuous', 'blocked-unexplained'])
+  })
+  it('one of several owners is the author → still a blocker: the others can approve', () => {
+    const f = facts({
+      codeOwners: { ok: true, value: [{ pattern: 'packages/crypto/', owners: [OWNER, 'second-owner'] }] },
+      state: { authorLogin: OWNER },
+    })
+    const r = diagnosePrWhy(f)
+    expect(r.verdicts.map((x) => x.name)).toEqual(['codeowner-approval-missing'])
+    expect(r.verdicts[0]?.evidence.join(' ')).toContain('@second-owner')
+  })
+  it('one of several owners is the author and the other approves → no blocker', () => {
+    const f = facts({
+      codeOwners: { ok: true, value: [{ pattern: 'packages/crypto/', owners: [OWNER, 'second-owner'] }] },
+      state: { authorLogin: OWNER, reviews: [{ login: 'second-owner', state: 'APPROVED', submittedAt: '2026-11-05T09:00:00Z' }] },
+    })
+    expect(names(f)).not.toContain('codeowner-approval-missing')
+  })
+  it('mixed paths: the author-only path is vacuous, a path owned by someone else is still a blocker', () => {
+    const f = facts({
+      codeOwners: { ok: true, value: [{ pattern: 'packages/crypto/', owners: [OWNER] }, { pattern: 'deploy/', owners: ['infra-owner'] }] },
+      files: { ok: true, value: [OWNED_FILE, 'deploy/x.yml'] },
+      state: { authorLogin: OWNER, changedFiles: 2 },
+    })
+    const r = diagnosePrWhy(f)
+    expect(r.verdicts.map((x) => x.name)).toEqual(['codeowner-approval-missing', 'codeowner-approval-vacuous'])
+    expect(r.verdicts[0]?.evidence[0]).toContain('deploy/x.yml')
+    expect(r.verdicts[0]?.evidence[0]).not.toContain(OWNED_FILE)
+  })
+  it('the author owns none of the paths (a different owner) → blocker', () => {
+    expect(names(facts({ state: { authorLogin: 'someone-else' } }))).toContain('codeowner-approval-missing')
   })
   it('flips: the path is not owned → gone', () => {
     expect(names(facts({ files: { ok: true, value: ['README.md'] } }))).not.toContain('codeowner-approval-missing')

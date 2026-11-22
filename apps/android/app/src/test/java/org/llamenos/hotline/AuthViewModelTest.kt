@@ -23,6 +23,7 @@ import org.junit.Before
 import org.junit.Test
 import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.InviteRepository
+import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.DeviceKeyState
 import org.llamenos.hotline.crypto.KeystoreService
@@ -64,6 +65,7 @@ class AuthViewModelTest {
     private lateinit var inviteRepository: InviteRepository
     private lateinit var deviceRegistrationManager: DeviceRegistrationManager
     private lateinit var pushRegistrationManager: PushRegistrationManager
+    private lateinit var webSocketService: WebSocketService
 
     @Before
     fun setup() {
@@ -75,6 +77,7 @@ class AuthViewModelTest {
         inviteRepository = mockk()
         deviceRegistrationManager = mockk(relaxed = true)
         pushRegistrationManager = mockPushRegistrationManager()
+        webSocketService = mockk(relaxed = true)
     }
 
     @After
@@ -90,6 +93,7 @@ class AuthViewModelTest {
             inviteRepository,
             deviceRegistrationManager,
             pushRegistrationManager,
+            webSocketService,
         )
     }
 
@@ -584,6 +588,7 @@ class AuthViewModelTest {
             inviteRepository,
             deviceRegistrationManager,
             pushRegistrationManager,
+            webSocketService,
         )
 
         vm.unlockWithPin("123456")
@@ -619,7 +624,7 @@ class AuthViewModelTest {
         val ks = lockoutTrackingKeystore()
         val vm = AuthViewModel(
             cryptoService, ks, biometricKeyStore, inviteRepository,
-            deviceRegistrationManager, pushRegistrationManager,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
         )
 
         vm.unlockWithPin("123456")
@@ -646,7 +651,7 @@ class AuthViewModelTest {
             org.llamenos.hotline.crypto.CryptoException("Decryption failed: incorrect PIN")
         val vm = AuthViewModel(
             mockCrypto, ks, biometricKeyStore, inviteRepository,
-            deviceRegistrationManager, pushRegistrationManager,
+            deviceRegistrationManager, pushRegistrationManager, webSocketService,
         )
 
         vm.unlockWithPin("000000")
@@ -679,6 +684,7 @@ class AuthViewModelTest {
             inviteRepository,
             deviceRegistrationManager,
             pushRegistrationManager,
+            webSocketService,
         )
 
         vm.unlockWithPin("000000")
