@@ -318,7 +318,8 @@ async function signalProviderAuthRejection(
  *
  *  - `/call-recording`, `/user-answer` and `/call-status` carry no `?hub=`
  *    (CRIT-W1): their handlers resolve the hub from the call — through the
- *    leg's opaque call token, or the parent call SID. Validation resolves it
+ *    leg's opaque call token (`/user-answer`, `/call-status`), or, for
+ *    `/call-recording` alone, the parent call SID. Validation resolves it
  *    the same way. A `?hub=` on them is ignored, never preferred: the handler
  *    acts with the call's hub's adapter, so validating with any other hub's
  *    credentials would let one hub's account vouch for another hub's call
@@ -332,18 +333,33 @@ async function signalProviderAuthRejection(
  *
  * Resolving the token is a read: it never consumes or claims it.
  */
+/**
+ * Query parameters that are safe to write to a log. An ALLOWLIST: a parameter
+ * is shown by value only when named here, and every other is shown by name
+ * alone — so `callToken` (a bearer credential for the leg's callbacks), the
+ * `sig` tag and any parameter added later never reach the log (#2627).
+ */
+const LOGGABLE_QUERY_PARAMS = new Set(['hub', 'lang', 'forceLang', 'auto', 'round'])
+
+/** The query as `name=value` for allowlisted names, `name=[redacted]` for the rest. */
+function redactedQuery(params: URLSearchParams): string {
+  return Array.from(params.entries())
+    .map(([name, value]) => `${name}=${LOGGABLE_QUERY_PARAMS.has(name) ? value : '[redacted]'}`)
+    .join('&')
+}
+
 async function validatingHub(services: Services, url: URL): Promise<string | undefined> {
   const path = url.pathname
   const fromCall = async (callSid: string | null) =>
     (callSid ? await services.calls.getHubIdForCall(callSid) : null) || undefined
   if (path.endsWith('/call-recording')) return fromCall(url.searchParams.get('parentCallSid'))
   if (path.endsWith('/user-answer') || path.endsWith('/call-status')) {
-    // Exactly the handlers' resolution: the token's hub — and, for a status
-    // callback only, the parent call's when there is no usable token.
+    // Exactly the handlers' resolution: the token's hub, and nothing else. A
+    // leg with no usable token has no hub — never one guessed from a call SID
+    // in the query string (#2627).
     const callToken = url.searchParams.get('callToken')
     const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
-    if (tokenData?.hubId) return tokenData.hubId
-    return path.endsWith('/call-status') ? fromCall(url.searchParams.get('parentCallSid')) : undefined
+    return tokenData?.hubId || undefined
   }
   return url.searchParams.get('hub') || undefined
 }
@@ -363,7 +379,7 @@ async function validatingHub(services: Services, url: URL): Promise<string | und
  */
 async function validateWebhook(c: Context<AppEnv>, next: Next) {
   const url = new URL(c.req.url)
-  logger.debug('Webhook received', { method: c.req.method, path: url.pathname, search: url.search })
+  logger.debug('Webhook received', { method: c.req.method, path: url.pathname, query: redactedQuery(url.searchParams) })
   const env = c.env
   const services = c.get('services')
 
@@ -756,7 +772,7 @@ telephony.post('/user-answer',
   const tokenData = callToken ? await services.calls.answerCallWithToken(callToken) : null
   if (!tokenData) {
     // Invalid or expired token, another volunteer already won, or the caller is gone.
-    logger.warn('user-answer: invalid, expired or already-used call token — hanging up the leg', { callToken: callToken.slice(0, 8) })
+    logger.warn('user-answer: invalid, expired or already-used call token — hanging up the leg')
     return refuseLeg()
   }
   const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
@@ -825,18 +841,23 @@ telephony.post('/call-status',
   // provider sends pre-answer status events (initiated/ringing) to this route
   // with the same token /user-answer needs, so a status callback must never
   // consume it. The token lives until the call ends.
-  // CRIT-W1: Hub resolved from DB call record, not from URL param
+  // CRIT-W1 / #2627: the call, its hub and the leg's volunteer come from the
+  // token, and from nothing else. A `parentCallSid` in the query is not read:
+  // Plivo's signature leaves the query out and Bandwidth's Basic auth binds no
+  // part of the request, so on those providers any query parameter is the
+  // caller's to choose — and hubs sharing one provider account verify under
+  // the same key, so a valid signature never says whose call this is.
   const callToken = url.searchParams.get('callToken') || ''
   const tokenData = callToken ? await services.calls.resolveCallToken(callToken) : null
-  const parentCallSid = tokenData?.callSid || url.searchParams.get('parentCallSid') || ''
-  const pubkey = tokenData?.volunteerPubkey || ''
-  const hubId = tokenData?.hubId || (await services.calls.getHubIdForCall(parentCallSid))
-  if (!hubId) {
-    // No call of ours: every call we accept belongs to a hub and is recorded
-    // before anything rings (#2460), so there is nothing to update.
-    logger.warn('Call status for a call with no record — ignored', { parentCallSid })
+  if (!tokenData) {
+    // No usable token: the call has ended (its tokens are deleted with it), or
+    // this was never a leg of ours. Either way there is no call to update, and
+    // none is looked up from the URL. Answered 200 so the provider stops
+    // retrying; nothing is read, written or published.
+    logger.warn('Call status without a usable call token — ignored')
     return telephonyResponse((await getTelephonyFromService(c.env, services.settings))!.emptyResponse())
   }
+  const { callSid: parentCallSid, volunteerPubkey: pubkey, hubId } = tokenData
   const adapter = (await getHubAdapter(c.env, services, hubId))!
   const { status: callStatus } = await adapter.parseCallStatusWebhook(c.req.raw)
 
@@ -851,7 +872,7 @@ telephony.post('/call-status',
       // A leg's `completed` only ends the call when that leg is the one that
       // answered it. Other volunteers' legs (cancelled once someone picked up)
       // carry the same call SID but must not end the bridged call.
-      if (tokenData && preCall && preCall.answeredBy !== pubkey) {
+      if (preCall && preCall.answeredBy !== pubkey) {
         logger.debug('Ignoring completed status from a leg that did not answer the call', { parentCallSid })
         return telephonyResponse(adapter.emptyResponse())
       }
