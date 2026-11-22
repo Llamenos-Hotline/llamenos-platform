@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { generateAgentKeypair, unsealAgentKey } from '@worker/lib/agent-identity'
-import { ed25519 } from '@noble/curves/ed25519.js'
+import { x25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 
 // A valid 32-byte hex seal key
@@ -15,7 +15,7 @@ const SEAL_LABEL = 'llamenos:agent-seal'
 
 describe('agent-identity', () => {
   describe('generateAgentKeypair', () => {
-    it('generates a valid Ed25519 keypair', () => {
+    it('generates a valid X25519 keypair', () => {
       const { pubkey, sealedAgentKey } = generateAgentKeypair('agent-1', SEAL_KEY, SEAL_LABEL)
 
       // Pubkey should be 64 hex chars (32 bytes)
@@ -43,14 +43,14 @@ describe('agent-identity', () => {
       expect(kp1.pubkey).not.toBe(kp2.pubkey)
     })
 
-    it('pubkey is a valid Ed25519 public key', () => {
+    it('pubkey is the X25519 public key of the sealed secret', () => {
       const { pubkey, sealedAgentKey } = generateAgentKeypair('agent-test', SEAL_KEY, SEAL_LABEL)
       const pubkeyBytes = hexToBytes(pubkey)
       expect(pubkeyBytes.length).toBe(32)
 
       // Unseal the private key and verify it derives the same pubkey
       const agentSecretKeyHex = unsealAgentKey('agent-test', sealedAgentKey, SEAL_KEY, SEAL_LABEL)
-      const derivedPubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(agentSecretKeyHex)))
+      const derivedPubkey = bytesToHex(x25519.getPublicKey(hexToBytes(agentSecretKeyHex)))
       expect(derivedPubkey).toBe(pubkey)
     })
   })
@@ -64,7 +64,7 @@ describe('agent-identity', () => {
       expect(agentSecretKeyHex).toMatch(/^[0-9a-f]{64}$/)
 
       // Derive pubkey from recovered private key to verify it matches
-      const recoveredPubkey = bytesToHex(ed25519.getPublicKey(hexToBytes(agentSecretKeyHex)))
+      const recoveredPubkey = bytesToHex(x25519.getPublicKey(hexToBytes(agentSecretKeyHex)))
       expect(recoveredPubkey).toBe(pubkey)
     })
 

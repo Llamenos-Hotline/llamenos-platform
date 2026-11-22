@@ -4,7 +4,7 @@
  *
  * Each active firehose connection gets an in-memory agent instance that:
  * 1. Periodically fetches unextracted buffer messages
- * 2. Decrypts them using the agent's sealed Ed25519 key
+ * 2. Decrypts them using the agent's sealed X25519 key
  * 3. Clusters by time proximity (heuristic) and optionally refines via LLM
  * 4. Extracts structured reports via LLM inference
  * 5. Submits reports as E2EE conversations
@@ -124,7 +124,7 @@ export class FirehoseAgentService {
       throw new Error(`Connection ${connectionId} is not active (status: ${conn.status})`)
     }
 
-    // Unseal the agent's Ed25519 secret key
+    // Unseal the agent's X25519 secret key
     const agentSecretKeyHex = unsealAgentKey(
       connectionId,
       conn.sealedAgentKey,
