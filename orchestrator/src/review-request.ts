@@ -365,12 +365,17 @@ export async function refireReviewRequest(
     return { kind: 'failed', reason }
   }
   for (const candidate of reviewRequestCandidates(facts.author, input.headRefName)) {
+    // The pre-count only exists to CONFIRM the event afterwards (rule 1); it
+    // is not a precondition for firing. An unreadable pre-count used to return
+    // `unverified` here BEFORE any DELETE/POST (#2722) — but by now the
+    // `scope:` labels are already applied, so the PR was left with the grant in
+    // place, a pending reviewer whose run predates it, and no fresh
+    // `review_requested` for the gate to re-read the labels on (nothing in the
+    // PR-open path tries again, and a rerun repeats the stale lookup). A
+    // transient events-read failure says nothing about whether the WRITES
+    // work, so fire anyway and let the confirmation fail soft: `unverified`
+    // now means "attempted, could not confirm", never "not attempted".
     const before = await countSafe(pr, deps)
-    if (before === undefined) {
-      const reason = 'the review_requested event count could not be read, so whether the request fired is unknown'
-      deps.log(`review-request: refire pr ${pr} ${candidate}: ${reason}`)
-      return { kind: 'unverified', reviewer: candidate, reason }
-    }
     if (hasLogin(facts.requestedReviewers, candidate)) {
       try { await deps.deleteRequestedReviewer(pr, candidate) } catch (e) {
         deps.log(`review-request: refire pr ${pr} DELETE ${candidate} failed (${describeGhFailure(e)}) — continuing to the POST`)
@@ -388,12 +393,17 @@ export async function refireReviewRequest(
       return { kind: 'failed', reason }
     }
     const after = await countSafe(pr, deps)
-    if (after !== undefined && after > before) {
+    if (before === undefined || after === undefined) {
+      const reason = 'the review_requested event count could not be read, so whether the request fired is unknown (the DELETE+POST WAS made)'
+      deps.log(`review-request: refire pr ${pr} re-requested ${candidate} but ${reason}`)
+      return { kind: 'unverified', reviewer: candidate, reason }
+    }
+    if (after > before) {
       deps.log(`review-request: refire pr ${pr} re-requested a review from ${candidate} (events ${before} -> ${after})`)
       return { kind: 'requested', reviewer: candidate, reRequested: true }
     }
     const reason =
-      `the re-request for ${candidate} did not fire (events ${before} -> ${after ?? 'unreadable'}) — ` +
+      `the re-request for ${candidate} did not fire (events ${before} -> ${after}) — ` +
       'a CODEOWNER whose request GitHub re-adds instantly cannot be cycled (#1471); the review must be re-requested by hand'
     deps.log(`review-request: refire pr ${pr} FAILED — ${reason}`)
     return { kind: 'failed', reason }
