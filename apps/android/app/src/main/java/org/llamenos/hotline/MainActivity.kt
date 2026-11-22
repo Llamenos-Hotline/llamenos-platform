@@ -16,6 +16,7 @@ import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.crypto.KeystoreService
 import org.llamenos.hotline.service.OfflineQueue
+import org.llamenos.hotline.service.ShiftHeartbeat
 import org.llamenos.hotline.telephony.LinphoneService
 import org.llamenos.hotline.ui.DeepLinkDestination
 import org.llamenos.hotline.ui.LlamenosNavigation
@@ -45,6 +46,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var linphoneService: LinphoneService
+
+    @Inject
+    lateinit var shiftHeartbeat: ShiftHeartbeat
 
     private var backgroundTimestamp: Long? = null
 
@@ -102,6 +106,8 @@ class MainActivity : ComponentActivity() {
             cryptoService.lock()
         }
         backgroundTimestamp = null
+        // Re-assert any clock-in at once rather than waiting out the heartbeat interval (#2886)
+        shiftHeartbeat.onForeground()
     }
 
     companion object {
