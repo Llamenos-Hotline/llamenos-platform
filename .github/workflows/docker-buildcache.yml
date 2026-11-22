@@ -23,13 +23,22 @@
 # Registry choice: GHCR, not Docker Hub — free for a public repo, and keeps
 # this off the Docker Hub pull quota that docker.yml's release builds use.
 # The cache tag lives in the same package release.yml's `docker-stable` job
-# already publishes real images to (`ghcr.io/${{ github.repository }}`),
-# which is already public — see that job's "Log in to GHCR" comment — so
-# `bootstrap-backend`'s `docker compose --build` can pull this cache
-# anonymously with no login step added to ci.yml/ios-e2e.yml.
-# Cache import is a soft dependency: if the pull fails or the tag doesn't
-# exist yet, BuildKit silently falls back to a full build rather than
-# failing the job.
+# already publishes real images to (`ghcr.io/${{ github.repository }}`).
+#
+# The consumers (docker-compose.test.yml, docker-compose.prove-e2e.yml,
+# image-smoke.yml, release.yml) import it ANONYMOUSLY — no login step — so
+# the package MUST be public. That is a GHCR package setting, not something a
+# workflow can grant: a package pushed to an org starts out private even when
+# the repository is public, and pushing to it from here does not change that.
+# When it is private, BuildKit logs "failed to fetch anonymous token ... 401
+# Unauthorized" and quietly rebuilds from scratch (#2628: 58 of 96 jobs in four
+# green merge groups), while THIS workflow keeps succeeding — so the final step
+# below proves the tag is anonymously pullable and fails this run if not. A red
+# run here means: make the package public (the error names where), or, if it
+# must stay private, make every consumer authenticate with `packages: read`.
+# Cache import is otherwise a soft dependency: if the pull fails or the tag
+# doesn't exist yet, BuildKit falls back to a full build rather than failing
+# the job.
 #
 # Deliberately NOT wired into ci.yml/ios-e2e.yml as a
 # `cache_to` (export): those jobs run against PR head content (including
@@ -126,3 +135,11 @@ jobs:
           tags: ${{ steps.meta.outputs.image }}:buildcache
           cache-from: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache
           cache-to: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache,mode=max
+
+      # The producer cannot tell from its own (authenticated) push whether
+      # anyone else can read the result. This does what a consumer does,
+      # without credentials. See the header for what a failure means.
+      - name: Verify the cache is anonymously pullable
+        env:
+          CACHE_IMAGE: ${{ steps.meta.outputs.image }}
+        run: .github/scripts/check-buildcache-public.sh "$CACHE_IMAGE" buildcache

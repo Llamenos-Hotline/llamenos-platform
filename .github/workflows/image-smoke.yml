@@ -72,8 +72,9 @@ jobs:
           load: true
           push: false
           tags: llamenos-image-smoke:${{ github.sha }}
-          # Read-only import of the public cache docker-buildcache.yml keeps
-          # warm; never exported from here.
+          # Read-only, anonymous import of the cache docker-buildcache.yml keeps
+          # warm (it fails its own run when the package is not public, #2628);
+          # never exported from here.
           cache-from: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache
 
       - name: Smoke image against PostgreSQL 17 (runner CPU)
