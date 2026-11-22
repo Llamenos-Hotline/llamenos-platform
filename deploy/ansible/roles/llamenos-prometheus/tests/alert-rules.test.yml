@@ -18,7 +18,7 @@ tests:
   # erasure-expiry ticks every 300s → threshold 900s. Its last success tracks
   # wall-clock for 10 minutes, then freezes at t=600s. Age exceeds 900s from
   # minute 26; `for: 2m` → firing from minute 28.
-  # envelope-revocation (60s → floored to 600s) keeps ticking and must stay silent.
+  # re-encryption (60s → floored to 600s) keeps ticking and must stay silent.
   - interval: 1m
     input_series:
       - series: 'up{job="llamenos-app",instance="app-under-test"}'
@@ -27,11 +27,11 @@ tests:
         values: '0+60x40'
       - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
         values: '300x40'
-      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="envelope-revocation"}'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
         values: '60x40'
       - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
         values: '0+60x10 600x30'
-      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="envelope-revocation"}'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
         values: '0+60x40'
     alert_rule_test:
       - eval_time: 10m
@@ -90,9 +90,9 @@ tests:
         values: '0+60x40'
       - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="erasure-expiry"}'
         values: '300x40'
-      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="envelope-revocation"}'
+      - series: 'llamenos_worker_tick_interval_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
         values: '60x40'
-      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="envelope-revocation"}'
+      - series: 'llamenos_worker_last_success_timestamp_seconds{job="llamenos-app",instance="app-under-test",worker="re-encryption"}'
         values: '0+60x40'
     alert_rule_test:
       # Fresh process: no worker has had time to tick yet. Silent.

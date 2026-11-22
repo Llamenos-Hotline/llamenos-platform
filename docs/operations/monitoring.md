@@ -102,7 +102,7 @@ A Prometheus `ServiceMonitor` is pre-configured. Metrics are scraped from the `/
 
 ## Scheduler Worker Liveness (`WorkerStalled`)
 
-The app runs background workers on timers: erasure expiry, retention purge, envelope revocation, Signal queue drain, blast delivery, and others (`SCHEDULER_WORKER_NAMES` in `apps/worker/services/scheduler.ts`). If one of them stops, the app itself cannot notice. A check that runs inside a worker cannot report that worker being down. A stopped `erasure-expiry` worker would let a caller-erasure deadline pass with no record anywhere (#2323).
+The app runs background workers on timers: erasure expiry, retention purge, re-encryption, Signal queue drain, blast delivery, and others (`SCHEDULER_WORKER_NAMES` in `apps/worker/services/scheduler.ts`). If one of them stops, the app itself cannot notice. A check that runs inside a worker cannot report that worker being down. A stopped `erasure-expiry` worker would let a caller-erasure deadline pass with no record anywhere (#2323).
 
 Liveness is therefore judged **out of process**, by Prometheus. For every worker, the app publishes two gauges on `/api/metrics/prometheus`:
 
