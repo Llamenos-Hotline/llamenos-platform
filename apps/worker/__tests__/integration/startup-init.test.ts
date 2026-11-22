@@ -340,7 +340,7 @@ describe('server startup initialisation', () => {
       await sql`UPDATE system_settings SET spam_settings = ${sql.json(customSpam)}, ivr_languages = ${['fr']}`
       await sql`UPDATE roles SET description = 'edited by operator' WHERE id = 'role-volunteer'`
       await sql`DELETE FROM roles WHERE id = 'role-reporter'`
-      await sql`INSERT INTO roles (id, name, slug, permissions) VALUES ('role-custom', 'Custom', 'custom', ${['calls:read']})`
+      await sql`INSERT INTO roles (id, slug, permissions) VALUES ('role-custom', 'role-custom', ${['calls:read']})`
       // An admin deliberately deactivated the configured admin and gave it a second role.
       await sql`UPDATE users SET active = false, roles = ${['role-super-admin', 'role-volunteer']} WHERE pubkey = ${ADMIN_PUBKEY}`
     })
