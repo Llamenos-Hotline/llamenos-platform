@@ -455,15 +455,14 @@ class CaseManagementViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isAddingComment = true, actionError = null) }
             try {
-                sessionState.ensureAdminPubkeyLoaded(apiService)
                 // A comment is working content: it goes to the `fields` tier the
                 // server names for this record (its assignees, admins and
                 // `editRoles` holders), asked now and not cached. A failed
-                // lookup falls back to this device + the admin, and no admin key
-                // refuses the write (RecordReaders.kt, #1682).
+                // lookup falls back to this device + the hub's admins, and no admin
+                // reader refuses the write (RecordReaders.kt, #1682).
                 val readers = RecordReaderSet.forRecord(
                     author = cryptoService.encryptionPubkeyHex,
-                    adminDecryptionPubkey = sessionState.adminDecryptionPubkey,
+                    adminReaders = { sessionState.adminReaders(apiService) },
                 ) {
                     apiService.request<EnvelopeRecipientsResponse>(
                         "GET",

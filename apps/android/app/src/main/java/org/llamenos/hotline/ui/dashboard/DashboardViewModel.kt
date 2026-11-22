@@ -17,7 +17,6 @@ import org.llamenos.hotline.R
 import org.llamenos.hotline.api.AnalyticsRepository
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NoActiveHubException
-import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.api.failureMessage
@@ -79,7 +78,6 @@ class DashboardViewModel @Inject constructor(
     private val cryptoService: CryptoService,
     private val webSocketService: WebSocketService,
     private val apiService: ApiService,
-    private val sessionState: SessionState,
     private val activeHubState: ActiveHubState,
     private val analyticsRepository: AnalyticsRepository,
     private val shiftClockRepository: ShiftClockRepository,
@@ -240,8 +238,6 @@ class DashboardViewModel @Inject constructor(
     private suspend fun fetchServerEventKey() {
         try {
             val me = apiService.getAuthMe()
-            // Always persist admin decryption pubkey regardless of event keys
-            sessionState.adminDecryptionPubkey = me.adminDecryptionPubkey
             val currentKey = me.serverEventKeyHex ?: return
             webSocketService.setServerEventKeys(currentKey, me.serverEventKeyPrevHex ?: "")
         } catch (_: Exception) {

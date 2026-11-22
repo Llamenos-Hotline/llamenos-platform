@@ -130,9 +130,6 @@ class NotesViewModel @Inject constructor(
         }
     }
 
-    private suspend fun ensureAdminPubkeyLoaded() =
-        sessionState.ensureAdminPubkeyLoaded(apiService)
-
     /**
      * Load notes from the API and decrypt them locally.
      */
@@ -322,12 +319,14 @@ class NotesViewModel @Inject constructor(
                 val payload = NotePayload(text = noteText, fields = fields)
                 val payloadJson = json.encodeToString(NotePayload.serializer(), payload)
 
-                ensureAdminPubkeyLoaded()
+                // The hub the note lands in: a call's own hub, else the one being browsed.
+                val noteHubId = if (callId != null) hubId else null
+                val adminReaders = sessionState.adminReaders(apiService, noteHubId)
                 val authorPubkey = cryptoService.encryptionPubkeyHex
                     ?: throw CryptoException("No encryption key loaded")
                 val encrypted = cryptoService.encryptNote(
                     payloadJson,
-                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                    noteRecipientPubkeys(authorPubkey, adminReaders),
                 )
 
                 val (authorEnv, adminEnvs) = splitAuthorAndAdminEnvelopes(
@@ -462,12 +461,12 @@ class NotesViewModel @Inject constructor(
                 val payload = NotePayload(text = text, fields = fields)
                 val payloadJson = json.encodeToString(NotePayload.serializer(), payload)
 
-                ensureAdminPubkeyLoaded()
+                val adminReaders = sessionState.adminReaders(apiService)
                 val authorPubkey = cryptoService.encryptionPubkeyHex
                     ?: throw CryptoException("No encryption key loaded")
                 val encrypted = cryptoService.encryptNote(
                     payloadJson,
-                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                    noteRecipientPubkeys(authorPubkey, adminReaders),
                 )
 
                 val (authorEnv, adminEnvs) = splitAuthorAndAdminEnvelopes(
@@ -552,12 +551,12 @@ class NotesViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isSendingReply = true) }
             try {
-                ensureAdminPubkeyLoaded()
+                val adminReaders = sessionState.adminReaders(apiService)
                 val authorPubkey = cryptoService.encryptionPubkeyHex
                     ?: throw CryptoException("No encryption key loaded")
                 val encrypted = cryptoService.encryptNote(
                     text,
-                    noteRecipientPubkeys(authorPubkey, sessionState.adminPubkeys),
+                    noteRecipientPubkeys(authorPubkey, adminReaders),
                 )
 
                 val readerEnvelopes = encrypted.envelopes.map { env ->

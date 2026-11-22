@@ -331,7 +331,6 @@ class HubScopedViewModelReloadTest {
                 mockk<CryptoService>(relaxed = true),
                 mockWebSocketService(),
                 makeApiService(activeHubState),
-                mockk<SessionState>(relaxed = true),
                 activeHubState,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),

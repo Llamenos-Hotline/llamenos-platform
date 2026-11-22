@@ -19,7 +19,6 @@ import org.llamenos.hotline.api.AnalyticsRepository
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.RetryInterceptor
-import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
@@ -78,7 +77,6 @@ class DashboardRelayEventTest {
             mockk<CryptoService>(relaxed = true),
             ws,
             apiService,
-            mockk<SessionState>(relaxed = true),
             activeHubState,
             mockk<AnalyticsRepository>(relaxed = true),
             ShiftClockRepository(mockk(relaxed = true)),

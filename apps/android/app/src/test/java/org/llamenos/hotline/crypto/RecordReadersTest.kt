@@ -23,6 +23,7 @@ class RecordReadersTest {
 
     private val author = "aa".repeat(32)
     private val admin = "bb".repeat(32)
+    private val secondAdmin = "b1".repeat(32) // a second admin of the same hub (#1035)
     private val editor = "cc".repeat(32)      // holds an `editRoles` slug
     private val assignee = "dd".repeat(32)
     private val summaryOnly = "ee".repeat(32) // may see the case exists, nothing more
@@ -37,20 +38,20 @@ class RecordReadersTest {
 
     @Test
     fun `the fields tier carries the editRoles holder and the assignee as well as author and admin`() {
-        val readers = RecordReaderSet.compose(tiers, author, admin)
+        val readers = RecordReaderSet.compose(tiers, author, listOf(admin))
         assertEquals(listOf(author, editor, assignee, admin), readers.fields)
     }
 
     @Test
     fun `a summary-only member is on the summary tier and not on the fields tier`() {
-        val readers = RecordReaderSet.compose(tiers, author, admin)
+        val readers = RecordReaderSet.compose(tiers, author, listOf(admin))
         assertTrue(summaryOnly in readers.summary)
         assertFalse(summaryOnly in readers.fields)
     }
 
     @Test
     fun `a member the server did not name appears in no tier`() {
-        val readers = RecordReaderSet.compose(tiers, author, admin)
+        val readers = RecordReaderSet.compose(tiers, author, listOf(admin))
         for (tier in listOf(readers.summary, readers.fields, readers.pii)) {
             assertFalse(outsider in tier)
         }
@@ -63,7 +64,7 @@ class RecordReadersTest {
             fields = listOf(editor, editor, author, admin.uppercase()),
             pii = emptyList(),
         )
-        assertEquals(listOf(author, editor, admin), RecordReaderSet.compose(repeated, author, admin).fields)
+        assertEquals(listOf(author, editor, admin), RecordReaderSet.compose(repeated, author, listOf(admin)).fields)
     }
 
     @Test
@@ -71,12 +72,12 @@ class RecordReadersTest {
         val dirty = EnvelopeRecipientsResponse(
             summary = emptyList(), fields = listOf("garbage", editor, "ab".repeat(16)), pii = emptyList(),
         )
-        assertEquals(listOf(author, editor, admin), RecordReaderSet.compose(dirty, author, admin).fields)
+        assertEquals(listOf(author, editor, admin), RecordReaderSet.compose(dirty, author, listOf(admin)).fields)
     }
 
     @Test
     fun `a failed lookup leaves exactly the author and the admin and no other key`() = runTest {
-        val readers = RecordReaderSet.forRecord(author, admin) { throw java.io.IOException("offline") }
+        val readers = RecordReaderSet.forRecord(author, { listOf(admin) }) { throw java.io.IOException("offline") }
         assertEquals(listOf(author, admin), readers.fields)
         for (other in listOf(editor, assignee, summaryOnly, outsider)) {
             assertFalse(other in readers.fields)
@@ -85,23 +86,44 @@ class RecordReadersTest {
 
     @Test
     fun `a successful lookup is used`() = runTest {
-        val readers = RecordReaderSet.forRecord(author, admin) { tiers }
+        val readers = RecordReaderSet.forRecord(author, { listOf(admin) }) { tiers }
         assertTrue(editor in readers.fields && assignee in readers.fields)
     }
 
     @Test
-    fun `no admin recipient refuses the write and never asks the server`() = runTest {
-        for (bad in listOf(null, "", "not-hex", "ab".repeat(16), "g".repeat(64))) {
-            var asked = false
-            try {
-                RecordReaderSet.forRecord(author, bad) { asked = true; tiers }
-                throw AssertionError("an envelope set with no admin reader was produced for admin key $bad")
-            } catch (_: NoAdminReaderException) {
-                // expected
-            }
-            assertFalse("asked the server before refusing for $bad", asked)
+    fun `every admin of the hub is a reader of every tier, not just the first`() {
+        val readers = RecordReaderSet.compose(tiers, author, listOf(admin, secondAdmin))
+        for (tier in listOf(readers.summary, readers.fields, readers.pii)) {
+            assertTrue(admin in tier && secondAdmin in tier)
         }
-        assertThrows(NoAdminReaderException::class.java) { RecordReaderSet.compose(tiers, author, null) }
+    }
+
+    @Test
+    fun `a failed lookup still seals to every admin`() = runTest {
+        val readers = RecordReaderSet.forRecord(author, { listOf(admin, secondAdmin) }) { throw java.io.IOException("offline") }
+        assertEquals(listOf(author, admin, secondAdmin), readers.fields)
+    }
+
+    @Test
+    fun `no admin reader refuses the write and never asks the server`() = runTest {
+        var asked = false
+        try {
+            RecordReaderSet.forRecord(author, { emptyList() }) { asked = true; tiers }
+            throw AssertionError("an envelope set with no admin reader was produced")
+        } catch (_: NoAdminReaderException) {
+            // expected
+        }
+        assertFalse("asked the server before refusing", asked)
+        assertThrows(NoAdminReaderException::class.java) { RecordReaderSet.compose(tiers, author, emptyList()) }
+    }
+
+    @Test
+    fun `a refusal to resolve the admin set propagates and nothing is sealed`() = runTest {
+        assertThrows(NoAdminReaderException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                RecordReaderSet.forRecord(author, { throw NoAdminReaderException() }) { tiers }
+            }
+        }
     }
 
     @Test

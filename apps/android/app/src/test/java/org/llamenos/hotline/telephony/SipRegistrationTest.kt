@@ -675,7 +675,6 @@ class SipRegistrationTest {
             cryptoService,
             webSocketService,
             apiService,
-            mockk(relaxed = true),
             activeHubState,
             mockk(relaxed = true),
             shiftClockRepository,
