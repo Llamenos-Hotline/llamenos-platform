@@ -12,10 +12,13 @@ private final class ReplyServerStubURLProtocol: URLProtocol {
     private static var _handedToCarrier: [String] = []
     private static var _stored: [[String: Any]] = []
     private static var _carrierOutcome = "sent"
+    private static var _admins: [String] = []
 
-    static func reset(carrierOutcome: String = "sent") {
+    /// `admins` is what `GET /api/hubs/:hubId/readers?purpose=admin` answers with: the
+    /// registered device key of every admin of the hub.
+    static func reset(carrierOutcome: String = "sent", admins: [String] = [String(repeating: "ab", count: 32)]) {
         lock.lock(); defer { lock.unlock() }
-        _bodies = []; _handedToCarrier = []; _stored = []; _carrierOutcome = carrierOutcome
+        _bodies = []; _handedToCarrier = []; _stored = []; _carrierOutcome = carrierOutcome; _admins = admins
     }
     /// Every POST body the client sent, decoded.
     static var postBodies: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return _bodies }
@@ -56,6 +59,10 @@ private final class ReplyServerStubURLProtocol: URLProtocol {
     override func startLoading() {
         let path = request.url?.path ?? ""
         let method = request.httpMethod ?? "GET"
+        if path.hasSuffix("/readers") {
+            Self.lock.lock(); let admins = Self._admins; Self.lock.unlock()
+            return respond(200, ["hubId": "hub-a", "purpose": "admin", "recipients": admins])
+        }
         guard path.hasSuffix("/messages") else { return respond(404, ["error": "Not Found"]) }
 
         if method == "GET" {
@@ -113,8 +120,7 @@ final class ConversationReplyDeliveryTests: XCTestCase {
             apiService: api,
             cryptoService: crypto,
             webSocketService: WebSocketService(cryptoService: crypto),
-            hubContext: hubContext,
-            adminPubkeys: [String(repeating: "ab", count: 32)]
+            hubContext: hubContext
         )
         // Scopes the view model to the active hub, as opening the thread does.
         await vm.loadMessages(for: "conv-1")
@@ -167,5 +173,35 @@ final class ConversationReplyDeliveryTests: XCTestCase {
 
         XCTAssertTrue(ReplyServerStubURLProtocol.postBodies.isEmpty, "a blank reply must not be sent")
         XCTAssertTrue(ReplyServerStubURLProtocol.stored.isEmpty)
+    }
+
+    /// #1035: every admin of the hub is a reader of the reply, not one env-configured key.
+    func testAReplyIsSealedToEveryAdminOfTheHub() async throws {
+        let admins = [String(repeating: "ab", count: 32), String(repeating: "cd", count: 32)]
+        ReplyServerStubURLProtocol.reset(admins: admins)
+        let vm = try await makeViewModel()
+        vm.replyText = "We hear you."
+
+        await vm.sendReply()
+
+        let sent = try XCTUnwrap(ReplyServerStubURLProtocol.postBodies.first, "no reply reached the server")
+        let recipients = (sent["readerEnvelopes"] as? [[String: Any]] ?? []).compactMap { $0["pubkey"] as? String }
+        for admin in admins {
+            XCTAssertTrue(recipients.contains(admin), "admin \(admin.prefix(4)) is not a reader of the stored reply")
+        }
+    }
+
+    /// #1035: a hub with no admin able to read refuses the reply before anything is sealed,
+    /// and the volunteer's text stays on screen with the reason.
+    func testAReplyIsRefusedAndKeptWhenTheHubHasNoAdminReader() async throws {
+        ReplyServerStubURLProtocol.reset(admins: [])
+        let vm = try await makeViewModel()
+        vm.replyText = "We hear you."
+
+        await vm.sendReply()
+
+        XCTAssertTrue(ReplyServerStubURLProtocol.postBodies.isEmpty, "a reply no admin could read must not be sent")
+        XCTAssertEqual(vm.replyText, "We hear you.", "the text must stay in the field")
+        XCTAssertNotNil(vm.sendErrorMessage)
     }
 }

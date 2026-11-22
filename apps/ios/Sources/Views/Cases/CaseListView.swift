@@ -665,9 +665,6 @@ private struct CreateCaseSheet: View {
         isSubmitting = true
         errorMessage = nil
 
-        // Ensure admin pubkey is loaded before encrypting
-        await appState.ensureAdminPubkeyLoaded()
-
         do {
             let cryptoService = appState.cryptoService
             guard cryptoService.isUnlocked,
@@ -680,12 +677,13 @@ private struct CreateCaseSheet: View {
             // The summary is sealed to the `summary` tier the server names for
             // this entity type and the intended assignee (the creator): every
             // member who may see the case exists, plus this device and an
-            // admin. A failed lookup falls back to just this device + admin,
-            // and a missing admin key refuses the write (RecordReaders.swift).
+            // admin. A failed lookup falls back to just this device + the
+            // hub's admins, and a hub with no admin able to read refuses the
+            // write (RecordReaders.swift, HubAdminReaders.swift).
             let apiService = appState.apiService
             let readers = try await RecordReaderSet.creationReaders(
                 author: encPubkey,
-                adminDecryptionPubkey: appState.adminDecryptionPubkey
+                adminReaders: { try await HubAdminReaders.resolve(apiService: apiService) }
             ) {
                 try await RecordReaderSet.lookupCreationTiers(
                     apiService: apiService,

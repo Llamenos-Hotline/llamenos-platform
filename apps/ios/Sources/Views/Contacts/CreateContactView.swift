@@ -45,19 +45,20 @@ struct CreateContactView: View {
         }
 
         // Build reader pubkeys: current user + admin decryption key
-        var readerPubkeys: [String] = []
-        if let pubkey = appState.cryptoService.encryptionPubkeyHex {
-            readerPubkeys.append(pubkey)
-        }
-        if let adminPubkey = appState.adminDecryptionPubkey,
-           !readerPubkeys.contains(adminPubkey) {
-            readerPubkeys.append(adminPubkey)
-        }
-
         let contactsAPI = ContactsAPIService(apiService: appState.apiService)
 
         Task {
             do {
+                // This device + every admin of the hub the contact is filed in. A hub
+                // with no admin able to read refuses the save (#1035).
+                var readerPubkeys: [String] = []
+                if let pubkey = appState.cryptoService.encryptionPubkeyHex {
+                    readerPubkeys.append(pubkey)
+                }
+                for admin in try await HubAdminReaders.resolve(apiService: appState.apiService, hubId: hubId)
+                where !readerPubkeys.contains(admin) {
+                    readerPubkeys.append(admin)
+                }
                 let contact = try await vm.save(
                     hubId: hubId,
                     hubKey: hubKey,

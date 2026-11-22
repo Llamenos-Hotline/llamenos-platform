@@ -338,17 +338,12 @@ struct ConversationDetailView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ConversationsViewModel {
-        let currentAdminPubkeys = [appState.adminDecryptionPubkey].compactMap { $0 }
-        if let vm = viewModelBox.value {
-            vm.adminPubkeys = currentAdminPubkeys
-            return vm
-        }
+        if let vm = viewModelBox.value { return vm }
         let vm = ConversationsViewModel(
             apiService: appState.apiService,
             cryptoService: appState.cryptoService,
             webSocketService: appState.webSocketService,
-            hubContext: hubContext,
-            adminPubkeys: currentAdminPubkeys
+            hubContext: hubContext
         )
         viewModelBox.value = vm
         return vm

@@ -20,8 +20,8 @@ enum AuthStatus: Equatable {
 ///
 /// `@MainActor` (#1920 audit): every view reads this state on the main thread, and every
 /// mutation already came from a view or an `await MainActor.run` block — except the async
-/// ones. `ensureAdminPubkeyLoaded()` read `adminDecryptionPubkey` on the global executor, and
-/// the relay consumer ran `hubActivityService.handle` there. Isolating the class makes the
+/// ones. The relay consumer ran `hubActivityService.handle` on the global executor.
+/// Isolating the class makes the
 /// compiler hold every path to the main actor instead of relying on per-call hops.
 @MainActor
 @Observable
@@ -57,10 +57,6 @@ final class AppState {
     /// Whether the app is currently locked (background timeout or manual lock).
     /// Distinct from authStatus == .locked because it tracks the explicit "needs re-auth" state.
     var isLocked: Bool = false
-
-    /// Admin decryption pubkey from the server — used for E2EE envelope encryption
-    /// so admins can decrypt notes, reports, and messages created by this client.
-    var adminDecryptionPubkey: String?
 
     /// The current user's role. Determines whether admin features are visible.
     /// Loaded from the server after authentication.
@@ -178,10 +174,6 @@ final class AppState {
 
         // Determine initial auth state
         resolveAuthStatus()
-
-        // Load cached admin decryption pubkey so it's available immediately after unlock
-        // (before the async fetchUserRole() completes)
-        adminDecryptionPubkey = try? keychain.retrieveString(key: KeychainKey.adminDecryptionPubkey)
     }
 
     // MARK: - Launch Arguments (Test Support)
@@ -421,26 +413,6 @@ final class AppState {
         Task { await SecurityEventService.shared.flush() }
     }
 
-    /// Fetch admin decryption pubkey from the API if not already cached.
-    /// Call this before any encryption operation to guarantee the pubkey is available.
-    func ensureAdminPubkeyLoaded() async {
-        if adminDecryptionPubkey != nil { return }
-        do {
-            let response: AuthMeResponse = try await apiService.request(
-                method: "GET",
-                path: "/api/auth/me"
-            )
-            await MainActor.run {
-                self.adminDecryptionPubkey = response.adminDecryptionPubkey
-                if let pubkey = response.adminDecryptionPubkey {
-                    try? self.keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
-                }
-            }
-        } catch {
-            // Non-fatal — the cached value (if any) will be used
-        }
-    }
-
     /// Finish enrolment once the PIN screen has created the device keys.
     ///
     /// With an invite pending, redeem it first: the server only knows this device after
@@ -531,8 +503,6 @@ final class AppState {
         isLocked = false
         authStatus = .unauthenticated
         userRole = .volunteer
-        adminDecryptionPubkey = nil
-        keychainService.delete(key: KeychainKey.adminDecryptionPubkey)
         permissionService.clear()
         unreadConversationCount = 0
     }
@@ -633,13 +603,6 @@ final class AppState {
             case .loaded(let response):
                 syncDisplayRole()
 
-                // Store admin decryption pubkey for E2EE envelope encryption
-                adminDecryptionPubkey = response.adminDecryptionPubkey
-                // Persist to keychain so it's available immediately on next unlock
-                if let pubkey = response.adminDecryptionPubkey {
-                    try? keychainService.storeString(pubkey, key: KeychainKey.adminDecryptionPubkey)
-                }
-
                 // Store server event keys in Rust CryptoState for epoch-aware decryption.
                 // current key is required; previous key is optional (used during epoch rotation).
                 if let keyHex = response.serverEventKeyHex {
@@ -727,7 +690,6 @@ struct AuthMeResponse: Decodable {
     let name: String?
     let profileCompleted: Bool?
     let onBreak: Bool?
-    let adminDecryptionPubkey: String?
     let serverEventKeyHex: String?
     let serverEventKeyPrevHex: String?
 }

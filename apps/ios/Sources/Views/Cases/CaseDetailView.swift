@@ -669,19 +669,25 @@ struct CaseDetailView: View {
 
     /// Encrypt and post a case comment.
     ///
-    /// The admin decryption pubkey is resolved here, at submit time, because the
+    /// The hub's admin readers are resolved here, at submit time, because the
     /// server stores the envelopes it is given verbatim — a comment wrapped only
     /// for the author would be permanently unreadable to admins, breaking the
-    /// accountability guarantee in `docs/security/CRYPTO_ARCHITECTURE.md`.
+    /// accountability guarantee in `docs/security/CRYPTO_ARCHITECTURE.md`. A hub
+    /// with no admin able to read refuses the comment (#1035).
     ///
     /// Answers nil once the comment is saved, or the error to show — never nothing at
     /// all, so a comment that was not saved cannot be mistaken for one that was.
     private func submitComment(_ text: String) async -> String? {
-        await appState.ensureAdminPubkeyLoaded()
+        let adminPubkeys: [String]
+        do {
+            adminPubkeys = try await HubAdminReaders.resolve(apiService: appState.apiService)
+        } catch {
+            return error.localizedDescription
+        }
         let saved = await viewModel.addComment(
             recordId: record.id,
             text: text,
-            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
+            adminPubkeys: adminPubkeys
         )
         if saved { return nil }
         return viewModel.errorMessage

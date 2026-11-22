@@ -294,12 +294,8 @@ struct ReportsView: View {
     // MARK: - ViewModel Resolution
 
     private var resolvedViewModel: ReportsViewModel {
-        let currentAdminPubkeys = [appState.adminDecryptionPubkey].compactMap { $0 }
-        if let vm = viewModelBox.value {
-            vm.adminPubkeys = currentAdminPubkeys
-            return vm
-        }
-        let vm = ReportsViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService, adminPubkeys: currentAdminPubkeys)
+        if let vm = viewModelBox.value { return vm }
+        let vm = ReportsViewModel(apiService: appState.apiService, cryptoService: appState.cryptoService)
         viewModelBox.value = vm
         return vm
     }

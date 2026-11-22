@@ -21,7 +21,6 @@ import UIKit
 final class ReportsViewModel {
     private let apiService: APIService
     private let cryptoService: CryptoService
-    var adminPubkeys: [String]
 
     // MARK: - Public State
 
@@ -94,10 +93,9 @@ final class ReportsViewModel {
 
     // MARK: - Initialization
 
-    init(apiService: APIService, cryptoService: CryptoService, adminPubkeys: [String] = []) {
+    init(apiService: APIService, cryptoService: CryptoService) {
         self.apiService = apiService
         self.cryptoService = cryptoService
-        self.adminPubkeys = adminPubkeys
     }
 
     // MARK: - Data Loading
@@ -165,7 +163,10 @@ final class ReportsViewModel {
             if let ourPubkey = cryptoService.encryptionPubkeyHex {
                 recipientPubkeys.append(ourPubkey)
             }
-            for adminPubkey in adminPubkeys where !recipientPubkeys.contains(adminPubkey) {
+            // Every admin of the hub, asked now; a hub with none refuses the report
+            // before anything is sealed (#1035).
+            for adminPubkey in try await HubAdminReaders.resolve(apiService: apiService)
+            where !recipientPubkeys.contains(adminPubkey) {
                 recipientPubkeys.append(adminPubkey)
             }
 
@@ -244,7 +245,7 @@ final class ReportsViewModel {
             // Encrypt the fields JSON with per-message forward secrecy
             let encrypted = try cryptoService.encryptMessage(
                 plaintext: fieldsJSON,
-                readerPubkeys: adminPubkeys
+                readerPubkeys: try await HubAdminReaders.resolve(apiService: apiService)
             )
 
             let body = CreateReportBody(
