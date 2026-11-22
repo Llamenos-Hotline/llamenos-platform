@@ -2300,6 +2300,11 @@ public enum CryptoError: Swift.Error, Equatable, Hashable, Foundation.LocalizedE
     
     case FutureTimestamp(message: String)
     
+    /**
+     * The hub has no admin reader to seal to. See [`crate::readers`].
+     */
+    case NoAdminReader(message: String)
+    
 
     
 
@@ -2409,6 +2414,10 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 21: return .NoAdminReader(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2460,6 +2469,8 @@ public struct FfiConverterTypeCryptoError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(19))
         case .FutureTimestamp(_ /* message is ignored*/):
             writeInt(&buf, Int32(20))
+        case .NoAdminReader(_ /* message is ignored*/):
+            writeInt(&buf, Int32(21))
 
         
         }
@@ -3651,6 +3662,21 @@ public func mobileRecoveryShareLivenessProof(shareEnvelope: HpkeEnvelope, hubId:
 })
 }
 /**
+ * The admin reader set of a hub, from `GET /api/hubs/:hubId/readers?purpose=admin`.
+ *
+ * The one place mobile decides which keys count as readers of hub content
+ * (#1035): normalises, drops malformed entries, deduplicates, and returns
+ * `CryptoError.NoAdminReader` when nothing is left, so the caller refuses the
+ * write instead of sealing to the author alone. See [`crate::readers`].
+ */
+public func mobileResolveAdminReaders(serverRecipients: [String])throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_mobile_resolve_admin_readers(
+        FfiConverterSequenceString.lower(serverRecipients),$0
+    )
+})
+}
+/**
  * Seal a case ciphertext — a record's summary or fields, or a comment — as
  * this device, for this device plus `reader_pubkeys` (X25519, hex).
  *
@@ -4075,6 +4101,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers() != 2006) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711) {

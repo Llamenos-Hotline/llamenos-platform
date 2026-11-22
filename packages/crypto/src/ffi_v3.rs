@@ -704,6 +704,19 @@ pub fn mobile_key_wrap_aad_hex(label: String) -> Result<String, CryptoError> {
     crate::envelope_aad::key_wrap_aad_hex(&label)
 }
 
+/// The admin reader set of a hub, from `GET /api/hubs/:hubId/readers?purpose=admin`.
+///
+/// The one place mobile decides which keys count as readers of hub content
+/// (#1035): normalises, drops malformed entries, deduplicates, and returns
+/// `CryptoError.NoAdminReader` when nothing is left, so the caller refuses the
+/// write instead of sealing to the author alone. See [`crate::readers`].
+#[uniffi::export]
+pub fn mobile_resolve_admin_readers(
+    server_recipients: Vec<String>,
+) -> Result<Vec<String>, CryptoError> {
+    crate::readers::resolve_admin_readers(&server_recipients)
+}
+
 /// The numeric registry ID for a domain separation label.
 ///
 /// `HpkeEnvelope.labelId` is a wire field that must agree with the label the
