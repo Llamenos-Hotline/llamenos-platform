@@ -1,6 +1,6 @@
 /**
  * Erasure domain tables: erasure requests, erasure config,
- * re-encryption jobs, audit user keys.
+ * envelope revocation jobs, audit user keys.
  */
 import { sql } from 'drizzle-orm'
 import {
@@ -104,11 +104,17 @@ export const erasureConfig = pgTable('erasure_config', {
 })
 
 // ---------------------------------------------------------------------------
-// re_encryption_jobs
+// envelope_revocation_jobs
+//
+// Envelope REVOCATION (#1527), never re-sealing. A job removes a departed
+// member's wrapped-key entry from the jsonb envelope arrays so the server stops
+// serving it. No ciphertext is re-sealed and no content key is rewrapped, so a
+// wrap the member already copied stays valid — revocation closes future access
+// through the server, it does not invalidate past copies.
 // ---------------------------------------------------------------------------
 
-export const reEncryptionJobs = pgTable(
-  're_encryption_jobs',
+export const envelopeRevocationJobs = pgTable(
+  'envelope_revocation_jobs',
   {
     id: text('id')
       .primaryKey()
@@ -128,8 +134,8 @@ export const reEncryptionJobs = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index('re_encryption_jobs_user_id_idx').on(table.userId),
-    index('re_encryption_jobs_status_idx').on(table.status),
+    index('envelope_revocation_jobs_user_id_idx').on(table.userId),
+    index('envelope_revocation_jobs_status_idx').on(table.status),
   ],
 )
 

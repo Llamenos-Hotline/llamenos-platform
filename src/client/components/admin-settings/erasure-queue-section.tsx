@@ -16,9 +16,9 @@ import { Loader2, UserX, Smartphone, RefreshCw } from 'lucide-react'
 import {
   adminEraseUser,
   remoteWipeDevice,
-  listReEncryptionJobs,
+  listEnvelopeRevocationJobs,
 } from '@/lib/api'
-import type { ErasureRequest, ReEncryptionJob } from '@protocol/schemas'
+import type { ErasureRequest, EnvelopeRevocationJob } from '@protocol/schemas'
 
 interface Props {
   requests: ErasureRequest[]
@@ -42,7 +42,7 @@ export function ErasureQueueSection({ requests, onRefresh, expanded, onToggle, s
   const [wipeUserId, setWipeUserId] = useState('')
   const [wipeDevicePubkey, setWipeDevicePubkey] = useState('')
   const [wiping, setWiping] = useState(false)
-  const [reEncryptionJobs, setReEncryptionJobs] = useState<ReEncryptionJob[]>([])
+  const [envelopeRevocationJobs, setEnvelopeRevocationJobs] = useState<EnvelopeRevocationJob[]>([])
   const [jobsLoading, setJobsLoading] = useState(false)
 
   const filteredRequests = statusFilter === 'all'
@@ -83,11 +83,11 @@ export function ErasureQueueSection({ requests, onRefresh, expanded, onToggle, s
     }
   }
 
-  async function loadReEncryptionJobs() {
+  async function loadEnvelopeRevocationJobs() {
     setJobsLoading(true)
     try {
-      const { jobs } = await listReEncryptionJobs()
-      setReEncryptionJobs(jobs)
+      const { jobs } = await listEnvelopeRevocationJobs()
+      setEnvelopeRevocationJobs(jobs)
     } catch {
       toast(t('common.error'), 'error')
     } finally {
@@ -191,22 +191,22 @@ export function ErasureQueueSection({ requests, onRefresh, expanded, onToggle, s
         </Button>
       </div>
 
-      {/* Re-encryption jobs */}
+      {/* Envelope revocation jobs */}
       <div className="mt-6 border-t border-border/60 pt-5">
         <div className="flex items-center justify-between mb-3">
-          <h4 className="text-sm font-medium">{t('erasure.admin.reEncryptionJobs')}</h4>
-          <Button variant="ghost" size="sm" onClick={loadReEncryptionJobs} data-testid="reencryption-refresh">
+          <h4 className="text-sm font-medium">{t('erasure.admin.envelopeRevocationJobs')}</h4>
+          <Button variant="ghost" size="sm" onClick={loadEnvelopeRevocationJobs} data-testid="envelope-revocation-refresh">
             {jobsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </Button>
         </div>
-        {reEncryptionJobs.length === 0 ? (
-          <p className="text-sm text-muted-foreground" data-testid="reencryption-empty">
-            {t('erasure.admin.noReEncryptionJobs')}
+        {envelopeRevocationJobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="envelope-revocation-empty">
+            {t('erasure.admin.noEnvelopeRevocationJobs')}
           </p>
         ) : (
-          <div className="space-y-2" data-testid="reencryption-job-list">
-            {reEncryptionJobs.map((job) => (
-              <div key={job.id} className="rounded-lg border border-border p-3 space-y-2" data-testid={`reencryption-job-${job.id}`}>
+          <div className="space-y-2" data-testid="envelope-revocation-job-list">
+            {envelopeRevocationJobs.map((job) => (
+              <div key={job.id} className="rounded-lg border border-border p-3 space-y-2" data-testid={`envelope-revocation-job-${job.id}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-sm">{t('erasure.admin.jobUser', { userId: job.userId })}</span>
                   <Badge variant={job.status === 'completed' ? 'default' : job.status === 'failed' ? 'destructive' : 'secondary'}>

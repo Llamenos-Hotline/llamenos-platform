@@ -52,12 +52,12 @@ Feature: Account Erasure
     When the admin POSTs to "/hubs/test-hub/erasure/:userId" with a justification
     Then the response status should be 200
     And the response body "ok" should be true
-    And the response should contain reEncryptionJobIds
+    And the response should contain envelopeRevocationJobIds
 
   @backend
-  Scenario: Admin can view re-encryption jobs
+  Scenario: Admin can view envelope revocation jobs
     Given an admin user
-    When the admin GETs "/hubs/test-hub/erasure/re-encryption-jobs"
+    When the admin GETs "/hubs/test-hub/erasure/envelope-revocation-jobs"
     Then the response status should be 200
     And the response should contain a jobs list
 

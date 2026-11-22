@@ -3,7 +3,7 @@
  * Bun-native driver.
  *
  * MUST run under `bun test`, NOT vitest (`users.hub_roles` is a `bun-jsonb`
- * column; see hub-member-removal-reencryption.test.ts for why that matters):
+ * column; see hub-member-removal-envelope-revocation.test.ts for why that matters):
  *   bun test apps/worker/__tests__/integration-bun/hub-last-admin.test.ts
  *
  * Requires postgres at DATABASE_URL with migrations applied
@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { eq, inArray, sql } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase, outsideTransaction } from '../../db'
-import { hubs, users, roles, notes, erasureRequests, reEncryptionJobs } from '../../db/schema'
+import { hubs, users, roles, notes, erasureRequests, envelopeRevocationJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
 import { SettingsService, ServiceError } from '../../services/settings'
 import { ErasureService } from '../../services/erasure'
@@ -99,7 +99,7 @@ async function expectRefused(fn: () => Promise<unknown>): Promise<string> {
 
 afterAll(async () => {
   await db.delete(erasureRequests).where(inArray(erasureRequests.userId, createdUsers))
-  await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.userId, createdUsers))
+  await db.delete(envelopeRevocationJobs).where(inArray(envelopeRevocationJobs.userId, createdUsers))
   if (createdRoles.length > 0) await db.delete(roles).where(inArray(roles.id, createdRoles))
   if (createdHubs.length > 0) await db.delete(hubs).where(inArray(hubs.id, createdHubs))
   await db.delete(users).where(inArray(users.pubkey, createdUsers))
@@ -154,7 +154,7 @@ describe('the last admin cannot be removed or demoted', () => {
     await expectRefused(() => identity.removeHubRole({ pubkey: admin, hubId }))
     expect(await stillAdmin(admin, hubId)).toBe(true)
     // The refusal must be total: no revocation side effect was enqueued.
-    const jobs = await db.select().from(reEncryptionJobs).where(eq(reEncryptionJobs.userId, admin))
+    const jobs = await db.select().from(envelopeRevocationJobs).where(eq(envelopeRevocationJobs.userId, admin))
     expect(jobs).toEqual([])
   })
 

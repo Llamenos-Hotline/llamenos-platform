@@ -3,14 +3,14 @@
  *
  * Handles self-service erasure requests (with configurable delay),
  * admin immediate erasure, cryptographic cascade execution,
- * and re-encryption job queuing.
+ * and envelope revocation job queuing.
  */
 import { eq, and, or, ne, sql, desc, count, type SQL } from 'drizzle-orm'
 import type { Database } from '../db'
 import {
   erasureRequests,
   erasureConfig,
-  reEncryptionJobs,
+  envelopeRevocationJobs,
   auditUserKeys,
   users,
   auditLog,
@@ -129,7 +129,7 @@ function hasEnvelopeFor(column: SQL, pubkey: string): SQL {
 
 /**
  * Blob-envelope-mirror deletion, injected by the service registry. The hub
- * shred leaves queued scope='hub' marker jobs in re_encryption_jobs when a
+ * shred leaves queued scope='hub' marker jobs in envelope_revocation_jobs when a
  * crash lands between the database commit and the object-store deletion; the
  * retry path here finishes those rather than losing the mirrors silently.
  */
@@ -651,14 +651,14 @@ export class ErasureService {
    *
    * Phase 1 (revocation) and Phase 3 (crypto-shredding) happen here.
    * Phase 2 (server-side cleanup) is also transactional.
-   * Phase 4 (re-encryption) is queued as a background job.
+   * Phase 4 (envelope revocation) is queued as a background job.
    */
   async executeErasure(
     userId: string,
     executedBy: string,
     justification: string,
     auditService: AuditService,
-  ): Promise<{ reEncryptionJobIds: string[] }> {
+  ): Promise<{ envelopeRevocationJobIds: string[] }> {
     // CRIT-5: Fetch hub memberships BEFORE the transaction so we still have
     // hub_keys rows available. hub_keys are deleted inside the transaction.
     const hubMembershipsRows = await this.db.execute(sql`
@@ -667,7 +667,7 @@ export class ErasureService {
       SELECT DISTINCT hub_id FROM notes WHERE author_pubkey = ${userId}
     `)
 
-    const reEncryptionJobIds: string[] = []
+    const envelopeRevocationJobIds: string[] = []
 
     await this.db.transaction(async (tx) => {
       // First: if this account is the only admin of a hub, nothing below runs
@@ -774,20 +774,20 @@ export class ErasureService {
         AND jsonb_typeof(details) != 'null'
       `)
 
-      // RACE-10: Phase 4 — re-encryption job inserts INSIDE transaction.
+      // RACE-10: Phase 4 — envelope revocation job inserts INSIDE transaction.
       // If the process crashes after Phase 2+3 but before Phase 4, jobs would
       // be lost. Moving them inside ensures atomicity.
       for (const row of hubMembershipsRows as { hub_id: string }[]) {
         if (!row.hub_id) continue
         const [job] = await tx
-          .insert(reEncryptionJobs)
+          .insert(envelopeRevocationJobs)
           .values({
             userId,
             hubId: row.hub_id,
             status: 'queued',
           })
           .returning()
-        reEncryptionJobIds.push(job.id)
+        envelopeRevocationJobIds.push(job.id)
       }
 
       // Update erasure request status INSIDE transaction
@@ -816,7 +816,7 @@ export class ErasureService {
       justification,
     })
 
-    return { reEncryptionJobIds }
+    return { envelopeRevocationJobIds }
   }
 
   /**
@@ -1116,35 +1116,35 @@ export class ErasureService {
   }
 
   // ---------------------------------------------------------------------------
-  // Re-encryption jobs
+  // Envelope revocation jobs
   // ---------------------------------------------------------------------------
 
-  async listReEncryptionJobs(
+  async listEnvelopeRevocationJobs(
     hubId: string,
     userId?: string,
-  ): Promise<(typeof reEncryptionJobs.$inferSelect)[]> {
+  ): Promise<(typeof envelopeRevocationJobs.$inferSelect)[]> {
     return this.db
       .select()
-      .from(reEncryptionJobs)
-      .where(and(eq(reEncryptionJobs.hubId, hubId), userId ? eq(reEncryptionJobs.userId, userId) : undefined))
-      .orderBy(desc(reEncryptionJobs.createdAt))
+      .from(envelopeRevocationJobs)
+      .where(and(eq(envelopeRevocationJobs.hubId, hubId), userId ? eq(envelopeRevocationJobs.userId, userId) : undefined))
+      .orderBy(desc(envelopeRevocationJobs.createdAt))
   }
 
-  async getQueuedReEncryptionJobs(): Promise<(typeof reEncryptionJobs.$inferSelect)[]> {
+  async getQueuedEnvelopeRevocationJobs(): Promise<(typeof envelopeRevocationJobs.$inferSelect)[]> {
     return this.db
       .select()
-      .from(reEncryptionJobs)
-      .where(eq(reEncryptionJobs.status, 'queued'))
+      .from(envelopeRevocationJobs)
+      .where(eq(envelopeRevocationJobs.status, 'queued'))
       .limit(10)
   }
 
-  async updateReEncryptionJobProgress(
+  async updateEnvelopeRevocationJobProgress(
     jobId: string,
     processedEnvelopes: number,
     totalEnvelopes: number,
   ): Promise<void> {
     await this.db
-      .update(reEncryptionJobs)
+      .update(envelopeRevocationJobs)
       .set({
         processedEnvelopes,
         totalEnvelopes,
@@ -1153,17 +1153,20 @@ export class ErasureService {
         completedAt:
           processedEnvelopes >= totalEnvelopes ? new Date() : undefined,
       })
-      .where(eq(reEncryptionJobs.id, jobId))
+      .where(eq(envelopeRevocationJobs.id, jobId))
   }
 
   /**
-   * Process a single re-encryption job: remove departed user's envelope copies.
+   * Process a single envelope revocation job: remove the departed user's
+   * envelope entries from the jsonb arrays. This revokes future access through
+   * the server; it does NOT re-encrypt anything, so a wrap the user already
+   * copied still opens its content key (#1527).
    */
-  async processReEncryptionJob(jobId: string): Promise<void> {
+  async processEnvelopeRevocationJob(jobId: string): Promise<void> {
     const [job] = await this.db
       .select()
-      .from(reEncryptionJobs)
-      .where(eq(reEncryptionJobs.id, jobId))
+      .from(envelopeRevocationJobs)
+      .where(eq(envelopeRevocationJobs.id, jobId))
       .limit(1)
 
     if (!job || job.status === 'completed') return
@@ -1188,9 +1191,9 @@ export class ErasureService {
         })
       }
       await this.db
-        .update(reEncryptionJobs)
+        .update(envelopeRevocationJobs)
         .set({ status: 'completed', completedAt: new Date() })
-        .where(eq(reEncryptionJobs.id, jobId))
+        .where(eq(envelopeRevocationJobs.id, jobId))
       return
     }
 
@@ -1201,9 +1204,9 @@ export class ErasureService {
     )
     if (hub?.status === 'shredded') {
       await this.db
-        .update(reEncryptionJobs)
+        .update(envelopeRevocationJobs)
         .set({ status: 'completed', completedAt: new Date() })
-        .where(eq(reEncryptionJobs.id, jobId))
+        .where(eq(envelopeRevocationJobs.id, jobId))
       return
     }
 
@@ -1212,7 +1215,7 @@ export class ErasureService {
     // completion having stripped no envelopes — the exact silent success this
     // whole path is being fixed for. Leave it queued and say so.
     if (job.userId === null) {
-      logger.error('User-scope re-encryption job has no user — not processing', {
+      logger.error('User-scope envelope revocation job has no user — not processing', {
         jobId: job.id,
         hubId: job.hubId,
       })
@@ -1250,7 +1253,7 @@ export class ErasureService {
       Number((replyCount[0] as { cnt: string }).cnt) +
       Number((messageCount[0] as { cnt: string }).cnt)
 
-    await this.updateReEncryptionJobProgress(jobId, 0, total)
+    await this.updateEnvelopeRevocationJobProgress(jobId, 0, total)
 
     if (total === 0) {
       return
@@ -1269,7 +1272,7 @@ export class ErasureService {
       AND ${hasEnvelopeFor(sql`admin_envelopes`, userPubkey)}
     `)
     processed += Number((noteCount[0] as { cnt: string }).cnt)
-    await this.updateReEncryptionJobProgress(jobId, processed, total)
+    await this.updateEnvelopeRevocationJobProgress(jobId, processed, total)
 
     await this.db.execute(sql`
       UPDATE note_replies
@@ -1282,7 +1285,7 @@ export class ErasureService {
       AND ${hasEnvelopeFor(sql`reader_envelopes`, userPubkey)}
     `)
     processed += Number((replyCount[0] as { cnt: string }).cnt)
-    await this.updateReEncryptionJobProgress(jobId, processed, total)
+    await this.updateEnvelopeRevocationJobProgress(jobId, processed, total)
 
     await this.db.execute(sql`
       UPDATE messages
@@ -1297,7 +1300,7 @@ export class ErasureService {
       AND ${hasEnvelopeFor(sql`reader_envelopes`, userPubkey)}
     `)
     processed += Number((messageCount[0] as { cnt: string }).cnt)
-    await this.updateReEncryptionJobProgress(jobId, processed, total)
+    await this.updateEnvelopeRevocationJobProgress(jobId, processed, total)
   }
 
   // ---------------------------------------------------------------------------

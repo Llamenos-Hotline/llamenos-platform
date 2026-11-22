@@ -49,7 +49,7 @@ export const WORKER_TICK_INTERVAL_MS = {
   'retention-purge': 30 * MINUTE_MS,
   'audit-chain-verify': 60 * MINUTE_MS,
   'erasure-expiry': 5 * MINUTE_MS,
-  're-encryption': MINUTE_MS,
+  'envelope-revocation': MINUTE_MS,
   'periodic-cleanup': 5 * MINUTE_MS,
   'signal-queue-drain': 30_000,
   'stale-call-reaper': 2 * MINUTE_MS,

@@ -627,24 +627,24 @@
       }
     },
     {
-      "functionName": "listReEncryptionJobs",
+      "functionName": "listEnvelopeRevocationJobs",
       "file": "src/client/lib/api/governance.ts",
       "line": 61,
       "method": "GET",
-      "pathPattern": "/erasure/re-encryption-jobs",
-      "serverPath": "/api/erasure/re-encryption-jobs",
+      "pathPattern": "/erasure/envelope-revocation-jobs",
+      "serverPath": "/api/erasure/envelope-revocation-jobs",
       "body": {
         "verdict": "N/A"
       },
       "response": {
         "verdict": "UNBOUND",
-        "clientType": "{ jobs: ReEncryptionJob[] }",
-        "schemaIdent": "reEncryptionJobListResponseSchema",
+        "clientType": "{ jobs: EnvelopeRevocationJob[] }",
+        "schemaIdent": "envelopeRevocationJobListResponseSchema",
         "fieldDiff": {
           "missingOnClient": [],
           "extraOnClient": []
         },
-        "note": "hand-written shape; no PascalCase type alias exists yet for `reEncryptionJobListResponseSchema` — add `export type <Name> = z.infer<typeof reEncryptionJobListResponseSchema>` beside it in packages/protocol/schemas/erasure.ts"
+        "note": "hand-written shape; no PascalCase type alias exists yet for `envelopeRevocationJobListResponseSchema` — add `export type <Name> = z.infer<typeof envelopeRevocationJobListResponseSchema>` beside it in packages/protocol/schemas/erasure.ts"
       }
     },
     {
