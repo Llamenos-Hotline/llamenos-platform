@@ -225,8 +225,8 @@ describe('HubShredService.execute', () => {
     // The mirror marker the shred queued is completed, not left dangling.
     const [marker] = await fresh.db
       .select()
-      .from(schema.reEncryptionJobs)
-      .where(eq(schema.reEncryptionJobs.hubId, hubId))
+      .from(schema.envelopeRevocationJobs)
+      .where(eq(schema.envelopeRevocationJobs.hubId, hubId))
     expect(marker!.scope).toBe('hub')
     expect(marker!.status).toBe('completed')
     },

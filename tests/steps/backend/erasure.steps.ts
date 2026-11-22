@@ -245,10 +245,10 @@ Then('the response should contain a list of requests with total {int}', ({ world
   expect(body?.total).toBeGreaterThanOrEqual(total)
 })
 
-Then('the response should contain reEncryptionJobIds', ({ world }) => {
+Then('the response should contain envelopeRevocationJobIds', ({ world }) => {
   const state = getSharedState(world)
-  const body = state.lastResponse?.data as { reEncryptionJobIds?: string[] }
-  expect(Array.isArray(body?.reEncryptionJobIds)).toBe(true)
+  const body = state.lastResponse?.data as { envelopeRevocationJobIds?: string[] }
+  expect(Array.isArray(body?.envelopeRevocationJobIds)).toBe(true)
 })
 
 Then('the response should contain a jobs list', ({ world }) => {

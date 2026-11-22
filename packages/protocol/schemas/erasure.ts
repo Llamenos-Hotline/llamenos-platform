@@ -80,9 +80,9 @@ export const abandonErasureBodySchema = z.object({
   justification: z.string().trim().min(1).max(2000),
 })
 
-// --- Re-encryption job ---
+// --- Envelope revocation job ---
 
-export const reEncryptionJobSchema = z.object({
+export const envelopeRevocationJobSchema = z.object({
   id: z.string(),
   userId: z.string(),
   hubId: z.string(),
@@ -94,7 +94,7 @@ export const reEncryptionJobSchema = z.object({
   createdAt: z.string(),
 })
 
-export type ReEncryptionJob = z.infer<typeof reEncryptionJobSchema>
+export type EnvelopeRevocationJob = z.infer<typeof envelopeRevocationJobSchema>
 
 // --- Response schemas ---
 
@@ -118,8 +118,8 @@ export const erasureRequestListResponseSchema = z.object({
   total: z.number(),
 })
 
-export const reEncryptionJobListResponseSchema = z.object({
-  jobs: z.array(reEncryptionJobSchema),
+export const envelopeRevocationJobListResponseSchema = z.object({
+  jobs: z.array(envelopeRevocationJobSchema),
 })
 
 // --- Device wipe body ---

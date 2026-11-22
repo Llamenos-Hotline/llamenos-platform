@@ -172,9 +172,9 @@ describe('hubs carry a key generation', () => {
   })
 })
 
-describe('re_encryption_jobs carries scope', () => {
+describe('envelope_revocation_jobs carries scope', () => {
   it('accepts a hub-scoped job with no user', async () => {
-    const [job] = await db.insert(schema.reEncryptionJobs).values({
+    const [job] = await db.insert(schema.envelopeRevocationJobs).values({
       scope: 'hub', hubId: 'hub-d', userId: null,
     }).returning()
     expect(job.scope).toBe('hub')

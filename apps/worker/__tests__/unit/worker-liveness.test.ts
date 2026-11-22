@@ -26,7 +26,7 @@ import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
 import { startAuditChainVerifyWorker, stopAuditChainVerifyWorker } from '@worker/lib/audit-chain-verify-worker'
 import { startErasureExpiryWorker, stopErasureExpiryWorker } from '@worker/lib/erasure-expiry-worker'
-import { startReEncryptionWorker, stopReEncryptionWorker } from '@worker/lib/re-encryption-worker'
+import { startEnvelopeRevocationWorker, stopEnvelopeRevocationWorker } from '@worker/lib/envelope-revocation-worker'
 import { startPeriodicCleanupWorker, stopPeriodicCleanupWorker } from '@worker/lib/periodic-cleanup-worker'
 import { startSignalQueueDrainWorker, stopSignalQueueDrainWorker } from '@worker/lib/signal-queue-drain-worker'
 import { startStaleCallReaperWorker, stopStaleCallReaperWorker } from '@worker/lib/stale-call-reaper-worker'
@@ -92,9 +92,9 @@ const DRIVERS: Record<SchedulerWorkerName, { start: () => void; stop: () => void
       }),
     stop: stopErasureExpiryWorker,
   },
-  're-encryption': {
-    start: () => startReEncryptionWorker({ erasureService: { getQueuedReEncryptionJobs: async () => [] } as never }),
-    stop: stopReEncryptionWorker,
+  'envelope-revocation': {
+    start: () => startEnvelopeRevocationWorker({ erasureService: { getQueuedEnvelopeRevocationJobs: async () => [] } as never }),
+    stop: stopEnvelopeRevocationWorker,
   },
   'periodic-cleanup': {
     start: () =>
@@ -246,7 +246,7 @@ describe('renderWorkerLivenessMetrics', () => {
 
 describe('GET /api/metrics/prometheus', () => {
   it('exposes both liveness families to the scraper', async () => {
-    await trackWorkerTick('re-encryption', async () => undefined)
+    await trackWorkerTick('envelope-revocation', async () => undefined)
 
     const res = await metricsRoutes.request(
       '/prometheus',
@@ -261,7 +261,7 @@ describe('GET /api/metrics/prometheus', () => {
     for (const name of SCHEDULER_WORKER_NAMES) {
       expect(body).toContain(`${WORKER_TICK_INTERVAL_METRIC}{worker="${name}"}`)
     }
-    expect(body).toMatch(new RegExp(`^${WORKER_LAST_SUCCESS_METRIC}\\{worker="re-encryption"\\} \\d+\\.\\d{3}$`, 'm'))
+    expect(body).toMatch(new RegExp(`^${WORKER_LAST_SUCCESS_METRIC}\\{worker="envelope-revocation"\\} \\d+\\.\\d{3}$`, 'm'))
   })
 })
 

@@ -31,9 +31,9 @@ vi.mock('@worker/lib/erasure-expiry-worker', () => ({
   stopErasureExpiryWorker: vi.fn(),
 }))
 
-vi.mock('@worker/lib/re-encryption-worker', () => ({
-  startReEncryptionWorker: vi.fn(),
-  stopReEncryptionWorker: vi.fn(),
+vi.mock('@worker/lib/envelope-revocation-worker', () => ({
+  startEnvelopeRevocationWorker: vi.fn(),
+  stopEnvelopeRevocationWorker: vi.fn(),
 }))
 
 vi.mock('@worker/lib/periodic-cleanup-worker', () => ({
@@ -80,7 +80,7 @@ import { startScheduledBlastPoller, stopScheduledBlastPoller } from '@worker/lib
 import { startRetentionPurgeWorker, stopRetentionPurgeWorker } from '@worker/lib/retention-purge-worker'
 import { startAuditChainVerifyWorker, stopAuditChainVerifyWorker } from '@worker/lib/audit-chain-verify-worker'
 import { startErasureExpiryWorker, stopErasureExpiryWorker } from '@worker/lib/erasure-expiry-worker'
-import { startReEncryptionWorker, stopReEncryptionWorker } from '@worker/lib/re-encryption-worker'
+import { startEnvelopeRevocationWorker, stopEnvelopeRevocationWorker } from '@worker/lib/envelope-revocation-worker'
 import { startPeriodicCleanupWorker, stopPeriodicCleanupWorker } from '@worker/lib/periodic-cleanup-worker'
 import {
   createSignalQueueDrainOpts,
@@ -108,7 +108,7 @@ const WORKERS = [
   { name: 'retention purge', start: startRetentionPurgeWorker, stop: stopRetentionPurgeWorker, dep: 'retentionService' },
   { name: 'audit chain verify', start: startAuditChainVerifyWorker, stop: stopAuditChainVerifyWorker, dep: 'identityService' },
   { name: 'erasure expiry', start: startErasureExpiryWorker, stop: stopErasureExpiryWorker, dep: 'erasureService' },
-  { name: 're-encryption', start: startReEncryptionWorker, stop: stopReEncryptionWorker, dep: 'erasureService' },
+  { name: 'envelope-revocation', start: startEnvelopeRevocationWorker, stop: stopEnvelopeRevocationWorker, dep: 'erasureService' },
   { name: 'periodic cleanup', start: startPeriodicCleanupWorker, stop: stopPeriodicCleanupWorker, dep: 'identityService' },
   { name: 'signal queue drain', start: startSignalQueueDrainWorker, stop: stopSignalQueueDrainWorker, dep: 'resolveAdapter' },
   { name: 'stale call reaper', start: startStaleCallReaperWorker, stop: stopStaleCallReaperWorker, dep: 'callsService' },

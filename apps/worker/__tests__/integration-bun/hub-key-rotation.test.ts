@@ -4,7 +4,7 @@
  *
  *   bun test apps/worker/__tests__/integration-bun/hub-key-rotation.test.ts
  *
- * Bun tier for the same reason as hub-member-removal-reencryption.test.ts:
+ * Bun tier for the same reason as hub-member-removal-envelope-revocation.test.ts:
  * membership lives in the `bun-jsonb` `users.hub_roles` column, and "who is a
  * member" is exactly what the rotation's recipient rule is built on.
  *

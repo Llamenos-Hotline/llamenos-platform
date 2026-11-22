@@ -24,7 +24,7 @@ import { inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { erasureRequests, hubKeys, hubs, reEncryptionJobs, users } from '../../db/schema'
+import { erasureRequests, hubKeys, hubs, envelopeRevocationJobs, users } from '../../db/schema'
 import { ErasureService } from '../../services/erasure'
 import erasureRoutes from '../../routes/erasure'
 import { hubContext } from '../../middleware/hub'
@@ -163,14 +163,14 @@ beforeAll(async () => {
     REQ[label] = inserted!.id
   }
   for (const [label, hubId, userId] of [['a', HUB_A, IN_A.pubkey], ['b', HUB_B, IN_B.pubkey]] as const) {
-    const [job] = await db.insert(reEncryptionJobs).values({ hubId, userId }).returning({ id: reEncryptionJobs.id })
+    const [job] = await db.insert(envelopeRevocationJobs).values({ hubId, userId }).returning({ id: envelopeRevocationJobs.id })
     JOB[label] = job!.id
   }
 })
 
 afterAll(async () => {
   await db.delete(hubKeys).where(inArray(hubKeys.recipientPubkey, [FORMER_B_MEMBER.pubkey]))
-  await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.id, Object.values(JOB)))
+  await db.delete(envelopeRevocationJobs).where(inArray(envelopeRevocationJobs.id, Object.values(JOB)))
   await db.delete(erasureRequests).where(inArray(erasureRequests.id, Object.values(REQ)))
   await db.delete(users).where(inArray(users.pubkey, ownPubkeys))
   await db.delete(hubs).where(inArray(hubs.id, [HUB_A, HUB_B]))
@@ -276,9 +276,9 @@ describe('GET /api/erasure/platform/requests — the platform scope is its own e
   })
 })
 
-describe('GET /api/hubs/:hubId/erasure/re-encryption-jobs', () => {
+describe('GET /api/hubs/:hubId/erasure/envelope-revocation-jobs', () => {
   it('lists the hub’s jobs only', async () => {
-    const { status, body } = await call(HUB_A_ADMIN, 'GET', `/api/hubs/${HUB_A}/erasure/re-encryption-jobs`)
+    const { status, body } = await call(HUB_A_ADMIN, 'GET', `/api/hubs/${HUB_A}/erasure/envelope-revocation-jobs`)
     expect(status).toBe(200)
     const listed = (body.jobs ?? []).map(j => j.id)
     expect(listed).toContain(JOB.a)
@@ -286,7 +286,7 @@ describe('GET /api/hubs/:hubId/erasure/re-encryption-jobs', () => {
   })
 
   it('has no hub-less listing', async () => {
-    const { status, body } = await call(SUPER_ADMIN, 'GET', '/api/erasure/re-encryption-jobs')
+    const { status, body } = await call(SUPER_ADMIN, 'GET', '/api/erasure/envelope-revocation-jobs')
     expect(status).toBe(400)
     expect(body.jobs).toBeUndefined()
   })
