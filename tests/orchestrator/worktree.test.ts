@@ -29,6 +29,7 @@ import {
   stopSession, killWorktreeProcesses, salvageUncommittedWork, destroyWorktree, labelIssue, settle,
   classifyWorktreeChanges, parsePorcelainPaths, findWedgedWorktrees, resolveWedgeForDispatch,
   salvageInventory, salvagedFleetBranch, describeRunFailure, SALVAGE_PUSH_TIMEOUT_MS,
+  retireObsoleteSalvage, isSalvageBranchObsolete, salvageItemId,
 } from '../../orchestrator/src/worktree.js'
 
 const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>
@@ -489,6 +490,156 @@ describe('salvageInventory (issue #1755 doctor report)', () => {
     expect(withWork?.realFiles).toBe(1)
     expect(withWork?.artifactFiles).toBe(1)
     expect(withWork?.hasWorktree).toBe(true)
+  })
+})
+
+describe('salvage backlog (issue #2699)', () => {
+  const git = (cwd: string, cmd: string): string => execSync(`git ${cmd}`, { cwd }).toString().trim()
+
+  /** A salvage branch off main carrying `file` = `content`, no worktree. */
+  function salvageBranch(f: Fixture, name: string, file: string, content: string): void {
+    git(f.mainRepo, `checkout -q -b ${name} main`)
+    writeFileSync(join(f.mainRepo, file), content)
+    git(f.mainRepo, `add ${file}`)
+    git(f.mainRepo, 'commit -q -m salvage')
+    git(f.mainRepo, 'checkout -q main')
+  }
+
+  it('finds nested salvage/fleet/<lane>/<n> branches, which a refs/heads/salvage/* glob misses', async () => {
+    const f = makeFixture()
+    salvageBranch(f, 'salvage/fleet/desktop/1008-1794300019226', 'a.ts', 'a\n')
+    salvageBranch(f, 'salvage/fleet-ios-7-1790000000000', 'b.ts', 'b\n')
+    const inv = await salvageInventory(f.mainRepo)
+    expect(inv.map((e) => e.branch).sort()).toEqual(['salvage/fleet-ios-7-1790000000000', 'salvage/fleet/desktop/1008-1794300019226'])
+    expect(inv.find((e) => e.branch.includes('1008'))?.itemId).toBe('1008')
+    expect(inv.find((e) => e.branch.includes('ios-7'))?.itemId).toBe('7')
+  })
+
+  it('parses the item id from either name form and from nothing else', () => {
+    expect(salvageItemId('salvage/fleet/android/1278-1794334898128')).toBe('1278')
+    expect(salvageItemId('salvage/fleet-ios-7-1790000000000')).toBe('7')
+    expect(salvageItemId('salvage/no-epoch')).toBeUndefined()
+    expect(salvageItemId('fleet/ios/7')).toBeUndefined()
+  })
+
+  it('reports whether origin holds each branch, and flags the ones that exist on this disk alone', async () => {
+    const f = makeFixture()
+    salvageBranch(f, 'salvage/fleet/backend/1-1790000000001', 'a.ts', 'a\n')
+    salvageBranch(f, 'salvage/fleet/backend/2-1790000000002', 'b.ts', 'b\n')
+    git(f.mainRepo, 'push -q origin salvage/fleet/backend/1-1790000000001')
+    const byBranch = new Map((await salvageInventory(f.mainRepo)).map((e) => [e.branch, e]))
+    expect(byBranch.get('salvage/fleet/backend/1-1790000000001')?.pushed).toBe(true)
+    expect(byBranch.get('salvage/fleet/backend/2-1790000000002')?.pushed).toBe(false)
+
+    // A branch that moved on after its push has commits origin lacks.
+    git(f.mainRepo, 'checkout -q salvage/fleet/backend/1-1790000000001')
+    writeFileSync(join(f.mainRepo, 'c.ts'), 'c\n')
+    git(f.mainRepo, 'add c.ts')
+    git(f.mainRepo, 'commit -q -m more')
+    git(f.mainRepo, 'checkout -q main')
+    const again = new Map((await salvageInventory(f.mainRepo)).map((e) => [e.branch, e]))
+    expect(again.get('salvage/fleet/backend/1-1790000000001')?.pushed).toBe(false)
+  })
+
+  it('leaves push state unknown, not "pushed" and not "unpushed", when origin cannot be asked', async () => {
+    const f = makeFixture()
+    salvageBranch(f, 'salvage/fleet/backend/1-1790000000001', 'a.ts', 'a\n')
+    git(f.mainRepo, 'remote set-url origin /nonexistent/origin.git')
+    const [e] = await salvageInventory(f.mainRepo)
+    expect(e?.pushed).toBeUndefined()
+  })
+
+  describe('isSalvageBranchObsolete', () => {
+    it('is true for a branch with no commits of its own', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'branch salvage/fleet/backend/9-1790000000000 main')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/fleet/backend/9-1790000000000')).toBe(true)
+    })
+
+    it('is true when main took the same change by another route (a squash merge)', async () => {
+      const f = makeFixture()
+      salvageBranch(f, 'salvage/fleet/backend/9-1790000000000', 'landed.ts', 'same\n')
+      writeFileSync(join(f.mainRepo, 'landed.ts'), 'same\n')
+      git(f.mainRepo, 'add landed.ts')
+      git(f.mainRepo, 'commit -q -m "squash of the same change"')
+      git(f.mainRepo, 'push -q origin main')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/fleet/backend/9-1790000000000')).toBe(true)
+    })
+
+    it('is false when the branch holds a file main does not have — the break-it case', async () => {
+      const f = makeFixture()
+      salvageBranch(f, 'salvage/fleet/backend/9-1790000000000', 'unmerged.ts', 'real work\n')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/fleet/backend/9-1790000000000')).toBe(false)
+    })
+
+    it('is false when main later changed the path to something else', async () => {
+      const f = makeFixture()
+      salvageBranch(f, 'salvage/fleet/backend/9-1790000000000', 'file.txt', 'branch version\n')
+      writeFileSync(join(f.mainRepo, 'file.txt'), 'main moved on\n')
+      git(f.mainRepo, 'commit -qam "main edits the same file"')
+      git(f.mainRepo, 'push -q origin main')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/fleet/backend/9-1790000000000')).toBe(false)
+    })
+
+    it('is undefined, never true, when the comparison cannot be made', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'branch salvage/fleet/backend/9-1790000000000 main')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/does/not/exist-1')).toBeUndefined()
+    })
+
+    it('checks every path of a branch larger than one pathspec chunk', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'checkout -q -b salvage/fleet/backend/9-1790000000000 main')
+      for (let i = 0; i < 230; i++) writeFileSync(join(f.mainRepo, `f${i}.txt`), `${i}\n`)
+      git(f.mainRepo, 'add .')
+      git(f.mainRepo, 'commit -q -m big')
+      git(f.mainRepo, 'checkout -q main')
+      // Main lands all but the LAST file: the differing path sits in chunk two.
+      for (let i = 0; i < 229; i++) writeFileSync(join(f.mainRepo, `f${i}.txt`), `${i}\n`)
+      git(f.mainRepo, 'add .')
+      git(f.mainRepo, 'commit -q -m "most of it"')
+      git(f.mainRepo, 'push -q origin main')
+      expect(await isSalvageBranchObsolete(f.mainRepo, 'salvage/fleet/backend/9-1790000000000')).toBe(false)
+    })
+  })
+
+  describe('retireObsoleteSalvage', () => {
+    it('deletes obsolete branches and keeps real work, artifact-only branches and branches with a worktree', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'branch salvage/fleet/backend/1-1790000000001 main') // empty -> retire
+      salvageBranch(f, 'salvage/fleet/backend/2-1790000000002', 'work.ts', 'work\n') // real work -> keep
+      git(f.worktree, 'checkout -q -b salvage/work-1-1790000000003') // empty but a worktree is on it -> keep
+
+      const inv = await salvageInventory(f.mainRepo)
+      const retired = await retireObsoleteSalvage(f.mainRepo, inv)
+      expect(retired.map((e) => e.branch)).toEqual(['salvage/fleet/backend/1-1790000000001'])
+      const left = git(f.mainRepo, "for-each-ref '--format=%(refname:short)' refs/heads/salvage/").split('\n').sort()
+      expect(left).toEqual(['salvage/fleet/backend/2-1790000000002', 'salvage/work-1-1790000000003'])
+    })
+
+    it('does not delete a branch that moved after it was read', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'branch salvage/fleet/backend/1-1790000000001 main')
+      const inv = await salvageInventory(f.mainRepo)
+      // Someone adds real work between the read and the delete.
+      git(f.mainRepo, 'checkout -q salvage/fleet/backend/1-1790000000001')
+      writeFileSync(join(f.mainRepo, 'late.ts'), 'late\n')
+      git(f.mainRepo, 'add late.ts')
+      git(f.mainRepo, 'commit -q -m late')
+      git(f.mainRepo, 'checkout -q main')
+      const logs: string[] = []
+      expect(await retireObsoleteSalvage(f.mainRepo, inv, (m) => logs.push(m))).toEqual([])
+      expect(git(f.mainRepo, 'branch --list salvage/fleet/backend/1-1790000000001')).not.toBe('')
+      expect(logs.join('\n')).toContain('could not retire')
+    })
+
+    it('keeps the commits recoverable through the reflog target — the sha is logged', async () => {
+      const f = makeFixture()
+      git(f.mainRepo, 'branch salvage/fleet/backend/1-1790000000001 main')
+      const logs: string[] = []
+      await retireObsoleteSalvage(f.mainRepo, await salvageInventory(f.mainRepo), (m) => logs.push(m))
+      expect(logs[0]).toContain(git(f.mainRepo, 'rev-parse --short=9 main'))
+    })
   })
 })
 

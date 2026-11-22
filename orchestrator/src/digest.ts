@@ -5,6 +5,8 @@ import type { LaneMode } from './config.js'
 import type { Rejection } from './select.js'
 import type { DependencyReport } from './dependency.js'
 import { isQuotaHaltReason, parseQuotaResumeAt } from './circuit.js'
+import { renderSalvageSection } from './salvage-report.js'
+import type { SalvageInventoryEntry } from './worktree.js'
 
 export interface LaneStatus {
   id: string
@@ -176,6 +178,12 @@ export interface DigestInput {
    */
   awaitingHuman: RunRecord[]
   rejections: RejectionInput[]
+  /**
+   * Issue #2699: every local `salvage/*` branch, read live by the caller.
+   * Absent when the caller did not read it (the section is then omitted rather
+   * than rendered as "(none)", which would claim a clean slate nobody checked).
+   */
+  salvage?: SalvageInventoryEntry[]
   dependency: DependencyReport
   /**
    * True when the most recent pass aborted with `tick.ts`'s
@@ -314,6 +322,8 @@ export function renderDigest(input: DigestInput): string {
       rejections.map((h) => `- ${h.reason}: ${h.count}`),
     ),
   )
+
+  if (input.salvage !== undefined) parts.push(renderSalvageSection(input.salvage, 0))
 
   const depLines = [
     `- ok: ${input.dependency.ok ? 'yes' : 'no'}`,
