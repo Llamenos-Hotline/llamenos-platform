@@ -54,6 +54,11 @@ class ScanText(unittest.TestCase):
                   "apps/worker/routes/", f"$HOME{H}alice"):
             self.assertEqual(self.roots(s), [], s)
 
+    def test_ellipsis_prefix_is_a_tail_of_a_longer_path(self):
+        # "…" (U+2026) is how prose elides the head of a path, exactly as "..." does.
+        for s in (f"`\u2026{H}x/`", f"\u2026{H}alice/x", f"...{H}alice/x", f"\u2026{U}alice/x"):
+            self.assertEqual(self.roots(s), [], s)
+
     def test_prefix_longer_account_name_is_not_allowlisted(self):
         self.assertEqual(self.roots(f"{H}runner-alice/x"), ["/home"])
         self.assertEqual(self.roots(f"{H}operators/x"), ["/home"])
@@ -103,6 +108,39 @@ class ScanBody(unittest.TestCase):
         for bad in ("", "{not json", "42", "[]"):
             with self.assertRaises(clp.CouldNotCheck, msg=bad):
                 clp.scan_body(bad)
+
+
+class SurfacesAgree(unittest.TestCase):
+    """The diff scan and the body scan must give the same verdict on the same text."""
+
+    CASES = {
+        "root_in_text": f"cd {H}alice/x",
+        "tail_of_longer_path": f"apps{H}alice/x",
+        "ellipsis_tail": f"`\u2026{H}x/`",
+        "allowlisted_root": f"{H}runner/work",
+        "placeholder": f"{H}<user>/x",
+        "macos_root": f"cd {U}alice/x",
+    }
+
+    def verdicts(self, text):
+        via_diff = [r for f in clp.scan_diff(diff_for("docs/x.md", text)) for r in [f.root]]
+        via_body = [f.root for f in clp.scan_body(json.dumps(text))]
+        return via_diff, via_body
+
+    def test_identical_input_gives_identical_verdict(self):
+        for name, text in self.CASES.items():
+            via_diff, via_body = self.verdicts(text)
+            self.assertEqual(via_diff, via_body, name)
+
+    def test_a_root_fails_on_both_surfaces(self):
+        for name in ("root_in_text", "macos_root"):
+            via_diff, via_body = self.verdicts(self.CASES[name])
+            self.assertEqual(len(via_diff), 1, name)
+            self.assertEqual(len(via_body), 1, name)
+
+    def test_tail_and_allowlisted_pass_on_both_surfaces(self):
+        for name in ("tail_of_longer_path", "ellipsis_tail", "allowlisted_root", "placeholder"):
+            self.assertEqual(self.verdicts(self.CASES[name]), ([], []), name)
 
 
 class EndToEnd(unittest.TestCase):

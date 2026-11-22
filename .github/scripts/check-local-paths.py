@@ -17,7 +17,7 @@ echoes the segment or the surrounding text: the failure message must not
 reproduce the content it is flagging, and a CI log is public.
 
 Not findings:
-  * relative paths (apps/worker/routes/) and any `.../home/<x>/` that is the tail
+  * relative paths (apps/worker/routes/) and any `.../home/<x>/` (or the Unicode-ellipsis form) that is the tail
     of a longer path (the match must start at a path boundary)
   * placeholders and non-account paths: ALLOWED_ACCOUNTS below, and a segment
     that does not start with an alphanumeric (/home/.local, /home/<user>/,
@@ -51,7 +51,10 @@ ALLOWED_ACCOUNTS = frozenset({"llamenos", "operator", "runner", "ci", "deploy"})
 
 # `/home/<seg>` or `/Users/<seg>` that STARTS at a path boundary (so `apps/home/x/`
 # and `https://host/home/x/` are not matches) and whose segment is a real name.
-LOCAL_PATH = re.compile(r"(?<![\w.~/$\-])(/(?:home|Users))/([A-Za-z0-9][A-Za-z0-9._-]*)(?![A-Za-z0-9._-])")
+# `\u2026` (the horizontal ellipsis) is in the boundary set because prose elides the head of
+# a path with it exactly as it does with `...`; `\u2026/home/x/` is a tail, not a root.
+# One regex, one `scan_text`: the diff scan and the body scan both go through it.
+LOCAL_PATH = re.compile(r"(?<![\w.~/$\-\u2026])(/(?:home|Users))/([A-Za-z0-9][A-Za-z0-9._-]*)(?![A-Za-z0-9._-])")
 
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
