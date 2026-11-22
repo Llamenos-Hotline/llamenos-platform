@@ -62,6 +62,28 @@ const execFileAsync = promisify(execFile)
  */
 export const VERIFY_JOB = 'fleet/verify'
 export const REVIEW_JOB = 'fleet/review'
+/**
+ * The check run `review-and-merge` posts as the `llamenos-fleet-review` App
+ * (#2816). It is NOT `fleet/review`, and must never be: the ruleset requires
+ * `fleet/review` with `integration_id: any`, so a same-named run from a second
+ * app is a SECOND carrier of the required context on the head, and the
+ * context's verdict is the worst of its carriers (#2871: the App's PASS was
+ * outvoted by the Actions carrier's `NO-VERDICT:unreviewed`). Under this name
+ * it satisfies nothing; the Actions carrier READS it (`review-app-verdict.ts`)
+ * and concludes — the head keeps exactly one `fleet/review`.
+ */
+export const REVIEW_RECORDED_JOB = `${REVIEW_JOB}/recorded`
+/**
+ * The check a review REQUEST is evaluated on (#2813/#2815): the caller job
+ * `re-evaluate` in fleet-review-re-evaluate.yml, then the called workflow's
+ * `fleet/review/re-evaluate` job. It carries no required name, so its result
+ * never gates anything — which is why a failure HERE (a host problem) leaves
+ * the carrier still reading its earlier `NO-VERDICT:*`, and the board must
+ * read this check to tell "the gate could not ask" from "the code is wrong".
+ * tests/orchestrator/required-context-creation.test.ts pins this to what the
+ * workflows evaluate to.
+ */
+export const REVIEW_RE_EVALUATE_CHECK = `re-evaluate / ${REVIEW_JOB}/re-evaluate`
 
 /**
  * The display name of the mandatory non-author review (`secondOpinion`),
@@ -208,15 +230,17 @@ export function commitsAllBotAuthored(
 
 /**
  * The `pull_request` ACTIONS that put a head in front of the merge gate with
- * no review request attached: `opened` and `reopened` (a head the gate has
- * never seen, or has not seen since the PR was closed), and `synchronize` (the
- * head moved — a push, a force-push, a rebase, or the "Update branch" button).
- * They are exactly the actions on which every OTHER required context
- * (`ci-status`, `gitleaks`, `CodeQL`, `fleet/verify`) is created, and
- * tests/orchestrator/required-context-creation.test.ts fails if
- * `fleet-review.yml` stops triggering on any of them.
+ * no review request attached: `opened` (a head the gate has never seen) and
+ * `synchronize` (the head moved — a push, a force-push, a rebase, or the
+ * "Update branch" button). They are exactly the actions on which every OTHER
+ * required context (`ci-status`, `gitleaks`, `CodeQL`, `fleet/verify`) is
+ * created, and tests/orchestrator/required-context-creation.test.ts fails if
+ * `fleet-review.yml` stops triggering on any of them. `reopened` is NOT one
+ * (#2816): over an unchanged head it created a second carrier of every
+ * required context, so no carrier workflow triggers on it and
+ * `carriers-on-reopen.yml` reports a reopened head that has none.
  *
- * `opened`/`reopened` joined `synchronize` in #2806. Before that the only
+ * `opened` joined `synchronize` in #2806. Before that the only
  * route to a FIRST `fleet/review` on a PR was a review request, and the only
  * automatic review request is CODEOWNERS — so a PR touching only paths no
  * entry owns (#2805: a Dependabot bump of `deploy/docker/Dockerfile`) got no
@@ -249,7 +273,7 @@ export function commitsAllBotAuthored(
  * CLEAN and queueable with no verdict for the code it would merge. A review
  * for another tree is not a review of this one; request one.
  */
-export const REVIEW_REPUBLISH_ACTIONS = ['opened', 'reopened', 'synchronize'] as const
+export const REVIEW_REPUBLISH_ACTIONS = ['opened', 'synchronize'] as const
 
 /**
  * The event name of the operator's manual dispatch — `fleet-review.yml`'s
@@ -339,7 +363,7 @@ export function reviewTriggerLogins(pr: Pick<ReviewRequestEvent, 'prAuthor' | 'b
 /**
  * Whether this event may only REPUBLISH an existing verdict — never start a
  * new review. True for exactly one thing: a `pull_request` whose action is in
- * `REVIEW_REPUBLISH_ACTIONS` (`synchronize`, #1284; `opened`/`reopened`, #2806).
+ * `REVIEW_REPUBLISH_ACTIONS` (`synchronize`, #1284; `opened`, #2806).
  *
  * This is the whole of what makes adding those actions to `fleet-review.yml`
  * safe against the quota burn their absence originally prevented — `opened`

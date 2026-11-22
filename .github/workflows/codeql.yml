@@ -164,8 +164,12 @@ name: CodeQL
 on:
   push:
     branches: [main]
+  # `opened`/`synchronize` ONLY — a reopen would upload a second analysis for an
+  # unchanged head, and with it a second `CodeQL` carrier (#2816);
+  # carriers-on-reopen.yml covers it.
   pull_request:
     branches: [main]
+    types: [opened, synchronize]
   # The merge queue's own ref. See ci.yml's `on:` block: a required context
   # that never reports on the queue's ref blocks the queue forever.
   merge_group:

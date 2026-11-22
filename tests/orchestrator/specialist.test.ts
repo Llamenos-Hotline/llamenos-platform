@@ -381,7 +381,7 @@ describe('rail: #1092\'s per-specialist checks are deleted (#1158)', () => {
     // #2815 moved `review_requested` out of this file's own types into
     // fleet-review-re-evaluate.yml, which calls it: a run of THIS workflow on
     // a review request was a newer suite that shadowed the head's carrier.
-    expect(on['pull_request']).toEqual({ types: ['opened', 'reopened', 'synchronize'] })
+    expect(on['pull_request']).toEqual({ types: ['opened', 'synchronize'] })
     const caller = parseYaml(readFileSync(join(workflowDir, 'fleet-review-re-evaluate.yml'), 'utf8')) as { on: Record<string, unknown> }
     expect(caller.on).toEqual({ pull_request: { types: ['review_requested'] } })
     for (const forbiddenType of ['labeled', 'unlabeled', 'edited', 'ready_for_review']) {

@@ -1,5 +1,5 @@
 import { describeGhFailure } from './gh.js'
-import { REVIEW_JOB } from './ci.js'
+import { REVIEW_RECORDED_JOB } from './ci.js'
 import { defaultMissingChecksDeps, type HeadCheckRun } from './missing-checks.js'
 
 /**
@@ -12,8 +12,9 @@ import { defaultMissingChecksDeps, type HeadCheckRun } from './missing-checks.js
  *    (`review-cache.ts`), and the head's `pull_request` carrier republishes it;
  *  - the operator route: `llamenos-fleet review-and-merge` runs the same
  *    review set on the operator's machine and POSTS the verdict as a
- *    `fleet/review` CHECK RUN, authored by the `llamenos-fleet-review` GitHub
- *    App (`review-and-merge.ts`, `github-app.ts`).
+ *    `fleet/review/recorded` CHECK RUN (`REVIEW_RECORDED_JOB` — never the
+ *    required name itself, #2816: a same-named run from a second app is a
+ *    second carrier), authored by the `llamenos-fleet-review` GitHub App (`review-and-merge.ts`, `github-app.ts`).
  *
  * `review-and-merge` is documented as the escape hatch for a PR whose review
  * cannot be re-requested (#1637, #1471) — and it is a local CLI, so it cannot
@@ -80,16 +81,16 @@ export type AppRecordedVerdict =
  */
 export function appRecordedVerdictFrom(runs: readonly HeadCheckRun[], headSha: string, binding: string): AppRecordedVerdict {
   const mine = runs.filter((r) =>
-    r.name === REVIEW_JOB && r.appSlug === REVIEW_RECORDER_APP_SLUG && r.status === 'completed')
+    r.name === REVIEW_RECORDED_JOB && r.appSlug === REVIEW_RECORDER_APP_SLUG && r.status === 'completed')
   if (mine.length === 0) {
-    return { kind: 'none', reason: `no completed ${REVIEW_JOB} check run by the ${REVIEW_RECORDER_APP_SLUG} App on ${headSha}` }
+    return { kind: 'none', reason: `no completed ${REVIEW_RECORDED_JOB} check run by the ${REVIEW_RECORDER_APP_SLUG} App on ${headSha}` }
   }
   const latest = [...mine].sort((a, b) =>
     a.startedAt === b.startedAt ? b.id - a.id : a.startedAt < b.startedAt ? 1 : -1)[0] as HeadCheckRun
   if (latest.conclusion !== 'success') {
     return {
       kind: 'none',
-      reason: `the ${REVIEW_RECORDER_APP_SLUG} App's latest ${REVIEW_JOB} on ${headSha} concluded ` +
+      reason: `the ${REVIEW_RECORDER_APP_SLUG} App's latest ${REVIEW_RECORDED_JOB} on ${headSha} concluded ` +
         `${latest.conclusion ?? '(none)'}, which is not a pass`,
     }
   }
@@ -113,7 +114,7 @@ export async function readAppRecordedVerdict(
   try {
     return appRecordedVerdictFrom(await fetchCheckRuns(headSha), headSha, binding)
   } catch (e) {
-    const reason = `could not read the ${REVIEW_JOB} check runs on ${headSha}: ${describeGhFailure(e)}`
+    const reason = `could not read the ${REVIEW_RECORDED_JOB} check runs on ${headSha}: ${describeGhFailure(e)}`
     log(reason)
     return { kind: 'unreadable', reason }
   }

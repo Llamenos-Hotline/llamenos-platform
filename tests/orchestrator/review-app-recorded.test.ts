@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  decideReviewGate, reviewGateFailsClosed, REVIEW_GATE_STANDING, REVIEW_OUTCOME_TOKENS,
+  decideReviewGate, reviewGateFailsClosed, REVIEW_GATE_STANDING, REVIEW_OUTCOME_TOKENS, REVIEW_RECORDED_JOB,
   type ReviewGateDeps,
 } from '../../orchestrator/src/ci.js'
 import { claimDigest } from '../../orchestrator/src/review.js'
@@ -31,7 +31,7 @@ const CLAIM_HEX = claimDigest(CLAIM)
 const BINDING = reviewBinding(undefined, CLAIM_HEX)
 
 const run = (o: Partial<HeadCheckRun> & { id: number }): HeadCheckRun => ({
-  name: 'fleet/review', status: 'completed', conclusion: 'success',
+  name: REVIEW_RECORDED_JOB, status: 'completed', conclusion: 'success',
   startedAt: '2026-11-20T10:00:00Z', appSlug: REVIEW_RECORDER_APP_SLUG, externalId: BINDING, ...o,
 })
 
@@ -45,6 +45,10 @@ describe('appRecordedVerdictFrom — which check run is believed', () => {
       expect(appRecordedVerdictFrom([run({ id: 1, appSlug: slug })], HEAD, BINDING).kind, slug).toBe('none')
     }
     expect(appRecordedVerdictFrom([run({ id: 1, appSlug: '(no app)' })], HEAD, BINDING).kind).toBe('none')
+  })
+
+  it('#2816: the App\'s run under the REQUIRED name is a second carrier, never a recorded verdict', () => {
+    expect(appRecordedVerdictFrom([run({ id: 1, name: 'fleet/review' })], HEAD, BINDING).kind).toBe('none')
   })
 
   it('ignores another check name and a run still in flight', () => {

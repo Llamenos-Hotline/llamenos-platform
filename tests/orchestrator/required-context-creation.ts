@@ -55,15 +55,14 @@ export const RULESET_REQUIRED_CONTEXTS = ['ci-status', 'gitleaks', 'CodeQL', 'fl
 export const PROTECTED_BRANCH = 'main'
 
 export type HeadEvent =
-  | { event: 'pull_request'; action: 'opened' | 'reopened' | 'synchronize' }
+  | { event: 'pull_request'; action: 'opened' | 'synchronize' }
   | { event: 'merge_group'; action: 'checks_requested' }
 
-/** Every event on which GitHub evaluates the required contexts against a head
- *  that has not been judged yet: a PR opened or reopened, a PR whose head
- *  moved, and the merge queue's own synthetic commit. */
+/** Every event on which a carrier is CREATED for a head: a PR opened, a PR
+ *  whose head moved, and the merge queue's own synthetic commit. `reopened` is
+ *  deliberately not one (#2816) — see `HEAD_ACTIONS`. */
 export const HEAD_EVENTS: readonly HeadEvent[] = [
   { event: 'pull_request', action: 'opened' },
-  { event: 'pull_request', action: 'reopened' },
   { event: 'pull_request', action: 'synchronize' },
   { event: 'merge_group', action: 'checks_requested' },
 ]
@@ -372,12 +371,19 @@ export function concurrencyGroupOn(file: string, doc: Record<string, unknown> | 
 
 /**
  * `pull_request` actions that put a new head in front of the gate, and so are
- * the ONLY ones allowed to create a carrier. `reopened` is here because a PR
- * reopened after its branch moved has a head nothing has judged (#2806); on a
- * PR reopened over an UNCHANGED head it is one extra carrier, the one residual
- * of this model, and the reason it is named rather than hidden.
+ * the ONLY ones allowed to create a carrier.
+ *
+ * `reopened` is NOT one (#2816). It leaves the head where it was in the common
+ * case, and a carrier workflow that also ran on it created a SECOND carrier of
+ * every required context at once (`ci-status`, `gitleaks`, `CodeQL`,
+ * `fleet/*`) over an unchanged head — #2815 named it as the one residual of
+ * its model and left it. Nothing can tell, from the event, whether the branch
+ * moved while the PR was closed, so `reopened` creates no carrier at all, and
+ * `analyseReopenGuard` requires a workflow that says out loud when the head it
+ * lands on has none (a head that moved while closed is then red and told to
+ * take a push, never silently empty).
  */
-export const HEAD_ACTIONS: readonly string[] = ['opened', 'synchronize', 'reopened']
+export const HEAD_ACTIONS: readonly string[] = ['opened', 'synchronize']
 
 /**
  * Every `pull_request` action a workflow triggers on that does NOT move the
@@ -611,5 +617,88 @@ export function analyseCarrierUniqueness(
     }
   }
 
+  // 6. (#2816) A reopen creates no carrier — rules 1 and 5 above are what keep
+  //    it that way — and the one case it used to cover, a branch that moved
+  //    while the PR was closed, must be reported rather than left silently
+  //    empty: some workflow triggers on `reopened`, reads the required
+  //    contexts from the ruleset and the head's check runs, and FAILS when
+  //    one has no carrier.
+  const guards = parsed.filter(({ doc }) => {
+    const t = triggerFor(doc?.on, 'pull_request')
+    if (t === null) return false
+    const types = t.types === undefined ? DEFAULT_TYPES.pull_request : asStrings(t.types)
+    if (!types.includes('reopened')) return false
+    return Object.values(jobsOf(doc)).some((job) => (job.steps ?? []).some((st) =>
+      typeof st.run === 'string' && /rules\/branches/.test(st.run) && /check-runs/.test(st.run) && /exit 1/.test(st.run)))
+  })
+  if (guards.length === 0) {
+    violations.push(
+      'pull_request.reopened: no workflow reports a reopened head that carries no required context — a reopen creates no ' +
+        'carrier (#2816), so a branch that moved while the PR was closed would read BLOCKED with every visible check green. ' +
+        'A workflow triggered on `reopened` must read the ruleset and the head\'s check runs and fail naming what is missing',
+    )
+  }
+
   return { violations, reevaluators, reevaluates }
+}
+
+// ─── #2816: carriers from OTHER apps ─────────────────────────────────────
+
+/** A workflow step that creates a check run or a commit status by hand —
+ *  through the REST API, `actions/github-script`, or a third-party action. */
+const HAND_POSTED_CHECK = new RegExp([
+  String.raw`(?:-X|--method)[ =]POST[^\n]*(?:check-runs|statuses/)`,
+  String.raw`(?:check-runs|statuses/)[^\n]*(?:-X|--method)[ =]POST`,
+  String.raw`\bchecks\.create\s*\(`,
+  String.raw`\brepos\.createCommitStatus\s*\(`,
+  String.raw`LouisBrunner/checks-action`,
+  String.raw`actions/create-check`,
+].join('|'))
+
+/**
+ * #2816. The ruleset requires each context with `integration_id: any`, so a
+ * check run named after one is a carrier whichever app posted it — and every
+ * rail above reads workflow YAML, which cannot see an app that is not Actions.
+ * Two sources of such a carrier exist in this repo, and both are checked:
+ *
+ *  - code that posts a check run through the Checks API as a GitHub App
+ *    (`review-and-merge`'s `llamenos-fleet-review` App). `postedNames` is
+ *    what that code ACTUALLY posts, observed by running it against a recording
+ *    HTTP double, never a list of strings that claims to be that;
+ *  - a workflow step that creates a check run or commit status by hand.
+ *
+ * The second is flagged whatever its name: a hand-posted check cannot be
+ * named by static analysis, and nothing in this repo has a reason to post one.
+ */
+export function analyseForeignCarriers(
+  workflows: readonly Workflow[],
+  postedNames: readonly string[],
+  required: readonly string[] = RULESET_REQUIRED_CONTEXTS,
+): string[] {
+  const violations: string[] = []
+  if (postedNames.length === 0) {
+    violations.push('no check-run name was observed from the GitHub App verdict recorder — refusing a vacuous pass')
+  }
+  for (const name of postedNames) {
+    if (required.includes(name)) {
+      violations.push(
+        `\`${name}\`: the GitHub App verdict recorder posts a check run under the required name — a second carrier of ` +
+          'the context from a second app, which the ruleset accepts (`integration_id: any`) and admission weighs against the Actions carrier (#2816)',
+      )
+    }
+  }
+  for (const { file, text } of workflows) {
+    const doc = parseYaml(text) as Record<string, unknown> | null
+    for (const [key, job] of Object.entries(jobsOf(doc))) {
+      for (const step of job.steps ?? []) {
+        const body = [typeof step.run === 'string' ? step.run : '', typeof step.uses === 'string' ? step.uses : '',
+          typeof step.with?.script === 'string' ? step.with.script : ''].join('\n')
+        const hit = HAND_POSTED_CHECK.exec(body)
+        if (hit !== null) {
+          violations.push(`${file}#${key}: creates a check run or commit status by hand (\`${hit[0].trim()}\`) — a carrier the workflow analysis cannot name, and the ruleset accepts it for any required context (#2816)`)
+        }
+      }
+    }
+  }
+  return violations
 }

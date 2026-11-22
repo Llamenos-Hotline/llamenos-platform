@@ -79,7 +79,7 @@ on:
   # a `pull_request` workflow), so the isolation this whole file exists to
   # provide is unaffected.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize]
   workflow_call:
   merge_group:
     types: [checks_requested]
@@ -90,7 +90,7 @@ concurrency:
   # per workflow file, so reusing ci.yml's names here would cancel or queue
   # against unrelated ci.yml runs sharing the same PR ref/SHA.
   #
-  # A head's CARRIER (`opened`/`reopened`/`synchronize`) groups by PR ref AND
+  # A head's CARRIER (`opened`/`synchronize`) groups by PR ref AND
   # head sha, and is never cancelled (#2813). Its only possible group-mates
   # are its own re-run attempts. Before #2813 every `pull_request` run of a
   # PR shared one per-ref group with `cancel-in-progress`, so the
@@ -105,12 +105,12 @@ concurrency:
   # A RE-EVALUATION (`review_requested`) groups per PR ref and IS cancelled
   # by a newer one: it carries no required name, and the newest request's
   # refresh re-runs the carrier.
-  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) && format('fleet-verify-pr-{0}-head-{1}', github.ref, github.event.pull_request.head.sha) || format('fleet-verify-pr-{0}-re-evaluate', github.ref)) || format('fleet-verify-mg-{0}', github.sha) }}
+  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","synchronize"]'), github.event.action) && format('fleet-verify-pr-{0}-head-{1}', github.ref, github.event.pull_request.head.sha) || format('fleet-verify-pr-{0}-re-evaluate', github.ref)) || format('fleet-verify-mg-{0}', github.sha) }}
   # Never cancelled outside a re-evaluation: same reasoning as ci.yml's own
   # `concurrency:` block — a merge_group check that gets cancelled mid-run
   # leaves its required check permanently missing, which stalls the queue
   # rather than failing it loudly — and a cancelled PR carrier is #2813.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(fromJSON('["opened","synchronize"]'), github.event.action) }}
 
 permissions: {}  # deny-all; the job below sets its own
 
@@ -120,13 +120,13 @@ env:
 jobs:
   fleet-verify:
     # ONE carrier per head (#2813) — the same model as fleet-review.yml's
-    # `fleet-review` job, whose comment explains it. `opened`/`reopened`/
+    # `fleet-review` job, whose comment explains it. `opened`/
     # `synchronize` (and `merge_group`) carry `fleet/verify`; a
     # `review_requested` run lands on a head that already carries it, so it
     # is named `fleet/verify/re-evaluate` and `fleet-verify/refresh-carrier`
     # re-runs the one carrier in place. Evaluated per event by
     # tests/orchestrator/required-context-creation.test.ts.
-    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) && 'fleet/verify' || 'fleet/verify/re-evaluate' }}
+    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","synchronize"]'), github.event.action)) && 'fleet/verify' || 'fleet/verify/re-evaluate' }}
     # `merge_group` alongside `pull_request`: cheap and mechanical, so it runs
     # at PR-open time for fast feedback AND again on the queue ref right
     # before the commit lands, satisfying it as a required check there too

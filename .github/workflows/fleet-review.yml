@@ -101,8 +101,11 @@
 #    `gitleaks`, `CodeQL` and `fleet/verify` — and the merge queue tests the
 #    real merge commit.
 #
-#    `opened` AND `reopened` ARE TRIGGERS TOO (#2806), on the same terms as
-#    `synchronize`: republish-only, never a model call. `opened` used to be
+#    `opened` IS A TRIGGER TOO (#2806), on the same terms as
+#    `synchronize`: republish-only, never a model call. (`reopened` was one,
+#    and is not any more (#2816): over an unchanged head it created a SECOND
+#    `fleet/review` carrier. carriers-on-reopen.yml says so out loud when a
+#    reopened head has none.) `opened` used to be
 #    banned on the theory that it "re-enters through CODEOWNERS" — that a
 #    review request always follows an open. It does not when no CODEOWNERS
 #    entry covers a touched path: #2805 got no request, so no run, so NO
@@ -408,7 +411,7 @@ on:
   # carrying a required context triggers on any action that does not move
   # the head.
   #
-  # `opened`/`reopened` (#2806) exist so the required context EXISTS on a
+  # `opened` (#2806) exists so the required context EXISTS on a
   # head nobody requested a review for. They are republish-only exactly like
   # `synchronize` (`REVIEW_REPUBLISH_ACTIONS`, ci.ts). Without them the first
   # `fleet/review` on a PR came only from a review request, and the only
@@ -433,7 +436,7 @@ on:
   # on every review request and the gate step decides; it must never become
   # a job-level `if:` (invariant 1).
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, synchronize]
   # The re-evaluation arm (#2815, see above): fleet-review-re-evaluate.yml
   # calls this file on `pull_request.review_requested`. The `github` context
   # of a called workflow is the CALLER's, so every expression below still
@@ -521,7 +524,7 @@ concurrency:
   #
   # TWO kinds of `pull_request` run, in two kinds of group (#2813):
   #
-  #   - The head's CARRIER (`opened`/`reopened`/`synchronize` — see the job's
+  #   - The head's CARRIER (`opened`/`synchronize` — see the job's
   #     `name:`) groups by PR AND HEAD SHA. Nothing else ever joins that
   #     group: not a review request on the same head, and not a carrier for
   #     another head. Its only group-mates are its own re-run attempts. That
@@ -544,7 +547,7 @@ concurrency:
   # target two different PRs at once and must never collide.
   # `merge_group` groups by the queue commit: two entries in the queue are
   # two different commits and must never cancel or queue behind each other.
-  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action) && format('fleet-review-pr-{0}-head-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || format('fleet-review-pr-{0}', github.event.pull_request.number)) || github.event_name == 'merge_group' && format('fleet-review-mg-{0}', github.sha) || format('fleet-review-wd-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && (contains(fromJSON('["opened","synchronize"]'), github.event.action) && format('fleet-review-pr-{0}-head-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || format('fleet-review-pr-{0}', github.event.pull_request.number)) || github.event_name == 'merge_group' && format('fleet-review-mg-{0}', github.sha) || format('fleet-review-wd-{0}', github.run_id) }}
   # Never cancelled: a required check that gets cancelled mid-run leaves its
   # context permanently missing rather than failing loudly (same reasoning as
   # ci.yml's and fleet-verify.yml's own `concurrency:` blocks) — which on a
@@ -579,7 +582,7 @@ jobs:
   fleet-review:
     # ONE carrier per head (#2813). The required `fleet/review` context is
     # carried by exactly one run per head: the one created by the event that
-    # PUT the head there — `opened`, `reopened` or `synchronize` — plus
+    # PUT the head there — `opened` or `synchronize` — plus
     # `merge_group` on the queue commit (and the operator's
     # `workflow_dispatch`, whose suite is not PR-associated, #1471).
     #
@@ -604,7 +607,7 @@ jobs:
     # The expression must agree with `runs-on` below and with the group in
     # `concurrency:` above; tests/orchestrator/required-context-creation.test.ts
     # evaluates all of them per event.
-    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) && 'fleet/review' || 'fleet/review/re-evaluate' }}
+    name: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["opened","synchronize"]'), github.event.action)) && 'fleet/review' || 'fleet/review/re-evaluate' }}
     # NO job-level `if:` here — deliberately, and never again (invariant 1 in
     # the file header). GitHub cannot filter a `pull_request` trigger by WHO
     # a review was requested from, only by `types:`, so this job IS
@@ -650,7 +653,7 @@ jobs:
     # starts and can never disagree with the gate's own later decision.
     # Pinned by a rail in tests/orchestrator/guards.test.ts, which also
     # asserts `ubuntu-latest` appears here ONLY under that condition.
-    runs-on: ${{ ((github.event_name == 'pull_request' && contains(fromJSON('["opened","reopened","synchronize"]'), github.event.action)) || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
+    runs-on: ${{ ((github.event_name == 'pull_request' && contains(fromJSON('["opened","synchronize"]'), github.event.action)) || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","fleet-review"]') }}
     # Read by the label-clearing job below. `outcome` and `clear_labels` are
     # written by the gate step (`runReviewGate`, cli.ts); `clear_labels` is
     # non-empty ONLY on the `run-engine` path, so a cache hit, a low-tier
@@ -973,6 +976,22 @@ jobs:
           # The LATEST completed run, never "any of them passed": a
           # re-requested review that found a problem after an earlier pass
           # must block the queue, not be outvoted by the run it supersedes.
+          #
+          # `completed_at` has one-second precision, so two carriers on one head
+          # tie routinely (#2895: a FAIL and a PASS, both completed at 11:49:38Z)
+          # and `sort_by`'s stability made `last` whatever order the API listed
+          # them — a PASS-or-FAIL decision made by chance. Ties are therefore
+          # broken on `started_at` then the check run's id, and a tie that hides
+          # a DISAGREEMENT (the newest completed_at shared by runs that conclude
+          # differently) is refused, loudly, rather than resolved: the head has
+          # two carriers of one required context, which is itself the defect.
+          latest_at="$(printf '%s' "$completed" | jq -r 'last | .completed_at')"
+          tied="$(printf '%s' "$completed" | jq -c --arg at "$latest_at" '[.[] | select(.completed_at == $at) | .conclusion] | unique')"
+          if [ "$(printf '%s' "$tied" | jq -r 'length')" != "1" ]; then
+            echo "::error::fleet/review FAILED: queue-pr-review-ambiguous — PR #$pr's head $pr_head carries two completed fleet/review check runs that disagree ($tied) and finished in the same second ($latest_at), so there is no latest to judge on; refusing to pick one by API order. A head must carry exactly one fleet/review (#2816): request a review cycle (remove, then re-add the reviewer) so one carrier is refreshed, then re-queue."
+            refuse queue-pr-review-ambiguous
+          fi
+          completed="$(printf '%s' "$completed" | jq -c 'sort_by([.completed_at, (.started_at // ""), .id])')"
           conclusion="$(printf '%s' "$completed" | jq -r 'last | .conclusion')"
           run_url="$(printf '%s' "$completed" | jq -r 'last | .html_url')"
           if [ "$conclusion" != "success" ]; then
@@ -3048,7 +3067,7 @@ jobs:
   # creating a second one. A `review_requested` run is named
   # `fleet/review/re-evaluate` (see the `fleet-review` job's `name:`); this
   # job then RE-RUNS the head's one `fleet/review` carrier — the run created
-  # by `opened`/`reopened`/`synchronize` — once that run is not in progress.
+  # by `opened`/`synchronize` — once that run is not in progress.
   # The carrier is republish-only, so its re-run reads the verdict the
   # re-evaluation just cached for this tree and concludes on it (`cache-hit`),
   # or fails closed exactly as it would have (`unreviewed`, `tree-changed`,

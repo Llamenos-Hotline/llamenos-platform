@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isRepublishOnlyEvent, REVIEW_GATE_STANDING, REVIEW_REPUBLISH_ACTIONS, reviewGateFailsClosed } from '../../orchestrator/src/ci'
+import { isRepublishOnlyEvent, REVIEW_RE_EVALUATE_CHECK, REVIEW_GATE_STANDING, REVIEW_REPUBLISH_ACTIONS, reviewGateFailsClosed } from '../../orchestrator/src/ci'
 import { parse as parseYaml } from 'yaml'
+import { postReviewCheckRun } from '../../orchestrator/src/review-and-merge'
 import {
-  analyseCarrierUniqueness, analyseRequiredContextCreation, concurrencyGroupOn, HEAD_EVENTS, jobNameOn,
+  analyseCarrierUniqueness, analyseForeignCarriers, analyseRequiredContextCreation, concurrencyGroupOn, HEAD_EVENTS, jobNameOn,
   repoWorkflows, RULESET_REQUIRED_CONTEXTS, SAMPLE_HEAD, type Workflow,
 } from './required-context-creation'
 
@@ -65,17 +66,16 @@ describe('every required context is created on every head event, for every path 
 
   // ─── #2805: fleet/review created only on a review request ──────────────
   it('FAILS when fleet/review is created only on review_requested + synchronize — the #2805 shape', () => {
-    const broken = mutate('fleet-review.yml', 'types: [opened, reopened, synchronize]', 'types: [review_requested, synchronize]')
+    const broken = mutate('fleet-review.yml', 'types: [opened, synchronize]', 'types: [review_requested, synchronize]')
     const { violations } = analyseRequiredContextCreation(broken)
     expect(violations.join('\n')).toMatch(/`fleet\/review` on pull_request\.opened: nothing creates it/)
-    expect(violations.join('\n')).toMatch(/`fleet\/review` on pull_request\.reopened: nothing creates it/)
   })
 
   it('does not count review_requested as a creator — it exists only where CODEOWNERS owns a touched path', () => {
     expect(HEAD_EVENTS.map((e) => e.action)).not.toContain('review_requested')
-    const broken = mutate('fleet-review.yml', 'types: [opened, reopened, synchronize]', 'types: [review_requested]')
+    const broken = mutate('fleet-review.yml', 'types: [opened, synchronize]', 'types: [review_requested]')
     const { violations } = analyseRequiredContextCreation(broken)
-    expect(violations.filter((v) => v.startsWith('`fleet/review` on pull_request.')).length).toBe(3)
+    expect(violations.filter((v) => v.startsWith('`fleet/review` on pull_request.')).length).toBe(2)
   })
 
   // ─── #2799: the release-PR skip on the uploading CodeQL legs ───────────
@@ -172,6 +172,9 @@ describe('one carrier per (head, required context) — #2813', () => {
     // …and the carrier workflows themselves no longer re-evaluate at all.
     expect(reevaluators.has('fleet-review.yml')).toBe(false)
     expect(reevaluators.has('fleet-verify.yml')).toBe(false)
+    // #2816: …and no carrier workflow runs on a reopen; the guard is the only one that does.
+    for (const file of ['ci.yml', 'secret-scan.yml', 'codeql.yml']) expect(reevaluators.has(file), file).toBe(false)
+    expect(reevaluators.get('carriers-on-reopen.yml')).toEqual(['reopened'])
   })
 
   it('a review request names its run apart from the carrier, for both gates', () => {
@@ -182,9 +185,11 @@ describe('one carrier per (head, required context) — #2813', () => {
       const doc = parseYaml(real.find((w) => w.file === file)?.text ?? '') as { jobs: Record<string, { name?: unknown }> }
       const j = doc.jobs[job]
       if (j === undefined) throw new Error(`no ${job} in ${file}`)
-      for (const action of ['opened', 'reopened', 'synchronize']) {
+      for (const action of ['opened', 'synchronize']) {
         expect(jobNameOn(file, job, j, { event: 'pull_request', action }), `${file} ${action}`).toBe(carrier)
       }
+      // #2816: a reopen is a re-evaluation, never a carrier.
+      expect(jobNameOn(file, job, j, { event: 'pull_request', action: 'reopened' }), `${file} reopened`).not.toBe(carrier)
       expect(jobNameOn(file, job, j, { event: 'merge_group', action: 'checks_requested' })).toBe(carrier)
       const reeval = jobNameOn(file, job, j, { event: 'pull_request', action: 'review_requested' })
       expect(reeval).not.toBe(carrier)
@@ -230,7 +235,7 @@ describe('one carrier per (head, required context) — #2813', () => {
     const broken = mutateAll(
       'fleet-review.yml',
       [/\n {4}name: \$\{\{[^\n]*'fleet\/review'[^\n]*\}\}\n/, '\n    name: fleet/review\n'],
-      [/types: \[opened, reopened, synchronize\]/, 'types: [review_requested, opened, reopened, synchronize]'],
+      [/types: \[opened, synchronize\]/, 'types: [review_requested, opened, synchronize]'],
     )
     const { violations } = analyseCarrierUniqueness(broken)
     expect(violations.join('\n')).toMatch(/`fleet\/review` on pull_request\.review_requested: fleet-review\.yml#fleet-review carries the required name/)
@@ -240,7 +245,7 @@ describe('one carrier per (head, required context) — #2813', () => {
     const broken = mutateAll(
       'fleet-verify.yml',
       [/\n {4}name: \$\{\{[^\n]*'fleet\/verify'[^\n]*\}\}\n/, '\n    name: fleet/verify\n'],
-      [/types: \[opened, synchronize, reopened\]/, 'types: [opened, synchronize, reopened, review_requested]'],
+      [/types: \[opened, synchronize\]/, 'types: [opened, synchronize, review_requested]'],
     )
     const { violations } = analyseCarrierUniqueness(broken)
     expect(violations.join('\n')).toMatch(/`fleet\/verify` on pull_request\.review_requested: fleet-verify\.yml#fleet-verify carries the required name/)
@@ -251,8 +256,8 @@ describe('one carrier per (head, required context) — #2813', () => {
   // carrier's own workflow. Every check read green and `enqueuePullRequest`
   // refused `2 of 5 required status checks are expected`.
   it.each([
-    ['fleet-review.yml', /types: \[opened, reopened, synchronize\]/, 'types: [review_requested, opened, reopened, synchronize]', 'fleet/review'],
-    ['fleet-verify.yml', /types: \[opened, synchronize, reopened\]/, 'types: [opened, synchronize, reopened, review_requested]', 'fleet/verify'],
+    ['fleet-review.yml', /types: \[opened, synchronize\]/, 'types: [review_requested, opened, synchronize]', 'fleet/review'],
+    ['fleet-verify.yml', /types: \[opened, synchronize\]/, 'types: [opened, synchronize, review_requested]', 'fleet/verify'],
   ] as const)('FAILS on the #2815 shape: %s re-evaluating in its own suites, even named apart', (file, from, to, context) => {
     const { violations } = analyseCarrierUniqueness(mutateAll(file, [from, to]))
     const text = violations.join('\n')
@@ -278,6 +283,7 @@ describe('one carrier per (head, required context) — #2813', () => {
       if (j === undefined) throw new Error(`no ${job} in ${file}`)
       const full = `re-evaluate / ${jobNameOn(file, job, j, { event: 'pull_request', action: 'review_requested' })}`
       expect(full).toBe(expected)
+      if (file === 'fleet-review.yml') expect(full).toBe(REVIEW_RE_EVALUATE_CHECK)
       expect(RULESET_REQUIRED_CONTEXTS as readonly string[]).not.toContain(full)
     }
   })
@@ -307,8 +313,110 @@ describe('one carrier per (head, required context) — #2813', () => {
   })
 
   it('FAILS when a workflow adds a re-evaluation trigger to a plain carrier', () => {
-    const broken = mutate('secret-scan.yml', /\n {2}pull_request:\s*\n/, '\n  pull_request:\n    types: [opened, synchronize, reopened, labeled]\n')
+    const broken = mutate('secret-scan.yml', 'types: [opened, synchronize]', 'types: [opened, synchronize, labeled]')
     const { violations } = analyseCarrierUniqueness(broken)
     expect(violations.join('\n')).toMatch(/`gitleaks` on pull_request\.labeled: secret-scan\.yml#gitleaks carries the required name/)
   })
 })
+
+// ─── #2816: reopening a PR on an unchanged head ───────────────────────────
+describe('a reopen creates no carrier, and says so when the head has none (#2816)', () => {
+  // The shape that shipped: every carrier workflow's bare `pull_request:`
+  // meant [opened, synchronize, reopened], so reopening a PR over its
+  // unchanged head put a second carrier of all five required contexts on it.
+  it.each([
+    ['ci.yml', /types: \[opened, synchronize\]/, 'ci-status'],
+    ['secret-scan.yml', /types: \[opened, synchronize\]/, 'gitleaks'],
+    ['fleet-verify.yml', /types: \[opened, synchronize\]/, 'fleet/verify'],
+    ['fleet-review.yml', /types: \[opened, synchronize\]/, 'fleet/review'],
+  ] as const)('FAILS when %s triggers on reopened again — a second `%s` carrier on an unchanged head', (file, from, context) => {
+    const { violations } = analyseCarrierUniqueness(mutateAll(file, [from, 'types: [opened, synchronize, reopened]']))
+    const text = violations.join('\n')
+    expect(text).toContain(`${file} carries`)
+    expect(text).toContain('pull_request.reopened')
+    expect(text).toContain(`\`${context}\``)
+  })
+
+  it('FAILS when codeql.yml triggers on reopened again — a second analysis upload, a second `CodeQL` carrier', () => {
+    const { violations } = analyseCarrierUniqueness(mutateAll('codeql.yml', [/types: \[opened, synchronize\]/, 'types: [opened, synchronize, reopened]']))
+    expect(violations.join('\n')).toMatch(/codeql\.yml carries .*`CodeQL`.* also runs on pull_request\.reopened/)
+  })
+
+  it('FAILS when a bare `pull_request:` brings the default `reopened` back', () => {
+    const { violations } = analyseCarrierUniqueness(mutateAll('ci.yml', [/\n {2}pull_request:\n {4}types: \[opened, synchronize\]\n/, '\n  pull_request:\n']))
+    expect(violations.join('\n')).toMatch(/`ci-status` on pull_request\.reopened: ci\.yml#ci-status carries the required name/)
+  })
+
+  it('FAILS when nothing reports a reopened head that has no carrier — it would be BLOCKED with every check green', () => {
+    const { violations } = analyseCarrierUniqueness(real.filter((w) => w.file !== 'carriers-on-reopen.yml'))
+    expect(violations.join('\n')).toMatch(/pull_request\.reopened: no workflow reports a reopened head that carries no required context/)
+  })
+
+  it('FAILS when the guard stops failing — a guard that cannot fail reports nothing', () => {
+    const { violations } = analyseCarrierUniqueness(mutateAll('carriers-on-reopen.yml', [/exit 1/g, 'exit 0']))
+    expect(violations.join('\n')).toMatch(/no workflow reports a reopened head/)
+  })
+
+  it('FAILS when the guard carries a required name itself — it would be a second carrier on the head it guards', () => {
+    const { violations } = analyseCarrierUniqueness(mutateAll('carriers-on-reopen.yml', [/name: carriers\/reopened/, 'name: fleet/verify']))
+    expect(violations.join('\n')).toMatch(/`fleet\/verify` on pull_request\.reopened: carriers-on-reopen\.yml#carriers-present carries the required name/)
+  })
+
+  it('holds for the workflows as committed', () => {
+    expect(analyseCarrierUniqueness(real).violations).toEqual([])
+  })
+})
+
+// ─── #2816: a second APP posting a required name ──────────────────────────
+describe('no other app carries a required context (#2816)', () => {
+  /** What `review-and-merge` really posts, observed — never a restated list. */
+  async function postedNames(): Promise<string[]> {
+    const names: string[] = []
+    await postReviewCheckRun('a'.repeat(40), 'PASS', 'VERDICT: PASS', 'binding', {
+      mintToken: async () => 'ghs_test',
+      http: async (req) => {
+        names.push(String((JSON.parse(req.body ?? '{}') as { name?: unknown }).name))
+        return { status: 201, body: '{"id":1}' }
+      },
+    })
+    return names
+  }
+
+  it('holds as committed: the verdict recorder posts under a name the ruleset does not require', async () => {
+    expect(analyseForeignCarriers(real, await postedNames())).toEqual([])
+  })
+
+  it('FAILS on the shape that shipped: the App posting `fleet/review` itself', async () => {
+    const v = analyseForeignCarriers(real, ['fleet/review'])
+    expect(v.join('\n')).toMatch(/`fleet\/review`: the GitHub App verdict recorder posts a check run under the required name/)
+  })
+
+  it('FAILS on every required name, not only the one that shipped', () => {
+    for (const name of RULESET_REQUIRED_CONTEXTS) expect(analyseForeignCarriers(real, [name]), name).toHaveLength(1)
+  })
+
+  it('refuses a vacuous pass when the recorder was observed posting nothing', () => {
+    expect(analyseForeignCarriers(real, []).join('\n')).toMatch(/refusing a vacuous pass/)
+  })
+
+  it.each([
+    ['REST', "gh api -X POST repos/$REPO/check-runs -f name=fleet/review -f head_sha=$SHA"],
+    ['REST, method first', 'gh api --method POST "repos/$REPO/check-runs" -f name=ci-status'],
+    ['a commit status', 'gh api -X POST repos/$REPO/statuses/$SHA -f context=fleet/verify -f state=success'],
+    ['github-script', "await github.rest.checks.create({ name: 'CodeQL' })"],
+  ])('FAILS when a workflow step posts a check by hand: %s', (_label, run) => {
+    const broken = real.map((w) => w.file !== 'secret-scan.yml' ? w : {
+      ...w, text: w.text.replace(/\n {4}steps:\n/, `\n    steps:\n      - name: post\n        run: |\n          ${run.replaceAll('\n', '\n          ')}\n`),
+    })
+    expect(broken.find((w) => w.file === 'secret-scan.yml')?.text).toContain('name: post')
+    expect(analyseForeignCarriers(broken, ['fleet/review/recorded']).join('\n')).toMatch(/secret-scan\.yml#gitleaks: creates a check run or commit status by hand/)
+  })
+
+  it('FAILS when a workflow uses a third-party checks action', () => {
+    const broken = real.map((w) => w.file !== 'secret-scan.yml' ? w : {
+      ...w, text: w.text.replace(/\n {4}steps:\n/, '\n    steps:\n      - uses: LouisBrunner/checks-action@v2\n'),
+    })
+    expect(analyseForeignCarriers(broken, ['fleet/review/recorded']).join('\n')).toMatch(/creates a check run or commit status by hand/)
+  })
+})
+
