@@ -22,7 +22,7 @@
 ARG TARGETARCH
 
 # Stage 1: Install runtime deps
-FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS deps
+FROM oven/bun:1.4.5@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS deps
 # This runtime base is pinned independently of .mise.toml's `bun = "1.3.5"`.
 # .mise.toml pins the *developer/CI tool* version (kept in sync with
 # .github/workflows/ci.yml's bun-version input); this image is the
@@ -53,7 +53,7 @@ COPY site/package.json site/package.json
 RUN bun install --frozen-lockfile --production --ignore-scripts --filter '!llamenos-site'
 
 # Stage 2: Build Rust crypto FFI (.so)
-FROM rust:1-slim@sha256:cc9edbcadf2c27013a642b1d1bb7504e26b1142d6b5ebe58f64cf2eb2bc128ae AS rust-builder
+FROM rust:1-slim@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe AS rust-builder
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY packages/crypto/ packages/crypto/
@@ -79,7 +79,7 @@ ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /trixie-updates
 ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trixie-security.InRelease
 
 # Stage 3: Production
-FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 AS app-base
+FROM oven/bun:1.4.5-slim@sha256:b780593f3e10918cbdaec3d5a08d52224b9198069a65eb47812085c2ec007643 AS app-base
 # Pinned independently of .mise.toml's dev/CI `bun = "1.3.5"` — see the
 # `deps` stage comment above for why the two are allowed to diverge. Update
 # via Dependabot.
@@ -209,7 +209,7 @@ FROM app-${TARGETARCH} AS app
 
 # Stage 4: Install full JS deps (incl. devDependencies) for the SPA build.
 # Separate from the `deps` stage above, which installs --production only.
-FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS frontend-deps
+FROM oven/bun:1.4.5@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS frontend-deps
 WORKDIR /app
 COPY package.json bun.lockb ./
 COPY packages/crypto/package.json packages/crypto/package.json
@@ -277,7 +277,7 @@ RUN xcaddy build --with github.com/mholt/caddy-ratelimit
 # Caddy container calls curl (its healthcheck is `caddy version`), so this is
 # patched rather than removed only to keep the base image's contents unchanged.
 # Drop the curl/libcurl pins once a caddy base image ships curl >= 8.23.0-r0.
-FROM caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9 AS static
+FROM caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 AS static
 RUN apk add --no-cache 'brotli-libs>=1.2.1-r0' 'curl>=8.23.0-r0' 'libcurl>=8.23.0-r0'
 COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY --from=frontend-builder /app/dist/client /srv/app

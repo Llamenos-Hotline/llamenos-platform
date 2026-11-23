@@ -5,7 +5,7 @@ ARG TARGETARCH
 # Builder and runtime are the same Bun release, pinned to the same image and
 # digest as deploy/docker/Dockerfile's `deps` stage and independently of
 # .mise.toml's dev/CI tool pin (see that stage for why the two may diverge).
-FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS base
+FROM oven/bun:1.4.5@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS base
 WORKDIR /app
 
 # Install dependencies
@@ -42,7 +42,7 @@ ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /trix
 # drops that root and refuses those chains as revoked. Dependabot watches this
 # directory (.github/dependabot.yml); scripts/check-image-trust-store.sh is what
 # verifies the result.
-FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS runtime-base
+FROM oven/bun:1.4.5@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS runtime-base
 WORKDIR /app
 
 # Outstanding Debian security updates on top of the pinned base, as in

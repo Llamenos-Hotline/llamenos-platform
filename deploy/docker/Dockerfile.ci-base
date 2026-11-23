@@ -30,7 +30,7 @@
 # would only add pull cost with nothing to show for it. Revisit when the
 # E2E job itself is migrated to `container:`.
 
-FROM rust:1-slim@sha256:cc9edbcadf2c27013a642b1d1bb7504e26b1142d6b5ebe58f64cf2eb2bc128ae
+FROM rust:1-slim@sha256:6f14b2b4b278ec0d50aa1d69541c304ce0f95e0f6268487aa9924af1c2e9aebe
 # rust:1-slim tracks the same "stable" channel as packages/crypto/rust-toolchain.toml.
 # Digest pinned like every other base image in this repo (see deploy/docker/Dockerfile);
 # bumped by Dependabot's existing docker-base-images group (dependabot.yml).
