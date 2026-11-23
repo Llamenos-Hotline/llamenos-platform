@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { DISPATCH_SCRIPT } from './paths.js'
 import { checkDispatchDependency, gitFactsFor } from './dependency.js'
 import { fleetRuntimeRoot } from './provenance.js'
-import { classifyTmuxOwner, dispatchGuard, isolatedLaunch, probeTmuxOwnership } from './tmux-isolation.js'
+import { ghLoginResolver, workerIdentityRefusal } from './identity.js'
+import { classifyTmuxOwner, dispatchGuard, isolatedLaunch, probeTmuxGlobalEnv, probeTmuxOwnership } from './tmux-isolation.js'
 import { fleetBranchFor } from './ci.js'
 import type { Lane, EngineId } from './config.js'
 import type { WorkItem } from './source.js'
@@ -697,11 +698,23 @@ export function resolveLaunchOutcome(input: LaunchOutcomeInput): DispatchResult 
  * exact limitation this system exists to remove. Teardown is `tick`'s job,
  * once, after the review loop for an item has actually ended.
  */
-export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
+export async function dispatch(req: DispatchRequest, deps: DispatchDeps = {}): Promise<DispatchResult> {
   const args = buildArgs({
     name: req.name, itemId: req.item.id, briefPath: req.briefPath, lane: req.lane,
     timeoutSec: req.timeoutSec, model: req.model, effort: req.effort,
   })
+
+  // #2966: the identity gate. A worker that opens its pull request as the
+  // codeowner produces one the codeowner is forbidden to review, which then
+  // merges by bypass with nothing recording that no review happened — and the
+  // credential check `doctor` makes never sees it, because it inspects a file
+  // and the worker's identity is decided by the environment its session is built
+  // from. So the check runs here, immediately before the launch, against that
+  // environment.
+  const identityRefusal = await (deps.identityRefusal ?? defaultIdentityRefusal)()
+  if (identityRefusal !== undefined) {
+    return { outcome: 'FAILED', note: identityRefusal }
+  }
 
   // dispatch-one.sh itself returns almost immediately — it starts the worker
   // in a DETACHED tmux session (`tmux new-session -d`) and does not wait for
@@ -733,6 +746,7 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   if (guard.refuse !== undefined) {
     return { outcome: 'FAILED', note: guard.refuse }
   }
+
   let launchError: string | undefined
   try {
     await launchWorker(args)
@@ -770,6 +784,19 @@ export async function dispatch(req: DispatchRequest): Promise<DispatchResult> {
   // a worker attached to a fragile tmux owner says so in its ledger note.
   return guard.warn === undefined ? result : { ...result, note: `tmux-owner: ${guard.warn} | ${result.note ?? ''}` }
 }
+
+/** Seams for `dispatch`. Production passes none. */
+export interface DispatchDeps {
+  /** The pre-launch identity gate: a refusal message, or `undefined` to launch. */
+  identityRefusal?: () => Promise<string | undefined>
+}
+
+const defaultIdentityRefusal = (): Promise<string | undefined> =>
+  workerIdentityRefusal({
+    dispatcherToken: process.env['GH_TOKEN'],
+    tmuxToken: probeTmuxGlobalEnv('GH_TOKEN'),
+    resolve: ghLoginResolver(),
+  })
 
 /** Runs one command line; the seam `launchWorker` is tested through. */
 export type LaunchRunner = (file: string, args: string[], opts: { timeout: number; maxBuffer: number }) => Promise<unknown>

@@ -197,3 +197,51 @@ export function dispatchGuard(o: TmuxOwnership): DispatchGuard {
   const warn = ownershipWarning(o)
   return warn === undefined ? {} : { warn }
 }
+
+/**
+ * What the tmux server's GLOBAL environment says a variable is (#2966).
+ *
+ * A worker is a `tmux new-session` client, and a new session's environment is
+ * built from the SERVER's global environment — not from the process that ran
+ * `tmux new-session`. So the dispatcher's own environment says nothing about
+ * what a worker sees once a server is already running: the server keeps the
+ * environment of whoever started it, however long ago, and a `GH_TOKEN` the
+ * dispatcher holds never reaches a worker the server did not already have it
+ * for. The worker then falls through to the `gh` wrapper's per-owner map, which
+ * picks the account from the git remote — which is how a fleet whose
+ * credential check passed still opened pull requests as the codeowner.
+ *
+ * `value` is returned to the caller for comparison and resolution only; it is
+ * never rendered here.
+ */
+export type TmuxGlobalEnv =
+  | { kind: 'no-server' }
+  | { kind: 'unset' }
+  | { kind: 'value'; value: string }
+  | { kind: 'unreadable'; reason: string }
+
+/** Pure: `tmux show-environment -g NAME` output/stderr to a verdict. */
+export function parseGlobalEnv(name: string, out: { stdout: string; stderr: string; failed: boolean }): TmuxGlobalEnv {
+  if (out.failed) {
+    if (/no server running|error connecting to|No such file or directory/i.test(out.stderr)) return { kind: 'no-server' }
+    if (/unknown variable/i.test(out.stderr)) return { kind: 'unset' }
+    return { kind: 'unreadable', reason: `tmux show-environment failed: ${out.stderr.trim().slice(0, 200)}` }
+  }
+  const line = out.stdout.split('\n').find((l) => l.startsWith(`${name}=`) || l === `-${name}`)
+  if (line === undefined || line === `-${name}`) return { kind: 'unset' }
+  return { kind: 'value', value: line.slice(name.length + 1) }
+}
+
+/** Reads variable `name` from the live tmux server's global environment. */
+export function probeTmuxGlobalEnv(name: string, opts: ProbeOptions = {}): TmuxGlobalEnv {
+  const args = [...(opts.socket !== undefined ? ['-S', opts.socket] : []), 'show-environment', '-g', name]
+  try {
+    const stdout = execFileSync('tmux', args, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10_000, env: tmuxEnv(opts),
+    })
+    return parseGlobalEnv(name, { stdout, stderr: '', failed: false })
+  } catch (e) {
+    const stderr = (e as { stderr?: Buffer | string }).stderr?.toString() ?? (e as Error).message
+    return parseGlobalEnv(name, { stdout: '', stderr, failed: true })
+  }
+}

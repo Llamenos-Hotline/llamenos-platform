@@ -34,6 +34,22 @@ export interface Lane {
   scopeOnly?: true
 }
 
+/**
+ * The GitHub account the fleet MUST author as (#2966). Pull requests are
+ * opened by this bot and reviewed by the codeowner; GitHub forbids an author
+ * from reviewing their own pull request, and the codeowner is a
+ * `bypass_actors` entry, so a pull request the codeowner authored clears the
+ * code-owner rule by bypass and merges with no review recorded at all — and
+ * nothing anywhere reads as a failure. `identity.ts` checks the credential
+ * against this login before the fleet acts; nothing else compares to it.
+ *
+ * A fleet-wide constant rather than an environment variable on purpose: an
+ * env override lives in `~/.llamenos-fleet/env` beside the very credential it
+ * is meant to police, so one wrong edit there would move both and the check
+ * would agree with itself. Changing the bot is a reviewed change to this file.
+ */
+export const FLEET_BOT_LOGIN = 'llamenos-auto'
+
 export const LANE_IDS = ['backend', 'shared', 'desktop', 'ios', 'android', 'infra'] as const
 
 /**
