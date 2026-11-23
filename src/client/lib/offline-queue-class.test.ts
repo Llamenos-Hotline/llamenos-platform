@@ -498,6 +498,131 @@ describe('OfflineQueue', () => {
       restarted.destroy()
     })
 
+    describe('queue persisted before storage was scoped to an identity', () => {
+      const LEGACY_KEY = 'llamenos-offline-queue'
+      const legacyOp = {
+        id: 'legacy-op', type: 'note:create', path: '/notes', method: 'POST',
+        body: '{"encryptedContent":"unsent"}', queuedAt: '2026-11-01T00:00:00.000Z', attempts: 0, lastError: null,
+      }
+
+      it('adopts a legacy queue that opens under the current identity, and stops reading the legacy key', async () => {
+        localStorage.setItem(LEGACY_KEY, await sealer.seal(JSON.stringify([legacyOp])))
+        const upgraded = new OfflineQueue({ sealer, identity: () => OWNER })
+        expect(upgraded.hydrated).toBe(false)
+        await upgraded.hydrate()
+        expect(upgraded.getQueue().map(op => op.id)).toEqual(['legacy-op'])
+        expect(upgraded.unreadable).toBeNull()
+        // Moved, not copied: the identity's own key holds it, the legacy key is gone.
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+        expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull()
+        upgraded.destroy()
+
+        // A later launch reads only the scoped key, and still finds the operation.
+        const relaunched = new OfflineQueue({ sealer, identity: () => OWNER })
+        await relaunched.hydrate()
+        expect(relaunched.getQueue().map(op => op.id)).toEqual(['legacy-op'])
+        relaunched.destroy()
+      })
+
+      it('replays an adopted legacy operation', async () => {
+        localStorage.setItem(LEGACY_KEY, await sealer.seal(JSON.stringify([legacyOp])))
+        const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const upgraded = new OfflineQueue({ sealer, identity: () => OWNER })
+        expect(await upgraded.replay(async () => ({}))).toEqual({ succeeded: 1, failed: 0, remaining: 0 })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+        expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+        vi.unstubAllGlobals()
+        upgraded.destroy()
+      })
+
+      it('merges ahead of what is enqueued before the legacy queue has been opened', async () => {
+        localStorage.setItem(LEGACY_KEY, await sealer.seal(JSON.stringify([legacyOp])))
+        const upgraded = new OfflineQueue({ sealer, identity: () => OWNER })
+        const newId = await upgraded.enqueue('/messages', 'POST', '{}')
+        expect(upgraded.getQueue().map(op => op.id)).toEqual(['legacy-op', newId])
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+        upgraded.destroy()
+      })
+
+      it('reports a legacy blob that does not authenticate as unreadable, and keeps it', async () => {
+        const blob = await sealer.seal(JSON.stringify([legacyOp]))
+        localStorage.setItem(LEGACY_KEY, blob)
+        sealer.failOpen = true // another identity sealed it: the tag fails under this key
+        const other = new OfflineQueue({ sealer, identity: () => OWNER })
+        await expect(other.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+        expect(other.unreadable).toBeInstanceOf(OfflineQueueStorageError)
+        expect(other.getQueue()).toEqual([])
+        // Neither adopted nor dropped.
+        expect(localStorage.getItem(LEGACY_KEY)).toBe(blob)
+        expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+        // Nothing can be queued over it until the user decides.
+        await expect(other.enqueue('/messages', 'POST', '{}')).rejects.toBeInstanceOf(OfflineQueueStorageError)
+        expect(localStorage.getItem(LEGACY_KEY)).toBe(blob)
+        other.destroy()
+      })
+
+      it('discarding an unreadable legacy blob removes it', async () => {
+        localStorage.setItem(LEGACY_KEY, await sealer.seal(JSON.stringify([legacyOp])))
+        sealer.failOpen = true
+        const other = new OfflineQueue({ sealer, identity: () => OWNER })
+        await expect(other.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+        await other.clear()
+        expect(other.unreadable).toBeNull()
+        expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+        sealer.failOpen = false
+        await other.enqueue('/messages', 'POST', '{}')
+        expect(other.pendingCount).toBe(1)
+        other.destroy()
+      })
+
+      it('leaves the legacy blob alone when the identity already has a queue of its own', async () => {
+        await queue.enqueue('/notes', 'POST', '{}')
+        queue.destroy()
+        const blob = await sealer.seal(JSON.stringify([legacyOp]))
+        localStorage.setItem(LEGACY_KEY, blob)
+        const relaunched = new OfflineQueue({ sealer, identity: () => OWNER })
+        await relaunched.hydrate()
+        expect(relaunched.pendingCount).toBe(1)
+        expect(relaunched.getQueue().map(op => op.id)).not.toContain('legacy-op')
+        expect(localStorage.getItem(LEGACY_KEY)).toBe(blob)
+        relaunched.destroy()
+      })
+    })
+
+    it('does not write one identity\'s queue, or delete its blob, when another unlocks mid-write', async () => {
+      let owner = 'owner-pubkey-a'
+      let release!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const slow: OfflineQueueSealer = {
+        ...sealer,
+        open: async blob => { await gate; return sealer.open(blob) },
+      }
+      const shared = new OfflineQueue({ sealer: slow, identity: () => owner })
+      const keyA = offlineQueueStorageKey('owner-pubkey-a')
+      const keyB = offlineQueueStorageKey('owner-pubkey-b')
+      const aBlob = await sealer.seal(JSON.stringify([{
+        id: 'a-earlier-op', type: 'note:create', path: '/notes', method: 'POST', body: null,
+        queuedAt: '2026-11-01T00:00:00.000Z', attempts: 0, lastError: null,
+      }]))
+      localStorage.setItem(keyA, aBlob)
+
+      // A's write is still opening A's earlier blob when B unlocks.
+      const aWrite = shared.enqueue('/notes', 'POST', '{}').catch((err: unknown) => err)
+      await vi.waitFor(() => expect(shared.pendingCount).toBe(1))
+      owner = 'owner-pubkey-b'
+      expect(shared.unreadable).toBeNull() // reading it rebinds the queue to B
+      release()
+      expect(await aWrite).toBeInstanceOf(OfflineQueueStorageError)
+
+      // B's queue is its own, and A's persisted blob is exactly as it was.
+      expect(shared.getQueue()).toEqual([])
+      expect(localStorage.getItem(keyA)).toBe(aBlob)
+      expect(localStorage.getItem(keyB)).toBeNull()
+      shared.destroy()
+    })
+
     it('removes storage once the last operation is replayed', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
       await queue.enqueue('/notes', 'POST', '{}')

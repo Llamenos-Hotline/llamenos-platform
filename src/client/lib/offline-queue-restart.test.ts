@@ -169,3 +169,88 @@ describe('offline queue across a change of device identity (#2948)', () => {
     run.offlineQueue.destroy()
   })
 })
+
+describe('offline queue persisted before storage was scoped to an identity (#2948)', () => {
+  const LEGACY_KEY = 'llamenos-offline-queue'
+
+  beforeEach(() => {
+    vi.stubEnv('PLAYWRIGHT_TEST', 'true')
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.doUnmock('@tauri-apps/api/core')
+    vi.unstubAllEnvs()
+  })
+
+  /** Identity A queues a write; its blob is then moved to where a pre-upgrade build kept it. */
+  async function legacyBlobSealedByA() {
+    const first = await coldStart()
+    const a = await first.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'legacy-identity-a' },
+    )
+    first.keyManager.markUnlocked(a.state.signingPubkeyHex)
+    const aId = await first.offlineQueue.enqueue('/notes', 'POST', '{"encryptedContent":"unsent-before-update"}')
+    first.offlineQueue.destroy()
+    const scopedKey = offlineQueueStorageKey(a.state.signingPubkeyHex)
+    const blob = localStorage.getItem(scopedKey)
+    expect(blob).not.toBeNull()
+    localStorage.removeItem(scopedKey)
+    localStorage.setItem(LEGACY_KEY, blob!)
+    return { a, aId, scopedKey, blob: blob! }
+  }
+
+  it('adopts the legacy blob when it was sealed by the identity that unlocks, and replays it', { timeout: 120_000 }, async () => {
+    const { a, aId, scopedKey } = await legacyBlobSealedByA()
+
+    const upgraded = await coldStart()
+    const state = await upgraded.invoke<{ signingPubkeyHex: string }>('unlock_with_pin', { data: a, pin: PIN })
+    upgraded.keyManager.markUnlocked(state.signingPubkeyHex)
+
+    await vi.waitFor(() => expect(upgraded.offlineQueue.hydrated).toBe(true))
+    expect(upgraded.offlineQueue.getQueue().map(op => op.id)).toEqual([aId])
+    expect(upgraded.offlineQueue.unreadable).toBeNull()
+    // Moved to the identity's own key; the legacy key is no longer read or kept.
+    await vi.waitFor(() => expect(localStorage.getItem(scopedKey)).not.toBeNull())
+    expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await upgraded.offlineQueue.replay(async () => ({}))
+    vi.unstubAllGlobals()
+    expect(result).toEqual({ succeeded: 1, failed: 0, remaining: 0 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    upgraded.offlineQueue.destroy()
+  })
+
+  it('reports a legacy blob sealed by a DIFFERENT identity as unreadable, never adopting or dropping it', { timeout: 120_000 }, async () => {
+    const { a, aId, scopedKey, blob } = await legacyBlobSealedByA()
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // ── B unlocks first on the same webview storage ──
+    const other = await coldStart()
+    const b = await other.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'legacy-identity-b' },
+    )
+    expect(b.state.signingPubkeyHex).not.toBe(a.state.signingPubkeyHex)
+    other.keyManager.markUnlocked(b.state.signingPubkeyHex)
+
+    await vi.waitFor(() => expect(other.offlineQueue.unreadable).not.toBeNull())
+    expect(other.offlineQueue.getQueue()).toEqual([])
+    expect(localStorage.getItem(LEGACY_KEY)).toBe(blob)
+    expect(localStorage.getItem(offlineQueueStorageKey(b.state.signingPubkeyHex))).toBeNull()
+    expect(errors).toHaveBeenCalled()
+    other.offlineQueue.destroy()
+
+    // ── The identity that sealed it returns: nothing was lost meanwhile ──
+    const owner = await coldStart()
+    const state = await owner.invoke<{ signingPubkeyHex: string }>('unlock_with_pin', { data: a, pin: PIN })
+    owner.keyManager.markUnlocked(state.signingPubkeyHex)
+    await vi.waitFor(() => expect(owner.offlineQueue.hydrated).toBe(true))
+    expect(owner.offlineQueue.getQueue().map(op => op.id)).toEqual([aId])
+    await vi.waitFor(() => expect(localStorage.getItem(scopedKey)).not.toBeNull())
+    expect(localStorage.getItem(LEGACY_KEY)).toBeNull()
+    owner.offlineQueue.destroy()
+    errors.mockRestore()
+  })
+})

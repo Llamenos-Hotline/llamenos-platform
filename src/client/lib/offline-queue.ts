@@ -23,6 +23,17 @@
  * under another's session. A blob that is its own identity's and still will
  * not open is a genuine defect: it is kept, reported as `unreadable`, and left
  * for the user to discard explicitly.
+ *
+ * Before queues were scoped, every identity shared one key
+ * (`llamenos-offline-queue`). A device that updates with writes still unsent
+ * keeps them: while an identity has no queue of its own, the legacy blob is
+ * tried under that identity's key. The AEAD tag is the proof of ownership — a
+ * blob sealed by another identity cannot authenticate, so no key comparison is
+ * needed. If it opens it is adopted (written under the identity's own key, the
+ * legacy key removed in the same synchronous step); if it does not, it is
+ * reported as `unreadable` exactly like an unopenable queue of one's own, and
+ * stays in storage until the user discards it — in the meantime it remains
+ * available to the identity that did seal it.
  */
 
 import { getApiUrl } from './api-config'
@@ -116,6 +127,9 @@ function parseQueue(json: string): QueuedOperation[] {
 
 const STORAGE_KEY_PREFIX = 'llamenos-offline-queue'
 
+/** The key every identity shared before queues were scoped; only ever migrated from. */
+const LEGACY_STORAGE_KEY = STORAGE_KEY_PREFIX
+
 /** The storage key of one device identity's queue. */
 export function offlineQueueStorageKey(owner: string): string {
   return `${STORAGE_KEY_PREFIX}:${owner}`
@@ -154,6 +168,10 @@ export class OfflineQueue {
    * write would overwrite operations this session has not read yet.
    */
   private sealed: string | null = null
+  /** Whether `sealed` was read from the pre-scoping shared key rather than `owner`'s own. */
+  private sealedIsLegacy = false
+  /** The legacy blob has been adopted or discarded; remove it once `owner`'s own key is written. */
+  private legacyResolved = false
   /** Why `owner`'s persisted queue could not be opened, while that is so. */
   private unreadableError: OfflineQueueStorageError | null = null
   private unreadableListeners = new Set<UnreadableListener>()
@@ -270,7 +288,9 @@ export class OfflineQueue {
   async clear(): Promise<void> {
     const owner = this.bind()
     this.queue = []
+    if (this.sealedIsLegacy) this.legacyResolved = true
     this.sealed = null
+    this.sealedIsLegacy = false
     this.setUnreadable(null)
     this.notifyListeners()
     // No identity has unlocked: nothing is persisted under one to discard.
@@ -284,9 +304,15 @@ export class OfflineQueue {
    * be opened — it is left in storage untouched, never silently dropped.
    */
   async hydrate(): Promise<void> {
-    this.bind()
-    if (this.sealed === null) return
-    await this.serialized(() => this.openSealed())
+    const owner = this.bind()
+    if (owner === null || this.sealed === null) return
+    await this.serialized(async () => {
+      // A legacy queue is moved to the identity's own key as soon as it opens,
+      // not on the next write, so the migration does not wait for new traffic.
+      const migrating = this.sealedIsLegacy
+      await this.openSealed()
+      if (migrating && this.sealed === null) await this.write(owner)
+    })
   }
 
   /**
@@ -430,7 +456,14 @@ export class OfflineQueue {
     const droppedOperations = this.queue.length > 0
     this.owner = owner
     this.queue = []
+    this.legacyResolved = false
     this.sealed = this.storage.getItem(offlineQueueStorageKey(owner))
+    this.sealedIsLegacy = false
+    if (this.sealed === null) {
+      // No queue of its own yet: a pre-scoping blob may be this identity's.
+      this.sealed = this.storage.getItem(LEGACY_STORAGE_KEY)
+      this.sealedIsLegacy = this.sealed !== null
+    }
     this.setUnreadable(null)
     if (droppedOperations) this.notifyListeners()
     return owner
@@ -451,29 +484,47 @@ export class OfflineQueue {
   /** Write the current queue to storage, sealed. Rejects if it could not be. */
   private persist(): Promise<void> {
     const owner = this.owner
-    return this.serialized(async () => {
-      if (owner === null || owner !== this.owner) {
-        throw new OfflineQueueStorageError(
-          'Could not seal the offline queue',
-          new Error('the device identity changed before the queue was saved'),
-        )
-      }
-      // A persisted queue not yet read must be merged first, or this write
-      // would replace operations from the previous session.
-      await this.openSealed()
-      const storageKey = offlineQueueStorageKey(owner)
-      if (this.queue.length === 0) {
-        this.storage.removeItem(storageKey)
-        return
-      }
-      let sealed: string
-      try {
-        sealed = await this.sealer.seal(JSON.stringify(this.queue))
-      } catch (cause) {
-        throw new OfflineQueueStorageError('Could not seal the offline queue', cause)
-      }
-      this.storage.setItem(storageKey, sealed)
-    })
+    return this.serialized(() => this.write(owner))
+  }
+
+  /**
+   * Seal the queue under `owner`'s own key. Runs inside the serialised chain.
+   * The identity is re-checked after every await: `bind()` may have moved on to
+   * another identity meanwhile, and the in-memory queue is then theirs — writing
+   * it under `owner`'s key would corrupt `owner`'s blob.
+   */
+  private async write(owner: string | null): Promise<void> {
+    const changed = () => new OfflineQueueStorageError(
+      'Could not seal the offline queue',
+      new Error('the device identity changed before the queue was saved'),
+    )
+    if (owner === null || owner !== this.owner) throw changed()
+    // A persisted queue not yet read must be merged first, or this write
+    // would replace operations from the previous session.
+    await this.openSealed()
+    if (owner !== this.owner) throw changed()
+    const storageKey = offlineQueueStorageKey(owner)
+    if (this.queue.length === 0) {
+      this.storage.removeItem(storageKey)
+      this.dropResolvedLegacy()
+      return
+    }
+    let sealed: string
+    try {
+      sealed = await this.sealer.seal(JSON.stringify(this.queue))
+    } catch (cause) {
+      throw new OfflineQueueStorageError('Could not seal the offline queue', cause)
+    }
+    if (owner !== this.owner) throw changed()
+    this.storage.setItem(storageKey, sealed)
+    this.dropResolvedLegacy()
+  }
+
+  /** Remove the legacy blob once its content lives under (or was discarded from) an identity's own key. */
+  private dropResolvedLegacy(): void {
+    if (!this.legacyResolved) return
+    this.storage.removeItem(LEGACY_STORAGE_KEY)
+    this.legacyResolved = false
   }
 
   private async openSealed(): Promise<void> {
@@ -495,7 +546,9 @@ export class OfflineQueue {
     if (this.owner !== owner) return
     const persistedIds = new Set(persisted.map(op => op.id))
     this.queue = [...persisted, ...this.queue.filter(op => !persistedIds.has(op.id))]
+    if (this.sealedIsLegacy) this.legacyResolved = true
     this.sealed = null
+    this.sealedIsLegacy = false
     this.setUnreadable(null)
     this.notifyListeners()
   }
