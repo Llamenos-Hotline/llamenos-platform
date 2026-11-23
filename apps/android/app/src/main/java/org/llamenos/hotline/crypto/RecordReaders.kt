@@ -96,4 +96,18 @@ object RecordReaderSet {
         }
         return compose(tiers, author, adminDecryptionPubkey)
     }
+
+    /**
+     * Readers of a record that does not exist yet, asked at write time.
+     *
+     * [lookup] performs `GET /api/records/envelope-recipients?entityTypeId=…`,
+     * which names the tiers for a new record of that type. Failure semantics are
+     * those of [forRecord]: no admin recipient refuses the write before the
+     * request; a failed lookup leaves the author and the admin.
+     */
+    suspend fun forNewRecord(
+        author: String?,
+        adminDecryptionPubkey: String?,
+        lookup: suspend () -> EnvelopeRecipientsResponse,
+    ): RecordReaders = forRecord(author, adminDecryptionPubkey, lookup)
 }
