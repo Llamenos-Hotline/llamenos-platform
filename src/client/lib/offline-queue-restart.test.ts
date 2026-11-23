@@ -15,10 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * are gone, only localStorage remains, as after a real relaunch.
  */
 
+import { offlineQueueStorageKey } from './offline-queue'
+
 type Invoke = <T = unknown>(cmd: string, args?: Record<string, unknown>) => Promise<T>
 
 const PIN = '12345678'
-const STORAGE_KEY = 'llamenos-offline-queue'
 
 /** Fresh modules: a cold start of the webview and of the Rust CryptoState. */
 async function coldStart() {
@@ -62,7 +63,7 @@ describe('offline queue across a restart, with no hub key', () => {
       await first.offlineQueue.enqueue('/reports', 'POST', '{"encryptedContent":"report-body"}'),
     ]
 
-    const stored = localStorage.getItem(STORAGE_KEY)
+    const stored = localStorage.getItem(offlineQueueStorageKey(encrypted.state.signingPubkeyHex))
     expect(stored, 'the queue must be persisted, not held in memory only').not.toBeNull()
     for (const body of ['note-body', 'msg-body', 'report-body']) {
       expect(stored).not.toContain(body)
@@ -93,7 +94,78 @@ describe('offline queue across a restart, with no hub key', () => {
     // Device key locked: nothing can seal the queue.
     await expect(offlineQueue.enqueue('/notes', 'POST', '{}')).rejects.toThrow(/seal the offline queue/)
     expect(offlineQueue.pendingCount).toBe(0)
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+    expect(localStorage.length).toBe(0)
     offlineQueue.destroy()
+  })
+})
+
+describe('offline queue across a change of device identity (#2948)', () => {
+  beforeEach(() => {
+    vi.stubEnv('PLAYWRIGHT_TEST', 'true')
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.doUnmock('@tauri-apps/api/core')
+    vi.unstubAllEnvs()
+  })
+
+  it('does not try to open one identity\'s queue under another identity\'s key', { timeout: 120_000 }, async () => {
+    // ── Identity A queues a write while offline, then the device is re-keyed ──
+    const first = await coldStart()
+    const a = await first.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'identity-a' },
+    )
+    first.keyManager.markUnlocked(a.state.signingPubkeyHex)
+    const aId = await first.offlineQueue.enqueue('/notes', 'POST', '{"encryptedContent":"a-note"}')
+    first.offlineQueue.destroy()
+
+    // ── Restart; a DIFFERENT identity unlocks on the same webview storage ──
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const second = await coldStart()
+    const b = await second.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'identity-b' },
+    )
+    expect(b.state.signingPubkeyHex).not.toBe(a.state.signingPubkeyHex)
+    second.keyManager.markUnlocked(b.state.signingPubkeyHex)
+
+    // B's queue opens (empty), with nothing reported — A's blob is not B's to open.
+    await vi.waitFor(() => expect(second.offlineQueue.hydrated).toBe(true))
+    expect(second.offlineQueue.getQueue()).toEqual([])
+    expect(second.offlineQueue.unreadable).toBeNull()
+    expect(errors).not.toHaveBeenCalled()
+
+    // B's own writes persist without touching A's.
+    const bId = await second.offlineQueue.enqueue('/notes', 'POST', '{"encryptedContent":"b-note"}')
+    second.offlineQueue.destroy()
+
+    // ── A returns (same device key): A's write is still there, B's is not ──
+    const third = await coldStart()
+    const restoredA = await third.invoke<{ signingPubkeyHex: string }>(
+      'unlock_with_pin', { data: a, pin: PIN },
+    )
+    third.keyManager.markUnlocked(restoredA.signingPubkeyHex)
+    await vi.waitFor(() => expect(third.offlineQueue.hydrated).toBe(true))
+    expect(third.offlineQueue.getQueue().map(op => op.id)).toEqual([aId])
+    expect(third.offlineQueue.getQueue().map(op => op.id)).not.toContain(bId)
+    third.offlineQueue.destroy()
+    errors.mockRestore()
+  })
+
+  it('drops the previous identity\'s in-memory queue when another identity unlocks without a restart', { timeout: 120_000 }, async () => {
+    const run = await coldStart()
+    const a = await run.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'identity-a' },
+    )
+    run.keyManager.markUnlocked(a.state.signingPubkeyHex)
+    await run.offlineQueue.enqueue('/notes', 'POST', '{"encryptedContent":"a-note"}')
+    expect(run.offlineQueue.pendingCount).toBe(1)
+
+    const b = await run.invoke<{ state: { signingPubkeyHex: string } }>(
+      'device_generate_and_load', { pin: PIN, deviceId: 'identity-b' },
+    )
+    run.keyManager.markUnlocked(b.state.signingPubkeyHex)
+    await vi.waitFor(() => expect(run.offlineQueue.pendingCount).toBe(0))
+    run.offlineQueue.destroy()
   })
 })

@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "Sie sind offline. Anrufe und Nachrichten funktionieren erst wieder, wenn die Verbindung wiederhergestellt ist.",
+    "discardQueue": "Discard saved actions",
     "operationQueued": "Offline gespeichert — wird bei Verbindung synchronisiert",
     "pendingCount": "{{count}} ausstehend",
     "pendingCountOne": "{{count}} ausstehend",
     "pendingSyncMessage": "{{count}} Operationen warten auf Synchronisierung",
     "pendingSyncMessageOne": "{{count}} Operation wartet auf Synchronisierung",
+    "queueUnreadable": "Saved offline actions on this device could not be read, so nothing new can be saved offline. Discard them to continue.",
     "rejected": "Nicht gespeichert: Der Server hat es abgelehnt",
     "relayReconnected": "Wieder verbunden — verpasste Ereignisse werden nachgeholt",
     "relayReconnecting": "Verbindung zum Echtzeit-Server wird wiederhergestellt...",

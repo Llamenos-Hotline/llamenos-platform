@@ -50,7 +50,10 @@ test.describe('Offline Resilience', () => {
     )
 
     // Persisted at enqueue time, and sealed: the body is not in storage.
-    const stored = await page.evaluate(() => localStorage.getItem('llamenos-offline-queue'))
+    const stored = await page.evaluate(() => {
+      const key = Object.keys(localStorage).find(k => k.startsWith('llamenos-offline-queue:'))
+      return key === undefined ? null : localStorage.getItem(key)
+    })
     expect(stored).not.toBeNull()
     expect(stored).not.toContain('offline-queue-plaintext-marker')
 

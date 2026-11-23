@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "أنت غير متصل بالإنترنت. لن تعمل المكالمات والرسائل حتى يتم استعادة الاتصال.",
+    "discardQueue": "Discard saved actions",
     "operationQueued": "تم الحفظ بدون اتصال — ستتم المزامنة عند الاتصال",
     "pendingCount": "{{count}} قيد الانتظار",
     "pendingCountOne": "{{count}} قيد الانتظار",
     "pendingSyncMessage": "{{count}} عمليات في انتظار المزامنة",
     "pendingSyncMessageOne": "{{count}} عملية في انتظار المزامنة",
+    "queueUnreadable": "Saved offline actions on this device could not be read, so nothing new can be saved offline. Discard them to continue.",
     "rejected": "لم يُحفظ: رفض الخادم ذلك",
     "relayReconnected": "تمت إعادة الاتصال — جارٍ استرداد الأحداث الفائتة",
     "relayReconnecting": "جارٍ إعادة الاتصال بالخادم...",

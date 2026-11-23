@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "आप ऑफ़लाइन हैं। कनेक्टिविटी बहाल होने तक कॉल और संदेश काम नहीं करेंगे।",
+    "discardQueue": "Discard saved actions",
     "operationQueued": "ऑफ़लाइन सहेजा गया — कनेक्ट होने पर सिंक होगा",
     "pendingCount": "{{count}} लंबित",
     "pendingCountOne": "{{count}} लंबित",
     "pendingSyncMessage": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
     "pendingSyncMessageOne": "{{count}} ऑपरेशन सिंक होने की प्रतीक्षा में",
+    "queueUnreadable": "Saved offline actions on this device could not be read, so nothing new can be saved offline. Discard them to continue.",
     "rejected": "सहेजा नहीं गया: सर्वर ने इसे अस्वीकार कर दिया",
     "relayReconnected": "पुनः कनेक्ट हो गया — छूटे हुए इवेंट प्राप्त कर रहा है",
     "relayReconnecting": "रियल-टाइम सर्वर से पुनः कनेक्ट हो रहा है...",

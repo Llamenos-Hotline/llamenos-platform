@@ -4405,11 +4405,13 @@
   "activeCalls": "Oyonik Tajin Kasamaj",
   "offline": {
     "banner": "Majun okem pa k'amb'al taq tz'ib'. Ri oyonik xuqujeʼ ri taq tzijob'al man kesamaj taj k'a kamik che ri k'amb'al taq tz'ib' katzolij.",
+    "discardQueue": "Discard saved actions",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Saved offline actions on this device could not be read, so nothing new can be saved offline. Discard them to continue.",
     "rejected": "Not saved: the server refused it",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

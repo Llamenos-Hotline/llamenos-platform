@@ -4139,11 +4139,13 @@
   },
   "offline": {
     "banner": "အင်တာနက်ချိတ်ဆက်မှုပြတ်နေသည်။ ချိတ်ဆက်မှုပြန်ရသည်အထိ ဖုန်းခေါ်ဆိုမှုနှင့် မက်ဆေ့ချ်များ အလုပ်မလုပ်ပါ။",
+    "discardQueue": "Discard saved actions",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Saved offline actions on this device could not be read, so nothing new can be saved offline. Discard them to continue.",
     "rejected": "မသိမ်းဆည်းရပါ- ဆာဗာက ငြင်းပယ်လိုက်သည်",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

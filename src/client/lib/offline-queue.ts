@@ -13,11 +13,21 @@
  * key. Persisting is part of enqueueing: if the queue cannot be sealed, the
  * enqueue rejects and the operation is NOT queued — a write is never reported
  * as queued while it lives only in memory.
+ *
+ * The seal key belongs to ONE device identity, so the stored blob is scoped to
+ * it: each identity's queue lives under its own storage key
+ * (`llamenos-offline-queue:<signing pubkey>`). A webview whose device key is
+ * replaced (re-import, restore, a different user on a shared machine) never
+ * presents one identity's blob to another's key — that cannot authenticate (an
+ * AES-GCM tag failure) and, were it replayed, would send one user's writes
+ * under another's session. A blob that is its own identity's and still will
+ * not open is a genuine defect: it is kept, reported as `unreadable`, and left
+ * for the user to discard explicitly.
  */
 
 import { getApiUrl } from './api-config'
 import { netFetch } from './net'
-import { onUnlock, isUnlocked } from './key-manager'
+import { onUnlock, isUnlocked, getPublicKeyHex } from './key-manager'
 import * as platform from './platform'
 
 /** Types of operations that can be queued */
@@ -53,6 +63,7 @@ export interface QueuedOperation {
 }
 
 type QueueChangeListener = (queue: QueuedOperation[]) => void
+type UnreadableListener = (error: OfflineQueueStorageError | null) => void
 
 /** Seals the serialized queue for at-rest storage on this device. */
 export interface OfflineQueueSealer {
@@ -103,7 +114,13 @@ function parseQueue(json: string): QueuedOperation[] {
   return parsed
 }
 
-const STORAGE_KEY = 'llamenos-offline-queue'
+const STORAGE_KEY_PREFIX = 'llamenos-offline-queue'
+
+/** The storage key of one device identity's queue. */
+export function offlineQueueStorageKey(owner: string): string {
+  return `${STORAGE_KEY_PREFIX}:${owner}`
+}
+
 const MAX_ATTEMPTS = 10
 const BASE_RETRY_DELAY = 1_000
 const MAX_RETRY_DELAY = 60_000
@@ -129,28 +146,53 @@ export class OfflineQueue {
   private listeners = new Set<QueueChangeListener>()
   private replaying = false
   private isOnline = navigator.onLine
+  /** The device identity the in-memory queue belongs to; null until one has unlocked. */
+  private owner: string | null = null
   /**
-   * The persisted, still-sealed queue from a previous session, until it has
-   * been opened into memory. While it is set, nothing may be written: a write
-   * would overwrite operations this session has not read yet.
+   * `owner`'s persisted, still-sealed queue from a previous session, until it
+   * has been opened into memory. While it is set, nothing may be written: a
+   * write would overwrite operations this session has not read yet.
    */
-  private sealed: string | null
+  private sealed: string | null = null
+  /** Why `owner`'s persisted queue could not be opened, while that is so. */
+  private unreadableError: OfflineQueueStorageError | null = null
+  private unreadableListeners = new Set<UnreadableListener>()
   /** Serialises storage writes so an older snapshot never lands after a newer one. */
   private writes: Promise<void> = Promise.resolve()
   private readonly sealer: OfflineQueueSealer
   private readonly storage: Storage
+  private readonly identity: () => string | null
 
-  constructor(options: { sealer?: OfflineQueueSealer; storage?: Storage } = {}) {
+  constructor(options: { sealer?: OfflineQueueSealer; storage?: Storage; identity?: () => string | null } = {}) {
     this.sealer = options.sealer ?? platformSealer
     this.storage = options.storage ?? localStorage
-    this.sealed = this.storage.getItem(STORAGE_KEY)
+    this.identity = options.identity ?? getPublicKeyHex
     window.addEventListener('online', this.handleOnline)
     window.addEventListener('offline', this.handleOffline)
   }
 
-  /** Whether the persisted queue has been opened into memory (or there was none). */
+  /** Whether the current identity's persisted queue has been opened into memory (or there was none). */
   get hydrated(): boolean {
-    return this.sealed === null
+    return this.bind() !== null && this.sealed === null
+  }
+
+  /**
+   * Set while the current identity's own persisted queue exists but cannot be
+   * opened (corrupt, or sealed under a device key this device no longer holds).
+   * Nothing can be queued meanwhile; `clear()` discards it and recovers.
+   */
+  get unreadable(): OfflineQueueStorageError | null {
+    this.bind()
+    return this.unreadableError
+  }
+
+  /** Be told when the persisted queue becomes unreadable, and when that ends. */
+  subscribeUnreadable(listener: UnreadableListener): () => void {
+    this.unreadableListeners.add(listener)
+    listener(this.unreadableError)
+    return () => {
+      this.unreadableListeners.delete(listener)
+    }
   }
 
   /** Add a listener for queue changes (for UI pending count) */
@@ -185,6 +227,10 @@ export class OfflineQueue {
    * operation out of the queue — if it could not be persisted.
    */
   async enqueue(path: string, method: string, body: string | null): Promise<string> {
+    if (this.bind() === null) {
+      // No device identity has unlocked, so there is no key to seal this under.
+      throw new OfflineQueueStorageError('Could not seal the offline queue', new Error('the device key is locked'))
+    }
     const op: QueuedOperation = {
       id: crypto.randomUUID(),
       type: classifyOperation(path, method),
@@ -218,14 +264,17 @@ export class OfflineQueue {
   }
 
   /**
-   * Discard every queued operation — in memory and at rest, including a
-   * persisted queue that has not been opened yet.
+   * Discard every queued operation of the current identity — in memory and at
+   * rest, including a persisted queue that has not been opened yet or cannot be.
    */
   async clear(): Promise<void> {
+    const owner = this.bind()
     this.queue = []
     this.sealed = null
+    this.setUnreadable(null)
     this.notifyListeners()
-    await this.persist()
+    // No identity has unlocked: nothing is persisted under one to discard.
+    if (owner !== null) await this.persist()
   }
 
   /**
@@ -235,6 +284,7 @@ export class OfflineQueue {
    * be opened — it is left in storage untouched, never silently dropped.
    */
   async hydrate(): Promise<void> {
+    this.bind()
     if (this.sealed === null) return
     await this.serialized(() => this.openSealed())
   }
@@ -367,14 +417,53 @@ export class OfflineQueue {
     return run
   }
 
+  /**
+   * Point the in-memory queue at the identity that is unlocked now. Another
+   * identity's operations are never carried over: they were persisted under
+   * their owner's key when queued, and replaying them here would send them
+   * under this identity's session. Returns the identity, or null while none
+   * has unlocked.
+   */
+  private bind(): string | null {
+    const owner = this.identity()
+    if (owner === null || owner === this.owner) return this.owner
+    const droppedOperations = this.queue.length > 0
+    this.owner = owner
+    this.queue = []
+    this.sealed = this.storage.getItem(offlineQueueStorageKey(owner))
+    this.setUnreadable(null)
+    if (droppedOperations) this.notifyListeners()
+    return owner
+  }
+
+  private setUnreadable(error: OfflineQueueStorageError | null): void {
+    if (this.unreadableError === error) return
+    this.unreadableError = error
+    for (const listener of this.unreadableListeners) {
+      try {
+        listener(error)
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
+
   /** Write the current queue to storage, sealed. Rejects if it could not be. */
   private persist(): Promise<void> {
+    const owner = this.owner
     return this.serialized(async () => {
+      if (owner === null || owner !== this.owner) {
+        throw new OfflineQueueStorageError(
+          'Could not seal the offline queue',
+          new Error('the device identity changed before the queue was saved'),
+        )
+      }
       // A persisted queue not yet read must be merged first, or this write
       // would replace operations from the previous session.
       await this.openSealed()
+      const storageKey = offlineQueueStorageKey(owner)
       if (this.queue.length === 0) {
-        this.storage.removeItem(STORAGE_KEY)
+        this.storage.removeItem(storageKey)
         return
       }
       let sealed: string
@@ -383,22 +472,31 @@ export class OfflineQueue {
       } catch (cause) {
         throw new OfflineQueueStorageError('Could not seal the offline queue', cause)
       }
-      this.storage.setItem(STORAGE_KEY, sealed)
+      this.storage.setItem(storageKey, sealed)
     })
   }
 
   private async openSealed(): Promise<void> {
     const sealed = this.sealed
+    const owner = this.owner
     if (sealed === null) return
     let persisted: QueuedOperation[]
     try {
       persisted = parseQueue(await this.sealer.open(sealed))
     } catch (cause) {
-      throw new OfflineQueueStorageError('Could not open the persisted offline queue', cause)
+      const error = new OfflineQueueStorageError('Could not open the persisted offline queue', cause)
+      // The blob is this identity's own, so this is not a stale key from
+      // someone else: report it where the user can act on it.
+      if (this.owner === owner) this.setUnreadable(error)
+      throw error
     }
+    // The identity changed while the open was in flight: `persisted` is another
+    // identity's queue and must not be merged into this one.
+    if (this.owner !== owner) return
     const persistedIds = new Set(persisted.map(op => op.id))
     this.queue = [...persisted, ...this.queue.filter(op => !persistedIds.has(op.id))]
     this.sealed = null
+    this.setUnreadable(null)
     this.notifyListeners()
   }
 

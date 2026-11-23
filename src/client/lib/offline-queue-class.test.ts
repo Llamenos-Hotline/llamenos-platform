@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   OfflineQueue,
   OfflineQueueStorageError,
+  offlineQueueStorageKey,
   classifyOperation,
   isQueueableMethod,
   isNetworkError,
   type OfflineQueueSealer,
 } from './offline-queue'
 
-const STORAGE_KEY = 'llamenos-offline-queue'
+const OWNER = 'owner-pubkey-a'
+const STORAGE_KEY = offlineQueueStorageKey(OWNER)
 
 /**
  * A reversible stand-in for the device-local seal, so these tests exercise the
@@ -38,7 +40,7 @@ describe('OfflineQueue', () => {
   beforeEach(() => {
     localStorage.clear()
     sealer = fakeSealer()
-    queue = new OfflineQueue({ sealer })
+    queue = new OfflineQueue({ sealer, identity: () => OWNER })
   })
 
   afterEach(() => {
@@ -403,7 +405,7 @@ describe('OfflineQueue', () => {
       const id2 = await queue.enqueue('/reports', 'POST', '{}')
       queue.destroy()
 
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       // Sealed until the device key opens it.
       expect(restarted.hydrated).toBe(false)
       expect(restarted.pendingCount).toBe(0)
@@ -417,11 +419,11 @@ describe('OfflineQueue', () => {
       const persistedId = await queue.enqueue('/notes', 'POST', '{}')
       queue.destroy()
 
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       const newId = await restarted.enqueue('/messages', 'POST', '{}')
       expect(restarted.getQueue().map(op => op.id)).toEqual([persistedId, newId])
 
-      const third = new OfflineQueue({ sealer })
+      const third = new OfflineQueue({ sealer, identity: () => OWNER })
       await third.hydrate()
       expect(third.getQueue().map(op => op.id)).toEqual([persistedId, newId])
       restarted.destroy()
@@ -441,7 +443,7 @@ describe('OfflineQueue', () => {
       queue.destroy()
 
       sealer.failOpen = true
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
       // A later write must not overwrite operations it has not read.
       await expect(restarted.enqueue('/messages', 'POST', '{}')).rejects.toBeInstanceOf(OfflineQueueStorageError)
@@ -449,16 +451,39 @@ describe('OfflineQueue', () => {
       restarted.destroy()
     })
 
+    it('reports a persisted queue that will not open as unreadable, until it is discarded', async () => {
+      await queue.enqueue('/notes', 'POST', '{}')
+      queue.destroy()
+
+      sealer.failOpen = true
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
+      const seen: Array<OfflineQueueStorageError | null> = []
+      restarted.subscribeUnreadable(error => seen.push(error))
+      expect(seen).toEqual([null])
+      await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
+      expect(restarted.unreadable).toBeInstanceOf(OfflineQueueStorageError)
+      expect(seen).toHaveLength(2)
+
+      // Discarding is the explicit recovery: the queue is usable again.
+      sealer.failOpen = false
+      await restarted.clear()
+      expect(restarted.unreadable).toBeNull()
+      expect(seen.at(-1)).toBeNull()
+      await restarted.enqueue('/messages', 'POST', '{}')
+      expect(restarted.pendingCount).toBe(1)
+      restarted.destroy()
+    })
+
     it('rejects a persisted value that is not a sealed queue', async () => {
       localStorage.setItem(STORAGE_KEY, 'not-a-sealed-queue')
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
       restarted.destroy()
     })
 
     it('rejects an opened queue whose contents are not queued operations', async () => {
       localStorage.setItem(STORAGE_KEY, await sealer.seal('[{"id":1}]'))
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       await expect(restarted.hydrate()).rejects.toBeInstanceOf(OfflineQueueStorageError)
       restarted.destroy()
     })
@@ -466,7 +491,7 @@ describe('OfflineQueue', () => {
     it('clear discards the persisted queue too, even unopened', async () => {
       await queue.enqueue('/notes', 'POST', '{}')
       queue.destroy()
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       await restarted.clear()
       expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
       expect(restarted.hydrated).toBe(true)
@@ -485,15 +510,45 @@ describe('OfflineQueue', () => {
       await queue.enqueue('/notes', 'POST', '{}')
       queue.destroy()
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
-      const restarted = new OfflineQueue({ sealer })
+      const restarted = new OfflineQueue({ sealer, identity: () => OWNER })
       const result = await restarted.replay(async () => ({}))
       expect(result).toEqual({ succeeded: 1, failed: 0, remaining: 0 })
       vi.unstubAllGlobals()
       restarted.destroy()
     })
 
+    it('keeps each device identity\'s queue under its own storage key', async () => {
+      let owner = 'owner-pubkey-a'
+      const shared = new OfflineQueue({ sealer, identity: () => owner })
+      const aId = await shared.enqueue('/notes', 'POST', '{}')
+      expect(shared.getQueue().map(op => op.id)).toEqual([aId])
+
+      // Another identity unlocks in the same webview: A's operations are not
+      // carried over, and A's blob is never opened under B's key.
+      owner = 'owner-pubkey-b'
+      sealer.failOpen = true // opening A's blob would fail, as it does under B's key
+      await shared.hydrate()
+      expect(shared.getQueue()).toEqual([])
+      expect(shared.unreadable).toBeNull()
+      const bId = await shared.enqueue('/notes', 'POST', '{}')
+      expect(shared.getQueue().map(op => op.id)).toEqual([bId])
+      sealer.failOpen = false
+
+      owner = 'owner-pubkey-a'
+      await shared.hydrate()
+      expect(shared.getQueue().map(op => op.id)).toEqual([aId])
+      shared.destroy()
+    })
+
+    it('refuses to queue a write while no device identity has unlocked', async () => {
+      const locked = new OfflineQueue({ sealer, identity: () => null })
+      await expect(locked.enqueue('/notes', 'POST', '{}')).rejects.toThrow(/seal the offline queue/)
+      expect(locked.pendingCount).toBe(0)
+      locked.destroy()
+    })
+
     it('handles empty localStorage', async () => {
-      const q2 = new OfflineQueue({ sealer })
+      const q2 = new OfflineQueue({ sealer, identity: () => OWNER })
       expect(q2.hydrated).toBe(true)
       expect(q2.pendingCount).toBe(0)
       q2.destroy()
