@@ -15,9 +15,11 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.llamenos.hotline.MountedRoutes
+import org.llamenos.hotline.R
 import org.llamenos.hotline.MountedRoutes.Companion.json
 import org.llamenos.hotline.MountedRoutes.Route
 import org.llamenos.hotline.MountedServer
@@ -52,6 +54,7 @@ class DashboardEndedCallTest {
     private lateinit var events: MutableSharedFlow<AttributedHubEvent<LlamenosEvent>>
     private lateinit var hold: EndedCallHold
     private var activeCalls: MutableMap<String, String> = mutableMapOf()
+    private var providerHangupFails = false
     private lateinit var routes: MountedRoutes
     private lateinit var server: MountedServer
 
@@ -61,12 +64,16 @@ class DashboardEndedCallTest {
         events = MutableSharedFlow(extraBufferCapacity = 8)
         hold = EndedCallHold()
         activeCalls = mutableMapOf()
+        providerHangupFails = false
         routes = MountedRoutes(
             Route("GET", "/api/hubs/:hubId/calls/active") { call ->
                 val body = activeCalls[call.params.getValue("hubId")]
                 json("""{"calls":[${body ?: ""}]}""")
             },
             Route("POST", "/api/hubs/:hubId/calls/:id/hangup") { call ->
+                if (providerHangupFails) {
+                    return@Route json("""{"error":"Provider hang-up failed — caller may still be connected"}""", 502)
+                }
                 // The call is over once hung up: it is no longer listed.
                 activeCalls.remove(call.params.getValue("hubId"))
                 json("""{"ok":true}""")
@@ -123,6 +130,26 @@ class DashboardEndedCallTest {
         )
         assertNull(vm.uiState.value.currentCall)
         assertEquals(CallRef("call-1", "hub-b"), vm.uiState.value.endedCall)
+    }
+
+    @Test
+    fun `a hang-up the server refuses keeps the call and says why`() = runTest(UnconfinedTestDispatcher()) {
+        val vm = viewModel()
+        activeCalls["hub-a"] = inProgress("call-3", me)
+        events.emit(AttributedHubEvent(hubId = "hub-a", event = LlamenosEvent.CallAnswered("call-3", me)))
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.currentCall)
+
+        providerHangupFails = true
+        vm.hangupCall()
+        advanceUntilIdle()
+
+        assertNotNull("the call is still up", vm.uiState.value.currentCall)
+        assertEquals(R.string.calls_hangup_failed, vm.uiState.value.errorRes)
+        val detail = vm.uiState.value.errorDetail
+        assertNotNull(detail)
+        assertTrue(detail!!.startsWith("HTTP 502"))
+        assertTrue(detail.contains("caller may still be connected"))
     }
 
     @Test

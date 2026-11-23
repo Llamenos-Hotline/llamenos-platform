@@ -207,6 +207,58 @@ fun DashboardScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                // Error card (dismissible). First, so a failed action is seen even when the active
+                // call card above it would otherwise push it off-screen.
+                val errorRes = uiState.errorRes
+                if (errorRes != null) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("dashboard-error-card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                        ),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(errorRes),
+                                    modifier = Modifier.testTag("dashboard-error-text"),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                val errorDetail = uiState.errorDetail
+                                if (errorDetail != null) {
+                                    Text(
+                                        text = errorDetail,
+                                        modifier = Modifier.testTag("dashboard-error-detail"),
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { viewModel.dismissError() },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("dashboard-error-dismiss"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Close,
+                                    contentDescription = stringResource(R.string.dismiss),
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Active call card (shown above everything when on a call)
                 val currentCall = uiState.currentCall
                 if (currentCall != null) {
@@ -321,48 +373,6 @@ fun DashboardScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.testTag("connection-status"),
                         )
-                    }
-                }
-
-                // Error card (dismissible)
-                val errorRes = uiState.errorRes
-                if (errorRes != null) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("dashboard-error-card"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = stringResource(errorRes),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("dashboard-error-text"),
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            IconButton(
-                                onClick = { viewModel.dismissError() },
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .testTag("dashboard-error-dismiss"),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Close,
-                                    contentDescription = stringResource(R.string.dismiss),
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
                     }
                 }
 

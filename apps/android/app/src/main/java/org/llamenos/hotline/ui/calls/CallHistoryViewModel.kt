@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.NoActiveHubException
+import org.llamenos.hotline.api.failureMessage
 import org.llamenos.hotline.crypto.AdminEnvelopeData
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
@@ -139,7 +140,7 @@ class CallHistoryViewModel @Inject constructor(
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
-                        error = e.message ?: "Failed to load call history",
+                        error = e.failureMessage("Failed to load call history"),
                     )
                 }
             }
