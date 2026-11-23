@@ -593,9 +593,12 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // grant mechanism — so a label able to widen a PR onto it could widen the
   // label set. The scanner suppressions and the audit allowlist are the files a
   // PR edits to make a finding disappear.
-  '.github/labels.yml',
-  '.github/dependabot.yml',
-  '.github/actionlint.yaml',
+  // Prefixes, not one spelling each: GitHub accepts `.yml` and `.yaml` for the
+  // dependabot config, and an alternate spelling must not be a way around the
+  // exclusion.
+  '.github/labels.',
+  '.github/dependabot.',
+  '.github/actionlint.',
   '.github/codeql/',
   '.github/ci/audit-allowlist.txt',
   '/.gitleaks.toml',
@@ -607,8 +610,12 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // contributor's or a runner's machine.
   '/.mise.toml',
   '/.mcp.json',
-  // The human gate itself.
+  // The human gate itself — in every location GitHub reads it from. `.github/`
+  // is searched BEFORE the root, so a new `.github/CODEOWNERS` would silently
+  // replace the one in force.
   '/CODEOWNERS',
+  '.github/CODEOWNERS',
+  'docs/CODEOWNERS',
   // Agent configuration, as a whole (#2935). Settings and hooks execute code and
   // the agent definitions steer every worker. This is also what makes the
   // fragments that DECLARE lane scope unreachable by a grant: they are owned by

@@ -188,7 +188,11 @@ describe('the files that decide what scanners and reviewers see are owned but un
     '.gitleaks.toml', '.gitleaksignore', '.trivyignore', '.codeqlignore', 'deny.toml', '.mise.toml', '.mcp.json', 'CODEOWNERS',
     '.github/labels.yml', '.github/dependabot.yml', '.github/actionlint.yaml', '.github/codeql/codeql-config.yml',
     '.github/ci/audit-allowlist.txt', '.claude/settings.json',
+    // Alternate spellings and locations of the same files: a new file there would replace or shadow the one in force.
+    '.github/CODEOWNERS', 'docs/CODEOWNERS', '.github/dependabot.yaml', '.github/actionlint.yml', '.github/labels.yaml',
   ]
+  // Not tracked today, so they are asserted against the gate directly rather than through the tree.
+  const NOT_YET_TRACKED = new Set(['.github/CODEOWNERS', 'docs/CODEOWNERS', '.github/dependabot.yaml', '.github/actionlint.yml', '.github/labels.yaml'])
   const GRANTABLE_ROOT = ['.gitignore', '.dockerignore', 'CONTRIBUTING.md', 'LICENSE', '.github/PULL_REQUEST_TEMPLATE.md', '.github/ISSUE_TEMPLATE/bug_report.yml']
   const lane = (id: string): Lane => {
     const l = lanes.find((x) => x.id === id)
@@ -198,7 +202,7 @@ describe('the files that decide what scanners and reviewers see are owned but un
 
   it('infra owns all of them, so its own PR can change them', () => {
     for (const f of [...GATE_CONFIG, ...GRANTABLE_ROOT]) {
-      expect(tracked, f).toContain(f)
+      if (!NOT_YET_TRACKED.has(f)) expect(tracked, f).toContain(f)
       expect(checkScope([f], lane('infra').scope, []).strayed, f).toEqual([])
     }
   })
