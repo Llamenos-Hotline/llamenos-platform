@@ -8,7 +8,7 @@
  *     place and every detail nulled; the platform chain records the shred.
  *  3. Erasure orthogonality (spec §6.2) — a person's pending erasure is
  *     neither satisfied nor orphaned by a hub shred, and a user-scope
- *     re-encryption job against a shredded hub completes as a no-op.
+ *     envelope revocation job against a shredded hub completes as a no-op.
  */
 import { and, eq, isNull } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -285,21 +285,21 @@ describe('erasure orthogonality (spec §6.2)', () => {
     ).resolves.toBeDefined()
   })
 
-  it('completes a re-encryption job targeting a shredded hub as a no-op', async () => {
+  it('completes a envelope revocation job targeting a shredded hub as a no-op', async () => {
     const hubId = await createHub()
     const user = reader()
     await fresh.shred.execute(hubId, EXECUTOR, fresh.audit, fresh.providerMedia)
     const [job] = await fresh.db
-      .insert(schema.reEncryptionJobs)
+      .insert(schema.envelopeRevocationJobs)
       .values({ userId: user.pubkey, hubId, status: 'queued' })
       .returning()
 
-    await fresh.erasure.processReEncryptionJob(job!.id)
+    await fresh.erasure.processEnvelopeRevocationJob(job!.id)
 
     const [done] = await fresh.db
       .select()
-      .from(schema.reEncryptionJobs)
-      .where(eq(schema.reEncryptionJobs.id, job!.id))
+      .from(schema.envelopeRevocationJobs)
+      .where(eq(schema.envelopeRevocationJobs.id, job!.id))
     expect(
       done!.status,
       'a job against a shredded hub must complete, not stall',

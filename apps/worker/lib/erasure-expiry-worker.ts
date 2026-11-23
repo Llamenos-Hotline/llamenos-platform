@@ -101,7 +101,7 @@ export async function processExpiredRequest(
 
   const userId = request.userId
 
-  const { reEncryptionJobIds } =
+  const { envelopeRevocationJobIds } =
     await opts.erasureService.executeErasure(
       userId,
       'system',
@@ -123,7 +123,7 @@ export async function processExpiredRequest(
   logger.info('Erasure executed', {
     requestId: request.id,
     userId: request.userId,
-    reEncryptionJobs: reEncryptionJobIds.length,
+    envelopeRevocationJobs: envelopeRevocationJobIds.length,
   })
 }
 

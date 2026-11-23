@@ -267,8 +267,8 @@ describe('IdentityService.removeHubRole', () => {
   // hub-key wrap. The behaviour these mocks can gate is that the call site
   // EXISTS; that it genuinely strips access is proven against real PostgreSQL
   // and the Bun SQL driver in
-  // apps/worker/__tests__/integration-bun/hub-member-removal-reencryption.test.ts.
-  it('enqueues a user-scope re-encryption job scoped to the hub left', async () => {
+  // apps/worker/__tests__/integration-bun/hub-member-removal-envelope-revocation.test.ts.
+  it('enqueues a user-scope envelope revocation job scoped to the hub left', async () => {
     const { db, service } = setup()
     const user = makeUserRow({
       hubRoles: [

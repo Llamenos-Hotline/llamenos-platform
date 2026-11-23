@@ -30,9 +30,9 @@ import {
   stopErasureExpiryWorker,
 } from '../lib/erasure-expiry-worker'
 import {
-  startReEncryptionWorker,
-  stopReEncryptionWorker,
-} from '../lib/re-encryption-worker'
+  startEnvelopeRevocationWorker,
+  stopEnvelopeRevocationWorker,
+} from '../lib/envelope-revocation-worker'
 import {
   startAuditChainVerifyWorker,
   stopAuditChainVerifyWorker,
@@ -94,7 +94,7 @@ export const SCHEDULER_WORKER_NAMES = [
   'retention-purge',
   'audit-chain-verify',
   'erasure-expiry',
-  're-encryption',
+  'envelope-revocation',
   'periodic-cleanup',
   'signal-queue-drain',
   'stale-call-reaper',
@@ -223,10 +223,10 @@ export class TaskScheduler {
     })
     started.push('erasure-expiry')
 
-    startReEncryptionWorker({
+    startEnvelopeRevocationWorker({
       erasureService: deps.erasureService,
     })
-    started.push('re-encryption')
+    started.push('envelope-revocation')
 
     // Periodic cleanup: IdentityService.cleanup() (sessions, WebAuthn
     // challenges, provision rooms, invite codes, auth nonces) and
@@ -310,7 +310,7 @@ export class TaskScheduler {
     stopRetentionPurgeWorker()
     stopAuditChainVerifyWorker()
     stopErasureExpiryWorker()
-    stopReEncryptionWorker()
+    stopEnvelopeRevocationWorker()
     stopPeriodicCleanupWorker()
     stopSignalQueueDrainWorker()
     stopStaleCallReaperWorker()

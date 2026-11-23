@@ -56,7 +56,7 @@ This document defines the threat model for Llamenos, a secure crisis response ho
 - Certificate pinning scaffolding (iOS/Android) — pins to be populated after first production deployment
 - Sigchain device revocation — compromised devices can be deauthorized without affecting other devices
 - Recovery group key escrow with Shamir threshold — account recovery without single-point trust
-- Active re-encryption on departure — envelope copies for departed users are removed, not just access-revoked
+- Envelope revocation on departure — envelope entries for departed users are removed server-side, not just access-revoked (revocation, not re-encryption: see Phase 4 below)
 - Remote device wipe — server-pushed key destruction for compromised devices
 - Crypto-shredding for erasure — per-user audit envelope key destroyed, rendering audit details unreadable while preserving hash chain integrity
 
@@ -129,7 +129,7 @@ flowchart TB
         API["Hono API → Auth MW → Perm MW → Route Handler"]
         DB["PostgreSQL<br/>(encrypted blobs, hashed identifiers)"]
         BlastQueue["Blast Delivery Queue<br/>(rate-limited, per-channel)"]
-        ErasureEngine["Erasure Engine<br/>(crypto-cascade, re-encryption jobs)"]
+        ErasureEngine["Erasure Engine<br/>(crypto-cascade, envelope revocation jobs)"]
         RecoveryRelay["Recovery Session Relay<br/>(HPKE ciphertext only)"]
         ServerMeta["Server can see: metadata, delivery status, team/tag IDs, ban hashes"]
         ServerCant["Server CANNOT see: note content, role names, entity fields, recovery shares"]
@@ -249,7 +249,7 @@ flowchart TB
 | Cross-context key reuse prevention | Domain separation labels + Albrecht defense (see `crypto-labels.json`) | Label enforced at decrypt |
 | Recovery share secrecy | Shamir GF(2^8) — below-threshold shares reveal zero information | Information-theoretic |
 | Recovery group integrity | Group pubkey anchored to user sigchain + share holder cross-signatures | Tamper-evident, server cannot substitute |
-| Erasure completeness | Crypto-shredding — per-user audit key destroyed; active re-encryption removes departed envelopes | Forward-secure revocation |
+| Erasure completeness | Crypto-shredding — per-user audit key destroyed; envelope revocation removes departed envelope entries | Forward-secure revocation |
 | Entity field confidentiality | 3-tier envelope model (summary/fields/pii) per entity | Per-tier HPKE wrapping |
 | Role metadata confidentiality | Platform roles: per-admin HPKE; Hub roles: hub-key symmetric | Domain-separated labels |
 | Device authorization integrity | Sigchain — append-only, hash-chained, Ed25519-signed | Tamper-evident |
@@ -342,7 +342,7 @@ This section documents what data can be obtained through legal process against v
 - Admin can trigger remote device wipe — server pushes key destruction + data wipe to the seized device (EP08)
 - Hub key rotation on departure excludes seized device
 - Argon2id (64MB/3/4) applied automatically — no user action required
-- If seizure is detected, admin can initiate immediate account erasure with cryptographic cascade — hub keys rotated, PUK envelopes deleted, active re-encryption removes departed user's envelope copies
+- If seizure is detected, admin can initiate immediate account erasure with cryptographic cascade — hub keys rotated, PUK envelopes deleted, envelope revocation removes departed user's envelope entries
 
 ### Device Seizure (Admin)
 
@@ -470,7 +470,7 @@ When a user departs the organization, they retain their device private keys. The
 | Decrypt notes created after departure | New notes use keys they don't possess |
 | Access the application | Sessions revoked; WebAuthn credentials revoked; device deauthorized via sigchain |
 
-### Hub Key Rotation and Active Re-Encryption (EP08)
+### Hub Key Rotation and Envelope Revocation (EP08)
 
 When a user departs (voluntarily or via admin erasure):
 
@@ -491,12 +491,12 @@ When a user departs (voluntarily or via admin erasure):
 10. Destroy per-user audit envelope key — audit entries referencing this user become undecryptable
 11. Replace `actorPubkey` with `[erased]` on audit entries (preserves hash chain integrity)
 
-**Phase 4 — Active re-encryption (background):**
+**Phase 4 — Envelope revocation (background):**
 12. Find all note/message envelopes referencing departed user's pubkey
 13. Remove the departed user's HPKE-wrapped key copy from each envelope JSONB array
-14. Progress tracked in `re_encryption_jobs` table — admin monitors via UI
+14. Progress tracked in `envelope_revocation_jobs` table — admin monitors via UI
 
-This goes beyond access revocation: even if an adversary had previously extracted the departed user's keys AND ciphertext, the server-side envelopes are re-wrapped without them. Historical data encrypted before departure remains accessible only to currently authorized users via the CLKR chain.
+This is envelope **revocation**, not re-encryption (#1527): no ciphertext is re-sealed and no content key is rewrapped. It stops the server from serving the departed user's wrapped key, but a wrap the user already copied before departure still opens its content key — only re-encryption would invalidate it, and that is not implemented. Do not rely on this phase against an adversary who extracted a departed user's key material and ciphertext.
 
 ## SMS/WhatsApp Outbound Message Limitation
 
@@ -692,7 +692,7 @@ Entity records (cases, contacts, events) use a 3-tier encryption model that limi
 | Threat | Example | Mitigation |
 |--------|---------|------------|
 | Coerced erasure | Adversary forces volunteer to request account erasure under duress | Configurable delay (24h–7d) with cancellation window; emergency override requires co-approver Ed25519 signature from a different user; 4h hard minimum floor prevents zero-delay erasure |
-| Incomplete data purge | Erasure process fails to remove all user data from all locations | 4-phase cryptographic cascade: revocation → cleanup → crypto-shredding → active re-encryption; `re_encryption_jobs` table tracks progress; idempotent retry on failure |
+| Incomplete data purge | Erasure process fails to remove all user data from all locations | 4-phase cryptographic cascade: revocation → cleanup → crypto-shredding → envelope revocation; `envelope_revocation_jobs` table tracks progress; idempotent retry on failure |
 | Re-registration with old data | Erased user re-registers and somehow regains access to old encrypted data | Erasure destroys per-user audit envelope key and removes all HPKE envelopes addressed to the departed user; new registration creates fresh keypair with no link to old envelopes; hub keys were rotated on departure |
 | Retention bypass | Hub admin sets data retention to minimum (24h) to destroy evidence | Platform admin enforces a minimum delay floor across all hubs via `erasurePlatformFloor.minDelayHours`; retention minimums are hard-coded constants, not configurable by hub admins |
 | Remote wipe abuse | Malicious admin triggers device wipe on a legitimate volunteer's device | Wipe requires `erasure:admin` permission; wipe events audit-logged; signed wipe confirmation (`LABEL_DEVICE_WIPE_SIG`) creates tamper-evident record |

@@ -13,7 +13,7 @@ import {
   createEmergencySelfErasureBodySchema,
   adminErasureBodySchema,
   deviceWipeBodySchema,
-  reEncryptionJobListResponseSchema,
+  envelopeRevocationJobListResponseSchema,
   erasureConfigResponseSchema,
   updateErasureConfigBodySchema,
   abandonErasureBodySchema,
@@ -597,7 +597,7 @@ erasure.post(
       return c.json({ error: 'Forbidden', required: 'erasure:admin' }, 403)
     }
 
-    const { reEncryptionJobIds } = await services.erasure.executeErasure(
+    const { envelopeRevocationJobIds } = await services.erasure.executeErasure(
       targetUserId,
       pubkey,
       body.justification,
@@ -622,7 +622,7 @@ erasure.post(
 
     return c.json({
       ok: true,
-      reEncryptionJobIds,
+      envelopeRevocationJobIds,
     })
   },
 )
@@ -676,16 +676,16 @@ erasure.post(
 )
 
 erasure.get(
-  '/re-encryption-jobs',
+  '/envelope-revocation-jobs',
   describeRoute({
     tags: ['Erasure'],
-    summary: 'List re-encryption jobs',
+    summary: 'List envelope revocation jobs',
     responses: {
       200: {
-        description: 'Re-encryption jobs list',
+        description: 'Envelope revocation jobs list',
         content: {
           'application/json': {
-            schema: resolver(reEncryptionJobListResponseSchema),
+            schema: resolver(envelopeRevocationJobListResponseSchema),
           },
         },
       },
@@ -700,7 +700,7 @@ erasure.get(
       return c.json({ error: 'Hub context required' }, 400)
     }
     const userId = c.req.query('userId')
-    const jobs = await services.erasure.listReEncryptionJobs(hubId, userId ?? undefined)
+    const jobs = await services.erasure.listEnvelopeRevocationJobs(hubId, userId ?? undefined)
 
     return c.json({
       jobs: jobs.map((j) => ({

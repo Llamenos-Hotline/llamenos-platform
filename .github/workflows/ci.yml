@@ -3487,6 +3487,46 @@ jobs:
           scripts/check-migration-order.test.ts scripts/db-generate.test.ts scripts/lib/migration-graph.test.ts
           scripts/lib/git-ancestry.test.ts scripts/ci-run-gate.test.ts
 
+  # WHO authored the PR and every commit on it (#2916). Authorship is an input to
+  # the merge gates (`fleet-review.yml` branches on it; a code-owner approval is
+  # vacuous when the author is the sole owner) yet was an output of ambient local
+  # state that nothing asserted. This is the assertion, as an ALLOWLIST scoped by
+  # branch namespace, failing closed: "not in the allowed set" (exit 1) and "could
+  # not establish the author" (exit 2) are distinct failures and neither is green.
+  # See .github/scripts/check-authorship.ts for the rules and for why nothing read
+  # off the event is ever echoed into this job's output.
+  #
+  # Part of the required `ci-status` aggregate (a new required CONTEXT would need a
+  # ruleset change, which is a separate step). `pull_request` only: every commit a
+  # merge group carries was already judged here on the PR's own head, and a
+  # `merge_group` event has no PR author to read. A skipped job is a pass to
+  # ci-status, which is why this is the one place that decision is made.
+  authorship:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `bun install`: the gate imports only node: built-ins.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Test the authorship gate
+        run: bun test ./.github/scripts/check-authorship.test.ts
+
+      - name: Check the PR author and every commit's author and committer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun .github/scripts/check-authorship.ts
+
   docs-guard:
     needs: changes
     # Release-bump-only PR skip (#2094) — see the first use, in no-generated-files-in-git.
@@ -3906,7 +3946,7 @@ jobs:
           echo "coverage audit: event=$EVENT_NAME gap='${gap:-none}' deferred='${deferred:-none}'"
 
   ci-status:
-    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-bdd-opt-in, backend-unit, backend-integration-bun, backend-integration, sidecar-tests, repo-tests, desktop-unit, desktop-rust, android-build-test, android-compile-check, android-e2e, e2e, desktop-e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, production-smoke, platform-suite-coverage]
+    needs: [no-generated-files-in-git, verify-updater-config, build, audit, lint, crypto-tests, backend-bdd, backend-bdd-opt-in, backend-unit, backend-integration-bun, backend-integration, sidecar-tests, repo-tests, desktop-unit, desktop-rust, android-build-test, android-compile-check, android-e2e, e2e, desktop-e2e, ios-build-test, ios-compile-check, ios-e2e, crypto-guardrails, migration-drift, ansible-validate, backup-restore-roundtrip, docs-guard, authorship, production-smoke, platform-suite-coverage]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -3981,6 +4021,7 @@ jobs:
           check_job "backup-restore-roundtrip" "${{ needs.backup-restore-roundtrip.result }}"
           check_job "production-smoke" "${{ needs.production-smoke.result }}"
           check_job "docs-guard" "${{ needs.docs-guard.result }}"
+          check_job "authorship" "${{ needs.authorship.result }}"
           check_job "platform-suite-coverage" "${{ needs.platform-suite-coverage.result }}"
 
           if [[ -n "$NO_VERDICT" ]]; then

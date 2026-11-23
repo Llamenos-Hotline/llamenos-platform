@@ -29,7 +29,7 @@ import {
   deviceVerifications,
   authNonces,
   hubKeys,
-  reEncryptionJobs,
+  envelopeRevocationJobs,
 } from '../db/schema'
 import type {
   User,
@@ -916,8 +916,8 @@ export class IdentityService {
    *      `hub_keys` as the list of hubs a user belongs to, and the next admin
    *      rotation would re-wrap the new key for someone who is no longer a
    *      member.
-   *   3. Enqueues a user-scope re-encryption job for THIS hub, which the
-   *      re-encryption worker (apps/worker/lib/re-encryption-worker.ts) picks
+   *   3. Enqueues a user-scope envelope revocation job for THIS hub, which the
+   *      envelope revocation worker (apps/worker/lib/envelope-revocation-worker.ts) picks
    *      up to strip that member's envelope copies from the hub's records.
    *
    * Scoping is the correctness question: a user may be a member of several
@@ -995,20 +995,20 @@ export class IdentityService {
       // independent of when the worker happens to wake up. An admin who
       // re-adds a member re-shares what that member should see.
       const pending = await tx
-        .select({ id: reEncryptionJobs.id })
-        .from(reEncryptionJobs)
+        .select({ id: envelopeRevocationJobs.id })
+        .from(envelopeRevocationJobs)
         .where(
           and(
-            eq(reEncryptionJobs.scope, 'user'),
-            eq(reEncryptionJobs.userId, data.pubkey),
-            eq(reEncryptionJobs.hubId, data.hubId),
-            inArray(reEncryptionJobs.status, ['queued', 'running']),
+            eq(envelopeRevocationJobs.scope, 'user'),
+            eq(envelopeRevocationJobs.userId, data.pubkey),
+            eq(envelopeRevocationJobs.hubId, data.hubId),
+            inArray(envelopeRevocationJobs.status, ['queued', 'running']),
           ),
         )
         .limit(1)
 
       if (pending.length === 0) {
-        await tx.insert(reEncryptionJobs).values({
+        await tx.insert(envelopeRevocationJobs).values({
           scope: 'user',
           userId: data.pubkey,
           hubId: data.hubId,

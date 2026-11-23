@@ -12,7 +12,7 @@
  */
 import { sql } from 'drizzle-orm'
 import type { Database } from '../db'
-import { reEncryptionJobs } from '../db/schema'
+import { envelopeRevocationJobs } from '../db/schema'
 import {
   HUB_SHRED_TARGETS,
   type EnvelopeClearValue,
@@ -206,13 +206,13 @@ export class HubShredService {
 
       // Marker for the blob-mirror deletion that must happen after commit.
       // A crash between commit and deletion leaves this queued, and the
-      // re-encryption worker's retry path re-derives the file ids and finishes
+      // envelope revocation worker's retry path re-derives the file ids and finishes
       // the job rather than losing the mirrors silently.
       if (fileIds.length > 0) {
         const [marker] = await tx
-          .insert(reEncryptionJobs)
+          .insert(envelopeRevocationJobs)
           .values({ scope: 'hub', userId: null, hubId, status: 'queued' })
-          .returning({ id: reEncryptionJobs.id })
+          .returning({ id: envelopeRevocationJobs.id })
         mirrorMarkerId = marker?.id ?? null
       }
     })
@@ -222,7 +222,7 @@ export class HubShredService {
       await this.deleteBlobEnvelopeMirrors(fileIds)
       if (mirrorMarkerId) {
         await this.db.execute(sql`
-          UPDATE re_encryption_jobs SET status = 'completed', completed_at = NOW()
+          UPDATE envelope_revocation_jobs SET status = 'completed', completed_at = NOW()
           WHERE id = ${mirrorMarkerId}
         `)
       }

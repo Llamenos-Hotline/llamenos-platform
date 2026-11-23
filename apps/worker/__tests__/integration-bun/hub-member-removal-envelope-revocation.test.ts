@@ -3,7 +3,7 @@
  * real PostgreSQL, Bun-native driver.
  *
  * MUST run under `bun test`, NOT vitest:
- *   bun test apps/worker/__tests__/integration-bun/hub-member-removal-reencryption.test.ts
+ *   bun test apps/worker/__tests__/integration-bun/hub-member-removal-envelope-revocation.test.ts
  *
  * Why this tier and not apps/worker/__tests__/integration/ (vitest +
  * `drizzle-orm/postgres-js`):
@@ -14,8 +14,8 @@
  *      below about WHICH hub a user is still a member of reads back through
  *      that column, so under postgres-js it would be testing a different
  *      serialization path than production uses.
- *   2. The re-encryption job this file asserts is enqueued is consumed by
- *      `ErasureService.processReEncryptionJob`, whose envelope predicates are
+ *   2. The envelope revocation job this file asserts is enqueued is consumed by
+ *      `ErasureService.processEnvelopeRevocationJob`, whose envelope predicates are
  *      `admin_envelopes @> '[{"pubkey": …}]'::jsonb`. #1600 measured that the
  *      vitest/postgres-js tier cannot distinguish a working jsonb predicate
  *      from a broken one — it silently makes the broken binding form work. A
@@ -23,7 +23,7 @@
  *
  * Scope note: this file asserts that removal ENQUEUES the strip and REVOKES the
  * server-held hub-key wrap. It deliberately does not assert that
- * `processReEncryptionJob` then removes the envelopes: that is the predicate
+ * `processEnvelopeRevocationJob` then removes the envelopes: that is the predicate
  * defect tracked by #1600, open at the time of writing, and asserting it here
  * would make this file red for a reason that is not #1601.
  *
@@ -35,7 +35,7 @@ import { describe, it, expect, afterAll, beforeAll } from 'bun:test'
 import { and, eq, inArray } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { hubs, hubKeys, users, notes, reEncryptionJobs } from '../../db/schema'
+import { hubs, hubKeys, users, notes, envelopeRevocationJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
 
 const DATABASE_URL =
@@ -113,7 +113,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.hubId, [hubA, hubB]))
+  await db.delete(envelopeRevocationJobs).where(inArray(envelopeRevocationJobs.hubId, [hubA, hubB]))
   await db.delete(notes).where(inArray(notes.hubId, [hubA, hubB]))
   await db.delete(users).where(inArray(users.pubkey, [departing, staying]))
   await db.delete(hubs).where(inArray(hubs.id, [hubA, hubB]))
@@ -122,8 +122,8 @@ afterAll(async () => {
 async function jobsFor(pubkey: string, hubId: string) {
   return db
     .select()
-    .from(reEncryptionJobs)
-    .where(and(eq(reEncryptionJobs.userId, pubkey), eq(reEncryptionJobs.hubId, hubId)))
+    .from(envelopeRevocationJobs)
+    .where(and(eq(envelopeRevocationJobs.userId, pubkey), eq(envelopeRevocationJobs.hubId, hubId)))
 }
 
 async function wrapsFor(pubkey: string, hubId: string) {
@@ -140,7 +140,7 @@ describe('removing a member from a hub revokes their access to that hub (#1601)'
     expect(await wrapsFor(departing, hubB)).toHaveLength(1)
   })
 
-  it('enqueues a user-scope re-encryption job for the hub the member left', async () => {
+  it('enqueues a user-scope envelope revocation job for the hub the member left', async () => {
     await identity.removeHubRole({ pubkey: departing, hubId: hubA })
 
     const jobs = await jobsFor(departing, hubA)

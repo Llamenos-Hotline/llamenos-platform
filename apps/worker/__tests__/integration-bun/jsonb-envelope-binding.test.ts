@@ -40,7 +40,7 @@ import {
   messages,
   files,
   subscribers,
-  reEncryptionJobs,
+  envelopeRevocationJobs,
   blasts as blastsTable,
   blastDeliveries,
 } from '../../db/schema'
@@ -95,7 +95,7 @@ async function envelopeCount(
 
 afterAll(async () => {
   if (createdHubIds.length > 0) {
-    await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.hubId, createdHubIds))
+    await db.delete(envelopeRevocationJobs).where(inArray(envelopeRevocationJobs.hubId, createdHubIds))
     await db.delete(blastsTable).where(inArray(blastsTable.hubId, createdHubIds))
     await db.delete(subscribers).where(inArray(subscribers.hubId, createdHubIds))
     await db.delete(notes).where(inArray(notes.hubId, createdHubIds))
@@ -110,7 +110,7 @@ afterAll(async () => {
   }
 })
 
-describe('ErasureService.processReEncryptionJob strips the departed member envelopes (#1595)', () => {
+describe('ErasureService.processEnvelopeRevocationJob strips the departed member envelopes (#1595)', () => {
   it('removes the user envelope from notes, note replies and messages, and leaves the others', async () => {
     const hubId = await freshHub('erase')
     const departing = `pk-departing-${Math.random().toString(36).slice(2, 8)}`
@@ -159,11 +159,11 @@ describe('ErasureService.processReEncryptionJob strips the departed member envel
     expect(await envelopeCount('messages', 'reader_envelopes', message!.id, departing)).toBe(1)
 
     const [job] = await db
-      .insert(reEncryptionJobs)
+      .insert(envelopeRevocationJobs)
       .values({ scope: 'user', userId: departing, hubId, status: 'queued' })
-      .returning({ id: reEncryptionJobs.id })
+      .returning({ id: envelopeRevocationJobs.id })
 
-    await erasure.processReEncryptionJob(job!.id)
+    await erasure.processEnvelopeRevocationJob(job!.id)
 
     // Post-condition: the departed member can no longer decrypt any of it.
     expect(await envelopeCount('notes', 'admin_envelopes', note!.id, departing)).toBe(0)
@@ -192,20 +192,20 @@ describe('ErasureService.processReEncryptionJob strips the departed member envel
       .returning({ id: notes.id })
 
     const [job] = await db
-      .insert(reEncryptionJobs)
+      .insert(envelopeRevocationJobs)
       .values({ scope: 'user', userId: departing, hubId, status: 'queued' })
-      .returning({ id: reEncryptionJobs.id })
+      .returning({ id: envelopeRevocationJobs.id })
 
-    await erasure.processReEncryptionJob(job!.id)
+    await erasure.processEnvelopeRevocationJob(job!.id)
 
     const [progress] = await db
       .select({
-        total: reEncryptionJobs.totalEnvelopes,
-        processed: reEncryptionJobs.processedEnvelopes,
-        status: reEncryptionJobs.status,
+        total: envelopeRevocationJobs.totalEnvelopes,
+        processed: envelopeRevocationJobs.processedEnvelopes,
+        status: envelopeRevocationJobs.status,
       })
-      .from(reEncryptionJobs)
-      .where(eq(reEncryptionJobs.id, job!.id))
+      .from(envelopeRevocationJobs)
+      .where(eq(envelopeRevocationJobs.id, job!.id))
 
     // The gating COUNT(*) used the same broken predicate: it returned 0, the
     // job short-circuited as "nothing to do", and reported completion.

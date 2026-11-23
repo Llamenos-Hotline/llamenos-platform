@@ -2,7 +2,7 @@
  * What survives an account erasure (#2187) — real PostgreSQL, Bun-native driver.
  *
  * MUST run under `bun test`, NOT vitest (`users.hub_roles` is a `bun-jsonb`
- * column; see hub-member-removal-reencryption.test.ts):
+ * column; see hub-member-removal-envelope-revocation.test.ts):
  *   bun test apps/worker/__tests__/integration-bun/erasure-residue.test.ts
  *
  * Requires postgres at DATABASE_URL with migrations applied
@@ -17,7 +17,7 @@ import { randomBytes } from 'node:crypto'
 import { eq, inArray, sql } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
-import { hubs, users, securityEvents, userSignalContacts, auditLog, erasureRequests, reEncryptionJobs } from '../../db/schema'
+import { hubs, users, securityEvents, userSignalContacts, auditLog, erasureRequests, envelopeRevocationJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { ErasureService } from '../../services/erasure'
@@ -71,7 +71,7 @@ afterAll(async () => {
   await db.delete(securityEvents).where(sql`${securityEvents.metadata}->>'pubkey' IN (${sql.join(createdUsers.map(u => sql`${u}`), sql`, `)})`)
   await db.delete(auditLog).where(inArray(auditLog.hubId, createdHubs))
   await db.delete(erasureRequests).where(inArray(erasureRequests.userId, createdUsers))
-  await db.delete(reEncryptionJobs).where(inArray(reEncryptionJobs.userId, createdUsers))
+  await db.delete(envelopeRevocationJobs).where(inArray(envelopeRevocationJobs.userId, createdUsers))
   if (createdHubs.length > 0) await db.delete(hubs).where(inArray(hubs.id, createdHubs))
   await db.delete(users).where(inArray(users.pubkey, createdUsers))
 })

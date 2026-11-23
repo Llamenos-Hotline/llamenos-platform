@@ -4063,7 +4063,7 @@ that is gone). Never a hub's requests, for any holder. Under a hub path: 400.
 POST   /api/hubs/:hubId/erasure/:userId
 Permission: erasure:admin
 Body: { "justification": string }
-Response: { "ok": true, "reEncryptionJobIds": string[] }
+Response: { "ok": true, "envelopeRevocationJobIds": string[] }
 POST   /api/erasure/:userId           (subject belongs to no hub; needs system:manage-instance as well)
 403 unless :userId belongs to :hubId AND the caller holds erasure:admin in EVERY hub :userId belongs to.
 
@@ -4073,10 +4073,10 @@ Body: { "reason"?: string }
 Response: { "ok": true }
 Same subject rule as erasure above.
 
-GET    /api/hubs/:hubId/erasure/re-encryption-jobs
+GET    /api/hubs/:hubId/erasure/envelope-revocation-jobs
 Permission: erasure:admin
 Query: ?userId=
-Response: { "jobs": ReEncryptionJob[] }
+Response: { "jobs": EnvelopeRevocationJob[] }
 Only :hubId's jobs. Without a hub path: 400.
 ```
 
@@ -5155,16 +5155,16 @@ GET    /api/hubs/:hubId/erasure/requests?status=&limit=&offset=
 POST   /api/hubs/:hubId/erasure/:userId
        Permission: erasure:admin
        Body: { "justification": string }
-       Response: { "ok": true, "reEncryptionJobIds": string[] }
+       Response: { "ok": true, "envelopeRevocationJobIds": string[] }
 
 POST   /api/hubs/:hubId/erasure/:userId/wipe-device/:devicePubkey
        Permission: erasure:admin
        Body: { "reason": string }
        Response: { "ok": true }
 
-GET    /api/hubs/:hubId/erasure/re-encryption-jobs?userId=
+GET    /api/hubs/:hubId/erasure/envelope-revocation-jobs?userId=
        Permission: erasure:admin
-       Response: { "jobs": ReEncryptionJob[] }
+       Response: { "jobs": EnvelopeRevocationJob[] }
 
 (Hub-scoped since #2363 — see §4.45 for the scoping rules and the platform-scope `GET /api/erasure/platform/requests`.)
 ```

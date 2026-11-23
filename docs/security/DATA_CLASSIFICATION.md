@@ -290,8 +290,8 @@ Complete inventory of all data stored and processed by Llamenos, with classifica
 | `erasure_config[].hubId` | Plaintext | Indefinite | Hub scope |
 | `erasure_config[].delayHours` | Plaintext | Indefinite | 24–168 hours |
 | `erasure_config[].emergencyOverrideEnabled` | Plaintext | Indefinite | Boolean |
-| `re_encryption_jobs[].status` | Plaintext | Until completed | Job progress tracking |
-| `re_encryption_jobs[].processedEnvelopes` | Plaintext | Until completed | Counter |
+| `envelope_revocation_jobs[].status` | Plaintext | Until completed | Job progress tracking |
+| `envelope_revocation_jobs[].processedEnvelopes` | Plaintext | Until completed | Counter |
 | `device_wipe_records[].deviceId` | Plaintext | Indefinite | Wiped device UUID |
 | `device_wipe_records[].wipedAt` | Plaintext | Indefinite | Wipe timestamp |
 | `device_wipe_records[].wipedBy` | Plaintext | Indefinite | Admin pubkey who triggered |
@@ -511,7 +511,7 @@ flowchart LR
 |-------|----------------|
 | **Access** | Users can export their notes (decrypted client-side). Admins can export all metadata. |
 | **Rectification** | Users can edit their notes. Admins can update user profiles. |
-| **Erasure** | Self-service erasure with configurable delay (24h–7d) or admin-immediate erasure. Full cryptographic cascade: sigchain revocation → hub key rotation → crypto-shredding (per-user audit key destroyed) → active re-encryption (envelope copies removed). E2EE content is both cryptographically inaccessible and actively cleaned. (EP08) |
+| **Erasure** | Self-service erasure with configurable delay (24h–7d) or admin-immediate erasure. Full cryptographic cascade: sigchain revocation → hub key rotation → crypto-shredding (per-user audit key destroyed) → envelope revocation (envelope entries removed; nothing is re-encrypted). E2EE content is cryptographically inaccessible and the server stops serving the departed user's wrap. (EP08) |
 | **Portability** | Backup export includes encrypted device keys (PIN-protected). No bulk data export by design (leakage risk). |
 | **Restriction** | Admin can deactivate accounts (revokes sessions, deauthorizes devices via sigchain). Emergency lockdown terminates all sessions and triggers key rotations. (EP02) |
 
@@ -537,7 +537,7 @@ flowchart LR
 | Team/tag assignments | Hub lifetime | Organizational metadata |
 | Platform ban records | Indefinite | Safety — ban persistence across hubs |
 | Erasure request records | Until executed + 30 days | Audit trail for erasure compliance |
-| Re-encryption job records | Until completed | Operational tracking |
+| Envelope revocation job records | Until completed | Operational tracking |
 
 EP08 introduces per-hub data retention purge with platform-enforced minimums. Hub admins configure ciphertext TTLs; a daily cron job purges expired records. Platform admin sets a minimum floor to prevent evidence destruction.
 

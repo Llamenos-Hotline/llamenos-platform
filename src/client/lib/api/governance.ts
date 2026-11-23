@@ -14,7 +14,7 @@ import type {
   ErasureRequest,
   MyErasureRequestResponse,
   ErasureConfig,
-  ReEncryptionJob,
+  EnvelopeRevocationJob,
   RetentionSetting,
   RetentionPlatformFloor,
   PlatformBanListResponse,
@@ -68,11 +68,11 @@ export async function updateErasureConfig(data: { delayHours?: number; emergency
   })
 }
 
-export async function listReEncryptionJobs(params?: { userId?: string }) {
+export async function listEnvelopeRevocationJobs(params?: { userId?: string }) {
   const qs = new URLSearchParams()
   if (params?.userId) qs.set('userId', params.userId)
   const query = qs.toString()
-  return request<{ jobs: ReEncryptionJob[] }>(hp(`/erasure/re-encryption-jobs${query ? `?${query}` : ''}`))
+  return request<{ jobs: EnvelopeRevocationJob[] }>(hp(`/erasure/envelope-revocation-jobs${query ? `?${query}` : ''}`))
 }
 
 // --- Retention ---
