@@ -118,7 +118,10 @@ let sql: ReturnType<typeof postgres>
 let db: Database
 let services: Services
 let counter = 0
-const nextId = () => `${++counter}-${Math.random().toString(36).slice(2, 8)}`
+// Deterministic on purpose: ids built here (hub ids) reach the wire, and a random suffix there
+// is one more way for the caller-digits scan to match by coincidence (#2962). The database is
+// created per run, so the counter alone is unique.
+const nextId = () => `${++counter}`
 
 /** Everything one outbound request would have put on the wire. */
 interface Sent {
@@ -152,6 +155,46 @@ function pushedCall(s: Sent): { callId: string; hubId: string; type: string } {
 
 function everythingSent(): string {
   return sent.map(s => `${s.url}\n${s.headers}\n${s.body}`).join('\n')
+}
+
+/**
+ * The wire, minus the two values on it that are random BY DESIGN and so cannot be frozen — each
+ * excluded by name, each pinned to its format instead, never by a substring search that happens
+ * to miss it. Any four digits are, by chance, a substring of a 128-bit random hex string
+ * (29 windows in 32 characters, ~1 in 2,000 per push) and of a 64-byte signature rendered in
+ * base64url; that coincidence — not a leak — is what ejected #2955 from the merge queue (#2962).
+ *
+ *  - the body's `call-id`: the call's `pushRef`, `randomBytes(16)` hex. Excluded, but it must be
+ *    exactly 32 lowercase hex characters, so nothing (a caller's digits, a provider id) can ride
+ *    along in it; that it is not derived from the call id is the "two calls" test below.
+ *  - the `authorization` header's JWT signature: ES256 over random nonce material. Its header and
+ *    claims are decoded and scanned — they are deterministic once the clock is frozen — and the
+ *    claims must be exactly `iss` and `iat`, so no caller data can enter through them.
+ *
+ * Everything else — URL, every other header, every other body field — is scanned verbatim.
+ */
+function scannableWire(): string {
+  return sent.map(s => {
+    const parts: string[] = [s.url]
+    for (const [name, value] of JSON.parse(s.headers) as [string, string][]) {
+      if (name.toLowerCase() === 'authorization') {
+        const jwt = value.split(' ')
+        expect(jwt).toHaveLength(2)
+        const [header, claims, signature, ...rest] = jwt[1].split('.')
+        expect(rest).toEqual([])
+        expect(signature).toMatch(/^[A-Za-z0-9_-]+$/) // excluded: random by design
+        const decoded = [header, claims].map(seg => Buffer.from(seg, 'base64url').toString('utf-8'))
+        expect(Object.keys(JSON.parse(decoded[1]) as object).sort()).toEqual(['iat', 'iss'])
+        parts.push(`${name}: ${jwt[0]} ${decoded.join('.')}`)
+      } else {
+        parts.push(`${name}: ${value}`)
+      }
+    }
+    const body = JSON.parse(s.body) as Record<string, unknown>
+    expect(body['call-id']).toMatch(/^[0-9a-f]{32}$/) // excluded: random by design
+    parts.push(JSON.stringify({ ...body, 'call-id': '<push-ref>' }))
+    return parts.join('\n')
+  }).join('\n')
 }
 
 async function createHub(): Promise<string> {
@@ -288,7 +331,7 @@ describe.each([
     expect(wire).not.toContain(providerCallId)
     expect(wire).not.toContain(providerCallId.toLowerCase())
     expect(wire).not.toContain(providerCallId.toUpperCase())
-    expect(wire).not.toContain(CALLER_LAST4)
+    expect(scannableWire()).not.toContain(CALLER_LAST4)
     expect(wire).not.toContain(CALLER_NUMBER)
     // Nor anything shaped like a provider SID, whatever the value.
     expect(wire).not.toMatch(/\b[A-Z]{2}[0-9a-f]{32}\b/)
