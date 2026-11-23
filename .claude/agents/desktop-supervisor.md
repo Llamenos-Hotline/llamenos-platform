@@ -10,6 +10,9 @@ You are the Desktop supervisor for Llamenos, a secure crisis response hotline ap
 
 **Owned paths:**
 - `apps/desktop/` — Tauri v2 shell (Rust backend + webview frontend)
+- `/index.html`, `/vite.config.ts`, `/tsconfig.json`, `/tsconfig.tests.json`, `/vitest.desktop.config.ts`, `/vitest.desktop.setup.ts`, `/vitest.unit.config.ts`, `/vitest.unit.setup.ts`, `/playwright.docker.config.ts`, `/playwright.live.config.ts`, `/components.json`, `/src/globals.d.ts` — the repo-root build and test entry points for the webview app and the Bun unit suite. Shared by every client in principle, assigned here because the webview is the client that builds from them (#2935: before this no lane owned them, so a PR touching one could never clear the scope gate). Root-anchored on purpose: a bare name is a basename pattern that matches at any depth.
+- `public/`, `flatpak/` — static assets served by the webview and the Flatpak packaging manifests.
+- `docs/DESKTOP_BUILD.md`, `docs/runbooks/desktop-update-release.md` — the desktop build guide and the updater release runbook. Documentation sits with what it documents (#2935): a change to the behaviour and the document describing it lands as one commit. Infra also owns the whole docs tree, so this is an additional owner and never a carve-out.
 - `src/client/` — Frontend SPA (Vite + React: routes, components, lib)
 - `tests/` — Root test config, `tests/mocks/` (Tauri IPC mocks for Playwright); this grant also covers tests/steps/fixtures.ts, the shared World-type fixture backend-supervisor separately narrow-shared-writes too, and tests/steps/crypto/, the crypto BDD step definitions shared-supervisor narrow-shared-writes so it can implement the crypto scenarios and crypto crate it owns — both stay writable by this lane
 - `playwright.config.ts` — backend-supervisor holds a narrow shared-write on this file too, limited to the backend-bdd/backend-bdd-global-setting project definitions

@@ -10,6 +10,8 @@ You are the Backend supervisor for Llamenos, a secure crisis response hotline ap
 
 **Owned paths:**
 - `apps/worker/` — Bun HTTP server (Hono + PostgreSQL: routes, db, services, telephony, messaging, lib)
+- `/vitest.integration.config.ts`, `/start-server.sh` — the integration-suite runner config and the dev server launcher, both of which exist only to run apps/worker (#2935: unowned before this). Root-anchored on purpose.
+- `docs/api/`, `docs/telephony/`, `docs/runbooks/provider-webhook-rejections.md`, `docs/runbooks/migrations.md` — the API reference, the telephony provider audit, the webhook-rejection runbook and the schema-migration runbook. A change to webhook handling or the migration process and the runbook describing it must land as one commit (#2957 could not, before #2935). Documentation sits with what it documents (#2935): a change to the behaviour and the document describing it lands as one commit. Infra also owns the whole docs tree, so this is an additional owner and never a carve-out.
 - `sip-bridge/` — Protocol-agnostic SIP bridge (`PBX_TYPE` selects ARI/ESL/Kamailio)
 - `signal-notifier/` — Zero-knowledge Signal notification sidecar (port 3100)
 - `src/server/` — Bun server bootstrap that wires apps/worker's Hono app onto Bun's native HTTP; this entrypoint is backend's even though it lives outside apps/worker/ itself, not desktop's just because it sits under src/.

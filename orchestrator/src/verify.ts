@@ -1009,9 +1009,11 @@ async function readHeadBlobs(worktree: string, rev: string, files: string[]): Pr
  *   a red herring there: a `scope:` label is refused those paths even when
  *   the granted lane owns them, so advising one would send the reader to a
  *   remedy that cannot work. Only the owning lane's own PR may write them.
- * - **unowned** — no lane owns the file at all (the #1115 gap: 772 of 4165
- *   tracked files). No grant can reach an unowned path; the file must leave
- *   the PR or wait for a lane-ownership assignment.
+ * - **unowned** — no lane owns the file at all (the #1115 gap). No grant can
+ *   reach an unowned path; the file must leave the PR or wait for a
+ *   lane-ownership assignment. Since #2935 this is a fail-closed guard, not a
+ *   reachable verdict for any tracked file: `lane-coverage.test.ts` fails the
+ *   moment a path is added that no fragment owns.
  *
  * Pure and exported for direct unit testing: the caller passes exactly what
  * `verifyMechanical` already computed, so the classification the tests pin

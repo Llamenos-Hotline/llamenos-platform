@@ -203,17 +203,25 @@ describe('what a scope-only grant must NOT widen', () => {
     expect(out.kind).toBe('refused')
   })
 
+  // #2935: these used to read `unowned` — mac owns them but its grant is narrowed
+  // to the runbook, so the gate's candidate list had no owner. "Unowned" told the
+  // author to wait for an assignment that exists. They are grant-excluded, which
+  // is the true and the same answer: only a PR on the owning fragment's own work
+  // may write them, and no label can carry another PR onto them.
   it.each(['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts'])(
     'mac also owns %s, but it is host-executed/gate code: still unreachable by any grant',
     (file) => {
       const plan = planScopeGrants([...PR_2863, file], find(grantable, 'infra'), grantable)
-      expect(plan.refused).toEqual([{ file, reason: 'unowned' }])
+      // A refusal makes NO grant: grantScopeAtOpen applies nothing while `refused` is non-empty.
+      expect(plan.refused).toEqual([{ file, reason: 'grant-excluded' }])
     },
   )
 
-  it('a runbook nobody owns stays unowned — the grant reaches mac\'s files, not docs/runbooks/', () => {
-    const plan = planScopeGrants(['scripts/ci/x.sh', 'docs/runbooks/deploy-official.md'], find(grantable, 'infra'), grantable)
-    expect(plan.refused).toEqual([{ file: 'docs/runbooks/deploy-official.md', reason: 'unowned' }])
+  it('the scope:mac grant reaches mac\'s runbook only: another runbook is infra\'s own, so it needs no grant', () => {
+    const plan = planScopeGrants(['scripts/ci/x.sh', 'docs/runbooks/deploy-official.md', RUNBOOK], find(grantable, 'infra'), grantable)
+    expect(plan.refused).toEqual([])
+    expect(plan.grants).toEqual(['mac'])
+    expect(plan.filesByLane).toEqual({ mac: [RUNBOOK] })
   })
 
   it('a branch named for the scope-only fragment is still "unknown lane", never a PR\'s own lane', async () => {

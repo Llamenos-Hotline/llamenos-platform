@@ -787,12 +787,15 @@ gate would honour from an operator.
 `resolveLane` still falls back to `UNSCOPED_LANE` for any branch not named
 `fleet/<lane>/…`, and an unrestricted scope means no ownership check at all.
 So the scope gate is currently **opt-in by branch name** — the one string the
-worker being contained chooses. Closing that requires every path to have an
-owner first: **772 of 4165 tracked files currently have none** (most of
-`docs/`, all of `drizzle/migrations/`, `orchestrator/` itself, and
-`.claude/agents/` — including the lane fragments that define scope). Tracked
-in #1115; `NEVER_WRITE_PATHS` and CODEOWNERS are the defences that do bind
-universally in the meantime.
+worker being contained chooses. The precondition for closing that, that every
+path has an owner, now holds (#2935): `tests/orchestrator/lane-coverage.test.ts`
+asks the gate's own instruments about every tracked file as every lane's PR
+and fails on any answer of "owned by no lane". The one deliberate exception is
+the directory of fragments that declare lane scope, which no lane owns and which
+is `GRANT_EXCLUDED_PATHS`, so the gate calls it grant-excluded. The `unowned`
+verdict stays as a fail-closed guard for a file added without an owner; the
+ratchet is what keeps it unreachable. `NEVER_WRITE_PATHS` and CODEOWNERS bind
+universally either way.
 
 ## The merge-queue guard: only the supervisor queues a fleet PR (#1894)
 

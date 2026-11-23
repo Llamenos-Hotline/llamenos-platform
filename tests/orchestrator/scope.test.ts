@@ -74,6 +74,12 @@ describe('checkScope', () => {
     it('parses the real fragments into the expected owned/notOwned lists', () => {
       expect(backend.owned).toEqual([
         'apps/worker/',
+        '/vitest.integration.config.ts',
+        '/start-server.sh',
+        'docs/api/',
+        'docs/telephony/',
+        'docs/runbooks/provider-webhook-rejections.md',
+        'docs/runbooks/migrations.md',
         'sip-bridge/',
         'signal-notifier/',
         'src/server/',
@@ -106,6 +112,22 @@ describe('checkScope', () => {
       ])
       expect(desktop.owned).toEqual([
         'apps/desktop/',
+        '/index.html',
+        '/vite.config.ts',
+        '/tsconfig.json',
+        '/tsconfig.tests.json',
+        '/vitest.desktop.config.ts',
+        '/vitest.desktop.setup.ts',
+        '/vitest.unit.config.ts',
+        '/vitest.unit.setup.ts',
+        '/playwright.docker.config.ts',
+        '/playwright.live.config.ts',
+        '/components.json',
+        '/src/globals.d.ts',
+        'public/',
+        'flatpak/',
+        'docs/DESKTOP_BUILD.md',
+        'docs/runbooks/desktop-update-release.md',
         'src/client/',
         'tests/',
         'tests/mocks/',
@@ -1332,13 +1354,21 @@ describe('operator-facing docs are infra-owned, and ONLY at the repo root (#1467
     expect(checkScope(['packages/test-specs/README.md'], shared, []).strayed).toEqual([])
   })
 
-  it('does not reach the rest of the docs tree', () => {
-    const otherDocs = ['docs/protocol/PROTOCOL.md', 'docs/epics/README.md', 'docs/security/threat-model.md']
-    expect(checkScope(otherDocs, infra, []).strayed).toEqual(otherDocs)
+  // #2935 widened this from the two named documents to the docs tree: lane
+  // strictness that only produced PR churn (a fix and its runbook could not
+  // land as one commit) was deliberately relaxed. What must NOT have moved is
+  // the exclusive ownership the shared lane already held (#1811), so the
+  // protocol and security documents stay carved out of infra.
+  it('reaches the docs tree, but not the protocol or security documents shared owns exclusively', () => {
+    const open = ['docs/epics/README.md', 'docs/runbooks/rollback.md', 'docs/superpowers/specs/x.md']
+    expect(checkScope(open, infra, []).strayed).toEqual([])
+    const shared = ['docs/protocol/PROTOCOL.md', 'docs/security/threat-model.md', 'docs/architecture/E2EE_ARCHITECTURE.md']
+    expect(checkScope(shared, infra, []).strayed).toEqual(shared)
   })
 
   /**
-   * `.claude/agents/fragments/` stays unowned by every lane, deliberately: a
+   * `.claude/agents/fragments/` stays unowned by every lane, deliberately (and
+   * grant-excluded, so the gate reports it as such — #2935): a
    * lane that could edit the scope judging it could widen its own authority.
    * That is why this grant had to be made on a non-fleet branch and reviewed
    * by a human, and the property is worth a rail of its own.

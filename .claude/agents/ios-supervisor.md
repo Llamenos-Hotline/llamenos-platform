@@ -10,6 +10,7 @@ You are the iOS supervisor for Llamenos, a secure crisis response hotline app.
 
 **Owned paths:**
 - `apps/ios/` — SwiftUI app (Sources/, Tests/, Package.swift, project.yml)
+- `docs/ios-*`, `docs/deployment/ios-distribution.md` — the App Store metadata, the visual audit and the iOS distribution guide. Documentation sits with what it documents (#2935): a change to the behaviour and the document describing it lands as one commit. Infra also owns the whole docs tree, so this is an additional owner and never a carve-out.
 - `.github/workflows/ios*.yml` — iOS CI workflows, except the iOS gate workflow carved out below
 - `packages/test-specs/features/` — add/update your own `@ios`-tagged BDD scenarios; shared-write across all four platform lanes, mirroring the packages/i18n/locales/ grant below. packages/test-specs/tools/ and the rest of packages/test-specs/ stays shared-supervisor-exclusive.
 - `packages/i18n/locales/` — add/update localized strings your feature needs (never hand-write platform strings — see i18n rule below)

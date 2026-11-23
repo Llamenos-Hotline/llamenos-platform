@@ -588,6 +588,41 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // the workflows: its own PR writes them, a label on someone else's cannot.
   '.github/scripts/',
   '.github/actions/',
+  // The rest of what decides what CI, the scanners and the labels will accept
+  // (#2935). `.github/labels.yml` defines the `scope:` labels themselves — the
+  // grant mechanism — so a label able to widen a PR onto it could widen the
+  // label set. The scanner suppressions and the audit allowlist are the files a
+  // PR edits to make a finding disappear.
+  '.github/labels.yml',
+  '.github/dependabot.yml',
+  '.github/actionlint.yaml',
+  '.github/codeql/',
+  '.github/ci/audit-allowlist.txt',
+  '/.gitleaks.toml',
+  '/.gitleaksignore',
+  '/.trivyignore',
+  '/.codeqlignore',
+  '/deny.toml',
+  // Tool-version pins and the MCP server list: both decide what code runs on a
+  // contributor's or a runner's machine.
+  '/.mise.toml',
+  '/.mcp.json',
+  // The human gate itself.
+  '/CODEOWNERS',
+  // Agent configuration, as a whole (#2935). Settings and hooks execute code and
+  // the agent definitions steer every worker. This is also what makes the
+  // fragments that DECLARE lane scope unreachable by a grant: they are owned by
+  // no lane (infra's `Does NOT own`), so the gate reports a touch of one as
+  // grant-excluded — a lane able to edit the scope judging it could widen its
+  // own authority inside a branch, before any reviewer sees the diff.
+  '.claude/',
+  // Mac CI host code (#2867/#2935). `mac` is a fragment, not a lane, so no PR's
+  // own lane can write these and a grant is refused them on purpose: they
+  // execute on the shared self-hosted runner, or are the rail judging it. Listed
+  // here so the gate says "grant-excluded" — true — rather than "owned by no lane".
+  'scripts/ci/mac-runner-disk-guard.sh',
+  'scripts/mac-run.sh',
+  'tests/runner-boundary.spec.ts',
   'deploy/',
   'Dockerfile*',
   'Caddyfile*',
