@@ -33,7 +33,7 @@ import { audit } from '../services/audit'
 import { applyTemplate, detectTemplateUpdates } from '../lib/template-engine'
 import type { AppliedTemplateRecord } from '../lib/template-engine'
 import { loadBundledTemplates } from '../lib/template-loader'
-import { createEntityRouter } from '../lib/entity-router'
+import { okResponseSchema } from '@protocol/schemas/common'
 
 /**
  * Mounted at `/api/settings/cms` and at `/api/hubs/:hubId/settings/cms`. As in
@@ -186,8 +186,7 @@ deployment.put('/cross-hub',
 
 // --- Entity Types ---
 
-// GET /entity-types stays hand-written — uses requireAnyPermission (OR logic)
-// which the entity-router factory cannot express.
+// GET /entity-types uses requireAnyPermission (OR logic).
 entitySchema.get('/entity-types',
   describeRoute({
     tags: ['Case Management'],
@@ -280,30 +279,66 @@ entitySchema.post('/entity-types',
   },
 )
 
-// PATCH /:id, DELETE /:id via entity-router factory
-const entityTypeRouter = createEntityRouter({
-  tag: 'Case Management',
-  domain: 'cases-entity-types',
-  service: 'entitySchema',
-  listResponseSchema: entityTypeListResponseSchema,
-  itemResponseSchema: entityTypeDefinitionSchema,
-  updateBodySchema: updateEntityTypeBodySchema,
-  permissionOverrides: {
-    update: 'cases:manage-types',
-    delete: 'cases:manage-types',
+// PATCH /:id, DELETE /:id and /:id/customize are hand-written for the same reason as
+// GET /:id above, and these are WRITES. `createEntityRouter` reaches a service method by
+// NAME with a fixed argument order and an `(...args: unknown[])` cast, so `updateEntityType(id,
+// body)` / `deleteEntityType(id)` — which took no hub — compiled and ran as a bare id write:
+// an admin of hub A could PATCH or DELETE hub B's entity type through hub A's own URL (#2631).
+// Called directly, the hub is a required argument the type checker sees, and the one the
+// handler passes is the PATH hub (or, on the unscoped mount, a hub the caller may manage types
+// in; none → the platform's own types under hub ''), never one read off the row.
+entitySchema.patch('/entity-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Update an entity type definition',
+    responses: {
+      200: {
+        description: 'Entity type updated',
+        content: { 'application/json': { schema: resolver(entityTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', updateEntityTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.entitySchema.updateEntityType(id, hubId, c.req.valid('json'))
+    await audit(services.audit, 'entityTypeUpdated', c.get('pubkey'), { entityTypeId: id }, undefined, hubId || null)
+    return c.json(result)
   },
-  disableList: true,
-  disableGet: true,
-  methods: {
-    update: 'updateEntityType',
-    delete: 'deleteEntityType',
+)
+
+entitySchema.delete('/entity-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Delete an entity type definition',
+    responses: {
+      200: {
+        description: 'Entity type deleted',
+        content: { 'application/json': { schema: resolver(okResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    await services.entitySchema.deleteEntityType(id, hubId)
+    await audit(services.audit, 'entityTypeDeleted', c.get('pubkey'), { entityTypeId: id }, undefined, hubId || null)
+    return c.json({ ok: true })
   },
-  auditEvents: {
-    updated: 'entityTypeUpdated',
-    deleted: 'entityTypeDeleted',
-  },
-})
-entitySchema.route('/entity-types', entityTypeRouter)
+)
 
 // Hub-level customization of a template-sourced entity type (EP06-A2)
 entitySchema.patch('/entity-types/:id/customize',
@@ -326,44 +361,123 @@ entitySchema.patch('/entity-types/:id/customize',
     const body = c.req.valid('json')
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const updated = await services.entitySchema.updateEntityType(id, body as Record<string, unknown>)
-    await audit(services.audit, 'entityTypeCustomized', pubkey, { entityTypeId: id, fields: Object.keys(body) }, undefined, c.get('hubId') ?? null)
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const updated = await services.entitySchema.updateEntityType(id, hubId, body as Record<string, unknown>)
+    await audit(services.audit, 'entityTypeCustomized', pubkey, { entityTypeId: id, fields: Object.keys(body) }, undefined, hubId || null)
     return c.json(updated)
   },
 )
 
 // --- Relationship Types ---
 
-// GET /relationship-types via factory (uses settings:read via permissionOverrides)
-// POST, PATCH /:id, DELETE /:id via entity-router factory
-const relationshipTypeRouter = createEntityRouter({
-  tag: 'Case Management',
-  domain: 'cases-relationship-types',
-  service: 'entitySchema',
-  listResponseSchema: relationshipTypeListResponseSchema,
-  itemResponseSchema: relationshipTypeDefinitionSchema,
-  createBodySchema: createRelationshipTypeBodySchema,
-  updateBodySchema: updateRelationshipTypeBodySchema,
-  permissionOverrides: {
-    list: 'settings:read',
-    create: 'cases:manage-types',
-    update: 'cases:manage-types',
-    delete: 'cases:manage-types',
+// Hand-written like the entity-type verbs above, and for the same reason (#2631): the factory
+// dispatched `getRelationshipTypes()` / `updateRelationshipType(id, body)` /
+// `deleteRelationshipType(id)` by name with no hub, so a hub's list answered with EVERY hub's
+// relationship types and a hub's admin could PATCH or DELETE another hub's by id. Create read
+// the hub out of `body.hubId` (default ''), exactly as `POST /entity-types` did.
+entitySchema.get('/relationship-types',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'List relationship type definitions',
+    responses: {
+      200: {
+        description: 'Relationship types list',
+        content: { 'application/json': { schema: resolver(relationshipTypeListResponseSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('settings:read'),
+  async (c) => {
+    const services = c.get('services')
+    // Same scoping as the entity-type list: the path hub wins; another hub is honoured only
+    // for a caller who can read settings there.
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    return c.json(await services.entitySchema.getRelationshipTypes(target.hubId))
   },
-  disableGet: true,
-  methods: {
-    list: 'getRelationshipTypes',
-    create: 'createRelationshipType',
-    update: 'updateRelationshipType',
-    delete: 'deleteRelationshipType',
+)
+
+entitySchema.post('/relationship-types',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Create a relationship type definition',
+    responses: {
+      201: {
+        description: 'Relationship type created',
+        content: { 'application/json': { schema: resolver(relationshipTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', createRelationshipTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const body = c.req.valid('json')
+    const target = resolveTargetHub(c, body.hubId || undefined, 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.entitySchema.createRelationshipType({ ...body, hubId })
+    await audit(services.audit, 'relationshipTypeCreated', c.get('pubkey'), {}, undefined, hubId || null)
+    return c.json(result, 201)
   },
-  auditEvents: {
-    created: 'relationshipTypeCreated',
-    updated: 'relationshipTypeUpdated',
-    deleted: 'relationshipTypeDeleted',
+)
+
+entitySchema.patch('/relationship-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Update a relationship type definition',
+    responses: {
+      200: {
+        description: 'Relationship type updated',
+        content: { 'application/json': { schema: resolver(relationshipTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', updateRelationshipTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.entitySchema.updateRelationshipType(id, hubId, c.req.valid('json'))
+    await audit(services.audit, 'relationshipTypeUpdated', c.get('pubkey'), { relationshipTypeId: id }, undefined, hubId || null)
+    return c.json(result)
   },
-})
-entitySchema.route('/relationship-types', relationshipTypeRouter)
+)
+
+entitySchema.delete('/relationship-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Delete a relationship type definition',
+    responses: {
+      200: {
+        description: 'Relationship type deleted',
+        content: { 'application/json': { schema: resolver(okResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    await services.entitySchema.deleteRelationshipType(id, hubId)
+    await audit(services.audit, 'relationshipTypeDeleted', c.get('pubkey'), { relationshipTypeId: id }, undefined, hubId || null)
+    return c.json({ ok: true })
+  },
+)
 
 // --- Case Number Generation ---
 
@@ -580,11 +694,9 @@ entitySchema.post('/templates/apply',
 
 // --- CMS Report Type Definitions (Epic 343) ---
 
-// GET /report-types (list) stays hand-written — uses settings:read (or the
-// dedicated reports:read-types grant, #1363) which differs from the CRUD
-// permission (cases:manage-types). The factory list could handle it via
-// permissionOverrides, but keeping it explicit for clarity alongside the
-// factory-generated GET /:id which uses settings:read alone.
+// GET /report-types (list) uses settings:read (or the dedicated reports:read-types
+// grant, #1363), which differs from GET /:id (settings:read alone) and from the
+// write permission (cases:manage-types).
 entitySchema.get('/report-types',
   describeRoute({
     tags: ['Case Management'],
@@ -607,35 +719,110 @@ entitySchema.get('/report-types',
   },
 )
 
-// GET /:id, POST, PATCH /:id, DELETE /:id via entity-router factory
-const reportTypeRouter = createEntityRouter({
-  tag: 'Case Management',
-  domain: 'cases-report-types',
-  service: 'reportTypes',
-  listResponseSchema: cmsReportTypeListResponseSchema,
-  itemResponseSchema: reportTypeDefinitionSchema,
-  createBodySchema: createCmsReportTypeBodySchema,
-  updateBodySchema: updateCmsReportTypeBodySchema,
-  permissionOverrides: {
-    get: 'settings:read',
-    create: 'cases:manage-types',
-    update: 'cases:manage-types',
-    delete: 'cases:manage-types',
+// GET /:id, POST, PATCH /:id and DELETE /:id are hand-written for the same reason as the entity
+// and relationship types above (#2631): the factory handed `getCmsReportTypeById(id)`,
+// `updateCmsReportType(id, body)` and `deleteCmsReportType(id)` a bare id — no hub — and create
+// read the hub out of `body.hubId`.
+entitySchema.get('/report-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Get a CMS report type definition',
+    responses: {
+      200: {
+        description: 'Report type definition',
+        content: { 'application/json': { schema: resolver(reportTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('settings:read'),
+  async (c) => {
+    const services = c.get('services')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    return c.json(await services.reportTypes.getCmsReportTypeById(c.req.param('id'), target.hubId ?? ''))
   },
-  disableList: true,
-  methods: {
-    get: 'getCmsReportTypeById',
-    create: 'createCmsReportType',
-    update: 'updateCmsReportType',
-    delete: 'deleteCmsReportType',
+)
+
+entitySchema.post('/report-types',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Create a CMS report type definition',
+    responses: {
+      201: {
+        description: 'Report type created',
+        content: { 'application/json': { schema: resolver(reportTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', createCmsReportTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const body = c.req.valid('json')
+    const target = resolveTargetHub(c, body.hubId || undefined, 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.reportTypes.createCmsReportType({ ...body, hubId })
+    await audit(services.audit, 'reportTypeCreated', c.get('pubkey'), {}, undefined, hubId || null)
+    return c.json(result, 201)
   },
-  auditEvents: {
-    created: 'reportTypeCreated',
-    updated: 'reportTypeUpdated',
-    deleted: 'reportTypeArchived',
+)
+
+entitySchema.patch('/report-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Update a CMS report type definition',
+    responses: {
+      200: {
+        description: 'Report type updated',
+        content: { 'application/json': { schema: resolver(reportTypeDefinitionSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  validator('json', updateCmsReportTypeBodySchema),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    const result = await services.reportTypes.updateCmsReportType(id, hubId, c.req.valid('json'))
+    await audit(services.audit, 'reportTypeUpdated', c.get('pubkey'), { reportTypeId: id }, undefined, hubId || null)
+    return c.json(result)
   },
-})
-entitySchema.route('/report-types', reportTypeRouter)
+)
+
+entitySchema.delete('/report-types/:id',
+  describeRoute({
+    tags: ['Case Management'],
+    summary: 'Archive a CMS report type definition',
+    responses: {
+      200: {
+        description: 'Report type archived',
+        content: { 'application/json': { schema: resolver(okResponseSchema) } },
+      },
+      ...authErrors,
+      ...notFoundError,
+    },
+  }),
+  requirePermission('cases:manage-types'),
+  async (c) => {
+    const services = c.get('services')
+    const id = c.req.param('id')
+    const target = resolveTargetHub(c, c.req.query('hubId'), 'cases:manage-types')
+    if (!target.ok) return c.json({ error: target.error }, target.status)
+    const hubId = target.hubId ?? ''
+    await services.reportTypes.deleteCmsReportType(id, hubId)
+    await audit(services.audit, 'reportTypeArchived', c.get('pubkey'), { reportTypeId: id }, undefined, hubId || null)
+    return c.json({ ok: true })
+  },
+)
 
 /** `/api/settings/cms` — the per-hub CMS settings (platform bucket) plus the deployment-wide ones. */
 const entitySchemaRoutes = new Hono<AppEnv>()

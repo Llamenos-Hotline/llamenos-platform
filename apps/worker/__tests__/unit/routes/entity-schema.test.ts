@@ -307,8 +307,27 @@ describe('entity-schema routes', () => {
       })
 
       expect(res.status).toBe(200)
-      expect(updateEntityTypeSpy).toHaveBeenCalledWith('et-1', { label: 'Updated' }, expect.objectContaining({ callerPubkey: expect.any(String), permissions: expect.any(Array) }))
+      // Outside a hub the write is to the platform's own types, stored under hub ''.
+      expect(updateEntityTypeSpy).toHaveBeenCalledWith('et-1', '', { label: 'Updated' })
       expect(auditLogSpy).toHaveBeenCalledOnce()
+    })
+
+    it('passes the PATH hub to the service — never a hub-less id (#2631)', async () => {
+      const updateEntityTypeSpy = vi.fn().mockResolvedValue({ id: 'et-1', label: 'Updated' })
+      const { app } = createTestApp({
+        permissions: ['cases:manage-types'],
+        hubId: 'hub-a',
+        serviceMock: { entitySchema: { updateEntityType: updateEntityTypeSpy } },
+      })
+
+      const res = await app.request('/cms/entity-types/et-1', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: 'Updated' }),
+      })
+
+      expect(res.status).toBe(200)
+      expect(updateEntityTypeSpy).toHaveBeenCalledWith('et-1', 'hub-a', { label: 'Updated' })
     })
 
     it('requires cases:manage-types permission', async () => {
@@ -336,7 +355,20 @@ describe('entity-schema routes', () => {
 
       const res = await app.request('/cms/entity-types/et-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
-      expect(deleteEntityTypeSpy).toHaveBeenCalledWith('et-1', expect.objectContaining({ callerPubkey: expect.any(String), permissions: expect.any(Array) }))
+      expect(deleteEntityTypeSpy).toHaveBeenCalledWith('et-1', '')
+    })
+
+    it('passes the PATH hub to the service — never a hub-less id (#2631)', async () => {
+      const deleteEntityTypeSpy = vi.fn().mockResolvedValue({ deleted: true })
+      const { app } = createTestApp({
+        permissions: ['cases:manage-types'],
+        hubId: 'hub-a',
+        serviceMock: { entitySchema: { deleteEntityType: deleteEntityTypeSpy } },
+      })
+
+      const res = await app.request('/cms/entity-types/et-1', { method: 'DELETE' })
+      expect(res.status).toBe(200)
+      expect(deleteEntityTypeSpy).toHaveBeenCalledWith('et-1', 'hub-a')
     })
 
     it('requires cases:manage-types permission', async () => {

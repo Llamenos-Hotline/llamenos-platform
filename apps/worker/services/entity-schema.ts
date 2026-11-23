@@ -145,14 +145,22 @@ export class EntitySchemaService {
     return this.rowToEntityType(created)
   }
 
+  /**
+   * Update an entity type of `hubId`. The hub is a required argument and part of
+   * every statement's WHERE, not a check done once up front: a type of another
+   * hub is indistinguishable from one that does not exist, and the write itself
+   * cannot land on it (#2631).
+   */
   async updateEntityType(
     id: string,
+    hubId: string,
     data: Record<string, unknown>,
   ): Promise<EntityTypeDefinition> {
+    const inHub = and(eq(entityTypeDefinitions.id, id), eq(entityTypeDefinitions.hubId, hubId))
     const [existing] = await this.db
       .select()
       .from(entityTypeDefinitions)
-      .where(eq(entityTypeDefinitions.id, id))
+      .where(inHub)
     if (!existing) {
       throw new ServiceError(404, 'Entity type not found')
     }
@@ -215,12 +223,12 @@ export class EntitySchemaService {
     await this.db
       .update(entityTypeDefinitions)
       .set(updates)
-      .where(eq(entityTypeDefinitions.id, id))
+      .where(inHub)
 
     const [updated] = await this.db
       .select()
       .from(entityTypeDefinitions)
-      .where(eq(entityTypeDefinitions.id, id))
+      .where(inHub)
     return this.rowToEntityType(updated)
   }
 
@@ -279,10 +287,11 @@ export class EntitySchemaService {
     return { entityTypes: data.entityTypes }
   }
 
-  async deleteEntityType(id: string): Promise<{ deleted: true }> {
+  /** Delete an entity type of `hubId` — see {@link updateEntityType} for why the hub is required. */
+  async deleteEntityType(id: string, hubId: string): Promise<{ deleted: true }> {
     const result = await this.db
       .delete(entityTypeDefinitions)
-      .where(eq(entityTypeDefinitions.id, id))
+      .where(and(eq(entityTypeDefinitions.id, id), eq(entityTypeDefinitions.hubId, hubId)))
       .returning()
     if (result.length === 0) {
       throw new ServiceError(404, 'Entity type not found')
@@ -347,14 +356,17 @@ export class EntitySchemaService {
     return this.rowToRelationshipType(created)
   }
 
+  /** Update a relationship type of `hubId` — the hub is required, as for {@link updateEntityType}. */
   async updateRelationshipType(
     id: string,
+    hubId: string,
     data: Record<string, unknown>,
   ): Promise<RelationshipTypeDefinition> {
+    const inHub = and(eq(relationshipTypeDefinitions.id, id), eq(relationshipTypeDefinitions.hubId, hubId))
     const [existing] = await this.db
       .select()
       .from(relationshipTypeDefinitions)
-      .where(eq(relationshipTypeDefinitions.id, id))
+      .where(inHub)
     if (!existing) {
       throw new ServiceError(404, 'Relationship type not found')
     }
@@ -388,12 +400,12 @@ export class EntitySchemaService {
     await this.db
       .update(relationshipTypeDefinitions)
       .set(updates)
-      .where(eq(relationshipTypeDefinitions.id, id))
+      .where(inHub)
 
     const [updated] = await this.db
       .select()
       .from(relationshipTypeDefinitions)
-      .where(eq(relationshipTypeDefinitions.id, id))
+      .where(inHub)
     return this.rowToRelationshipType(updated)
   }
 
@@ -435,10 +447,11 @@ export class EntitySchemaService {
     return { relationshipTypes: data.relationshipTypes }
   }
 
-  async deleteRelationshipType(id: string): Promise<{ deleted: true }> {
+  /** Delete a relationship type of `hubId` — the hub is required, as for {@link updateEntityType}. */
+  async deleteRelationshipType(id: string, hubId: string): Promise<{ deleted: true }> {
     const result = await this.db
       .delete(relationshipTypeDefinitions)
-      .where(eq(relationshipTypeDefinitions.id, id))
+      .where(and(eq(relationshipTypeDefinitions.id, id), eq(relationshipTypeDefinitions.hubId, hubId)))
       .returning()
     if (result.length === 0) {
       throw new ServiceError(404, 'Relationship type not found')
