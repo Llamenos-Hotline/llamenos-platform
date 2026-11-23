@@ -39,10 +39,8 @@ import org.llamenos.hotline.R
  * Provides a form with title, description, location, and date fields.
  * The event is created as a CMS record under the first event entity type.
  *
- * Note: Full event creation with E2EE field encryption requires the
- * CryptoService. This screen provides the UI scaffolding; actual creation
- * delegates to the CaseManagementViewModel's record creation flow which
- * handles encryption.
+ * The title and description are sealed on this device by
+ * [EventsViewModel.createEvent]; the server never receives them as plaintext.
  *
  * @param viewModel Shared EventsViewModel for state access
  * @param onNavigateBack Callback to navigate back
