@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PhoneDisabled
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Voicemail
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -188,6 +190,19 @@ fun CallHistoryScreen(
                     onClear = { viewModel.clearDateRange() },
                 )
 
+                val loadError = uiState.error
+
+                // Rows from an earlier load are still this hub's: keep them, and say the
+                // refresh failed above them.
+                if (loadError != null && uiState.calls.isNotEmpty()) {
+                    org.llamenos.hotline.ui.components.ErrorCard(
+                        error = loadError,
+                        onDismiss = { viewModel.dismissError() },
+                        onRetry = { viewModel.loadCalls() },
+                        testTag = "call-history-error",
+                    )
+                }
+
                 // Content
                 when {
                     uiState.isLoading && uiState.calls.isEmpty() -> {
@@ -199,6 +214,16 @@ fun CallHistoryScreen(
                         ) {
                             CircularProgressIndicator()
                         }
+                    }
+                    // Nothing listed because the load FAILED — never the empty state, which would
+                    // tell a volunteer they have no calls when the truth is they were refused
+                    // or the server failed (#2121). It was once composed after a fillMaxSize
+                    // sibling and measured to zero height; this is a branch of the same `when`.
+                    loadError != null && uiState.calls.isEmpty() -> {
+                        CallHistoryLoadFailed(
+                            error = loadError,
+                            onRetry = { viewModel.loadCalls() },
+                        )
                     }
                     uiState.calls.isEmpty() && !uiState.isLoading -> {
                         EmptyCallHistory(
@@ -246,16 +271,48 @@ fun CallHistoryScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
 
-                // Error card
-                if (uiState.error != null) {
-                    org.llamenos.hotline.ui.components.ErrorCard(
-                        error = uiState.error ?: "",
-                        onDismiss = { viewModel.dismissError() },
-                        onRetry = { viewModel.loadCalls() },
-                        testTag = "call-history-error",
-                    )
-                }
+/**
+ * The history could not be loaded — not "there are no calls". Shown in place of the list,
+ * with the status and reason the server gave, and a retry.
+ */
+@Composable
+private fun CallHistoryLoadFailed(
+    error: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp)
+            .testTag("call-history-error"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Filled.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(48.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("call-history-error-message"),
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = onRetry,
+                modifier = Modifier.testTag("call-history-error-retry"),
+            ) {
+                Text(stringResource(R.string.common_retry))
             }
         }
     }

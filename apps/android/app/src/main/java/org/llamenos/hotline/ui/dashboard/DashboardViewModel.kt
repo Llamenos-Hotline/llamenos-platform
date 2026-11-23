@@ -20,6 +20,7 @@ import org.llamenos.hotline.api.NoActiveHubException
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
+import org.llamenos.hotline.api.failureMessage
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.hub.HubRepository
@@ -62,6 +63,8 @@ data class DashboardUiState(
     /** No UnifiedPush distributor installed — calls can never wake this device. */
     val pushDistributorMissing: Boolean = false,
     @StringRes val errorRes: Int? = null,
+    /** Why [errorRes] happened, when the server said ("HTTP 502: ..."). */
+    val errorDetail: String? = null,
 )
 
 /**
@@ -280,7 +283,7 @@ class DashboardViewModel @Inject constructor(
             if (microphoneGranted) {
                 reportCallSetup(sipRegistrar.registerMemberHubs())
             } else {
-                _uiState.update { it.copy(errorRes = R.string.incoming_call_microphone_required) }
+                _uiState.update { it.copy(errorRes = R.string.incoming_call_microphone_required, errorDetail = null) }
             }
         }
     }
@@ -299,15 +302,15 @@ class DashboardViewModel @Inject constructor(
         // Explicit user action in the hub being browsed — the only place the active hub decides.
         val hubId = activeHubState.activeHubId.value
         if (hubId == null) {
-            _uiState.update { it.copy(errorRes = failure) }
+            _uiState.update { it.copy(errorRes = failure, errorDetail = null) }
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isClockingInOut = true, errorRes = null) }
+            _uiState.update { it.copy(isClockingInOut = true, errorRes = null, errorDetail = null) }
             try {
                 action(hubId)
             } catch (_: Exception) {
-                _uiState.update { it.copy(errorRes = failure) }
+                _uiState.update { it.copy(errorRes = failure, errorDetail = null) }
             }
             _uiState.update { it.copy(isClockingInOut = false) }
         }
@@ -315,7 +318,7 @@ class DashboardViewModel @Inject constructor(
 
     private fun reportCallSetup(result: SipRegistrar.Result?) {
         if (result is SipRegistrar.Result.Failed) {
-            _uiState.update { it.copy(errorRes = R.string.dashboard_error_in_app_calls_unavailable) }
+            _uiState.update { it.copy(errorRes = R.string.dashboard_error_in_app_calls_unavailable, errorDetail = null) }
         }
     }
 
@@ -324,7 +327,7 @@ class DashboardViewModel @Inject constructor(
      */
     fun toggleBreak() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isTogglingBreak = true, errorRes = null) }
+            _uiState.update { it.copy(isTogglingBreak = true, errorRes = null, errorDetail = null) }
             val newBreakState = !_uiState.value.isOnBreak
             try {
                 apiService.requestNoContent(
@@ -339,7 +342,7 @@ class DashboardViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         isTogglingBreak = false,
-                        errorRes = R.string.dashboard_error_break,
+                        errorRes = R.string.dashboard_error_break, errorDetail = null,
                     )
                 }
             }
@@ -354,13 +357,20 @@ class DashboardViewModel @Inject constructor(
     fun hangupCall() {
         val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
-            _uiState.update { it.copy(isHangingUp = true) }
+            _uiState.update { it.copy(isHangingUp = true, errorRes = null, errorDetail = null) }
             try {
                 apiService.requestNoContent("POST", callPath(call, "hangup"))
                 _uiState.update { it.copy(currentCall = null, isHangingUp = false) }
                 holdIfOwn(call)
-            } catch (_: Exception) {
-                _uiState.update { it.copy(isHangingUp = false, errorRes = R.string.call_actions_ban_failed) }
+            } catch (e: Exception) {
+                // The caller may still be connected: say so, with the server's reason.
+                _uiState.update {
+                    it.copy(
+                        isHangingUp = false,
+                        errorRes = R.string.calls_hangup_failed,
+                        errorDetail = e.failureMessage(e::class.java.simpleName),
+                    )
+                }
             }
         }
     }
@@ -371,12 +381,14 @@ class DashboardViewModel @Inject constructor(
     fun reportSpam() {
         val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
-            _uiState.update { it.copy(isReportingSpam = true) }
+            _uiState.update { it.copy(isReportingSpam = true, errorRes = null, errorDetail = null) }
             try {
                 apiService.requestNoContent("POST", callPath(call, "spam"))
                 _uiState.update { it.copy(isReportingSpam = false) }
-            } catch (_: Exception) {
-                _uiState.update { it.copy(isReportingSpam = false, errorRes = R.string.call_actions_ban_failed) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isReportingSpam = false, errorRes = R.string.call_actions_ban_failed, errorDetail = e.failureMessage(e::class.java.simpleName))
+                }
             }
         }
     }
@@ -387,7 +399,7 @@ class DashboardViewModel @Inject constructor(
     fun banAndHangup(reason: String?) {
         val call = _uiState.value.currentCall ?: return
         viewModelScope.launch {
-            _uiState.update { it.copy(isBanning = true) }
+            _uiState.update { it.copy(isBanning = true, errorRes = null, errorDetail = null) }
             try {
                 if (reason != null) {
                     apiService.requestNoContent("POST", callPath(call, "ban"), BanRequest(reason))
@@ -396,8 +408,10 @@ class DashboardViewModel @Inject constructor(
                 }
                 _uiState.update { it.copy(currentCall = null, isBanning = false) }
                 holdIfOwn(call)
-            } catch (_: Exception) {
-                _uiState.update { it.copy(isBanning = false, errorRes = R.string.call_actions_ban_failed) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isBanning = false, errorRes = R.string.call_actions_ban_failed, errorDetail = e.failureMessage(e::class.java.simpleName))
+                }
             }
         }
     }
@@ -494,12 +508,12 @@ class DashboardViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             if (org.llamenos.hotline.BuildConfig.DEBUG) android.util.Log.d("DashboardViewModel", "refresh() started")
-            _uiState.update { it.copy(isRefreshing = true, errorRes = null) }
+            _uiState.update { it.copy(isRefreshing = true, errorRes = null, errorDetail = null) }
             // Re-read /auth/me: the identity may have been registered, or given a hub,
             // since the dashboard first loaded — and the event key follows the active hub.
             fetchServerEventKey()
             if (!checkHubReachable()) {
-                _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh) }
+                _uiState.update { it.copy(errorRes = R.string.dashboard_error_refresh, errorDetail = null) }
             }
             fetchActiveCall()
             loadAnalyticsStats()
@@ -511,7 +525,7 @@ class DashboardViewModel @Inject constructor(
      * Dismiss the error message.
      */
     fun dismissError() {
-        _uiState.update { it.copy(errorRes = null) }
+        _uiState.update { it.copy(errorRes = null, errorDetail = null) }
     }
 
     /** Retry distributor selection after the user installs a distributor (ntfy). */

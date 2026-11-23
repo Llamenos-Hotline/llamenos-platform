@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.WebSocketService
+import org.llamenos.hotline.api.failureMessage
 import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.model.CreateMessageEnvelope
@@ -204,7 +205,7 @@ class ConversationsViewModel @Inject constructor(
                         totalConversations = if (keep) it.totalConversations else 0,
                         isLoading = false,
                         isRefreshing = false,
-                        error = e.message ?: e::class.simpleName ?: "Failed to load conversations",
+                        error = e.failureMessage("Failed to load conversations"),
                     )
                 }
             }
