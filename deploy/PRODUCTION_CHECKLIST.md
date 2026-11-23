@@ -36,6 +36,7 @@ Detailed procedures are in `docs/runbooks/`:
 - [ ] `secrets/ban-hash-key` and `secrets/messaging-hash-key` exist (created by `first-run.sh`), are NOT in `.env`, are different from each other and from every other secret, and an offline copy of each is stored. The app records a fingerprint of `ban-hash-key` and refuses to boot on a different one (#2829); restore the original instead of generating a new file
 - [ ] `NOTIFIER_TOKEN_SECRET` (signal profile) and `SIP_REGISTRAR_SECRET` (asterisk profile) are set; neither falls back to `HMAC_SECRET`
 - [ ] `STORAGE_ACCESS_KEY` and `STORAGE_SECRET_KEY` are unique and >= 24 chars
+- [ ] Webhook IP allowlist decided (#1622): either `<PROVIDER>_WEBHOOK_IPS` lists the CIDRs your provider publishes (Ansible: `webhook_ip_allowlists`; Helm: `app.webhookIps`), or `WEBHOOK_IP_ALLOWLIST=disabled` (Ansible: `webhook_ip_allowlist_disabled: true`) records that webhooks are authenticated by provider signature alone. The app refuses to boot in production with neither, and with both. `.env.example` ships `disabled`; confirm that is what you want
 - [ ] `ADMIN_PUBKEY` set to real admin's Ed25519 pubkey
 - [ ] `ADMIN_DECRYPTION_PUBKEY` set to the admin's X25519 pubkey — the SECOND key
       `bun run bootstrap-admin` prints, a different value from `ADMIN_PUBKEY`.

@@ -681,6 +681,68 @@ def _coturn_peer_acl_failures(text: str, path: Path) -> list[str]:
     return failures
 
 
+WEBHOOK_ALLOWLIST_OFF_VAR = "WEBHOOK_IP_ALLOWLIST"
+
+
+def webhook_allowlist_posture(env_file: Path) -> tuple[list[str], bool]:
+    """(`<PROVIDER>_WEBHOOK_IPS` keys with a value, WEBHOOK_IP_ALLOWLIST=disabled?)."""
+    env = rendered_env(env_file)
+    on = sorted(k for k, v in env.items() if k.endswith("_WEBHOOK_IPS") and v.strip())
+    return on, env.get(WEBHOOK_ALLOWLIST_OFF_VAR, "").strip() == "disabled"
+
+
+def check_webhook_allowlist_posture(
+    disabled_targets: dict[str, Path],
+    configured_targets: dict[str, Path],
+) -> list[str]:
+    """The webhook IP allowlist must render as ON or as deliberately OFF (#1622).
+
+    apps/worker/lib/config.ts refuses to boot in production with neither, so a
+    template that stopped rendering either arm would ship a host that cannot
+    start -- and, worse, one that starts the day config.ts is relaxed and has
+    no allowlist and no word about it. Two opposed scenarios keep both arms
+    falsifiable:
+      - `webhook_ip_allowlist_disabled=true`  -> WEBHOOK_IP_ALLOWLIST=disabled
+        and NO `<PROVIDER>_WEBHOOK_IPS` value;
+      - `webhook_ip_allowlists` set           -> a `<PROVIDER>_WEBHOOK_IPS` value
+        and NO WEBHOOK_IP_ALLOWLIST (the worker refuses both together).
+    """
+    failures: list[str] = []
+    for label, path in disabled_targets.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        on, off = webhook_allowlist_posture(path)
+        if not off:
+            failures.append(
+                f"{label}: webhook_ip_allowlist_disabled=true rendered no "
+                f"{WEBHOOK_ALLOWLIST_OFF_VAR}=disabled -- a production host that chose the "
+                "explicit opt-out would refuse to boot (rendered file: " + str(path) + ")"
+            )
+        if on:
+            failures.append(
+                f"{label}: renders {', '.join(on)} alongside "
+                f"{WEBHOOK_ALLOWLIST_OFF_VAR}=disabled -- the worker refuses that "
+                "contradiction at startup"
+            )
+    for label, path in configured_targets.items():
+        if not path.is_file():
+            failures.append(f"{label}: rendered file {path} does not exist")
+            continue
+        on, off = webhook_allowlist_posture(path)
+        if not on:
+            failures.append(
+                f"{label}: webhook_ip_allowlists rendered no <PROVIDER>_WEBHOOK_IPS value -- "
+                "the allowlist is inert on a host that configured it (#1622)"
+            )
+        if off:
+            failures.append(
+                f"{label}: renders {WEBHOOK_ALLOWLIST_OFF_VAR}=disabled although an allowlist "
+                "is configured -- the worker refuses that contradiction at startup"
+            )
+    return failures
+
+
 def extract_required_vars(config_ts: Path) -> tuple[list[str], list[str]]:
     src = config_ts.read_text()
     unconditional = sorted(set(UNCONDITIONAL_RE.findall(src)))
@@ -820,6 +882,11 @@ def render_env_files(repo_root: Path, dest_dir: Path) -> None:
             "app_environment=production",
             "-e",
             "webhook_base_url=https://example.org",
+            # config.ts refuses to boot in production with no allowlist posture
+            # (#1622); this scenario renders the explicit opt-out so the
+            # "disabled" arm of check_webhook_allowlist_posture is exercised.
+            "-e",
+            "webhook_ip_allowlist_disabled=true",
         ],
         [
             "ansible-playbook",
@@ -871,6 +938,8 @@ def render_env_files(repo_root: Path, dest_dir: Path) -> None:
             # required-vars render above uses.
             "-e",
             "webhook_base_url=https://example.org",
+            "-e",
+            "webhook_ip_allowlist_disabled=true",
             "-e",
             "dev_routes_enabled=true",
             "-e",
@@ -1095,6 +1164,35 @@ def run_checks(repo_root: Path, renders: SimpleNamespace) -> int:
             "when their feature is on and not when it is off, the anchor mount "
             "accompanies SIP_TLS_CA_FILE, and TURN_SECRET matches coturn's "
             "--static-auth-secret"
+        )
+
+    print(
+        "\n[check-required-env] Webhook IP allowlist posture (#1622): production renders "
+        "the explicit opt-out, a configured allowlist renders its CIDRs:"
+    )
+    allowlist_failures = check_webhook_allowlist_posture(
+        disabled_targets={
+            "roles/llamenos/templates/env.j2 (monolithic, production, allowlist disabled)":
+                renders.monolithic_env,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, production, allowlist disabled)":
+                renders.app_env,
+            "roles/llamenos/templates/env.j2 (monolithic, production + dev routes, allowlist disabled)":
+                renders.monolithic_env_prod_devroutes,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, production + dev routes, allowlist disabled)":
+                renders.app_env_prod_devroutes,
+        },
+        configured_targets={
+            "roles/llamenos/templates/env.j2 (monolithic, allowlist configured)":
+                renders.monolithic_env_full,
+            "roles/llamenos-app/templates/env/app.j2 (per-service, allowlist configured)":
+                renders.app_env_full,
+        },
+    )
+    failures.extend(allowlist_failures)
+    if not allowlist_failures:
+        print(
+            "[check-required-env] OK   both templates render exactly one of "
+            f"{WEBHOOK_ALLOWLIST_OFF_VAR}=disabled / <PROVIDER>_WEBHOOK_IPS per scenario"
         )
 
     print("\n[check-required-env] BAN_HASH_KEY and MESSAGING_HASH_KEY are secret files, never env vars:")

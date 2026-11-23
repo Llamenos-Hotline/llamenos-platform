@@ -36,6 +36,9 @@ function baseEnv(environment: string): Record<string, string> {
     STORAGE_SECRET_KEY: 'rustfsadmin',
     // config.ts requires this in production; irrelevant elsewhere.
     WEBHOOK_BASE_URL: 'https://hotline.example.org',
+    // config.ts requires an allowlist posture in production (#1622); this suite
+    // is about the dev surface, so it takes the explicit opt-out.
+    WEBHOOK_IP_ALLOWLIST: 'disabled',
   }
 }
 

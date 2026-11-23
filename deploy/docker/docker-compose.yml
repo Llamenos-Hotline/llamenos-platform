@@ -68,6 +68,20 @@ services:
       # Host header for webhook signature validation — so the container would
       # crash-loop with no compose-level explanation. Fail at `up` instead.
       - "WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:?WEBHOOK_BASE_URL is required — the public https:// base URL webhooks are delivered to, e.g. https://api.example.org}"
+      # The inbound webhook IP allowlist (#1622). The middleware returns next() when
+      # <PROVIDER>_WEBHOOK_IPS is unset, so "not configured" is indistinguishable from
+      # "passed": the app refuses to boot in production unless the operator says which.
+      # Either list provider-published CIDRs in one or more of the *_WEBHOOK_IPS below, or
+      # set WEBHOOK_IP_ALLOWLIST=disabled to run on provider signatures alone on purpose
+      # (the app logs that on every boot). Both is refused. .env.example documents it.
+      - WEBHOOK_IP_ALLOWLIST=${WEBHOOK_IP_ALLOWLIST:-}
+      - TELEPHONY_WEBHOOK_IPS=${TELEPHONY_WEBHOOK_IPS:-}
+      - MESSAGING_WEBHOOK_IPS=${MESSAGING_WEBHOOK_IPS:-}
+      - SMS_WEBHOOK_IPS=${SMS_WEBHOOK_IPS:-}
+      - WHATSAPP_WEBHOOK_IPS=${WHATSAPP_WEBHOOK_IPS:-}
+      - SIGNAL_WEBHOOK_IPS=${SIGNAL_WEBHOOK_IPS:-}
+      - TELEGRAM_WEBHOOK_IPS=${TELEGRAM_WEBHOOK_IPS:-}
+      - RCS_WEBHOOK_IPS=${RCS_WEBHOOK_IPS:-}
       # One role per secret (D6, #2171). HMAC_SECRET is a HASHING key only (phone/IP
       # hashes, signed URLs): it encrypts nothing. SERVER_KEK encrypts the data the
       # server must read back (provider credentials, reply addresses, queued sends).

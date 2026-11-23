@@ -141,6 +141,32 @@ spec:
                    to the spoofable Host header for webhook signature validation. */}}
             - name: WEBHOOK_BASE_URL
               value: {{ if eq .Values.app.env.ENVIRONMENT "production" }}{{ required "app.env.WEBHOOK_BASE_URL is required when ENVIRONMENT is production" .Values.app.env.WEBHOOK_BASE_URL | quote }}{{ else }}{{ .Values.app.env.WEBHOOK_BASE_URL | default "" | quote }}{{ end }}
+            {{- /* The webhook IP allowlist (#1622). The middleware returns next() when
+                   <PROVIDER>_WEBHOOK_IPS is unset, so "not configured" is indistinguishable
+                   from "passed": production must say which, and the app refuses to boot
+                   otherwise. Fail at render rather than in a crash-looping pod. */}}
+            {{- $webhookIps := dict }}
+            {{- range $provider, $cidrs := (.Values.app.webhookIps | default dict) }}
+            {{- if $cidrs }}{{- $_ := set $webhookIps $provider $cidrs }}{{- end }}
+            {{- end }}
+            {{- $allowlistMode := .Values.app.env.WEBHOOK_IP_ALLOWLIST | default "" }}
+            {{- if and $allowlistMode (ne $allowlistMode "disabled") }}
+            {{- fail (printf "app.env.WEBHOOK_IP_ALLOWLIST=%q is not a recognised value; the only accepted value is \"disabled\". To switch the allowlist on, list CIDRs under app.webhookIps and leave it empty." $allowlistMode) }}
+            {{- end }}
+            {{- if and (eq $allowlistMode "disabled") $webhookIps }}
+            {{- fail "app.env.WEBHOOK_IP_ALLOWLIST=disabled contradicts app.webhookIps: the allowlist is either on or deliberately off, not both." }}
+            {{- end }}
+            {{- if and (eq .Values.app.env.ENVIRONMENT "production") (not $webhookIps) (ne $allowlistMode "disabled") }}
+            {{- fail "app.webhookIps is empty and app.env.WEBHOOK_IP_ALLOWLIST is not \"disabled\": when ENVIRONMENT is production the webhook IP allowlist must be configured (app.webhookIps) or deliberately disabled (app.env.WEBHOOK_IP_ALLOWLIST=disabled). The app refuses to boot otherwise (#1622)." }}
+            {{- end }}
+            {{- if eq $allowlistMode "disabled" }}
+            - name: WEBHOOK_IP_ALLOWLIST
+              value: "disabled"
+            {{- end }}
+            {{- range $provider, $cidrs := $webhookIps }}
+            - name: {{ upper $provider }}_WEBHOOK_IPS
+              value: {{ join "," $cidrs | quote }}
+            {{- end }}
             {{- with .Values.app.env.APP_DOWNLOAD_URL }}
             - name: APP_DOWNLOAD_URL
               value: {{ . | quote }}

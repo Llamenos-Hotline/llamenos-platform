@@ -172,18 +172,23 @@ ACTIVE_SHIFT_REAP_INTERVAL_SECONDS={{ active_shift_reap_interval_seconds }}
   fixed list of them; `webhook_ip_allowlists` is an operator map of
   provider -> CIDR list and each entry renders one line.
 
-  Empty by default, and that is a deliberate limit on this change: #1609
-  fixed this control's left-most-X-Forwarded-For bypass, but switching the
-  control ON means pinning provider-published IP ranges in a template, and a
-  range the provider later rotates away from silently rejects real webhooks —
-  worse than the signature-only posture it replaces. #1622 owns that decision
-  (fail closed, or an explicit opt-out so "unset" and "off" differ). What
-  belongs here is the plumbing, so turning it on is an operator variable and
-  not a template patch.
+  Empty by default: this repo cannot pin provider-published IP ranges for an
+  operator, because a range the provider later rotates away from silently
+  rejects real webhooks. What it CAN do is refuse to leave the choice
+  unmade. The worker's validateConfig() refuses to boot in production unless
+  either an allowlist is set here or `WEBHOOK_IP_ALLOWLIST=disabled` is
+  (`webhook_ip_allowlist_disabled: true`), so "not configured" and
+  "deliberately off" are different states and the second is logged on every
+  boot. playbooks/preflight.yml asserts the same before anything reaches the
+  host, and playbooks/smoke-check.yml reads the posture back from the running
+  container. Setting both is refused: the operator meant one of them.
 #}
 {% for provider, cidrs in (webhook_ip_allowlists | default({})) | dictsort %}
 {{ provider | upper }}_WEBHOOK_IPS={{ cidrs | join(',') if cidrs is not string else cidrs }}
 {% endfor %}
+{% if webhook_ip_allowlist_disabled | default(false) | bool %}
+WEBHOOK_IP_ALLOWLIST=disabled
+{% endif %}
 ENVIRONMENT={{ app_environment | default('production') }}
 HMAC_SECRET={{ hmac_secret }}
 {#

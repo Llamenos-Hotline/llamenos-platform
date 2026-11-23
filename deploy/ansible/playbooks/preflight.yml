@@ -251,6 +251,45 @@
         success_msg: "webhook_base_url: {{ webhook_base_url }}"
       when: (app_environment | default('production')) == 'production'
 
+    # apps/worker/lib/config.ts refuses to boot in production unless the inbound
+    # webhook IP allowlist is either configured (<PROVIDER>_WEBHOOK_IPS) or
+    # deliberately disabled (WEBHOOK_IP_ALLOWLIST=disabled): an unset allowlist
+    # makes the middleware return next(), indistinguishable from one that passed
+    # (#1622). Fail here, before anything is rendered, instead of after a
+    # container that refuses to start. The two arms are exclusive: setting both
+    # is a contradiction the worker also refuses.
+    - name: Assert the webhook IP allowlist is configured or deliberately disabled (production)
+      ansible.builtin.assert:
+        that:
+          - _webhook_allowlist_configured or _webhook_allowlist_disabled
+          - not (_webhook_allowlist_configured and _webhook_allowlist_disabled)
+        fail_msg: |
+          REQUIRED: say whether the inbound webhook IP allowlist is on or off.
+          The worker refuses to boot in production when it is neither, because an
+          unset allowlist silently skips the check (#1622).
+
+          webhook_ip_allowlists (providers with a CIDR list): {{ _webhook_allowlist_providers | default([]) | join(', ') or 'none' }}
+          webhook_ip_allowlist_disabled: {{ _webhook_allowlist_disabled }}
+
+          To fix, EXACTLY ONE of:
+            - switch it on:  webhook_ip_allowlists: { telephony: ["<provider-published CIDR>"] }
+            - switch it off on purpose (provider signature alone authenticates
+              webhooks; the worker logs this on every boot):
+                webhook_ip_allowlist_disabled: true
+          Setting both is refused: the operator meant one of them.
+        success_msg: >-
+          webhook IP allowlist: {{ 'DISABLED on purpose (signature-only)' if _webhook_allowlist_disabled
+          else 'ON for ' ~ (_webhook_allowlist_providers | join(', ')) }}
+      vars:
+        _webhook_allowlist_providers: >-
+          {{ (webhook_ip_allowlists | default({})) | dict2items
+             | rejectattr('value', 'equalto', [])
+             | rejectattr('value', 'equalto', '')
+             | map(attribute='key') | list }}
+        _webhook_allowlist_configured: "{{ (_webhook_allowlist_providers | length) > 0 }}"
+        _webhook_allowlist_disabled: "{{ webhook_ip_allowlist_disabled | default(false) | bool }}"
+      when: (app_environment | default('production')) == 'production'
+
     - name: Warn if admin_pubkey is not set (Tauri desktop app bootstrap allowed)
       ansible.builtin.debug:
         msg: |
@@ -937,6 +976,7 @@
           Crash Reporting (GlitchTip): {{ 'ENABLED' if glitchtip_dsn | default('') | length > 0 else 'DISABLED' }}
           Dev Routes: {{ 'ENABLED' if dev_routes_enabled | default(false) | bool else 'DISABLED' }} (app_environment={{ app_environment | default('production') }})
           Webhook Base URL: {{ webhook_base_url if (webhook_base_url | default('') | length > 0) else 'NOT SET' }}
+          Webhook IP allowlist: {{ 'DISABLED (signature-only)' if (webhook_ip_allowlist_disabled | default(false) | bool) else ((webhook_ip_allowlists | default({})) | dict2items | map(attribute='key') | list | join(', ') or 'NOT SET') }}
           ===========================================
           Proceeding with deployment...
           ===========================================

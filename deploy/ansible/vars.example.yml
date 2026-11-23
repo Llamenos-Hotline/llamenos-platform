@@ -77,15 +77,23 @@ metrics_scrape_token: ""
 # ─── Webhook IP allowlists ───────────────────────────────────────
 # Per-provider CIDR allowlists for inbound webhooks, rendered as
 # <PROVIDER>_WEBHOOK_IPS (apps/worker/middleware/webhook-auth.ts,
-# middleware/webhook-ip-allowlist.ts, messaging/router.ts). Empty by default:
-# webhooks are authenticated by provider signature regardless, and a stale
-# CIDR here rejects real traffic. Only add ranges you will keep current with
-# what the provider publishes.
+# middleware/webhook-ip-allowlist.ts, messaging/router.ts). Only add ranges you
+# will keep current with what the provider publishes: a stale CIDR rejects real
+# traffic.
+#
+# A production host must say which of the two it is. The worker refuses to boot,
+# and preflight refuses to deploy, when it is neither:
+#   - webhook_ip_allowlists has at least one provider  -> the control is ON, or
+#   - webhook_ip_allowlist_disabled: true               -> deliberately OFF:
+#     webhooks are authenticated by provider signature alone, and the worker
+#     logs that on every boot (renders WEBHOOK_IP_ALLOWLIST=disabled).
+# Setting both is refused. "Unset" is not "off" (#1622).
 #
 # webhook_ip_allowlists:
 #   twilio: ["54.172.60.0/23", "34.203.250.0/23"]
 #   telephony: ["54.172.60.0/23"]
 webhook_ip_allowlists: {}
+webhook_ip_allowlist_disabled: false
 
 # ─── SSH Hardening ───────────────────────────────────────────────
 # Port to move SSH to (default 22 is heavily targeted by bots). Avoid 2222: the FDE

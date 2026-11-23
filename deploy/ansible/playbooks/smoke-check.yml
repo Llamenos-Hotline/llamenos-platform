@@ -510,6 +510,87 @@
         smoke_check_detail: "/api/health returned {{ app_health.status | default('no response') }}"
       tags: always
 
+    # ─── Webhook IP allowlist posture (#1622) ────────────────────────────────
+    #
+    # The middleware returns next() when `<PROVIDER>_WEBHOOK_IPS` is unset, so a
+    # host with no allowlist answers every webhook exactly as a host whose
+    # allowlist PASSED it. Nothing at request time can tell them apart, and
+    # /api/health says nothing about it, so this reads the posture back from the
+    # RUNNING container -- the process that enforces it, not the file that was
+    # meant to configure it. Only variable NAMES leave the container; the CIDR
+    # lists and everything else in its environment stay there.
+    #
+    # Two checks off one probe, because they ask different questions:
+    #   - fatal:    the host declared a posture at all (the worker refuses to
+    #               boot in production otherwise, so this also catches a
+    #               container that is up on an old image that does not);
+    #   - advisory: the allowlist is actually ON. A host that chose
+    #               WEBHOOK_IP_ALLOWLIST=disabled is allowed to, so it must not
+    #               stop a deploy, but it must not read as green either.
+    # Probed and recorded only for production: elsewhere there is no
+    # provider-published range to pin and the worker only warns. THE `when:` IS
+    # ON THE PROBE, never the recording, as everywhere in this file, so a
+    # non-production host records SKIPPED rather than losing the check.
+    - name: Read the webhook IP allowlist posture from the running app container
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f "{{ app_dir }}/services/app/docker-compose.yml" exec -T app sh -c '
+          if [ "${WEBHOOK_IP_ALLOWLIST:-}" = "disabled" ]; then echo "posture=disabled"; fi
+          env | sed -n "s/^\([A-Za-z0-9_]*_WEBHOOK_IPS\)=.\{1,\}$/posture=on:\1/p" | sort
+        '
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: webhook_allowlist_probe
+      ignore_errors: true
+      when:
+        - _smoke_serves_app | bool
+        - (app_environment | default('production')) == 'production'
+      tags: always
+
+    - name: Record webhook IP allowlist posture declared result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: fatal
+        smoke_check_name: Webhook IP allowlist is configured or deliberately disabled
+        smoke_check_probe: "{{ webhook_allowlist_probe | default({}) }}"
+        # Exactly one of the two. `rc == 0` is part of the measurement: a probe
+        # that could not reach the container has an empty stdout, which would
+        # otherwise read as "no allowlist" -- a different, and wrong, failure.
+        smoke_check_pass: >-
+          {%- set _lines = webhook_allowlist_probe.stdout_lines | default([]) -%}
+          {%- set _off = (_lines | select('equalto', 'posture=disabled') | list | length) > 0 -%}
+          {%- set _on = (_lines | select('match', 'posture=on:') | list | length) > 0 -%}
+          {{ (webhook_allowlist_probe.rc | default(1) | int) == 0 and (_off != _on) }}
+        smoke_check_detail: >-
+          {{ 'could not read the app container environment: ' ~ (webhook_allowlist_probe.stderr | default('no output') | trim)
+             if (webhook_allowlist_probe.rc | default(1) | int) != 0
+             else 'the running app declares: ' ~ ((webhook_allowlist_probe.stdout_lines | default([])) | join(', ') or 'nothing')
+                  ~ '. Exactly one of <PROVIDER>_WEBHOOK_IPS (on) or WEBHOOK_IP_ALLOWLIST=disabled (off on purpose) is required; with neither, every webhook is accepted on its signature alone and nothing says so.' }}
+      tags: always
+
+    - name: Record webhook IP allowlist is on result
+      ansible.builtin.include_tasks:
+        file: tasks/record-smoke-result.yml
+        apply:
+          tags: always
+      vars:
+        smoke_check_severity: advisory
+        smoke_check_name: Webhook IP allowlist is on (not disabled)
+        smoke_check_probe: "{{ webhook_allowlist_probe | default({}) }}"
+        smoke_check_pass: >-
+          {{ (webhook_allowlist_probe.rc | default(1) | int) == 0
+             and ((webhook_allowlist_probe.stdout_lines | default([])) | select('match', 'posture=on:') | list | length) > 0
+             and ((webhook_allowlist_probe.stdout_lines | default([])) | select('equalto', 'posture=disabled') | list | length) == 0 }}
+        smoke_check_detail: >-
+          {{ 'the running app has WEBHOOK_IP_ALLOWLIST=disabled: inbound webhooks are authenticated by provider signature alone and no source-IP restriction applies. Deliberate, but not the same as protected.'
+             if ((webhook_allowlist_probe.stdout_lines | default([])) | select('equalto', 'posture=disabled') | list | length) > 0
+             else 'the running app reports no allowlist posture (' ~ ((webhook_allowlist_probe.stdout_lines | default([])) | join(', ') or 'nothing') ~ ')' }}
+      tags: always
+
     # ─── Database ────────────────────────────────────────────────────────────
 
     - name: Check PostgreSQL is accepting connections

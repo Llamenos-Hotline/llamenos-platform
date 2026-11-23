@@ -17,6 +17,10 @@ app:
     tag: "ci-test"
   env:
     WEBHOOK_BASE_URL: "https://hotline.example.invalid"
+    # Production refuses to render without an allowlist posture (#1622); the
+    # CI render takes the explicit opt-out, and helm-validate.yml exercises both
+    # arms and every refusal.
+    WEBHOOK_IP_ALLOWLIST: "disabled"
 
 postgres:
   host: postgres.example.invalid

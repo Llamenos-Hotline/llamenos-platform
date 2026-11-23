@@ -3633,7 +3633,9 @@ jobs:
       # the app refuses to boot otherwise rather than seal admin envelopes to a
       # signing key, which succeeds and makes every note undecryptable (#1283).
       # This job asserts the DEFAULT deployment boots, so its .env must carry exactly
-      # what a self-hoster is told to set.
+      # what a self-hoster is told to set -- including, since #1622, the webhook IP
+      # allowlist posture: production refuses to boot with no allowlist and no
+      # explicit WEBHOOK_IP_ALLOWLIST=disabled.
       - name: Write a production .env
         run: |
           set -euo pipefail
@@ -3650,6 +3652,7 @@ jobs:
           HOTLINE_NAME=Llamenos
           ENVIRONMENT=production
           WEBHOOK_BASE_URL=https://smoke.invalid
+          WEBHOOK_IP_ALLOWLIST=disabled
           BRIDGE_SECRET=$(openssl rand -hex 16)
           TURN_SECRET=$(openssl rand -hex 32)
           GLITCHTIP_SECRET_KEY=$(openssl rand -hex 32)
