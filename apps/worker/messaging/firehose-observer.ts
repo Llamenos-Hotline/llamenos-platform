@@ -15,6 +15,7 @@ import { hpkeSeal, symmetricEncrypt, randomBytes } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { keyWrapAad } from '@shared/envelope-aad'
 import { LABEL_FIREHOSE_BUFFER_ENCRYPT } from '@shared/crypto-labels'
+import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { createLogger } from '../lib/logger'
 import type { FirehoseService } from '../services/firehose'
 
@@ -49,7 +50,7 @@ function encryptWithWindowKey(plaintext: string, windowKey: Uint8Array): string 
 async function getOrCreateWindowKey(
   firehose: FirehoseService,
   connectionId: string,
-  agentPubkey: string,
+  agentPubkey: HpkeRecipientPubkey,
 ): Promise<{ windowKeyId: string; windowKeyBytes: Uint8Array }> {
   const now = new Date()
   const currentKey = await firehose.getCurrentWindowKey(connectionId)
@@ -122,11 +123,18 @@ export async function observeFirehoseMessage(
   if (conn.status !== 'active') return false
 
   try {
+    // The window key is HPKE-sealed to the agent, so `agentPubkey` must be its
+    // X25519 encryption key. Refuse a malformed one rather than seal to it.
+    const agentRecipient = hpkeRecipientPubkey(conn.agentPubkey)
+    if (!agentRecipient) {
+      throw new Error(`Connection ${conn.id} has no valid agent encryption key`)
+    }
+
     // Get or create a window key for forward secrecy
     const { windowKeyId, windowKeyBytes } = await getOrCreateWindowKey(
       firehose,
       conn.id,
-      conn.agentPubkey,
+      agentRecipient,
     )
 
     // Encrypt message content with window key
