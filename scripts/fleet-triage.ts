@@ -7,10 +7,12 @@
  * `reason: 'other-lane'`, so an open issue with no `lane:` label is unroutable
  * even when it is otherwise dispatchable. Assigning the lane is mechanical —
  * the body cites paths, and each lane's scope paths already live in
- * `.claude/agents/fragments/<lane>-supervisor.md`, parsed by the SAME
- * `loadLaneScopes()` + `matchesPath()` the orchestrator's scope breaker and
- * `doctor` use. This script reads that table rather than duplicating it, so
- * the triage agent and the router cannot drift apart.
+ * `.claude/agents/fragments/<lane>-supervisor.md`, loaded by the SAME
+ * `loadLanes()` the tick uses, and judged by the SAME router. This script
+ * reads that table rather than duplicating it, so the triage agent and the
+ * dispatcher cannot drift apart. The tick also labels an unlabelled
+ * dispatchable issue itself when the answer is unambiguous (#2623); this
+ * script is the batch form for the rest of the backlog.
  *
  * The one hard boundary: THIS TOOL NEVER APPLIES `agent-dispatchable`.
  * `lane:*` is a noun — it describes what an issue touches, and a wrong one is
@@ -20,49 +22,51 @@
  * that can enqueue its own work removes the last human decision about what
  * the fleet spends its budget on. So this agent proposes routing, and a human
  * still decides what gets worked. The boundary is enforced twice: the
- * decision function's return type can only ever be `lane:<id>` or
- * `needs-split`, and `assertAppliableLabel()` throws on anything else before
- * any `gh` call is made.
+ * decision function's return type can only ever be `lane:<id>`, and
+ * `assertAppliableLabel()` throws on anything else before any `gh` call is
+ * made.
  *
- * Decision rules (mirroring the hand-triage of seven M1 issues on 2026-10-11):
+ * Decision rules — implemented ONCE, in orchestrator/src/route.ts, and shared
+ * with the dispatcher's pre-dispatch ownership check (#1764), so triage and
+ * dispatch cannot disagree about which lane authors an issue:
  *   1. Extract repo-relative paths from the issue body.
- *   2. Attribute each path to the lane whose OWNED pattern matches longest
- *      (the same longest-match-wins rule as `scope.ts`). A path whose longest
- *      match ties across lanes — `packages/test-specs/features/`,
- *      `packages/i18n/locales/`, `playwright.config.ts` — is a deliberate
- *      shared-write grant: it is non-discriminative and attributes nowhere.
- *   3. Exactly one lane implicated, or one lane strictly dominant over one
- *      other → apply `lane:<x>`.
- *   4. Three or more lanes implicated → apply `needs-split` (no single lane
- *      can own it; dispatching it would burn three attempts, see #1764).
- *   5. No paths, no lane match, or a two-lane tie → apply nothing and say
- *      why. An agent that always picks a lane has not been verified — it has
- *      just been observed agreeing.
+ *   2. Attribute each path to the AUTHORING lane (a real lane, never a
+ *      scope-only fragment) that owns it — carve-outs honoured — by longest
+ *      owned match. A path several lanes own equally (`packages/i18n/locales/`,
+ *      `package.json`) is a deliberate shared-write grant: it attributes nowhere.
+ *   3. The contract owner when the issue cites the contract and two or more
+ *      consumer lanes; otherwise one lane implicated, or one lane strictly
+ *      dominant → apply `lane:<x>`. Three implicated lanes is one cross-lane
+ *      change authored by one lane, never a split (#2979 point 4).
+ *   4. No paths, no lane match, or a tie → apply nothing and say why. An agent
+ *      that always picks a lane has not been verified — it has just been
+ *      observed agreeing.
  *
  * Usage:
  *   bun run scripts/fleet-triage.ts              # dry run: print the plan
- *   bun run scripts/fleet-triage.ts -- --apply   # apply lane:/needs-split labels
+ *   bun run scripts/fleet-triage.ts -- --apply   # apply lane: labels
  *   bun run scripts/fleet-triage.ts -- --limit 50
  *
  * Default is a dry run. `--apply` only ever ADDS labels, only ever from the
- * allowlist above, and only to open issues carrying no `lane:*` label and no
- * `needs-split` label already.
+ * allowlist above, and only to open issues carrying no `lane:*` label already.
  */
 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadLaneScopes, matchesPath, type LaneScope } from '../orchestrator/src/fragments.js'
-import { LANE_IDS } from '../orchestrator/src/config.js'
+import { loadLanes, type Lane } from '../orchestrator/src/config.js'
+import { attributePaths, authorFor, extractPaths, type PathAttribution } from '../orchestrator/src/route.js'
 import { gh, describeGhFailure } from '../orchestrator/src/gh.js'
+
+export { attributePaths, extractPaths }
 
 /** The only labels this agent may ever apply. `agent-dispatchable` is absent
  *  on purpose — see the header. Widening this set is a fleet-governance
  *  decision, not a code change. */
-const APPLIABLE_LABEL = /^(lane:(backend|shared|desktop|ios|android|infra)|needs-split)$/
+const APPLIABLE_LABEL = /^lane:(backend|shared|desktop|ios|android|infra)$/
 
 /** The labels `decideLane` is allowed to return — a type-level guarantee on
  *  top of the runtime `APPLIABLE_LABEL` check. */
-export type TriageLabel = `lane:${string}` | 'needs-split'
+export type TriageLabel = `lane:${string}`
 
 export type TriageDecision =
   | { label: TriageLabel; lanes: Record<string, number>; paths: string[] }
@@ -77,132 +81,29 @@ export function assertAppliableLabel(label: string): asserts label is TriageLabe
 }
 
 /**
- * Pulls repo-relative path citations out of an issue body. A citation is a
- * token containing at least one `/` (`apps/worker/routes/notes.ts`,
- * `deploy/docker/…`); surrounding backticks, quotes and sentence punctuation
- * are stripped, as is a leading `./`. Bare filenames (`knope.toml`) are NOT
- * extracted: without a slash they collide with prose constantly, and every
- * hand-triaged example cited a slashed path. Globs containing a slash
- * (`.github/workflows/ios*.yml`) pass through unchanged — `matchesPath`
- * understands them.
+ * The routing decision for one issue: `lane:<author>` from the SAME router
+ * the dispatcher uses (`authorFor`, orchestrator/src/route.ts), or no label
+ * with a reason. Ties are NOT broken here — an unlabelled issue whose cited
+ * paths split evenly is a human's call — and nothing is ever split: an issue
+ * spanning three lanes is one cross-lane change authored by one lane (the
+ * contract owner when it cites the contract and two consumers), with the other
+ * lanes reviewing (#2979 point 4). `needs-split` was the per-lane slicing the
+ * lane model retired.
  */
-export function extractPaths(body: string): string[] {
-  const out: string[] = []
-  for (const m of body.matchAll(/[^\s`'"()[\]{}<>]*\/[^\s`'"()[\]{}<>]*/g)) {
-    const token = m[0]
-      .replace(/^\.\//, '')
-      .replace(/^[,;:!?/]+/, '')
-      .replace(/[.,;:!?]+$/, '')
-    if (token.length > 1 && token.includes('/')) out.push(token)
-  }
-  return [...new Set(out)]
-}
-
-export interface PathAttribution {
-  /** lane id -> cited paths attributed to that lane (each path lands in at most one lane). */
-  attributed: Map<string, string[]>
-  /** Paths whose longest owned match ties across lanes — shared-write grants, non-discriminative. */
-  sharedWrite: string[]
-  /** Paths no lane's owned scope matches at all. */
-  unmatched: string[]
-}
-
-/**
- * Attributes each cited path to at most one lane by longest matching OWNED
- * pattern — the same rule `scope.ts` uses to resolve owned/notOwned overlap.
- * A trailing `/` retry lets a citation of the directory itself (`apps/ios`)
- * match the lane's `apps/ios/` grant.
- *
- * A TIE at the longest length means the path sits under a deliberate
- * shared-write grant (the same pattern string appears in several fragments —
- * e.g. `packages/i18n/locales/`). Such a path cannot discriminate lanes, so
- * it attributes nowhere rather than implicating every tied lane and forcing a
- * false `needs-split`.
- */
-export function attributePaths(paths: string[], scopes: Record<string, LaneScope>): PathAttribution {
-  const attributed = new Map<string, string[]>()
-  const sharedWrite: string[] = []
-  const unmatched: string[] = []
-  for (const path of paths) {
-    let bestLen = -1
-    let best: string[] = []
-    for (const [lane, scope] of Object.entries(scopes)) {
-      for (const pattern of scope.owned) {
-        if (matchesPath(path, pattern) || matchesPath(`${path}/`, pattern)) {
-          if (pattern.length > bestLen) {
-            bestLen = pattern.length
-            best = [lane]
-          } else if (pattern.length === bestLen && !best.includes(lane)) {
-            best.push(lane)
-          }
-        }
-      }
-    }
-    if (best.length === 1 && best[0] !== undefined) {
-      const list = attributed.get(best[0]) ?? []
-      list.push(path)
-      attributed.set(best[0], list)
-    } else if (best.length > 1) {
-      sharedWrite.push(path)
-    } else {
-      unmatched.push(path)
-    }
-  }
-  return { attributed, sharedWrite, unmatched }
-}
-
-/**
- * The routing decision for one issue, from its attributed lane hits.
- *
- *   - 0 implicated lanes  → no label; the reason distinguishes "body cited no
- *     paths" from "paths cited match no lane's scope" — the second is the one
- *     a human should look at, because it means the scope table may have a gap.
- *   - 1 lane              → `lane:<that lane>`.
- *   - 2 lanes             → `lane:<winner>` only when the winner is STRICTLY
- *     dominant; a tie is a human call.
- *   - 3+ lanes            → `needs-split`. No single lane can own the work,
- *     and a mis-routed dispatch burns three attempts before giving up (#1764).
- *
- * Lane iteration is sorted so a tie-break is deterministic across runs.
- *
- * Only fleet lanes count. A supervisor fragment that is not in `LANE_IDS`
- * (mac-supervisor, #2599) still takes part in `attributePaths`, so its paths
- * resolve to it by longest match instead of falling through to a lane that
- * disclaims them. But the router cannot dispatch to it, so its paths implicate
- * nobody here: the issue stays unlabelled for a human.
- */
-export function decideLane(attributed: Map<string, string[]>): TriageDecision {
-  const fleetLanes: ReadonlySet<string> = new Set(LANE_IDS)
-  const routable = [...attributed].filter(([lane]) => fleetLanes.has(lane))
-  const lanes: Record<string, number> = {}
-  for (const [lane, paths] of routable) lanes[lane] = paths.length
-  const paths = routable.flatMap(([, p]) => p)
-  const ranked = Object.entries(lanes).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  if (ranked.length === 0) {
-    return { label: null, reason: 'no cited path matched any lane scope', lanes, paths }
-  }
-  if (ranked.length >= 3) {
-    return { label: 'needs-split', lanes, paths }
-  }
-  const [first, second] = ranked as [string, number][] as [[string, number], [string, number] | undefined]
-  if (second === undefined || first[1] > second[1]) {
-    return { label: `lane:${first[0]}`, lanes, paths }
-  }
-  return {
-    label: null,
-    reason: `spans ${first[0]} and ${second[0]} with no dominant lane (${first[1]} vs ${second[1]} cited paths)`,
-    lanes,
-    paths,
-  }
+export function decideLane(attribution: PathAttribution, lanes: readonly Lane[]): TriageDecision {
+  const decision = authorFor(attribution, lanes, { breakTies: false })
+  const paths = [...attribution.attributed.values()].flat()
+  if (decision.author === undefined) return { label: null, reason: decision.reason, lanes: decision.counts, paths }
+  return { label: `lane:${decision.author}`, lanes: decision.counts, paths }
 }
 
 /** Convenience composition kept pure for tests: body in, decision out. */
-export function triageBody(body: string, scopes: Record<string, LaneScope>): TriageDecision {
+export function triageBody(body: string, lanes: readonly Lane[]): TriageDecision {
   const extracted = extractPaths(body)
   if (extracted.length === 0) {
     return { label: null, reason: 'issue body cites no repo paths', lanes: {}, paths: [] }
   }
-  const decision = decideLane(attributePaths(extracted, scopes).attributed)
+  const decision = decideLane(attributePaths(extracted, lanes), lanes)
   return { ...decision, paths: extracted }
 }
 
@@ -236,7 +137,7 @@ function parseArgs(argv: string[]): { apply: boolean; limit: number } {
 if (import.meta.main) {
   const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
   const { apply, limit } = parseArgs(process.argv.slice(2))
-  const scopes = await loadLaneScopes(repoRoot)
+  const lanes = await loadLanes(repoRoot)
 
   const raw = await gh([
     'issue', 'list', '--state', 'open', '--limit', String(limit),
@@ -244,22 +145,20 @@ if (import.meta.main) {
   ])
   const issues = JSON.parse(raw) as IssueRow[]
 
-  const untriaged = issues.filter(
-    (i) => !i.labels.some((l) => l.name.startsWith('lane:') || l.name === 'needs-split'),
-  )
+  const untriaged = issues.filter((i) => !i.labels.some((l) => l.name.startsWith('lane:')))
   console.log(
-    `${issues.length} open issues, ${issues.length - untriaged.length} already carry lane:/needs-split, ` +
+    `${issues.length} open issues, ${issues.length - untriaged.length} already carry lane:, ` +
     `${untriaged.length} to triage (${apply ? 'APPLYING labels' : 'dry run — pass --apply to label'})`,
   )
 
-  const tally = { labelled: 0, needsSplit: 0, skipped: 0, failed: 0 }
+  const tally = { labelled: 0, skipped: 0, failed: 0 }
   for (const issue of untriaged) {
-    const decision = triageBody(`${issue.title}\n${issue.body ?? ''}`, scopes)
+    const decision = triageBody(`${issue.title}\n${issue.body ?? ''}`, lanes)
     const detail =
       decision.label === null
         ? `SKIP (${decision.reason})`
         : `${decision.label} (${Object.entries(decision.lanes).map(([l, n]) => `${l}:${n}`).join(', ')})`
-    console.log(`#${issue.number} ${decision.label === null ? ' ' : decision.label === 'needs-split' ? '~' : '+'} ${detail}  ${issue.title}`)
+    console.log(`#${issue.number} ${decision.label === null ? ' ' : '+'} ${detail}  ${issue.title}`)
     if (decision.label === null) {
       tally.skipped++
       continue
@@ -273,8 +172,7 @@ if (import.meta.main) {
       tally.failed++
       continue
     }
-    if (decision.label === 'needs-split') tally.needsSplit++
-    else tally.labelled++
+    tally.labelled++
     if (apply) {
       try {
         await gh(['issue', 'edit', String(issue.number), '--add-label', decision.label])
@@ -285,7 +183,7 @@ if (import.meta.main) {
     }
   }
   console.log(
-    `done: ${tally.labelled} lane labels, ${tally.needsSplit} needs-split, ` +
+    `done: ${tally.labelled} lane labels, ` +
     `${tally.skipped} skipped, ${tally.failed} failed${apply ? '' : ' (dry run — nothing applied)'}`,
   )
 }

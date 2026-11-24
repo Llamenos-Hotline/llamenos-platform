@@ -100,24 +100,27 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
       body:
         `You own these paths and ONLY these paths:\n\n` +
         lane.scope.owned.map((p) => `- \`${p}\``).join('\n') +
-        `\n\nA fix that crosses into files another LANE owns (a route plus the schema it declares and ` +
-        `the client that sends it; a catalog permission plus the migration that grants it) is still ONE ` +
-        `problem and ONE PR — take those files. At PR open the orchestrator reads your diff, applies the ` +
-        `\`scope:<lane>\` label(s) it needs, says so in a PR comment, and re-requests review, so do not ` +
-        `split the change and do not label the PR yourself. It will NOT do this for CI/deploy/supply-chain ` +
-        `paths (\`.github/workflows/\`, \`deploy/\`, \`Dockerfile*\`, \`Caddyfile*\`, \`knope.toml\`, ` +
-        `\`package.json\`, \`bun.lockb\`) owned by another lane, for secrets, or for a path no lane owns ` +
-        `— a diff holding one gets no grant at all and stops at \`NO-VERDICT:scope\`.\n\n` +
-        `If the fix genuinely requires touching one of THOSE (a grant-excluded or unowned path), ` +
+        `\n\nYou author this WHOLE issue (#2979): lanes route review, they do not fence the PR. A fix ` +
+        `that crosses into files another LANE owns (a route plus the schema it declares and the client ` +
+        `that sends it; a catalog permission plus the migration that grants it) is still ONE problem and ` +
+        `ONE PR — take those files, and those lanes review them. Never split the issue into per-lane PRs. ` +
+        `At PR open the orchestrator reads your diff, applies the \`scope:<lane>\` label(s) it needs, says ` +
+        `so in a PR comment, and re-requests review, so do not label the PR yourself. It will NOT do this ` +
+        `for CI/deploy/supply-chain paths (\`.github/workflows/\`, \`deploy/\`, \`Dockerfile*\`, ` +
+        `\`Caddyfile*\`, \`knope.toml\`, \`package.json\`, \`bun.lockb\`) owned by another lane, or for ` +
+        `secrets — a diff holding one gets no grant at all and stops at \`NO-VERDICT:scope\`.\n\n` +
+        `If the fix genuinely requires one of THOSE (a path only another lane's own PR may write), ` +
         `do NOT touch it. You then have TWO options, and choosing between them is your ` +
         `judgement call:\n\n` +
-        `1. If a smaller fix that fits inside your scope is genuinely an improvement, make ` +
-        `that one, and note in your final status exactly what you left out and why.\n` +
+        `1. If a smaller fix that fits is genuinely an improvement, make that one, and note in your ` +
+        `final status exactly what you left out and why.\n` +
         `2. If the only fix that fits would be WORSE than doing nothing — deleting a feature ` +
         `rather than adding a dependency, storing state in memory rather than in the schema, ` +
         `duplicating a shared type rather than changing it, weakening a guarantee to make a ` +
-        `test pass — then report BLOCKED instead, naming the path you needed and why the ` +
-        `in-scope alternative is worse.\n\n` +
+        `test pass — then report BLOCKED instead, naming the EXACT repo paths you needed and why the ` +
+        `in-scope alternative is worse. When those paths are another lane's, the fleet re-routes the ` +
+        `issue to that lane (MISROUTED): it costs no attempt and needs no human. Name the paths ` +
+        `repo-relative (\`.github/workflows/ci.yml\`), or it cannot.\n\n` +
         `Option 2 is a correct and valued outcome, not a failure. A scope boundary must never ` +
         `decide a product or architectural question by default: that is a human's call, and ` +
         `reporting BLOCKED is how you hand it to them. Shipping the lesser fix with an honest ` +

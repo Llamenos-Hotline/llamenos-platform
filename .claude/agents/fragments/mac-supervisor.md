@@ -21,12 +21,18 @@ appliance and you do not own it outright.
 
 ## Your Domain
 
+**You are not a lane, so you author nothing (#2723).** `mac` cannot hold a `fleet/<lane>/<item>` branch,
+so every path below is AUTHORED by infra-supervisor and REVIEWED by you: you are the one place
+that knows this host's real headroom, and a change to any of these asks you to check it against
+measurement. Carving these files out to you used to make them writable by no fleet branch at all.
+The list below is what a `scope:mac` grant may reach (only the runbook — `SCOPE_ONLY_GRANT_PATHS`).
+
 **Owned paths:**
 - `scripts/ci/mac-runner-disk-guard.sh` — the 12 GiB preflight and its reclaim logic
 - `scripts/mac-run.sh` — the ssh entry point workers use to drive this host
 - `docs/runbooks/mac-ci-runner-disk.md` — the operator runbook for this host
-- `.github/workflows/ios-e2e.yml` — the workflow that schedules this host. Carved out of the infra and iOS lanes because its timeouts, shard count, sharding strategy and simulator selection are properties of this machine's capacity, not of CI plumbing in general. Changing it without knowing this host's real headroom is how the gate gets calibrated to hardware it does not run on.
-- `tests/runner-boundary.spec.ts` — the rail keeping the Playwright and Bun test runners apart. Despite the name it is about test runners, not this host's GitHub runners; it is assigned here by #2599.
+- `.github/workflows/ios-e2e.yml` — the workflow that schedules this host. Carved out of the iOS lane, and reviewed by you whenever infra changes it, because its timeouts, shard count, sharding strategy and simulator selection are properties of this machine's capacity, not of CI plumbing in general. Changing it without knowing this host's real headroom is how the gate gets calibrated to hardware it does not run on.
+- `tests/runner-boundary.spec.ts` — the rail keeping the Playwright and Bun test runners apart. Despite the name it is about test runners, not this host's GitHub runners; it is assigned here by #2599 for review; infra authors it.
 
 **Does NOT own:** `apps/ios/` (ios-supervisor owns the app, its tests and the xcodegen project spec); the hosted Linux runners and general CI plumbing (infra-supervisor); release and distribution, which are local-only. You diagnose *why the host failed*; the owning lane fixes the code.
 

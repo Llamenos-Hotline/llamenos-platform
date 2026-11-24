@@ -19,6 +19,12 @@ import type { VerifyInput } from '../../orchestrator/src/verify.js'
  * not a lane (#2600), so the runbook read as owned by NO lane: `scope:<lane>`
  * could not reach it and the gate told the author to delete the documentation.
  *
+ * #2723 then closed the gap at its root: a fragment that is not a lane can never
+ * hold a branch, so it must not be a path's ONLY owner. Infra now authors every
+ * Mac host path (the runbook through its docs grant) and mac reviews them, so
+ * #2863's shape is an infra PR needing no grant at all. `scope:mac` still works
+ * for a different lane's PR, and still reaches exactly the runbook.
+ *
  * Every test runs against the REAL fragments in this checkout — the failure was
  * a disagreement between ownership as the fragments declare it and ownership as
  * the lane list exposes it, which a hand-written lane table cannot reproduce.
@@ -79,33 +85,36 @@ describe('a scope-only fragment is grantable but is not a lane', () => {
 })
 
 describe('PR #2863 — scripts/ci/<x>.sh + docs/runbooks/<x>.md on fleet/infra/*', () => {
-  it('BEFORE: judged against the dispatch lane list, the runbook is unowned and ungrantable', () => {
-    const plan = planScopeGrants(PR_2863, find(lanes, 'infra'), lanes)
-    expect(plan.refused).toEqual([{ file: RUNBOOK, reason: 'unowned' }])
-    expect(plan.grants).toEqual([])
-    const advice = scopeStrayAdvice([RUNBOOK], find(lanes, 'infra'), lanes)
-    expect(advice.join('\n')).toContain('owned by no lane')
+  // The same fix authored on another lane: the runbook is not that lane's, and scope:mac is one of its remedies.
+  const ON_IOS = ['apps/ios/Sources/A.swift', RUNBOOK]
+
+  it('#2723: infra authors the whole of #2863 — no grant, against either lane list', () => {
+    for (const all of [lanes, grantable]) {
+      const plan = planScopeGrants(PR_2863, find(all, 'infra'), all)
+      expect(plan.refused).toEqual([])
+      expect(plan.grants).toEqual([])
+    }
+    expect(checkScopeAcross(PR_2863, find(lanes, 'infra').scope, [], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([])
   })
 
-  it('AFTER: the plan grants scope:mac for the runbook and nothing else', () => {
-    const plan = planScopeGrants(PR_2863, find(grantable, 'infra'), grantable)
+  it('on another lane the runbook is grantable, and the planner covers it with one label', () => {
+    const plan = planScopeGrants(ON_IOS, find(grantable, 'ios'), grantable)
     expect(plan.refused).toEqual([])
-    expect(plan.grants).toEqual(['mac'])
-    expect(plan.filesByLane).toEqual({ mac: [RUNBOOK] })
+    expect(plan.grants).toHaveLength(1)
+    expect(plan.filesByLane).toEqual({ [plan.grants[0] ?? '']: [RUNBOOK] })
   })
 
-  it('AFTER: without the label the gate\'s advice names the remedy that now works', () => {
-    const advice = scopeStrayAdvice([RUNBOOK], find(grantable, 'infra'), grantable).join('\n')
-    expect(advice).toContain('owned by lane "mac"')
-    expect(advice).toContain('scope:mac')
+  it('without a label the gate\'s advice names a remedy that works, never "owned by no lane"', () => {
+    const advice = scopeStrayAdvice([RUNBOOK], find(grantable, 'ios'), grantable).join('\n')
+    expect(advice).toContain('scope:')
     expect(advice).not.toContain('owned by no lane')
   })
 
-  it('the scope check passes with the grant and fails without it', () => {
-    const infra = find(grantable, 'infra')
+  it('the scope check passes with scope:mac and fails without it', () => {
+    const ios = find(grantable, 'ios')
     const mac = find(grantable, 'mac')
-    expect(checkScopeAcross(PR_2863, infra.scope, [mac.scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([])
-    expect(checkScopeAcross(PR_2863, infra.scope, [], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([RUNBOOK])
+    expect(checkScopeAcross(ON_IOS, ios.scope, [mac.scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([])
+    expect(checkScopeAcross(ON_IOS, ios.scope, [], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([RUNBOOK])
   })
 
   it('fleet/verify resolves a scope:mac label into the granted lanes', async () => {
@@ -154,19 +163,12 @@ describe('PR #2863 — scripts/ci/<x>.sh + docs/runbooks/<x>.md on fleet/infra/*
       return dir
     }
 
-    it('BEFORE/AFTER: refused with advice naming no remedy, then judged once scope:mac is applied', async () => {
+    it('the infra PR passes the scope gate ungranted (#2723)', async () => {
       const dir = repoWithPr2863()
       const infra = find(grantable, 'infra')
-      const base = { worktree: dir, branch: 'HEAD', lane: infra, allLanes: grantable, skipTests: true } as const
-
-      const ungranted = await verifyMechanical({ ...base })
-      expect(ungranted.passed).toBe(false)
-      expect(ungranted.reasons.join('\n')).toContain(RUNBOOK)
-      expect(ungranted.reasons.join('\n')).toContain('scope:mac')
-
-      const granted = await verifyMechanical({ ...base, grantedLanes: [find(grantable, 'mac')] })
-      expect(granted.reasons.filter((r) => r.includes('outside lane'))).toEqual([])
-      expect(granted.reasons.filter((r) => r.startsWith('scope advice:'))).toEqual([])
+      const report = await verifyMechanical({ worktree: dir, branch: 'HEAD', lane: infra, allLanes: grantable, skipTests: true })
+      expect(report.reasons.filter((r) => r.includes('outside lane'))).toEqual([])
+      expect(report.reasons.filter((r) => r.startsWith('scope advice:'))).toEqual([])
     })
   })
 
@@ -181,19 +183,19 @@ describe('PR #2863 — scripts/ci/<x>.sh + docs/runbooks/<x>.md on fleet/infra/*
       refireReview: async () => true,
       log: () => {},
     }
-    const out = await grantScopeAtOpen({ pr: '2863', headRefName: 'fleet/infra/2860' }, deps)
-    expect(out).toEqual({ kind: 'granted', grants: ['mac'], refired: true })
-    expect(added).toEqual([['scope:mac']])
+    // Infra owns all of it now, so the orchestrator correctly applies nothing.
+    expect(await grantScopeAtOpen({ pr: '2863', headRefName: 'fleet/infra/2860' }, deps)).toEqual({ kind: 'not-needed' })
+    expect(added).toEqual([])
   })
 })
 
 describe('what a scope-only grant must NOT widen', () => {
-  it('the Mac workflow stays grant-excluded: a diff carrying it is refused outright, no label applied', async () => {
-    const files = [...PR_2863, '.github/workflows/ios-e2e.yml']
-    expect(planScopeGrants(files, find(grantable, 'infra'), grantable).refused)
+  it('the Mac workflow stays grant-excluded: another lane\'s diff carrying it is refused outright, no label applied', async () => {
+    const files = ['apps/ios/Sources/A.swift', '.github/workflows/ios-e2e.yml']
+    expect(planScopeGrants(files, find(grantable, 'ios'), grantable).refused)
       .toEqual([{ file: '.github/workflows/ios-e2e.yml', reason: 'grant-excluded' }])
     const out = await grantScopeAtOpen(
-      { pr: '1', headRefName: 'fleet/infra/1' },
+      { pr: '1', headRefName: 'fleet/ios/1' },
       {
         readChangedFiles: async () => files, readLabels: async () => [], lanes: async () => grantable,
         addLabels: async () => { throw new Error('must not label') }, comment: async () => {},
@@ -209,19 +211,21 @@ describe('what a scope-only grant must NOT widen', () => {
   // is the true and the same answer: only a PR on the owning fragment's own work
   // may write them, and no label can carry another PR onto them.
   it.each(['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts'])(
-    'mac also owns %s, but it is host-executed/gate code: still unreachable by any grant',
+    '%s is host-executed/gate code: infra\'s own PR writes it, no grant carries another lane onto it',
     (file) => {
-      const plan = planScopeGrants([...PR_2863, file], find(grantable, 'infra'), grantable)
+      expect(planScopeGrants([...PR_2863, file], find(grantable, 'infra'), grantable).refused).toEqual([])
+      const plan = planScopeGrants(['apps/ios/Sources/A.swift', file], find(grantable, 'ios'), grantable)
       // A refusal makes NO grant: grantScopeAtOpen applies nothing while `refused` is non-empty.
       expect(plan.refused).toEqual([{ file, reason: 'grant-excluded' }])
     },
   )
 
-  it('the scope:mac grant reaches mac\'s runbook only: another runbook is infra\'s own, so it needs no grant', () => {
-    const plan = planScopeGrants(['scripts/ci/x.sh', 'docs/runbooks/deploy-official.md', RUNBOOK], find(grantable, 'infra'), grantable)
-    expect(plan.refused).toEqual([])
-    expect(plan.grants).toEqual(['mac'])
-    expect(plan.filesByLane).toEqual({ mac: [RUNBOOK] })
+  it('the scope:mac grant reaches mac\'s runbook only', () => {
+    const mac = find(grantable, 'mac')
+    const ios = find(grantable, 'ios')
+    expect(checkScopeAcross([RUNBOOK], ios.scope, [mac.scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([])
+    expect(checkScopeAcross(['docs/runbooks/deploy-official.md'], ios.scope, [mac.scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed)
+      .toEqual(['docs/runbooks/deploy-official.md'])
   })
 
   it('a branch named for the scope-only fragment is still "unknown lane", never a PR\'s own lane', async () => {

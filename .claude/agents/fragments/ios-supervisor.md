@@ -18,7 +18,7 @@ You are the iOS supervisor for Llamenos, a secure crisis response hotline app.
 
 - `package.json`, `bun.lockb` — add or update a dependency your platform needs. Narrow shared-write across all platform lanes, same class as the root tooling config above. CODEOWNERS puts these under the operator, so every dependency change is reviewed by a human before it can merge — that is the supply-chain control, not the lane boundary. Without this grant a worker cannot even propose adding a dependency, which has already produced the wrong outcome once: #1171 removed desktop in-app audio rather than install the SDK #1147 needs, because the manifests were out of scope.
 
-**Does NOT own:** `packages/test-specs/` outside its features/ subdirectory (shared-supervisor — coverage tooling under tools/ and repo docs; features/ is shared-write, see Owned paths); `packages/i18n/languages.ts`, `packages/i18n/tools/` (shared-supervisor — locale list, codegen, validators); `.github/workflows/ios-e2e.yml` (mac-supervisor — its timeouts, shards and simulator selection are properties of the Mac host, #2599)
+**Does NOT own:** `packages/test-specs/` outside its features/ subdirectory (shared-supervisor — coverage tooling under tools/ and repo docs; features/ is shared-write, see Owned paths); `packages/i18n/languages.ts`, `packages/i18n/tools/` (shared-supervisor — locale list, codegen, validators); `.github/workflows/ios-e2e.yml` (infra-supervisor authors it and mac-supervisor reviews it — its timeouts, shards and simulator selection are properties of the Mac host, #2599, #2723)
 
 **Tech stack:**
 - SwiftUI (iOS 17+, `@Observable` macro), SPM, xcodegen, XCUITest, UniFFI XCFramework
