@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, index, unique } from 'drizzle-orm/pg-core'
 import type { RecipientEnvelope } from '@protocol/schemas/common'
 import { jsonb } from '../bun-jsonb'
 import { shifts } from './shifts'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 export const shiftOverrides = pgTable('shift_overrides', {
   id: text('id').primaryKey(),
@@ -17,7 +18,9 @@ export const shiftOverrides = pgTable('shift_overrides', {
   noteEnvelopes: jsonb('note_envelopes').$type<RecipientEnvelope[]>(),
   createdBy: text('created_by').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  cryptoFormat: cryptoFormatColumn(),
 }, (table) => [
+  cryptoFormatCheck('shift_overrides', table.cryptoFormat),
   unique('shift_overrides_hub_shift_date').on(table.hubId, table.shiftId, table.date),
   index('shift_overrides_hub_date_idx').on(table.hubId, table.date),
 ])

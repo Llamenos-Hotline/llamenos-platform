@@ -13,6 +13,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // contacts
@@ -60,8 +61,10 @@ export const contacts = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('contacts', table.cryptoFormat),
     index('contacts_hub_id_idx').on(table.hubId),
     index('contacts_identifier_hashes_idx').using(
       'gin',
@@ -95,8 +98,10 @@ export const contactRelationships = pgTable(
       .notNull()
       .defaultNow(),
     createdBy: text('created_by').notNull(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('contact_relationships', table.cryptoFormat),
     index('contact_relationships_contact_id_a_idx').on(table.contactIdA),
     index('contact_relationships_contact_id_b_idx').on(table.contactIdB),
   ],
@@ -121,7 +126,8 @@ export const affinityGroups = pgTable('affinity_groups', {
     .notNull()
     .defaultNow(),
   createdBy: text('created_by').notNull(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('affinity_groups', table.cryptoFormat)])
 
 // ---------------------------------------------------------------------------
 // group_members

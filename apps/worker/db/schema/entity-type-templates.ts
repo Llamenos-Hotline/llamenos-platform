@@ -11,6 +11,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 export const entityTypeTemplates = pgTable(
   'entity_type_templates',
@@ -35,8 +36,10 @@ export const entityTypeTemplates = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('entity_type_templates', table.cryptoFormat),
     index('entity_type_templates_template_key_idx').on(table.templateKey),
     index('entity_type_templates_category_idx').on(table.category),
   ],

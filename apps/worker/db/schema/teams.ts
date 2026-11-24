@@ -14,6 +14,7 @@ import {
 import { contacts } from './contacts'
 import { hubs } from './settings'
 import { users } from './users'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // teams
@@ -35,8 +36,10 @@ export const teams = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('teams', table.cryptoFormat),
     index('teams_hub_idx').on(table.hubId),
   ],
 )

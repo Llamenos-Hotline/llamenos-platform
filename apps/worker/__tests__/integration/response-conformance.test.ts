@@ -84,6 +84,7 @@ import { inviteValidationResponseSchema, inviteListResponseSchema } from '@proto
 import { userListResponseSchema, userResponseSchema } from '@protocol/schemas/users'
 import { myStatusResponseSchema } from '@protocol/schemas/shifts'
 import { settingsDomainMock } from '../helpers/settings-domain-mock'
+import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
 
 // ---------------------------------------------------------------------------
 // Default env bindings — passed to app.request() as the 3rd argument.
@@ -365,6 +366,7 @@ describe('Calls Routes — response conformance', () => {
       answeredAt: null,
       endedAt: null,
       duration: null,
+      cryptoFormat: CRYPTO_FORMAT_CURRENT,
     },
   ]
 
@@ -590,6 +592,7 @@ describe('Notes Routes — response conformance', () => {
       encryptedContent: 'encrypted-reply-base64',
       readerEnvelopes: [{ pubkey: adminKey, enc: 'b'.repeat(64), ct: 'dGVzdC13cmFwcGVkLWtleQ' }],
       createdAt: new Date(),
+      cryptoFormat: CRYPTO_FORMAT_CURRENT,
     }
     const mockRecords = {
       getNote: vi.fn().mockResolvedValue({ ...mockNote, hubId: DEFAULT_HUB_ID }),

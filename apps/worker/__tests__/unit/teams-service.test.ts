@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TeamsService } from '../../services/teams'
 import { ServiceError } from '../../services/service-error'
+import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
 
 // ---------------------------------------------------------------------------
 // Row helpers
@@ -23,6 +24,7 @@ function makeTeamRow(overrides: Partial<{
     createdBy: 'pk-admin',
     createdAt: new Date('2026-01-01'),
     updatedAt: new Date('2026-01-01'),
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,
   }
 }

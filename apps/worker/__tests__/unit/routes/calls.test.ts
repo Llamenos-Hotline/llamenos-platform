@@ -19,6 +19,7 @@ import {
 } from '@protocol/schemas/calls'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
+import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
 
 // This file asserts the response *shape*. Ring-leg cancellation and relay publishing are
 // the answer route's side effects, covered in ringing-service.test.ts and
@@ -69,6 +70,7 @@ function activeRow(overrides: Partial<ActiveCallRow> = {}): ActiveCallRow {
     answeredAt: new Date('2026-09-30T10:00:05.000Z'),
     endedAt: null,
     duration: null,
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,
   }
 }
@@ -90,6 +92,7 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
     encryptedContent: 'ciphertext',
     adminEnvelopes: [{ pubkey: 'd'.repeat(64), enc: 'e'.repeat(64), ct: 'wrapped-key' }],
     createdAt: new Date('2026-09-30T09:05:00.000Z'),
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,
   }
 }

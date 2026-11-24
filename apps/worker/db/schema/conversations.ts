@@ -18,6 +18,7 @@ import {
 import { jsonb } from '../bun-jsonb'
 import { caseRecords } from './cases'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // conversations
@@ -90,8 +91,10 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('messages', table.cryptoFormat),
     index('messages_conversation_created_idx').on(
       table.conversationId,
       table.createdAt,
@@ -157,8 +160,10 @@ export const files = pgTable(
       .notNull()
       .defaultNow(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('files', table.cryptoFormat),
     index('files_hub_id_idx').on(table.hubId),
     index('files_case_record_id_idx').on(table.caseRecordId),
     foreignKey({
@@ -189,7 +194,8 @@ export const contactIdentifiers = pgTable('contact_identifiers', {
     .primaryKey()
     .references(() => conversations.id, { onDelete: 'cascade' }),
   encryptedIdentifier: text('encrypted_identifier').notNull(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('contact_identifiers', table.cryptoFormat)])
 
 // ---------------------------------------------------------------------------
 // Relations

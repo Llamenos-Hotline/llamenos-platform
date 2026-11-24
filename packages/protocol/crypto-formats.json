@@ -1,0 +1,5 @@
+{
+  "description": "Crypto formats a sealed row can carry in its crypto_format column (#2964). `current` is what every writer stamps today; `known` is every value a reader accepts, and is the CHECK constraint on each sealed table. A reader REFUSES any value not in `known` and never guesses. Adding a format is append-only: add its value to `known` (and move `current` once writers produce it), run `bun run db:generate` to widen every table's CHECK, and update CRYPTO_FORMAT_* in packages/crypto/src/crypto_format.rs, which a crate test pins to this file. The v2 format itself is defined by the #2974 spec, not here.",
+  "current": 1,
+  "known": [1]
+}

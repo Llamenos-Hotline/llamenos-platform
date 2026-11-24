@@ -18,6 +18,7 @@ import {
 import type { PukHpkeEnvelope } from '@protocol/schemas/sigchain'
 import { jsonb } from '../bun-jsonb'
 import { users } from './users'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // puk_envelopes
@@ -52,8 +53,10 @@ export const pukEnvelopes = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('puk_envelopes', table.cryptoFormat),
     index('puk_envelopes_user_pubkey_idx').on(table.userPubkey),
     index('puk_envelopes_device_id_idx').on(table.deviceId),
     // One envelope per (user, device, generation). userPubkey is part of the

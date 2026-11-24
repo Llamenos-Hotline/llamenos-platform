@@ -10,6 +10,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core'
 import { ringGroups } from './ring-groups'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // shifts
@@ -36,7 +37,8 @@ export const shifts = pgTable('shifts', {
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('shifts', table.cryptoFormat)])
 
 // ---------------------------------------------------------------------------
 // push_reminders_sent

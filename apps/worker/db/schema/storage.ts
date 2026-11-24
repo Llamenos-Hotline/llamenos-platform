@@ -3,6 +3,7 @@
  */
 import { integer, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 export const hubStorageSettings = pgTable(
   'hub_storage_settings',
@@ -34,4 +35,5 @@ export const hubStorageCredentials = pgTable('hub_storage_credentials', {
   policyName: text('policy_name').notNull(),
   userName: text('user_name').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('hub_storage_credentials', table.cryptoFormat)])

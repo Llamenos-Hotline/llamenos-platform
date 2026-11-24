@@ -23,7 +23,8 @@ There is no WASM build: the Playwright test build aliases the Tauri IPC layer to
 | `envelope_aad` | The one definition of an envelope AAD (mirrors `packages/shared/envelope-aad.ts`) |
 | `case_record` | Case records + case comments, sealed per purpose — no platform chooses the label or AAD |
 | `audit_key` | Per-user audit key (AES-256-GCM) and its HPKE wrapping |
-| `backup` | Offline key backup — the one canonical backup file format |
+| `backup` | Offline key backup — the one canonical backup file format (v5: both device seeds, #2140) |
+| `crypto_format` | The `crypto_format` a sealed row carries; `check_crypto_format` refuses unknown formats. Values pinned to `../../packages/protocol/crypto-formats.json` (#2964) |
 | `erasure` | Erasure-override and device-wipe signatures |
 | `shamir` | Shamir secret sharing over GF(2^8) for recovery groups |
 | `kdf_params` | Argon2id parameters, shared by every PIN/passphrase KDF; `test-kdf` release-build guard |
