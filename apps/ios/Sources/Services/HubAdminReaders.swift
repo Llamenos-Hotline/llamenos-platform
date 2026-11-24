@@ -25,9 +25,20 @@ enum HubAdminReaders {
     ///   read — the caller keeps the user's input on screen and says why, it never
     ///   substitutes another key — or the request's own error.
     static func resolve(apiService: APIService, hubId: String? = nil) async throws -> [String] {
-        let route = "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)"
-        let path = try hubId.map { APIService.hubPath($0, route) } ?? apiService.activeHubPath(route)
-        let response: HubReadersResponse = try await apiService.request(method: "GET", path: path)
+        // The path is spelled inside each `request(...)` so the API contract guard
+        // can read the route it reaches (a path held in a variable is "unresolved").
+        let response: HubReadersResponse
+        if let hubId {
+            response = try await apiService.request(
+                method: "GET",
+                path: APIService.hubPath(hubId, "/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
+            )
+        } else {
+            response = try await apiService.request(
+                method: "GET",
+                path: try apiService.activeHubPath("/api/readers?purpose=\(ReaderPurpose.admin.rawValue)")
+            )
+        }
         return try admins(from: response.recipients)
     }
 

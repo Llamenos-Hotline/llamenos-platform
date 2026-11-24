@@ -36,11 +36,19 @@ class SessionState @Inject constructor(
      *   caller reports it and writes nothing; it never substitutes another key.
      */
     suspend fun adminReaders(apiService: ApiService, hubId: String? = null): List<String> {
-        val route = "/api/readers?purpose=${ReaderPurpose.Admin.value}"
-        val response = apiService.request<HubReadersResponse>(
-            "GET",
-            if (hubId != null) apiService.hubPath(hubId, route) else apiService.activeHubPath(route),
-        )
+        // The route is spelled inside each call so the mobile route scanner and the
+        // API contract guard can read what it reaches.
+        val response = if (hubId != null) {
+            apiService.request<HubReadersResponse>(
+                "GET",
+                apiService.hubPath(hubId, "/api/readers?purpose=${ReaderPurpose.Admin.value}"),
+            )
+        } else {
+            apiService.request<HubReadersResponse>(
+                "GET",
+                apiService.activeHubPath("/api/readers?purpose=${ReaderPurpose.Admin.value}"),
+            )
+        }
         return try {
             mobileResolveAdminReaders(response.recipients)
         } catch (_: CryptoException.NoAdminReader) {
