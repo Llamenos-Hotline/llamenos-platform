@@ -414,7 +414,7 @@
     "add": "ጨምር",
     "appName": "Llámenos",
     "back": "ተመለስ",
-    "cancel": "ሰርዝ",
+    "cancel": "ይቅር",
     "clear": "አጽዳ",
     "close": "ዝጋ",
     "configured": "ተዋቅሯል",
@@ -4214,8 +4214,8 @@
     "syncNow": "Sync now",
     "syncing": "Syncing..."
   },
-  "cancel": "ሰርዝ",
-  "deepLinkConfirmCancel": "ሰርዝ",
+  "cancel": "ይቅር",
+  "deepLinkConfirmCancel": "ይቅር",
   "actionDone": "ተጠናቅቋል",
   "smsWebhook": "SMS Webhook",
   "webhook": {

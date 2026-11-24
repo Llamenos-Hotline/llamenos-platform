@@ -23,6 +23,7 @@ import {
   loadDeferralRecord,
 } from './deferral'
 import { readSameAsEn } from './untranslated'
+import { describeCollision, findButtonCollisions } from './dialog-buttons'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -393,6 +394,32 @@ function validateLocaleCoverage(): number {
   }
 
   return errors.length
+}
+
+// ---------------------------------------------------------------------------
+// Dialog-button collisions (#2546)
+//
+// A confirmation dialog whose Cancel and Delete buttons read identically is
+// worse than no dialog. See tools/dialog-buttons.ts for the rule and its limits.
+// ---------------------------------------------------------------------------
+
+function validateDialogButtons(): number {
+  const en = JSON.parse(readFileSync(join(LOCALES_DIR, 'en.json'), 'utf-8'))
+  const collisions = readdirSync(LOCALES_DIR)
+    .filter(f => f.endsWith('.json') && f !== 'en.json')
+    .sort()
+    .flatMap(f => {
+      const code = f.replace(/\.json$/, '')
+      return findButtonCollisions(en, JSON.parse(readFileSync(join(LOCALES_DIR, f), 'utf-8')), code)
+    })
+
+  if (collisions.length > 0) {
+    console.error(`  Dialog buttons: ${collisions.length} indistinguishable pair(s) found:`)
+    for (const c of collisions) console.error(`    ${describeCollision(c)}`)
+  } else {
+    console.log('  Dialog buttons: cancel/confirm pairs are distinct in every locale')
+  }
+  return collisions.length
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,6 +1130,7 @@ function main() {
   totalErrors += validateKeyCasing()
   totalErrors += validateLocaleCoverage()
   totalErrors += validateLocaleCompleteness()
+  totalErrors += validateDialogButtons()
   totalErrors += selfTestFormatArguments()
   totalErrors += selfTestKeyRefs()
 
