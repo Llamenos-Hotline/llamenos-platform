@@ -24,12 +24,17 @@ second failure is `genuine`, full stop.
 
 Output is `key=value` lines (shell-friendly; no JSON parsing in bash):
 
-    kind=<zero-tests|infra-partial|script-never-started|infra|genuine|passed>
+    kind=<zero-tests|infra-partial|script-never-started|infra|genuine|build-failure|passed>
     signatures=<comma separated names>
     retest=<Class/test Class/test ...>          (ios infra-partial only)
     failed=<Target/Class/test ...>              (ios genuine only: the failed tests, when
                                                  every one of them is accounted for)
     detail=<one line a human can read in the job output>
+
+`genuine` means a TEST failed (or a failure that may have been one could not be read).
+`build-failure` is the android verdict for a Gradle failure with NO failing test and no
+infrastructure signature: the job still fails and is not retried, but it is not called a
+test result (#2969).
 
 `siblings` prints sibling_state=<passed|pending|none|unreadable>, siblings=<i:conclusion ...>
 and detail=.
@@ -46,7 +51,9 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 # ---------------------------------------------------------------- iOS --------
 
@@ -201,30 +208,60 @@ def merge_ios(attempt1: str, attempt2: str, superseded: list[str], reason: str =
 
 # ------------------------------------------------------------- Android -------
 
+def load_patterns(name: str) -> "list[re.Pattern[str]]":
+    """One ERE per line from scripts/ci/<name>, compiled for `re.MULTILINE`.
+
+    These are the SAME files the Gradle retry wrapper hands to `grep -E -f`, so
+    the wrapper and this classifier cannot disagree about what a dependency
+    failure or a test failure looks like (#2969: one shard's log said "Could not
+    GET ... status code 429" and was retried, another's said "Could not find" and
+    ejected the PR). A missing or empty file is an error, never an empty list: an
+    empty list would call every failure "no signature".
+    """
+    path = Path(__file__).resolve().parents[2] / "scripts" / "ci" / name
+    lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if not lines:
+        raise SystemExit(f"classify-infra-failure: {path} is empty")
+    return [re.compile(l, re.MULTILINE) for l in lines]
+
+
 # Seen verbatim in a failed hosted shard (run 41779683568, android-e2e (3)).
 ANDROID_INFRA_LINES = (
     ("adb-device-not-found", re.compile(r"adb: device '[^']+' not found")),
     ("emulator-boot-timeout", re.compile(r"Timeout waiting for emulator to boot")),
     ("emulator-no-disk-space", re.compile(r"FATAL\s*\|\s*Your device does not have enough disk space")),
-    # A dependency repository refusing or failing the request while Gradle
-    # resolves the build, before any test exists to run. Seen verbatim in
-    # run 43823933518, android-e2e (0) -- Maven Central throttling the hosted
-    # runner (shards 1-3 of the same run passed):
-    #   Could not HEAD 'https://repo.maven.apache.org/maven2/...jar'. Received
-    #   status code 429 from server: Too Many Requests
-    # Only the throttle and server-side statuses: a 404 (an artifact that does
-    # not exist -- a bad version bump) or a 401/403 is the build's own fault and
-    # stays genuine.
-    ("dependency-repo-unavailable",
-     re.compile(r"Could not (?:HEAD|GET) 'https?://[^']+'\. Received status code (?:429|5\d\d) from server")),
 )
-# A per-test failure line Gradle prints for connected tests:
-# `Feature > scenario[Pixel_5(AVD) - 14] FAILED`, and the summary sentence.
-ANDROID_TEST_FAILED_RE = re.compile(r"^\S.* > .*\[[^\]]*\] FAILED\s*$", re.MULTILINE)
-ANDROID_FAILING_TESTS_RE = re.compile(r"There were failing tests", re.IGNORECASE)
-# `M1 probe FAIL <flow>`: the M1 probe gate (apps/android/app/build.gradle.kts)
-# re-runs every required flow once per shard and writes one report per flow.
-ANDROID_PROBE_FAIL_RE = re.compile(r"^M1 probe FAIL ", re.MULTILINE)
+# The shared pattern lists are read when an ANDROID verdict is asked for, not at
+# import: the iOS verdicts run from this same file on the Mac and must not depend
+# on files that only the Gradle jobs use.
+#
+# resolution: a dependency registry refusing, throttling or missing the request
+#   while Gradle resolves the build (runs 43823933518: 429; 45226563795: 429 on
+#   protobuf-java; 45241487811: "Could not find" on the same artifact -- the SAME
+#   defect worded differently by Gradle, depending on whether the registry answered
+#   or went quiet). scripts/ci/gradle-resolution.patterns.
+# test_failed / probe_failed: output that proves a test, or an M1 probe flow, ran
+#   and failed (scripts/ci/gradle-test-failure.patterns). The probe line is kept
+#   apart because a probe flow is attributed through its own per-flow reports
+#   (`M1 probe FAIL <flow>`: the gate in apps/android/app/build.gradle.kts re-runs
+#   every required flow once per shard), not through the JUnit XML.
+class AndroidPatterns(NamedTuple):
+    resolution: "list[re.Pattern[str]]"
+    test_failed: "list[re.Pattern[str]]"
+    probe_failed: "re.Pattern[str]"
+
+
+@lru_cache(maxsize=None)
+def android_patterns() -> AndroidPatterns:
+    failure = load_patterns("gradle-test-failure.patterns")
+    probe = next((rx for rx in failure if rx.pattern.startswith("^M1 probe FAIL")), None)
+    if probe is None:
+        raise SystemExit("classify-infra-failure: the test-failure pattern list no longer names the M1 probe gate line")
+    return AndroidPatterns(load_patterns("gradle-resolution.patterns"), [rx for rx in failure if rx is not probe], probe)
+
+
+# A per-test failure line Gradle prints for connected tests is
+# `Feature > scenario[Pixel_5(AVD) - 14] FAILED`, followed by the summary sentence.
 ANDROID_PROBE_PASS_RE = re.compile(r"^OK \(1 test\)", re.MULTILINE)
 
 # The emulator reaches the host (where the backend runs) at this fixed alias.
@@ -327,8 +364,9 @@ def classify_android(log: str, marker_exists: bool, results_dir: Path | None, pr
     scenario = junit_failure_causes(results_dir)
     if scenario is None:
         return genuine("could not read the JUnit results, so the failures cannot be attributed")
-    log_says_failed = bool(ANDROID_FAILING_TESTS_RE.search(log) or ANDROID_TEST_FAILED_RE.search(log))
-    probe_says_failed = bool(ANDROID_PROBE_FAIL_RE.search(log))
+    pats = android_patterns()
+    log_says_failed = any(rx.search(log) for rx in pats.test_failed)
+    probe_says_failed = bool(pats.probe_failed.search(log))
     probe: list[str] = []
     if probe_says_failed:
         got = probe_failure_causes(probe_dir)
@@ -355,9 +393,16 @@ def classify_android(log: str, marker_exists: bool, results_dir: Path | None, pr
         return {"kind": "infra", "signatures": ",".join(sigs), "retest": "",
                 "detail": f"{what}, every one rooted in a connect failure to {ANDROID_TEST_HOST} while the host backend is live: {_summarise(causes)}"}
 
+    # Reaching here, NOTHING failed as a test: no failing scenario in the Gradle
+    # output or the JUnit XML, no failing probe flow. The failure is the build's,
+    # and `genuine` -- a verdict about tests -- is not available for it (#2969).
     sigs = [name for name, rx in ANDROID_INFRA_LINES if rx.search(log)]
+    if any(rx.search(log) for rx in pats.resolution):
+        sigs.append("dependency-resolution")
     if not sigs:
-        return genuine("no infrastructure signature in the Gradle output")
+        return {"kind": "build-failure", "signatures": "", "retest": "",
+                "detail": "Gradle failed with no failing test and no infrastructure signature in its output: "
+                          "a build error, not a test result. Not retried"}
     return {"kind": "infra", "signatures": ",".join(sigs), "retest": "",
             "detail": "Gradle failed with an infrastructure signature and no failing test"}
 

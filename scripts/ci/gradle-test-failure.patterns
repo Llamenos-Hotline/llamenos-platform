@@ -1,0 +1,3 @@
+^[^ ].* > .* FAILED *$
+There were failing tests
+^M1 probe FAIL 
