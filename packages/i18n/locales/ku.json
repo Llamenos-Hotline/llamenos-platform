@@ -4391,11 +4391,13 @@
   },
   "offline": {
     "banner": "Tu negirêdayî yî. Bang û peyam heta ku pêwendî were vegerandin naxebitin.",
+    "discardQueue": "Çalakiyên tomarkirî jê bibe",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Çalakiyên bê înternetê yên tomarkirî li ser vê amûrê nehatin xwendin, ji ber vê yekê nikare tiştekî nû bê înternetê were tomarkirin. Ji bo berdewamiyê wan jê bibe.",
     "rejected": "Nehat tomarkirin: server red kir",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

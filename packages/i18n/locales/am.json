@@ -4199,11 +4199,13 @@
   "invitePhoneLabel": "Phone number",
   "offline": {
     "banner": "ከመስመር ውጭ ነዎት። ግንኙነት እስኪመለስ ድረስ ጥሪዎችና መልዕክቶች አይሰሩም።",
+    "discardQueue": "የተቀመጡ እርምጃዎችን ሰርዝ",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "በዚህ መሣሪያ ላይ የተቀመጡ ከመስመር ውጭ እርምጃዎች ሊነበቡ አልቻሉም፣ ስለዚህ ከመስመር ውጭ ምንም አዲስ ነገር ማስቀመጥ አይቻልም። ለመቀጠል ይሰርዟቸው።",
     "rejected": "አልተቀመጠም፦ አገልጋዩ አልተቀበለውም",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

@@ -4465,11 +4465,13 @@
   "apiSecretLabel": "رمز API",
   "offline": {
     "banner": "شما آفلاین هستید. تماس‌ها و پیام‌ها تا بازگشت اتصال کار نخواهند کرد.",
+    "discardQueue": "حذف اقدام‌های ذخیره‌شده",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "اقدام‌های آفلاینِ ذخیره‌شده در این دستگاه خوانده نشدند، بنابراین نمی‌توان چیز جدیدی را به‌صورت آفلاین ذخیره کرد. برای ادامه، آن‌ها را حذف کنید.",
     "rejected": "ذخیره نشد: سرور آن را نپذیرفت",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

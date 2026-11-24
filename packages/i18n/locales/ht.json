@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "Ou pa konekte. Apèl ak mesaj pa pral fonksyone jiskaske koneksyon retabli.",
+    "discardQueue": "Jete aksyon ki sovgade yo",
     "operationQueued": "Sove san koneksyon — pral senkronize lè konekte",
     "pendingCount": "{{count}} an atant",
     "pendingCountOne": "{{count}} an atant",
     "pendingSyncMessage": "{{count}} operasyon ap tann senkronizasyon",
     "pendingSyncMessageOne": "{{count}} operasyon ap tann senkronizasyon",
+    "queueUnreadable": "Pa t kapab li aksyon ki sovgade san koneksyon sou aparèy sa a, kidonk pa gen anyen nouvo ki ka sovgade san koneksyon. Jete yo pou kontinye.",
     "rejected": "Pa anrejistre: sèvè a refize l",
     "relayReconnected": "Rekonekte — ap rattrape evènman ki te manke",
     "relayReconnecting": "Rekoneksyon ak sèvè an tan reyèl...",

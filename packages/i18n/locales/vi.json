@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "Bạn đang ngoại tuyến. Cuộc gọi và tin nhắn sẽ không hoạt động cho đến khi kết nối được khôi phục.",
+    "discardQueue": "Hủy các thao tác đã lưu",
     "operationQueued": "Đã lưu ngoại tuyến — sẽ đồng bộ khi kết nối",
     "pendingCount": "{{count}} đang chờ",
     "pendingCountOne": "{{count}} đang chờ",
     "pendingSyncMessage": "{{count}} thao tác đang chờ đồng bộ",
     "pendingSyncMessageOne": "{{count}} thao tác đang chờ đồng bộ",
+    "queueUnreadable": "Không thể đọc các thao tác ngoại tuyến đã lưu trên thiết bị này, nên không thể lưu thêm thao tác mới khi ngoại tuyến. Hãy hủy chúng để tiếp tục.",
     "rejected": "Chưa lưu: máy chủ đã từ chối",
     "relayReconnected": "Đã kết nối lại — đang đồng bộ sự kiện bị bỏ lỡ",
     "relayReconnecting": "Đang kết nối lại máy chủ thời gian thực...",

@@ -28,6 +28,7 @@ vi.mock('./key-manager', () => ({
   setOnCall: vi.fn(),
   onLock: () => () => {},
   onUnlock: () => () => {},
+  getPublicKeyHex: () => null,
 }))
 vi.mock('./api/client', async (importActual) => ({
   ...(await importActual<typeof import('./api/client')>()),

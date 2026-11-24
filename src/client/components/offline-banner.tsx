@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { WifiOff, CloudOff, RefreshCw, Loader2 } from 'lucide-react'
-import { offlineQueue, type QueuedOperation } from '@/lib/offline-queue'
+import { offlineQueue, type OfflineQueueStorageError, type QueuedOperation } from '@/lib/offline-queue'
 import { getAuthHeadersForReplay } from '@/lib/api'
 
 /**
@@ -14,6 +14,7 @@ export function OfflineBanner() {
   const [isOffline, setIsOffline] = useState(!navigator.onLine)
   const [pendingOps, setPendingOps] = useState<QueuedOperation[]>([])
   const [isReplaying, setIsReplaying] = useState(false)
+  const [unreadable, setUnreadable] = useState<OfflineQueueStorageError | null>(null)
   const { t } = useTranslation()
 
   useEffect(() => {
@@ -32,6 +33,8 @@ export function OfflineBanner() {
       setPendingOps(queue)
     })
   }, [])
+
+  useEffect(() => offlineQueue.subscribeUnreadable(setUnreadable), [])
 
   // Auto-replay when coming back online
   useEffect(() => {
@@ -52,6 +55,32 @@ export function OfflineBanner() {
   }, [isReplaying])
 
   const pendingCount = pendingOps.length
+
+  // The device's saved offline actions cannot be opened: say so, and let the
+  // user discard them — the queue accepts nothing new until they do.
+  if (unreadable) {
+    return (
+      <div
+        role="alert"
+        data-testid="offline-queue-unreadable"
+        className="flex items-center justify-center gap-2 bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground"
+      >
+        <CloudOff className="h-4 w-4 shrink-0" />
+        <span>{t('offline.queueUnreadable')}</span>
+        <button
+          data-testid="offline-queue-discard"
+          onClick={() => {
+            offlineQueue.clear().catch((err: unknown) => {
+              console.error('[offline-queue] the unreadable queue could not be discarded', err)
+            })
+          }}
+          className="ml-2 inline-flex items-center gap-1 rounded bg-white/20 px-2 py-0.5 text-xs hover:bg-white/30"
+        >
+          {t('offline.discardQueue')}
+        </button>
+      </div>
+    )
+  }
 
   // Nothing to show
   if (!isOffline && pendingCount === 0) return null

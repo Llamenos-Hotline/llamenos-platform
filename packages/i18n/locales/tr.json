@@ -4459,11 +4459,13 @@
   },
   "offline": {
     "banner": "Çevrimdışısınız. Bağlantı yeniden sağlanana kadar aramalar ve mesajlar çalışmayacaktır.",
+    "discardQueue": "Kayıtlı işlemleri sil",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Bu cihazda kayıtlı çevrimdışı işlemler okunamadı, bu nedenle çevrimdışıyken yeni bir şey kaydedilemiyor. Devam etmek için bunları silin.",
     "rejected": "Kaydedilmedi: sunucu reddetti",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

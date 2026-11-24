@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "Você está offline. Chamadas e mensagens não funcionarão até que a conectividade seja restaurada.",
+    "discardQueue": "Descartar ações salvas",
     "operationQueued": "Salvo offline — será sincronizado ao conectar",
     "pendingCount": "{{count}} pendentes",
     "pendingCountOne": "{{count}} pendente",
     "pendingSyncMessage": "{{count}} operações aguardando sincronização",
     "pendingSyncMessageOne": "{{count}} operação aguardando sincronização",
+    "queueUnreadable": "Não foi possível ler as ações offline salvas neste dispositivo, portanto nada de novo pode ser salvo offline. Descarte-as para continuar.",
     "rejected": "Não salvo: o servidor recusou",
     "relayReconnected": "Reconectado — recuperando eventos perdidos",
     "relayReconnecting": "Reconectando ao servidor em tempo real...",

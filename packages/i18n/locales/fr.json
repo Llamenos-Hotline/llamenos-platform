@@ -2767,11 +2767,13 @@
   "oauthStarting": "Starting OAuth...",
   "offline": {
     "banner": "Vous êtes hors ligne. Les appels et messages ne fonctionneront pas tant que la connectivité ne sera pas rétablie.",
+    "discardQueue": "Supprimer les actions enregistrées",
     "operationQueued": "Enregistré hors ligne — sera synchronisé à la reconnexion",
     "pendingCount": "{{count}} en attente",
     "pendingCountOne": "{{count}} en attente",
     "pendingSyncMessage": "{{count}} opérations en attente de synchronisation",
     "pendingSyncMessageOne": "{{count}} opération en attente de synchronisation",
+    "queueUnreadable": "Les actions hors ligne enregistrées sur cet appareil n'ont pas pu être lues ; aucune nouvelle action ne peut donc être enregistrée hors ligne. Supprimez-les pour continuer.",
     "rejected": "Non enregistré : le serveur l'a refusé",
     "relayReconnected": "Reconnecté — rattrapage des événements manqués",
     "relayReconnecting": "Reconnexion au serveur temps réel...",

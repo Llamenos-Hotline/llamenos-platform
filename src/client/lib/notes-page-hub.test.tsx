@@ -25,7 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }))
 vi.mock('@/lib/config', () => ({ useConfig: () => ({ currentHubId: 'hub-A' }) }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: () => {} }) }))
-vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true, onUnlock: () => () => {} }))
+vi.mock('@/lib/key-manager', () => ({ isUnlocked: () => true, onUnlock: () => () => {}, getPublicKeyHex: () => null }))
 vi.mock('@/lib/admin-recipient', () => ({
   hubAdminReaders: async () => ['pk-admin'],
   activeHubAdminReaders: async () => ['pk-admin'],

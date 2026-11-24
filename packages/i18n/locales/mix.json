@@ -3145,11 +3145,13 @@
   },
   "offline": {
     "banner": "Ñá íyo conexión. Llamada ji mensaje ña ku koo hasta ná ndikó conexión.",
+    "discardQueue": "Xíta acciones ni̱ chikaa",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Ñá ni̱ kúu ndaskíꞌin acciones ni̱ chikaa ñá íyo conexión nuu aparato yóꞌo, ña̱ ñá ku̱u chikaa ña̱ yáꞌa ñá íyo conexión. Xíta ná kuaꞌan noꞌó.",
     "rejected": "Not saved: the server refused it",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",

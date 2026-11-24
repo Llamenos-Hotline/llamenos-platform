@@ -4264,11 +4264,13 @@
   "methodSms": "SMS",
   "offline": {
     "banner": "Aad ayaad ka baxday shabakadda. Wicitaannada iyo fariimaha ma shaqeynayaan ilaa isku xirku soo noqdo.",
+    "discardQueue": "Tuur ficillada la keydiyay",
     "operationQueued": "Saved offline — will sync when connected",
     "pendingCount": "{{count}} pending",
     "pendingCountOne": "{{count}} pending",
     "pendingSyncMessage": "{{count}} operations waiting to sync",
     "pendingSyncMessageOne": "{{count}} operation waiting to sync",
+    "queueUnreadable": "Ficillada la keydiyay ee khadka-ka-baxsan ee qalabkan lama akhriyi karo, sidaa darteed wax cusub lagama keydin karo marka aan khadka lagu jirin. Tuur si aad u sii wadato.",
     "rejected": "Lama kaydin: serverku wuu diiday",
     "relayReconnected": "Reconnected — catching up on missed events",
     "relayReconnecting": "Reconnecting to real-time server...",
