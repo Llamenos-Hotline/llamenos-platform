@@ -23,6 +23,7 @@ import { toCaseEvent } from '../services/cases'
 import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED } from '@shared/event-kinds'
 import { publishEvent } from '../lib/ws-events'
 import { hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
+import { assertSealedTiersReadable } from '../lib/admin-envelopes'
 
 const events = new Hono<AppEnv>()
 
@@ -152,6 +153,11 @@ events.post('/',
     const services = c.get('services')
     const body = c.req.valid('json')
 
+    // Before anything is numbered or stored: an event no admin can open is lost.
+    await assertSealedTiersReadable(services, c.env, pathHubId(c), [
+      { what: 'An event', content: body.encryptedDetails, envelopes: body.detailEnvelopes },
+    ], { authorPubkey: pubkey })
+
     // Generate case number if entity type has numbering enabled
     let caseNumber: string | undefined
     try {
@@ -217,6 +223,12 @@ events.patch('/:id',
     const pubkey = c.get('pubkey')
     const services = c.get('services')
     const body = c.req.valid('json')
+
+    // New details are sealed under a new key, so only the envelopes that arrive
+    // with them can open them; a bare envelope swap can drop the admin.
+    await assertSealedTiersReadable(services, c.env, pathHubId(c), [
+      { what: 'An event', content: body.encryptedDetails, envelopes: body.detailEnvelopes },
+    ], { eventId: id, authorPubkey: pubkey })
 
     const updated = await services.cases.updateEvent(id, body)
 

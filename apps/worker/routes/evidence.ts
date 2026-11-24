@@ -20,6 +20,7 @@ import {
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import { ServiceError } from '../services/service-error'
+import { assertSealedTiersReadable } from '../lib/admin-envelopes'
 
 const evidence = new Hono<AppEnv>()
 
@@ -155,6 +156,10 @@ evidence.post('/records/:id/evidence',
     const pubkey = c.get('pubkey')
     const services = c.get('services')
     const body = c.req.valid('json')
+
+    await assertSealedTiersReadable(services, c.env, hubIdOf(c), [
+      { what: 'An evidence description', content: body.encryptedDescription, envelopes: body.descriptionEnvelopes },
+    ], { caseId, authorPubkey: pubkey })
 
     // The entry describes a file, so the file must exist: a completed upload
     // made TO this case record, in this hub (#2462). An entry naming a file

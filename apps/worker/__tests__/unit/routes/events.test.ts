@@ -10,11 +10,17 @@ import type { AppEnv } from '@worker/types'
 import eventsRouter from '@worker/routes/events'
 import { ServiceError } from '@worker/services/service-error'
 import { settingsDomainMock } from '../../helpers/settings-domain-mock'
+import { serviceErrorHandler } from '../../helpers/service-error-handler'
 
 // Mock event publish — it's fire-and-forget and shouldn't affect route behavior
 vi.mock('@worker/lib/ws-events', () => ({
   publishEvent: vi.fn(),
 }))
+
+// The one admin recipient of the hub: a write must seal to it (#2174).
+const ADMIN = 'ad'.repeat(32)
+const NON_ADMIN = 'ee'.repeat(32)
+const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-key-hex' })
 
 // ---------------------------------------------------------------------------
 // Test app factory
@@ -52,12 +58,15 @@ function makeApp(opts: {
     listEventReports: vi.fn().mockResolvedValue([]),
   }
 
+  const mockIdentity = { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([ADMIN]) }
+
   const mockSettings = {
     getEntityTypeById: vi.fn().mockRejectedValue(new Error('Not found')),
     generateCaseNumber: vi.fn().mockResolvedValue({ number: 'CASE-001' }),
   }
 
   const app = new Hono<AppEnv>()
+  app.onError(serviceErrorHandler)
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
@@ -65,6 +74,7 @@ function makeApp(opts: {
     c.set('services', {
       audit: { log: auditLog },
       cases: mockCases,
+      identity: mockIdentity,
       ...settingsDomainMock(mockSettings),
       ...(services as Record<string, unknown>),
     } as unknown as AppEnv['Variables']['services'])
@@ -74,7 +84,7 @@ function makeApp(opts: {
   })
   app.route('/', eventsRouter)
 
-  return { app, mockCases, mockSettings, auditLog }
+  return { app, mockCases, mockSettings, mockIdentity, auditLog }
 }
 
 const baseEvent = {
@@ -157,11 +167,7 @@ describe('POST /events', () => {
     eventTypeHash: 'type-hash-abc',
     statusHash: 'status-hash-abc',
     encryptedDetails: 'encrypted-payload',
-    detailEnvelopes: [{
-      pubkey: 'a'.repeat(64),
-      enc: 'b'.repeat(64),
-      ct: 'wrapped-key-hex',
-    }],
+    detailEnvelopes: [envelopeTo(ADMIN)],
   }
 
   it('creates event and returns 201', async () => {
@@ -227,6 +233,49 @@ describe('POST /events', () => {
     )
   })
 
+  it('accepts details sealed to an admin alongside other readers', async () => {
+    const { app, mockCases, mockIdentity } = makeApp({ permissions: ['events:create'] })
+    mockCases.createEvent.mockResolvedValue(baseEvent)
+
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...validBody, detailEnvelopes: [envelopeTo(NON_ADMIN), envelopeTo(ADMIN)] }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(mockIdentity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
+  })
+
+  it('REFUSES (422) details no admin can open, and stores and numbers nothing (#2174)', async () => {
+    const { app, mockCases, mockSettings } = makeApp({ permissions: ['events:create'] })
+    mockSettings.getEntityTypeById.mockResolvedValue({ numberingEnabled: true, numberPrefix: 'EVT' })
+
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...validBody, detailEnvelopes: [envelopeTo(NON_ADMIN)] }),
+    })
+
+    expect(res.status).toBe(422)
+    expect(mockCases.createEvent).not.toHaveBeenCalled()
+    expect(mockSettings.generateCaseNumber).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (503) when the hub has no admin recipient at all', async () => {
+    const { app, mockCases, mockIdentity } = makeApp({ permissions: ['events:create'] })
+    mockIdentity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
+
+    const res = await app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+
+    expect(res.status).toBe(503)
+    expect(mockCases.createEvent).not.toHaveBeenCalled()
+  })
+
   it('returns 403 without events:create', async () => {
     const { app } = makeApp({ permissions: ['events:read'] })
 
@@ -271,6 +320,60 @@ describe('PATCH /events/:id', () => {
     expect(res.status).toBe(200)
     expect(mockCases.updateEvent).toHaveBeenCalledWith('ev-1', expect.any(Object))
     expect(auditLog).toHaveBeenCalledOnce()
+  })
+
+  it('accepts new details sealed to an admin', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:update'] })
+    mockCases.updateEvent.mockResolvedValue(baseEvent)
+
+    const res = await app.request('/ev-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ encryptedDetails: 'new', detailEnvelopes: [envelopeTo(ADMIN)] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockCases.updateEvent).toHaveBeenCalledOnce()
+  })
+
+  it('REFUSES (422) new details whose envelopes name no admin (#2174)', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:update'] })
+
+    const res = await app.request('/ev-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ encryptedDetails: 'new', detailEnvelopes: [envelopeTo(NON_ADMIN)] }),
+    })
+
+    expect(res.status).toBe(422)
+    expect(mockCases.updateEvent).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) new details sent without any envelopes — the stored set wraps the old key', async () => {
+    const { app, mockCases } = makeApp({ permissions: ['events:update'] })
+
+    const res = await app.request('/ev-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ encryptedDetails: 'new' }),
+    })
+
+    expect(res.status).toBe(422)
+    expect(mockCases.updateEvent).not.toHaveBeenCalled()
+  })
+
+  it('does not consult the readers for an update that touches no sealed content', async () => {
+    const { app, mockCases, mockIdentity } = makeApp({ permissions: ['events:update'] })
+    mockCases.updateEvent.mockResolvedValue(baseEvent)
+
+    const res = await app.request('/ev-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ statusHash: 'closed' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockIdentity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
   })
 
   it('returns 403 without events:update', async () => {

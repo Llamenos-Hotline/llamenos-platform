@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import evidenceRoutes from '@worker/routes/evidence'
+import { serviceErrorHandler } from '../../helpers/service-error-handler'
 
 // ---------------------------------------------------------------------------
 // Test app factory
@@ -57,6 +58,7 @@ function makeApp(opts: {
   }
 
   const app = new Hono<AppEnv>()
+  app.onError(serviceErrorHandler)
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
@@ -264,6 +266,77 @@ describe('POST /records/:id/evidence', () => {
     })
 
     expect(res.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /records/:id/evidence — the description names an admin reader (#2174)
+// ---------------------------------------------------------------------------
+
+describe('POST /records/:id/evidence — a sealed description an admin can open (#2174)', () => {
+  const ADMIN = 'ad'.repeat(32)
+  const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-key' })
+  const body = {
+    fileId: 'file-123',
+    filename: 'evidence.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 1024,
+    classification: 'photo',
+    integrityHash: 'a'.repeat(64),
+  }
+  const adminApp = () => {
+    const identity = { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([ADMIN]) }
+    const made = makeApp({ permissions: ['evidence:upload'], services: { identity } })
+    made.mockCases.createEvidence.mockResolvedValue({ id: 'ev-1', ...body })
+    return { ...made, identity }
+  }
+  const post = (app: ReturnType<typeof makeApp>['app'], extra: Record<string, unknown>) =>
+    app.request('/records/case-1/evidence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, ...extra }),
+    })
+
+  it('accepts a description sealed to an admin among other readers', async () => {
+    const { app, mockCases, identity } = adminApp()
+    const res = await post(app, {
+      encryptedDescription: 'enc',
+      descriptionEnvelopes: [envelopeTo('ee'.repeat(32)), envelopeTo(ADMIN)],
+    })
+    expect(res.status).toBe(201)
+    expect(mockCases.createEvidence).toHaveBeenCalledOnce()
+    expect(identity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
+  })
+
+  it('REFUSES (422) a description no admin can open, and registers no evidence', async () => {
+    const { app, mockCases, auditLog } = adminApp()
+    const res = await post(app, { encryptedDescription: 'enc', descriptionEnvelopes: [envelopeTo('ee'.repeat(32))] })
+    expect(res.status).toBe(422)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+    expect(auditLog).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a description sent without envelopes', async () => {
+    const { app, mockCases } = adminApp()
+    const res = await post(app, { encryptedDescription: 'enc' })
+    expect(res.status).toBe(422)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (503) when the hub has no admin recipient at all', async () => {
+    const { app, mockCases, identity } = adminApp()
+    identity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
+    const res = await post(app, { encryptedDescription: 'enc', descriptionEnvelopes: [envelopeTo(ADMIN)] })
+    expect(res.status).toBe(503)
+    expect(mockCases.createEvidence).not.toHaveBeenCalled()
+  })
+
+  it('accepts evidence with no description, which has nothing sealed to read', async () => {
+    const { app, mockCases, identity } = adminApp()
+    const res = await post(app, {})
+    expect(res.status).toBe(201)
+    expect(mockCases.createEvidence).toHaveBeenCalledOnce()
+    expect(identity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
   })
 })
 

@@ -93,3 +93,44 @@ export async function assertAdminCanRead(
     )
   }
 }
+
+/**
+ * One independently-sealed piece of a record: its ciphertext and the envelope
+ * set that is the ONLY way to open it. A record can carry several (a case's
+ * summary, fields and PII tiers are each sealed under their own key).
+ */
+export interface SealedTier {
+  /** Names the tier in the error log and the response message, e.g. "A case summary". */
+  what: string
+  /** The ciphertext the envelopes unlock. `undefined` when the request carries none. */
+  content: string | undefined
+  /** The envelope set the request carries for it. `undefined` when it carries none. */
+  envelopes: readonly AddressedEnvelope[] | undefined
+}
+
+/**
+ * {@link assertAdminCanRead} for every tier of a record write.
+ *
+ * A tier is checked when the request touches it: it carries ciphertext, or it
+ * carries an envelope set (a bare re-wrap can drop the admin just as a new
+ * ciphertext without envelopes can leave none). A tier the request does not
+ * mention is left alone — on an update its stored envelopes still wrap the
+ * stored key, so there is nothing to orphan, and on a create an absent optional
+ * tier holds nothing to read. A mandatory tier must therefore be passed with its
+ * content and envelopes both present, which its create schema already requires.
+ *
+ * Every tier is checked, not the first: a record whose summary is readable and
+ * whose PII is not is still half orphaned.
+ */
+export async function assertSealedTiersReadable(
+  services: Parameters<typeof assertAdminCanRead>[0],
+  env: AdminKeyEnv,
+  hubId: string | undefined,
+  tiers: readonly SealedTier[],
+  context: Record<string, unknown> = {},
+): Promise<void> {
+  for (const tier of tiers) {
+    if (tier.content === undefined && tier.envelopes === undefined) continue
+    await assertAdminCanRead(services, env, hubId, tier.envelopes, tier.what, context)
+  }
+}

@@ -9,6 +9,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import recordsRouter from '../../routes/records'
 import { settingsDomainMock } from '../helpers/settings-domain-mock'
+import { serviceErrorHandler } from '../helpers/service-error-handler'
 
 // ---------------------------------------------------------------------------
 // Schema-valid test data helpers
@@ -19,6 +20,8 @@ const HPKE_ENC = 'b'.repeat(64)
 const WRAPPED_CT = 'dGVzdC13cmFwcGVkLWtleQ'
 const TEST_ENVELOPE = { pubkey: HEX64, enc: HPKE_ENC, ct: WRAPPED_CT }
 const VALID_UUID = '00000000-0000-4000-8000-000000000001'
+// The hub's one admin recipient is TEST_ENVELOPE's key; NON_ADMIN_ENVELOPE names no admin (#2174).
+const NON_ADMIN_ENVELOPE = { pubkey: 'e'.repeat(64), enc: HPKE_ENC, ct: WRAPPED_CT }
 
 /** Minimal valid body for createRecordBodySchema */
 const validCreateBody = {
@@ -97,6 +100,7 @@ function makeApp(opts: {
     getRoles: vi.fn().mockResolvedValue({ roles: opts.roles ?? [] }),
   }
   const mockIdentity = {
+    listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([HEX64]),
     getUsers: vi.fn().mockResolvedValue({ users: opts.users ?? [] }),
     // Mirrors IdentityService.resolveDeviceEncryptionPubkeys: users with no
     // registered device key are ABSENT from the map, never mapped to [].
@@ -115,10 +119,13 @@ function makeApp(opts: {
   }
 
   const app = new Hono<AppEnv>()
+  app.onError(serviceErrorHandler)
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('hubId', hubId)
+    // No ADMIN_DECRYPTION_PUBKEY: the admin recipients come from the identity mock.
+    Object.defineProperty(c, 'env', { value: {}, configurable: true })
     c.set('requestId', 'req-test')
     c.set('services', {
       audit: mockAudit,
@@ -447,6 +454,162 @@ describe('POST /records/:id/interactions', () => {
       body: JSON.stringify({ interactionType: 'note', sourceId: 'n1', interactionTypeHash: 'h1' }),
     })
     expect(res.status).toBe(403)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The never-orphaned guard on every sealed tier (#2174)
+// ---------------------------------------------------------------------------
+
+describe('POST /records — every sealed tier names an admin reader (#2174)', () => {
+  const post = (app: ReturnType<typeof makeApp>['app'], body: Record<string, unknown>) =>
+    app.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('accepts a summary, fields and PII tier each sealed to an admin among other readers', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, {
+      ...validCreateBody,
+      summaryEnvelopes: [NON_ADMIN_ENVELOPE, TEST_ENVELOPE],
+      encryptedFields: 'enc-fields',
+      fieldEnvelopes: [TEST_ENVELOPE],
+      encryptedPII: 'enc-pii',
+      piiEnvelopes: [TEST_ENVELOPE],
+    })
+    expect(res.status).toBe(201)
+    expect(mockCases.create).toHaveBeenCalledOnce()
+  })
+
+  it('REFUSES (422) a summary no admin can open, and neither numbers nor stores the case', async () => {
+    const { app, mockCases, mockSettings } = makeApp()
+    mockSettings.getEntityTypeById.mockResolvedValue({ id: 'et-1', numberingEnabled: true, numberPrefix: 'C' })
+    const res = await post(app, { ...validCreateBody, summaryEnvelopes: [NON_ADMIN_ENVELOPE] })
+    expect(res.status).toBe(422)
+    expect(mockCases.create).not.toHaveBeenCalled()
+    expect(mockSettings.generateCaseNumber).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a readable summary beside a fields tier no admin can open', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, {
+      ...validCreateBody,
+      encryptedFields: 'enc-fields',
+      fieldEnvelopes: [NON_ADMIN_ENVELOPE],
+    })
+    expect(res.status).toBe(422)
+    expect(mockCases.create).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a PII tier sent without any envelope', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, { ...validCreateBody, encryptedPII: 'enc-pii' })
+    expect(res.status).toBe(422)
+    expect(mockCases.create).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (503) when the hub has no admin recipient at all', async () => {
+    const { app, mockCases, mockIdentity } = makeApp()
+    mockIdentity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
+    const res = await post(app, validCreateBody)
+    expect(res.status).toBe(503)
+    expect(mockCases.create).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /records/:id — every sealed tier it touches names an admin reader (#2174)', () => {
+  const patch = (app: ReturnType<typeof makeApp>['app'], body: Record<string, unknown>) =>
+    app.request('/rec-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('accepts a re-sealed fields tier that names an admin', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await patch(app, { encryptedFields: 'new', fieldEnvelopes: [TEST_ENVELOPE] })
+    expect(res.status).toBe(200)
+    expect(mockCases.update).toHaveBeenCalledOnce()
+  })
+
+  it('REFUSES (422) a re-sealed fields tier no admin can open', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await patch(app, { encryptedFields: 'new', fieldEnvelopes: [NON_ADMIN_ENVELOPE] })
+    expect(res.status).toBe(422)
+    expect(mockCases.update).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) new ciphertext sent without envelopes — the stored set wraps the old key', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await patch(app, { encryptedSummary: 'new' })
+    expect(res.status).toBe(422)
+    expect(mockCases.update).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a bare envelope swap that drops the admin', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await patch(app, { piiEnvelopes: [NON_ADMIN_ENVELOPE] })
+    expect(res.status).toBe(422)
+    expect(mockCases.update).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a status-change comment no admin can open', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await patch(app, {
+      statusHash: 'closed',
+      statusChangeContent: 'why',
+      statusChangeEnvelopes: [NON_ADMIN_ENVELOPE],
+    })
+    expect(res.status).toBe(422)
+    expect(mockCases.update).not.toHaveBeenCalled()
+  })
+
+  it('does not consult the readers for an update that seals nothing', async () => {
+    const { app, mockCases, mockIdentity } = makeApp()
+    const res = await patch(app, { statusHash: 'closed-hash' })
+    expect(res.status).toBe(200)
+    expect(mockCases.update).toHaveBeenCalledOnce()
+    expect(mockIdentity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /records/:id/interactions — an inline comment names an admin reader (#2174)', () => {
+  const post = (app: ReturnType<typeof makeApp>['app'], body: Record<string, unknown>) =>
+    app.request('/rec-1/interactions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const comment = { interactionType: 'comment', interactionTypeHash: 'h1', encryptedContent: 'enc-comment' }
+
+  it('accepts a comment sealed to an admin', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, { ...comment, contentEnvelopes: [NON_ADMIN_ENVELOPE, TEST_ENVELOPE] })
+    expect(res.status).toBe(201)
+    expect(mockCases.createInteraction).toHaveBeenCalledOnce()
+  })
+
+  it('REFUSES (422) a comment no admin can open', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, { ...comment, contentEnvelopes: [NON_ADMIN_ENVELOPE] })
+    expect(res.status).toBe(422)
+    expect(mockCases.createInteraction).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a comment sent without envelopes', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, comment)
+    expect(res.status).toBe(422)
+    expect(mockCases.createInteraction).not.toHaveBeenCalled()
+  })
+
+  it('accepts a linked interaction, which carries no sealed content of its own', async () => {
+    const { app, mockCases } = makeApp()
+    const res = await post(app, { interactionType: 'note', sourceId: 'n1', interactionTypeHash: 'h1' })
+    expect(res.status).toBe(201)
+    expect(mockCases.createInteraction).toHaveBeenCalledOnce()
   })
 })
 

@@ -32,6 +32,7 @@ import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { ServiceError } from '../services/service-error'
+import { assertSealedTiersReadable, type SealedTier } from '../lib/admin-envelopes'
 import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import {
   mergeContactsBodySchema,
@@ -49,6 +50,30 @@ import {
 const contactCaseListResponseSchema = z.object({
   cases: z.array(contactCaseLinkSchema),
 })
+
+/**
+ * The sealed tiers a contact write carries: the summary and the PII are opened
+ * only by their own envelope sets, so each must name an admin (#2174).
+ */
+function contactTiers(body: {
+  encryptedSummary?: string
+  summaryEnvelopes?: SealedTier['envelopes']
+  encryptedPII?: string
+  piiEnvelopes?: SealedTier['envelopes']
+}): SealedTier[] {
+  return [
+    { what: 'A contact summary', content: body.encryptedSummary, envelopes: body.summaryEnvelopes },
+    { what: 'A contact PII tier', content: body.encryptedPII, envelopes: body.piiEnvelopes },
+  ]
+}
+
+/**
+ * The bulk-create and merge bodies name an envelope's recipient `recipientPubkey`;
+ * the guard reads `pubkey`.
+ */
+function addressed(envelopes: readonly { recipientPubkey: string }[]): SealedTier['envelopes'] {
+  return envelopes.map(e => ({ pubkey: e.recipientPubkey }))
+}
 
 const contactsV2 = new Hono<AppEnv>()
 
@@ -206,9 +231,12 @@ contactsV2.post('/',
     const services = c.get('services')
     const body = c.req.valid('json')
 
+    const hubId = c.get('hubId') ?? body.hubId
+    await assertSealedTiersReadable(services, c.env, hubId, contactTiers(body), { authorPubkey: c.get('pubkey') })
+
     const contact = await services.contacts.create({
       ...body,
-      hubId: c.get('hubId') ?? body.hubId,
+      hubId,
     })
 
     await audit(services.audit, 'contactCreated', c.get('pubkey'), { contactId: contact.id }, undefined, c.get('hubId') ?? null)
@@ -262,6 +290,10 @@ contactsV2.post('/groups',
     const hubId = c.get('hubId') ?? ''
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+
+    await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
+      { what: 'An affinity group', content: body.encryptedDetails, envelopes: body.detailEnvelopes },
+    ], { authorPubkey: pubkey })
 
     const group = await services.contacts.createGroup(hubId, pubkey, body)
 
@@ -320,6 +352,11 @@ contactsV2.patch('/groups/:groupId',
     const groupId = c.req.param('groupId')
     const services = c.get('services')
     const body = c.req.valid('json')
+
+    const existing = await services.contacts.getGroup(groupId)
+    await assertSealedTiersReadable(services, c.env, existing.hubId, [
+      { what: 'An affinity group', content: body.encryptedDetails, envelopes: body.detailEnvelopes },
+    ], { groupId, authorPubkey: c.get('pubkey') })
 
     const updated = await services.contacts.updateGroup(groupId, body)
     if (!updated) return c.json({ error: 'Group not found' }, 404)
@@ -462,6 +499,11 @@ contactsV2.patch('/:id',
     const services = c.get('services')
     const body = c.req.valid('json')
 
+    // New content is sealed under a new key, so only the envelopes that arrive
+    // with it can open it; a bare envelope swap can drop the admin.
+    const existing = await services.contacts.get(id)
+    await assertSealedTiersReadable(services, c.env, existing.hubId, contactTiers(body), { contactId: id, authorPubkey: c.get('pubkey') })
+
     const updated = await services.contacts.update(id, body)
     if (!updated) return c.json({ error: 'Contact not found' }, 404)
 
@@ -519,6 +561,10 @@ contactsV2.post('/:id/relationships',
     const hubId = c.get('hubId') ?? ''
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
+
+    await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
+      { what: 'A relationship note', content: body.encryptedNotes, envelopes: body.notesEnvelopes },
+    ], { contactId: contactIdA, authorPubkey: pubkey })
 
     const relationship = await services.contacts.createRelationship(
       contactIdA,
@@ -679,6 +725,12 @@ contactsV2.post('/merge',
     const hubId = c.get('hubId') ?? ''
     const body = c.req.valid('json')
 
+    // The merged summary is a new ciphertext under a new key: only the envelopes
+    // sent with it can open it.
+    await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
+      { what: 'A merged contact summary', content: body.mergedEncryptedSummary, envelopes: addressed(body.mergedSummaryEnvelopes) },
+    ], { primaryId: body.primaryId, secondaryId: body.secondaryId, authorPubkey: c.get('pubkey') })
+
     const result = await services.contacts.mergeContacts(hubId, body)
 
     await audit(services.audit, 'contactMerged', c.get('pubkey') ?? '', {
@@ -738,6 +790,14 @@ contactsV2.post('/bulk-create',
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
     const { contacts: batch } = c.req.valid('json')
+
+    // Every contact in the batch is sealed on its own, so every one is checked;
+    // one orphaned contact refuses the whole batch rather than being skipped.
+    for (const [index, contact] of batch.entries()) {
+      await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
+        { what: `Contact ${index + 1} of the batch`, content: contact.encryptedSummary, envelopes: addressed(contact.summaryEnvelopes) },
+      ], { authorPubkey: c.get('pubkey') })
+    }
 
     const result = await services.contacts.bulkCreate(hubId, batch)
 
