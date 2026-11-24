@@ -65,11 +65,20 @@ import { LEDGER_FILE } from './paths.js'
  * label accompanies it. The wedge is re-derived from the worktree on every
  * pass, so it ends the moment the worktree does — a row or label that
  * outlived it would be a stale cache of a live fact.
+ *
+ * MISROUTED (#1764, #2979) names an item sent to a lane that cannot author it:
+ * the lane owns none of the paths the issue cites (checked BEFORE a worker is
+ * launched — `routeForDispatch`, route.ts), or a worker reported BLOCKED on
+ * paths only another lane's own PR may write (`routeBlocked`). Its `note`
+ * names the lane, the paths and where the item was re-routed. It is a routing
+ * fact, not evidence the item is hard: absent from `TERMINAL_FAILURES` below
+ * and from `circuit.ts`'s streak, and it attaches no `needs-human` — the item
+ * is re-labelled to the lane that owns it instead of being parked.
  */
 export type Outcome =
   | 'DISPATCHED' | 'SUCCESS' | 'FAILED' | 'BLOCKED'
   | 'TIMEOUT' | 'SHADOW' | 'REJECTED' | 'QUOTA' | 'UNVERIFIED'
-  | 'WEDGED'
+  | 'WEDGED' | 'MISROUTED'
 
 export interface RunRecord {
   ts: number
@@ -178,14 +187,28 @@ export function since(windowMs: number, now = Date.now()): RunRecord[] {
 // for good, long after the worktree was gone. A wedge is a live fact tick.ts
 // re-derives and skips on every pass without recording an attempt, so there
 // is nothing for the budget to bound.
+//
+// MISROUTED is excluded too (#1764): a lane that owns none of an item's files
+// failing at it is not evidence the item is hard.
 const TERMINAL_FAILURES: ReadonlySet<Outcome> = new Set<Outcome>(['FAILED', 'TIMEOUT', 'REJECTED'])
 
-/** Counts backward from the newest record for this item and stops at a SUCCESS. */
-export function failedAttemptsIn(rows: RunRecord[], itemId: string): number {
+/**
+ * Counts backward from the newest record for this item and stops at a SUCCESS.
+ *
+ * With `laneId`, only attempts made BY that lane count (#1764). The budget
+ * bounds how often one lane may fail at one item; attempts a different lane
+ * made — before the item was re-routed, by MISROUTED or by a person changing
+ * its `lane:` label — say nothing about whether the lane that owns the files
+ * can do it. Without this, an item that exhausted its budget in the wrong lane
+ * arrived at the right one already parked, which is the permanence #1764
+ * measured. A SUCCESS by any lane still resets the count.
+ */
+export function failedAttemptsIn(rows: RunRecord[], itemId: string, laneId?: string): number {
   const mine = rows.filter((r) => r.itemId === itemId).sort((a, b) => b.ts - a.ts)
   let n = 0
   for (const r of mine) {
     if (r.outcome === 'SUCCESS') break
+    if (laneId !== undefined && r.lane !== laneId) continue
     if (TERMINAL_FAILURES.has(r.outcome)) n++
   }
   return n

@@ -26,6 +26,21 @@ export type Rejection =
    * not a label (`needs-human` would outlive the worktree that justified it).
    */
   | 'wedged'
+  /**
+   * #1764: like `wedged`, applied by `tick.ts` just before dispatch and never
+   * by `judge()`. The lane about to receive the item owns none of the paths
+   * the issue cites (`routeForDispatch`, route.ts), so no worker is launched,
+   * no attempt is spent, and the item is re-labelled to the lane that owns
+   * them.
+   */
+  | 'misrouted'
+  /**
+   * #2623: the item carries the require label but NO `lane:` label, so every
+   * lane rejected it as `other-lane` — the correct per-lane answer and the
+   * wrong global one. Produced by `tick.ts` from the aggregate, never by
+   * `judge()`, so "claimable by no lane" is said out loud.
+   */
+  | 'unrouted'
 
 export type Verdict = { ok: true } | { ok: false; reason: Rejection }
 

@@ -28,6 +28,10 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     // interferes with a test that isn't about it.
     findOpenPr: async () => undefined,
     findWedge: async () => undefined,
+    // No tree by default: routing (#1764) is skipped, so a test that is not
+    // about it sees the dispatch behaviour from before routing existed.
+    readTree: async () => undefined,
+    relabelLane: vi.fn(async () => {}),
     // Default dispatch resolves SUCCESS but WITHOUT pr/branch/worktree, so it
     // never falls into the verify/review pipeline unless a test opts
     // in explicitly by overriding dispatch (or the pipeline deps below).

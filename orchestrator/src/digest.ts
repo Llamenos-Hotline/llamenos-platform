@@ -59,6 +59,11 @@ const REJECTION_SPECIFICITY: Record<Rejection, number> = {
   'pr-already-open': 5,
   // Also a live fact (a salvage worktree exists right now), same tier as an open PR.
   'wedged': 5,
+  // Routing findings (#1764, #2623): computed from the item's cited paths and
+  // the lane table at dispatch time — more specific than any label verdict,
+  // and the reason the item will move rather than sit.
+  'misrouted': 5,
+  'unrouted': 5,
 }
 
 function specificityRank(reason: Rejection): number {

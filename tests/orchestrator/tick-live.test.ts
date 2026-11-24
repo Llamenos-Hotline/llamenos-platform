@@ -35,6 +35,10 @@ function baseDeps(over: Partial<TickDeps> = {}): TickDeps {
     readLabels: async () => ['agent-dispatchable', 'lane:ios'],
     findOpenPr: async () => undefined,
     findWedge: async () => undefined,
+    // No tree by default: routing (#1764) is skipped, so a test that is not
+    // about it sees the dispatch behaviour from before routing existed.
+    readTree: async () => undefined,
+    relabelLane: vi.fn(async () => {}),
     dispatch: vi.fn(async (): Promise<DispatchOutcome> =>
       ({ outcome: 'SUCCESS', branch: 'fleet/ios/1', pr: '42', worktree: '/wt/ios-1' })),
     verifyMechanical: vi.fn(async () => passingVerify),
