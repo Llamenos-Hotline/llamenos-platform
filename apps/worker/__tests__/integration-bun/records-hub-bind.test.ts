@@ -54,6 +54,8 @@ import { requireDatabaseUrl } from '../helpers/database-url'
 const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
+/** The X25519 device key the stubbed hub admin recipient set names. */
+const ADMIN_DEVICE_KEY = 'd5'.repeat(32)
 const settings = createSettingsDomain(db)
 const svc = {
   ...settings,
@@ -62,7 +64,13 @@ const svc = {
   // The auto-assign branch reads these; the entity types seeded here have
   // autoAssign off, so they are never reached.
   shifts: { getCurrentVolunteers: async () => [] as string[] },
-  identity: { getUsers: async () => ({ users: [] }) },
+  // These cases are about hub binding, not readers: the hub's one admin recipient
+  // is a fixed device key, which `createBody` seals to (#2174). The guard itself
+  // runs against the real reader sets in sealed-write-readers.test.ts.
+  identity: {
+    getUsers: async () => ({ users: [] }),
+    listAdminEnvelopeRecipients: async () => [ADMIN_DEVICE_KEY],
+  },
 }
 
 const ALL_ROLES: Role[] = DEFAULT_ROLES.map(r => ({
@@ -156,7 +164,7 @@ const createBody = (entityTypeId: string, extra: Record<string, unknown> = {}) =
   entityTypeId,
   statusHash: 'open',
   encryptedSummary: 'ciphertext',
-  summaryEnvelopes: envelopes(ADMIN_A.pubkey),
+  summaryEnvelopes: envelopes(ADMIN_DEVICE_KEY),
   ...extra,
 })
 
