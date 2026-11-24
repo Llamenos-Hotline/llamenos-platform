@@ -148,8 +148,7 @@ For each epic, verify:
 - [ ] Crypto changes have interop tests (Rust ↔ TS, Rust ↔ Swift, Rust ↔ Kotlin)
 - [ ] No raw string literals used for crypto contexts (use `crypto-labels.json`)
 - [ ] `bun run test:changed` passes for all affected platforms
-- [ ] NEXT_BACKLOG.md updated with findings and epic references
-- [ ] COMPLETED_BACKLOG.md updated after implementation
+- [ ] Each finding is filed as an issue and attached as a sub-issue of the relevant epic (planning index #2988)
 
 ## Step 6: Audit Report Documentation
 

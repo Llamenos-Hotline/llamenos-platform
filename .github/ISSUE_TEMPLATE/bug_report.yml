@@ -30,3 +30,10 @@ body:
     attributes:
       label: Environment
       description: OS version, app version, Rust/Bun/Xcode versions if relevant.
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent epic (optional)
+      description: Issue number of the epic this belongs to, if you know it (see planning index #2988). A maintainer attaches the issue as a sub-issue; you don't need to.
+      placeholder: "#2976"

@@ -1,5 +1,7 @@
 # Completed Backlog
 
+> History only. New work is tracked in GitHub epics (planning index #2988).
+
 ## 2026-03-14: Case Management System (Epics 315-332)
 
 ### Architecture

@@ -1,7 +1,9 @@
 # Crypto Protocol Alignment: Ed25519/X25519 + HPKE + MLS
 
 **Date**: 2026-04-27
-**Status**: Draft
+**Status**: Draft — partly superseded (see below)
+
+> **Superseded in part (2026-11-24, part of #2973):** MLS (§8–§9) is retired in favour of the reader-group model (#2961). SFrame (§10) is planned for app-to-app calls only, keyed per call; it is not implemented in any client. Hotline calls are hop-by-hop DTLS-SRTP, so the SFrame-over-SRTP/DTLS decision (§8 of the rationale) applies to app-to-app calls only. Sections below are kept as the original design record.
 **Priority**: Critical — foundational crypto architecture for all platforms
 
 ---

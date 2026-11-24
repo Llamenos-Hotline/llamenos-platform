@@ -350,7 +350,9 @@ Clients receive the server event key (current + previous epoch) via `GET /api/au
 
 ### Voice E2EE (SFrame)
 
-For encrypted voice channels:
+> **Status (planned, not shipped):** No client encrypts SFrame frames today. SFrame is planned for **app-to-app calls only** (volunteer↔volunteer, volunteer↔admin), keyed **per call** with a call key sealed to the participants' per-hub user groups (#2961). **Hotline calls are hop-by-hop DTLS-SRTP**, because the PBX has to decrypt to transcode, mix, handle DTMF and take voicemail. The MLS-exporter and hub-PTK key sources described below are being replaced by "open the sealed call key". Part of #2973.
+
+The current key schedule in `packages/crypto/src/sframe.rs`:
 
 1. Derive call secret from MLS exporter or hub PTK (label: `LABEL_SFRAME_CALL_SECRET`)
 2. Derive SFrame base key (label: `LABEL_SFRAME_BASE_KEY`)
@@ -360,7 +362,9 @@ For encrypted voice channels:
 
 ---
 
-## MLS (RFC 9420)
+## MLS (RFC 9420) — retired
+
+> **Status:** MLS is retired in favour of the reader-group model (#2961), and its code is to be removed (part of #2973). The text below describes what exists in the crate today, not the target design.
 
 MLS group management is compiled unconditionally using OpenMLS 0.8. The `mls` feature flag was removed — MLS is always available.
 
