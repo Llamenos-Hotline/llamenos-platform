@@ -27,7 +27,7 @@
  */
 
 /** Container version this build reads and writes. Must match Rust's `BACKUP_FORMAT_VERSION`. */
-export const BACKUP_FORMAT_VERSION = 4
+export const BACKUP_FORMAT_VERSION = 5
 
 /** PIN-protected block: Argon2id over the credential, AES-256-GCM. */
 interface PinBlock {
@@ -52,8 +52,8 @@ export interface BackupFile {
   v: typeof BACKUP_FORMAT_VERSION
   id: string // first 6 hex chars of SHA-256(signing pubkey hex) — identification only
   t: number // unix seconds, rounded to the nearest hour
-  d: PinBlock // PIN-protected copy of the signing seed
-  r: RecoveryBlock // recovery-key-protected copy of the signing seed
+  d: PinBlock // PIN-protected copy of both device seeds (signing || encryption)
+  r: RecoveryBlock // recovery-key-protected copy of both device seeds
 }
 
 function isHex(value: unknown): value is string {
@@ -78,9 +78,10 @@ function isRecoveryBlock(block: unknown): block is RecoveryBlock {
  *
  * Shape and version are validated here so a wrong or truncated file is rejected
  * before a credential is asked for; the credential itself is checked in Rust.
- * Returns null for anything that is not a v4 backup — including the v1 and v3
- * files older builds could produce, which are not readable by any build (see
- * `packages/crypto/src/backup.rs`, "Compatibility").
+ * Returns null for anything that is not a v5 backup — including the v1, v3 and
+ * v4 files older builds could produce. v1/v3 were never readable; v4 held only
+ * the signing seed, so restoring it would invent a different decryption key
+ * (#2140). See `packages/crypto/src/backup.rs`, "Compatibility".
  */
 export async function readBackupFile(file: File): Promise<BackupFile | null> {
   try {

@@ -1440,8 +1440,9 @@ pub fn generate_recovery_key() -> String {
 
 /// Generate an encrypted backup of the loaded device key.
 ///
-/// Both credentials protect the same 32-byte signing seed: the PIN (Argon2id)
-/// and the recovery key (HKDF-SHA256). Format, KDFs and rationale live in
+/// Both credentials protect the same plaintext — both device seeds, so a
+/// restore yields the same X25519 key (#2140): the PIN (Argon2id) and the
+/// recovery key (HKDF-SHA256). Format, KDFs and rationale live in
 /// `packages/crypto/src/backup.rs` — this command only plumbs CryptoState into
 /// it so the seed never crosses the IPC boundary.
 #[tauri::command]
@@ -1450,16 +1451,8 @@ pub fn generate_backup_from_state(
     pin: String,
     recovery_key: String,
 ) -> Result<String, String> {
-    let ds = state.get_device_state()?;
     let file = state.with_secrets(|secrets| {
-        backup::create_backup(
-            &secrets.signing_seed,
-            &ds.signing_pubkey_hex,
-            &pin,
-            &recovery_key,
-            unix_now_seconds(),
-        )
-        .map_err(err_str)
+        backup::create_backup(secrets, &pin, &recovery_key, unix_now_seconds()).map_err(err_str)
     })?;
     serde_json::to_string(&file).map_err(err_str)
 }
@@ -1483,8 +1476,9 @@ pub fn backup_verify_credential(
 
 /// Restore a device key from a backup file and load it into CryptoState.
 ///
-/// The recovered signing seed goes straight from the backup into
-/// `CryptoState` — it is never returned to the webview. The returned blob is
+/// The recovered seeds — signing AND encryption, exactly as they were before the
+/// backup (#2140) — go straight from the backup into `CryptoState`; they are
+/// never returned to the webview. The returned blob is
 /// the device key re-encrypted under `new_pin`, for the caller to persist in
 /// the vault exactly as `device_import_and_load` does.
 #[tauri::command]
@@ -1497,13 +1491,8 @@ pub fn restore_backup_and_load(
     device_id: String,
 ) -> Result<serde_json::Value, String> {
     let file: backup::BackupFile = serde_json::from_str(&backup_json).map_err(err_str)?;
-    let signing_seed = backup::open_backup(&file, backup_credential(&credential, is_recovery_key))
+    let secrets = backup::open_backup(&file, backup_credential(&credential, is_recovery_key))
         .map_err(err_str)?;
-
-    let secrets = device_keys::DeviceSecrets {
-        signing_seed: *signing_seed,
-        encryption_seed: derive_encryption_seed_from_signing(&signing_seed),
-    };
     let device_state = device_keys::DeviceKeyState {
         device_id,
         signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),

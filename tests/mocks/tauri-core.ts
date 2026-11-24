@@ -266,8 +266,10 @@ const ARGON2_M_COST_KIB = 4_096   // 4 MiB (production Rust uses 65_536)
 const ARGON2_T_COST = 3
 const ARGON2_P_COST = 4
 
-// ── Backup container (v4) — mirrors packages/crypto/src/backup.rs ───
-const BACKUP_FORMAT_VERSION = 4
+// ── Backup container (v5) — mirrors packages/crypto/src/backup.rs ───
+// Plaintext is signing_seed || encryption_seed: restore must yield the SAME
+// X25519 key the device had, never one re-derived from the signing seed (#2140).
+const BACKUP_FORMAT_VERSION = 5
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 
 /** Base32-encode (RFC 4648, no padding) and group into dash-separated quads. */
@@ -298,10 +300,10 @@ function deriveRecoveryKek(recoveryKey: string, salt: Uint8Array): Uint8Array {
     utf8ToBytes(LABEL_BACKUP_HKDF_INFO), 32)
 }
 
-/** Open a v4 backup with either credential, returning the 32-byte signing seed. */
+/** Open a v5 backup with either credential, returning both device seeds. */
 async function openMockBackup(
   backupJson: string, credential: string, isRecoveryKey: boolean,
-): Promise<Uint8Array> {
+): Promise<{ signingSeed: Uint8Array; encryptionSeed: Uint8Array }> {
   const file = JSON.parse(backupJson)
   if (file.v !== BACKUP_FORMAT_VERSION) {
     throw new Error(`Unsupported backup version ${file.v} (this build reads v${BACKUP_FORMAT_VERSION})`)
@@ -317,8 +319,8 @@ async function openMockBackup(
   } catch {
     throw new Error('Decryption failed: authentication tag mismatch')
   }
-  if (seed.length !== 32) throw new Error('Backup payload must be a 32-byte signing seed')
-  return seed
+  if (seed.length !== 64) throw new Error('Backup payload must be 64 bytes of device seeds')
+  return { signingSeed: seed.slice(0, 32), encryptionSeed: seed.slice(32) }
 }
 
 async function deriveKek(pin: string, salt: Uint8Array): Promise<Uint8Array> {
@@ -969,7 +971,7 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     return result
   },
 
-  // --- Backup generation / restore (v4 container) ---
+  // --- Backup generation / restore (v5 container) ---
   //
   // These honour their arguments and really encrypt, so an E2E can round-trip a
   // backup and a wrong credential is actually rejected. The container shape
@@ -990,15 +992,19 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     if (!pin) throw new Error('PIN is empty')
     if (!normalizeRecoveryKey(recoveryKey)) throw new Error('Recovery key is empty after normalization')
 
+    const seeds = new Uint8Array(64)
+    seeds.set(secrets.signingSeed, 0)
+    seeds.set(secrets.encryptionSeed, 32)
+
     const pinSalt = randomBytes(32)
     const pinNonce = randomBytes(12)
     const pinCt = gcm(await deriveKek(pin, pinSalt), pinNonce, utf8ToBytes(LABEL_BACKUP))
-      .encrypt(secrets.signingSeed)
+      .encrypt(seeds)
 
     const rSalt = randomBytes(32)
     const rNonce = randomBytes(12)
     const rCt = gcm(deriveRecoveryKek(recoveryKey, rSalt), rNonce, utf8ToBytes(LABEL_BACKUP_HKDF_INFO))
-      .encrypt(secrets.signingSeed)
+      .encrypt(seeds)
 
     return JSON.stringify({
       v: BACKUP_FORMAT_VERSION,
@@ -1044,11 +1050,9 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
   },
 
   restore_backup_and_load: async (a) => {
-    const signingSeed = await openMockBackup(
+    const { signingSeed, encryptionSeed } = await openMockBackup(
       a.backupJson as string, a.credential as string, a.isRecoveryKey as boolean,
     )
-    const encryptionSeed = hkdf(sha256, signingSeed, new Uint8Array(0),
-      utf8ToBytes(LABEL_DEVICE_ENCRYPTION_SEED), 32)
 
     const state: MockDeviceKeyState = {
       deviceId: a.deviceId as string,
