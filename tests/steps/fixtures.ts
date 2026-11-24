@@ -60,6 +60,8 @@ export type BackupWorld = {
   pin: string
   /** Signing pubkey of the device key the backup was made from. */
   pubkeyHex: string
+  /** X25519 pubkey of that device key — what everything sealed to it was sealed to (#2140). */
+  encryptionPubkeyHex: string
   /** Path of the backup file on disk, for the file input. */
   filePath: string
 }
@@ -381,7 +383,7 @@ export const test = base.extend<
     })
   },
   backupWorld: async ({}, use) => {
-    await use({ recoveryKey: '', pin: '', pubkeyHex: '', filePath: '' })
+    await use({ recoveryKey: '', pin: '', pubkeyHex: '', encryptionPubkeyHex: '', filePath: '' })
   },
   conversationWorld: async ({}, use) => {
     await use({})

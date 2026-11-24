@@ -43,11 +43,18 @@ Given('I have downloaded an encrypted backup of my device key', async ({ page, b
       generateKeypairAndLoad(pin: string): Promise<{ publicKey: string }>
       generateRecoveryKey(): Promise<string>
       generateBackupFromState(pin: string, recoveryKey: string): Promise<string>
+      getDevicePubkeys(): Promise<{ encryptionPubkeyHex: string } | null>
     }
     const generated = await platform.generateKeypairAndLoad(pin)
+    const device = await platform.getDevicePubkeys()
     const recoveryKey = await platform.generateRecoveryKey()
     const backupJson = await platform.generateBackupFromState(pin, recoveryKey)
-    return { recoveryKey, backupJson, pubkeyHex: generated.publicKey }
+    return {
+      recoveryKey,
+      backupJson,
+      pubkeyHex: generated.publicKey,
+      encryptionPubkeyHex: device?.encryptionPubkeyHex ?? '',
+    }
   }, BACKUP_PIN)
 
   // The displayed key must be base32 with dashes — the shape a user retypes.
@@ -56,6 +63,8 @@ Given('I have downloaded an encrypted backup of my device key', async ({ page, b
   backupWorld.recoveryKey = written.recoveryKey
   backupWorld.pin = BACKUP_PIN
   backupWorld.pubkeyHex = written.pubkeyHex
+  expect(written.encryptionPubkeyHex).toMatch(/^[0-9a-f]{64}$/)
+  backupWorld.encryptionPubkeyHex = written.encryptionPubkeyHex
   backupWorld.filePath = writeTempBackup('backup-roundtrip.json', written.backupJson)
 
   // Start the restore from a clean slate: a stored key would show PIN entry
@@ -131,6 +140,15 @@ Then('the restored device key matches the one the backup was made from', async (
   await expect.poll(async () => (await readKeyManager()).pubkeyHex, { timeout: Timeouts.AUTH })
     .toBe(backupWorld.pubkeyHex)
   expect((await readKeyManager()).unlocked).toBe(true)
+  // And the SAME decryption key (#2140): a restore that kept the identity but
+  // re-derived the X25519 key would open nothing sealed before the backup.
+  const restored = await page.evaluate(async () => {
+    const platform = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
+      getDevicePubkeys(): Promise<{ encryptionPubkeyHex: string } | null>
+    }
+    return (await platform.getDevicePubkeys())?.encryptionPubkeyHex ?? null
+  })
+  expect(restored).toBe(backupWorld.encryptionPubkeyHex)
 })
 
 // --- Keyboard-only restore (#2215) ------------------------------------------
