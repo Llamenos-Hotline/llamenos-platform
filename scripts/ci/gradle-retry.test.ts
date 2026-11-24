@@ -3,7 +3,9 @@
 //
 // The stub's behaviour per run is read from a script file: run N takes line N
 // (the last line repeats). A line is `ok`, `resolve-miss` (the exact failure of
-// merge group 44432600870), `timeout`, `test-fail` or `compile-fail`.
+// merge group 44432600870), `timeout`, `test-fail` or `compile-fail`; `utp-miss` is the #2969
+// failure, and `connected-test-fail` / `probe-fail` are test results whose own text looks like
+// a transport error.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -43,6 +45,27 @@ case "$mode" in
     echo "- Plugin Repositories (could not resolve plugin artifact 'com.google.dagger.hilt.android:com.google.dagger.hilt.android.gradle.plugin:2.59.2')"
     echo "BUILD FAILED in 840ms"; exit 1 ;;
   timeout) echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Read timed out"; echo "BUILD FAILED"; exit 1 ;;
+  utp-miss)
+    echo "> Task :app:connectedDebugAndroidTest FAILED"
+    echo "M1 probe gate: all 6 required flows pass"
+    echo "* What went wrong:"
+    echo "Execution failed for task ':app:connectedDebugAndroidTest'."
+    echo "> Could not resolve all files for configuration ':app:_internal-unified-test-platform-android-test-plugin-host-additional-test-output'."
+    echo "   > Could not find com.google.protobuf:protobuf-java:4.28.3."
+    echo "BUILD FAILED in 1m"; exit 1 ;;
+  connected-test-fail)
+    echo ".Admin Sidebar Navigation > t0[emulator-5554 - 14] FAILED"
+    echo "    java.lang.AssertionError: createTestHub FAILED after 3 attempts (hubUrl=http://10.0.2.2:3000)"
+    echo "    Caused by: java.net.ConnectException: Failed to connect to /10.0.2.2:3000"
+    echo "    Caused by: java.net.ConnectException: Connection refused"
+    echo "> Task :app:connectedDebugAndroidTest FAILED"
+    echo "> There were failing tests. See the report at: file:///x"
+    echo "BUILD FAILED in 4m"; exit 1 ;;
+  probe-fail)
+    echo "> Task :app:m1ProbeGate FAILED"
+    echo "M1 probe FAIL auth"
+    echo "> Could not GET 'https://repo.maven.apache.org/x.pom'. Received status code 503 from server: Service Unavailable"
+    echo "BUILD FAILED"; exit 1 ;;
   test-fail) echo "> Task :app:testDebugUnitTest FAILED"; echo "FooTest > bar FAILED"; echo "BUILD FAILED in 2m"; exit 1 ;;
   compile-fail) echo "e: file:///x/Foo.kt:3:5 Could not compile: unresolved reference: bar"; echo "BUILD FAILED"; exit 1 ;;
 esac
@@ -155,6 +178,40 @@ describe('gradle-retry.sh', () => {
     expect(r.code).toBe(1)
     expect(r.invocations).toHaveLength(1)
     expect(r.out).toContain('not retrying')
+  })
+
+  // #2969: the one invocation that had no guard. The failure arrives at the START of connectedDebugAndroidTest,
+  // so a retry costs a re-run, not a lost suite.
+  test('the #2969 failure — the Unified Test Platform classpath missing a jar — is retried', () => {
+    const r = run(['utp-miss', 'ok'], ['connectedDebugAndroidTest', '--console=plain'])
+    expect(r.code).toBe(0)
+    expect(r.invocations).toHaveLength(2)
+    expect(r.invocations[1]).toContain('--refresh-dependencies')
+    expect(r.invocations[1]).toContain('connectedDebugAndroidTest')
+  })
+
+  test('the retry stays bounded: a persistent #2969 miss runs exactly GRADLE_RETRY_ATTEMPTS times (default 3) and fails', () => {
+    const r = run(['utp-miss'], ['connectedDebugAndroidTest'])
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(3)
+  })
+
+  // The half that matters more: a wrapper that retried every failure would re-run a red suite until it went green.
+  test.each(['connected-test-fail', 'probe-fail'])('%s: a test result whose text looks like a transport error is returned after ONE run, never retried', (mode) => {
+    const r = run([mode, 'ok'], ['connectedDebugAndroidTest'])
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(1)
+    expect(r.out).toContain('after a test failure — not retrying')
+  })
+
+  test('what counts as "a test failed" is whatever gradle-test-failure.patterns says, and a missing file is a hard error', () => {
+    const none = join(dir, 'none.patterns')
+    writeFileSync(none, 'zzz-never-matches\n')
+    expect(run(['connected-test-fail', 'ok'], ['connectedDebugAndroidTest'], { GRADLE_TEST_FAILURE_PATTERNS: none }).invocations).toHaveLength(2)
+    writeFileSync(calls, '')
+    const missing = run(['ok'], undefined, { GRADLE_TEST_FAILURE_PATTERNS: join(dir, 'absent.patterns') })
+    expect(missing.code).toBe(2)
+    expect(missing.invocations).toHaveLength(0)
   })
 
   test('a compile error that says "Could not compile" is not mistaken for a registry failure', () => {

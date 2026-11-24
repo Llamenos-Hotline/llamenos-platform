@@ -92,7 +92,8 @@
 # WHAT IS RETRIED
 # ---------------
 # Only a failure whose Gradle output names a resolution/transport error
-# (gradle-resolution.patterns). A compile error, a failing test, a lint finding
+# (gradle-resolution.patterns) and names no failing test
+# (gradle-test-failure.patterns). A compile error, a failing test, a lint finding
 # and a Gradle configuration error all exit non-zero WITHOUT matching it and are
 # returned immediately, after exactly one run, with Gradle's own exit status.
 # A genuinely missing dependency (a typo in libs.versions.toml) also matches, is
@@ -134,13 +135,20 @@ RATE_REPO_INITIAL_BACKOFF_MS=5000
 # "Could not" would also match "Could not compile", which is a real error. Never
 # inline a copy of either list here or anywhere else: implementations that
 # disagree is how android-e2e came to call a missed gson jar "not an
-# infrastructure signature". .github/scripts/classify-infra-failure.py still
-# carries its own, narrower regex; it moves onto these files in #2875's follow-up
-# (that directory is in no lane's scope, so it cannot ride with this change).
+# infrastructure signature" and, on identical errors, retry one shard and eject
+# another (#2969). .github/scripts/classify-infra-failure.py reads the same files.
+#
+# gradle-test-failure.patterns is the third list, and the one that keeps this
+# script safe to put around `connectedDebugAndroidTest`: output that proves a TEST
+# ran and failed. A failing scenario's own text routinely contains "Connection
+# refused" / "Failed to connect", which is a resolution pattern; without this
+# list that failure would be retried as a registry blip, three times, against an
+# emulator that cannot reach its backend.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLUTION_PATTERNS="${GRADLE_RESOLUTION_PATTERNS:-$HERE/gradle-resolution.patterns}"
 CACHED_MISS_PATTERNS="${GRADLE_CACHED_MISS_PATTERNS:-$HERE/gradle-cached-miss.patterns}"
-for f in "$RESOLUTION_PATTERNS" "$CACHED_MISS_PATTERNS"; do
+TEST_FAILURE_PATTERNS="${GRADLE_TEST_FAILURE_PATTERNS:-$HERE/gradle-test-failure.patterns}"
+for f in "$RESOLUTION_PATTERNS" "$CACHED_MISS_PATTERNS" "$TEST_FAILURE_PATTERNS"; do
   [ -s "$f" ] || { echo "gradle-retry: pattern file ${f} is missing or empty" >&2; exit 2; }
 done
 
@@ -205,6 +213,14 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
       fi
     fi
     exit 0
+  fi
+
+  if grep -qE -f "$TEST_FAILURE_PATTERNS" "$log"; then
+    # A test, or an M1 probe flow, ran and failed. Whatever else the output says
+    # (a ConnectException is "Connection refused"), that is a result, not a blip:
+    # retrying it would re-run the suite until it passed.
+    echo "gradle-retry: Gradle exited ${rc} after a test failure — not retrying."
+    exit "$rc"
   fi
 
   if ! grep -qE -f "$RESOLUTION_PATTERNS" "$log"; then

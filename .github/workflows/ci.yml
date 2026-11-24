@@ -2390,17 +2390,22 @@ jobs:
           file apps/android/app/src/debug/jniLibs/x86_64/libllamenos_core.so
 
       # Resolve and build everything the instrumented run needs BEFORE the
-      # emulator boots (#2870). The Gradle call inside the emulator action is not
-      # retryable on its own: a missed jar fails it, Gradle remembers the miss, and
-      # run 44513364742 (shard 0) lost a merge group to a gson 404 that
-      # gradle-retry.sh would have survived. Through gradle-retry.sh the dependency
-      # graph is resolved with the same retry + --refresh-dependencies policy as
-      # android-build-test, so the connectedDebugAndroidTest run finds it all in
-      # the Gradle cache and only installs and runs. A persistent miss now fails
+      # emulator boots (#2870), through the same retry + --refresh-dependencies
+      # policy as android-build-test, so the connectedDebugAndroidTest run finds it
+      # all in the Gradle cache and only installs and runs. A persistent miss fails
       # here, in seconds, instead of after a ten-minute emulator boot.
+      #
+      # assembleDebug/assembleDebugAndroidTest do NOT resolve everything
+      # connectedDebugAndroidTest does (#2969): AGP's Unified Test Platform keeps
+      # its plugin classpath in `_internal-unified-test-platform-*` configurations
+      # that are resolved only when that task starts. A protobuf-java miss there
+      # ejected two merge groups without a Cucumber scenario having run.
+      # resolveConnectedTestDependencies (the init script) resolves them to files here.
+      # The emulator run itself ALSO goes through gradle-retry.sh (see the script
+      # written below), so no Gradle invocation in this job is left uncovered.
       - name: Resolve and build the debug + androidTest APKs (retried on a registry miss)
         working-directory: apps/android
-        run: bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain
+        run: bash ../../scripts/ci/gradle-retry.sh -I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies --console=plain
 
       # ── Start backend services ──────────────────────────────────
       # Android E2E tests need a running backend for hub creation,
@@ -2573,9 +2578,14 @@ jobs:
           # Gradle's output is teed to a file so the classifier can read it after
           # the emulator action returns; `sh` has no pipefail, so its exit code
           # travels through a file rather than through the pipe.
+          #
+          # Through gradle-retry.sh like every other Gradle call in this job (#2969):
+          # it re-runs ONLY for a dependency-resolution/transport error and never
+          # after a failing test or probe flow (gradle-test-failure.patterns), so a
+          # registry miss no longer costs the shard, and a test result is never retried.
           rm -f /tmp/gradle-e2e.exit
           (
-            cd apps/android && ./gradlew connectedDebugAndroidTest --console=plain \
+            cd apps/android && bash ../../scripts/ci/gradle-retry.sh connectedDebugAndroidTest --console=plain \
               -Pandroid.testInstrumentationRunnerArguments.cucumberFeatures="$SHARD_FEATURES" \
               -Pandroid.testInstrumentationRunnerArguments.testHubUrl="http://10.0.2.2:3000" \
               -Pandroid.testInstrumentationRunnerArguments.testSecret="test-reset-secret"
@@ -2663,7 +2673,7 @@ jobs:
           # Gradle cache (#2870); gradle-retry.sh is the one place that knows to clear it
           # (--refresh-dependencies on its later attempts), so re-resolve through it
           # before spending another emulator boot. Harmless when nothing was missed.
-          ( cd apps/android && bash ../../scripts/ci/gradle-retry.sh assembleDebug assembleDebugAndroidTest --console=plain )
+          ( cd apps/android && bash ../../scripts/ci/gradle-retry.sh -I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies --console=plain )
 
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
         id: e2e-retry

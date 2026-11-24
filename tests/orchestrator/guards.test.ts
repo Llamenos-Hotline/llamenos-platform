@@ -5569,10 +5569,25 @@ describe('rail: classify-infra-failure.py retries infrastructure signatures and 
     it.each([
       ['a failing scenario in the Gradle output, even alongside an adb line', { marker: true, log: `${GENUINE_FAILURE}adb: device 'emulator-5554' not found\n` }],
       ['a failing testcase in the JUnit XML, even with an infra line', { marker: true, log: "adb: device 'emulator-5554' not found\n", xml: '<testsuite><testcase name="a"><failure message="boom"/></testcase></testsuite>' }],
-      ['a failure with no infrastructure signature at all', { marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nExecution failed for task\n' }],
     ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
       const v = android(opts)
       expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    // #2969 (c): neither a failing test nor an infrastructure signature. Still fails the job and is still
+    // not retried, but `genuine` is a verdict about TESTS and none failed, so it is not available here.
+    it('#2969: a Gradle failure with no failing test and no infrastructure signature is `build-failure` — not retried, never `genuine`', () => {
+      const v = android({ marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nExecution failed for task\n' })
+      expect(v).toMatchObject({ kind: 'build-failure', signatures: '' })
+      expect(v.detail).toContain('Not retried')
+    })
+
+    it('#2969: the workflow retries only `script-never-started` and `infra`, so `build-failure` fails the job like `genuine`', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const at = ci.indexOf('id: e2e-classify')
+      const sw = ci.slice(ci.indexOf('case "$kind" in', at), ci.indexOf('esac', at))
+      expect(sw).toMatch(/script-never-started\|infra\)\n\s+echo "retry=true"/)
+      expect(sw).toMatch(/\*\)\n\s+echo "retry=false"[\s\S]*exit 1/)
     })
 
     // Run 43823933518, android-e2e (0): Maven Central throttled dependency
@@ -5601,30 +5616,126 @@ BUILD FAILED in 39s
     ])('a dependency repository answering "%s" while Gradle resolves, with no failing test, is infrastructure', (status) => {
       const v = android({ marker: true, log: repoRefused(status) })
       expect(v).toMatchObject({ kind: 'infra' })
-      expect(v.signatures).toContain('dependency-repo-unavailable')
+      expect(v.signatures).toContain('dependency-resolution')
     })
 
+    // A 404 / 403 from a registry used to stay `genuine` ("a bad version bump is the build's fault"). Gradle words
+    // an unreachable registry as "Could not find" too (#2969), and gradle-retry.sh already retries both, so the
+    // classifier now agrees: ONE retry, bounded, and a bad version fails the second attempt as well.
     it.each([
-      ['a 404: the artifact does not exist (a bad version bump is the build\'s fault)', { marker: true, log: repoRefused('Received status code 404 from server: Not Found') }],
-      ['a 403 from the repository', { marker: true, log: repoRefused('Received status code 403 from server: Forbidden') }],
-      ['a repository 429 alongside a failing scenario', { marker: true, log: `${repoRefused('Received status code 429 from server: Too Many Requests')}${GENUINE_FAILURE}` }],
-      ['a 429 the code under test reported, not Gradle\'s resolver', { marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nHTTP 429 Too Many Requests from /api/calls\n' }],
-    ])('BREAK-IT: %s is NOT infrastructure — no retry', (_n, opts) => {
-      const v = android(opts)
+      ['a 404 from the registry', 'Received status code 404 from server: Not Found'],
+      ['a 403 from the registry', 'Received status code 403 from server: Forbidden'],
+    ])('#2969: %s with no failing test is retried once, like gradle-retry.sh', (_n, status) => {
+      expect(android({ marker: true, log: repoRefused(status) })).toMatchObject({ kind: 'infra', signatures: 'dependency-resolution' })
+    })
+
+    it('BREAK-IT: a repository 429 alongside a failing scenario is NOT infrastructure — a test result wins over a transport line', () => {
+      const v = android({ marker: true, log: `${repoRefused('Received status code 429 from server: Too Many Requests')}${GENUINE_FAILURE}` })
       expect(v.kind, v.detail).toBe('genuine')
     })
 
-    it('#2870: every Gradle invocation in a workflow goes through gradle-retry.sh, except the emulator run, which the shard retry owns', () => {
+    it('a 429 the code under test reported, not Gradle\'s resolver, is not a resolution failure', () => {
+      const v = android({ marker: true, log: '> Task :app:connectedDebugAndroidTest FAILED\nHTTP 429 Too Many Requests from /api/calls\n' })
+      expect(v.kind, v.detail).toBe('build-failure')
+    })
+
+    // ── #2969: the two shards of the two ejected groups, VERBATIM from their uploaded gradle-e2e.log. Same
+    // artifact, same task, same configuration; the registry answered 429 for one and went quiet for the other,
+    // so Gradle worded them differently, and the classifier answered `infra` for one and `genuine` for the other.
+    const UTP = ":app:_internal-unified-test-platform-android-test-plugin-host-additional-test-output"
+    const utpLog = (cause: string) => `> Task :app:connectedDebugAndroidTest FAILED
+
+> Task :app:m1ProbeGate
+M1 probe PASS logout
+M1 probe PASS auth
+M1 probe gate: all 6 required flows pass
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:connectedDebugAndroidTest'.
+> Could not resolve all files for configuration '${UTP}'.
+${cause}
+`
+    const UTP_429 = `   > Could not resolve com.google.protobuf:protobuf-java:4.28.3.
+     Required by:
+         project ':app' > com.android.tools.utp:android-test-plugin-host-additional-test-output:32.1.0
+      > Could not resolve com.google.protobuf:protobuf-java:4.28.3.
+         > Could not get resource 'https://repo.maven.apache.org/maven2/com/google/protobuf/protobuf-java/4.28.3/protobuf-java-4.28.3.pom'.
+            > Could not GET 'https://repo.maven.apache.org/maven2/com/google/protobuf/protobuf-java/4.28.3/protobuf-java-4.28.3.pom'. Received status code 429 from server: Too Many Requests`
+    const UTP_NOT_FOUND = `   > Could not find com.google.protobuf:protobuf-java:4.28.3.
+     Searched in the following locations:
+       - https://dl.google.com/dl/android/maven2/com/google/protobuf/protobuf-java/4.28.3/protobuf-java-4.28.3.pom
+       - https://repo.maven.apache.org/maven2/com/google/protobuf/protobuf-java/4.28.3/protobuf-java-4.28.3.pom
+     Required by:
+         project ':app' > com.android.tools.utp:android-test-plugin-host-additional-test-output:32.1.0`
+
+    it.each([
+      ['run 45226563795 shard 2 (status 429)', UTP_429],
+      ['run 45241487811 shard 1 (Could not find)', UTP_NOT_FOUND],
+    ])('#2969 (a): the captured %s is infrastructure — ONE verdict for the same defect', (_n, cause) => {
+      const v = android({ marker: true, log: utpLog(cause) })
+      expect(v, v.detail).toMatchObject({ kind: 'infra', signatures: 'dependency-resolution' })
+    })
+
+    // #2969 (b): the half that matters more. A real failing scenario whose own output carries the very text a
+    // transport failure would — it must still be `genuine`, or the queue retries every red suite.
+    it('#2969 (b) BREAK-IT: a real failing test is `genuine` even when its output also says "Could not find" and "Connection refused"', () => {
+      const log = `${GENUINE_FAILURE}${utpLog(UTP_NOT_FOUND)}Caused by: java.net.ConnectException: Connection refused\n`
+      const xml = '<testsuite><testcase name="a"><failure message="boom">java.lang.AssertionError: expected 1 was 0</failure></testcase></testsuite>'
+      for (const withXml of [undefined, xml]) {
+        const v = android({ marker: true, log, xml: withXml })
+        expect(v.kind, v.detail).toBe('genuine')
+      }
+    })
+
+    it('#2969 (b) BREAK-IT: a failing probe flow is not hidden by a resolution error in the same log', () => {
+      const log = `${utpLog(UTP_429)}M1 probe FAIL auth\n`
+      const v = android({ marker: true, log, probe: { auth: probeReport('auth', 'java.lang.AssertionError: probe saw 500') } })
+      expect(v.kind, v.detail).toBe('genuine')
+    })
+
+    it('#2969: the classifier reads the SAME pattern files as gradle-retry.sh and keeps no copy of them', () => {
+      const src = readFileSync(SCRIPT, 'utf8')
+      expect(src).toContain('gradle-resolution.patterns')
+      expect(src).toContain('gradle-test-failure.patterns')
+      expect(src).not.toMatch(/re\.compile\([^)]*Could not/)
+    })
+
+    // #2969: this used to exempt `connectedDebugAndroidTest` ("the shard retry owns it"). That exemption WAS the
+    // defect: the one unwrapped invocation was the one with a dependency set of its own. There is no exemption now.
+    it('#2870/#2969: every Gradle invocation in a workflow goes through gradle-retry.sh — the emulator run included', () => {
       const wfDir = join(process.cwd(), '.github', 'workflows')
       const bare: string[] = []
       for (const f of readdirSync(wfDir).filter((n) => n.endsWith('.yml'))) {
         readFileSync(join(wfDir, f), 'utf8').split('\n').forEach((l, i) => {
           if (l.trim().startsWith('#') || !/\.\/gradlew\b/.test(l)) return
-          if (l.includes('connectedDebugAndroidTest')) return // the emulator run: classified, retried a whole shard at a time, after the pre-resolve step
           bare.push(`${f}:${i + 1}: ${l.trim()}`)
         })
       }
       expect(bare).toEqual([])
+    })
+
+    it('#2969: the script the emulator action runs calls connectedDebugAndroidTest through gradle-retry.sh', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const calls = job.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('connectedDebugAndroidTest'))
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toContain('bash ../../scripts/ci/gradle-retry.sh connectedDebugAndroidTest')
+    })
+
+    it('#2969: the pre-emulator resolve (and the retry\'s) also resolves the Unified Test Platform classpaths, and the init script exists', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const resolves = job.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('gradle-retry.sh') && l.includes('assembleDebugAndroidTest'))
+      expect(resolves).toHaveLength(2)
+      for (const l of resolves) {
+        expect(l).toContain('-I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts')
+        expect(l).toContain('resolveConnectedTestDependencies')
+      }
+      const init = readFileSync(join(process.cwd(), 'scripts', 'ci', 'gradle-resolve-connected-test.init.gradle.kts'), 'utf8')
+      expect(init).toContain('resolveConnectedTestDependencies')
+      expect(init, 'must fail when AGP renames the configurations, not resolve nothing').toContain('check(platform.isNotEmpty())')
     })
 
     // The job #2853 was first ejected from, on `Could not find junit:junit:4.13.2`. The workflow-wide guard above
@@ -5644,12 +5755,12 @@ BUILD FAILED in 39s
       const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
       const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
       const firstEmulator = job.indexOf('reactivecircus/android-emulator-runner')
-      const preResolve = job.indexOf('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+      const preResolve = job.indexOf('assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies')
       expect(preResolve, 'pre-resolve step missing').toBeGreaterThan(0)
       // The AVD-snapshot step also uses the emulator action: the pre-resolve must precede ALL of them.
       expect(preResolve).toBeLessThan(firstEmulator)
       const prep = job.slice(job.indexOf('Prepare the infrastructure retry'), job.indexOf('infrastructure retry\n', job.indexOf('Prepare the infrastructure retry')))
-      expect(prep).toContain('gradle-retry.sh assembleDebug assembleDebugAndroidTest')
+      expect(prep).toContain('gradle-retry.sh -I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies')
     })
 
     // ── #2657: an emulator with no default route reaches the tests as ConnectException, not as an
