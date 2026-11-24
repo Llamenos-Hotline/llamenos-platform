@@ -942,7 +942,7 @@ deliberate exception:
 | `~/.llamenos-fleet/runs.jsonl` | The ledger — one JSON line per dispatch/shadow/rejection-relevant outcome. Read by `status`, the circuit breakers, and the per-item attempt limit. |
 | `~/.llamenos-fleet/fleet.log` | Plain `<timestamp> <message>` log, one line per event plus one JSON-encoded `TickResult` line per pass. `doctor` and `status` tail this file to report whether the *last* pass errored. |
 | `~/.llamenos-fleet/review-app.pem` | The `llamenos-fleet-review` GitHub App's private key, mode **600** (#1483). The only credential the fleet reads that is not the operator's own `gh` auth — used solely to mint a short-lived installation token for the `fleet/review` check-run POST, which the Checks API refuses to accept from a PAT. Absent, loose-permissioned or unparseable, `review-and-merge` refuses before spending a review. Path overridable with `FLEET_REVIEW_APP_KEY_PATH`. |
-| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
+| `~/.llamenos-fleet/env` | Optional. Sourced by the `bin/llamenos-fleet` wrapper (`set -a; . env; set +a`) before exec — secrets live here, never in git. Also referenced by the systemd unit's `EnvironmentFile=-%h/.llamenos-fleet/env` (the leading `-` makes it optional). Carries `GH_TOKEN` — which MUST resolve to `FLEET_BOT_LOGIN` (`config.ts`), never the codeowner (#2966) — and `FLEET_REVIEW_APP_ID` (see "Recording a verdict" above — the App ID is not a secret; its key is, and lives in the file below). |
 
 ## Runtime provenance (#1801)
 
@@ -1297,3 +1297,17 @@ before the resume no longer count toward tripping it again. It does **not**
 remove the GitHub `halt`-labelled issue if that is what's stopping the fleet;
 close or unlabel that issue on GitHub directly. Run `llamenos-fleet doctor`
 afterward to confirm `not halted` reports `ok`.
+
+## Fleet identity (#2966)
+
+The bot (`FLEET_BOT_LOGIN`, `config.ts`) authors pull requests and the codeowner reviews them; GitHub forbids an author from reviewing their own pull request, and the codeowner is a bypass actor, so a PR authored as the codeowner merges with no review recorded and nothing reads as a failure. Three checks, each on the path the action takes:
+
+| Where | What it asserts | On a wrong or unknown identity |
+|---|---|---|
+| `llamenos-fleet doctor` (`fleet-env.ts`) | The `GH_TOKEN` in `~/.llamenos-fleet/env` resolves to the bot. `ok` is printed only for a *verified* login; a file with a `GH_TOKEN=` line is not `ok` on that basis. | Wrong account: **FAIL** naming the resolved login. Could not resolve: **WARN** "identity NOT verified" — never `ok`, never reported as the wrong account. |
+| `dispatch()` (`engines.ts` → `identity.ts`) | Immediately before every launch: the dispatcher holds an explicit `GH_TOKEN`, it resolves to the bot, and so does the token in the **running tmux server's** global environment. | Refuses the launch (`FAILED`, ledger note names the login). Unverifiable refuses too. |
+| `llamenos-fleet assert-identity` | Run by the worker from its worktree before `gh pr create` (the brief says to). Judges the credential in the worker's own environment and working directory. | Exit 1 (wrong account) or 2 (cannot establish); the worker writes `BLOCKED`. |
+
+**Which credential wins.** The `gh` on this host is a wrapper (`~/.local/bin/gh`): a non-empty `GH_TOKEN` in the process environment is passed straight through and wins; without one it picks an account from a per-owner map keyed on the working tree's git remote; without a match, `gh`'s active account. So the only deterministic identity is an explicit `GH_TOKEN`, and that is what the dispatch gate requires. A worker's session is built from the **tmux server's** environment, not the dispatcher's — a server started before the token was wired up hands workers no `GH_TOKEN`, and they fall through to the remote-keyed map. When the gate reports that, from a shell that sourced the fleet env run `tmux set-environment -g GH_TOKEN "$GH_TOKEN"` (the value is never printed), or end the server once idle.
+
+No test needs a real credential: resolution goes through an injected `LoginResolver`. Messages carry the resolved login only, never any part of a credential.

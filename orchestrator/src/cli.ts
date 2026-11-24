@@ -16,6 +16,7 @@ import { describeSyncOutcome, liveRunPids, readSyncRecord } from './runtime-sync
 import { expectedUnits, systemctlProbe, unitProblems, type UnitProbe } from './systemd-units.js'
 import { classifyTmuxOwner, ownershipWarning, probeTmuxOwnership, type TmuxOwnership } from './tmux-isolation.js'
 import { checkFleetEnvFile } from './fleet-env.js'
+import { ghLoginResolver, verifyBotIdentity, type LoginResolver } from './identity.js'
 import { buildBrief, renderBrief } from './brief.js'
 import { loadContracts, contractsFor, buildMemoryContext, augmentBrief } from './memory.js'
 import {
@@ -173,6 +174,9 @@ export interface DoctorDeps {
   /** Seam for the tmux-ownership check (#2655): the host's real tmux server in
    *  production, a fixture in tests. */
   tmuxOwnership?: () => TmuxOwnership
+  /** Seam for resolving the fleet env file's credential to a login (#2966):
+   *  `gh` in production, a fake in tests — no test needs a real credential. */
+  resolveLogin?: LoginResolver
 }
 
 export async function doctor(deps: DoctorDeps = {}): Promise<number> {
@@ -367,11 +371,19 @@ export async function doctor(deps: DoctorDeps = {}): Promise<number> {
   // #773: the fleet's GitHub identity. `absent` is the expected state until
   // the bot account's token is placed here, so it is a WARNING, printed
   // alongside the lane-scope warnings below — never a hard FAIL, and never
-  // something this loop or `bad` below sees. `fail`/`ok` DO go through the
-  // normal checks list: once the file exists, wrong permissions or a missing
-  // GH_TOKEN are real misconfiguration, not a transitional state.
-  const envFile = checkFleetEnvFile()
+  // something this loop or `bad` below sees. `fail` DOES go through the
+  // normal checks list: once the file exists, wrong permissions, a missing
+  // GH_TOKEN, or (#2966) a token that resolves to anyone but the bot are real
+  // misconfiguration, not a transitional state.
+  //
+  // `ok` is printed ONLY for a credential that was resolved and is the bot's.
+  // `unverified` — the file is well-formed but whose token it is could not be
+  // established — is a WARNING that says so, never an `ok` line: a present
+  // `GH_TOKEN=` is not an identity.
+  const envFile = await checkFleetEnvFile(deps.resolveLogin)
   if (envFile.state === 'absent') {
+    warnings++
+  } else if (envFile.state === 'unverified') {
     warnings++
   } else {
     checks.push([`fleet env file (${FLEET_ENV_FILE})`, envFile.state === 'ok', envFile.message])
@@ -383,7 +395,7 @@ export async function doctor(deps: DoctorDeps = {}): Promise<number> {
     if (!ok) bad++
   }
 
-  if (envFile.state === 'absent') {
+  if (envFile.state === 'absent' || envFile.state === 'unverified') {
     process.stdout.write(` WARN  ${envFile.message}\n`)
   }
 
@@ -2478,6 +2490,13 @@ const HANDLERS: Record<string, CommandHandler> = {
   }))),
   'review-gate': asVerification(() => runReviewGate()),
   'review-and-merge': (rest) => runReviewAndMergeCommand(rest),
+  // #2966: "will `gh pr create` from HERE be authored by the fleet bot?" Run by
+  // a worker from its worktree before it opens a pull request: the answer comes
+  // from the same environment, working directory and `gh` wrapper the PR
+  // creation itself will use, so it cannot pass on a different identity than
+  // the one that acts. Exit 0 only for a verified bot; 1 for the wrong
+  // account; 2 when it could not be established — never 0 for either.
+  'assert-identity': () => runAssertIdentity(),
   plan: () => runPlan(),
   integrate: () => runIntegrate(),
   // The deterministic gate decision table (board.ts) — read-only: derives
@@ -2522,6 +2541,24 @@ const HANDLERS: Record<string, CommandHandler> = {
     process.stdout.write(`${renderQueueFeed(result)}\n`)
     return result.undecidable.length > 0 ? 2 : 0
   },
+}
+
+/**
+ * `assert-identity`: the account `gh` will act as from the current directory
+ * and environment. An explicit non-empty `GH_TOKEN` is used as given (the gh
+ * wrapper passes it through); without one the ambient resolution — the wrapper's
+ * per-owner map, then gh's active account — is what is judged.
+ */
+export async function runAssertIdentity(resolve: LoginResolver = ghLoginResolver()): Promise<number> {
+  const token = process.env['GH_TOKEN']
+  const v = await verifyBotIdentity(token === '' ? undefined : token, resolve)
+  if (v.state === 'bot') {
+    process.stdout.write(`identity: ${v.login} (the fleet bot)\n`)
+    return 0
+  }
+  process.stderr.write(`identity: REFUSED — ${v.message}\n` +
+    'do not run `gh pr create` from here; write status BLOCKED naming this message\n')
+  return v.state === 'wrong' ? 1 : 2
 }
 
 /** Every subcommand name this CLI actually implements — see `HANDLERS`. */

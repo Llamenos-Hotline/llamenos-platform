@@ -139,6 +139,10 @@ export function buildBrief(item: WorkItem, lane: Lane, branch: string): Brief {
         `- Your PR description MUST contain the line \`Closes #${item.id}\` on its own line. ` +
         `That is what closes issue #${item.id} when the PR merges; without it the issue stays ` +
         `open after the work has landed.\n` +
+        `- Before your first \`gh pr create\`, run \`bun orchestrator/src/cli.ts assert-identity\` from your ` +
+        `worktree. It asks whether the PR you are about to open will be authored by the fleet bot — a PR ` +
+        `authored by the codeowner cannot be reviewed by the codeowner and merges with no review recorded. ` +
+        `If it exits non-zero, do NOT open the PR: write \`BLOCKED\` with the message it printed.\n` +
         `${writeGateRules()}\n` +
         `- Never deploy anything, to any environment.\n` +
         `- Never send anything (no notifications, no messages, no emails) as a side effect of this work.\n` +
