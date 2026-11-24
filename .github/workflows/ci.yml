@@ -2407,6 +2407,18 @@ jobs:
         working-directory: apps/android
         run: bash ../../scripts/ci/gradle-retry.sh -I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies --console=plain
 
+      # The invariant, checked rather than assumed (#2971): connectedDebugAndroidTest
+      # resolves NOTHING from the network. Maven Central answers 429 to the hosted
+      # runner pool's shared egress address, and retrying a per-IP throttle does not
+      # clear it, so the emulator step must never need to ask. Gradle runs --offline
+      # here with no device; it either stops at "No connected devices!" (everything
+      # was in the cache) or names the configuration that was not primed. Fails in
+      # seconds, before a ten-minute emulator boot, and says what to add to
+      # resolveConnectedTestDependencies.
+      - name: Prove the emulator step needs no network (--offline)
+        working-directory: apps/android
+        run: bash ../../scripts/ci/assert-connected-test-offline.sh
+
       # ── Start backend services ──────────────────────────────────
       # Android E2E tests need a running backend for hub creation,
       # authentication, and call/message simulation endpoints.
@@ -2579,13 +2591,20 @@ jobs:
           # the emulator action returns; `sh` has no pipefail, so its exit code
           # travels through a file rather than through the pipe.
           #
-          # Through gradle-retry.sh like every other Gradle call in this job (#2969):
-          # it re-runs ONLY for a dependency-resolution/transport error and never
-          # after a failing test or probe flow (gradle-test-failure.patterns), so a
-          # registry miss no longer costs the shard, and a test result is never retried.
+          # --offline, ONE attempt (#2971). This run must never ask a registry for
+          # anything: the throttle that ejected PRs is per egress address, so a retry
+          # (which sends --refresh-dependencies, i.e. asks Central for everything again)
+          # is the opposite of a remedy. Every dependency was primed by the retried
+          # step before the emulator booted and assert-connected-test-offline.sh proved
+          # it; if that ever fails to hold, this fails at once with "No cached version
+          # ... available for offline mode" instead of a 429, the classifier calls it
+          # infrastructure, and the shard retry re-primes the cache through the
+          # wrapper before trying again.
+          # It still goes through gradle-retry.sh (#2969) for its guarantee that a failing test or
+          # probe flow is never mistaken for a transport error.
           rm -f /tmp/gradle-e2e.exit
           (
-            cd apps/android && bash ../../scripts/ci/gradle-retry.sh connectedDebugAndroidTest --console=plain \
+            cd apps/android && GRADLE_RETRY_ATTEMPTS=1 bash ../../scripts/ci/gradle-retry.sh connectedDebugAndroidTest --offline --console=plain \
               -Pandroid.testInstrumentationRunnerArguments.cucumberFeatures="$SHARD_FEATURES" \
               -Pandroid.testInstrumentationRunnerArguments.testHubUrl="http://10.0.2.2:3000" \
               -Pandroid.testInstrumentationRunnerArguments.testSecret="test-reset-secret"
@@ -2674,6 +2693,8 @@ jobs:
           # (--refresh-dependencies on its later attempts), so re-resolve through it
           # before spending another emulator boot. Harmless when nothing was missed.
           ( cd apps/android && bash ../../scripts/ci/gradle-retry.sh -I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts assembleDebug assembleDebugAndroidTest resolveConnectedTestDependencies --console=plain )
+          # The second attempt's emulator run is --offline too; prove the cache covers it.
+          ( cd apps/android && bash ../../scripts/ci/assert-connected-test-offline.sh )
 
       - name: Run Cucumber instrumented tests (shard ${{ matrix.shard }}) — infrastructure retry
         id: e2e-retry
