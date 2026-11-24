@@ -658,10 +658,10 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // grant-excluded — a lane able to edit the scope judging it could widen its
   // own authority inside a branch, before any reviewer sees the diff.
   '.claude/',
-  // Mac CI host code (#2867/#2935). `mac` is a fragment, not a lane, so no PR's
-  // own lane can write these and a grant is refused them on purpose: they
-  // execute on the shared self-hosted runner, or are the rail judging it. Listed
-  // here so the gate says "grant-excluded" — true — rather than "owned by no lane".
+  // Mac CI host code (#2867/#2935/#2723). Infra AUTHORS these — `mac` is a
+  // fragment, not a lane, and reviews them — and a grant is refused them on
+  // purpose: they execute on the shared self-hosted runner, or are the rail
+  // judging it, so only infra's own PR may write them.
   'scripts/ci/mac-runner-disk-guard.sh',
   'scripts/mac-run.sh',
   'tests/runner-boundary.spec.ts',

@@ -3,7 +3,8 @@ import { tick, MAX_PASS_LIVE_DISPATCH_START_MS, type TickDeps, type DispatchOutc
 import { failureBreaker, type Limits } from '../../orchestrator/src/circuit.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import type { WorkItem } from '../../orchestrator/src/source.js'
-import type { RunRecord } from '../../orchestrator/src/ledger.js'
+import { failedAttemptsIn, type RunRecord } from '../../orchestrator/src/ledger.js'
+import { indexTree } from '../../orchestrator/src/route.js'
 import type { VerifyReport } from '../../orchestrator/src/verify.js'
 
 const LIMITS: Limits = { maxDispatchesPerHour: 8, consecutiveFailuresToHalt: 3, quotaCooldownMs: 3_600_000 }
@@ -666,5 +667,158 @@ describe('tick: pass live-dispatch start gate (MAX_PASS_LIVE_DISPATCH_START_MS)'
     })
     await tick(d)
     expect(d.dispatch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('tick: ownership is checked BEFORE dispatch (#1764, #2623, #2979)', () => {
+  const ios = lane()
+  const infra: Lane = { ...lane(), id: 'infra', scope: { owned: ['.github/workflows/', 'docs/'], notOwned: [] } }
+  const tree = indexTree(['apps/ios/Sources/A.swift', '.github/workflows/ci.yml', 'docs/runbooks/x.md'])
+  const pad = ` ${'x'.repeat(220)}`
+  const ciItem: WorkItem = { id: '1', title: 'ci timeout', body: `raise the timeout in \`.github/workflows/ci.yml\`${pad}`, url: 'u', labels: [] }
+  const row = (over: Partial<RunRecord>): RunRecord =>
+    ({ ts: 1, runId: 'r', lane: 'ios', itemId: '1', itemName: 't', engine: 'claude', outcome: 'REJECTED', ...over })
+
+  const misrouteDeps = (over: Partial<TickDeps> = {}) => baseDeps({
+    lanes: [ios, infra],
+    readTree: async () => tree,
+    listItems: async () => ({ ok: true as const, items: [ciItem] }),
+    readLabels: async () => ['agent-dispatchable', 'lane:ios'],
+    ...over,
+  })
+
+  it('a lane owning none of the cited paths launches NO worker, spends no attempt, and is re-labelled to the owner', async () => {
+    const d = misrouteDeps()
+    const r = await tick(d)
+    expect(d.dispatch).not.toHaveBeenCalled()
+    const recorded = vi.mocked(d.record).mock.calls.map(([x]) => x)
+    expect(recorded.map((x) => x.outcome)).toEqual(['MISROUTED'])
+    expect(recorded[0]?.note).toContain('lane "ios" owns none of the cited paths')
+    expect(recorded[0]?.note).toContain('.github/workflows/ci.yml')
+    expect(failedAttemptsIn(recorded, '1')).toBe(0)
+    expect(d.relabelLane).toHaveBeenCalledWith('1', 'ios', 'infra')
+    expect(d.commentOnIssue).toHaveBeenCalledTimes(1)
+    expect(r.rejections).toContainEqual({ id: '1', reason: 'misrouted' })
+    expect(r.misrouted).toEqual([{ id: '1', from: 'ios', to: 'infra', paths: ['.github/workflows/ci.yml'] }])
+    expect(r.attempted).toBe(0)
+  })
+
+  it('reported once: a repeat pass writes no second row or comment, but keeps trying the relabel until it lands', async () => {
+    const first = misrouteDeps()
+    await tick(first)
+    const prior = vi.mocked(first.record).mock.calls.map(([x]) => x)
+    const d = misrouteDeps({ readLedger: () => prior })
+    await tick(d)
+    expect(d.record).not.toHaveBeenCalled()
+    expect(d.commentOnIssue).not.toHaveBeenCalled()
+    expect(d.relabelLane).toHaveBeenCalledWith('1', 'ios', 'infra')
+  })
+
+  it('a relabel that fails is logged and the pass goes on — the item is still not dispatched', async () => {
+    const logs: string[] = []
+    const d = misrouteDeps({ relabelLane: vi.fn(async () => { throw new Error('gh down') }), log: (m) => { logs.push(m) } })
+    const r = await tick(d)
+    expect(r.aborted).toBeUndefined()
+    expect(d.dispatch).not.toHaveBeenCalled()
+    expect(logs.join('\n')).toContain('could not move item 1 to lane:infra')
+  })
+
+  it('a misrouted item takes no lane slot: the next item in the same lane is still dispatched', async () => {
+    const own: WorkItem = { id: '2', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
+    const d = misrouteDeps({ listItems: async () => ({ ok: true as const, items: [ciItem, own] }) })
+    await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(d.dispatch).mock.calls[0]?.[0].id).toBe('2')
+  })
+
+  it('a shadow lane records the finding but writes nothing to GitHub', async () => {
+    const d = misrouteDeps({ lanes: [{ ...ios, mode: 'shadow' }, infra] })
+    await tick(d)
+    expect(d.relabelLane).not.toHaveBeenCalled()
+    expect(d.commentOnIssue).not.toHaveBeenCalled()
+    expect(vi.mocked(d.record).mock.calls.map(([x]) => x.outcome)).toEqual(['MISROUTED'])
+  })
+
+  it('an unreadable tree routes nothing: the item is dispatched as labelled, exactly as before the check existed', async () => {
+    const d = misrouteDeps({ readTree: async () => undefined })
+    await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+    expect(d.relabelLane).not.toHaveBeenCalled()
+  })
+
+  it('VERIFY BY BREAKING IT: an item parked by three failures in the wrong lane is dispatchable once routed to its owner', async () => {
+    const parked = [1, 2, 3].map((ts) => row({ ts, outcome: 'REJECTED', lane: 'ios' }))
+    // Before: on its old lane the budget is spent (and the item is misrouted anyway).
+    expect(failedAttemptsIn(parked, '1', 'ios')).toBe(3)
+    // After the relabel: infra claims it, and the old lane's attempts are not infra's.
+    const d = misrouteDeps({
+      readLedger: () => parked,
+      readLabels: async () => ['agent-dispatchable', 'lane:infra'],
+      dispatch: vi.fn(async (): Promise<DispatchOutcome> => ({ outcome: 'BLOCKED', note: 'needs a decision' })),
+    })
+    await tick(d)
+    expect(d.dispatch).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(d.dispatch).mock.calls[0]?.[1].id).toBe('infra')
+    // …and three failures by the owning lane still exhaust it there.
+    expect(failedAttemptsIn([...parked, ...[4, 5, 6].map((ts) => row({ ts, lane: 'infra' }))], '1', 'infra')).toBe(3)
+  })
+
+  it('a worker BLOCKED on paths only another lane\'s own PR may write is MISROUTED, not parked behind needs-human', async () => {
+    const own: WorkItem = { id: '2', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
+    const d = misrouteDeps({
+      listItems: async () => ({ ok: true as const, items: [own] }),
+      dispatch: vi.fn(async (): Promise<DispatchOutcome> =>
+        ({ outcome: 'BLOCKED', note: 'the fix needs .github/workflows/ci.yml, which is outside my ownership' })),
+    })
+    await tick(d)
+    const final = vi.mocked(d.record).mock.calls.map(([x]) => x).at(-1)
+    expect(final?.outcome).toBe('MISROUTED')
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'MISROUTED', needsHuman: false }))
+    expect(d.relabelLane).toHaveBeenCalledWith('2', 'ios', 'infra')
+  })
+
+  it('a worker BLOCKED on a decision is still BLOCKED with needs-human', async () => {
+    const own: WorkItem = { id: '2', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
+    const d = misrouteDeps({
+      listItems: async () => ({ ok: true as const, items: [own] }),
+      dispatch: vi.fn(async (): Promise<DispatchOutcome> => ({ outcome: 'BLOCKED', note: 'needs a product decision' })),
+    })
+    await tick(d)
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'BLOCKED', needsHuman: true }))
+    expect(d.relabelLane).not.toHaveBeenCalled()
+  })
+
+  it('#2623: a dispatchable item with NO lane label is said out loud, and labelled when one lane owns its paths', async () => {
+    const own: WorkItem = { id: '3', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
+    const logs: string[] = []
+    const d = misrouteDeps({
+      listItems: async () => ({ ok: true as const, items: [own] }),
+      readLabels: async () => ['agent-dispatchable'],
+      log: (m) => { logs.push(m) },
+    })
+    const r = await tick(d)
+    expect(r.unrouted).toEqual(['3'])
+    expect(r.rejections).toContainEqual({ id: '3', reason: 'unrouted' })
+    expect(logs.join('\n')).toContain('1 dispatchable issue(s) claimable by no lane')
+    expect(d.relabelLane).toHaveBeenCalledWith('3', undefined, 'ios')
+    expect(d.dispatch).not.toHaveBeenCalled()
+  })
+
+  it('#2623: an unlabelled item citing nothing routable is reported, never guessed at', async () => {
+    const vague: WorkItem = { id: '4', title: 'slow', body: `the app feels slow${pad}`, url: 'u', labels: [] }
+    const d = misrouteDeps({
+      listItems: async () => ({ ok: true as const, items: [vague] }),
+      readLabels: async () => ['agent-dispatchable'],
+    })
+    const r = await tick(d)
+    expect(r.unrouted).toEqual(['4'])
+    expect(r.misrouted).toEqual([{ id: '4', from: undefined, to: undefined, paths: [] }])
+    expect(d.relabelLane).not.toHaveBeenCalled()
+  })
+
+  it('#2623: a vetoed unlabelled item is not "unrouted" — the veto is its reason', async () => {
+    const d = misrouteDeps({ readLabels: async () => ['agent-dispatchable', 'needs-human'] })
+    const r = await tick(d)
+    expect(r.unrouted).toEqual([])
   })
 })
