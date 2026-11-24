@@ -354,24 +354,24 @@ Clients receive the server event key (current + previous epoch) via `GET /api/au
 
 The current key schedule in `packages/crypto/src/sframe.rs`:
 
-1. Derive call secret from MLS exporter or hub PTK (label: `LABEL_SFRAME_CALL_SECRET`)
+1. Derive call secret from an MLS exporter (`mls` feature only) or hub PTK (label: `LABEL_SFRAME_CALL_SECRET`)
 2. Derive SFrame base key (label: `LABEL_SFRAME_BASE_KEY`)
 3. Derive per-participant send keys using participant index
 
-> **Note:** SFrame key derivation is fully implemented, but **actual media frame encryption** (AES-128-CTR + HMAC-SHA256 per frame) is **not yet implemented**. See [Security Gaps](SECURITY_GAPS_AND_ROADMAP.md#13-sframe-voice-e2ee-low).
+> **Note:** SFrame key derivation and the frame primitives (`sframe_encrypt` / `sframe_decrypt`, AES-256-GCM in the RFC 9605 wire format) exist in the crate, but **no client encrypts media frames with them yet**. See [Security Gaps](SECURITY_GAPS_AND_ROADMAP.md#13-sframe-voice-e2ee-low).
 
 ---
 
 ## MLS (RFC 9420) — retired
 
-> **Status:** MLS is retired in favour of the reader-group model (#2961), and its code is to be removed (part of #2973). The text below describes what exists in the crate today, not the target design.
+> **Status:** MLS is retired in favour of the reader-group model (#2961). Its code (`packages/crypto/src/mls.rs`) is to be removed; removal is tracked in #2973. The text below describes what the crate contains today, not the target design.
 
-MLS group management is compiled unconditionally using OpenMLS 0.8. The `mls` feature flag was removed — MLS is always available.
+MLS group management lives in `packages/crypto/src/mls.rs`, built on OpenMLS 0.9 (`openmls = "0.9"` with `openmls_rust_crypto`). It is an **optional, default-off `mls` Cargo feature** (`#[cfg(feature = "mls")]` in `lib.rs`), so default builds do not compile it.
 
-- **Ciphersuite**: `MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`
-- **Operations**: Group creation, member add/remove, self-update, epoch secret export
+- **Ciphersuite**: `MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519`
+- **Operations**: Group creation, key package generation, member add, welcome processing, self-update, epoch secret export
 - **Hub PTK derivation**: `derive_hub_ptk(export_secret, hub_id)` for hub-specific symmetric keys
-- **SFrame integration**: MLS exporter secrets feed into SFrame key derivation for voice E2EE
+- **SFrame integration**: `derive_call_secret_from_mls` in `sframe.rs` accepts an MLS exporter secret as a call-secret source; this is being replaced by sealed per-call keys (see Voice E2EE above)
 
 > **Note:** MLS is implemented in the crypto crate and backend routes exist, but **client-side MLS integration** (automatic group creation on hub create, key package upload) may not be fully active. See [Security Gaps](SECURITY_GAPS_AND_ROADMAP.md#22-mls-client-side-integration-low).
 
@@ -514,7 +514,7 @@ Message bound to: `timestamp_ms || method || path`. Validated with 5-minute wind
 | `ed25519-dalek` | 2 | Audited, constant-time |
 | `x25519-dalek` | 2 | Audited, constant-time |
 | `aes-gcm` | 0.10 | RustCrypto, AES-NI hardware acceleration |
-| `openmls` | 0.8 | RFC 9420 reference implementation |
+| `openmls` | 0.9 (optional, default-off `mls` feature) | RFC 9420 implementation; retired, removal tracked in #2973 |
 | `k256` | 0.13 | Legacy secp256k1, RustCrypto |
 
 All dependencies use `Cargo.lock` for reproducible builds. The `packages/crypto/` crate is the single audit target for all cryptographic operations across all platforms.
