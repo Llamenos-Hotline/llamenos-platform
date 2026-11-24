@@ -36,10 +36,9 @@ import { contactEnvelopeRecipientsResponseSchema } from '@protocol/schemas/conta
 import { x25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { caseOpen, caseSeal } from '@llamenos/crypto/ffi'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)

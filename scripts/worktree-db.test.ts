@@ -472,6 +472,23 @@ describe('no launcher names the shared database itself', () => {
     expect(offenders).toEqual([])
   })
 
+  // ~60 integration test files each carried their own `process.env.DATABASE_URL ?? '<shared URL>'`
+  // (#2704). A default that supplies what the environment should have provided cannot fail when
+  // isolation is missing — it quietly succeeds against the shared database. They now call
+  // requireDatabaseUrl(), which throws; this keeps a new file from bringing the default back.
+  test('no worker integration test names the shared database or defaults DATABASE_URL', () => {
+    const dirs = ['integration', 'integration-bun'].map((d) => join(REPO, 'apps/worker/__tests__', d))
+    const files = dirs.flatMap((d) => filesUnder(d)).filter((f) => f.endsWith('.ts'))
+    expect(files.length).toBeGreaterThan(50)
+    const offenders = files
+      .map((f) => relative(REPO, f))
+      .filter((f) => {
+        const src = readFileSync(join(REPO, f), 'utf8')
+        return SHARED_LITERAL.test(src) || /DATABASE_URL\s*(\?\?|\|\|)/.test(src)
+      })
+    expect(offenders).toEqual([])
+  })
+
   test('the scan reads real files (it would pass vacuously on an empty list)', () => {
     expect(filesUnder(join(REPO, 'scripts')).length).toBeGreaterThan(20)
     expect(SHARED_LITERAL.test('postgresql://llamenos:dev@localhost:5432/llamenos')).toBe(true)
@@ -484,9 +501,14 @@ describe('no launcher names the shared database itself', () => {
       ['scripts/dev-bun.sh', /worktree_db_export/],
       ['start-server.sh', /worktree_db_export/],
       ['scripts/test-worker-integration.ts', /worktree_db_export/],
+      ['scripts/test-worker-integration-bun.sh', /worktree_db_export/],
     ]
     for (const [file, re] of must) expect(readFileSync(join(REPO, file), 'utf8'), file).toMatch(re)
-    expect(JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).scripts['db:migrate']).toBe('bash scripts/db-migrate.sh')
+    const pkgScripts = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).scripts
+    expect(pkgScripts['db:migrate']).toBe('bash scripts/db-migrate.sh')
+    // The integration tiers' package scripts run the resolving wrappers, never bare vitest/bun test (#2704).
+    expect(pkgScripts['test:worker:integration']).toBe('bun scripts/test-worker-integration.ts')
+    expect(pkgScripts['test:worker:integration-bun']).toBe('bash scripts/test-worker-integration-bun.sh')
     // And no default database in drizzle's config.
     expect(readFileSync(join(REPO, 'drizzle.config.ts'), 'utf8')).not.toMatch(/\|\|\s*['"`]postgres/)
   })

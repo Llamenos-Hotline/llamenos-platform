@@ -52,10 +52,9 @@ import { ServiceError } from '../../services/service-error'
 import { ed25519Sign, ed25519PubkeyFromSeed } from '../mocks/llamenos-crypto-ffi'
 import { hexToBytes, bytesToHex } from '@shared/encoding'
 import type { SigchainLinkType } from '@protocol/schemas/sigchain'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_sigchain_concurrency_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

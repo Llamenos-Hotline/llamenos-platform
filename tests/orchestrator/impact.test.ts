@@ -115,6 +115,7 @@ describe('classifyImpact', () => {
     ['scripts/verify-runtime.ts'],
     ['scripts/run-migrations.ts'],
     ['scripts/test-orchestrator.sh'],
+    ['scripts/test-worker-integration-bun.sh'],
     ['scripts/test-fleet.sh'],
     ['scripts/test-backend-bdd.sh'],
     ['scripts/test-integration-full.sh'],

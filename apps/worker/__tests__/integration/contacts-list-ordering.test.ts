@@ -32,10 +32,9 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { contacts } from '../../db/schema'
 import { ContactsService } from '../../services/contacts'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_contacts_order_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

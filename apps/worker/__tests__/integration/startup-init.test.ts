@@ -21,12 +21,11 @@ import postgres from 'postgres'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import { bytesToHex } from '@shared/encoding'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const ADMIN_PUBKEY = 'c'.repeat(64)
 /**

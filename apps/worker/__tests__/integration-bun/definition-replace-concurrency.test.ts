@@ -21,10 +21,9 @@ import { entityTypeDefinitions } from '../../db/schema'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { applyTemplate } from '../../lib/template-engine'
 import { loadBundledTemplates } from '../../lib/template-loader'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const settings = createSettingsDomain(db)

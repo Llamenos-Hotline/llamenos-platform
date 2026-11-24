@@ -19,8 +19,10 @@
  * files that quietly stop being collected.
  *
  * Deliberately takes no arguments: the floor must hold for the one invocation
- * CI and `scripts/test-worker.sh` make. Run `bunx vitest --config
- * vitest.integration.config.ts <file>` directly to work on a single file.
+ * CI and `scripts/test-worker.sh` make (`bun run test:worker:integration` is this
+ * file). To work on a single file run `bunx vitest --config
+ * vitest.integration.config.ts <file>` directly, with DATABASE_URL set to a
+ * database you own — the test files refuse to run without one (#2704).
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, readdirSync } from 'node:fs'

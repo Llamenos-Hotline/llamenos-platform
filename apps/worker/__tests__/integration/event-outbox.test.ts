@@ -30,14 +30,13 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { EventOutbox } from '../../lib/event-outbox'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
 // ---------------------------------------------------------------------------
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 /** Unique schema per test run to prevent cross-run interference */
 const TEST_SCHEMA = `test_outbox_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`

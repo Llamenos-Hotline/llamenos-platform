@@ -45,13 +45,12 @@ import { startParallelRinging } from '../../services/ringing'
 import { initConnectionManager, type ConnectionState } from '../../lib/ws-manager'
 import callsRoutes from '../../routes/calls'
 import type { AppEnv, Env } from '../../types'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `voip_push_ref_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)

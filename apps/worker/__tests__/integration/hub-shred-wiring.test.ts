@@ -59,12 +59,11 @@ import {
   reader,
   seedReadableNote,
 } from './hub-shred-helpers'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
 const ENTRYPOINT = path.join(REPO_ROOT, 'src/server/index.ts')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const DB_NAME = `hub_shred_wiring_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)

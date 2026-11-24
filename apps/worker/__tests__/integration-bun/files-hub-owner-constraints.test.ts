@@ -20,10 +20,9 @@ import { inArray, sql } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs } from '../../db/schema'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 

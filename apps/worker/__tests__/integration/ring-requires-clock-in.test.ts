@@ -64,10 +64,9 @@ import { createSettingsDomain, type SettingsDomainServices } from '../../service
 import { IdentityService } from '../../services/identity'
 import { CallsService } from '../../services/calls'
 import { resolveRingableVolunteers } from '../../services/ringing'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const RUN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 

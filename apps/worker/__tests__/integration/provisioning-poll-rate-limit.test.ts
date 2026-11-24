@@ -41,10 +41,9 @@ import { ServiceError } from '../../services/service-error'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import type { AppEnv } from '../../types'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_provision_poll_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

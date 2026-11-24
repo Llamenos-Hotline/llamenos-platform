@@ -35,10 +35,9 @@ import * as schema from '../../db/schema'
 import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { rateLimit, RATE_LIMIT_TIERS } from '../../middleware/rate-limit'
 import type { AppEnv } from '../../types'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_rate_limit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 

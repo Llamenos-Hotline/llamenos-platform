@@ -14,14 +14,13 @@ import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 import { signalMessageQueue } from '../../db/schema'
 import { SignalMessageQueue, hashSignalQueueRecipientIdentifier } from '../../messaging/signal/queue'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 // This integration suite runs in Node; the production crypto wrapper uses
 // bun:ffi, so use the shared contract-compatible crypto implementation.
 vi.mock('@llamenos/crypto/ffi', async () => import('../mocks/llamenos-crypto-ffi'))
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:llamenos@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const TEST_SCHEMA = `test_signal_queue_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const HMAC_SECRET = 'a'.repeat(64)

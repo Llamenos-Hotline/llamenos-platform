@@ -37,11 +37,10 @@ import { IncidentService } from '../../services/incidents'
 import type { BlobStorage } from '../../types'
 import type { TelephonyAdapter } from '../../telephony/adapter'
 import { notes } from '../../db/schema'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 /** Stored records seal with no AAD; the label is bound as the HPKE info. */
 const NO_AAD = new Uint8Array(0)

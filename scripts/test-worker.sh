@@ -59,10 +59,11 @@ else
 fi
 
 # Step 4: Worker integration tests.
-# The wrapper, not `bun run test:worker:integration`: it runs the same vitest
-# config and then asserts the suite actually ran (every file collected, test
-# count above a floor). The bare npm script stays un-floored on purpose, as the
-# escape hatch for working on a single file — see the script's header (#1167).
+# The wrapper (`bun run test:worker:integration` runs the same thing): it
+# resolves this worktree's database, runs vitest and then asserts the suite
+# actually ran (every file collected, test count above a floor) (#1167). To work
+# on a single file, run `bunx vitest` on it directly with DATABASE_URL set — see
+# the wrapper's header.
 if reporter_run_step "worker integration tests" bun scripts/test-worker-integration.ts; then
   reporter_record_suite "integration" 1 0 0
 else

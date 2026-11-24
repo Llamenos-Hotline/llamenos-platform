@@ -41,10 +41,9 @@ import { conversations, deviceVerifications, devices, hubs, messages, users } fr
 import { ConversationsService } from '../../services/conversations'
 import { ServiceError } from '../../services/service-error'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../../lib/hpke-recipient'
+import { requireDatabaseUrl } from '../helpers/database-url'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const service = new ConversationsService(db, 'ab'.repeat(32))
