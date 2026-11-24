@@ -99,7 +99,7 @@ function appAs(actor: Actor) {
   })
   app.use('*', async (c, next) => {
     c.set('pubkey', actor.pubkey)
-    c.set('user', { pubkey: actor.pubkey, roles: [], hubRoles: actor.hubRoles } as AppEnv['Variables']['user'])
+    c.set('user', { pubkey: actor.pubkey, roles: [], hubRoles: actor.hubRoles } as unknown as AppEnv['Variables']['user'])
     c.set('allRoles', ALL_ROLES)
     c.set('permissions', resolvePermissions([], ALL_ROLES))
     c.set('services', services as unknown as AppEnv['Variables']['services'])

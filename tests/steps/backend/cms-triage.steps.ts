@@ -16,7 +16,7 @@ import {
   createCmsReportTypeViaApi,
   createShiftViaApi,
   createUserViaApi,
-  generateTestKeypair,
+  adminDeviceKey,
   uniqueName,
   encryptForTest,
   ADMIN_SEED,
@@ -255,7 +255,6 @@ When('the admin creates a case record from the report', async ({ request, world 
   }
 
   // Step 1: Create the case record with all required fields
-  const kp = generateTestKeypair()
   const hubId = getScenarioState(world).hubId
   const { data, status } = await apiPost<{ id?: string; record?: { id: string } }>(
     request,
@@ -264,7 +263,7 @@ When('the admin creates a case record from the report', async ({ request, world 
       entityTypeId: getTriageState(world).entityTypeId,
       statusHash: 'open',
       encryptedSummary: 'triage-case-summary',
-      summaryEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'key', enc: 'b'.repeat(64) }],
     },
   )
   // Both writes are this scenario's subject. They used to be guarded by

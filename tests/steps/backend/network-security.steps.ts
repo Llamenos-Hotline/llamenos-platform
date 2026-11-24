@@ -21,6 +21,7 @@ import {
   ADMIN_SEED,
   authHeaders,
   uploadFileViaApi,
+  adminFileKeyEnvelopes,
 } from '../../api-helpers'
 import { getScenarioState } from './common.steps'
 import {
@@ -577,6 +578,7 @@ When('uploading a file of {int}MB', async ({ request, world }, sizeMB: number) =
   const size = sizeMB * 1024 * 1024
   const init = await apiPost<{ uploadId?: string }>(request, `/hubs/${hubId}/uploads/init`, {
     totalSize: size, totalChunks: 1, owner: { kind: 'entity_field' },
+    recipientEnvelopes: adminFileKeyEnvelopes(),
   })
   expect(init.status).toBe(200)
   const path = `/api/hubs/${hubId}/uploads/${init.data.uploadId}/chunks/0`

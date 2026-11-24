@@ -15,6 +15,7 @@ import {
   uniquePhone,
   uniqueName,
   ADMIN_SEED,
+  adminDeviceKey,
 } from '../../api-helpers'
 import { simulateCallForNote } from '../../simulation-helpers'
 import {
@@ -161,7 +162,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
         entityTypeId: etRes.data.id,
         statusHash: 'active',
         encryptedSummary: 'storage-test-summary',
-        summaryEnvelopes: [{ pubkey: adminPubkey, enc: DUMMY_ENC, ct: 'storage-test-ct' }],
+        summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'storage-test-ct' }],
         blindIndexes: { category: ['storage-test'] },
       },
     )

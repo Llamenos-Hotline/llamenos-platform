@@ -1674,7 +1674,7 @@ export async function createContactByNameViaApi(
   // "Restricted" placeholder (issue #796).
   const { encryptedContent: encryptedSummary, readerEnvelopes } = await encryptMessageForDesktop(
     JSON.stringify({ displayName, contactType, tags: [] }),
-    [seedHex],
+    writerAndAdminSeeds(seedHex),
   )
 
   return createContactViaApi(request, {
@@ -1703,6 +1703,56 @@ async function realEnvelope(
 }
 
 /**
+ * The seeds a client-sealed write is wrapped for: the writer, and always the
+ * admin. The server refuses (422) a record, event, contact, file or evidence
+ * description whose envelopes name no admin reader (#2174), because it can never
+ * re-wrap a client-sealed key — so a fixture that seals only to its own writer
+ * is exactly what the guard rejects.
+ */
+function writerAndAdminSeeds(seedHex: string): string[] {
+  return seedHex === ADMIN_SEED ? [ADMIN_SEED] : [seedHex, ADMIN_SEED]
+}
+
+/**
+ * The admin's HPKE device encryption key — the recipient a write must name
+ * (#2174). NOT the admin's Ed25519 identity key: sealing to that succeeds and
+ * opens for nobody, and the guard refuses it for the same reason.
+ */
+export function adminDeviceKey(): string {
+  return hpkeRecipientForSeed(ADMIN_SEED).pubkeyHex
+}
+
+/**
+ * Placeholder key envelopes addressed to the admin, for an upload `init` whose
+ * scenario never opens the file (a size limit, a hub boundary). `init` refuses
+ * a file whose key no admin can unwrap (#2174), so a body without them never
+ * reaches the check the scenario is about. A scenario that reads the file back
+ * uses {@link uploadFileViaApi}, which wraps a real key.
+ */
+export function adminFileKeyEnvelopes(): Array<{ pubkey: string; enc: string; ct: string }> {
+  return [{ pubkey: adminDeviceKey(), enc: 'b'.repeat(64), ct: 'c'.repeat(32) }]
+}
+
+/**
+ * The admin as a recipient in the `{ recipientPubkey, encryptedKey }` shape the
+ * contact merge and bulk-create bodies carry their envelopes in. A body that
+ * names no admin is refused (422, #2174), so a fixture that does not care what
+ * is sealed still has to address the admin.
+ */
+export function adminSummaryRecipients(): Array<{ recipientPubkey: string; encryptedKey: string }> {
+  return [{ recipientPubkey: adminDeviceKey(), encryptedKey: 'test-wrapped-key' }]
+}
+
+/** {@link realEnvelope} for the writer and the admin. */
+async function realEnvelopesForWriterAndAdmin(
+  contentKey: Uint8Array,
+  seedHex: string,
+  label = LABEL_NOTE_KEY,
+): Promise<Array<{ pubkey: string; ct: string; enc: string }>> {
+  return Promise.all(writerAndAdminSeeds(seedHex).map(seed => realEnvelope(contentKey, seed, label)))
+}
+
+/**
  * Seal a case summary, fields payload or comment for the seed's HPKE recipient
  * in the case-record format (PROTOCOL.md §2.18) — the construction pinned to the
  * server-persisted vectors by tests/crypto-interop.spec.ts — so seeded case
@@ -1714,7 +1764,8 @@ async function sealCaseForSeed(
   seedHex = ADMIN_SEED,
 ): Promise<{ encryptedContent: string; envelopes: Array<{ pubkey: string; ct: string; enc: string }> }> {
   const recipient = hpkeRecipientForSeed(seedHex)
-  const sealed = await sealCaseMock(purpose, plaintext, [], { encryptionPubkeyHex: recipient.pubkeyHex, signingPubkeyHex: '' })
+  const adminReaders = seedHex === ADMIN_SEED ? [] : [hpkeRecipientForSeed(ADMIN_SEED).pubkeyHex]
+  const sealed = await sealCaseMock(purpose, plaintext, adminReaders, { encryptionPubkeyHex: recipient.pubkeyHex, signingPubkeyHex: '' })
   return { encryptedContent: sealed.encryptedContent, envelopes: sealed.readerEnvelopes }
 }
 
@@ -1803,7 +1854,7 @@ export async function createContactViaApi(
   if (!summaryEnvelopes) {
     const contentKey = generateContentKey()
     encryptedSummary ??= encryptContent('test contact summary', contentKey, LABEL_NOTE_KEY)
-    summaryEnvelopes = [await realEnvelope(contentKey, seedHex)]
+    summaryEnvelopes = await realEnvelopesForWriterAndAdmin(contentKey, seedHex)
   }
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
@@ -2006,7 +2057,7 @@ export async function createEventViaApi(
 ): Promise<Record<string, unknown>> {
   const contentKey = generateContentKey()
   const encryptedDetails = encryptContent('test event', contentKey, LABEL_NOTE_KEY)
-  const envelope = await realEnvelope(contentKey, seedHex)
+  const envelopes = await realEnvelopesForWriterAndAdmin(contentKey, seedHex)
   const { status, data } = await apiPost<Record<string, unknown>>(
     request,
     hubOwnedPath('/events', options.hubId),
@@ -2019,7 +2070,7 @@ export async function createEventViaApi(
       statusHash: options?.statusHash ?? 'event_status_hash',
       blindIndexes: {},
       encryptedDetails,
-      detailEnvelopes: [envelope],
+      detailEnvelopes: envelopes,
       locationPrecision: 'neighborhood',
     },
     seedHex,
@@ -2105,7 +2156,7 @@ export async function createInteractionViaApi(
   if (options.sourceId) body.sourceId = options.sourceId
   if (options.encryptedContent) {
     body.encryptedContent = options.encryptedContent
-    body.contentEnvelopes = [await realEnvelope(contentKey, seedHex)]
+    body.contentEnvelopes = await realEnvelopesForWriterAndAdmin(contentKey, seedHex)
   }
   if (options.previousStatusHash) body.previousStatusHash = options.previousStatusHash
   if (options.newStatusHash) body.newStatusHash = options.newStatusHash
@@ -2165,7 +2216,7 @@ export async function uploadFileViaApi(
   const plaintext = 'f'.repeat(options.plaintextBytes ?? 1024)
   const contentKey = generateContentKey()
   const ciphertext = hexToBytes(encryptContent(plaintext, contentKey, LABEL_FILE_KEY))
-  const recipientSeeds = seedHex === ADMIN_SEED ? [ADMIN_SEED] : [seedHex, ADMIN_SEED]
+  const recipientSeeds = writerAndAdminSeeds(seedHex)
   const recipientEnvelopes = await Promise.all(
     recipientSeeds.map(seed => realEnvelope(contentKey, seed, LABEL_FILE_KEY)),
   )
@@ -2521,7 +2572,7 @@ export async function createAffinityGroupViaApi(
 ): Promise<GroupResult> {
   const contentKey = generateContentKey()
   const encryptedDetails = encryptContent(JSON.stringify({ name }), contentKey, LABEL_NOTE_KEY)
-  const envelope = await realEnvelope(contentKey, seedHex)
+  const envelopes = await realEnvelopesForWriterAndAdmin(contentKey, seedHex)
   // The group body requires at least one member. If none provided, the caller
   // must supply initialMembers. The encryptedDetails is encrypted with real AES-256-GCM.
   const members = initialMembers.map(m => ({
@@ -2534,7 +2585,7 @@ export async function createAffinityGroupViaApi(
     hubOwnedPath('/directory/groups', hubId),
     {
       encryptedDetails,
-      detailEnvelopes: [envelope],
+      detailEnvelopes: envelopes,
       members,
     },
     seedHex,
