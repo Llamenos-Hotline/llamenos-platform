@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { IdentityService } from '../../services/identity'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 
 // ---------------------------------------------------------------------------
 // DB row factory

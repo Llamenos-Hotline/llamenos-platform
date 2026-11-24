@@ -33,7 +33,7 @@ import { ed25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import type { AppEnv } from '@worker/types'
 import * as schema from '../../db/schema'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 import { buildAuthMessage } from '../../lib/auth'
 import { freshHubDb } from './hub-shred-helpers'
 
@@ -47,7 +47,7 @@ async function makeApp() {
   const services = {
     identity: fresh.identity,
     audit: fresh.audit,
-    settings: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
+    rateLimits: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
   }
   const { default: invites } = await import('@worker/routes/invites')
   const app = new Hono<AppEnv>()

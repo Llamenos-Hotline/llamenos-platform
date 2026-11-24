@@ -60,7 +60,7 @@ import { and, eq, sql } from 'drizzle-orm'
 import type { Database } from '../db'
 import { users, roles as roleDefinitions, hubs } from '../db/schema'
 import { DEFAULT_ROLES, HUB_ADMIN_PERMISSIONS, roleUsableIn, rolesConferHubAdmin, rolesGrantAll, type RoleCatalog } from '@shared/permissions'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { isRevokedSigningKey } from './revoked-signing-keys'
 
 // The permission minimum and the pure "do these roles confer admin" predicate

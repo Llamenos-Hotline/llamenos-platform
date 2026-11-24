@@ -96,8 +96,8 @@ export const auth = createMiddleware<AppEnv>(async (c, next) => {
     }
   }
 
-  // Load all roles from SettingsService
-  const { roles: allRoles } = await services.settings.getRoles()
+  // Load all roles from RolesService
+  const { roles: allRoles } = await services.roles.getRoles()
 
   // Resolve effective permissions from user's role IDs
   const permissions = resolvePermissions(authResult.user.roles, allRoles)

@@ -26,7 +26,7 @@ import { getUserHpkeRecipients, messageReaders } from '../lib/device-recipients'
 import { hpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { listAdminPubkeys } from '../lib/hub-admin'
 import { mayRewrapHistoryTo } from '@shared/history-rewrap-gate'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { createLogger } from '../lib/logger'
 import {
   conversationMetadataSchema,
@@ -450,7 +450,7 @@ export class ConversationsService {
     if (input.assignedTo !== undefined) updates.assignedTo = input.assignedTo
     if (input.metadata) {
       // Encoded by the column, never JSON.stringify'd — see the comment on
-      // SettingsService.updateHubSettings for both halves of why.
+      // HubSettingsService.updateHubSettings for both halves of why.
       updates.metadata = sql`COALESCE(${conversations.metadata}, '{}'::jsonb) || ${conversations.metadata.mapToDriverValue(input.metadata)}::jsonb`
     }
 

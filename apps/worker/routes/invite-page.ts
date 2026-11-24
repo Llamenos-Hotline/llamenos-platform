@@ -157,7 +157,7 @@ invitePage.get('/', async (c) => {
   if (!INVITE_CODE.test(code)) return respond('invalid', 404)
 
   const services = c.get('services')
-  if (await checkRateLimit(services.settings, `invite-validate:${routeRateLimitClient(c)}`, 5)) {
+  if (await checkRateLimit(services.rateLimits, `invite-validate:${routeRateLimitClient(c)}`, 5)) {
     return respond('rateLimited', 429)
   }
 

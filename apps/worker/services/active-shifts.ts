@@ -7,7 +7,7 @@
 import { eq, and, lt, gte } from 'drizzle-orm'
 import type { Database } from '../db'
 import { activeShifts } from '../db/schema'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import {
   ACTIVE_SHIFT_HEARTBEAT_INTERVAL_MS,
   ACTIVE_SHIFT_MIN_BEATS_BEFORE_STALE,

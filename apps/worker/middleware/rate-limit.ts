@@ -2,7 +2,7 @@
  * PostgreSQL-backed fixed-window rate limiting middleware (Epic A / C03).
  *
  * Replaces the in-memory Map with atomic INSERT ... ON CONFLICT upsert
- * via SettingsService.checkApiRateLimit(). State persists across restarts.
+ * via RateLimitService.checkApiRateLimit(). State persists across restarts.
  */
 
 import type { MiddlewareHandler } from 'hono'
@@ -104,7 +104,7 @@ export function rateLimit(tier: RateLimitTier): MiddlewareHandler<AppEnv> {
 
     try {
       const services = c.get('services')
-      const result = await services.settings.checkApiRateLimit(key, config.maxRequests, config.windowMs)
+      const result = await services.rateLimits.checkApiRateLimit(key, config.maxRequests, config.windowMs)
 
       if (result.limited) {
         c.header('Retry-After', String(result.retryAfterSeconds))

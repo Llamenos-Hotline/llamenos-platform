@@ -38,7 +38,7 @@ webauthn.post('/login/options',
   async (c) => {
     const services = c.get('services')
     // Rate limit WebAuthn login attempts to prevent challenge flooding
-    const limited = await checkRateLimit(services.settings, `webauthn:${routeRateLimitClient(c)}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `webauthn:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests. Try again later.' }, 429)
     const rpID = new URL(c.req.url).hostname
     const { credentials } = await services.identity.getAllWebAuthnCredentials()
@@ -73,7 +73,7 @@ webauthn.post('/login/verify',
   async (c) => {
     const services = c.get('services')
     // Rate limit verification attempts
-    const verifyLimited = await checkRateLimit(services.settings, `webauthn-verify:${routeRateLimitClient(c)}`, 5)
+    const verifyLimited = await checkRateLimit(services.rateLimits, `webauthn-verify:${routeRateLimitClient(c)}`, 5)
     if (verifyLimited) return c.json({ error: 'Too many requests. Try again later.' }, 429)
     const body = c.req.valid('json')
     const assertion = body.assertion as unknown as AuthenticationResponseJSON

@@ -13,7 +13,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import type { TelephonyAdapter } from '@worker/telephony/adapter'
 import type { Services } from '@worker/services'
-import { HubNotFoundError, ServiceError } from '@worker/services/settings'
+import { HubNotFoundError, ServiceError } from '@worker/services/service-error'
 import '@worker/__tests__/mocks/llamenos-crypto-ffi'
 
 vi.mock('@worker/lib/service-factories')
@@ -50,7 +50,7 @@ function makeAdapter(opts: { signatureValid?: boolean; ownAccount?: boolean } = 
 function makeServices() {
   const signal = vi.fn().mockResolvedValue(undefined)
   const services = {
-    settings: {
+    hubs: {
       getHub: vi.fn(async (id: string) => {
         if (id !== 'hub-1') throw new HubNotFoundError()
         return { hub: { id } }
@@ -59,9 +59,13 @@ function makeServices() {
         if (phone !== HUB_NUMBER) throw new ServiceError(404, 'No hub for this number')
         return { hub: { id: 'hub-1' } }
       }),
+    },
+    ivrSettings: {
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en'] }),
-      getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
       resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+    },
+    callSettings: {
+      getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120 }),
     },
     records: { checkBan: vi.fn().mockResolvedValue(false) },
     calls: { getHubIdForCall: vi.fn().mockResolvedValue('hub-1') },

@@ -205,7 +205,7 @@ users.post('/',
     const requestedRoleIds = (body.roleIds?.length ? body.roleIds : undefined) || (body.roles?.length ? body.roles : undefined) || []
     const roleIds = requestedRoleIds.length > 0 || !hubId
       ? requestedRoleIds
-      : await resolveHubDefaultMemberRoles(services.settings, hubId)
+      : await resolveHubDefaultMemberRoles(services, hubId)
 
     // The creator must already hold every permission they grant (prevents privilege escalation)
     const denied = checkRoleGrant(c, roleIds)

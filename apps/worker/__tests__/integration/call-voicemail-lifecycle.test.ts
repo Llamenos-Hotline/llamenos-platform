@@ -11,7 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { CallsService } from '../../services/calls'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
 

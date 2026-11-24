@@ -34,7 +34,8 @@ import { createDatabase } from '../../db'
 import { hubs, inviteCodes, users } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { IdentityService } from '../../services/identity'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import type { AppEnv } from '../../types'
 import { DEFAULT_ROLES, resolvePermissions, type Role } from '@shared/permissions'
 
@@ -44,7 +45,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const svc = { identity, settings: new SettingsService(db), audit: new AuditService(db) }
+const svc = { identity, ...createSettingsDomain(db), audit: new AuditService(db) }
 
 const ALL_ROLES: Role[] = DEFAULT_ROLES.map(r => ({
   ...r,

@@ -39,7 +39,7 @@ import type {
   ServerSession,
   DeviceRecord,
 } from '../types'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import type { SampleIdentity } from '../lib/sample-identities'
 import { destructiveResetRefusal, type DevSurfacesEnv } from '../lib/dev-surfaces'
 import { isRevokedSigningKey } from '../lib/revoked-signing-keys'
@@ -1539,7 +1539,7 @@ export class IdentityService {
     const current = await this.getWebAuthnSettings()
     const updated = { ...current, ...data }
 
-    // Upsert into systemSettings — assumes a single row exists (created by SettingsService.ensureInit)
+    // Upsert into systemSettings — assumes a single row exists (created by SettingsBootstrapService.ensureInit)
     await this.db
       .update(systemSettings)
       .set({ webauthnSettings: updated })

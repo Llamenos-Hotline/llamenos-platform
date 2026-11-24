@@ -7,7 +7,7 @@
  *
  * Each adapter is driven through every call-flow step that takes an audio map.
  * The map records every key the adapter looks up; each is then offered to the
- * real upload path (SettingsService.uploadIvrAudio), which refuses a prompt
+ * real upload path (IvrSettingsService.uploadIvrAudio), which refuses a prompt
  * type it does not know before it touches storage.
  */
 import { describe, it, expect } from 'vitest'
@@ -19,7 +19,7 @@ import { BandwidthAdapter } from '@worker/telephony/bandwidth'
 import { TelnyxAdapter } from '@worker/telephony/telnyx'
 import { AsteriskAdapter } from '@worker/telephony/asterisk'
 import { FreeSwitchAdapter } from '@worker/telephony/freeswitch'
-import { SettingsService } from '@worker/services/settings'
+import { createSettingsDomain } from '@worker/services/settings-domain'
 import { createMockDb } from './mock-db'
 import { fakeSpeech } from '../helpers/fake-speech'
 
@@ -110,8 +110,8 @@ const NOT_YET_UPLOADABLE = new Set(['voicemailPrompt'])
 /** Whether the real upload path accepts this prompt type (it fails on the empty file next, never storing it) */
 async function uploadable(promptType: string): Promise<boolean> {
   const { db } = createMockDb()
-  const settings = new SettingsService(db as never)
-  const error = await settings.uploadIvrAudio(undefined, promptType, LANG, '', 0).then(() => null, (e: Error) => e.message)
+  const settings = createSettingsDomain(db as never)
+  const error = await settings.ivrSettings.uploadIvrAudio(undefined, promptType, LANG, '', 0).then(() => null, (e: Error) => e.message)
   if (error === 'Invalid prompt type') return false
   expect(error).toBe('Empty file')
   return true

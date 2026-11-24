@@ -741,7 +741,7 @@ publicRoutes.post('/initiate',
     const services = c.get('services')
 
     const limited = await checkRateLimit(
-      services.settings,
+      services.rateLimits,
       `recovery-initiate:${routeRateLimitClient(c)}`,
       2, // 2 per minute = 10 per 5 min
     )

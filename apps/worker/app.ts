@@ -76,7 +76,7 @@ import { openAPIRouteHandler } from 'hono-openapi'
 import { Scalar } from '@scalar/hono-api-reference'
 import { openAPIConfig } from './openapi/config'
 import { enforceDeclaredResponses, registerDeclaredResponses } from './openapi/declared-responses'
-import { ServiceError, serviceErrorBody } from './services/settings'
+import { ServiceError, serviceErrorBody } from './services/service-error'
 import { createLogger } from './lib/logger'
 import { devSurfacesEnabled } from './lib/dev-surfaces'
 

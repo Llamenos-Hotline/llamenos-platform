@@ -80,7 +80,7 @@ webrtc.get('/webrtc-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
+    const config = await services.providerConfig.getTelephonyProvider(c.env.SERVER_KEK)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -147,7 +147,7 @@ webrtc.get('/sip-token',
     }
 
     // Get provider config
-    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
+    const config = await services.providerConfig.getTelephonyProvider(c.env.SERVER_KEK)
     if (!config) {
       return c.json({ error: 'No telephony provider configured' }, 404)
     }
@@ -229,7 +229,7 @@ webrtc.get('/sip-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
+    const config = await services.providerConfig.getTelephonyProvider(c.env.SERVER_KEK)
     // Must agree with /sip-token, which refuses while the credential would be
     // shared (#1203), refuses a caller holding no hub role (#1540) and refuses
     // while the registrar secret is unset (D6).
@@ -266,7 +266,7 @@ webrtc.get('/webrtc-status',
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
+    const config = await services.providerConfig.getTelephonyProvider(c.env.SERVER_KEK)
     return c.json({
       available: isWebRtcConfigured(config),
       provider: config?.type ?? null,

@@ -82,9 +82,13 @@ function makeServices(rosters: Record<string, string[]>): Services {
     activeShifts: {
       listClockedInPubkeys: vi.fn(async (hubId: string) => new Set(rosters[hubId] ?? [])),
     },
-    settings: {
+    callSettings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
     },
     identity: {
@@ -160,7 +164,7 @@ describe('call:ring relay delivery (#1013)', () => {
     // or not. Every call now belongs to a hub and the check has no exemption.
     const member = connect(mgr, 'pk-member', [HUB_A], [HUB_A])
     const services = makeServices({ [HUB_A]: [] })
-    vi.mocked(services.settings.getFallbackGroup).mockResolvedValue({ userPubkeys: ['pk-nohub'] })
+    vi.mocked(services.callSettings.getFallbackGroup).mockResolvedValue({ userPubkeys: ['pk-nohub'] })
     vi.mocked(services.identity.getUsers).mockResolvedValue({
       users: [{ pubkey: 'pk-nohub', active: true, onBreak: false, callPreference: 'browser', phone: null, roles: [], hubRoles: [] }],
     } as unknown as Awaited<ReturnType<Services['identity']['getUsers']>>)

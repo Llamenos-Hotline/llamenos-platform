@@ -41,7 +41,7 @@ import {
   type MessageCluster,
 } from './firehose-inference'
 import { AuditService, audit } from './audit'
-import type { SettingsService } from './settings'
+import type { CustomFieldsService } from './custom-fields'
 
 const log = createLogger('services.firehose-agent')
 
@@ -76,7 +76,7 @@ export class FirehoseAgentService {
     private readonly firehose: FirehoseService,
     private readonly conversations: ConversationsService,
     private readonly auditService: AuditService,
-    private readonly settings: SettingsService,
+    private readonly customFields: CustomFieldsService,
     private readonly sealKey: string,
     private readonly env: {
       SERVER_SECRET?: string
@@ -577,7 +577,7 @@ export class FirehoseAgentService {
     _hubId: string,
     _reportTypeId: string,
   ): Promise<CustomFieldDef[]> {
-    const { fields: allFields } = await this.settings.getCustomFields('admin')
+    const { fields: allFields } = await this.customFields.getCustomFields('admin')
 
     // Filter to report-context fields
     const relevant = allFields.filter((f) => f.context === 'reports')

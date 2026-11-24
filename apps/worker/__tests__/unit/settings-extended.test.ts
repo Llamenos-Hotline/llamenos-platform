@@ -1,11 +1,12 @@
 /**
- * Extended unit tests for SettingsService covering methods not tested in settings.test.ts.
+ * Extended unit tests for the settings-domain services covering methods not tested in settings.test.ts.
  * Targets: ensureInit, transcription, call settings, IVR, fallback group, custom fields,
  * messaging config, setup state, enabled channels, report types, telephony provider,
  * IVR audio, roles CRUD, captcha, TTL overrides, cleanup metrics, archiveHub, deleteHub.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { SettingsService, invalidateRolesCache } from '@worker/services/settings'
+import { invalidateRolesCache } from '@worker/services/roles'
+import { createSettingsDomain } from '@worker/services/settings-domain'
 import { SealedRecordingDeleteError } from '@worker/services/call-recordings'
 import { createMockDb } from './mock-db'
 
@@ -76,7 +77,7 @@ function setup() {
   // non-empty default row so tests that don't care about the exact
   // persisted shape don't have to set one up themselves.
   db.$setInsertResult([{ settings: {} }])
-  const service = new SettingsService(db as any)
+  const service = createSettingsDomain(db as any)
   return { db, service }
 }
 
@@ -84,7 +85,7 @@ function setup() {
 // ensureInit
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.ensureInit', () => {
+describe('SettingsBootstrapService.ensureInit', () => {
   it('seeds spam settings when row has empty spamSettings', async () => {
     const { db, service } = setup()
     // First select: returns row with empty spamSettings
@@ -93,7 +94,7 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow({ spamSettings: {} })],
       [], // roles empty → seed defaults
     ])
-    await service.ensureInit()
+    await service.settingsBootstrap.ensureInit()
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -103,7 +104,7 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow({})],
       [], // no roles
     ])
-    await service.ensureInit()
+    await service.settingsBootstrap.ensureInit()
     expect(db.insert).toHaveBeenCalled()
   })
 
@@ -113,7 +114,7 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow({})],
       [makeRole()], // roles exist
     ])
-    await service.ensureInit()
+    await service.settingsBootstrap.ensureInit()
     // insert should NOT be called for roles (update may be called for spam settings)
     const insertCalls = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
     expect(insertCalls).toBe(0)
@@ -125,7 +126,7 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow({ setupState: null, messagingConfig: null })],
       [makeRole()],
     ])
-    await service.ensureInit({ ENVIRONMENT: 'development' })
+    await service.settingsBootstrap.ensureInit({ ENVIRONMENT: 'development' })
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -135,9 +136,9 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow()],
       [makeRole()],
     ])
-    await service.ensureInit()
+    await service.settingsBootstrap.ensureInit()
     const firstInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
-    await service.ensureInit() // second call — initialized flag is set
+    await service.settingsBootstrap.ensureInit() // second call — initialized flag is set
     const secondInsertCount = (db.insert as ReturnType<typeof vi.fn>).mock.calls.length
     expect(secondInsertCount).toBe(firstInsertCount) // no additional calls
   })
@@ -150,9 +151,9 @@ describe('SettingsService.ensureInit', () => {
       [makeSettingsRow({ setupState: null, messagingConfig: null })],
       [makeRole()],
     ])
-    await service.ensureInit() // boot
+    await service.settingsBootstrap.ensureInit() // boot
     const updatesAfterBoot = (db.update as ReturnType<typeof vi.fn>).mock.calls.length
-    await service.ensureInit({ ENVIRONMENT: 'development' })
+    await service.settingsBootstrap.ensureInit({ ENVIRONMENT: 'development' })
     expect((db.update as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(updatesAfterBoot)
   })
 })
@@ -161,12 +162,12 @@ describe('SettingsService.ensureInit', () => {
 // getTranscriptionSettings
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getTranscriptionSettings', () => {
+describe('CallSettingsService.getTranscriptionSettings', () => {
   it('returns transcription settings from DB', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ transcriptionEnabled: false, allowUserTranscriptionOptOut: true })])
 
-    const result = await service.getTranscriptionSettings()
+    const result = await service.callSettings.getTranscriptionSettings()
     expect(result.globalEnabled).toBe(false)
     expect(result.allowUserOptOut).toBe(true)
   })
@@ -175,20 +176,20 @@ describe('SettingsService.getTranscriptionSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ transcriptionEnabled: null, allowUserTranscriptionOptOut: null })])
 
-    const result = await service.getTranscriptionSettings()
+    const result = await service.callSettings.getTranscriptionSettings()
     expect(result.globalEnabled).toBe(true) // default true
     expect(result.allowUserOptOut).toBe(false) // default false
   })
 })
 
-describe('SettingsService.updateTranscriptionSettings', () => {
+describe('CallSettingsService.updateTranscriptionSettings', () => {
   it('updates globalEnabled', async () => {
     const { db, service } = setup()
     // updateTranscriptionSettings calls getSettings() once at the end (in getTranscriptionSettings())
     // Set up the mock to return the post-update state on that read
     db.$setSelectResult([makeSettingsRow({ transcriptionEnabled: false, allowUserTranscriptionOptOut: false })])
 
-    const result = await service.updateTranscriptionSettings({ globalEnabled: false })
+    const result = await service.callSettings.updateTranscriptionSettings({ globalEnabled: false })
     expect(db.update).toHaveBeenCalled()
     expect(result.globalEnabled).toBe(false)
   })
@@ -198,7 +199,7 @@ describe('SettingsService.updateTranscriptionSettings', () => {
     // Return post-update state for the single getSettings() call
     db.$setSelectResult([makeSettingsRow({ transcriptionEnabled: true, allowUserTranscriptionOptOut: true })])
 
-    const result = await service.updateTranscriptionSettings({ allowUserOptOut: true })
+    const result = await service.callSettings.updateTranscriptionSettings({ allowUserOptOut: true })
     expect(result.allowUserOptOut).toBe(true)
   })
 
@@ -206,7 +207,7 @@ describe('SettingsService.updateTranscriptionSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    await service.updateTranscriptionSettings({})
+    await service.callSettings.updateTranscriptionSettings({})
     expect(db.update).not.toHaveBeenCalled()
   })
 })
@@ -215,12 +216,12 @@ describe('SettingsService.updateTranscriptionSettings', () => {
 // getCallSettings / updateCallSettings
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getCallSettings', () => {
+describe('CallSettingsService.getCallSettings', () => {
   it('returns call settings from DB', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ callSettings: { queueTimeoutSeconds: 60, voicemailMaxSeconds: 90 } })])
 
-    const result = await service.getCallSettings()
+    const result = await service.callSettings.getCallSettings()
     expect(result.queueTimeoutSeconds).toBe(60)
     expect(result.voicemailMaxSeconds).toBe(90)
   })
@@ -229,7 +230,7 @@ describe('SettingsService.getCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ callSettings: null })])
 
-    const result = await service.getCallSettings()
+    const result = await service.callSettings.getCallSettings()
     expect(result.queueTimeoutSeconds).toBe(90)
     expect(result.voicemailMaxSeconds).toBe(120)
   })
@@ -240,7 +241,7 @@ describe('SettingsService.getCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ callSettings: null })])
 
-    expect((await service.getCallSettings()).recordCalls).toBe(false)
+    expect((await service.callSettings.getCallSettings()).recordCalls).toBe(false)
   })
 
   it('defaults recordCalls to false for settings that predate the field', async () => {
@@ -248,7 +249,7 @@ describe('SettingsService.getCallSettings', () => {
     // The shape every existing hub has today: call settings, no recordCalls.
     db.$setSelectResult([makeSettingsRow({ callSettings: { queueTimeoutSeconds: 60, voicemailMaxSeconds: 90 } })])
 
-    expect((await service.getCallSettings()).recordCalls).toBe(false)
+    expect((await service.callSettings.getCallSettings()).recordCalls).toBe(false)
   })
 
   it('a hub that opted in reads back recordCalls true, and its neighbour does not', async () => {
@@ -257,23 +258,23 @@ describe('SettingsService.getCallSettings', () => {
       [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
       [{ hubId: 'hub-a', settings: { callSettings: { recordCalls: true } } }],
     ])
-    expect((await service.getCallSettings('hub-a')).recordCalls).toBe(true)
+    expect((await service.callSettings.getCallSettings('hub-a')).recordCalls).toBe(true)
 
     const second = setup()
     second.db.$setSelectResults([
       [makeSettingsRow({ callSettings: { queueTimeoutSeconds: 90 } })],
       [{ hubId: 'hub-b', settings: { callSettings: {} } }],
     ])
-    expect((await second.service.getCallSettings('hub-b')).recordCalls).toBe(false)
+    expect((await second.service.callSettings.getCallSettings('hub-b')).recordCalls).toBe(false)
   })
 })
 
-describe('SettingsService.updateCallSettings', () => {
+describe('CallSettingsService.updateCallSettings', () => {
   it('clamps queueTimeoutSeconds to min 30', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    const result = await service.updateCallSettings({ queueTimeoutSeconds: 5 })
+    const result = await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 5 })
     expect(result.queueTimeoutSeconds).toBe(30)
   })
 
@@ -281,7 +282,7 @@ describe('SettingsService.updateCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    const result = await service.updateCallSettings({ queueTimeoutSeconds: 9999 })
+    const result = await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 9999 })
     expect(result.queueTimeoutSeconds).toBe(300)
   })
 
@@ -289,7 +290,7 @@ describe('SettingsService.updateCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    const result = await service.updateCallSettings({ queueTimeoutSeconds: 120 })
+    const result = await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 120 })
     expect(result.queueTimeoutSeconds).toBe(120)
   })
 
@@ -297,7 +298,7 @@ describe('SettingsService.updateCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ callSettings: { queueTimeoutSeconds: 60, voicemailMaxSeconds: 90 } })])
 
-    const result = await service.updateCallSettings({ voicemailMaxSeconds: 60 })
+    const result = await service.callSettings.updateCallSettings({ voicemailMaxSeconds: 60 })
     expect(result.queueTimeoutSeconds).toBe(60) // preserved
     expect(result.voicemailMaxSeconds).toBe(60) // updated
   })
@@ -306,7 +307,7 @@ describe('SettingsService.updateCallSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    await service.updateCallSettings({ queueTimeoutSeconds: 100 })
+    await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 100 })
     expect(db.update).toHaveBeenCalled()
   })
 
@@ -316,31 +317,31 @@ describe('SettingsService.updateCallSettings', () => {
   it('round-trips recordCalls on and back off again', async () => {
     const on = setup()
     on.db.$setSelectResult([makeSettingsRow()])
-    expect((await on.service.updateCallSettings({ recordCalls: true })).recordCalls).toBe(true)
+    expect((await on.service.callSettings.updateCallSettings({ recordCalls: true })).recordCalls).toBe(true)
 
     const off = setup()
     off.db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true } })])
-    expect((await off.service.updateCallSettings({ recordCalls: false })).recordCalls).toBe(false)
+    expect((await off.service.callSettings.updateCallSettings({ recordCalls: false })).recordCalls).toBe(false)
   })
 
   it('leaves recordCalls alone when an unrelated field is updated', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ callSettings: { recordCalls: true, queueTimeoutSeconds: 60 } })])
 
-    const result = await service.updateCallSettings({ queueTimeoutSeconds: 120 })
+    const result = await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 120 })
     expect(result.recordCalls).toBe(true)
     expect(result.queueTimeoutSeconds).toBe(120)
   })
 })
 
-describe('SettingsService per-hub call settings (#1051)', () => {
+describe('CallSettingsService per-hub call settings (#1051)', () => {
   it('reads the hub override layered over the platform values', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow()],
       [{ hubId: 'hub-a', settings: { callSettings: { queueTimeoutSeconds: 45 } } }],
     ])
-    const result = await service.getCallSettings('hub-a')
+    const result = await service.callSettings.getCallSettings('hub-a')
     expect(result.queueTimeoutSeconds).toBe(45)
     expect(result.voicemailMaxSeconds).toBe(120)
   })
@@ -356,7 +357,7 @@ describe('SettingsService per-hub call settings (#1051)', () => {
       [makeSettingsRow()], // re-read effective: system_settings
       [{ hubId: 'hub-a', settings: { callSettings: { queueTimeoutSeconds: 30 } } }],
     ])
-    await service.updateCallSettings({ queueTimeoutSeconds: 5 }, 'hub-a')
+    await service.callSettings.updateCallSettings({ queueTimeoutSeconds: 5 }, 'hub-a')
     expect(db.insert).toHaveBeenCalled()
     expect(db.update).not.toHaveBeenCalled()
   })
@@ -366,12 +367,12 @@ describe('SettingsService per-hub call settings (#1051)', () => {
 // getIvrLanguages / updateIvrLanguages
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getIvrLanguages', () => {
+describe('IvrSettingsService.getIvrLanguages', () => {
   it('returns IVR languages from DB', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ ivrLanguages: ['en', 'es'] })])
 
-    const result = await service.getIvrLanguages()
+    const result = await service.ivrSettings.getIvrLanguages()
     expect(result.enabledLanguages).toEqual(['en', 'es'])
   })
 
@@ -379,31 +380,31 @@ describe('SettingsService.getIvrLanguages', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ ivrLanguages: null })])
 
-    const result = await service.getIvrLanguages()
+    const result = await service.ivrSettings.getIvrLanguages()
     expect(result.enabledLanguages.length).toBeGreaterThan(0)
     expect(result.enabledLanguages).toContain('en')
   })
 })
 
-describe('SettingsService.updateIvrLanguages', () => {
+describe('IvrSettingsService.updateIvrLanguages', () => {
   it('throws 400 for empty array', async () => {
     const { service } = setup()
     await expect(
-      service.updateIvrLanguages({ enabledLanguages: [] }),
+      service.ivrSettings.updateIvrLanguages({ enabledLanguages: [] }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('throws 400 for invalid language codes', async () => {
     const { service } = setup()
     await expect(
-      service.updateIvrLanguages({ enabledLanguages: ['klingon', 'elvish'] }),
+      service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['klingon', 'elvish'] }),
     ).rejects.toMatchObject({ status: 400, message: 'No valid IVR language codes provided' })
   })
 
   it('filters out invalid codes, saves only valid ones', async () => {
     const { db, service } = setup()
 
-    const result = await service.updateIvrLanguages({ enabledLanguages: ['en', 'invalid_xyz'] })
+    const result = await service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'invalid_xyz'] })
     expect(result.enabledLanguages).toEqual(['en'])
     expect(db.update).toHaveBeenCalled()
   })
@@ -411,7 +412,7 @@ describe('SettingsService.updateIvrLanguages', () => {
   it('accepts valid language codes', async () => {
     const { service } = setup()
 
-    const result = await service.updateIvrLanguages({ enabledLanguages: ['en', 'es'] })
+    const result = await service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'es'] })
     expect(result.enabledLanguages).toContain('en')
     expect(result.enabledLanguages).toContain('es')
   })
@@ -420,7 +421,7 @@ describe('SettingsService.updateIvrLanguages', () => {
     const { service } = setup()
     const ten = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru']
 
-    const result = await service.updateIvrLanguages({ enabledLanguages: ten })
+    const result = await service.ivrSettings.updateIvrLanguages({ enabledLanguages: ten })
     expect(result.enabledLanguages).toEqual(ten)
   })
 
@@ -429,7 +430,7 @@ describe('SettingsService.updateIvrLanguages', () => {
     const eleven = ['es', 'en', 'zh', 'tl', 'vi', 'ar', 'fr', 'ht', 'ko', 'ru', 'hi']
 
     await expect(
-      service.updateIvrLanguages({ enabledLanguages: eleven }),
+      service.ivrSettings.updateIvrLanguages({ enabledLanguages: eleven }),
     ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('at most 10 languages') })
     expect(db.update).not.toHaveBeenCalled()
   })
@@ -439,70 +440,70 @@ describe('SettingsService.updateIvrLanguages', () => {
 // Per-hub IVR language override (#732)
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getHubIvrLanguages (per-hub override cascade)', () => {
+describe('IvrSettingsService.getHubIvrLanguages (per-hub override cascade)', () => {
   it('returns the hub override when hub_settings.settings.ivrLanguages is set', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubSettings').mockResolvedValue({ ivrLanguages: ['fr', 'de'] })
+    vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({ ivrLanguages: ['fr', 'de'] })
 
-    const result = await service.getHubIvrLanguages('hub-1')
+    const result = await service.ivrSettings.getHubIvrLanguages('hub-1')
     expect(result).toEqual(['fr', 'de'])
   })
 
   it('falls back to the instance-wide list when the hub has no override', async () => {
     const { db, service } = setup()
-    vi.spyOn(service, 'getHubSettings').mockResolvedValue({})
+    vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({})
     db.$setSelectResult([makeSettingsRow({ ivrLanguages: ['en', 'es'] })])
 
-    const result = await service.getHubIvrLanguages('hub-1')
+    const result = await service.ivrSettings.getHubIvrLanguages('hub-1')
     expect(result).toEqual(['en', 'es'])
   })
 
   it('falls back to the IVR_LANGUAGES constant when neither hub nor instance has a list', async () => {
     const { db, service } = setup()
-    vi.spyOn(service, 'getHubSettings').mockResolvedValue({})
+    vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({})
     db.$setSelectResult([makeSettingsRow({ ivrLanguages: null })])
 
-    const result = await service.getHubIvrLanguages('hub-1')
+    const result = await service.ivrSettings.getHubIvrLanguages('hub-1')
     expect(result.length).toBeGreaterThan(0)
     expect(result).toContain('en')
   })
 })
 
-describe('SettingsService.updateIvrLanguages — provider speakability (#732)', () => {
+describe('IvrSettingsService.updateIvrLanguages — provider speakability (#732)', () => {
   it('rejects a hub override naming a language the hub-specific provider cannot speak', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+    vi.spyOn(service.providerConfig, 'getHubTelephonyProvider').mockResolvedValue({
       type: 'vonage',
       phoneNumber: '+15551234567',
     } as any)
 
     // Vonage's catalog has no entry for 'ht' (Haitian Creole) — see vonage.ts.
     await expect(
-      service.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
+      service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('tells a self-hosted operator which language a caller hears instead, and that recordings fix it (#1347)', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+    vi.spyOn(service.providerConfig, 'getHubTelephonyProvider').mockResolvedValue({
       type: 'asterisk',
       phoneNumber: '+15551234567',
     } as any)
 
     // Generated speech has no Tagalog or Mixtec voice (ivr-speech/voices.ts).
-    const refused = service.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
+    const refused = service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'tl', 'mix'] }, 'hub-1')
     await expect(refused).rejects.toMatchObject({ status: 400 })
     await expect(refused).rejects.toThrow(/cannot speak: tl, mix\. No offline voice exists for them: .*\(tl → en, mix → es\) unless you upload recordings/)
   })
 
   it('accepts a hub override where every language is in the provider catalog', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue({
+    vi.spyOn(service.providerConfig, 'getHubTelephonyProvider').mockResolvedValue({
       type: 'vonage',
       phoneNumber: '+15551234567',
     } as any)
 
-    const result = await service.updateIvrLanguages(
+    const result = await service.ivrSettings.updateIvrLanguages(
       { enabledLanguages: ['en', 'es'] },
       'hub-1',
     )
@@ -511,23 +512,23 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
 
   it('falls back to the global provider when the hub has none configured', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue(null)
-    vi.spyOn(service, 'getTelephonyProvider').mockResolvedValue({
+    vi.spyOn(service.providerConfig, 'getHubTelephonyProvider').mockResolvedValue(null)
+    vi.spyOn(service.providerConfig, 'getTelephonyProvider').mockResolvedValue({
       type: 'vonage',
       phoneNumber: '+15551234567',
     } as any)
 
     await expect(
-      service.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
+      service.ivrSettings.updateIvrLanguages({ enabledLanguages: ['en', 'ht'] }, 'hub-1'),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('does not constrain by provider speakability when no provider is configured yet', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubTelephonyProvider').mockResolvedValue(null)
-    vi.spyOn(service, 'getTelephonyProvider').mockResolvedValue(null)
+    vi.spyOn(service.providerConfig, 'getHubTelephonyProvider').mockResolvedValue(null)
+    vi.spyOn(service.providerConfig, 'getTelephonyProvider').mockResolvedValue(null)
 
-    const result = await service.updateIvrLanguages(
+    const result = await service.ivrSettings.updateIvrLanguages(
       { enabledLanguages: ['en', 'ht'] },
       'hub-1',
     )
@@ -539,33 +540,33 @@ describe('SettingsService.updateIvrLanguages — provider speakability (#732)', 
 // getFallbackGroup / setFallbackGroup
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getFallbackGroup', () => {
+describe('CallSettingsService.getFallbackGroup', () => {
   // Per hub only: there is no instance-wide group (#2460).
   it("returns the hub's fallback group", async () => {
     const { service } = setup()
-    const read = vi.spyOn(service, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.getHubSettings>>)
+    const read = vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.hubSettings.getHubSettings>>)
 
-    const result = await service.getFallbackGroup('hub-1')
+    const result = await service.callSettings.getFallbackGroup('hub-1')
     expect(result.userPubkeys).toEqual(['pk1', 'pk2'])
     expect(read).toHaveBeenCalledWith('hub-1')
   })
 
   it('returns an empty group when the hub has none', async () => {
     const { service } = setup()
-    vi.spyOn(service, 'getHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.getHubSettings>>)
+    vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.hubSettings.getHubSettings>>)
 
-    const result = await service.getFallbackGroup('hub-1')
+    const result = await service.callSettings.getFallbackGroup('hub-1')
     expect(result.userPubkeys).toEqual([])
   })
 })
 
-describe('SettingsService.setFallbackGroup', () => {
+describe('CallSettingsService.setFallbackGroup', () => {
   it("writes the hub's fallback group", async () => {
     const { service } = setup()
-    const write = vi.spyOn(service, 'updateHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.updateHubSettings>>)
-    vi.spyOn(service, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.getHubSettings>>)
+    const write = vi.spyOn(service.hubSettings, 'updateHubSettings').mockResolvedValue({} as Awaited<ReturnType<typeof service.hubSettings.updateHubSettings>>)
+    vi.spyOn(service.hubSettings, 'getHubSettings').mockResolvedValue({ fallbackGroup: ['pk1', 'pk2'] } as Awaited<ReturnType<typeof service.hubSettings.getHubSettings>>)
 
-    const result = await service.setFallbackGroup({ userPubkeys: ['pk1', 'pk2'] }, 'hub-1')
+    const result = await service.callSettings.setFallbackGroup({ userPubkeys: ['pk1', 'pk2'] }, 'hub-1')
     expect(result).toEqual({ userPubkeys: ['pk1', 'pk2'] })
     expect(write).toHaveBeenCalledWith('hub-1', { fallbackGroup: ['pk1', 'pk2'] })
   })
@@ -575,7 +576,7 @@ describe('SettingsService.setFallbackGroup', () => {
 // getCustomFields / updateCustomFields
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getCustomFields', () => {
+describe('CustomFieldsService.getCustomFields', () => {
   it('returns all fields for admin role', async () => {
     const now = new Date()
     const { db, service } = setup()
@@ -599,7 +600,7 @@ describe('SettingsService.getCustomFields', () => {
       },
     ])
 
-    const result = await service.getCustomFields('admin')
+    const result = await service.customFields.getCustomFields('admin')
     expect(result.fields).toHaveLength(1)
     expect(result.fields[0].name).toBe('notes_category')
   })
@@ -627,12 +628,12 @@ describe('SettingsService.getCustomFields', () => {
       },
     ])
 
-    const result = await service.getCustomFields('volunteer')
+    const result = await service.customFields.getCustomFields('volunteer')
     expect(result.fields).toHaveLength(0)
   })
 })
 
-describe('SettingsService.updateCustomFields', () => {
+describe('CustomFieldsService.updateCustomFields', () => {
   const validField = {
     id: 'field-1',
     name: 'severity',
@@ -650,14 +651,14 @@ describe('SettingsService.updateCustomFields', () => {
   it('throws 400 when fields is not an array', async () => {
     const { service } = setup()
     await expect(
-      service.updateCustomFields({ fields: null as any }),
+      service.customFields.updateCustomFields({ fields: null as any }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('throws 400 when field name is invalid (special characters)', async () => {
     const { service } = setup()
     await expect(
-      service.updateCustomFields({
+      service.customFields.updateCustomFields({
         fields: [{ ...validField, name: 'bad-name!' }],
       }),
     ).rejects.toMatchObject({ status: 400 })
@@ -666,7 +667,7 @@ describe('SettingsService.updateCustomFields', () => {
   it('throws 400 for duplicate field names', async () => {
     const { service } = setup()
     await expect(
-      service.updateCustomFields({
+      service.customFields.updateCustomFields({
         fields: [
           { ...validField, name: 'duplicate' },
           { ...validField, id: 'field-2', name: 'duplicate' },
@@ -678,7 +679,7 @@ describe('SettingsService.updateCustomFields', () => {
   it('throws 400 for select field without options', async () => {
     const { service } = setup()
     await expect(
-      service.updateCustomFields({
+      service.customFields.updateCustomFields({
         fields: [{ ...validField, type: 'select' as const, options: [] }],
       }),
     ).rejects.toMatchObject({ status: 400 })
@@ -687,7 +688,7 @@ describe('SettingsService.updateCustomFields', () => {
   it('throws 400 for invalid field type', async () => {
     const { service } = setup()
     await expect(
-      service.updateCustomFields({
+      service.customFields.updateCustomFields({
         fields: [{ ...validField, type: 'audio' as any }],
       }),
     ).rejects.toMatchObject({ status: 400 })
@@ -710,7 +711,7 @@ describe('SettingsService.updateCustomFields', () => {
       context: 'all', maxFileSize: null, allowedMimeTypes: null, maxFiles: 1, sortOrder: 0, createdAt: new Date(),
     }])
 
-    const result = await service.updateCustomFields({ fields: [validField] })
+    const result = await service.customFields.updateCustomFields({ fields: [validField] })
     expect((db as any).transaction).toHaveBeenCalled()
     expect(result.fields).toHaveLength(1)
     expect(result.fields[0]).toMatchObject({ id: 'field-1', name: 'severity', createdAt: expect.any(String) })
@@ -732,7 +733,7 @@ describe('SettingsService.updateCustomFields', () => {
     }
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
-    await service.updateCustomFields({
+    await service.customFields.updateCustomFields({
       fields: [{ ...validField, context: 'both' as any }],
     })
     expect(values).toHaveBeenCalledWith(expect.objectContaining({ context: 'all' }))
@@ -743,7 +744,7 @@ describe('SettingsService.updateCustomFields', () => {
 // getMessagingConfig / updateMessagingConfig
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getMessagingConfig', () => {
+describe('MessagingConfigService.getMessagingConfig', () => {
   it('returns messaging config from DB', async () => {
     const { db, service } = setup()
     const config = {
@@ -754,7 +755,7 @@ describe('SettingsService.getMessagingConfig', () => {
     }
     db.$setSelectResult([makeSettingsRow({ messagingConfig: config })])
 
-    const result = await service.getMessagingConfig()
+    const result = await service.messagingConfig.getMessagingConfig()
     expect(result.inactivityTimeout).toBe(60)
     expect(result.enabledChannels).toContain('sms')
   })
@@ -763,13 +764,13 @@ describe('SettingsService.getMessagingConfig', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ messagingConfig: null })])
 
-    const result = await service.getMessagingConfig()
+    const result = await service.messagingConfig.getMessagingConfig()
     expect(result).toBeDefined()
     expect(typeof result.inactivityTimeout).toBe('number')
   })
 })
 
-describe('SettingsService.updateMessagingConfig', () => {
+describe('MessagingConfigService.updateMessagingConfig', () => {
   it('throws 400 when inactivityTimeout is out of range', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({
@@ -777,7 +778,7 @@ describe('SettingsService.updateMessagingConfig', () => {
     })])
 
     await expect(
-      service.updateMessagingConfig({ inactivityTimeout: 3 }),
+      service.messagingConfig.updateMessagingConfig({ inactivityTimeout: 3 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -788,7 +789,7 @@ describe('SettingsService.updateMessagingConfig', () => {
     })])
 
     await expect(
-      service.updateMessagingConfig({ maxConcurrentPerUser: 25 }),
+      service.messagingConfig.updateMessagingConfig({ maxConcurrentPerUser: 25 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -799,7 +800,7 @@ describe('SettingsService.updateMessagingConfig', () => {
     db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
 
     await expect(
-      service.updateMessagingConfig({ telegram: { enabled: true, botToken: '1:abc' } as never }),
+      service.messagingConfig.updateMessagingConfig({ telegram: { enabled: true, botToken: '1:abc' } as never }),
     ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Telegram webhook secret is required') })
     expect(db.update).not.toHaveBeenCalled()
   })
@@ -809,7 +810,7 @@ describe('SettingsService.updateMessagingConfig', () => {
     db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
 
     await expect(
-      service.updateMessagingConfig({ rcs: { agentId: 'a', serviceAccountKey: '{}', fallbackToSms: false } as never }),
+      service.messagingConfig.updateMessagingConfig({ rcs: { agentId: 'a', serviceAccountKey: '{}', fallbackToSms: false } as never }),
     ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('RCS webhook secret is required') })
     expect(db.update).not.toHaveBeenCalled()
   })
@@ -818,7 +819,7 @@ describe('SettingsService.updateMessagingConfig', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ messagingConfig: savedConfig })])
 
-    const result = await service.updateMessagingConfig({
+    const result = await service.messagingConfig.updateMessagingConfig({
       telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
       rcs: { agentId: 'a', serviceAccountKey: '{}', webhookSecret: 'rcs-secret', fallbackToSms: false },
     })
@@ -832,7 +833,7 @@ describe('SettingsService.updateMessagingConfig', () => {
       messagingConfig: { ...savedConfig, telegram: { enabled: true, botToken: '1:abc' } },
     })])
 
-    const result = await service.updateMessagingConfig({ inactivityTimeout: 30 })
+    const result = await service.messagingConfig.updateMessagingConfig({ inactivityTimeout: 30 })
     expect(result.inactivityTimeout).toBe(30)
   })
 
@@ -842,7 +843,7 @@ describe('SettingsService.updateMessagingConfig', () => {
       messagingConfig: { inactivityTimeout: 60, maxConcurrentPerUser: 5, enabledChannels: ['sms'], requireAssignment: false },
     })])
 
-    const result = await service.updateMessagingConfig({ inactivityTimeout: 30 })
+    const result = await service.messagingConfig.updateMessagingConfig({ inactivityTimeout: 30 })
     expect(result.inactivityTimeout).toBe(30)
     expect(result.maxConcurrentPerUser).toBe(5) // preserved
     expect(db.update).toHaveBeenCalled()
@@ -853,7 +854,7 @@ describe('SettingsService.updateMessagingConfig', () => {
 // getSetupState / updateSetupState
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getSetupState', () => {
+describe('SetupStateService.getSetupState', () => {
   it('returns setup state from DB', async () => {
     const { db, service } = setup()
     const state = {
@@ -864,7 +865,7 @@ describe('SettingsService.getSetupState', () => {
     }
     db.$setSelectResult([makeSettingsRow({ setupState: state })])
 
-    const result = await service.getSetupState()
+    const result = await service.setupState.getSetupState()
     expect(result.setupCompleted).toBe(true)
   })
 
@@ -872,20 +873,20 @@ describe('SettingsService.getSetupState', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ setupState: null })])
 
-    const result = await service.getSetupState()
+    const result = await service.setupState.getSetupState()
     expect(result).toBeDefined()
     expect(typeof result.setupCompleted).toBe('boolean')
   })
 })
 
-describe('SettingsService.updateSetupState', () => {
+describe('SetupStateService.updateSetupState', () => {
   it('merges partial update', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({
       setupState: { setupCompleted: false, completedSteps: [], pendingChannels: [], selectedChannels: [] },
     })])
 
-    const result = await service.updateSetupState({ setupCompleted: true })
+    const result = await service.setupState.updateSetupState({ setupCompleted: true })
     expect(result.setupCompleted).toBe(true)
     expect(db.update).toHaveBeenCalled()
   })
@@ -895,7 +896,7 @@ describe('SettingsService.updateSetupState', () => {
 // getEnabledChannels
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getEnabledChannels', () => {
+describe('MessagingConfigService.getEnabledChannels', () => {
   it('returns voice enabled when telephony provider configured', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
@@ -906,7 +907,7 @@ describe('SettingsService.getEnabledChannels', () => {
       [{ id: 'pc-1', hubId: '', providerType: 'twilio', credentials: JSON.stringify({ type: 'twilio', accountSid: 'AC123', authToken: 'tok', phoneNumber: '+15551234567' }), status: 'connected', capabilities: [], phoneNumbers: ['+15551234567'] }],
     ])
 
-    const result = await service.getEnabledChannels({})
+    const result = await service.messagingConfig.getEnabledChannels({})
     expect(result.voice).toBe(true)
     expect(result.sms).toBe(true)
     expect(result.reports).toBe(true)
@@ -920,7 +921,7 @@ describe('SettingsService.getEnabledChannels', () => {
       [],
     ])
 
-    const result = await service.getEnabledChannels({
+    const result = await service.messagingConfig.getEnabledChannels({
       TWILIO_ACCOUNT_SID: 'AC123',
       TWILIO_AUTH_TOKEN: 'tok',
       TWILIO_PHONE_NUMBER: '+15551234567',
@@ -935,7 +936,7 @@ describe('SettingsService.getEnabledChannels', () => {
       [],
     ])
 
-    const result = await service.getEnabledChannels({})
+    const result = await service.messagingConfig.getEnabledChannels({})
     expect(result.voice).toBe(false)
   })
 
@@ -967,7 +968,7 @@ describe('SettingsService.getEnabledChannels', () => {
       [],
     ])
 
-    const result = await service.getEnabledChannels({})
+    const result = await service.messagingConfig.getEnabledChannels({})
     expect(result.signal).toBe(true)
     expect(result.reports).toBe(false)
   })
@@ -977,12 +978,12 @@ describe('SettingsService.getEnabledChannels', () => {
 // getReportCategories / updateReportCategories
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getReportCategories', () => {
+describe('ReportTypesService.getReportCategories', () => {
   it('returns categories from DB', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ reportCategories: ['Incident', 'Observation'] })])
 
-    const result = await service.getReportCategories()
+    const result = await service.reportTypes.getReportCategories()
     expect(result.categories).toEqual(['Incident', 'Observation'])
   })
 
@@ -990,16 +991,16 @@ describe('SettingsService.getReportCategories', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ reportCategories: null })])
 
-    const result = await service.getReportCategories()
+    const result = await service.reportTypes.getReportCategories()
     expect(result.categories).toContain('Incident Report')
   })
 })
 
-describe('SettingsService.updateReportCategories', () => {
+describe('ReportTypesService.updateReportCategories', () => {
   it('throws 400 when categories is not an array', async () => {
     const { service } = setup()
     await expect(
-      service.updateReportCategories({ categories: 'wrong' as any }),
+      service.reportTypes.updateReportCategories({ categories: 'wrong' as any }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -1007,7 +1008,7 @@ describe('SettingsService.updateReportCategories', () => {
     const { db, service } = setup()
     const categories = Array.from({ length: 60 }, (_, i) => `Category ${i}`)
 
-    const result = await service.updateReportCategories({ categories })
+    const result = await service.reportTypes.updateReportCategories({ categories })
     expect(result.categories).toHaveLength(50)
     expect(db.update).toHaveBeenCalled()
   })
@@ -1017,13 +1018,13 @@ describe('SettingsService.updateReportCategories', () => {
 // getReportTypes / createReportType / updateReportType / archiveReportType
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getReportTypes', () => {
+describe('ReportTypesService.getReportTypes', () => {
   it('returns report types from DB', async () => {
     const { db, service } = setup()
     const types = [{ id: 'rt-1', name: 'Incident', description: '', fields: [], isDefault: true, isArchived: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]
     db.$setSelectResult([makeSettingsRow({ reportTypes: types })])
 
-    const result = await service.getReportTypes()
+    const result = await service.reportTypes.getReportTypes()
     expect(result.reportTypes).toHaveLength(1)
     expect(result.reportTypes[0].name).toBe('Incident')
   })
@@ -1034,24 +1035,24 @@ describe('SettingsService.getReportTypes', () => {
     // After update, second getSettings in the same call doesn't happen (method returns directly)
     db.$setSelectResult([makeSettingsRow({ reportTypes: null })])
 
-    const result = await service.getReportTypes()
+    const result = await service.reportTypes.getReportTypes()
     expect(result.reportTypes.length).toBeGreaterThan(0)
     expect(db.update).toHaveBeenCalled()
   })
 })
 
-describe('SettingsService.createReportType', () => {
+describe('ReportTypesService.createReportType', () => {
   it('throws 400 when name is missing', async () => {
     const { service } = setup()
     await expect(
-      service.createReportType({ description: 'No name' }),
+      service.reportTypes.createReportType({ description: 'No name' }),
     ).rejects.toMatchObject({ status: 400, message: 'Name is required' })
   })
 
   it('throws 400 when name is empty string', async () => {
     const { service } = setup()
     await expect(
-      service.createReportType({ name: '   ' }),
+      service.reportTypes.createReportType({ name: '   ' }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -1059,7 +1060,7 @@ describe('SettingsService.createReportType', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ reportTypes: [] })])
 
-    const result = await service.createReportType({ name: 'New Report', description: 'Test' })
+    const result = await service.reportTypes.createReportType({ name: 'New Report', description: 'Test' })
     expect(result.name).toBe('New Report')
     expect(result.id).toBeDefined()
     expect(result.isArchived).toBe(false)
@@ -1071,18 +1072,18 @@ describe('SettingsService.createReportType', () => {
     const existing = [{ id: 'rt-0', name: 'Old', description: '', fields: [], isDefault: true, isArchived: false, createdAt: '', updatedAt: '' }]
     db.$setSelectResult([makeSettingsRow({ reportTypes: existing })])
 
-    await service.createReportType({ name: 'New Default', isDefault: true })
+    await service.reportTypes.createReportType({ name: 'New Default', isDefault: true })
     expect(db.update).toHaveBeenCalled()
   })
 })
 
-describe('SettingsService.updateReportType', () => {
+describe('ReportTypesService.updateReportType', () => {
   it('throws 404 when report type not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ reportTypes: [] })])
 
     await expect(
-      service.updateReportType('nonexistent', { name: 'Updated' }),
+      service.reportTypes.updateReportType('nonexistent', { name: 'Updated' }),
     ).rejects.toMatchObject({ status: 404 })
   })
 
@@ -1092,7 +1093,7 @@ describe('SettingsService.updateReportType', () => {
     db.$setSelectResult([makeSettingsRow({ reportTypes: types })])
 
     await expect(
-      service.updateReportType('rt-1', { name: '' }),
+      service.reportTypes.updateReportType('rt-1', { name: '' }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -1101,18 +1102,18 @@ describe('SettingsService.updateReportType', () => {
     const types = [{ id: 'rt-1', name: 'Old Name', description: '', fields: [], isDefault: false, isArchived: false, createdAt: '', updatedAt: '' }]
     db.$setSelectResult([makeSettingsRow({ reportTypes: types })])
 
-    const result = await service.updateReportType('rt-1', { name: 'New Name' })
+    const result = await service.reportTypes.updateReportType('rt-1', { name: 'New Name' })
     expect(result.name).toBe('New Name')
     expect(db.update).toHaveBeenCalled()
   })
 })
 
-describe('SettingsService.archiveReportType', () => {
+describe('ReportTypesService.archiveReportType', () => {
   it('throws 404 when report type not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ reportTypes: [] })])
 
-    await expect(service.archiveReportType('nonexistent')).rejects.toMatchObject({ status: 404 })
+    await expect(service.reportTypes.archiveReportType('nonexistent')).rejects.toMatchObject({ status: 404 })
   })
 
   it('throws 400 when archiving the last active type', async () => {
@@ -1120,7 +1121,7 @@ describe('SettingsService.archiveReportType', () => {
     const types = [{ id: 'rt-1', name: 'Only Type', description: '', fields: [], isDefault: true, isArchived: false, createdAt: '', updatedAt: '' }]
     db.$setSelectResult([makeSettingsRow({ reportTypes: types })])
 
-    await expect(service.archiveReportType('rt-1')).rejects.toMatchObject({ status: 400 })
+    await expect(service.reportTypes.archiveReportType('rt-1')).rejects.toMatchObject({ status: 400 })
   })
 
   it('archives a type and promotes another to default', async () => {
@@ -1131,7 +1132,7 @@ describe('SettingsService.archiveReportType', () => {
     ]
     db.$setSelectResult([makeSettingsRow({ reportTypes: types })])
 
-    const result = await service.archiveReportType('rt-1')
+    const result = await service.reportTypes.archiveReportType('rt-1')
     expect(result).toEqual({ ok: true })
     expect(db.update).toHaveBeenCalled()
   })
@@ -1141,7 +1142,7 @@ describe('SettingsService.archiveReportType', () => {
 // getTelephonyProvider / updateTelephonyProvider
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getTelephonyProvider', () => {
+describe('ProviderConfigService.getTelephonyProvider', () => {
   it('returns provider from DB', async () => {
     const { db, service } = setup()
     const provider = { type: 'twilio', accountSid: 'AC123', authToken: 'tok', phoneNumber: '+15551234567' }
@@ -1155,7 +1156,7 @@ describe('SettingsService.getTelephonyProvider', () => {
       phoneNumbers: ['+15551234567'],
     }])
 
-    const result = await service.getTelephonyProvider()
+    const result = await service.providerConfig.getTelephonyProvider()
     expect(result?.type).toBe('twilio')
   })
 
@@ -1163,30 +1164,30 @@ describe('SettingsService.getTelephonyProvider', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getTelephonyProvider()
+    const result = await service.providerConfig.getTelephonyProvider()
     expect(result).toBeNull()
   })
 })
 
-describe('SettingsService.updateTelephonyProvider', () => {
+describe('ProviderConfigService.updateTelephonyProvider', () => {
   it('throws deprecation error for any input', async () => {
     const { service } = setup()
     await expect(
-      service.updateTelephonyProvider({ type: 'twilio' } as never),
+      service.providerConfig.updateTelephonyProvider({ type: 'twilio' } as never),
     ).rejects.toThrow(/deprecated.*POST \/provider-setup\/configure/i)
   })
 
   it('throws deprecation error regardless of provider type', async () => {
     const { service } = setup()
     await expect(
-      service.updateTelephonyProvider({ type: 'invalidpbx' } as never),
+      service.providerConfig.updateTelephonyProvider({ type: 'invalidpbx' } as never),
     ).rejects.toThrow(/deprecated/)
   })
 
   it('throws deprecation error regardless of phone format', async () => {
     const { service } = setup()
     await expect(
-      service.updateTelephonyProvider({ type: 'twilio', phoneNumber: '+15551234567' } as never),
+      service.providerConfig.updateTelephonyProvider({ type: 'twilio', phoneNumber: '+15551234567' } as never),
     ).rejects.toThrow(/deprecated/)
   })
 })
@@ -1195,12 +1196,12 @@ describe('SettingsService.updateTelephonyProvider', () => {
 // IVR Audio
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getIvrAudioList', () => {
+describe('IvrSettingsService.getIvrAudioList', () => {
   it('returns empty list when no audio', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudioList(undefined)
+    const result = await service.ivrSettings.getIvrAudioList(undefined)
     expect(result.recordings).toEqual([])
   })
 
@@ -1211,39 +1212,39 @@ describe('SettingsService.getIvrAudioList', () => {
       { promptType: 'greeting', language: 'en', size: 4096, uploadedAt: now },
     ])
 
-    const result = await service.getIvrAudioList(undefined)
+    const result = await service.ivrSettings.getIvrAudioList(undefined)
     expect(result.recordings).toHaveLength(1)
     expect(result.recordings[0].promptType).toBe('greeting')
     expect(typeof result.recordings[0].uploadedAt).toBe('string')
   })
 })
 
-describe('SettingsService.uploadIvrAudio', () => {
+describe('IvrSettingsService.uploadIvrAudio', () => {
   it('throws 400 for invalid prompt type', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio(undefined, 'invalid_type', 'en', 'base64data', 100),
+      service.ivrSettings.uploadIvrAudio(undefined, 'invalid_type', 'en', 'base64data', 100),
     ).rejects.toMatchObject({ status: 400, message: 'Invalid prompt type' })
   })
 
   it('throws 400 for empty file (size = 0)', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 0),
+      service.ivrSettings.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 0),
     ).rejects.toMatchObject({ status: 400, message: 'Empty file' })
   })
 
   it('throws 400 for file exceeding 1MB', async () => {
     const { service } = setup()
     await expect(
-      service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 2_000_000),
+      service.ivrSettings.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 2_000_000),
     ).rejects.toMatchObject({ status: 400, message: 'File too large (max 1MB)' })
   })
 
   it('upserts valid audio and returns metadata', async () => {
     const { db, service } = setup()
 
-    const result = await service.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 1024)
+    const result = await service.ivrSettings.uploadIvrAudio(undefined, 'greeting', 'en', 'base64data', 1024)
     expect(result.ok).toBe(true)
     expect(result.promptType).toBe('greeting')
     expect(result.language).toBe('en')
@@ -1252,12 +1253,12 @@ describe('SettingsService.uploadIvrAudio', () => {
   })
 })
 
-describe('SettingsService.getIvrAudio', () => {
+describe('IvrSettingsService.getIvrAudio', () => {
   it('returns null when not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
+    const result = await service.ivrSettings.getIvrAudio(undefined, 'greeting', 'en')
     expect(result).toBeNull()
   })
 
@@ -1265,17 +1266,17 @@ describe('SettingsService.getIvrAudio', () => {
     const { db, service } = setup()
     db.$setSelectResult([{ promptType: 'greeting', language: 'en', audio: 'base64data', size: 1024, uploadedAt: new Date() }])
 
-    const result = await service.getIvrAudio(undefined, 'greeting', 'en')
+    const result = await service.ivrSettings.getIvrAudio(undefined, 'greeting', 'en')
     expect(result?.audio).toBe('base64data')
     expect(result?.size).toBe(1024)
   })
 })
 
-describe('SettingsService.deleteIvrAudio', () => {
+describe('IvrSettingsService.deleteIvrAudio', () => {
   it('deletes and returns ok', async () => {
     const { db, service } = setup()
 
-    const result = await service.deleteIvrAudio(undefined, 'greeting', 'en')
+    const result = await service.ivrSettings.deleteIvrAudio(undefined, 'greeting', 'en')
     expect(result).toEqual({ ok: true })
     expect(db.delete).toHaveBeenCalled()
   })
@@ -1285,7 +1286,7 @@ describe('SettingsService.deleteIvrAudio', () => {
 // Roles CRUD
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getRoles', () => {
+describe('RolesService.getRoles', () => {
   beforeEach(() => {
     invalidateRolesCache()
   })
@@ -1294,7 +1295,7 @@ describe('SettingsService.getRoles', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole()])
 
-    const result = await service.getRoles()
+    const result = await service.roles.getRoles()
     expect(result.roles).toHaveLength(1)
     expect(result.roles[0].slug).toBe('volunteer')
   })
@@ -1303,8 +1304,8 @@ describe('SettingsService.getRoles', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole()])
 
-    await service.getRoles()
-    await service.getRoles()
+    await service.roles.getRoles()
+    await service.roles.getRoles()
 
     // DB is queried 3 times on the first call (roles, envelopes, user counts),
     // then 0 times on the cached second call — total = 3
@@ -1315,12 +1316,12 @@ describe('SettingsService.getRoles', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getRoles()
+    const result = await service.roles.getRoles()
     expect(result.roles).toEqual([])
   })
 })
 
-describe('SettingsService.createRole', () => {
+describe('RolesService.createRole', () => {
   it('throws 409 when the id already exists', async () => {
     const { db, service } = setup()
     // The id's unique index swallowed the insert (ON CONFLICT DO NOTHING
@@ -1329,7 +1330,7 @@ describe('SettingsService.createRole', () => {
     db.$setInsertResult([])
 
     await expect(
-      service.createRole({ id: 'role-00000000-0000-4000-8000-000000000001', permissions: ['calls:answer'] }),
+      service.roles.createRole({ id: 'role-00000000-0000-4000-8000-000000000001', permissions: ['calls:answer'] }),
     ).rejects.toMatchObject({ status: 409 })
   })
 
@@ -1339,18 +1340,18 @@ describe('SettingsService.createRole', () => {
     db.$setInsertResult([{ id }])
     db.$setSelectResult([makeRole({ id, name: null, slug: id, description: '', hubId: null })])
 
-    await service.createRole({ id, permissions: ['calls:answer'] })
+    await service.roles.createRole({ id, permissions: ['calls:answer'] })
     const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]!.value.values.mock.calls[0]![0]
     expect(values).toMatchObject({ id, name: null, slug: id, description: '', hubId: null })
   })
 })
 
-describe('SettingsService.createHubRole', () => {
+describe('RolesService.createHubRole', () => {
   it('stores the sealed name as given and the hub as owner, never a plaintext name (#2780)', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ name: null, description: '', hubId: 'hub-a' })])
 
-    await service.createHubRole('hub-a', { permissions: ['calls:answer'], encryptedName: 'ab'.repeat(40) })
+    await service.roles.createHubRole('hub-a', { permissions: ['calls:answer'], encryptedName: 'ab'.repeat(40) })
     const values = (db.insert as ReturnType<typeof vi.fn>).mock.results[0]!.value.values.mock.calls[0]![0]
     expect(values).toMatchObject({ name: null, description: '', hubId: 'hub-a', encryptedName: 'ab'.repeat(40) })
     expect(values.slug).toBe(values.id)
@@ -1359,31 +1360,31 @@ describe('SettingsService.createHubRole', () => {
   it('refuses a permission the catalogue does not define', async () => {
     const { service } = setup()
     await expect(
-      service.createHubRole('hub-a', { permissions: ['calls:answer', 'not:a-permission'], encryptedName: 'ab'.repeat(40) }),
+      service.roles.createHubRole('hub-a', { permissions: ['calls:answer', 'not:a-permission'], encryptedName: 'ab'.repeat(40) }),
     ).rejects.toMatchObject({ status: 400 })
   })
 })
 
-describe('SettingsService.updateRole', () => {
+describe('RolesService.updateRole', () => {
   it('throws 404 when role not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.updateRole('nonexistent', { permissions: [] })).rejects.toMatchObject({ status: 404 })
+    await expect(service.roles.updateRole('nonexistent', { permissions: [] })).rejects.toMatchObject({ status: 404 })
   })
 
   it('throws 403 when updating system role', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ isSystem: true })])
 
-    await expect(service.updateRole('role-1', { permissions: ['*'] })).rejects.toMatchObject({ status: 403 })
+    await expect(service.roles.updateRole('role-1', { permissions: ['*'] })).rejects.toMatchObject({ status: 403 })
   })
 
   it('does not reach a hub-owned role from the deployment scope', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ hubId: 'hub-a' })])
 
-    await expect(service.updateRole('role-1', { permissions: [] })).rejects.toMatchObject({ status: 404 })
+    await expect(service.roles.updateRole('role-1', { permissions: [] })).rejects.toMatchObject({ status: 404 })
   })
 
   it('writes the row and returns it read back', async () => {
@@ -1392,18 +1393,18 @@ describe('SettingsService.updateRole', () => {
     const { db, service } = setup()
     db.$setSelectResults([[makeRole()], [makeRole({ updatedAt: new Date() })]])
 
-    const result = await service.updateRole('role-1', {})
+    const result = await service.roles.updateRole('role-1', {})
     expect(result.id).toBe('role-1')
     expect(db.update).toHaveBeenCalled()
   })
 })
 
-describe('SettingsService.updateHubRole', () => {
+describe('RolesService.updateHubRole', () => {
   it('does not reach another hub\'s role', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ hubId: 'hub-b' })])
 
-    await expect(service.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
+    await expect(service.roles.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
       .rejects.toMatchObject({ status: 404 })
   })
 
@@ -1411,31 +1412,31 @@ describe('SettingsService.updateHubRole', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ hubId: null })])
 
-    await expect(service.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
+    await expect(service.roles.updateHubRole('hub-a', 'role-1', { encryptedName: 'ab'.repeat(40) }))
       .rejects.toMatchObject({ status: 404 })
   })
 })
 
-describe('SettingsService.deleteRole', () => {
+describe('RolesService.deleteRole', () => {
   it('throws 404 when role not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.deleteRole('nonexistent')).rejects.toMatchObject({ status: 404 })
+    await expect(service.roles.deleteRole('nonexistent')).rejects.toMatchObject({ status: 404 })
   })
 
   it('throws 403 when deleting default role', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ isDefault: true })])
 
-    await expect(service.deleteRole('role-1')).rejects.toMatchObject({ status: 403 })
+    await expect(service.roles.deleteRole('role-1')).rejects.toMatchObject({ status: 403 })
   })
 
   it('deletes non-default role', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeRole({ isDefault: false })])
 
-    const result = await service.deleteRole('role-1')
+    const result = await service.roles.deleteRole('role-1')
     expect(result).toEqual({ ok: true })
     expect(db.delete).toHaveBeenCalled()
   })
@@ -1445,11 +1446,11 @@ describe('SettingsService.deleteRole', () => {
 // CAPTCHA
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.storeCaptcha', () => {
+describe('CaptchaService.storeCaptcha', () => {
   it('stores captcha and returns ok', async () => {
     const { db, service } = setup()
 
-    const result = await service.storeCaptcha({ callSid: 'CA123', expected: '1234' })
+    const result = await service.captcha.storeCaptcha({ callSid: 'CA123', expected: '1234' })
     expect(result).toEqual({ ok: true })
     expect(db.insert).toHaveBeenCalled()
   })
@@ -1463,12 +1464,12 @@ describe('SettingsService.storeCaptcha', () => {
 // TTL Overrides
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getTTLOverrides', () => {
+describe('TtlCleanupService.getTTLOverrides', () => {
   it('returns empty overrides when null', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ ttlOverrides: null })])
 
-    const result = await service.getTTLOverrides()
+    const result = await service.ttlCleanup.getTTLOverrides()
     expect(result.overrides).toEqual({})
   })
 
@@ -1476,16 +1477,16 @@ describe('SettingsService.getTTLOverrides', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ ttlOverrides: { sessions: 86400 } })])
 
-    const result = await service.getTTLOverrides()
+    const result = await service.ttlCleanup.getTTLOverrides()
     expect(result.overrides).toHaveProperty('sessions')
   })
 })
 
-describe('SettingsService.updateTTLOverrides', () => {
+describe('TtlCleanupService.updateTTLOverrides', () => {
   it('throws 400 for invalid TTL values', async () => {
     const { service } = setup()
     await expect(
-      service.updateTTLOverrides({ sessions: -100 }),
+      service.ttlCleanup.updateTTLOverrides({ sessions: -100 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 })
@@ -1494,12 +1495,12 @@ describe('SettingsService.updateTTLOverrides', () => {
 // getCleanupMetrics
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getCleanupMetrics', () => {
+describe('TtlCleanupService.getCleanupMetrics', () => {
   it('returns empty metrics when null in DB', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow({ cleanupMetrics: null })])
 
-    const result = await service.getCleanupMetrics()
+    const result = await service.ttlCleanup.getCleanupMetrics()
     expect(result).toBeDefined()
   })
 
@@ -1508,7 +1509,7 @@ describe('SettingsService.getCleanupMetrics', () => {
     const metrics = { lastRunAt: new Date().toISOString(), deletedSessions: 5, deletedChallenges: 2 }
     db.$setSelectResult([makeSettingsRow({ cleanupMetrics: metrics })])
 
-    const result = await service.getCleanupMetrics()
+    const result = await service.ttlCleanup.getCleanupMetrics()
     expect(result).toMatchObject(metrics)
   })
 })
@@ -1517,19 +1518,19 @@ describe('SettingsService.getCleanupMetrics', () => {
 // archiveHub
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.archiveHub', () => {
+describe('HubService.archiveHub', () => {
   it('throws 404 when hub not found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.archiveHub('nonexistent')).rejects.toMatchObject({ status: 404 })
+    await expect(service.hubs.archiveHub('nonexistent')).rejects.toMatchObject({ status: 404 })
   })
 
   it('updates hub status to archived', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeHub()])
 
-    const result = await service.archiveHub('hub-1')
+    const result = await service.hubs.archiveHub('hub-1')
     expect(result).toEqual({ ok: true })
     expect(db.update).toHaveBeenCalled()
   })
@@ -1539,7 +1540,7 @@ describe('SettingsService.archiveHub', () => {
 // deleteHub
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.deleteHub', () => {
+describe('HubService.deleteHub', () => {
   const noProviderMedia = {
     deleteForCalls: async () => ({ deleted: 0, failed: [] }),
     deleteForHub: async () => ({ deleted: 0, failed: [] }),
@@ -1550,7 +1551,7 @@ describe('SettingsService.deleteHub', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.deleteHub('nonexistent', { eraseForHub: vi.fn() }, noProviderMedia)).rejects.toMatchObject({ status: 404 })
+    await expect(service.hubs.deleteHub('nonexistent', { eraseForHub: vi.fn() }, noProviderMedia)).rejects.toMatchObject({ status: 404 })
   })
 
   it('executes transaction to delete hub and cascade data', async () => {
@@ -1572,7 +1573,7 @@ describe('SettingsService.deleteHub', () => {
     ;(db as any).transaction = vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => fn(tx))
 
     const eraseForHub = vi.fn().mockResolvedValue(undefined)
-    const result = await service.deleteHub('hub-1', { eraseForHub }, noProviderMedia)
+    const result = await service.hubs.deleteHub('hub-1', { eraseForHub }, noProviderMedia)
     expect(result).toEqual({ ok: true })
     expect(eraseForHub).toHaveBeenCalledWith('hub-1')
     expect(eraseForHub.mock.invocationCallOrder[0], 'sealed recordings go before the rows that name them')
@@ -1585,7 +1586,7 @@ describe('SettingsService.deleteHub', () => {
     ;(db as any).transaction = vi.fn()
     const refusal = new SealedRecordingDeleteError('hub-1', [{ callId: 'c1', error: 'store down' }])
 
-    await expect(service.deleteHub('hub-1', { eraseForHub: vi.fn().mockRejectedValue(refusal) }, noProviderMedia))
+    await expect(service.hubs.deleteHub('hub-1', { eraseForHub: vi.fn().mockRejectedValue(refusal) }, noProviderMedia))
       .rejects.toMatchObject({ status: 502 })
     expect((db as any).transaction, 'the rows that name the blobs must survive the refusal').not.toHaveBeenCalled()
   })
@@ -1595,7 +1596,7 @@ describe('SettingsService.deleteHub', () => {
 // runCleanup
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.runCleanup', () => {
+describe('TtlCleanupService.runCleanup', () => {
   // The rate-limit trim+delete now runs as a single SQL CTE (issue #1127 —
   // `select().from(rateLimits)` with no limit used to pull every distinct
   // rate-limit key in the table into Node memory on every tick), so what
@@ -1614,7 +1615,7 @@ describe('SettingsService.runCleanup', () => {
     db.$setExecuteResult([{ key: 'stale-key' }])
     db.$setDeleteResult([])
 
-    const metrics = await service.runCleanup()
+    const metrics = await service.ttlCleanup.runCleanup()
 
     expect(metrics.rateLimitEntriesDeleted).toBe(1)
     expect(db.execute).toHaveBeenCalled()
@@ -1632,7 +1633,7 @@ describe('SettingsService.runCleanup', () => {
     db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }, { id: 'cap-2' }])
 
-    const metrics = await service.runCleanup()
+    const metrics = await service.ttlCleanup.runCleanup()
 
     expect(metrics.captchaChallengesDeleted).toBe(2)
   })
@@ -1650,7 +1651,7 @@ describe('SettingsService.runCleanup', () => {
     db.$setExecuteResult([])
     db.$setDeleteResult([{ id: 'cap-1' }])
 
-    const metrics = await service.runCleanup()
+    const metrics = await service.ttlCleanup.runCleanup()
 
     // Accumulated from existing + new
     expect(metrics.captchaChallengesDeleted).toBe(6)
@@ -1666,7 +1667,7 @@ describe('SettingsService.runCleanup', () => {
     db.$setExecuteResult([])
     db.$setDeleteResult([])
 
-    const metrics = await service.runCleanup()
+    const metrics = await service.ttlCleanup.runCleanup()
 
     expect(metrics.lastCleanupAt).toBeDefined()
     expect(metrics.lastCleanupAt! >= before).toBe(true)
@@ -1680,7 +1681,7 @@ describe('SettingsService.runCleanup', () => {
     db.$setExecuteResult([])
     db.$setDeleteResult([])
 
-    await service.runCleanup()
+    await service.ttlCleanup.runCleanup()
 
     expect(db.update).toHaveBeenCalled()
   })
@@ -1693,7 +1694,7 @@ describe('SettingsService.runCleanup', () => {
       }),
     })
 
-    await expect(service.runCleanup()).rejects.toThrow('DB connection failed')
+    await expect(service.ttlCleanup.runCleanup()).rejects.toThrow('DB connection failed')
   })
 })
 
@@ -1701,12 +1702,12 @@ describe('SettingsService.runCleanup', () => {
 // clearExpiredApiRateLimits
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.clearExpiredApiRateLimits', () => {
+describe('RateLimitService.clearExpiredApiRateLimits', () => {
   it('deletes api_rate_limits rows older than the expiry window', async () => {
     const { db, service } = setup()
     db.$setDeleteResult([{ key: 'strict:1.2.3.4' }])
 
-    await service.clearExpiredApiRateLimits()
+    await service.rateLimits.clearExpiredApiRateLimits()
 
     expect(db.delete).toHaveBeenCalled()
   })

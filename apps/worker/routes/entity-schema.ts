@@ -63,7 +63,7 @@ entitySchema.get('/case-management',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') as string | undefined
-    const result = await services.settings.getCaseManagementEnabled(hubId)
+    const result = await services.hubSettings.getCaseManagementEnabled(hubId)
     return c.json(result)
   },
 )
@@ -86,7 +86,7 @@ entitySchema.put('/case-management',
     const body = c.req.valid('json')
     const services = c.get('services')
     const hubId = c.get('hubId') as string | undefined
-    const result = await services.settings.setCaseManagementEnabled(body, hubId)
+    const result = await services.hubSettings.setCaseManagementEnabled(body, hubId)
     await audit(services.audit, 'caseManagementToggled', c.get('pubkey'), body, undefined, c.get('hubId') ?? null)
     return c.json(result)
   },
@@ -110,7 +110,7 @@ entitySchema.get('/auto-assignment',
   async (c) => {
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
-    const hubSettings = await services.settings.getHubSettings(hubId)
+    const hubSettings = await services.hubSettings.getHubSettings(hubId)
     return c.json({ enabled: (hubSettings.autoAssignment as boolean) ?? false })
   },
 )
@@ -133,7 +133,7 @@ entitySchema.put('/auto-assignment',
     const body = c.req.valid('json')
     const services = c.get('services')
     const hubId = c.get('hubId') ?? ''
-    await services.settings.updateHubSettings(hubId, { autoAssignment: body.enabled })
+    await services.hubSettings.updateHubSettings(hubId, { autoAssignment: body.enabled })
     await audit(services.audit, 'autoAssignmentToggled', c.get('pubkey'), body, undefined, c.get('hubId') ?? null)
     return c.json({ enabled: body.enabled })
   },
@@ -156,7 +156,7 @@ deployment.get('/cross-hub',
   requirePermission('settings:read'),
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getCrossHubSharingEnabled()
+    const result = await services.platformSettings.getCrossHubSharingEnabled()
     return c.json(result)
   },
 )
@@ -178,7 +178,7 @@ deployment.put('/cross-hub',
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')
-    const result = await services.settings.setCrossHubSharingEnabled(body)
+    const result = await services.platformSettings.setCrossHubSharingEnabled(body)
     await audit(services.audit, 'crossHubSharingToggled', c.get('pubkey'), body, undefined, null)
     return c.json(result)
   },
@@ -208,7 +208,7 @@ entitySchema.get('/entity-types',
     // different hub is honoured only for a caller who can read there.
     const target = resolveTargetHub(c, c.req.query('hubId'), ['settings:read', 'cases:read-own', 'cases:read-assigned', 'cases:create'])
     if (!target.ok) return c.json({ error: target.error }, target.status)
-    const result = await services.settings.getEntityTypes(target.hubId)
+    const result = await services.entitySchema.getEntityTypes(target.hubId)
     return c.json(result)
   },
 )
@@ -240,7 +240,7 @@ entitySchema.get('/entity-types/:id',
     // types are stored under hub ''.
     const target = resolveTargetHub(c, c.req.query('hubId'), 'settings:read')
     if (!target.ok) return c.json({ error: target.error }, target.status)
-    const result = await services.settings.getEntityTypeById(c.req.param('id'), target.hubId ?? '')
+    const result = await services.entitySchema.getEntityTypeById(c.req.param('id'), target.hubId ?? '')
     return c.json(result)
   },
 )
@@ -274,7 +274,7 @@ entitySchema.post('/entity-types',
     const target = resolveTargetHub(c, body.hubId || undefined, 'cases:manage-types')
     if (!target.ok) return c.json({ error: target.error }, target.status)
     const hubId = target.hubId ?? ''
-    const result = await services.settings.createEntityType({ ...body, hubId })
+    const result = await services.entitySchema.createEntityType({ ...body, hubId })
     await audit(services.audit, 'entityTypeCreated', c.get('pubkey'), {}, undefined, hubId || null)
     return c.json(result, 201)
   },
@@ -284,7 +284,7 @@ entitySchema.post('/entity-types',
 const entityTypeRouter = createEntityRouter({
   tag: 'Case Management',
   domain: 'cases-entity-types',
-  service: 'settings',
+  service: 'entitySchema',
   listResponseSchema: entityTypeListResponseSchema,
   itemResponseSchema: entityTypeDefinitionSchema,
   updateBodySchema: updateEntityTypeBodySchema,
@@ -326,7 +326,7 @@ entitySchema.patch('/entity-types/:id/customize',
     const body = c.req.valid('json')
     const services = c.get('services')
     const pubkey = c.get('pubkey')
-    const updated = await services.settings.updateEntityType(id, body as Record<string, unknown>)
+    const updated = await services.entitySchema.updateEntityType(id, body as Record<string, unknown>)
     await audit(services.audit, 'entityTypeCustomized', pubkey, { entityTypeId: id, fields: Object.keys(body) }, undefined, c.get('hubId') ?? null)
     return c.json(updated)
   },
@@ -339,7 +339,7 @@ entitySchema.patch('/entity-types/:id/customize',
 const relationshipTypeRouter = createEntityRouter({
   tag: 'Case Management',
   domain: 'cases-relationship-types',
-  service: 'settings',
+  service: 'entitySchema',
   listResponseSchema: relationshipTypeListResponseSchema,
   itemResponseSchema: relationshipTypeDefinitionSchema,
   createBodySchema: createRelationshipTypeBodySchema,
@@ -384,7 +384,7 @@ entitySchema.post('/case-number',
   async (c) => {
     const body = c.req.valid('json')
     const services = c.get('services')
-    const { number } = await services.settings.generateCaseNumber({
+    const { number } = await services.entitySchema.generateCaseNumber({
       prefix: body.prefix,
       year: body.year,
       hubId: body.hubId || c.get('hubId') || '',
@@ -412,7 +412,7 @@ entitySchema.get('/templates',
     const services = c.get('services')
     const templates = await loadBundledTemplates()
     // Fetch applied templates to include appliedTemplateIds in response
-    const { appliedTemplates = [] } = await services.settings.getAppliedTemplates() as { appliedTemplates: AppliedTemplateRecord[] }
+    const { appliedTemplates = [] } = await services.templateState.getAppliedTemplates() as { appliedTemplates: AppliedTemplateRecord[] }
     const appliedIds = appliedTemplates.map(at => at.templateId)
     return c.json({
       templates: templates.map(t => ({
@@ -447,7 +447,7 @@ entitySchema.get('/templates/updates',
   requirePermission('settings:read'),
   async (c) => {
     const services = c.get('services')
-    const { appliedTemplates = [] } = await services.settings.getAppliedTemplates() as { appliedTemplates: AppliedTemplateRecord[] }
+    const { appliedTemplates = [] } = await services.templateState.getAppliedTemplates() as { appliedTemplates: AppliedTemplateRecord[] }
     const available = await loadBundledTemplates()
     const updates = detectTemplateUpdates(appliedTemplates, available)
     return c.json({ updates })
@@ -503,10 +503,10 @@ entitySchema.post('/templates/apply',
     if (!template) return c.json({ error: 'Template not found' }, 404)
 
     // Get existing entity types for this hub only
-    const { entityTypes: existing } = await services.settings.getEntityTypes(hubId)
+    const { entityTypes: existing } = await services.entitySchema.getEntityTypes(hubId)
 
     // Get existing CMS report types for this hub only
-    const { reportTypes: existingReportTypes } = await services.settings.getCmsReportTypes(hubId)
+    const { reportTypes: existingReportTypes } = await services.reportTypes.getCmsReportTypes(hubId)
 
     // Apply template with correct hubId so new entity types are hub-scoped
     const allTemplatesMap = new Map(templates.map(t => [t.id, t]))
@@ -521,11 +521,11 @@ entitySchema.post('/templates/apply',
     }
 
     // Save entity types (hub-scoped bulk replacement — only touches this hub's rows)
-    await services.settings.bulkSetEntityTypes({ entityTypes: merged, hubId })
+    await services.entitySchema.bulkSetEntityTypes({ entityTypes: merged, hubId })
 
     // Save relationship types (hub-scoped append)
-    const { relationshipTypes: existingRels } = await services.settings.getRelationshipTypes(hubId)
-    await services.settings.bulkSetRelationshipTypes({
+    const { relationshipTypes: existingRels } = await services.entitySchema.getRelationshipTypes(hubId)
+    await services.entitySchema.bulkSetRelationshipTypes({
       relationshipTypes: [...existingRels, ...result.relationshipTypes],
       hubId,
     })
@@ -538,19 +538,19 @@ entitySchema.post('/templates/apply',
         if (idx >= 0) mergedReportTypes[idx] = newRT
         else mergedReportTypes.push(newRT)
       }
-      await services.settings.bulkSetCmsReportTypes({ reportTypes: mergedReportTypes, hubId })
+      await services.reportTypes.bulkSetCmsReportTypes({ reportTypes: mergedReportTypes, hubId })
     }
 
     // Track applied template. This list is still server-wide (a record carries
     // no hub), and it is load-bearing as such: a new member's default role is
     // resolved from it (`lib/hub-default-role.ts`). Narrowing both is #1446.
-    const { appliedTemplates = [] } = await services.settings.getAppliedTemplates() as { appliedTemplates: unknown[] }
+    const { appliedTemplates = [] } = await services.templateState.getAppliedTemplates() as { appliedTemplates: unknown[] }
     appliedTemplates.push(result.appliedRecord)
-    await services.settings.setAppliedTemplates({ appliedTemplates })
+    await services.templateState.setAppliedTemplates({ appliedTemplates })
 
     // Enable case management where the template was applied: under a hub that
     // is the hub's own switch, never the deployment default every hub inherits.
-    await services.settings.setCaseManagementEnabled({ enabled: true }, c.get('hubId'))
+    await services.hubSettings.setCaseManagementEnabled({ enabled: true }, c.get('hubId'))
 
     await audit(services.audit, 'templateApplied', c.get('pubkey'), {
       templateId,
@@ -602,7 +602,7 @@ entitySchema.get('/report-types',
     const services = c.get('services')
     const target = resolveTargetHub(c, c.req.query('hubId'), ['settings:read', 'reports:read-types'])
     if (!target.ok) return c.json({ error: target.error }, target.status)
-    const result = await services.settings.getCmsReportTypes(target.hubId)
+    const result = await services.reportTypes.getCmsReportTypes(target.hubId)
     return c.json(result)
   },
 )
@@ -611,7 +611,7 @@ entitySchema.get('/report-types',
 const reportTypeRouter = createEntityRouter({
   tag: 'Case Management',
   domain: 'cases-report-types',
-  service: 'settings',
+  service: 'reportTypes',
   listResponseSchema: cmsReportTypeListResponseSchema,
   itemResponseSchema: reportTypeDefinitionSchema,
   createBodySchema: createCmsReportTypeBodySchema,

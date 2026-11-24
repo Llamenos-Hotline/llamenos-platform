@@ -43,8 +43,10 @@ function makeAdapter(message: IncomingMessage = incoming): MessagingAdapter {
 function makeServices(channelEnabled: boolean) {
   return {
     audit: { log: vi.fn().mockResolvedValue(undefined) },
-    settings: {
+    hubs: {
       getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-test' } }),
+    },
+    messagingConfig: {
       getMessagingConfig: vi.fn().mockResolvedValue(null),
       isHubChannelEnabled: vi.fn().mockResolvedValue(channelEnabled),
     },
@@ -104,7 +106,7 @@ describe('inbound messaging webhook honours the hub channel switch — #2384', (
     const res = await post(app)
 
     expect(res.status).toBe(403)
-    expect(services.settings.isHubChannelEnabled).toHaveBeenCalledWith(HUB, 'sms')
+    expect(services.messagingConfig.isHubChannelEnabled).toHaveBeenCalledWith(HUB, 'sms')
     expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
     expect(publishEvent).not.toHaveBeenCalled()
     expect(services.audit.log).not.toHaveBeenCalled()
@@ -173,13 +175,13 @@ describe('inbound messaging webhook honours the hub channel switch — #2384', (
     const res = await post(app, '')
 
     expect(res.status).toBe(400)
-    expect(services.settings.isHubChannelEnabled).not.toHaveBeenCalled()
+    expect(services.messagingConfig.isHubChannelEnabled).not.toHaveBeenCalled()
     expect(services.conversations.handleIncoming).not.toHaveBeenCalled()
   })
 
   it('fails open when the switch cannot be read: a database blip does not turn a crisis contact away', async () => {
     const services = makeServices(true)
-    services.settings.isHubChannelEnabled = vi.fn().mockRejectedValue(new Error('postgres is down'))
+    services.messagingConfig.isHubChannelEnabled = vi.fn().mockRejectedValue(new Error('postgres is down'))
     const app = await createApp(services)
 
     const res = await post(app)

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { updateRecordBodySchema } from '@protocol/schemas/records'
 import { updatePlatformSettingsBodySchema } from '@protocol/schemas/platform-settings'
 import { CasesService } from '../../services/cases'
-import { SettingsService } from '../../services/settings'
+import { PlatformSettingsService } from '../../services/platform-settings'
 
 /**
  * Issue #1643 — a PATCH must write only what the client sent.
@@ -106,8 +106,8 @@ describe('PATCH /api/records/:id — unsent fields are untouched (#1643)', () =>
 })
 
 describe('PATCH platform settings — sibling fields are untouched (#1643)', () => {
-  /** A SettingsService whose stored platform settings are captured, not written. */
-  function settingsServiceCapturingSet(stored: Record<string, unknown>) {
+  /** A PlatformSettingsService whose stored platform settings are captured, not written. */
+  function capturingPlatformSettings(stored: Record<string, unknown>) {
     const setValues = vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue(undefined),
     })
@@ -122,7 +122,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
       }),
       update: vi.fn().mockReturnValue({ set: setValues }),
     }
-    return { service: new SettingsService(db as never), setValues }
+    return { service: new PlatformSettingsService(db as never), setValues }
   }
 
   const operatorSettings = {
@@ -143,7 +143,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
   }
 
   it('changing one feature flag leaves the other three as the operator set them', async () => {
-    const { service, setValues } = settingsServiceCapturingSet(operatorSettings)
+    const { service, setValues } = capturingPlatformSettings(operatorSettings)
 
     const body = updatePlatformSettingsBodySchema.parse({ featureFlags: { mlsEnabled: true } })
     expect(body).toEqual({ featureFlags: { mlsEnabled: true } })
@@ -167,7 +167,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
   })
 
   it('changing one session-policy field does not reset the other to the 30-day default', async () => {
-    const { service } = settingsServiceCapturingSet(operatorSettings)
+    const { service } = capturingPlatformSettings(operatorSettings)
 
     const body = updatePlatformSettingsBodySchema.parse({ sessionPolicy: { maxInactiveHours: 2 } })
     const merged = await service.updatePlatformSettings(body as Record<string, unknown>)
@@ -176,7 +176,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
   })
 
   it('changing the purge hour does not re-enable scheduled purging', async () => {
-    const { service } = settingsServiceCapturingSet(operatorSettings)
+    const { service } = capturingPlatformSettings(operatorSettings)
 
     const body = updatePlatformSettingsBodySchema.parse({ retentionPurge: { cronHourUtc: 5 } })
     const merged = await service.updatePlatformSettings(body as Record<string, unknown>)
@@ -185,7 +185,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
   })
 
   it('renaming the instance does not blank the support and privacy contacts', async () => {
-    const { service } = settingsServiceCapturingSet(operatorSettings)
+    const { service } = capturingPlatformSettings(operatorSettings)
 
     const body = updatePlatformSettingsBodySchema.parse({ branding: { instanceName: 'Renamed' } })
     const merged = await service.updatePlatformSettings(body as Record<string, unknown>)
@@ -198,7 +198,7 @@ describe('PATCH platform settings — sibling fields are untouched (#1643)', () 
   })
 
   it('an empty erasure-floor section does not reset the operator floor', async () => {
-    const { service } = settingsServiceCapturingSet(operatorSettings)
+    const { service } = capturingPlatformSettings(operatorSettings)
 
     const body = updatePlatformSettingsBodySchema.parse({ erasurePlatformFloor: {} })
     const merged = await service.updatePlatformSettings(body as Record<string, unknown>)

@@ -1,5 +1,5 @@
 /**
- * SettingsService.updateCustomFields concurrency — real PostgreSQL (#686).
+ * CustomFieldsService.updateCustomFields concurrency — real PostgreSQL (#686).
  *
  * updateCustomFields replaces the whole custom-field set with DELETE + INSERT.
  * Under READ COMMITTED, two concurrent replacements interleave: the second
@@ -24,7 +24,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import type { CustomFieldDefinition } from '@shared/types'
 
 const DATABASE_URL =
@@ -69,7 +69,7 @@ const JSONB_TYPE = {
 
 let adminSql: ReturnType<typeof postgres>
 let testSql: ReturnType<typeof postgres>
-let settings: SettingsService
+let settings: SettingsDomainServices
 
 function field(name: string, label = name): CustomFieldDefinition {
   return {
@@ -99,7 +99,7 @@ beforeAll(async () => {
     types: { jsonb: JSONB_TYPE },
   })
   const db = drizzle({ client: testSql, schema }) as unknown as Database
-  settings = new SettingsService(db)
+  settings = createSettingsDomain(db)
 })
 
 afterAll(async () => {
@@ -112,10 +112,10 @@ beforeEach(async () => {
   await testSql`TRUNCATE TABLE custom_field_definitions`
 })
 
-describe('SettingsService.updateCustomFields under concurrent writers', () => {
+describe('CustomFieldsService.updateCustomFields under concurrent writers', () => {
   it('persists exactly one caller\'s list — never the union of concurrent PUTs', async () => {
     // Seed so every writer's DELETE has existing rows to lock on.
-    await settings.updateCustomFields({ fields: [field('seed_a'), field('seed_b')] })
+    await settings.customFields.updateCustomFields({ fields: [field('seed_a'), field('seed_b')] })
 
     const lists: CustomFieldDefinition[][] = Array.from({ length: 8 }, (_, i) => [
       field('severity'),
@@ -124,9 +124,9 @@ describe('SettingsService.updateCustomFields under concurrent writers', () => {
     ])
 
     for (let round = 0; round < 5; round++) {
-      await Promise.all(lists.map((fields) => settings.updateCustomFields({ fields })))
+      await Promise.all(lists.map((fields) => settings.customFields.updateCustomFields({ fields })))
 
-      const { fields: persisted } = await settings.getCustomFields('admin')
+      const { fields: persisted } = await settings.customFields.getCustomFields('admin')
       const names = persisted.map((f) => f.name)
 
       // No duplicate names ever persisted.
@@ -140,7 +140,7 @@ describe('SettingsService.updateCustomFields under concurrent writers', () => {
 
     // And a subsequent full-list PUT still succeeds (no poisoned duplicate).
     await expect(
-      settings.updateCustomFields({ fields: [field('severity'), field('after')] }),
+      settings.customFields.updateCustomFields({ fields: [field('severity'), field('after')] }),
     ).resolves.toBeDefined()
   })
 })

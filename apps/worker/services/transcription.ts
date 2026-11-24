@@ -2,7 +2,7 @@ import type { Env } from '../types'
 import type { Services } from '../services'
 import { encryptMessageForStorage } from '../lib/crypto'
 import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 
 /**
  * Transcribe a call recording into an E2EE note for the answering volunteer and
@@ -23,7 +23,7 @@ export async function maybeTranscribe(params: {
 }): Promise<void> {
   const { hubId, callId, audio, userPubkey, env, services } = params
 
-  const { globalEnabled } = await services.settings.getTranscriptionSettings()
+  const { globalEnabled } = await services.callSettings.getTranscriptionSettings()
   if (!globalEnabled) return
 
   // A volunteer removed since answering has no transcription preference left

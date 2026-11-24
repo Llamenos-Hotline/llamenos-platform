@@ -108,7 +108,7 @@ function appAs(as: Actor) {
     c.set('user', { pubkey: as.pubkey, roles: as.roles, hubRoles: as.hubRoles } as unknown as AppEnv['Variables']['user'])
     c.set('services', {
       erasure,
-      settings: { getHub: async () => ({}) },
+      hubs: { getHub: async () => ({}) },
       audit: { log: async () => {} },
     } as unknown as AppEnv['Variables']['services'])
     c.set('allRoles', ALL_ROLES)

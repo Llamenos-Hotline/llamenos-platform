@@ -21,7 +21,7 @@ import { backgroundTask } from '../lib/hono-compat'
 import { createLogger } from '../lib/logger'
 import { audit } from '../services/audit'
 import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 
 const log = createLogger('routes.firehose')
 

@@ -36,7 +36,7 @@ const uploadedPrompt = (hubSegment: boolean) => async (c: Context<AppEnv>) => {
   const language = c.req.param('language') ?? ''
   if (hubSegment && !IVR_HUB_ID_PATTERN.test(hubId ?? '')) return notFound()
   if (!IVR_PROMPT_TYPE_PATTERN.test(promptType) || !IVR_LANGUAGE_PATTERN.test(language)) return notFound()
-  const result = await c.get('services').settings.getEffectiveIvrAudio(hubId, promptType, language)
+  const result = await c.get('services').ivrSettings.getEffectiveIvrAudio(hubId, promptType, language)
   if (!result) return notFound()
   // Uploads are validated as PCM WAV (ivrAudioFormatError), so the type is true.
   return c.body(Buffer.from(result.audio, 'base64'), 200, { 'Content-Type': 'audio/wav' })

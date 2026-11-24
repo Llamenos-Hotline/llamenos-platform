@@ -120,7 +120,7 @@ publicSecurityEventsRoutes.post('/',
   // counted before validation so malformed floods are throttled too.
   async (c, next) => {
     const ipKey = `security-events-submit:${routeRateLimitClient(c)}`
-    if (await checkRateLimit(c.get('services').settings, ipKey, SUBMIT_MAX_PER_MINUTE)) {
+    if (await checkRateLimit(c.get('services').rateLimits, ipKey, SUBMIT_MAX_PER_MINUTE)) {
       return c.json({ error: 'Too many requests. Try again later.' }, 429)
     }
     return next()
@@ -155,7 +155,7 @@ publicSecurityEventsRoutes.post('/',
   })
 
 async function alertAdmins(services: AppEnv['Variables']['services'], eventCount: number): Promise<void> {
-  const throttle = await services.settings.checkApiRateLimit('security-events-admin-alert', 1, ADMIN_ALERT_WINDOW_MS)
+  const throttle = await services.rateLimits.checkApiRateLimit('security-events-admin-alert', 1, ADMIN_ALERT_WINDOW_MS)
   if (throttle.limited) return
   const adminPubkeys = await services.identity.listActiveSuperAdminPubkeys()
   await Promise.allSettled(

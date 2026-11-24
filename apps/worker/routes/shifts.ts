@@ -506,7 +506,7 @@ shifts.get('/fallback',
   async (c) => {
     const services = c.get('services')
     const hubId = pathHubId(c)
-    const result = await services.settings.getFallbackGroup(hubId)
+    const result = await services.callSettings.getFallbackGroup(hubId)
     return c.json(result)
   },
 )
@@ -534,7 +534,7 @@ shifts.put('/fallback',
     const services = c.get('services')
     const hubId = pathHubId(c)
     const body = c.req.valid('json')
-    const result = await services.settings.setFallbackGroup(body, hubId)
+    const result = await services.callSettings.setFallbackGroup(body, hubId)
     return c.json(result)
   },
 )

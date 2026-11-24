@@ -36,14 +36,14 @@ const logger = createLogger('channel-guard')
  * the refusal.
  */
 export async function refuseIfChannelDisabled(
-  services: Pick<Services, 'settings' | 'incidents'>,
+  services: Pick<Services, 'messagingConfig' | 'incidents'>,
   hubId: string,
   channel: Exclude<HubChannelType, 'email'>,
 ): Promise<boolean> {
 
   let enabled: boolean
   try {
-    enabled = await services.settings.isHubChannelEnabled(hubId, channel)
+    enabled = await services.messagingConfig.isHubChannelEnabled(hubId, channel)
   } catch (err) {
     logger.error('Could not read the hub channel switch — processing the contact', {
       hubId,

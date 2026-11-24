@@ -8,7 +8,7 @@ import { hangUpCallerLeg } from '../services/call-hangup'
 import { audit } from '../services/audit'
 import { banHash, openCallerNumber } from '../lib/crypto'
 import { hubScope } from '@shared/owner-scope'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { resolveRingableVolunteers, canAnswerInApp, cancelLosingLegs } from '../services/ringing'
 import { getHubPresence } from '../services/presence'
 import { currentRingDecision } from '../services/routing-readiness'
@@ -242,7 +242,7 @@ async function historyReadScope(c: Context<AppEnv>): Promise<
   const permissions = c.get('permissions')
   if (checkPermission(permissions, 'calls:read-history')) return { access: { scope: 'all' } }
   if (!checkPermission(permissions, 'calls:read-own-history')) return null
-  const { volunteerAccessDays } = await c.get('services').settings.getCallHistoryAccess(pathHubId(c))
+  const { volunteerAccessDays } = await c.get('services').callSettings.getCallHistoryAccess(pathHubId(c))
   const answeredSince = new Date(Date.now() - volunteerAccessDays * DAY_MS)
   return {
     access: { scope: 'own', windowDays: volunteerAccessDays, availableSince: answeredSince.toISOString() },

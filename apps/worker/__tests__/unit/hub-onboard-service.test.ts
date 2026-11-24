@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { HubOnboardService } from '@worker/services/provider-setup/hub-onboard'
 import { ProviderSetup } from '@worker/services/provider-setup'
-import { SettingsService } from '@worker/services/settings'
+import { HubSettingsService } from '@worker/services/hub-settings'
 import { createMockDb } from './mock-db'
 
 function setup() {
@@ -12,8 +12,8 @@ function setup() {
   // persisted shape don't have to set one up themselves.
   db.$setInsertResult([{ settings: {} }])
   const providerSetup = new ProviderSetup(db as any, 'secret', 'localhost')
-  const settings = new SettingsService(db as any)
-  const service = new HubOnboardService(db as any, providerSetup, settings)
+  const hubSettings = new HubSettingsService(db as any)
+  const service = new HubOnboardService(db as any, providerSetup, hubSettings)
   return { db, service, reset }
 }
 

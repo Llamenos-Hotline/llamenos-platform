@@ -33,7 +33,7 @@ import {
 import { getClientIp, CLIENT_FINGERPRINT_PREFIX } from '../lib/client-ip'
 import { createLogger } from '../lib/logger'
 import { withProviderRefs } from '../lib/provider-ref'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import type { ErasureService } from './erasure'
 
 const logger = createLogger('services.audit')

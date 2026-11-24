@@ -19,7 +19,7 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs, users, securityEvents, userSignalContacts, auditLog, erasureRequests, envelopeRevocationJobs } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { ErasureService } from '../../services/erasure'
 import { AuditService } from '../../services/audit'
 import { SIP_REVOCATION_EVENT } from '../../telephony/registrar'
@@ -30,7 +30,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const erasure = new ErasureService(db)
 const audit = new AuditService(db)
 
@@ -50,7 +50,7 @@ async function makeUser(label: string, extra: Partial<typeof users.$inferInsert>
 
 async function makeHub(label: string, founder: string): Promise<string> {
   const id = nextId(`hub-${label}`)
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

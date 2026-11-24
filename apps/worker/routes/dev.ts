@@ -11,7 +11,7 @@ import { KIND_CALL_RING, KIND_CALL_UPDATE, KIND_CALL_VOICEMAIL, KIND_MESSAGE_NEW
 import { getTestPushLog, clearTestPushLog } from '../lib/push-dispatch'
 import { getApnsBundleId, getApnsVoipTopic } from '../lib/apns-topic'
 import { seedSampleDataset } from '../services/sample-seeder'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { audit } from '../services/audit'
 import { resolveRingableVolunteers } from '../services/ringing'
 import { SAMPLE_HUB } from '../lib/sample-dataset'
@@ -107,8 +107,8 @@ dev.post('/test-reset', async (c) => {
   // causing resolvePermissions('role-super-admin', []) → [] → 403 on hub routes.
   // By resetting settings first, the roles table is re-seeded before the admin
   // user is created and before concurrent requests can authenticate.
-  await services.settings.reset(env, secret)
-  await services.settings.ensureInit()
+  await services.settingsBootstrap.reset(env, secret)
+  await services.settingsBootstrap.ensureInit()
   // Re-seed admin immediately — minimizes the window where hasAdmin()=false
   // (concurrent browser requests between reset() and the later ensureInit() would
   // see needsBootstrap=true, causing flaky AdminBootstrap to appear in E2E tests)
@@ -152,7 +152,7 @@ dev.post('/test-reset-no-admin', async (c) => {
   // Reset all services
   await services.audit.reset()
   await services.identity.reset(env, secret)
-  await services.settings.reset(env, secret)
+  await services.settingsBootstrap.reset(env, secret)
   await services.records.reset()
   await services.shifts.reset('')
   await services.calls.reset('', services.callRecordings)
@@ -309,8 +309,8 @@ dev.delete('/test-rate-limits', async (c) => {
   if (denied) return denied
   const prefix = c.req.query('prefix')
   const services = c.get('services')
-  await services.settings.clearRateLimits(prefix || undefined)
-  await services.settings.clearApiRateLimits(prefix || undefined)
+  await services.rateLimits.clearRateLimits(prefix || undefined)
+  await services.rateLimits.clearApiRateLimits(prefix || undefined)
   return c.json({ ok: true })
 })
 
@@ -539,12 +539,12 @@ dev.post('/test-seed', async (c) => {
   const warnings: string[] = []
 
   // Ensure default roles/settings exist (CI fresh database)
-  await services.settings.ensureInit({ ENVIRONMENT: c.env.ENVIRONMENT })
+  await services.settingsBootstrap.ensureInit({ ENVIRONMENT: c.env.ENVIRONMENT })
 
   // ── Permissions ──────────────────────────────────────────────────────────
   if (spec.permissions.enableCaseManagement) {
     try {
-      await services.settings.setCaseManagementEnabled({ enabled: true }, hubId)
+      await services.hubSettings.setCaseManagementEnabled({ enabled: true }, hubId)
     } catch (e) {
       warnings.push(`setCaseManagementEnabled: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -552,7 +552,7 @@ dev.post('/test-seed', async (c) => {
 
   if (spec.permissions.grantVolunteerCms) {
     try {
-      await services.settings.updateRole('role-volunteer', {
+      await services.roles.updateRole('role-volunteer', {
         permissions: [
           'calls:answer', 'calls:read-active',
           'notes:create', 'notes:read-own', 'notes:update-own', 'notes:reply',
@@ -596,12 +596,12 @@ dev.post('/test-seed', async (c) => {
     let entityTypeId: string
 
     try {
-      const created = await services.settings.createEntityType({ ...tmpl, hubId })
+      const created = await services.entitySchema.createEntityType({ ...tmpl, hubId })
       entityTypeId = created.id
     } catch (e) {
       // If already exists (409), look it up
       if (e instanceof Error && e.message.includes('already exists')) {
-        const { entityTypes } = await services.settings.getEntityTypes(hubId)
+        const { entityTypes } = await services.entitySchema.getEntityTypes(hubId)
         const existing = entityTypes.find(et => et.name === tmpl.name)
         if (existing) {
           entityTypeId = existing.id
@@ -651,7 +651,7 @@ dev.post('/test-seed', async (c) => {
   for (const rtSpec of spec.reportTypes) {
     try {
       const reportTypeName = rtSpec.template === 'general_report' ? 'General Report' : rtSpec.template
-      const reportType = await services.settings.createCmsReportType({
+      const reportType = await services.reportTypes.createCmsReportType({
         hubId,
         name: reportTypeName,
         label: reportTypeName,
@@ -773,7 +773,7 @@ dev.delete('/test-seed-sample', async (c) => {
   const denied = devRouteDenied(c)
   if (denied) return denied
   const services = c.get('services')
-  await services.settings.purgeHub(SAMPLE_HUB.id, services.callRecordings)
+  await services.hubs.purgeHub(SAMPLE_HUB.id, services.callRecordings)
   for (const account of sampleIdentities(c.env)) {
     await services.identity.deleteUser(account.pubkey).catch(() => {})
   }
@@ -865,7 +865,7 @@ dev.post('/test-simulate/incoming-call', async (c) => {
   const services = c.get('services')
   const hubId = body.hubId
   try {
-    await services.settings.getHub(hubId)
+    await services.hubs.getHub(hubId)
   } catch (err) {
     if (err instanceof ServiceError && err.status === 404) return c.json({ error: 'Unknown hub' }, 404)
     throw err
@@ -1018,7 +1018,7 @@ dev.post('/test-simulate/incoming-message', async (c) => {
   }
   const services = c.get('services')
   try {
-    await services.settings.getHub(body.hubId)
+    await services.hubs.getHub(body.hubId)
   } catch (err) {
     if (err instanceof ServiceError && err.status === 404) return c.json({ error: 'Unknown hub' }, 404)
     throw err
@@ -1578,7 +1578,7 @@ dev.post('/test-create-hub', async (c) => {
 
   // Seed default roles/settings if this is the first request to a fresh database.
   const services = c.get('services')
-  await services.settings.ensureInit({ ENVIRONMENT: c.env.ENVIRONMENT })
+  await services.settingsBootstrap.ensureInit({ ENVIRONMENT: c.env.ENVIRONMENT })
 
   const rawBody = await c.req.json().catch(() => ({}))
   const hubName = typeof rawBody === 'object' && rawBody !== null && 'name' in rawBody && typeof rawBody.name === 'string'
@@ -1621,7 +1621,7 @@ dev.post('/test-create-hub', async (c) => {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await services.identity.ensureInit(adminPubkey)
-      await services.settings.createHub(hub, { pubkey: adminPubkey, roleIds: ['role-super-admin'] })
+      await services.hubs.createHub(hub, { pubkey: adminPubkey, roleIds: ['role-super-admin'] })
       return c.json({ id: hub.id, name: hub.name })
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)

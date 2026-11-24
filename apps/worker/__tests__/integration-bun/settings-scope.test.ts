@@ -43,7 +43,8 @@ import {
 } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { IdentityService } from '../../services/identity'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import settingsRoutes, { hubSettingsRoutes } from '../../routes/settings'
 import entitySchemaRoutes, { hubEntitySchemaRoutes } from '../../routes/entity-schema'
@@ -56,7 +57,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const svc = {
-  settings: new SettingsService(db),
+  ...createSettingsDomain(db),
   audit: new AuditService(db),
   identity: new IdentityService(db),
 }
@@ -147,7 +148,7 @@ async function restoreDeployment() {
 let reportTypeId = ''
 
 beforeAll(async () => {
-  await svc.settings.getSpamSettings() // the singleton row exists from here on
+  await svc.spamSettings.getSpamSettings() // the singleton row exists from here on
   savedRow = await deploymentRow()
   savedFields = await customFieldRows()
   await db.insert(hubs).values([
@@ -180,8 +181,8 @@ interface DeploymentCase {
 const column = <K extends keyof SettingsRow>(k: K) => async () => (await deploymentRow())[k]
 
 const seedReportType = async () => {
-  reportTypeId = (await svc.settings.createReportType({ name: `Seed ${suffix}` })).id
-  await svc.settings.createReportType({ name: `Seed spare ${suffix}` })
+  reportTypeId = (await svc.reportTypes.createReportType({ name: `Seed ${suffix}` })).id
+  await svc.reportTypes.createReportType({ name: `Seed spare ${suffix}` })
 }
 
 const CASES: DeploymentCase[] = [
@@ -294,9 +295,9 @@ describe('the shared messaging sender (#2367)', () => {
   const SECRET = `deployment-sender-${suffix}`
 
   it("hub A's admin cannot read or replace the deployment's sender credentials", async () => {
-    await svc.settings.updateMessagingConfig({
+    await svc.messagingConfig.updateMessagingConfig({
       sms: { enabled: true, accountSid: `AC${'1'.repeat(32)}`, authToken: SECRET, phoneNumber: '+15550002222' },
-    } as Parameters<SettingsService['updateMessagingConfig']>[0])
+    } as Parameters<SettingsDomainServices['messagingConfig']['updateMessagingConfig']>[0])
     const before = (await deploymentRow()).messagingConfig
 
     const read = await call(ADMIN_A, 'GET', `/api/hubs/${HUB_A}/settings/messaging`)
@@ -313,7 +314,7 @@ describe('the shared messaging sender (#2367)', () => {
     expect(JSON.stringify(after)).toContain(SECRET)
     expect(JSON.stringify(after)).not.toContain(MARK)
     // And what the messaging router actually sends with is the operator's config.
-    expect(JSON.stringify(await svc.settings.getMessagingConfig())).toContain(SECRET)
+    expect(JSON.stringify(await svc.messagingConfig.getMessagingConfig())).toContain(SECRET)
   })
 
   it('the instance permission on the unscoped route replaces them', async () => {
@@ -328,15 +329,15 @@ describe('the shared messaging sender (#2367)', () => {
 describe('templates/apply under a hub turns on that hub only (#2367)', () => {
   it("enables case management in hub A, not in the deployment default hub B inherits", async () => {
     await db.update(systemSettings).set({ caseManagementEnabled: false }).where(eq(systemSettings.id, 1))
-    expect((await svc.settings.getCaseManagementEnabled(HUB_B)).enabled).toBe(false)
+    expect((await svc.hubSettings.getCaseManagementEnabled(HUB_B)).enabled).toBe(false)
 
     const res = await call(ADMIN_A, 'POST', `/api/hubs/${HUB_A}/settings/cms/templates/apply`, { templateId: 'general-hotline' })
     expect(res.status).toBe(201)
 
     expect((await deploymentRow()).caseManagementEnabled).toBe(false)
-    expect((await svc.settings.getHubSettings(HUB_A)).caseManagementEnabled).toBe(true)
-    expect((await svc.settings.getCaseManagementEnabled(HUB_A)).enabled).toBe(true)
-    expect((await svc.settings.getCaseManagementEnabled(HUB_B)).enabled).toBe(false)
+    expect((await svc.hubSettings.getHubSettings(HUB_A)).caseManagementEnabled).toBe(true)
+    expect((await svc.hubSettings.getCaseManagementEnabled(HUB_A)).enabled).toBe(true)
+    expect((await svc.hubSettings.getCaseManagementEnabled(HUB_B)).enabled).toBe(false)
     // The template's definitions landed in hub A's rows.
     const rows = await db.select().from(entityTypeDefinitions).where(eq(entityTypeDefinitions.hubId, HUB_A))
     expect(rows.length).toBeGreaterThan(0)
@@ -347,7 +348,7 @@ describe('the custom-field vocabulary stays readable inside a hub (#2367)', () =
   // Load-bearing: iOS loads a note's custom fields through the hub mount, and a
   // hub-only member has no global role for the unscoped route to accept.
   it("a hub-only member reads the deployment's fields under their hub, and cannot write them", async () => {
-    await svc.settings.updateCustomFields({ fields: [{ id: crypto.randomUUID(), name: `shared_${rand}`, label: 'Shared', type: 'text', required: false, visibleToUsers: true, editableByUsers: true, order: 0 }] } as Parameters<SettingsService['updateCustomFields']>[0])
+    await svc.customFields.updateCustomFields({ fields: [{ id: crypto.randomUUID(), name: `shared_${rand}`, label: 'Shared', type: 'text', required: false, visibleToUsers: true, editableByUsers: true, order: 0 }] } as Parameters<SettingsDomainServices['customFields']['updateCustomFields']>[0])
     const read = await call(VOLUNTEER_A, 'GET', `/api/hubs/${HUB_A}/settings/custom-fields`)
     expect(read.status).toBe(200)
     expect((JSON.parse(read.text) as { fields: { name: string }[] }).fields.map(f => f.name)).toContain(`shared_${rand}`)

@@ -31,7 +31,7 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { devices, hubKeys, hubs, roles, tags, teams, users } from '../../db/schema'
 import { IdentityService } from '../../services/identity'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { getHubKeyRecipients, rotateHubKey } from '../../lib/hub-key'
 import { HUB_ADMIN_PERMISSIONS } from '@shared/permissions'
 import type { HubKeyRotateBody } from '@protocol/schemas/hubs'
@@ -42,7 +42,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 const hubId = `hub-rot-${suite}`
@@ -128,7 +128,7 @@ beforeAll(async () => {
   await db.insert(teams).values({ id: `team-${suite}`, hubId, encryptedName: 'sealed-team', createdBy: admin })
 
   // The first key, wrapped for everyone.
-  await settings.setHubKeyEnvelopes(hubId, { envelopes: people.map(pk => wrapFor(pk, 'first')), expectedGeneration: 0 })
+  await settings.hubKeys.setHubKeyEnvelopes(hubId, { envelopes: people.map(pk => wrapFor(pk, 'first')), expectedGeneration: 0 })
 })
 
 afterAll(async () => {
@@ -213,7 +213,7 @@ describe('hub key rotation on departure', () => {
 
   it('a re-distribution that drops a holder marks the key due again', async () => {
     const read = await getHubKeyRecipients(db, hubId)
-    await settings.setHubKeyEnvelopes(hubId, {
+    await settings.hubKeys.setHubKeyEnvelopes(hubId, {
       envelopes: read.envelopes.filter(e => e.pubkey === admin),
       expectedGeneration: read.generation,
     })

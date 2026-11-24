@@ -38,18 +38,30 @@ const CALL_SID = 'v3:caller-leg'
 
 function makeServices() {
   return {
-    settings: {
+    hubs: {
       getHubByPhone: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
       getHub: vi.fn().mockResolvedValue({ hub: { id: 'hub-1' } }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    ivrSettings: {
       getIvrLanguages: vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'] }),
       resolveIvrVoiceCatalog: vi.fn().mockResolvedValue({ state: 'resolved', catalog: TELNYX_VOICES }),
+      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
+    },
+    spamSettings: {
       getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: true, rateLimitEnabled: false, maxCallsPerMinute: 5, overLimitAction: 'message' }),
+    },
+    rateLimits: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
+    },
+    captcha: {
       storeCaptcha: vi.fn().mockResolvedValue(undefined),
       submitCaptcha: vi.fn().mockResolvedValue({ outcome: 'pass' }),
+    },
+    callSettings: {
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90, voicemailMaxSeconds: 120, recordCalls: false }),
-      resolveIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
     },
     records: { checkBan: vi.fn().mockResolvedValue(false) },
     incidents: { signal: vi.fn().mockResolvedValue(undefined) },
@@ -162,7 +174,7 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       expect(incoming.headers.get('content-type')).toContain('text/xml')
       const menu = await incoming.text()
       expect(menu).toContain('<Gather')
-      expect(services.settings.getIvrLanguages).toHaveBeenCalledTimes(1)
+      expect(services.ivrSettings.getIvrLanguages).toHaveBeenCalledTimes(1)
 
       // 2. The caller presses 2 (Spanish): the gather's action URL, with the digit.
       const afterMenu = await telnyxPost(pathOf(attr(menu, 'Gather', 'action')), callFields({ Digits: '2' }))
@@ -171,15 +183,15 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       // It was NOT the language menu again — the call moved on, in Spanish.
       expect(captcha).not.toContain('language-selected')
       expect(captcha).toContain('voice="AWS.Polly.Lupe-Neural"')
-      expect(services.settings.getIvrLanguages).toHaveBeenCalledTimes(2) // once to menu, once to resolve the digit
-      expect(services.settings.storeCaptcha).toHaveBeenCalledWith({ callSid: CALL_SID, expected: expect.stringMatching(/^\d{4}$/) })
+      expect(services.ivrSettings.getIvrLanguages).toHaveBeenCalledTimes(2) // once to menu, once to resolve the digit
+      expect(services.captcha.storeCaptcha).toHaveBeenCalledWith({ callSid: CALL_SID, expected: expect.stringMatching(/^\d{4}$/) })
       expect(startParallelRinging).not.toHaveBeenCalled() // nothing rings before the CAPTCHA passes
 
       // 3. The caller keys in the digits: the CAPTCHA gather's action URL.
       const afterCaptcha = await telnyxPost(pathOf(attr(captcha, 'Gather', 'action')), callFields({ Digits: '1234' }))
       expect(afterCaptcha.status).toBe(200)
       const queued = await afterCaptcha.text()
-      expect(services.settings.submitCaptcha).toHaveBeenCalledWith({ callSid: CALL_SID, digits: '1234' })
+      expect(services.captcha.submitCaptcha).toHaveBeenCalledWith({ callSid: CALL_SID, digits: '1234' })
       expect(queued).toContain('<Enqueue')
       expect(startParallelRinging).toHaveBeenCalledTimes(1)
       expect(vi.mocked(startParallelRinging).mock.calls[0]![0]).toBe(CALL_SID)
@@ -202,11 +214,11 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       const res = await telnyxPost(pathOf(redirect!), callFields())
       expect(res.status).toBe(200)
       expect(await res.text()).toContain('<Gather') // the CAPTCHA, in the detected language
-      expect(services.settings.storeCaptcha).toHaveBeenCalled()
+      expect(services.captcha.storeCaptcha).toHaveBeenCalled()
     })
 
     it('a wrong CAPTCHA answer is challenged again on the next round, not queued', async () => {
-      vi.mocked(services.settings.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+      vi.mocked(services.captcha.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
       const menu = await (await telnyxPost('/api/telephony/incoming', callFields())).text()
       const challenge = await (await telnyxPost(pathOf(attr(menu, 'Gather', 'action')), callFields({ Digits: '1' }))).text()
       const firstRound = pathOf(attr(challenge, 'Gather', 'action'))
@@ -291,8 +303,8 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       const res = await telnyxPost(redirected, callFields({ Digits: '1' }))
 
       expect(res.status).toBe(403)
-      expect(services.settings.getIvrLanguages).toHaveBeenCalledTimes(1) // the menu's own, nothing since
-      expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+      expect(services.ivrSettings.getIvrLanguages).toHaveBeenCalledTimes(1) // the menu's own, nothing since
+      expect(services.captcha.storeCaptcha).not.toHaveBeenCalled()
       expect(startParallelRinging).not.toHaveBeenCalled()
     })
 
@@ -305,7 +317,7 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
     it('a callback with its hub removed is refused rather than served as though it had one', async () => {
       const res = await telnyxPost(mutate(await menuPath(), q => q.delete('hub')), callFields({ Digits: '1' }))
       expect(res.status).toBe(403)
-      expect(services.settings.storeCaptcha).not.toHaveBeenCalled()
+      expect(services.captcha.storeCaptcha).not.toHaveBeenCalled()
     })
 
     it('a callback with no authentication tag at all is refused', async () => {
@@ -327,7 +339,7 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
     })
 
     async function captchaPath() {
-      vi.mocked(services.settings.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
+      vi.mocked(services.captcha.submitCaptcha).mockResolvedValue({ outcome: 'retry', digitsToSpeak: '4821', round: 1 })
       const afterMenu = await (await telnyxPost(await menuPath(), callFields({ Digits: '1' }))).text()
       return pathOf(attr(afterMenu, 'Gather', 'action'))
     }
@@ -339,10 +351,10 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       ['hub', OTHER_HUB],
     ])('a CAPTCHA answer re-sent with its %s altered is refused, and no challenge is touched', async (param, value) => {
       const genuine = await captchaPath()
-      vi.mocked(services.settings.submitCaptcha).mockClear()
+      vi.mocked(services.captcha.submitCaptcha).mockClear()
       const res = await telnyxPost(mutate(genuine, q => q.set(param, value)), callFields({ Digits: '0000' }))
       expect(res.status).toBe(403)
-      expect(services.settings.submitCaptcha).not.toHaveBeenCalled()
+      expect(services.captcha.submitCaptcha).not.toHaveBeenCalled()
     })
 
     it('a CAPTCHA answer with an extra parameter appended is refused', async () => {
@@ -405,7 +417,7 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
         body: new URLSearchParams(callFields({ Digits: '1' })).toString(),
       })
       expect(res.status).toBe(403)
-      expect(services.settings.getIvrLanguages).not.toHaveBeenCalled()
+      expect(services.ivrSettings.getIvrLanguages).not.toHaveBeenCalled()
       expect(services.calls.answerCallWithToken).not.toHaveBeenCalled()
     })
 
@@ -443,7 +455,7 @@ describe('Telnyx TeXML call flow, through the real router with real signatures',
       expect((await send()).headers.get('content-type')).toContain('text/xml')
       const replay = await send()
       expect(await replay.text()).toBe('OK')
-      expect(services.settings.getIvrLanguages).toHaveBeenCalledTimes(1)
+      expect(services.ivrSettings.getIvrLanguages).toHaveBeenCalledTimes(1)
     })
   })
 })

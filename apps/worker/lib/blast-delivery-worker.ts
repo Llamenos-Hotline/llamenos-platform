@@ -18,7 +18,7 @@
  */
 
 import type { BlastsService } from '../services/blasts'
-import type { SettingsService } from '../services/settings'
+import type { MessagingConfigService } from '../services/messaging-config'
 import type { MessagingAdapter, SendResult } from '../messaging/adapter'
 import type { MessagingChannelType, BlastContent, MultiBlastContent, BlastSettings } from '@shared/types'
 import { DEFAULT_BLAST_SETTINGS, resolveBlastContent } from '@shared/types'
@@ -51,7 +51,7 @@ export type AdapterResolver = (channel: MessagingChannelType, hubId?: string) =>
 
 export interface BlastDeliveryWorkerDeps {
   blastsService: BlastsService
-  settingsService: SettingsService
+  messagingConfigService: MessagingConfigService
   resolveAdapter: AdapterResolver
   /** Resolve subscriber identifier from encryptedIdentifier — needed to actually send messages */
   resolveIdentifier: (subscriberId: string) => Promise<string | null>
@@ -147,7 +147,7 @@ export async function processBlastBatch(deps: BlastDeliveryWorkerDeps, blastId: 
   // Get blast settings for rate limit
   const settings = await deps.blastsService.getBlastSettings(hubId)
 
-  const messagingConfig = await deps.settingsService.getMessagingConfig()
+  const messagingConfig = await deps.messagingConfigService.getMessagingConfig()
   const smsContentMode = messagingConfig.smsContentMode ?? 'notification-only'
 
   // Get the blast content + opt-out footer

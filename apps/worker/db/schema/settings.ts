@@ -164,7 +164,7 @@ export const hubKeys = pgTable(
  * what an organisation does and who does it, so it is sensitive and never
  * stored in the clear (#2780). Only the seeded defaults (`is_default`) carry a
  * plaintext `name`/`description`, because theirs are public constants shipped
- * in `packages/shared/permissions.ts`. `SettingsService` writes no other
+ * in `packages/shared/permissions.ts`. `RolesService` writes no other
  * plaintext; the database CHECK enforcing it lands in the release after this
  * code (#2787), because the release being replaced still writes plaintext
  * names (see docs/runbooks/migrations.md, "Add … CHECK … constraints").
@@ -203,7 +203,7 @@ export const roles = pgTable('roles', {
     'roles_hub_role_is_sealed',
     sql`${t.hubId} IS NULL OR ${t.encryptedName} IS NOT NULL`,
   ),
-  // #2787: the database refuses what SettingsService already never writes (#2780).
+  // #2787: the database refuses what RolesService already never writes (#2780).
   // Only a seeded default carries a plaintext name; a custom role has none.
   check(
     'roles_custom_role_has_no_plaintext',

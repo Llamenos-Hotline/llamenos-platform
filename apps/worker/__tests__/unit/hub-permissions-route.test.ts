@@ -23,7 +23,7 @@ const allRoles = [
 function appFor(user: Record<string, unknown>) {
   const app = new Hono<AppEnv>()
   const services = {
-    settings: { getHub: vi.fn(async (id: string) => ({ hub: { id } })) },
+    hubs: { getHub: vi.fn(async (id: string) => ({ hub: { id } })) },
   }
   app.use('*', async (c, next) => {
     c.set('user', user as never)

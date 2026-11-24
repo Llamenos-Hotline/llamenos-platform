@@ -46,16 +46,16 @@ const STAGING = {
  * A route shaped like the real ones: a named per-client limiter at 2/min,
  * enforced for everybody, keyed through `routeRateLimitClient`.
  */
-function makeApp(settings: { checkRateLimit: ReturnType<typeof vi.fn> }, env: Record<string, string>) {
+function makeApp(rateLimits: { checkRateLimit: ReturnType<typeof vi.fn> }, env: Record<string, string>) {
   const app = new Hono<AppEnv>()
   app.use('*', async (c, next) => {
-    c.set('services', { settings } as unknown as AppEnv['Variables']['services'])
+    c.set('services', { rateLimits } as unknown as AppEnv['Variables']['services'])
     c.env = env as unknown as AppEnv['Bindings']
     await next()
   })
   app.get('/probe', async (c) => {
     const key = `probe:${routeRateLimitClient(c)}`
-    if (await checkRateLimit(c.get('services').settings, key, 2)) {
+    if (await checkRateLimit(c.get('services').rateLimits, key, 2)) {
       return c.json({ error: 'Too many requests' }, 429)
     }
     return c.json({ ok: true, key })

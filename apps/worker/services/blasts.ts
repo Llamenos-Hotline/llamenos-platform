@@ -33,7 +33,7 @@ import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import { HMAC_PREFERENCE_TOKEN } from '@shared/crypto-labels'
 import { encryptContactIdentifier } from '../lib/crypto'
 import { messagingContactHash, canonicalSubscriberIdentifier } from '../lib/messaging-contact-hash'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { MessagingSuppressionService } from './messaging-suppression'
 
 // ---------------------------------------------------------------------------

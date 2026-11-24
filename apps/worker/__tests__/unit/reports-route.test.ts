@@ -8,7 +8,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import reportsRouter from '../../routes/reports'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { settingsDomainMock } from '../helpers/settings-domain-mock'
 
 // ---------------------------------------------------------------------------
 // Schema-valid test data helpers
@@ -134,7 +135,7 @@ function makeApp(opts: {
       audit: mockAudit,
       conversations: mockConversations,
       cases: mockCases,
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       // HEX64 — the admin key `testEnvelope` is addressed to (#2113).
       identity: { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([HEX64]) },
     } as unknown as AppEnv['Variables']['services'])

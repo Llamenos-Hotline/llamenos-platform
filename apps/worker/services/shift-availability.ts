@@ -8,7 +8,7 @@
 import { eq, and, gte, lte } from 'drizzle-orm'
 import type { Database } from '../db'
 import { userAvailabilityBlocks } from '../db/schema'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import type { SealedShiftField } from '@protocol/schemas/shifts'
 import { sealedFieldColumns } from '../lib/sealed-shift-field'
 

@@ -33,7 +33,8 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs, ivrAudio } from '../../db/schema'
 import { AuditService } from '../../services/audit'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import settingsRoutes, { hubSettingsRoutes } from '../../routes/settings'
 import ivrMediaRoutes from '../../routes/ivr-media'
@@ -48,7 +49,7 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const svc = {
-  settings: new SettingsService(db),
+  ...createSettingsDomain(db),
   audit: new AuditService(db),
 }
 
@@ -150,7 +151,7 @@ async function fetchMedia(url: string): Promise<Response> {
 
 /** The signed URL a call in `hubId` is handed for the greeting */
 async function greetingUrl(hubId: string | undefined): Promise<string | undefined> {
-  return (await buildAudioUrlMap(svc.settings, ORIGIN, ENV.HMAC_SECRET, hubId))['greeting:en']
+  return (await buildAudioUrlMap(svc.ivrSettings, ORIGIN, ENV.HMAC_SECRET, hubId))['greeting:en']
 }
 
 /** What a caller in `hubId` hears for the greeting right now; empty when the line would be silent */
@@ -162,7 +163,7 @@ async function played(hubId: string | undefined): Promise<Uint8Array> {
 }
 
 async function setScope(hubId: string | undefined, bytes: Uint8Array) {
-  await svc.settings.uploadIvrAudio(hubId, 'greeting', 'en', Buffer.from(bytes).toString('base64'), bytes.byteLength)
+  await svc.ivrSettings.uploadIvrAudio(hubId, 'greeting', 'en', Buffer.from(bytes).toString('base64'), bytes.byteLength)
 }
 
 beforeAll(async () => {
@@ -179,13 +180,13 @@ afterAll(async () => {
 describe('ivr_audio is per hub (#2239)', () => {
   // The platform default row is shared by every test database user, so each
   // test starts from a known state and restores it.
-  let original: Awaited<ReturnType<SettingsService['getIvrAudio']>>
-  beforeAll(async () => { original = await svc.settings.getIvrAudio(undefined, 'greeting', 'en') })
+  let original: Awaited<ReturnType<SettingsDomainServices['ivrSettings']['getIvrAudio']>>
+  beforeAll(async () => { original = await svc.ivrSettings.getIvrAudio(undefined, 'greeting', 'en') })
   afterAll(async () => {
     if (original) {
-      await svc.settings.uploadIvrAudio(undefined, 'greeting', 'en', original.audio, original.size)
+      await svc.ivrSettings.uploadIvrAudio(undefined, 'greeting', 'en', original.audio, original.size)
     } else {
-      await svc.settings.deleteIvrAudio(undefined, 'greeting', 'en')
+      await svc.ivrSettings.deleteIvrAudio(undefined, 'greeting', 'en')
     }
   })
 
@@ -213,7 +214,7 @@ describe('ivr_audio is per hub (#2239)', () => {
       const res = await ivr(ADMIN_A, hubOf(HUB_B), method, PROMPT, body)
       expect(res.status).toBe(403)
     }
-    expect((await svc.settings.getIvrAudio(HUB_B, 'greeting', 'en'))!.audio).toBe(Buffer.from(B_WAV).toString('base64'))
+    expect((await svc.ivrSettings.getIvrAudio(HUB_B, 'greeting', 'en'))!.audio).toBe(Buffer.from(B_WAV).toString('base64'))
     expect(sameBytes(await played(HUB_B), B_WAV)).toBe(true)
     expect(sameBytes(await played(undefined), DEFAULT_WAV)).toBe(true)
   })
@@ -243,7 +244,7 @@ describe('ivr_audio is per hub (#2239)', () => {
 
     expect(sameBytes(await played(HUB_A), A_WAV)).toBe(true)
     // Hub B has recorded nothing: it inherits the default.
-    await svc.settings.deleteIvrAudio(HUB_B, 'greeting', 'en')
+    await svc.ivrSettings.deleteIvrAudio(HUB_B, 'greeting', 'en')
     expect(sameBytes(await played(HUB_B), DEFAULT_WAV)).toBe(true)
 
     // A URL minted while hub A had its own recording survives A deleting it.
@@ -269,12 +270,12 @@ describe('ivr_audio is per hub (#2239)', () => {
     await setScope(undefined, DEFAULT_WAV)
     await setScope(HUB_C, A_WAV)
     // This hub holds no provider recordings, so the eraser has nothing to ask a provider about.
-    await svc.settings.deleteHub(HUB_C, new CallRecordingsService(db, undefined, undefined), {
+    await svc.hubs.deleteHub(HUB_C, new CallRecordingsService(db, undefined, undefined), {
       deleteForCalls: async () => ({ deleted: 0, failed: [] }),
       deleteForHub: async () => ({ deleted: 0, failed: [] }),
       retryPending: async () => ({ deleted: 0, failed: [] }),
     })
     expect(await db.select().from(ivrAudio).where(eq(ivrAudio.hubId, HUB_C))).toHaveLength(0)
-    expect(await svc.settings.getIvrAudio(undefined, 'greeting', 'en')).not.toBeNull()
+    expect(await svc.ivrSettings.getIvrAudio(undefined, 'greeting', 'en')).not.toBeNull()
   })
 })

@@ -451,7 +451,7 @@ providerSetup.post('/configure',
       // endpoint; the outcome is logged by removeAllVolunteerEndpoints.
       const previous = hubId
         ? null
-        : await services.settings.getTelephonyProvider(c.env.SERVER_KEK)
+        : await services.providerConfig.getTelephonyProvider(c.env.SERVER_KEK)
       await services.providerSetup.configure(
         body.provider,
         body.credentials ?? {},
@@ -623,7 +623,7 @@ providerSetup.post('/phone-numbers/search',
     const hubId = c.get('hubId')
     const body = c.req.valid('json')
 
-    const limited = await checkRateLimit(services.settings, `provider-search:${hubId ?? 'global'}:${pubkey}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `provider-search:${hubId ?? 'global'}:${pubkey}`, 5)
     if (limited) {
       return c.json({ error: 'Rate limit exceeded' }, 429)
     }
@@ -666,7 +666,7 @@ providerSetup.post('/phone-numbers/provision',
     const hubId = c.get('hubId')
     const body = c.req.valid('json')
 
-    const limited = await checkRateLimit(services.settings, `provider-provision:${hubId ?? 'global'}:${pubkey}`, 1)
+    const limited = await checkRateLimit(services.rateLimits, `provider-provision:${hubId ?? 'global'}:${pubkey}`, 1)
     if (limited) {
       return c.json({ error: 'Rate limit exceeded' }, 429)
     }
@@ -926,7 +926,7 @@ providerSetup.post('/signal/verify',
     const services = c.get('services')
     const pubkey = c.get('pubkey')
 
-    const limited = await checkRateLimit(services.settings, `signal-verify:${pubkey}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `signal-verify:${pubkey}`, 5)
     if (limited) {
       return c.json({ error: 'Rate limit exceeded — max 5 verification attempts per minute' }, 429)
     }

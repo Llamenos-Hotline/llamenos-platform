@@ -1,5 +1,5 @@
 /**
- * `SettingsService.deleteHub` and caller audio the telephony provider holds
+ * `HubService.deleteHub` and caller audio the telephony provider holds
  * (#2364 part 1), against real PostgreSQL.
  *
  * `deleteHub` used to drop the hub — and, through the `provider_configs`
@@ -32,7 +32,7 @@ const account = { providerAccountId: () => 'twilio:AC-delete-hub' }
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-dhm-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -62,7 +62,7 @@ const openProviderMediaIncidents = (hubId: string) =>
     isNull(schema.hubIncidents.closedAt),
   ))
 
-describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
+describe('HubService.deleteHub — provider-held media (#2364)', () => {
   it('asks the provider to delete every recording BEFORE the credentials are dropped', async () => {
     const hubId = await createHub()
     await fresh.recordings.track({ hubId, callId: 'call-a', recordingSid: 'RE-vm', kind: 'voicemail', adapter: account })
@@ -82,7 +82,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
       },
     })
     try {
-      await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
+      await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
     } finally {
       fresh.useTelephonyAdapter(null)
     }
@@ -108,7 +108,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
     })
     const beforeDrop = vi.fn(async () => {})
     try {
-      await expect(fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia, { beforeDrop })).rejects.toMatchObject({ status: 502 })
+      await expect(fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia, { beforeDrop })).rejects.toMatchObject({ status: 502 })
     } finally {
       fresh.useTelephonyAdapter(null)
     }
@@ -129,7 +129,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
     const deleteRecording = vi.fn(async () => {})
     fresh.useTelephonyAdapter({ ...account, deleteRecording })
     try {
-      await expect(fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)).rejects.toMatchObject({ status: 502 })
+      await expect(fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)).rejects.toMatchObject({ status: 502 })
     } finally {
       fresh.useTelephonyAdapter(null)
     }
@@ -141,7 +141,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
   it('refuses when no provider is configured to ask, rather than dropping a handle it cannot use', async () => {
     const hubId = await createHub()
     await fresh.recordings.track({ hubId, callId: 'call-n', recordingSid: 'RE-orphan', kind: 'voicemail', adapter: account })
-    await expect(fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)).rejects.toMatchObject({ status: 502 })
+    await expect(fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)).rejects.toMatchObject({ status: 502 })
     expect(await hubRows(hubId)).toHaveLength(1)
     expect(await fresh.recordings.listHeld(hubId)).toHaveLength(1)
   })
@@ -151,7 +151,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
     const deleteRecording = vi.fn(async () => {})
     fresh.useTelephonyAdapter({ ...account, deleteRecording })
     try {
-      await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
+      await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia)
     } finally {
       fresh.useTelephonyAdapter(null)
     }
@@ -165,7 +165,7 @@ describe('SettingsService.deleteHub — provider-held media (#2364)', () => {
     const order: string[] = []
     fresh.useTelephonyAdapter({ ...account, deleteRecording: async () => { order.push('provider') } })
     try {
-      await fresh.settings.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia, {
+      await fresh.hubs.deleteHub(hubId, fresh.callRecordings, fresh.providerMedia, {
         beforeDrop: async () => { order.push(`teardown(hub stored: ${(await hubRows(hubId)).length === 1})`) },
       })
     } finally {

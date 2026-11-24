@@ -1,5 +1,5 @@
 /**
- * SettingsService hub-settings atomicity — real PostgreSQL, Bun-native driver (#1144).
+ * HubSettingsService hub-settings atomicity — real PostgreSQL, Bun-native driver (#1144).
  *
  * MUST run under `bun test`, NOT vitest:
  *   bun test apps/worker/__tests__/integration-bun/hub-settings-concurrency.test.ts
@@ -36,14 +36,14 @@ import { inArray } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs } from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const createdHubIds: string[] = []
 
@@ -60,7 +60,7 @@ afterAll(async () => {
   }
 })
 
-describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
+describe('HubSettingsService.updateHubSettings under concurrency (#1144)', () => {
   it('persists every key from N concurrent writers touching disjoint keys', async () => {
     const hubId = await freshHub('disjoint')
 
@@ -93,10 +93,10 @@ describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
     ]
 
     await Promise.all(
-      writes.map(([key, value]) => settings.updateHubSettings(hubId, { [key]: value })),
+      writes.map(([key, value]) => settings.hubSettings.updateHubSettings(hubId, { [key]: value })),
     )
 
-    const finalSettings = await settings.getHubSettings(hubId)
+    const finalSettings = await settings.hubSettings.getHubSettings(hubId)
     for (const [key, value] of writes) {
       expect(finalSettings[key]).toEqual(value)
     }
@@ -106,8 +106,8 @@ describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
     const hubId = await freshHub('two-admins')
 
     const [a, b] = await Promise.all([
-      settings.updateHubSettings(hubId, { fallbackGroup: ['pk-1', 'pk-2'] }),
-      settings.updateHubSettings(hubId, { spamSettings: { rateLimitEnabled: false } }),
+      settings.hubSettings.updateHubSettings(hubId, { fallbackGroup: ['pk-1', 'pk-2'] }),
+      settings.hubSettings.updateHubSettings(hubId, { spamSettings: { rateLimitEnabled: false } }),
     ])
 
     // Both callers' own writes must be reflected in what they got back...
@@ -118,7 +118,7 @@ describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
     // neither admin's change was silently discarded by the other's write,
     // and the stored value is a plain object (not the 2-element
     // [{}, "<json string>"] array that the double-encoding bug produced).
-    const finalSettings = await settings.getHubSettings(hubId)
+    const finalSettings = await settings.hubSettings.getHubSettings(hubId)
     expect(finalSettings.fallbackGroup).toEqual(['pk-1', 'pk-2'])
     expect(finalSettings.spamSettings).toEqual({ rateLimitEnabled: false })
     expect(Array.isArray(finalSettings)).toBe(false)
@@ -128,11 +128,11 @@ describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
     const hubId = await freshHub('same-key')
 
     await Promise.all([
-      settings.updateHubSettings(hubId, { ivrLanguages: ['en'] }),
-      settings.updateHubSettings(hubId, { ivrLanguages: ['es'] }),
+      settings.hubSettings.updateHubSettings(hubId, { ivrLanguages: ['en'] }),
+      settings.hubSettings.updateHubSettings(hubId, { ivrLanguages: ['es'] }),
     ])
 
-    const finalSettings = await settings.getHubSettings(hubId)
+    const finalSettings = await settings.hubSettings.getHubSettings(hubId)
     // Last-writer-wins on a genuinely shared key is still an acceptable
     // outcome (there's no way to "merge" two different language lists) —
     // what must NOT happen is silent loss of an *unrelated* key, covered
@@ -144,16 +144,16 @@ describe('SettingsService.updateHubSettings under concurrency (#1144)', () => {
   })
 })
 
-describe('SettingsService.incrementHubUsage under concurrency (#1144)', () => {
+describe('HubSettingsService.incrementHubUsage under concurrency (#1144)', () => {
   it('no production caller today, but increments correctly under N concurrent callers', async () => {
     const hubId = await freshHub('usage-increment')
     const n = 20
 
     await Promise.all(
-      Array.from({ length: n }, () => settings.incrementHubUsage(hubId, 'minutes', 1)),
+      Array.from({ length: n }, () => settings.hubSettings.incrementHubUsage(hubId, 'minutes', 1)),
     )
 
-    const finalSettings = await settings.getHubSettings(hubId)
+    const finalSettings = await settings.hubSettings.getHubSettings(hubId)
     const usage = finalSettings.usage as Array<{ month: string; minutes?: number }>
     expect(usage).toHaveLength(1)
     expect(usage[0].minutes).toBe(n)

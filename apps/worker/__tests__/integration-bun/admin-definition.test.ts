@@ -36,7 +36,8 @@ import { CallsService } from '../../services/calls'
 import { ConversationsService } from '../../services/conversations'
 import { IdentityService } from '../../services/identity'
 import { RecordsService } from '../../services/records'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { assertAdminCanRead } from '../../lib/admin-envelopes'
 import { revokedSigningKeys } from '../../lib/revoked-signing-keys'
 import { hubContext } from '../../middleware/hub'
@@ -50,11 +51,11 @@ const DATABASE_URL =
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const audit = new AuditService(db)
 const services = {
   identity,
-  settings,
+  ...settings,
   audit,
   records: new RecordsService(db, audit),
   conversations: new ConversationsService(db),
@@ -96,7 +97,7 @@ const makeSuperAdmin = (label: string) => makePerson(label, { roles: ['role-supe
 
 async function makeHub(label: string, founder: Person): Promise<string> {
   const id = nextId(`hub-${label}`)
-  await settings.createHub(
+  await settings.hubs.createHub(
     {
       id, name: label, slug: id, status: 'active', timezone: 'UTC', createdBy: founder.pubkey,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

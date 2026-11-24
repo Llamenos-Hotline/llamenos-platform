@@ -12,7 +12,7 @@ import { backgroundTask } from '../lib/hono-compat'
 import { publishEvent } from '../lib/ws-events'
 import { KIND_BLAST_PROGRESS } from '@shared/event-kinds'
 import { assertInHub, resourceInPathHub } from '../lib/hub-scope'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 
 const logger = createLogger('routes.blasts')
 

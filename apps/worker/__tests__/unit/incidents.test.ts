@@ -74,7 +74,7 @@ function delivery(users: ReturnType<typeof user>[]) {
   const d = new IncidentDelivery({
     env: { SERVER_SECRET: 'ab'.repeat(32) } as never,
     identity: { getUsers: vi.fn(async () => ({ users })) } as never,
-    settings: { getRoles: vi.fn(async () => ({ roles: ROLES })) } as never,
+    roles: { getRoles: vi.fn(async () => ({ roles: ROLES })) } as never,
     shifts: {} as never,
     userNotifications,
     pushDispatcher: push,

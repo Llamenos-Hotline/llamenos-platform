@@ -27,7 +27,7 @@ afterAll(fresh.teardown, 60_000)
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-pr-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await fresh.settings.createHub({
+  await fresh.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,

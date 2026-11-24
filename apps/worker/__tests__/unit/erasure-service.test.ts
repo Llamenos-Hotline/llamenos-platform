@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { ErasureService } from '@worker/services/erasure'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { users } from '@worker/db/schema'
 
 // Minimal Ed25519 helpers (real crypto, but no DB)

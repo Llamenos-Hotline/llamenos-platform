@@ -1,6 +1,6 @@
 /**
  * `/settings/cms/entity-types` through the REAL mounted router against the REAL
- * `SettingsService` and real PostgreSQL (Bun-native driver).
+ * `EntitySchemaService` and real PostgreSQL (Bun-native driver).
  *
  * MUST run under `bun test`, NOT vitest:
  *   bun test apps/worker/__tests__/integration-bun/entity-type-routes.test.ts
@@ -27,7 +27,8 @@ import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { entityTypeDefinitions, hubs } from '../../db/schema'
 import { AuditService } from '../../services/audit'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import entitySchemaRoutes, { hubEntitySchemaRoutes } from '../../routes/entity-schema'
 import type { AppEnv } from '../../types'
@@ -38,8 +39,8 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
-const svc = { settings, audit: new AuditService(db) }
+const settings = createSettingsDomain(db)
+const svc = { ...settings, audit: new AuditService(db) }
 
 const ALL_ROLES: Role[] = DEFAULT_ROLES.map(r => ({
   ...r,
@@ -123,10 +124,10 @@ beforeAll(async () => {
   for (const [id, owner] of [[HUB_A, ADMIN_A], [HUB_B, ADMIN_B]] as const) {
     await db.insert(hubs).values({ id, name: id, slug: id, createdBy: owner.pubkey })
   }
-  typeA = (await settings.createEntityType(typeBody(HUB_A, 'route_a'))).id
-  typeB = (await settings.createEntityType(typeBody(HUB_B, 'route_b'))).id
+  typeA = (await settings.entitySchema.createEntityType(typeBody(HUB_A, 'route_a'))).id
+  typeB = (await settings.entitySchema.createEntityType(typeBody(HUB_B, 'route_b'))).id
   // The platform's own entity types are stored under hub ''.
-  typePlatform = (await settings.createEntityType(typeBody('', `route_platform_${rand}`))).id
+  typePlatform = (await settings.entitySchema.createEntityType(typeBody('', `route_platform_${rand}`))).id
 })
 
 afterAll(async () => {
@@ -230,7 +231,7 @@ describe('POST /entity-types — the hub is bound by the route', () => {
     created.push(String(res.json.id))
     expect(res.json.hubId).toBe(HUB_A)
     // The lookup the hub's records make is the one that has to find it.
-    expect((await settings.getEntityTypeById(String(res.json.id), HUB_A)).name).toBe('bound_by_path')
+    expect((await settings.entitySchema.getEntityTypeById(String(res.json.id), HUB_A)).name).toBe('bound_by_path')
     expect((await call(ADMIN_A, inHub(HUB_A, `/${res.json.id}`))).status).toBe(200)
   })
 

@@ -20,7 +20,7 @@ import {
 } from './hub-shred-targets'
 import type { AuditService } from './audit'
 import type { ProviderMediaEraser } from './provider-recordings'
-import { HubNotFoundError, ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './service-error'
 import { createLogger } from '../lib/logger'
 
 const logger = createLogger('services.hub-shred')

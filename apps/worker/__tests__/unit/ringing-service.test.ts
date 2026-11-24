@@ -134,9 +134,13 @@ function makeServices(overrides: {
     activeShifts: {
       listClockedInPubkeys: vi.fn().mockResolvedValue(new Set(clockedInPubkeys)),
     },
-    settings: {
+    callSettings: {
       getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: fallbackPubkeys }),
+    },
+    messagingConfig: {
       isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: DEFAULT_ROLES as unknown as Role[] }),
     },
     identity: {
@@ -196,7 +200,7 @@ describe('startParallelRinging', () => {
     await startParallelRinging('CA-2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
     // The hub's own group — not the instance-wide one (#1017).
-    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
+    expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
     expect(services.calls.addCall).toHaveBeenCalled()
   })
 
@@ -214,7 +218,7 @@ describe('startParallelRinging', () => {
 
       const result = await startParallelRinging('CA-hb1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-B')
 
-      expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-B')
+      expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-B')
       expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
       const rung = (services.calls.createCallToken as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0].volunteerPubkey)
       expect(rung).toEqual(['pk-hubB-fallback'])
@@ -277,7 +281,7 @@ describe('startParallelRinging', () => {
 
     const result = await startParallelRinging('CA-fb1', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
-    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
+    expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
     expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
     const tokenArgs = (services.calls.createCallToken as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0].volunteerPubkey)
     expect(tokenArgs).toEqual(['pk-fallback'])
@@ -403,7 +407,7 @@ describe('startParallelRinging', () => {
       expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
       expect(rung(services)).toEqual(['pk-in'])
       // A non-empty intersection is a manned hotline — the fallback is not consulted.
-      expect(services.settings.getFallbackGroup).not.toHaveBeenCalled()
+      expect(services.callSettings.getFallbackGroup).not.toHaveBeenCalled()
     })
 
     it('falls through to the fallback group when the schedule is populated but unmanned', async () => {
@@ -425,7 +429,7 @@ describe('startParallelRinging', () => {
       expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
       // The hub's own group (#1017), and the fallback is NOT itself gated on
       // clocking in — gating it would make an unmanned schedule silent.
-      expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
+      expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
       expect(rung(services)).toEqual(['pk-fallback'])
     })
 
@@ -451,7 +455,7 @@ describe('startParallelRinging', () => {
 
     await startParallelRinging('CA-fb3', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
-    expect(services.settings.getFallbackGroup).not.toHaveBeenCalled()
+    expect(services.callSettings.getFallbackGroup).not.toHaveBeenCalled()
     expect(mockAdapter.ringVolunteers.mock.calls[0][0].volunteers).toHaveLength(1)
   })
 
@@ -488,7 +492,7 @@ describe('startParallelRinging', () => {
 
     const result = await startParallelRinging('CA-busy2', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-b')
 
-    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-b')
+    expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-b')
     expect(result).toEqual({ ringing: true, volunteersNotified: 1 })
   })
 
@@ -629,7 +633,7 @@ describe('startParallelRinging', () => {
 
     const result = await startParallelRinging('CA-nohub', '+15551234567', 'http://localhost', makeEnv(), services, 'hub-1')
 
-    expect(services.settings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
+    expect(services.callSettings.getFallbackGroup).toHaveBeenCalledWith('hub-1')
     expect(result).toEqual({ ringing: false, reason: 'no-available-volunteers', volunteersNotified: 0 })
     expect(publishEvent).not.toHaveBeenCalled()
     expect(services.calls.createCallToken).not.toHaveBeenCalled()

@@ -73,7 +73,7 @@ function getAccessLevel(permissions: string[]): 'all' | 'assigned' | 'own' | nul
  * would seal a record to whoever holds a global role and to no hub admin.
  */
 async function resolveHubMembers(services: Services, hubId: string): Promise<HubMemberInfo[]> {
-  const { roles: roleDefs } = await services.settings.getRoles()
+  const { roles: roleDefs } = await services.roles.getRoles()
   const { users: allUsers } = await services.identity.getUsers()
 
   const members = allUsers
@@ -280,7 +280,7 @@ records.get('/envelope-recipients',
     const services = c.get('services')
 
     // Fetch entity type definition
-    const entityType = await services.settings.getEntityTypeById(entityTypeId, pathHubId(c))
+    const entityType = await services.entitySchema.getEntityTypeById(entityTypeId, pathHubId(c))
 
     // Resolve hub members with permissions — the members of the hub the new
     // record will belong to (the path hub)
@@ -402,13 +402,13 @@ records.post('/convert-from-report',
     // one of THIS hub's: a type that is another hub's, or does not exist, is a
     // 404 — never "proceed with defaults", which would also have applied the
     // wrong hub's configuration when the lookup was not hub-bound (#2605).
-    const entityType = await services.settings.getEntityTypeById(body.entityTypeId, hubId)
+    const entityType = await services.entitySchema.getEntityTypeById(body.entityTypeId, hubId)
     const defaultStatusHash = entityType.defaultStatus || 'pending'
     const autoAssign = entityType.autoAssign === true
     const requiredSpecializations = entityType.requiredSpecializations ?? []
     let caseNumber: string | undefined
     if (entityType.numberingEnabled && entityType.numberPrefix) {
-      const result = await services.settings.generateCaseNumber({
+      const result = await services.entitySchema.generateCaseNumber({
         prefix: entityType.numberPrefix,
         hubId,
       })
@@ -544,7 +544,7 @@ records.get('/:id/envelope-recipients',
     }
 
     // Fetch entity type definition
-    const entityType = await services.settings.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
+    const entityType = await services.entitySchema.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
 
     // Resolve the members of the hub the record belongs to
     const hubMembers = await resolveHubMembers(services, pathHubId(c))
@@ -581,10 +581,10 @@ records.post('/',
     // The entity type must be one of THIS hub's. A type that is another hub's,
     // or does not exist, is a 404 — the old "proceed without numbering" swallow
     // turned a failed check into a confident pass (#2605).
-    const entityType = await services.settings.getEntityTypeById(body.entityTypeId, pathHubId(c))
+    const entityType = await services.entitySchema.getEntityTypeById(body.entityTypeId, pathHubId(c))
     let caseNumber: string | undefined
     if (entityType.numberingEnabled && entityType.numberPrefix) {
-      const result = await services.settings.generateCaseNumber({
+      const result = await services.entitySchema.generateCaseNumber({
         prefix: entityType.numberPrefix,
         hubId: pathHubId(c),
       })
@@ -895,7 +895,7 @@ records.get('/:id/suggest-assignees',
     let requiredSpecializations: string[] = []
     if (record.entityTypeId) {
       try {
-        const entityType = await services.settings.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
+        const entityType = await services.entitySchema.getEntityTypeById(record.entityTypeId, record.hubId ?? '')
         requiredSpecializations = entityType.requiredSpecializations ?? []
       } catch {
         // Entity type not found — proceed with no specialization requirements
@@ -1276,7 +1276,7 @@ records.get('/:id/reports',
  * Requires cases:update permission.
  *
  * Uses getMessagingAdapterFromService which resolves adapters via
- * SettingsService (no Durable Objects dependency).
+ * the settings services (no Durable Objects dependency).
  */
 records.post('/:id/notify-contacts',
   describeRoute({
@@ -1310,7 +1310,7 @@ records.post('/:id/notify-contacts',
 
     for (const recipient of body.recipients) {
       try {
-        const adapter = await getMessagingAdapterFromService(recipient.channel, services.settings, services.messagingSuppression)
+        const adapter = await getMessagingAdapterFromService(recipient.channel, services, services.messagingSuppression)
         const sendResult = await adapter.sendMessage({
           recipientIdentifier: recipient.identifier,
           body: recipient.message,

@@ -35,37 +35,57 @@ function createTestApp(opts: {
   const mockAuditService = { log: vi.fn().mockResolvedValue(undefined) }
 
   const defaultServices = {
-    settings: {
+    callSettings: {
       getTranscriptionSettings: vi.fn().mockResolvedValue({ enabled: true, model: 'whisper' }),
       updateTranscriptionSettings: vi.fn().mockResolvedValue({ enabled: true, model: 'whisper' }),
-      getCustomFields: vi.fn().mockResolvedValue([{ id: 'cf-1', name: 'Field 1' }]),
-      updateCustomFields: vi.fn().mockResolvedValue([{ id: 'cf-1', name: 'Field 1' }]),
-      getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
-      updateSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
       getCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
       updateCallSettings: vi.fn().mockResolvedValue({ queueTimeoutSeconds: 90 }),
+    },
+    customFields: {
+      getCustomFields: vi.fn().mockResolvedValue([{ id: 'cf-1', name: 'Field 1' }]),
+      updateCustomFields: vi.fn().mockResolvedValue([{ id: 'cf-1', name: 'Field 1' }]),
+    },
+    spamSettings: {
+      getSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
+      updateSpamSettings: vi.fn().mockResolvedValue({ voiceCaptchaEnabled: false }),
+    },
+    ivrSettings: {
       getIvrLanguageSettings: vi.fn().mockResolvedValue({ enabledLanguages: ['en'], uncoveredLanguageCount: 0 }),
       updateIvrLanguages: vi.fn().mockResolvedValue({ languages: ['en'] }),
-      getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
-      updateTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
-      getMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
-      updateMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
-      getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
-      updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
       getIvrAudioList: vi.fn().mockResolvedValue({ recordings: [] }),
       uploadIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
       deleteIvrAudio: vi.fn().mockResolvedValue({ ok: true }),
+    },
+    providerConfig: {
+      getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
+      updateTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', phoneNumber: '+1555000000' }),
+    },
+    messagingConfig: {
+      getMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
+      updateMessagingConfig: vi.fn().mockResolvedValue({ channels: ['sms'] }),
+    },
+    setupState: {
+      getSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
+      updateSetupState: vi.fn().mockResolvedValue({ setupCompleted: true }),
+    },
+    reportTypes: {
       getReportTypes: vi.fn().mockResolvedValue([{ id: 'rt-1', name: 'Type 1' }]),
       createReportType: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Type 1' }),
       updateReportType: vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' }),
       archiveReportType: vi.fn().mockResolvedValue({ ok: true }),
+    },
+    roles: {
       getRoles: vi.fn().mockResolvedValue([{ id: 'role-1', name: 'Admin' }]),
       createRole: vi.fn().mockResolvedValue({ id: 'role-1', name: 'Admin' }),
       updateRole: vi.fn().mockResolvedValue({ id: 'role-1', name: 'Admin' }),
       deleteRole: vi.fn().mockResolvedValue({ ok: true }),
+    },
+    ttlCleanup: {
       getTTLOverrides: vi.fn().mockResolvedValue({ overrides: {} }),
       updateTTLOverrides: vi.fn().mockResolvedValue({ overrides: {} }),
       getCleanupMetrics: vi.fn().mockResolvedValue({}),
+    },
+    platformSettings: {
       getGeocodingConfig: vi.fn().mockResolvedValue({ provider: 'google', countries: ['US'], enabled: true }),
       updateGeocodingConfig: vi.fn().mockResolvedValue({ provider: 'google', countries: ['US'], enabled: true }),
       getGeocodingConfigAdmin: vi.fn().mockResolvedValue({ provider: 'google', apiKey: 'secret', countries: ['US'], enabled: true }),
@@ -141,7 +161,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ globalEnabled: false, allowUserOptOut: true })
       const app = createTestApp({
         permissions: ['settings:manage-transcription'],
-        services: { settings: { updateTranscriptionSettings: updateSpy } },
+        services: { callSettings: { updateTranscriptionSettings: updateSpy } },
       })
       const res = await app.request('/transcription', {
         method: 'PATCH',
@@ -158,7 +178,7 @@ describe('settings route', () => {
       const getSpy = vi.fn().mockResolvedValue([{ id: 'cf-1' }])
       const app = createTestApp({
         permissions: ['settings:manage-fields', 'settings:read'],
-        services: { settings: { getCustomFields: getSpy } },
+        services: { customFields: { getCustomFields: getSpy } },
       })
       const res = await app.request('/custom-fields')
       expect(res.status).toBe(200)
@@ -169,7 +189,7 @@ describe('settings route', () => {
       const getSpy = vi.fn().mockResolvedValue([{ id: 'cf-1' }])
       const app = createTestApp({
         permissions: ['settings:read'],
-        services: { settings: { getCustomFields: getSpy } },
+        services: { customFields: { getCustomFields: getSpy } },
       })
       await app.request('/custom-fields')
       expect(getSpy).toHaveBeenCalledWith('volunteer')
@@ -197,7 +217,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ voiceCaptchaEnabled: true })
       const app = createTestApp({
         permissions: ['settings:manage-spam'],
-        services: { settings: { updateSpamSettings: updateSpy } },
+        services: { spamSettings: { updateSpamSettings: updateSpy } },
       })
       const res = await app.request('/spam', {
         method: 'PATCH',
@@ -214,7 +234,7 @@ describe('settings route', () => {
         // hubContext replaces `permissions` with the hub-resolved set
         permissions: ['settings:manage-spam'],
         hubId: 'hub-a',
-        services: { settings: { updateSpamSettings: updateSpy } },
+        services: { spamSettings: { updateSpamSettings: updateSpy } },
       })
       const res = await app.request('/spam', {
         method: 'PATCH',
@@ -231,7 +251,7 @@ describe('settings route', () => {
         // hubContext replaces `permissions` with the hub-resolved set
         permissions: ['settings:manage-spam'],
         hubId: 'hub-a',
-        services: { settings: { updateSpamSettings: updateSpy } },
+        services: { spamSettings: { updateSpamSettings: updateSpy } },
       })
       const res = await app.request('/spam?hubId=hub-b', {
         method: 'PATCH',
@@ -248,7 +268,7 @@ describe('settings route', () => {
       const app = createTestApp({
         permissions: ['settings:manage-spam'],
         hubId: 'hub-a',
-        services: { settings: { getSpamSettings: getSpy } },
+        services: { spamSettings: { getSpamSettings: getSpy } },
       })
       const res = await app.request('/spam')
       expect(res.status).toBe(200)
@@ -267,7 +287,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ queueTimeoutSeconds: 120 })
       const app = createTestApp({
         permissions: ['settings:manage-calls'],
-        services: { settings: { updateCallSettings: updateSpy } },
+        services: { callSettings: { updateCallSettings: updateSpy } },
       })
       const res = await app.request('/call', {
         method: 'PATCH',
@@ -283,7 +303,7 @@ describe('settings route', () => {
       const app = createTestApp({
         permissions: ['settings:manage-calls'],
         hubId: 'hub-a',
-        services: { settings: { updateCallSettings: updateSpy } },
+        services: { callSettings: { updateCallSettings: updateSpy } },
       })
       const res = await app.request('/call', {
         method: 'PATCH',
@@ -299,7 +319,7 @@ describe('settings route', () => {
       const app = createTestApp({
         permissions: ['settings:manage-calls'],
         hubId: 'hub-a',
-        services: { settings: { updateCallSettings: updateSpy } },
+        services: { callSettings: { updateCallSettings: updateSpy } },
       })
       const res = await app.request('/call?hubId=hub-b', {
         method: 'PATCH',
@@ -323,7 +343,7 @@ describe('settings route', () => {
       const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
       const app = createTestApp({
         permissions: ['settings:manage-ivr'],
-        services: { settings: { getIvrLanguageSettings: getSpy } },
+        services: { ivrSettings: { getIvrLanguageSettings: getSpy } },
       })
       const res = await app.request('/ivr-languages')
       expect(res.status).toBe(200)
@@ -335,7 +355,7 @@ describe('settings route', () => {
       const getSpy = vi.fn().mockResolvedValue({ enabledLanguages: ['en', 'es'], uncoveredLanguageCount: 1 })
       const app = createTestApp({
         permissions: ['settings:manage-ivr'],
-        services: { settings: { updateIvrLanguages: updateSpy, getIvrLanguageSettings: getSpy } },
+        services: { ivrSettings: { updateIvrLanguages: updateSpy, getIvrLanguageSettings: getSpy } },
       })
       const res = await app.request('/ivr-languages', {
         method: 'PATCH',
@@ -437,7 +457,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ type: 'twilio' })
       const app = createTestApp({
         permissions: ['settings:manage-telephony'],
-        services: { settings: { updateTelephonyProvider: updateSpy } },
+        services: { providerConfig: { updateTelephonyProvider: updateSpy } },
       })
       const res = await app.request('/telephony-provider', {
         method: 'PATCH',
@@ -554,7 +574,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ enabledChannels: ['sms', 'whatsapp'] })
       const app = createTestApp({
         permissions: ['settings:manage-messaging'],
-        services: { settings: { updateMessagingConfig: updateSpy } },
+        services: { messagingConfig: { updateMessagingConfig: updateSpy } },
       })
       const res = await app.request('/messaging', {
         method: 'PATCH',
@@ -582,8 +602,10 @@ describe('settings route', () => {
         const app = createTestApp({
           permissions: ['settings:manage-messaging'],
           services: {
-            settings: {
+            hubs: {
               getHub: getHub(),
+            },
+            messagingConfig: {
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
@@ -609,8 +631,10 @@ describe('settings route', () => {
         const app = createTestApp({
           permissions: ['settings:manage-messaging'],
           services: {
-            settings: {
+            hubs: {
               getHub: getHub(),
+            },
+            messagingConfig: {
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
@@ -630,8 +654,10 @@ describe('settings route', () => {
         const app = createTestApp({
           permissions: ['settings:manage-messaging'],
           services: {
-            settings: {
+            hubs: {
               getHub: getHub(),
+            },
+            messagingConfig: {
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc' },
@@ -650,8 +676,10 @@ describe('settings route', () => {
         const app = createTestApp({
           permissions: ['settings:manage-messaging'],
           services: {
-            settings: {
+            hubs: {
               getHub: getHub(),
+            },
+            messagingConfig: {
               getMessagingConfig: vi.fn().mockResolvedValue({
                 enabledChannels: ['telegram'],
                 telegram: { enabled: true, botToken: '1:abc', webhookSecret: 'tg-secret' },
@@ -678,7 +706,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ setupCompleted: true })
       const app = createTestApp({
         permissions: ['settings:manage-setup'],
-        services: { settings: { updateSetupState: updateSpy } },
+        services: { setupState: { updateSetupState: updateSpy } },
       })
       const res = await app.request('/setup', {
         method: 'PATCH',
@@ -707,7 +735,7 @@ describe('settings route', () => {
       const app = createTestApp({
         hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
-        services: { settings: { uploadIvrAudio: uploadSpy } },
+        services: { ivrSettings: { uploadIvrAudio: uploadSpy } },
       })
       const res = await put(app)
       expect(res.status).toBe(200)
@@ -721,7 +749,7 @@ describe('settings route', () => {
       const app = createTestApp({
         hubId: 'hub-a',
         permissions: ['settings:manage-ivr'],
-        services: { settings: { deleteIvrAudio: deleteSpy, getIvrAudio: getSpy, getIvrAudioList: listSpy } },
+        services: { ivrSettings: { deleteIvrAudio: deleteSpy, getIvrAudio: getSpy, getIvrAudioList: listSpy } },
       })
       expect((await app.request('/ivr-audio/greeting/en', { method: 'DELETE' })).status).toBe(200)
       expect(deleteSpy).toHaveBeenCalledWith('hub-a', 'greeting', 'en')
@@ -733,7 +761,7 @@ describe('settings route', () => {
 
     it('the global mount manages the platform defaults, and only with the instance permission', async () => {
       const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
-      const services = { settings: { uploadIvrAudio: uploadSpy, deleteIvrAudio: vi.fn(), getIvrAudio: vi.fn(), getIvrAudioList: vi.fn() } }
+      const services = { ivrSettings: { uploadIvrAudio: uploadSpy, deleteIvrAudio: vi.fn(), getIvrAudio: vi.fn(), getIvrAudioList: vi.fn() } }
 
       const hubAdmin = createTestApp({ permissions: ['settings:manage-ivr'], services })
       expect((await put(hubAdmin)).status).toBe(403)
@@ -751,7 +779,7 @@ describe('settings route', () => {
       const uploadSpy = vi.fn().mockResolvedValue({ ok: true })
       const app = createTestApp({
         permissions: ['settings:manage-ivr', 'system:manage-instance'],
-        services: { settings: { uploadIvrAudio: uploadSpy } },
+        services: { ivrSettings: { uploadIvrAudio: uploadSpy } },
       })
       expect((await put(app, '?hubId=hub-b')).status).toBe(200)
       expect(uploadSpy.mock.calls[0][0]).toBeUndefined()
@@ -779,7 +807,7 @@ describe('settings route', () => {
       const createSpy = vi.fn().mockResolvedValue({ id: 'rt-new', name: 'New Type' })
       const app = createTestApp({
         permissions: ['settings:manage-fields'],
-        services: { settings: { createReportType: createSpy } },
+        services: { reportTypes: { createReportType: createSpy } },
       })
       const res = await app.request('/report-types', {
         method: 'POST',
@@ -794,7 +822,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ id: 'rt-1', name: 'Updated' })
       const app = createTestApp({
         permissions: ['settings:manage-fields'],
-        services: { settings: { updateReportType: updateSpy } },
+        services: { reportTypes: { updateReportType: updateSpy } },
       })
       const res = await app.request('/report-types/rt-1', {
         method: 'PATCH',
@@ -809,7 +837,7 @@ describe('settings route', () => {
       const archiveSpy = vi.fn().mockResolvedValue({ ok: true })
       const app = createTestApp({
         permissions: ['settings:manage-fields'],
-        services: { settings: { archiveReportType: archiveSpy } },
+        services: { reportTypes: { archiveReportType: archiveSpy } },
       })
       const res = await app.request('/report-types/rt-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
@@ -838,7 +866,7 @@ describe('settings route', () => {
       const createSpy = vi.fn().mockResolvedValue({ id: 'role-new', name: null })
       const app = createTestApp({
         permissions: ['system:manage-roles'],
-        services: { settings: { createRole: createSpy } },
+        services: { roles: { createRole: createSpy } },
       })
       const res = await app.request('/roles', {
         method: 'POST',
@@ -857,7 +885,7 @@ describe('settings route', () => {
       const createSpy = vi.fn()
       const app = createTestApp({
         permissions: ['system:manage-roles'],
-        services: { settings: { createRole: createSpy } },
+        services: { roles: { createRole: createSpy } },
       })
       const res = await app.request('/roles', {
         method: 'POST',
@@ -872,7 +900,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ id: 'role-1', name: null })
       const app = createTestApp({
         permissions: ['system:manage-roles'],
-        services: { settings: { updateRole: updateSpy } },
+        services: { roles: { updateRole: updateSpy } },
       })
       const res = await app.request('/roles/role-1', {
         method: 'PATCH',
@@ -887,7 +915,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn()
       const app = createTestApp({
         permissions: ['system:manage-roles'],
-        services: { settings: { updateRole: updateSpy } },
+        services: { roles: { updateRole: updateSpy } },
       })
       const res = await app.request('/roles/role-1', {
         method: 'PATCH',
@@ -900,7 +928,7 @@ describe('settings route', () => {
 
     it('GET /roles lists the deployment-wide roles only', async () => {
       const listSpy = vi.fn().mockResolvedValue({ roles: [] })
-      const app = createTestApp({ services: { settings: { listRoles: listSpy } } })
+      const app = createTestApp({ services: { roles: { listRoles: listSpy } } })
       const res = await app.request('/roles')
       expect(res.status).toBe(200)
       expect(listSpy).toHaveBeenCalledWith(null)
@@ -910,7 +938,7 @@ describe('settings route', () => {
       const deleteSpy = vi.fn().mockResolvedValue({ ok: true })
       const app = createTestApp({
         permissions: ['system:manage-roles'],
-        services: { settings: { deleteRole: deleteSpy } },
+        services: { roles: { deleteRole: deleteSpy } },
       })
       const res = await app.request('/roles/role-1', { method: 'DELETE' })
       expect(res.status).toBe(200)
@@ -923,7 +951,7 @@ describe('settings route', () => {
 
     it('GET /roles under a hub lists the deployment-wide roles and that hub\'s own', async () => {
       const listSpy = vi.fn().mockResolvedValue({ roles: [] })
-      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { listRoles: listSpy } } })
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { roles: { listRoles: listSpy } } })
       const res = await app.request('/roles')
       expect(res.status).toBe(200)
       expect(listSpy).toHaveBeenCalledWith('hub-a')
@@ -931,7 +959,7 @@ describe('settings route', () => {
 
     it('POST /roles under a hub stores the sealed name for that hub', async () => {
       const createSpy = vi.fn().mockResolvedValue({ id: 'role-x', name: null, hubId: 'hub-a' })
-      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { createHubRole: createSpy } } })
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { roles: { createHubRole: createSpy } } })
       const res = await app.request('/roles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -947,7 +975,7 @@ describe('settings route', () => {
       ['no sealed name at all', { permissions: ['calls:answer'] }],
     ])('POST /roles under a hub refuses %s', async (_case, body) => {
       const createSpy = vi.fn()
-      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { settings: { createHubRole: createSpy } } })
+      const app = createTestApp({ hubMount: true, hubId: 'hub-a', services: { roles: { createHubRole: createSpy } } })
       const res = await app.request('/roles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -963,7 +991,7 @@ describe('settings route', () => {
         hubMount: true,
         hubId: 'hub-a',
         permissions: ['system:manage-roles', 'calls:answer'],
-        services: { settings: { createHubRole: createSpy } },
+        services: { roles: { createHubRole: createSpy } },
       })
       const res = await app.request('/roles', {
         method: 'POST',
@@ -980,7 +1008,7 @@ describe('settings route', () => {
       const app = createTestApp({
         hubMount: true,
         hubId: 'hub-a',
-        services: { settings: { updateHubRole: updateSpy, deleteHubRole: deleteSpy } },
+        services: { roles: { updateHubRole: updateSpy, deleteHubRole: deleteSpy } },
       })
       const patch = await app.request('/roles/role-x', {
         method: 'PATCH',
@@ -1040,7 +1068,7 @@ describe('settings route', () => {
       const updateSpy = vi.fn().mockResolvedValue({ overrides: { conversationTTL: 86400 } })
       const app = createTestApp({
         permissions: ['settings:manage-ttl'],
-        services: { settings: { updateTTLOverrides: updateSpy } },
+        services: { ttlCleanup: { updateTTLOverrides: updateSpy } },
       })
       const res = await app.request('/ttl', {
         method: 'PATCH',
@@ -1064,7 +1092,7 @@ describe('settings route', () => {
     it('GET /cleanup-metrics returns aggregated metrics', async () => {
       const app = createTestApp({
         permissions: ['settings:manage'],
-        services: { settings: { getCleanupMetrics: vi.fn().mockResolvedValue({ deleted: 5 }) } },
+        services: { ttlCleanup: { getCleanupMetrics: vi.fn().mockResolvedValue({ deleted: 5 }) } },
       })
       const res = await app.request('/cleanup-metrics')
       expect(res.status).toBe(200)
@@ -1079,7 +1107,7 @@ describe('settings route', () => {
       const getGeocodingConfigAdmin = vi.fn().mockResolvedValue({ provider: 'opencage', apiKey: 'secret', countries: ['US'], enabled: true })
       const app = createTestApp({
         permissions: ['settings:read'],
-        services: { settings: { getGeocodingConfig, getGeocodingConfigAdmin } },
+        services: { platformSettings: { getGeocodingConfig, getGeocodingConfigAdmin } },
       })
       const res = await app.request('/geocoding')
       expect(res.status).toBe(200)
@@ -1096,7 +1124,7 @@ describe('settings route', () => {
       const getGeocodingConfigAdmin = vi.fn().mockResolvedValue({ provider: 'opencage', apiKey: 'secret', countries: ['US'], enabled: true })
       const app = createTestApp({
         permissions: ['settings:manage'],
-        services: { settings: { getGeocodingConfigAdmin } },
+        services: { platformSettings: { getGeocodingConfigAdmin } },
       })
       await app.request('/geocoding/test')
       // /geocoding/test uses getGeocodingConfigAdmin to look up the API key

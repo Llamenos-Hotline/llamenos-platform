@@ -19,7 +19,7 @@ import {
 } from '@protocol/schemas/evidence'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 
 const evidence = new Hono<AppEnv>()
 

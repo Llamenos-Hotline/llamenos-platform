@@ -73,7 +73,7 @@ function makeServices(overrides: Record<string, unknown> = {}) {
       getWebAuthnCredentials: vi.fn().mockResolvedValue({ credentials: [] }),
       ...overrides,
     },
-    settings: {
+    roles: {
       getRoles: vi.fn().mockResolvedValue({ roles: defaultRoles }),
     },
   }

@@ -8,7 +8,7 @@ import { hexToBytes } from '@shared/encoding'
 import type { Database } from '../db'
 import type { BlobStorage } from '../types'
 import { IdentityService } from './identity'
-import { SettingsService } from './settings'
+import { createSettingsDomain, type SettingsDomainServices } from './settings-domain'
 import { RecordsService } from './records'
 import { AuditService } from './audit'
 import { ShiftsService } from './shifts'
@@ -51,9 +51,8 @@ import { IncidentService } from './incidents'
 import { parseSignalQueueRetentionDays } from '../messaging/signal/queue'
 import { webhookOrigin } from '../lib/provider-webhook-urls'
 
-export interface Services {
+export interface Services extends SettingsDomainServices {
   identity: IdentityService
-  settings: SettingsService
   records: RecordsService
   audit: AuditService
   shifts: ShiftsService
@@ -126,7 +125,8 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // Register provider implementations once during service initialization (not at module import)
   registerAllProviders()
 
-  const settings = new SettingsService(db)
+  const settingsDomain = createSettingsDomain(db)
+  const { hubSettings, roles, customFields } = settingsDomain
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
   const hubShred = new HubShredService(db, opts?.blobStorage)
   const callRecordings = new CallRecordingsService(db, opts?.blobStorage, opts?.serverKek)
@@ -169,7 +169,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
 
   const services: Services = {
     identity,
-    settings,
+    ...settingsDomain,
     records: new RecordsService(db, audit),
     audit,
     shifts: new ShiftsService(db),
@@ -210,7 +210,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     }),
     a2pRegistration: new A2pRegistrationService(db, opts?.serverKek ?? ''),
     providerTemplates: new ProviderTemplateService(db),
-    hubOnboard: new HubOnboardService(db, providerSetup, settings),
+    hubOnboard: new HubOnboardService(db, providerSetup, hubSettings),
     erasure,
     retention: new RetentionService(db),
     hubShred,
@@ -223,7 +223,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
     activeShifts: new ActiveShiftsService(db, parseActiveShiftLiveness(opts?.env)),
     shiftAvailability: new ShiftAvailabilityService(db),
     shiftRequests: new ShiftRequestsService(db),
-    recoveryGroup: new RecoveryGroupService(db, settings, audit),
+    recoveryGroup: new RecoveryGroupService(db, roles, audit),
     ivrSpeech: new IvrSpeechService(opts?.hmacSecret ?? ''),
     teams: new TeamsService(db),
     tags: new TagsService(db),
@@ -245,7 +245,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
       firehose,
       conversations,
       audit,
-      settings,
+      customFields,
       opts.firehoseSealKey,
       opts.env ?? {},
     )
@@ -268,7 +268,10 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
 export function schedulerServiceDeps(services: Services): TaskSchedulerServiceDeps {
   return {
     blastsService: services.blasts,
-    settingsService: services.settings,
+    ttlCleanupService: services.ttlCleanup,
+    rateLimitService: services.rateLimits,
+    platformSettingsService: services.platformSettings,
+    messagingConfigService: services.messagingConfig,
     retentionService: services.retention,
     auditService: services.audit,
     erasureService: services.erasure,
@@ -288,7 +291,6 @@ export {
   TagsService,
   IncidentService,
   IdentityService,
-  SettingsService,
   RecordsService,
   AuditService,
   ShiftsService,

@@ -8,7 +8,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import eventsRouter from '@worker/routes/events'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
+import { settingsDomainMock } from '../../helpers/settings-domain-mock'
 
 // Mock event publish — it's fire-and-forget and shouldn't affect route behavior
 vi.mock('@worker/lib/ws-events', () => ({
@@ -64,7 +65,7 @@ function makeApp(opts: {
     c.set('services', {
       audit: { log: auditLog },
       cases: mockCases,
-      settings: mockSettings,
+      ...settingsDomainMock(mockSettings),
       ...(services as Record<string, unknown>),
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')

@@ -25,7 +25,7 @@
  * it (`new ShiftsService(db)` — no settings service, so its own internal
  * fallback is as dead here as it is in production), clock-in goes through the
  * real `ActiveShiftsService.clockIn` the route calls, and the fallback group is
- * written through the real `SettingsService.setFallbackGroup`.
+ * written through the real `CallSettingsService.setFallbackGroup`.
  *
  * Requires postgres at DATABASE_URL. Rows are scoped to per-run hub ids and
  * pubkeys and deleted on teardown; nothing global is truncated.
@@ -60,7 +60,7 @@ import * as schema from '../../db/schema'
 import { activeShifts, hubs, shifts, users } from '../../db/schema'
 import { ShiftsService } from '../../services/shifts'
 import { ActiveShiftsService } from '../../services/active-shifts'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 import { CallsService } from '../../services/calls'
 import { resolveRingableVolunteers } from '../../services/ringing'
@@ -88,7 +88,7 @@ let db: Database
 let services: Services
 let shiftsService: ShiftsService
 let activeShiftsService: ActiveShiftsService
-let settingsService: SettingsService
+let settings: SettingsDomainServices
 
 const createdHubs: string[] = []
 
@@ -160,16 +160,16 @@ beforeAll(async () => {
 
   shiftsService = new ShiftsService(db)
   activeShiftsService = new ActiveShiftsService(db)
-  settingsService = new SettingsService(db)
+  settings = createSettingsDomain(db)
 
   // Seeds the roles table; without roles, `resolveHubPermissions` grants nobody
   // access to any hub and the resolver would reject everyone for the wrong reason.
-  await settingsService.ensureInit()
+  await settings.settingsBootstrap.ensureInit()
 
   services = {
     shifts: shiftsService,
     activeShifts: activeShiftsService,
-    settings: settingsService,
+    ...settings,
     identity: new IdentityService(db),
     calls: new CallsService(db),
   } as unknown as Services
@@ -266,7 +266,7 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
     await makeMember(PK_SCHEDULED_ONLY, hub)
     await makeMember(PK_FALLBACK, hub)
     await schedule(hub, [PK_SCHEDULED_ONLY])
-    await settingsService.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
+    await settings.callSettings.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
 
     expect(await wouldRing(hub)).toEqual([PK_FALLBACK])
   })
@@ -277,7 +277,7 @@ describe('ring = scheduled_now ∩ clocked_in (real services, real Postgres)', (
     await makeMember(PK_BOTH, hub)
     await makeMember(PK_FALLBACK, hub)
     await schedule(hub, [PK_BOTH])
-    await settingsService.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
+    await settings.callSettings.setFallbackGroup({ userPubkeys: [PK_FALLBACK] }, hub)
 
     expect(await wouldRing(hub)).toEqual([PK_FALLBACK])
 

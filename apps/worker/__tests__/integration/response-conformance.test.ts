@@ -83,6 +83,7 @@ import { banListResponseSchema } from '@protocol/schemas/bans'
 import { inviteValidationResponseSchema, inviteListResponseSchema } from '@protocol/schemas/invites'
 import { userListResponseSchema, userResponseSchema } from '@protocol/schemas/users'
 import { myStatusResponseSchema } from '@protocol/schemas/shifts'
+import { settingsDomainMock } from '../helpers/settings-domain-mock'
 
 // ---------------------------------------------------------------------------
 // Default env bindings — passed to app.request() as the 3rd argument.
@@ -140,7 +141,7 @@ function buildApp(
   //
   // - getRoles: the auth middleware resolves permissions from role IDs. A
   //   super-admin role with wildcard permission so routes pass permission checks.
-  // - checkRateLimit: lib/helpers.ts `checkRateLimit(services.settings, ...)`,
+  // - checkRateLimit: lib/helpers.ts `checkRateLimit(services.rateLimits, ...)`,
   //   called by routes/auth.ts before login and by routes/invites.ts before
   //   validate/redeem. `{ limited: false }` = never rate-limited under test.
   // - getWebAuthnSettings: middleware/auth.ts reads it on every authenticated
@@ -151,10 +152,12 @@ function buildApp(
   // routes that grew a middleware call after this harness was written, caught
   // by nothing because this file has never run in CI (#1167).
   const mockSettingsBase = {
-    getRoles: vi.fn().mockResolvedValue({
-      roles: [{ id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'], hubPermissions: [] }],
-    }),
-    checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
+    roles: {
+      getRoles: vi.fn().mockResolvedValue({
+        roles: [{ id: 'role-super-admin', name: 'Super Admin', slug: 'super-admin', permissions: ['*'], hubPermissions: [] }],
+      }),
+    },
+    rateLimits: { checkRateLimit: vi.fn().mockResolvedValue({ limited: false }) },
   }
   const mockIdentityBase = {
     getWebAuthnSettings: vi.fn().mockResolvedValue({ requireForAdmins: false, requireForUsers: false }),
@@ -189,15 +192,16 @@ function buildApp(
       specializations: [],
     })
     // Merge per-service rather than per-services-object: a case that supplies
-    // its own `settings` or `identity` mock must still get the shared
+    // its own `roles`, `rateLimits` or `identity` mock must still get the shared
     // middleware methods above, not lose them. (The previous spread put
-    // `...services` over `settings: mockSettingsBase` wholesale, so any case
+    // `...services` over the shared settings mock wholesale, so any case
     // with its own settings mock silently lost getRoles.)
     const provided = services as Record<string, Record<string, unknown> | undefined>
     c.set('services', {
       audit: mockAudit,
       ...services,
-      settings: { ...mockSettingsBase, ...(provided.settings ?? {}) },
+      roles: { ...mockSettingsBase.roles, ...(provided.roles ?? {}) },
+      rateLimits: { ...mockSettingsBase.rateLimits, ...(provided.rateLimits ?? {}) },
       identity: { ...mockIdentityBase, ...(provided.identity ?? {}) },
     } as unknown as AppEnv['Variables']['services'])
 
@@ -324,7 +328,7 @@ describe('Config Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/config', configRoutes, {
-      services: { settings: mockSettings, identity: mockIdentity },
+      services: { ...settingsDomainMock(mockSettings), identity: mockIdentity },
     })
 
     const result = await assertConformsToSchema(app, 'GET', '/config', configResponseSchema, { env })
@@ -409,9 +413,13 @@ describe('Calls Routes — response conformance', () => {
           listActiveByHub: vi.fn().mockResolvedValue({ activeShifts: [{ pubkey: MOCK_PUBKEY, hubId: '' }] }),
           listClockedInPubkeys: vi.fn().mockResolvedValue(new Set([MOCK_PUBKEY])),
         },
-        settings: {
+        callSettings: {
           getFallbackGroup: vi.fn().mockResolvedValue({ userPubkeys: [] }),
+        },
+        messagingConfig: {
           isHubChannelEnabled: vi.fn().mockResolvedValue(true),
+        },
+        roles: {
           getRoles: vi.fn().mockResolvedValue({
             roles: [{ id: 'role-volunteer', name: 'Volunteer', permissions: ['calls:answer'] }],
           }),
@@ -468,7 +476,7 @@ describe('Hub Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/hubs', hubRoutes, {
-      services: { settings: mockSettings },
+      services: { ...settingsDomainMock(mockSettings) },
       permissions: ['*'],
     })
 
@@ -484,7 +492,7 @@ describe('Hub Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/hubs', hubRoutes, {
-      services: { settings: mockSettings },
+      services: { ...settingsDomainMock(mockSettings) },
       permissions: ['*'],  // super-admin bypasses hub membership check
     })
 
@@ -663,7 +671,7 @@ describe('Invites Routes — response conformance', () => {
     }
 
     const { app, env } = buildApp('/invites', invitesRoutes, {
-      services: { identity: mockIdentity, settings: mockSettings },
+      services: { identity: mockIdentity, ...settingsDomainMock(mockSettings) },
     })
 
     const result = await assertConformsToSchema(

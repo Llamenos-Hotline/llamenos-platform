@@ -18,7 +18,7 @@ import { eq } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { entityTypeDefinitions } from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { applyTemplate } from '../../lib/template-engine'
 import { loadBundledTemplates } from '../../lib/template-loader'
 
@@ -27,7 +27,7 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 
 const hubId = `hub-replace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -40,8 +40,8 @@ async function applyEventTemplate(): Promise<void> {
   const templates = await loadBundledTemplates()
   const template = templates.find(t => t.id === 'builtin:event')
   if (!template) throw new Error('builtin:event template is missing')
-  const { entityTypes: existing } = await settings.getEntityTypes(hubId)
-  const { reportTypes } = await settings.getCmsReportTypes(hubId)
+  const { entityTypes: existing } = await settings.entitySchema.getEntityTypes(hubId)
+  const { reportTypes } = await settings.reportTypes.getCmsReportTypes(hubId)
   const result = applyTemplate(template, hubId, new Map(templates.map(t => [t.id, t])), existing, reportTypes)
   const merged = [...existing]
   for (const created of result.entityTypes) {
@@ -49,7 +49,7 @@ async function applyEventTemplate(): Promise<void> {
     if (at >= 0) merged[at] = created
     else merged.push(created)
   }
-  await settings.bulkSetEntityTypes({ entityTypes: merged, hubId })
+  await settings.entitySchema.bulkSetEntityTypes({ entityTypes: merged, hubId })
 }
 
 describe('replacing a hub\'s entity types', () => {

@@ -18,7 +18,7 @@ import type { Database } from '../db'
 import { messagingSuppressions, messagingSuppressionIdentifiers } from '../db/schema'
 import { suppressionHashes } from '../lib/messaging-contact-hash'
 import { createLogger } from '../lib/logger'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 
 const logger = createLogger('messaging-suppression')
 

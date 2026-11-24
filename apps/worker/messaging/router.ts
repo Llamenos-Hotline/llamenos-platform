@@ -19,7 +19,7 @@ import { refuseIfChannelDisabled } from './channel-guard'
 import { checkWebhookReplay, releaseWebhookReplay } from '../services/webhook-replay'
 import { InboundUnreadableError } from '../services/conversations'
 import { getDb } from '../db'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { isIpInCidrs } from '../middleware/webhook-ip-allowlist'
 import { getClientIp } from '../lib/client-ip'
 import { webhookAuth } from '../middleware/webhook-auth'
@@ -46,7 +46,7 @@ messaging.get('/whatsapp/webhook', async (c) => {
   // Read WhatsApp config to check verify token
   const services = c.get('services')
   try {
-    const config = await services.settings.getMessagingConfig()
+    const config = await services.messagingConfig.getMessagingConfig()
     const waConfig = config?.whatsapp as WhatsAppConfig | null
     if (waConfig?.verifyToken && token === waConfig.verifyToken) {
       return c.text(challenge)
@@ -97,7 +97,7 @@ messaging.post('/:channel/webhook',
 
   let adapter: MessagingAdapter
   try {
-    adapter = await getMessagingAdapterFromService(channel, services.settings, services.messagingSuppression, c.env.WEBHOOK_BASE_URL ?? '')
+    adapter = await getMessagingAdapterFromService(channel, services, services.messagingSuppression, c.env.WEBHOOK_BASE_URL ?? '')
   } catch {
     return c.json({ error: `${channel} channel is not configured` }, 404)
   }
@@ -135,7 +135,7 @@ messaging.post('/:channel/webhook',
     return c.json({ error: 'Webhook URL names no hub (?hub=)' }, 400)
   }
   try {
-    await services.settings.getHub(hubId)
+    await services.hubs.getHub(hubId)
   } catch (err) {
     if (err instanceof ServiceError && err.status === 404) {
       logger.error(`Messaging webhook for ${channel} names an unknown hub — refused`, { hubId })
@@ -294,7 +294,7 @@ messaging.post('/:channel/webhook',
     const sourceUuid = incoming.metadata?.sourceUuid
     if (sourceNumber && sourceUuid) {
       backgroundTask(c,
-        services.settings.getMessagingConfig()
+        services.messagingConfig.getMessagingConfig()
           .then(config => services.signalIdentity.recordIdentity({
             hubId,
             number: sourceNumber,
@@ -519,7 +519,7 @@ async function tryAutoAssign(
 ): Promise<void> {
   try {
     // 1. Check if auto-assign is enabled
-    const messagingConfig = await services.settings.getMessagingConfig()
+    const messagingConfig = await services.messagingConfig.getMessagingConfig()
     if (!messagingConfig?.autoAssign) return
 
     const maxConcurrent = messagingConfig.maxConcurrentPerUser || 3
@@ -530,7 +530,7 @@ async function tryAutoAssign(
 
     // 3. Get user details to filter by channel capability
     const { users: allUsers } = await services.identity.getUsers()
-    const { roles: roleDefs } = await services.settings.getRoles()
+    const { roles: roleDefs } = await services.roles.getRoles()
     // The assignee must be able to claim conversations in the conversation's
     // hub — a volunteer removed from the hub may linger in its shift roster (#1037).
     const canClaimHere = (v: (typeof allUsers)[number]) =>

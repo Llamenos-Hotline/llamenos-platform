@@ -2,7 +2,7 @@
  * The database refuses a custom role that carries plaintext vocabulary (#2787).
  *
  * `roles_custom_role_has_no_plaintext`: a role that is not `is_default` has
- * `name` NULL, `description` '' and `slug` = `id`. SettingsService has never
+ * `name` NULL, `description` '' and `slug` = `id`. RolesService has never
  * written otherwise since #2780; this pins that the schema now refuses it too.
  *
  *   bun test apps/worker/__tests__/integration-bun/roles-no-plaintext-check.test.ts

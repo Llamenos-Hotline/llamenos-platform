@@ -51,14 +51,14 @@ export function resolveTemplateDefaultMemberRoles(
 }
 
 /**
- * What this resolution needs from SettingsService.
+ * What this resolution needs from the template-state and roles services.
  *
  * `appliedTemplates` is stored as untyped JSONB, so it arrives as `unknown[]`
  * and is narrowed here rather than asserted.
  */
 export interface DefaultMemberRoleDeps {
-  getAppliedTemplates(): Promise<{ appliedTemplates?: unknown[] }>
-  getRoles(): Promise<{ roles: readonly RoleIdentity[] }>
+  templateState: { getAppliedTemplates(): Promise<{ appliedTemplates?: unknown[] }> }
+  roles: { getRoles(): Promise<{ roles: readonly RoleIdentity[] }> }
 }
 
 function appliedTemplateId(record: unknown): string | null {
@@ -81,8 +81,8 @@ export async function resolveHubDefaultMemberRoles(
   _hubId: string,
 ): Promise<string[]> {
   const [{ appliedTemplates = [] }, { roles }] = await Promise.all([
-    deps.getAppliedTemplates(),
-    deps.getRoles(),
+    deps.templateState.getAppliedTemplates(),
+    deps.roles.getRoles(),
   ])
   const appliedIds = appliedTemplates
     .map(appliedTemplateId)

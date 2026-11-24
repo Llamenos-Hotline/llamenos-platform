@@ -31,7 +31,7 @@ function createApp(permissions: string[], userRoles: string[] = ['role-volunteer
     c.set('user', { roles: userRoles } as never)
     c.set('allRoles', allRoles as never)
     c.set('services', {
-      settings: {
+      entitySchema: {
         getEntityTypeById: vi.fn(),
       },
     } as never)
@@ -174,7 +174,7 @@ describe('requireEntityTypeAccess', () => {
     const mockGetEntityType = vi.fn().mockRejectedValue(new Error('not found'))
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -192,7 +192,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -209,7 +209,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -227,7 +227,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -247,7 +247,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -265,7 +265,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('write'))
@@ -285,7 +285,7 @@ describe('requireEntityTypeAccess', () => {
     })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/entity/:entityTypeId', requireEntityTypeAccess('read'))
@@ -300,7 +300,7 @@ describe('requireEntityTypeAccess', () => {
     const mockGetEntityType = vi.fn().mockResolvedValue({ accessRoles: ['admin'] })
     app.use('*', async (c, next) => {
       const svc = c.get('services')
-      ;(svc.settings as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
+      ;(svc.entitySchema as unknown as Record<string, unknown>).getEntityTypeById = mockGetEntityType
       await next()
     })
     app.use('/test', requireEntityTypeAccess('read'))

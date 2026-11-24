@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { SettingsService, ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
+import { createSettingsDomain } from '@worker/services/settings-domain'
 import { createMockDb } from './mock-db'
 import { hubDetailResponseSchema, hubListResponseSchema } from '@protocol/schemas/hubs'
 
@@ -51,7 +52,7 @@ function setup() {
   // non-empty default row so tests that don't care about the exact
   // persisted shape don't have to set one up themselves.
   db.$setInsertResult([{ settings: {} }])
-  const service = new SettingsService(db as any)
+  const service = createSettingsDomain(db as any)
   return { db, service }
 }
 
@@ -79,21 +80,21 @@ describe('ServiceError', () => {
 // checkRateLimit
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.checkRateLimit', () => {
+describe('RateLimitService.checkRateLimit', () => {
   it('throws 400 for empty key', async () => {
     const { service } = setup()
     await expect(
-      service.checkRateLimit({ key: '', maxPerMinute: 5 }),
+      service.rateLimits.checkRateLimit({ key: '', maxPerMinute: 5 }),
     ).rejects.toThrow(ServiceError)
     await expect(
-      service.checkRateLimit({ key: '', maxPerMinute: 5 }),
+      service.rateLimits.checkRateLimit({ key: '', maxPerMinute: 5 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('throws 400 for key with invalid characters', async () => {
     const { service } = setup()
     await expect(
-      service.checkRateLimit({ key: 'bad key!', maxPerMinute: 5 }),
+      service.rateLimits.checkRateLimit({ key: 'bad key!', maxPerMinute: 5 }),
     ).rejects.toMatchObject({ status: 400, message: 'Invalid rate limit key' })
   })
 
@@ -101,28 +102,28 @@ describe('SettingsService.checkRateLimit', () => {
     const { service } = setup()
     const longKey = 'a'.repeat(257)
     await expect(
-      service.checkRateLimit({ key: longKey, maxPerMinute: 5 }),
+      service.rateLimits.checkRateLimit({ key: longKey, maxPerMinute: 5 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('throws 400 for non-integer maxPerMinute', async () => {
     const { service } = setup()
     await expect(
-      service.checkRateLimit({ key: 'caller:1', maxPerMinute: 1.5 }),
+      service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 1.5 }),
     ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('maxPerMinute') })
   })
 
   it('throws 400 for maxPerMinute < 1', async () => {
     const { service } = setup()
     await expect(
-      service.checkRateLimit({ key: 'caller:1', maxPerMinute: 0 }),
+      service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 0 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
   it('throws 400 for maxPerMinute > 1000', async () => {
     const { service } = setup()
     await expect(
-      service.checkRateLimit({ key: 'caller:1', maxPerMinute: 1001 }),
+      service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 1001 }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
@@ -137,7 +138,7 @@ describe('SettingsService.checkRateLimit', () => {
     const { db, service } = setup()
     db.$setExecuteResult([{ count: 1 }])
 
-    const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
+    const result = await service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
     expect(result).toEqual({ limited: false })
   })
 
@@ -145,7 +146,7 @@ describe('SettingsService.checkRateLimit', () => {
     const { db, service } = setup()
     db.$setExecuteResult([{ count: 3 }])
 
-    const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
+    const result = await service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
     expect(result).toEqual({ limited: false })
   })
 
@@ -153,7 +154,7 @@ describe('SettingsService.checkRateLimit', () => {
     const { db, service } = setup()
     db.$setExecuteResult([{ count: 4 }])
 
-    const result = await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
+    const result = await service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
     expect(result).toEqual({ limited: true })
   })
 
@@ -161,7 +162,7 @@ describe('SettingsService.checkRateLimit', () => {
     const { db, service } = setup()
     db.$setExecuteResult([{ count: 1 }])
 
-    await service.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
+    await service.rateLimits.checkRateLimit({ key: 'caller:1', maxPerMinute: 3 })
 
     expect(db.execute).toHaveBeenCalledTimes(1)
     expect(db.select).not.toHaveBeenCalled()
@@ -173,7 +174,7 @@ describe('SettingsService.checkRateLimit', () => {
 
     // Should not throw
     await expect(
-      service.checkRateLimit({ key: 'hub-1:caller_abc:123', maxPerMinute: 5 }),
+      service.rateLimits.checkRateLimit({ key: 'hub-1:caller_abc:123', maxPerMinute: 5 }),
     ).resolves.toBeDefined()
   })
 })
@@ -182,18 +183,18 @@ describe('SettingsService.checkRateLimit', () => {
 // clearRateLimits
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.clearRateLimits', () => {
+describe('RateLimitService.clearRateLimits', () => {
   it('calls db.delete on the rate limits table', async () => {
     const { db, service } = setup()
 
-    await service.clearRateLimits()
+    await service.rateLimits.clearRateLimits()
 
     expect(db.delete).toHaveBeenCalled()
   })
 
   it('resolves without error', async () => {
     const { service } = setup()
-    await expect(service.clearRateLimits()).resolves.toBeUndefined()
+    await expect(service.rateLimits.clearRateLimits()).resolves.toBeUndefined()
   })
 })
 
@@ -201,7 +202,7 @@ describe('SettingsService.clearRateLimits', () => {
 // getSpamSettings
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getSpamSettings', () => {
+describe('SpamSettingsService.getSpamSettings', () => {
   it('returns spam settings from DB', async () => {
     const { db, service } = setup()
     const spamSettings = {
@@ -212,7 +213,7 @@ describe('SettingsService.getSpamSettings', () => {
     }
     db.$setSelectResult([makeSettingsRow({ spamSettings })])
 
-    const result = await service.getSpamSettings()
+    const result = await service.spamSettings.getSpamSettings()
     // A row stored before overLimitAction existed reads as the operator's default (#2179).
     expect(result).toEqual({ ...spamSettings, overLimitAction: 'message' })
   })
@@ -223,7 +224,7 @@ describe('SettingsService.getSpamSettings', () => {
     // Then insert for upsert (getSettings upserts if missing)
     db.$setSelectResult([makeSettingsRow({ spamSettings: null })])
 
-    const result = await service.getSpamSettings()
+    const result = await service.spamSettings.getSpamSettings()
     expect(result).toMatchObject({
       voiceCaptchaEnabled: false,
       rateLimitEnabled: true,
@@ -238,7 +239,7 @@ describe('SettingsService.getSpamSettings', () => {
 // updateSpamSettings
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.updateSpamSettings', () => {
+describe('SpamSettingsService.updateSpamSettings', () => {
   it('merges partial updates with existing settings', async () => {
     const { db, service } = setup()
     const existing = {
@@ -253,7 +254,7 @@ describe('SettingsService.updateSpamSettings', () => {
       [makeSettingsRow({ spamSettings: existing })],
     ])
 
-    const result = await service.updateSpamSettings({ maxCallsPerMinute: 10 })
+    const result = await service.spamSettings.updateSpamSettings({ maxCallsPerMinute: 10 })
     expect(result.maxCallsPerMinute).toBe(10)
     // Other fields should be preserved
     expect(result.voiceCaptchaEnabled).toBe(false)
@@ -264,20 +265,20 @@ describe('SettingsService.updateSpamSettings', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeSettingsRow()])
 
-    await service.updateSpamSettings({ voiceCaptchaEnabled: true })
+    await service.spamSettings.updateSpamSettings({ voiceCaptchaEnabled: true })
 
     expect(db.update).toHaveBeenCalled()
   })
 })
 
-describe('SettingsService per-hub spam settings (#1051)', () => {
+describe('SpamSettingsService per-hub spam settings (#1051)', () => {
   it('reads the hub override layered over the platform values', async () => {
     const { db, service } = setup()
     db.$setSelectResults([
       [makeSettingsRow()], // system_settings
       [{ hubId: 'hub-a', settings: { spamSettings: { rateLimitEnabled: false } } }], // hub_settings
     ])
-    const result = await service.getSpamSettings('hub-a')
+    const result = await service.spamSettings.getSpamSettings('hub-a')
     expect(result.rateLimitEnabled).toBe(false)
     expect(result.maxCallsPerMinute).toBe(3) // inherited from platform
   })
@@ -285,7 +286,7 @@ describe('SettingsService per-hub spam settings (#1051)', () => {
   it('a hub without an override inherits the platform values', async () => {
     const { db, service } = setup()
     db.$setSelectResults([[makeSettingsRow()], []])
-    const result = await service.getSpamSettings('hub-b')
+    const result = await service.spamSettings.getSpamSettings('hub-b')
     expect(result.rateLimitEnabled).toBe(true)
   })
 
@@ -300,7 +301,7 @@ describe('SettingsService per-hub spam settings (#1051)', () => {
       [makeSettingsRow()], // re-read effective: system_settings
       [{ hubId: 'hub-a', settings: { spamSettings: { rateLimitEnabled: false } } }],
     ])
-    await service.updateSpamSettings({ rateLimitEnabled: false }, 'hub-a')
+    await service.spamSettings.updateSpamSettings({ rateLimitEnabled: false }, 'hub-a')
     expect(db.insert).toHaveBeenCalled()
     expect(db.update).not.toHaveBeenCalled()
   })
@@ -310,12 +311,12 @@ describe('SettingsService per-hub spam settings (#1051)', () => {
 // getHubs
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getHubs', () => {
+describe('HubService.getHubs', () => {
   it('returns empty array when no hubs exist', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    const result = await service.getHubs()
+    const result = await service.hubs.getHubs()
     expect(result.hubs).toEqual([])
   })
 
@@ -323,7 +324,7 @@ describe('SettingsService.getHubs', () => {
     const { db, service } = setup()
     db.$setSelectResult([makeHub()])
 
-    const result = await service.getHubs()
+    const result = await service.hubs.getHubs()
     expect(result.hubs).toHaveLength(1)
     expect(result.hubs[0].id).toBe('hub-1')
     expect(result.hubs[0].name).toBe('Test Hub')
@@ -341,7 +342,7 @@ describe('SettingsService.getHubs', () => {
       makeHub({ id: 'hub-2', name: 'Hub Two', slug: 'hub-two' }),
     ])
 
-    const result = await service.getHubs()
+    const result = await service.hubs.getHubs()
     expect(result.hubs).toHaveLength(2)
     expect(result.hubs.map((h) => h.id)).toEqual(['hub-1', 'hub-2'])
   })
@@ -351,12 +352,12 @@ describe('SettingsService.getHubs', () => {
 // getHub
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.getHub', () => {
+describe('HubService.getHub', () => {
   it('returns hub when found', async () => {
     const { db, service } = setup()
     db.$setSelectResult([makeHub()])
 
-    const result = await service.getHub('hub-1')
+    const result = await service.hubs.getHub('hub-1')
     expect(result.hub.id).toBe('hub-1')
     expect(result.hub.name).toBe('Test Hub')
   })
@@ -365,7 +366,7 @@ describe('SettingsService.getHub', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.getHub('nonexistent')).rejects.toMatchObject({
+    await expect(service.hubs.getHub('nonexistent')).rejects.toMatchObject({
       status: 404,
     })
   })
@@ -374,7 +375,7 @@ describe('SettingsService.getHub', () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.getHub('nonexistent')).rejects.toBeInstanceOf(ServiceError)
+    await expect(service.hubs.getHub('nonexistent')).rejects.toBeInstanceOf(ServiceError)
   })
 })
 
@@ -382,7 +383,7 @@ describe('SettingsService.getHub', () => {
 // createHub
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.createHub', () => {
+describe('HubService.createHub', () => {
   const validHub = {
     id: 'hub-new',
     name: 'New Hub',
@@ -403,7 +404,7 @@ describe('SettingsService.createHub', () => {
     // Slug check returns existing hub
     db.$setSelectResult([makeHub({ slug: 'new-hub' })])
 
-    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({
+    await expect(service.hubs.createHub(validHub, founder)).rejects.toMatchObject({
       status: 409,
       message: 'Hub slug already exists',
     })
@@ -415,7 +416,7 @@ describe('SettingsService.createHub', () => {
     db.$setSelectResults([[], [founderRow], []])
     db.$setInsertResult([])
 
-    const result = await service.createHub(validHub, founder)
+    const result = await service.hubs.createHub(validHub, founder)
     expect(result.hub.id).toBe('hub-new')
     expect(db.insert).toHaveBeenCalled()
   })
@@ -425,7 +426,7 @@ describe('SettingsService.createHub', () => {
     db.$setSelectResults([[], [founderRow], []])
     db.$setInsertResult([])
 
-    await service.createHub(validHub, founder)
+    await service.hubs.createHub(validHub, founder)
     // insert should be called twice: once for hub, once for hub_settings
     expect(db.insert).toHaveBeenCalledTimes(2)
   })
@@ -435,7 +436,7 @@ describe('SettingsService.createHub', () => {
     db.$setSelectResults([[], [founderRow], []])
     db.$setInsertResult([])
 
-    await service.createHub(validHub, founder)
+    await service.hubs.createHub(validHub, founder)
     expect(db.transaction).toHaveBeenCalledTimes(1)
     expect(db.update).toHaveBeenCalledTimes(1)
   })
@@ -444,7 +445,7 @@ describe('SettingsService.createHub', () => {
     const { db, service } = setup()
     db.$setSelectResults([[], []])
 
-    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({ status: 404 })
+    await expect(service.hubs.createHub(validHub, founder)).rejects.toMatchObject({ status: 404 })
     expect(db.insert).not.toHaveBeenCalled()
   })
 
@@ -452,7 +453,7 @@ describe('SettingsService.createHub', () => {
     const { db, service } = setup()
     db.$setSelectResults([[], [{ ...founderRow, active: false }]])
 
-    await expect(service.createHub(validHub, founder)).rejects.toMatchObject({ status: 409 })
+    await expect(service.hubs.createHub(validHub, founder)).rejects.toMatchObject({ status: 409 })
     expect(db.insert).not.toHaveBeenCalled()
   })
 
@@ -460,7 +461,7 @@ describe('SettingsService.createHub', () => {
     const { db, service } = setup()
     db.$setSelectResults([[], [founderRow], []])
 
-    await expect(service.createHub(validHub, { pubkey: 'admin-pk', roleIds: ['role-volunteer'] }))
+    await expect(service.hubs.createHub(validHub, { pubkey: 'admin-pk', roleIds: ['role-volunteer'] }))
       .rejects.toMatchObject({ status: 400 })
     expect(db.insert).not.toHaveBeenCalled()
   })
@@ -470,12 +471,12 @@ describe('SettingsService.createHub', () => {
 // updateHub
 // ---------------------------------------------------------------------------
 
-describe('SettingsService.updateHub', () => {
+describe('HubService.updateHub', () => {
   it('throws 404 when hub does not exist', async () => {
     const { db, service } = setup()
     db.$setSelectResult([])
 
-    await expect(service.updateHub('nonexistent', { name: 'New Name' })).rejects.toMatchObject({
+    await expect(service.hubs.updateHub('nonexistent', { name: 'New Name' })).rejects.toMatchObject({
       status: 404,
     })
   })
@@ -486,7 +487,7 @@ describe('SettingsService.updateHub', () => {
     // updateHub: first select (existence check), then update, then second select (re-read)
     db.$setSelectResults([[hub], [hub]])
 
-    await service.updateHub('hub-1', { name: 'Updated Hub' })
+    await service.hubs.updateHub('hub-1', { name: 'Updated Hub' })
 
     expect(db.update).toHaveBeenCalled()
   })
@@ -497,18 +498,18 @@ describe('SettingsService.updateHub', () => {
     db.$setSelectResults([[hub], [hub], [hub], [hub]])
     const setArgs = () => db.update.mock.results.map((r) => (r.value as { set: { mock: { calls: unknown[][] } } }).set.mock.calls[0][0])
 
-    await service.updateHub('hub-1', { name: 'Renamed' })
+    await service.hubs.updateHub('hub-1', { name: 'Renamed' })
     expect(setArgs()[0]).not.toHaveProperty('timezone')
 
-    await service.updateHub('hub-1', { timezone: 'Europe/Berlin' })
+    await service.hubs.updateHub('hub-1', { timezone: 'Europe/Berlin' })
     expect(setArgs()[1]).toMatchObject({ timezone: 'Europe/Berlin' })
   })
 
   it('reports the stored zone on every read of a hub', async () => {
     const { db, service } = setup()
     db.$setSelectResults([[makeHub({ timezone: 'Asia/Kolkata' })], [makeHub({ timezone: 'Asia/Kolkata' })]])
-    expect((await service.getHub('hub-1')).hub.timezone).toBe('Asia/Kolkata')
-    expect((await service.getHubs()).hubs[0].timezone).toBe('Asia/Kolkata')
+    expect((await service.hubs.getHub('hub-1')).hub.timezone).toBe('Asia/Kolkata')
+    expect((await service.hubs.getHubs()).hubs[0].timezone).toBe('Asia/Kolkata')
   })
 
   it('every read of a hub satisfies the declared response contract, timezone included', async () => {
@@ -516,8 +517,8 @@ describe('SettingsService.updateHub', () => {
     db.$setSelectResults([[makeHub()], [makeHub()], [makeHub()], [makeHub()]])
     // The route tests mock the service, so this is the check that the REAL row
     // mapping fills every required `Hub` field.
-    expect(hubDetailResponseSchema.parse(await service.getHub('hub-1')).hub.timezone).toBe('UTC')
-    expect(hubListResponseSchema.parse(await service.getHubs()).hubs[0].timezone).toBe('UTC')
-    expect(hubDetailResponseSchema.parse(await service.updateHub('hub-1', { name: 'x' })).hub.timezone).toBe('UTC')
+    expect(hubDetailResponseSchema.parse(await service.hubs.getHub('hub-1')).hub.timezone).toBe('UTC')
+    expect(hubListResponseSchema.parse(await service.hubs.getHubs()).hubs[0].timezone).toBe('UTC')
+    expect(hubDetailResponseSchema.parse(await service.hubs.updateHub('hub-1', { name: 'x' })).hub.timezone).toBe('UTC')
   })
 })

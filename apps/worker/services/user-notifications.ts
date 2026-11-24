@@ -13,7 +13,7 @@ import { safeFetch } from '../lib/safe-fetch'
 import type { SignalContactsService } from './signal-contacts'
 import type { SecurityPrefsService } from './security-prefs'
 import type { AuditService } from './audit'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 import { getLocaleString } from '@llamenos/i18n'
 import type { IncidentCategory, IncidentState } from '@protocol/schemas/incidents'
 

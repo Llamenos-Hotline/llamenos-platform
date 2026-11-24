@@ -6,7 +6,7 @@ import {
   stopBlastWorker,
 } from '@worker/lib/blast-delivery-worker'
 import type { BlastsService } from '@worker/services/blasts'
-import type { SettingsService } from '@worker/services/settings'
+import type { MessagingConfigService } from '@worker/services/messaging-config'
 import type { MessagingAdapter } from '@worker/messaging/adapter'
 import type { BlastContent, BlastSettings, BlastStats } from '@shared/types'
 
@@ -57,7 +57,7 @@ function createMockAdapter(): MessagingAdapter {
   } as unknown as MessagingAdapter
 }
 
-function createSettingsService(overrides: Partial<SettingsService> = {}): SettingsService {
+function createMessagingConfigService(overrides: Partial<MessagingConfigService> = {}): MessagingConfigService {
   return {
     getMessagingConfig: vi.fn().mockResolvedValue({
       enabledChannels: ['sms', 'whatsapp', 'signal'],
@@ -73,14 +73,14 @@ function createSettingsService(overrides: Partial<SettingsService> = {}): Settin
       smsContentMode: 'notification-only',
     }),
     ...overrides,
-  } as unknown as SettingsService
+  } as unknown as MessagingConfigService
 }
 
 function createDeps(overrides: Record<string, unknown> = {}) {
   const mockAdapter = createMockAdapter()
   return {
     blastsService: createMockBlastsService(),
-    settingsService: createSettingsService(),
+    messagingConfigService: createMessagingConfigService(),
     resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
     resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
     onProgress: vi.fn(),
@@ -124,7 +124,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService({ getMessagingConfig: vi.fn().mockResolvedValue({
+        messagingConfigService: createMessagingConfigService({ getMessagingConfig: vi.fn().mockResolvedValue({
           enabledChannels: ['sms', 'whatsapp', 'signal'],
           sms: { enabled: true },
           whatsapp: { integrationMode: 'twilio' as const },
@@ -172,7 +172,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService({ getMessagingConfig: vi.fn().mockResolvedValue({
+        messagingConfigService: createMessagingConfigService({ getMessagingConfig: vi.fn().mockResolvedValue({
           enabledChannels: ['sms', 'whatsapp', 'signal'],
           sms: { enabled: true },
           whatsapp: { integrationMode: 'twilio' as const },
@@ -218,7 +218,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService({ getMessagingConfig: vi.fn().mockResolvedValue({
+        messagingConfigService: createMessagingConfigService({ getMessagingConfig: vi.fn().mockResolvedValue({
           enabledChannels: ['sms', 'whatsapp', 'signal'],
           sms: { enabled: true },
           whatsapp: { integrationMode: 'twilio' as const },
@@ -289,7 +289,7 @@ describe('blast-delivery-worker', () => {
       const onStatusChange = vi.fn()
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
         onStatusChange,
@@ -417,7 +417,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
       }
@@ -441,7 +441,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
       }
@@ -469,7 +469,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
       }
@@ -510,7 +510,7 @@ describe('blast-delivery-worker', () => {
 
       const deps = {
         blastsService,
-        settingsService: createSettingsService({ getMessagingConfig: vi.fn().mockResolvedValue({
+        messagingConfigService: createMessagingConfigService({ getMessagingConfig: vi.fn().mockResolvedValue({
           enabledChannels: ['sms', 'whatsapp', 'signal'],
           sms: { enabled: true },
           whatsapp: { integrationMode: 'twilio' as const },
@@ -555,7 +555,7 @@ describe('blast-delivery-worker', () => {
       const onProgress = vi.fn()
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
         onProgress,
@@ -583,7 +583,7 @@ describe('blast-delivery-worker', () => {
       const onStatusChange = vi.fn()
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
         onStatusChange,
@@ -626,7 +626,7 @@ describe('blast-delivery-worker', () => {
       const onStatusChange = vi.fn()
       const deps = {
         blastsService,
-        settingsService: createSettingsService(),
+        messagingConfigService: createMessagingConfigService(),
         resolveAdapter: vi.fn().mockResolvedValue(mockAdapter),
         resolveIdentifier: vi.fn().mockResolvedValue('+1234567890'),
         onStatusChange,

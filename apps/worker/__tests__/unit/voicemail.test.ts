@@ -28,7 +28,7 @@ function setup(opts: { transcription?: boolean; audio?: ArrayBuffer | null; dele
   } as any
   const calls: string[] = []
   const services = {
-    settings: {
+    callSettings: {
       getTranscriptionSettings: vi.fn().mockResolvedValue({ globalEnabled: opts.transcription ?? true }),
     },
     identity: {

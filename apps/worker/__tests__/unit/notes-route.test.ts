@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import notesRouter from '../../routes/notes'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 
 // The admin key the fixtures' envelopes are addressed to (#2113).
 const ADMIN_KEY = 'a'.repeat(64)

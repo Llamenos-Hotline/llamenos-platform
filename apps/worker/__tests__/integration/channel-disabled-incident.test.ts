@@ -67,7 +67,7 @@ beforeEach(async () => {
 let hubCounter = 0
 async function createHub(channels?: Record<string, boolean>): Promise<string> {
   const id = `hub-cd-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -76,7 +76,7 @@ async function createHub(channels?: Record<string, boolean>): Promise<string> {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   } as never, await insertHubFounder(fresh.db))
-  if (channels) await services.settings.updateHubSettings(id, { channels })
+  if (channels) await services.hubSettings.updateHubSettings(id, { channels })
   return id
 }
 
@@ -244,12 +244,12 @@ describe('who sees the channel-disabled incident', () => {
 describe('a hub that has switched voice off is not a ring target', () => {
   it('resolves nobody to ring, however well rostered; flipping voice on restores the roster', async () => {
     const hubId = await createHub({ voice: false, signal: true })
-    await services.settings.setFallbackGroup({ userPubkeys: ['pk-fallback'] }, hubId)
+    await services.callSettings.setFallbackGroup({ userPubkeys: ['pk-fallback'] }, hubId)
 
     expect(await resolveRingableVolunteers(services, hubId)).toBeNull()
     expect(await currentRingDecision(services, hubId)).toMatchObject({ wouldRing: false, volunteerCount: 0 })
 
-    await services.settings.updateHubSettings(hubId, { channels: { voice: true, signal: true } })
+    await services.hubSettings.updateHubSettings(hubId, { channels: { voice: true, signal: true } })
 
     // The fallback group names a pubkey that is no user, so nobody is available
     // — but the resolver now reaches the roster instead of returning null.
@@ -262,7 +262,7 @@ describe('a hub that has switched voice off is not a ring target', () => {
     // coverage. Asked of every registered L1 check, not of one category, so a
     // coverage check added later that forgets the voice switch fails here.
     const id = `hub-cd-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-    await services.settings.createHub({
+    await services.hubs.createHub({
       id,
       name: `Hub ${id}`,
       slug: id,
@@ -272,7 +272,7 @@ describe('a hub that has switched voice off is not a ring target', () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } as never, await insertHubFounder(fresh.db))
-    await services.settings.updateHubSettings(id, { channels: { voice: false, signal: true } })
+    await services.hubSettings.updateHubSettings(id, { channels: { voice: false, signal: true } })
     expect(services.incidents.getChecks().length).toBeGreaterThan(0)
 
     await services.incidents.runChecks()

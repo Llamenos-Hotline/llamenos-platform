@@ -90,17 +90,17 @@ describe('service-factories', () => {
         authToken: 'token',
         phoneNumber: '+1234',
       }
-      const settingsService = {
+      const configMock = {
         getTelephonyProvider: vi.fn().mockResolvedValue(config),
       }
       const env = {} as unknown as Parameters<typeof getTelephonyFromService>[0]
-      const adapter = await getTelephonyFromService(env, settingsService)
+      const adapter = await getTelephonyFromService(env, configMock)
       expect(adapter).toBeDefined()
-      expect(settingsService.getTelephonyProvider).toHaveBeenCalled()
+      expect(configMock.getTelephonyProvider).toHaveBeenCalled()
     })
 
     it('falls back to env vars when settings fail', async () => {
-      const settingsService = {
+      const configMock = {
         getTelephonyProvider: vi.fn().mockRejectedValue(new Error('db down')),
       }
       const env = {
@@ -108,7 +108,7 @@ describe('service-factories', () => {
         TWILIO_AUTH_TOKEN: 'fallback_token',
         TWILIO_PHONE_NUMBER: '+1999',
       } as unknown as Parameters<typeof getTelephonyFromService>[0]
-      const adapter = await getTelephonyFromService(env, settingsService)
+      const adapter = await getTelephonyFromService(env, configMock)
       expect(adapter).toEqual({
         type: 'twilio',
         sid: 'AC_fallback',
@@ -118,7 +118,7 @@ describe('service-factories', () => {
     })
 
     it('falls back to env vars when settings returns null', async () => {
-      const settingsService = {
+      const configMock = {
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
       const env = {
@@ -126,7 +126,7 @@ describe('service-factories', () => {
         TWILIO_AUTH_TOKEN: 'tk',
         TWILIO_PHONE_NUMBER: '+1888',
       } as unknown as Parameters<typeof getTelephonyFromService>[0]
-      const adapter = await getTelephonyFromService(env, settingsService)
+      const adapter = await getTelephonyFromService(env, configMock)
       expect(adapter).toEqual({
         type: 'twilio',
         sid: 'AC_fb',
@@ -136,11 +136,11 @@ describe('service-factories', () => {
     })
 
     it('returns null when no config available', async () => {
-      const settingsService = {
+      const configMock = {
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
       const env = {} as unknown as Parameters<typeof getTelephonyFromService>[0]
-      const adapter = await getTelephonyFromService(env, settingsService)
+      const adapter = await getTelephonyFromService(env, configMock)
       expect(adapter).toBeNull()
     })
   })
@@ -154,12 +154,12 @@ describe('service-factories', () => {
         phoneNumber: '+1111',
         signalwireSpace: 'space',
       }
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockResolvedValue(hubConfig),
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
       const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
-      const adapter = await getHubTelephonyFromService(env, settingsService, 'hub-1')
+      const adapter = await getHubTelephonyFromService(env, configMock, 'hub-1')
       expect(adapter).toEqual({
         type: 'signalwire',
         sid: 'AC_hub',
@@ -193,12 +193,12 @@ describe('service-factories', () => {
         authToken: 'global_token',
         phoneNumber: '+2222',
       }
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
         getTelephonyProvider: vi.fn().mockResolvedValue(globalConfig),
       }
       const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
-      const adapter = await getHubTelephonyFromService(env, settingsService, 'hub-1')
+      const adapter = await getHubTelephonyFromService(env, configMock, 'hub-1')
       expect(adapter).toEqual({
         type: 'twilio',
         sid: 'AC_global',
@@ -223,40 +223,40 @@ describe('service-factories', () => {
     ] as const)('agrees with the adapter on %s', async (_label, hubType, globalType) => {
       const asConfig = (type: string | null): TelephonyProviderConfig | null =>
         type ? ({ type, phoneNumber: '+1111', accountSid: 'AC', authToken: 't', signalwireSpace: 's' } as TelephonyProviderConfig) : null
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockResolvedValue(asConfig(hubType)),
         getTelephonyProvider: vi.fn().mockResolvedValue(asConfig(globalType)),
       }
       const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
 
-      const config = await resolveHubTelephonyConfig(env, settingsService, 'hub-1')
-      const adapter = await getHubTelephonyFromService(env, settingsService, 'hub-1')
+      const config = await resolveHubTelephonyConfig(env, configMock, 'hub-1')
+      const adapter = await getHubTelephonyFromService(env, configMock, 'hub-1')
 
       expect(config?.type).toBe(hubType ?? globalType)
       expect((adapter as unknown as { type: string }).type).toBe(config?.type)
     })
 
     it('resolves nothing when neither the hub nor the instance has a provider', async () => {
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
         getTelephonyProvider: vi.fn().mockRejectedValue(new Error('db down')),
       }
       const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
-      expect(await resolveHubTelephonyConfig(env, settingsService, 'hub-1')).toBeNull()
+      expect(await resolveHubTelephonyConfig(env, configMock, 'hub-1')).toBeNull()
     })
 
     it('reads only the instance-wide provider for a call that resolved to no hub', async () => {
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockResolvedValue(null),
         getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'asterisk', phoneNumber: '+1' } as TelephonyProviderConfig),
       }
       const env = {} as unknown as Parameters<typeof getHubTelephonyFromService>[0]
-      expect((await resolveHubTelephonyConfig(env, settingsService, ''))?.type).toBe('asterisk')
-      expect(settingsService.getHubTelephonyProvider).not.toHaveBeenCalled()
+      expect((await resolveHubTelephonyConfig(env, configMock, ''))?.type).toBe('asterisk')
+      expect(configMock.getHubTelephonyProvider).not.toHaveBeenCalled()
     })
 
     it('falls back to env vars when both hub and global fail', async () => {
-      const settingsService = {
+      const configMock = {
         getHubTelephonyProvider: vi.fn().mockRejectedValue(new Error('fail')),
         getTelephonyProvider: vi.fn().mockRejectedValue(new Error('fail')),
       }
@@ -265,7 +265,7 @@ describe('service-factories', () => {
         TWILIO_AUTH_TOKEN: 'env_token',
         TWILIO_PHONE_NUMBER: '+3333',
       } as unknown as Parameters<typeof getHubTelephonyFromService>[0]
-      const adapter = await getHubTelephonyFromService(env, settingsService, 'hub-1')
+      const adapter = await getHubTelephonyFromService(env, configMock, 'hub-1')
       expect(adapter).toEqual({
         type: 'twilio',
         sid: 'AC_env',
@@ -286,47 +286,47 @@ describe('service-factories', () => {
     } as unknown as MessagingConfig
 
     it('returns SMS adapter', async () => {
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', accountSid: 'AC', authToken: 't', phoneNumber: '+1' } as TelephonyProviderConfig),
       }
-      const adapter = await getMessagingAdapterFromService('sms', settingsService, noSuppression)
+      const adapter = await getMessagingAdapterFromService('sms', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)
       expect(adapter).toEqual({ channel: 'sms' })
     })
 
     it('returns WhatsApp adapter', async () => {
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('whatsapp', settingsService, noSuppression)
+      const adapter = await getMessagingAdapterFromService('whatsapp', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)
       expect(adapter).toEqual({ channel: 'whatsapp' })
     })
 
     it('returns Signal adapter', async () => {
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('signal', settingsService, noSuppression)
+      const adapter = await getMessagingAdapterFromService('signal', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)
       expect(adapter).toEqual({ channel: 'signal' })
     })
 
     it('returns RCS adapter', async () => {
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('rcs', settingsService, noSuppression)
+      const adapter = await getMessagingAdapterFromService('rcs', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)
       expect(adapter).toEqual({ channel: 'rcs' })
     })
 
     it('returns Telegram adapter', async () => {
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn(),
       }
-      const adapter = await getMessagingAdapterFromService('telegram', settingsService, noSuppression)
+      const adapter = await getMessagingAdapterFromService('telegram', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)
       expect(adapter).toEqual({ channel: 'telegram' })
     })
 
@@ -335,12 +335,12 @@ describe('service-factories', () => {
       const providerSend = vi.fn().mockResolvedValue({ success: true, externalId: 'SM1' })
       vi.mocked(createSMSAdapter).mockReturnValueOnce({ channelType: 'sms', sendMessage: providerSend } as never)
       const blocksOutbound = vi.fn().mockResolvedValue(true)
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(baseMessagingConfig),
         getTelephonyProvider: vi.fn().mockResolvedValue({ type: 'twilio', accountSid: 'AC', authToken: 't', phoneNumber: '+1' } as TelephonyProviderConfig),
       }
 
-      const adapter = await getMessagingAdapterFromService('sms', settingsService, { blocksOutbound })
+      const adapter = await getMessagingAdapterFromService('sms', { messagingConfig: configMock, providerConfig: configMock }, { blocksOutbound })
       const result = await adapter.sendMessage({ recipientIdentifier: '+15550001111', body: 'hi', conversationId: 'c' })
 
       expect(result).toMatchObject({ success: false, suppressed: true })
@@ -353,11 +353,11 @@ describe('service-factories', () => {
         ...baseMessagingConfig,
         enabledChannels: ['sms'],
       }
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('whatsapp', settingsService, noSuppression)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('whatsapp', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)).rejects.toThrow(
         'whatsapp channel is not enabled'
       )
     })
@@ -368,11 +368,11 @@ describe('service-factories', () => {
         enabledChannels: ['sms' as MessagingChannelType],
         sms: undefined,
       } as unknown as MessagingConfig
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn(),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService, noSuppression)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)).rejects.toThrow(
         'SMS is not enabled'
       )
     })
@@ -382,11 +382,11 @@ describe('service-factories', () => {
         ...baseMessagingConfig,
         enabledChannels: ['sms'],
       }
-      const settingsService = {
+      const configMock = {
         getMessagingConfig: vi.fn().mockResolvedValue(config),
         getTelephonyProvider: vi.fn().mockResolvedValue(null),
       }
-      await expect(getMessagingAdapterFromService('sms', settingsService, noSuppression)).rejects.toThrow(
+      await expect(getMessagingAdapterFromService('sms', { messagingConfig: configMock, providerConfig: configMock }, noSuppression)).rejects.toThrow(
         'SMS requires a configured telephony provider'
       )
     })

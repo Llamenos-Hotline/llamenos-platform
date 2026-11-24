@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import conversationsRouter from '../../routes/conversations'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 import { publishEvent } from '../../lib/ws-events'
 import { KIND_CONVERSATION_ASSIGNED } from '@shared/event-kinds'
 

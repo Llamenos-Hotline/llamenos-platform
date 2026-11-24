@@ -15,7 +15,7 @@ import { hpkeRecipientPubkey, transitionalInstanceRecipient } from '../lib/hpke-
 import { okResponseSchema } from '@protocol/schemas/common'
 import { authErrors, notFoundError } from '../openapi/helpers'
 import type { Hub } from '@shared/types'
-import { ServiceError, serviceErrorBody } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/service-error'
 import { SealedRecordingDeleteError } from '../services/call-recordings'
 import { audit } from '../services/audit'
 import { encryptStorageCredential } from '../lib/crypto'
@@ -97,7 +97,7 @@ routes.get('/',
     const user = c.get('user')
     const allRoles = c.get('allRoles')
 
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     const visible = hubs.filter(h =>
       h.status === 'active' &&
       resolveHubPermissions(user.roles, user.hubRoles ?? [], allRoles, h.id).length > 0,
@@ -154,7 +154,7 @@ routes.post('/',
     // cannot be made the hub is not created. The founder's role is the one the
     // role catalog designates for it by permission, not a role id.
     try {
-      await services.settings.createHub(hub, { pubkey })
+      await services.hubs.createHub(hub, { pubkey })
     } catch (err) {
       if (err instanceof ServiceError) {
         return c.json(serviceErrorBody(err), err.status as 400 | 404 | 409 | 500)
@@ -169,7 +169,7 @@ routes.post('/',
       try {
         const creds = await storageManager.provisionHub(hub.id)
         if (creds) {
-          await services.settings.storeHubStorageCredentials({
+          await services.hubStorage.storeHubStorageCredentials({
             hubId: hub.id,
             accessKeyId: creds.accessKeyId,
             encryptedSecretKey: encryptStorageCredential(creds.secretAccessKey, c.env.SERVER_KEK),
@@ -211,7 +211,7 @@ routes.get('/:hubId',
   async (c) => {
     const hubId = c.req.param('hubId')
     const services = c.get('services')
-    const { hub } = await services.settings.getHub(hubId)
+    const { hub } = await services.hubs.getHub(hubId)
     return c.json({ hub })
   },
 )
@@ -271,7 +271,7 @@ routes.patch('/:hubId',
     const body = c.req.valid('json')
 
     try {
-      const result = await services.settings.updateHub(hubId, body)
+      const result = await services.hubs.updateHub(hubId, body)
       return c.json(result)
     } catch (err) {
       // A ServiceError carries its HTTP answer (e.g. 404 for an unknown hub) —
@@ -432,7 +432,7 @@ routes.delete('/:hubId',
       const storageManager = (c.env as unknown as Record<string, unknown>).STORAGE_MANAGER as StorageManager | undefined
       const destroyHubStorage = async () => {
         if (!storageManager) return
-        const creds = await services.settings.getHubStorageCredentials(hubId)
+        const creds = await services.hubStorage.getHubStorageCredentials(hubId)
         await storageManager.destroyHub(hubId, creds?.userName)
       }
 
@@ -449,11 +449,11 @@ routes.delete('/:hubId',
         logger.error('Hub deletion: member roster unreadable — SIP endpoints may linger', { hubId, err })
       }
 
-      await services.settings.deleteHub(
+      await services.hubs.deleteHub(
         hubId,
         services.callRecordings,
         services.providerRecordings.eraser((id) =>
-          getHubTelephonyFromService(c.env as unknown as Env, services.settings, id)),
+          getHubTelephonyFromService(c.env as unknown as Env, services.providerConfig, id)),
         { beforeDrop: destroyHubStorage },
       )
 
@@ -503,7 +503,7 @@ routes.get('/:hubId/key',
     const services = c.get('services')
 
     try {
-      const { envelopes } = await services.settings.getHubKeyEnvelopes(hubId)
+      const { envelopes } = await services.hubKeys.getHubKeyEnvelopes(hubId)
 
       // Return only the envelope for this user
       const myEnvelope = envelopes.find(e => e.pubkey === pubkey)
@@ -583,7 +583,7 @@ routes.put('/:hubId/key',
 
     try {
       assertMayManageHubKey(c.get('user'), hubId, c.get('allRoles'))
-      return c.json(await services.settings.setHubKeyEnvelopes(hubId, body))
+      return c.json(await services.hubKeys.setHubKeyEnvelopes(hubId, body))
     } catch (err) {
       if (err instanceof ServiceError && [403, 404, 409].includes(err.status)) {
         return c.json(serviceErrorBody(err), err.status as 403 | 404 | 409)

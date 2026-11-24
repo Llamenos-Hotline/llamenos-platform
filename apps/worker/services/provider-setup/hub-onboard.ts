@@ -5,7 +5,7 @@ import {
   providerConfigs,
   providerTemplates,
 } from '../../db/schema'
-import { SettingsService } from '../settings'
+import { HubSettingsService } from '../hub-settings'
 import { ProviderSetup } from './index'
 import { ProviderApiError } from './types'
 import { hubQuotaSchema } from '@protocol/schemas/provider-setup'
@@ -41,7 +41,7 @@ export class HubOnboardService {
   constructor(
     private readonly db: Database,
     private readonly providerSetup: ProviderSetup,
-    private readonly settings: SettingsService,
+    private readonly hubSettings: HubSettingsService,
   ) {}
 
   async startOnboarding(
@@ -208,7 +208,7 @@ export class HubOnboardService {
       .limit(1)
 
     const onboarding = await this.getOnboardingStatus(hubId)
-    const hubSettings = await this.settings.getHubProviderSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubProviderSettings(hubId)
 
     const channelsConfigured: string[] = []
     const channelsPending: string[] = []
@@ -248,8 +248,8 @@ export class HubOnboardService {
       })
       .where(eq(hubOnboardingState.hubId, hubId))
 
-    const hubSettings = await this.settings.getHubSettings(hubId)
-    await this.settings.updateHubSettings(hubId, {
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
+    await this.hubSettings.updateHubSettings(hubId, {
       ...hubSettings,
       providerSetupComplete: true,
     })
@@ -258,7 +258,7 @@ export class HubOnboardService {
   }
 
   async getHubUsage(hubId: string): Promise<HubUsage> {
-    const hubSettings = await this.settings.getHubSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
     const usage = (hubSettings.usage as HubUsage[]) ?? []
 
     const now = new Date()
@@ -282,7 +282,7 @@ export class HubOnboardService {
     hubId: string,
     resource: string,
   ): Promise<{ allowed: boolean; limit: number; current: number }> {
-    const hubSettings = await this.settings.getHubSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
     const quotas = (hubSettings.quotas as Record<string, number | null>) ?? {}
     const usage = (hubSettings.usage as HubUsage[]) ?? []
 
@@ -301,26 +301,26 @@ export class HubOnboardService {
   }
 
   async enableChannel(hubId: string, channel: string): Promise<ChannelConfig> {
-    const hubSettings = await this.settings.getHubSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
     const defaultChannels: ChannelConfig = {
       voice: false, sms: false, email: false, signal: false,
       whatsapp: false, telegram: false, rcs: false,
     }
     const channels = { ...defaultChannels, ...(hubSettings.channels as ChannelConfig) }
     channels[channel as keyof ChannelConfig] = true
-    await this.settings.updateHubSettings(hubId, { ...hubSettings, channels })
+    await this.hubSettings.updateHubSettings(hubId, { ...hubSettings, channels })
     return channels
   }
 
   async disableChannel(hubId: string, channel: string): Promise<ChannelConfig> {
-    const hubSettings = await this.settings.getHubSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
     const defaultChannels: ChannelConfig = {
       voice: false, sms: false, email: false, signal: false,
       whatsapp: false, telegram: false, rcs: false,
     }
     const channels = { ...defaultChannels, ...(hubSettings.channels as ChannelConfig) }
     channels[channel as keyof ChannelConfig] = false
-    await this.settings.updateHubSettings(hubId, { ...hubSettings, channels })
+    await this.hubSettings.updateHubSettings(hubId, { ...hubSettings, channels })
     return channels
   }
 
@@ -382,7 +382,7 @@ export class HubOnboardService {
     }
 
     // Check sub-account quota
-    const hubSettings = await this.settings.getHubSettings(hubId)
+    const hubSettings = await this.hubSettings.getHubSettings(hubId)
     const quotas = (hubSettings.quotas as Record<string, number>) ?? {}
     const maxSubAccounts = quotas.maxSubAccounts ?? 0
 
@@ -416,7 +416,7 @@ export class HubOnboardService {
       updatedAt: new Date(),
     })
 
-    await this.settings.updateHubSettings(hubId, {
+    await this.hubSettings.updateHubSettings(hubId, {
       ...hubSettings,
       subAccountEnabled: true,
       subAccountConfigId: subAccountId,

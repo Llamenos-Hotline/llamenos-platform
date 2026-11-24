@@ -76,7 +76,7 @@ platformBans.post(
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
-    if (await checkRateLimit(services.settings, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
+    if (await checkRateLimit(services.rateLimits, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
       return c.json({ error: 'Too many ban evaluations. Try again in a minute.' }, 429)
     }
     const evaluatedElements: string[] = []
@@ -300,12 +300,12 @@ platformBans.post(
     const services = c.get('services')
     const pubkey = c.get('pubkey')
     const { blindedElement } = c.req.valid('json')
-    if (await checkRateLimit(services.settings, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
+    if (await checkRateLimit(services.rateLimits, `ban-evaluate:${pubkey}`, BAN_EVALUATIONS_PER_MINUTE)) {
       return c.json({ error: 'Too many ban evaluations. Try again in a minute.' }, 429)
     }
     // Every scope has its own key, so the number is evaluated once per hub and once for the
     // platform. The client finalizes each into that scope's digest and searches with them.
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     const scopes: { hubId?: string; scope: OwnerScope }[] = [
       { scope: PLATFORM_SCOPE },
       ...hubs.map((hub) => ({ hubId: hub.id, scope: hubScope(hub.id) })),

@@ -9,7 +9,7 @@ import { audit } from '../services/audit'
 import { createLogger } from '../lib/logger'
 import { assertInHub, hubOnly, pathHubId, resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import type { Services } from '../services'
 
 const logger = createLogger('routes.notes')

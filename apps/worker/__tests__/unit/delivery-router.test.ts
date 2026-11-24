@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { routeOutboundMessage } from '@worker/messaging/delivery-router'
 import type { MessagingConfig } from '@shared/types'
-import type { SettingsService } from '@worker/services/settings'
+import type { MessagingConfigService } from '@worker/services/messaging-config'
+import type { ProviderConfigService } from '@worker/services/provider-config'
 
 vi.mock('@worker/lib/service-factories', () => ({
   getMessagingAdapterFromService: vi.fn(),
@@ -42,7 +43,7 @@ describe('delivery-router', () => {
   function createDeps(config: Partial<MessagingConfig> & { signalRegistered?: boolean }) {
     const { signalRegistered, ...messagingConfig } = config
     return {
-      settingsService: {
+      messagingConfig: {
         getMessagingConfig: vi.fn().mockResolvedValue({
           enabledChannels: ['sms', 'whatsapp', 'signal'],
           sms: { enabled: true },
@@ -56,7 +57,8 @@ describe('delivery-router', () => {
           preferSignalDelivery: messagingConfig.preferSignalDelivery ?? true,
           smsContentMode: messagingConfig.smsContentMode ?? 'notification-only',
         } satisfies MessagingConfig),
-      } as unknown as SettingsService,
+      } as unknown as MessagingConfigService,
+      providerConfig: {} as unknown as ProviderConfigService,
       suppression: { blocksOutbound: vi.fn().mockResolvedValue(false) },
       notifierUrl: signalRegistered ? 'http://notifier:3100' : undefined,
       notifierApiKey: signalRegistered ? 'api-key' : undefined,

@@ -169,13 +169,21 @@ describe('seedSampleDataset', () => {
     const id = () => `id-${++n}`
     const users = new Set(sampleIdentities(DEV_SERVER).map(i => i.pubkey))
     const services = {
-      settings: {
+      settingsBootstrap: {
         ensureInit: track('settings.ensureInit', undefined),
+      },
+      hubs: {
         purgeHub: track('settings.purgeHub', { ok: true }),
         createHub: track('settings.createHub', undefined),
+      },
+      hubSettings: {
         setCaseManagementEnabled: track('settings.setCaseManagementEnabled', undefined),
+      },
+      entitySchema: {
         createEntityType: vi.fn(async () => ({ id: 'entity-type-1' })),
         generateCaseNumber: vi.fn(async () => ({ number: 'SAMPLE-2026-0001', sequence: 1 })),
+      },
+      messagingConfig: {
         getEnabledChannels: vi.fn(async () => ({ sms: true, whatsapp: false, signal: true, rcs: false, telegram: false })),
       },
       identity: {
@@ -210,7 +218,7 @@ describe('seedSampleDataset', () => {
     await seedSampleDataset(services, ENV, NOW)
     // The replace must hand purgeHub the recordings eraser: it is what keeps the
     // previous sample hub's sealed audio from outliving the rows that name it (#2338).
-    expect(stubs.settings.purgeHub).toHaveBeenCalledWith(SAMPLE_HUB.id, services.callRecordings)
+    expect(stubs.hubs.purgeHub).toHaveBeenCalledWith(SAMPLE_HUB.id, services.callRecordings)
     expect(calls.indexOf('settings.purgeHub')).toBeLessThan(calls.indexOf('settings.createHub'))
     // accounts removed by the purge are restored before memberships are assigned
     expect(calls.indexOf('identity.ensureSampleAccounts')).toBeGreaterThan(calls.indexOf('settings.purgeHub'))
@@ -266,6 +274,6 @@ describe('seedSampleDataset', () => {
     const { services, stubs } = stubServices()
     stubs.identity.getUserInternal.mockResolvedValueOnce(null)
     await expect(seedSampleDataset(services, ENV, NOW)).rejects.toThrow(/does not exist/)
-    expect(stubs.settings.purgeHub).not.toHaveBeenCalled()
+    expect(stubs.hubs.purgeHub).not.toHaveBeenCalled()
   })
 })

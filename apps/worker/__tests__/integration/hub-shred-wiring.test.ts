@@ -83,7 +83,7 @@ let services: Services
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -168,7 +168,7 @@ async function runSchedulerUntil(
     incidentNotifier: new IncidentDelivery({
       env: {} as Env,
       identity: services.identity,
-      settings: services.settings,
+      roles: services.roles,
       shifts: services.shifts,
       userNotifications: services.userNotifications,
     }),
@@ -244,7 +244,7 @@ beforeAll(async () => {
   // THE point of this suite: the production service registry, built exactly as
   // src/server/index.ts builds it. Nothing below constructs a service.
   services = createServices(db, { hmacSecret: HMAC_SECRET, serverKek: 'c'.repeat(64), env: { ENVIRONMENT: 'test' } })
-  await services.settings.ensureInit()
+  await services.settingsBootstrap.ensureInit()
 }, 180_000)
 
 afterAll(async () => {

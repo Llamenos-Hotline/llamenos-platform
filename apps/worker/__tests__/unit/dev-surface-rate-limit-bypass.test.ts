@@ -45,7 +45,7 @@ function makeApp(
   env: Record<string, string>,
 ) {
   const app = new Hono<AppEnv>()
-  const services = { settings: { checkApiRateLimit } }
+  const services = { rateLimits: { checkApiRateLimit } }
   app.use('*', async (c, next) => {
     c.set('services', services as never)
     // `write`/`read` tiers key on the authenticated pubkey and skip entirely

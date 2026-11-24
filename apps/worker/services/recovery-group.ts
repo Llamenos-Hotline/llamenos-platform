@@ -51,9 +51,8 @@ export class RecoveryGroupError extends Error {
 
 /**
  * The role definitions membership resolution needs. Structurally typed rather
- * than importing `SettingsService`, so this module does not depend on the
- * settings service's own (much larger) dependency surface and a test can pass
- * a two-line stub. `SettingsService.getRoles` satisfies it as-is.
+ * than importing `RolesService`, so a test can pass a two-line stub.
+ * `RolesService.getRoles` satisfies it as-is.
  */
 export interface RoleDefinitionSource {
   getRoles(): Promise<{ roles: Role[] }>
@@ -80,7 +79,7 @@ export class RecoveryGroupService {
    * Being enrolled in `hub_recovery_group_shares` is NOT authorization on its
    * own. Nothing on any removal path deletes those rows today (`removeHubRole`,
    * the GDPR cascade in `ErasureService.executeErasure`, and
-   * `SettingsService.purgeHub` all omit the table, and `hub_recovery_groups`
+   * `HubService.purgeHub` all omit the table, and `hub_recovery_groups`
    * has no FK to `hubs.id` for a cascade to travel), so without this check a
    * member removed from a hub stays a valid threshold participant in
    * reconstructing that hub's recovery secret indefinitely — the one capability

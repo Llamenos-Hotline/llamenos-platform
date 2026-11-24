@@ -76,7 +76,7 @@ function createApp(pubkey = 'user-pk-1', permissions: string[] = []) {
       deleteWebAuthnCredential: vi.fn().mockResolvedValue(undefined),
       renameWebAuthnCredential: vi.fn().mockResolvedValue(undefined),
     },
-    settings: {
+    rateLimits: {
       checkRateLimit: vi.fn().mockResolvedValue({ limited: false }),
     },
   }

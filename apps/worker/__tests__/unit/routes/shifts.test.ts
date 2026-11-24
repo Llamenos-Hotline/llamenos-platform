@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import shiftRoutes from '@worker/routes/shifts'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,7 +24,7 @@ function createTestApp(opts: {
 
   const services: Record<string, unknown> = {
     shifts: serviceMock.shifts || {},
-    settings: serviceMock.settings || {},
+    callSettings: serviceMock.callSettings || {},
     activeShifts: serviceMock.activeShifts || {},
     shiftAvailability: serviceMock.shiftAvailability || {},
     shiftOverrides: serviceMock.shiftOverrides || {},
@@ -167,7 +167,7 @@ describe('shifts routes', () => {
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
         hubId: 'hub-1',
-        serviceMock: { settings: { getFallbackGroup: getFallbackGroupSpy } },
+        serviceMock: { callSettings: { getFallbackGroup: getFallbackGroupSpy } },
       })
 
       const res = await app.request('/shifts/fallback')
@@ -196,7 +196,7 @@ describe('shifts routes', () => {
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
         hubId: 'hub-1',
-        serviceMock: { settings: { setFallbackGroup: setFallbackGroupSpy } },
+        serviceMock: { callSettings: { setFallbackGroup: setFallbackGroupSpy } },
       })
 
       const res = await app.request('/shifts/fallback', {
@@ -234,7 +234,7 @@ describe('shifts routes', () => {
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
         hubId: null,
-        serviceMock: { settings: { getFallbackGroup: getFallbackGroupSpy } },
+        serviceMock: { callSettings: { getFallbackGroup: getFallbackGroupSpy } },
       })
       const res = await app.request('/shifts/fallback')
       expect(res.status).toBe(404)
@@ -246,7 +246,7 @@ describe('shifts routes', () => {
       const { app } = createTestApp({
         permissions: ['shifts:manage-fallback'],
         hubId: null,
-        serviceMock: { settings: { setFallbackGroup: setFallbackGroupSpy } },
+        serviceMock: { callSettings: { setFallbackGroup: setFallbackGroupSpy } },
       })
       const res = await app.request('/shifts/fallback', {
         method: 'PUT',

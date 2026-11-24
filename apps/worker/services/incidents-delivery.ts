@@ -31,7 +31,7 @@ import { permissionGranted, resolveHubPermissions, resolvePermissions } from '@s
 import { publishEvent } from '../lib/ws-events'
 import { createPushDispatcherFromService, type PushDispatcher } from '../lib/push-dispatch'
 import type { IdentityService } from './identity'
-import type { SettingsService } from './settings'
+import type { RolesService } from './roles'
 import type { ShiftsService } from './shifts'
 import type { UserNotificationsService } from './user-notifications'
 import { isHubScoped, type HubScopedIncidentRow, type IncidentNotifier } from './incidents'
@@ -56,12 +56,12 @@ export interface IncidentHolder {
  */
 export async function resolveIncidentHolders(
   identity: Pick<IdentityService, 'getUsers'>,
-  settings: Pick<SettingsService, 'getRoles'>,
+  rolesService: Pick<RolesService, 'getRoles'>,
   hubId: string,
   category: IncidentCategory,
 ): Promise<IncidentHolder[]> {
   const permission = INCIDENT_CATEGORIES[category].permission
-  const [{ users }, { roles }] = await Promise.all([identity.getUsers(hubId), settings.getRoles()])
+  const [{ users }, { roles }] = await Promise.all([identity.getUsers(hubId), rolesService.getRoles()])
   return users
     .filter((u) => u.active)
     .filter((u) => (u.hubRoles ?? []).some((assignment) => assignment.hubId === hubId))
@@ -76,9 +76,9 @@ export async function resolveIncidentHolders(
  */
 export async function resolvePlatformIncidentHolders(
   identity: Pick<IdentityService, 'getUsers'>,
-  settings: Pick<SettingsService, 'getRoles'>,
+  rolesService: Pick<RolesService, 'getRoles'>,
 ): Promise<IncidentHolder[]> {
-  const [{ users }, { roles }] = await Promise.all([identity.getUsers(), settings.getRoles()])
+  const [{ users }, { roles }] = await Promise.all([identity.getUsers(), rolesService.getRoles()])
   return users
     .filter((u) => u.active)
     .filter((u) => permissionGranted(resolvePermissions(u.roles, roles), PLATFORM_INCIDENT_PERMISSION))
@@ -88,7 +88,7 @@ export async function resolvePlatformIncidentHolders(
 export interface IncidentDeliveryDeps {
   env: Env
   identity: IdentityService
-  settings: SettingsService
+  roles: RolesService
   shifts: ShiftsService
   userNotifications: Pick<UserNotificationsService, 'sendAlert'>
   /** Overridable for tests; defaults to the dispatcher every other push uses. */
@@ -112,7 +112,7 @@ export class IncidentDelivery implements IncidentNotifier {
   async interrupt(incident: HubIncidentRow, state: IncidentState): Promise<void> {
     const category = incident.category as IncidentCategory
     if (!isHubScoped(incident)) return this.interruptPlatform(incident, category, state)
-    const holders = await resolveIncidentHolders(this.deps.identity, this.deps.settings, incident.hubId, category)
+    const holders = await resolveIncidentHolders(this.deps.identity, this.deps.roles, incident.hubId, category)
     const wake = { hubId: incident.hubId, type: 'incident' as const }
     await Promise.allSettled(
       holders.map(async (holder) => {
@@ -144,7 +144,7 @@ export class IncidentDelivery implements IncidentNotifier {
    * and retries apply — and read the detail from `GET /admin/incidents`.
    */
   private async interruptPlatform(incident: HubIncidentRow, category: IncidentCategory, state: IncidentState): Promise<void> {
-    const holders = await resolvePlatformIncidentHolders(this.deps.identity, this.deps.settings)
+    const holders = await resolvePlatformIncidentHolders(this.deps.identity, this.deps.roles)
     await Promise.allSettled(
       holders.map(async (holder) => {
         try {

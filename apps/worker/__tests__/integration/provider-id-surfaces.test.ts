@@ -106,7 +106,7 @@ afterEach(() => {
 let hubCounter = 0
 async function createHub(): Promise<string> {
   const id = `hub-pis-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await services.settings.createHub({
+  await services.hubs.createHub({
     id, name: `Hub ${id}`, slug: id, status: 'active', createdBy: 'integration-test',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   } as never, await insertHubFounder(fresh.db))

@@ -13,7 +13,7 @@ const logger = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(),
 vi.mock('../../lib/logger', () => ({ createLogger: () => logger }))
 
 import { assertAdminCanRead } from '../../lib/admin-envelopes'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 
 const ADMIN = 'a'.repeat(64)
 const DEVICE = 'd'.repeat(64)

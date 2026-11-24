@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ShiftsService, isShiftActive, shiftWallClock } from '@worker/services/shifts'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { createMockDb } from './mock-db'
 
 describe('ShiftsService', () => {

@@ -18,7 +18,7 @@ import type {
   HubKeyRotationResponse,
   HubSealedValues,
 } from '@protocol/schemas/hubs'
-import { HubNotFoundError, ServiceError } from '../services/settings'
+import { HubNotFoundError, ServiceError } from '../services/service-error'
 import { adminStateOf, administersHub, holdsInHub, listHolderPubkeys } from './hub-admin'
 
 /** The explicit grant for distributing (and generating) a hub's key. */

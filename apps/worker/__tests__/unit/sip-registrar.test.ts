@@ -444,13 +444,13 @@ describe('revokeVolunteerSipIdentity (role-loss / account-deletion hook)', () =>
         sipPassword: 'hub-secret',
       }),
     }
-    await revokeVolunteerSipIdentity({ settings }, 'hmac', PUBKEY_A)
+    await revokeVolunteerSipIdentity({ providerConfig: settings }, 'hmac', PUBKEY_A)
     expect(calls).toHaveLength(0)
   })
 
   it('removes the volunteer objects when the provider is our own Asterisk', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    await revokeVolunteerSipIdentity({ settings }, 'hmac', PUBKEY_A)
+    await revokeVolunteerSipIdentity({ providerConfig: settings }, 'hmac', PUBKEY_A)
     expect(calls.map((c) => c.method)).toEqual(['DELETE', 'DELETE', 'DELETE'])
     expect(calls[0].object).toBe(`endpoint/${volunteerSipUsername(PUBKEY_A)}`)
   })
@@ -458,7 +458,7 @@ describe('revokeVolunteerSipIdentity (role-loss / account-deletion hook)', () =>
   it('never throws when the provider config is unreadable — revocation is best-effort', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockRejectedValue(new Error('db down')) }
     await expect(
-      revokeVolunteerSipIdentity({ settings }, 'hmac', PUBKEY_A),
+      revokeVolunteerSipIdentity({ providerConfig: settings }, 'hmac', PUBKEY_A),
     ).resolves.toBeUndefined()
     expect(calls).toHaveLength(0)
   })
@@ -467,7 +467,7 @@ describe('revokeVolunteerSipIdentity (role-loss / account-deletion hook)', () =>
     statusFor[`DELETE endpoint/${volunteerSipUsername(PUBKEY_A)}`] = 500
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     await expect(
-      revokeVolunteerSipIdentity({ settings }, 'hmac', PUBKEY_A),
+      revokeVolunteerSipIdentity({ providerConfig: settings }, 'hmac', PUBKEY_A),
     ).resolves.toBeUndefined()
   })
 })
@@ -523,7 +523,7 @@ function createSipTokenApp(opts: {
 describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
   it('issues per-volunteer credentials for provider:asterisk and provisions the endpoint', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     const res = await app.request('/sip-token')
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -557,7 +557,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
 
   it('is deterministic — re-issuance returns the same credential', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     const first = ((await (await app.request('/sip-token')).json()) as { sip: { password: string } }).sip
       .password
     const second = ((await (await app.request('/sip-token')).json()) as { sip: { password: string } }).sip
@@ -577,7 +577,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
         sipPassword: 'hub-secret',
       }),
     }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     const res = await app.request('/sip-token')
     expect(res.status).toBe(503)
     expect(await res.text()).toContain('shared trunk credential')
@@ -587,7 +587,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
 
   it('503s rather than issuing a dead credential when the registrar will not provision', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     statusFor[`PUT endpoint/${volunteerSipUsername(PUBKEY_A)}`] = 500
     const res = await app.request('/sip-token')
     expect(res.status).toBe(503)
@@ -596,7 +596,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
 
   it('400s when the volunteer takes calls by phone only', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings }, callPreference: 'phone' })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, callPreference: 'phone' })
     const res = await app.request('/sip-token')
     expect(res.status).toBe(400)
     expect(calls).toHaveLength(0)
@@ -605,7 +605,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
   it('refuses to issue a credential when SIP_REGISTRAR_SECRET is unset, deriving from no other secret', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
-      services: { settings },
+      services: { providerConfig: settings },
       env: { SIP_REGISTRAR_SECRET: '' },
     })
     const res = await app.request('/sip-token')
@@ -622,7 +622,7 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
       const path = join(dir, 'edge.pem')
       writeFileSync(path, pem)
       const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-      const app = await createSipTokenApp({ services: { settings }, env: { SIP_TLS_CA_FILE: path } })
+      const app = await createSipTokenApp({ services: { providerConfig: settings }, env: { SIP_TLS_CA_FILE: path } })
       const res = await app.request('/sip-token')
       expect(res.status).toBe(200)
       const body = (await res.json()) as { sip: { transport: string; tlsTrustAnchorPem?: string } }
@@ -637,14 +637,14 @@ describe('GET /api/telephony/sip-token (per-volunteer issuance)', () => {
 
   it('omits the anchor when the deployment publishes none', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings }, env: { SIP_TLS_CA_FILE: '' } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, env: { SIP_TLS_CA_FILE: '' } })
     const body = (await (await app.request('/sip-token')).json()) as { sip: Record<string, unknown> }
     expect('tlsTrustAnchorPem' in body.sip).toBe(false)
   })
 
   it('sip-status reports available for asterisk, still false for vendors', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     expect(sipCredentialsMayBeIssued(asteriskConfig())).toBe(true)
     const res = await app.request('/sip-status')
     expect(res.status).toBe(200)
@@ -666,7 +666,7 @@ describe('GET /api/telephony/sip-status agrees with /sip-token', () => {
 
   async function both(config: TelephonyProviderConfig | null, env: Partial<AppEnv['Bindings']>) {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(config) }
-    const app = await createSipTokenApp({ services: { settings }, env })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, env })
     const status = (await (await app.request('/sip-status')).json()) as { available: boolean; provider: string | null }
     const token = await app.request('/sip-token')
     return { status, tokenStatus: token.status }
@@ -713,7 +713,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     // Exactly the state `DELETE /hubs/:hubId/members/:pubkey` leaves behind:
     // the account and its device key are intact, every hub assignment is gone.
-    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, hubRoles: [] })
     const res = await app.request('/sip-token')
     expect(res.status).toBe(403)
     expect(await res.text()).toContain('No hub membership')
@@ -724,7 +724,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
   it('refuses an assignment that grants no permission in its hub', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
-      services: { settings },
+      services: { providerConfig: settings },
       hubRoles: [{ hubId: HUB, roleIds: [] }],
     })
     expect((await app.request('/sip-token')).status).toBe(403)
@@ -734,7 +734,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
   it('a global non-super-admin role is not hub membership', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
-      services: { settings },
+      services: { providerConfig: settings },
       roles: ['role-admin'],
       hubRoles: [],
     })
@@ -744,7 +744,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
   it('a super-admin holds every hub, so issuance is unaffected', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
-      services: { settings },
+      services: { providerConfig: settings },
       roles: ['role-super-admin'],
       hubRoles: [],
     })
@@ -753,7 +753,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
 
   it('a still-valid member keeps issuing and re-issuing normally', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings } })
+    const app = await createSipTokenApp({ services: { providerConfig: settings } })
     const first = await app.request('/sip-token')
     expect(first.status).toBe(200)
     const second = await app.request('/sip-token')
@@ -766,7 +766,7 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
   it('a volunteer removed from ONE of two hubs keeps their credential', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
     const app = await createSipTokenApp({
-      services: { settings },
+      services: { providerConfig: settings },
       hubRoles: [{ hubId: 'hub-2', roleIds: ['role-volunteer'] }],
     })
     expect((await app.request('/sip-token')).status).toBe(200)
@@ -785,13 +785,13 @@ describe('GET /api/telephony/sip-token requires a remaining hub role', () => {
         apiSecret: 'sec',
       }),
     }
-    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, hubRoles: [] })
     expect((await app.request('/webrtc-token')).status).toBe(403)
   })
 
   it('sip-status agrees: unavailable for a volunteer with no hub role', async () => {
     const settings = { getTelephonyProvider: vi.fn().mockResolvedValue(asteriskConfig()) }
-    const app = await createSipTokenApp({ services: { settings }, hubRoles: [] })
+    const app = await createSipTokenApp({ services: { providerConfig: settings }, hubRoles: [] })
     expect(await (await app.request('/sip-status')).json()).toEqual({
       available: false,
       provider: 'asterisk',
@@ -815,7 +815,7 @@ describe('credential epoch', () => {
         events.filter(e => e.eventType === eventType && e.metadata?.pubkey === pubkey).length,
       ),
     }
-    const services = { settings, identity }
+    const services = { providerConfig: settings, identity }
 
     // Issue while a member.
     const member = await createSipTokenApp({ services })
@@ -861,7 +861,7 @@ describe('revokeSipIdentityIfRoleless', () => {
 
   function servicesWith(remaining: unknown) {
     return {
-      settings: { getTelephonyProvider: vi.fn().mockResolvedValue(config) },
+      providerConfig: { getTelephonyProvider: vi.fn().mockResolvedValue(config) },
       identity: {
         getUserInternal: vi.fn().mockResolvedValue(remaining),
         emitSecurityEvent: vi.fn().mockResolvedValue(undefined),

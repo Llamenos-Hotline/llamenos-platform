@@ -24,7 +24,7 @@ import { authErrors } from '../openapi/helpers'
 import { isValidE164 } from '../lib/helpers'
 import { isMockTelephonyAllowed, recoverMockRecording, mockCallTrace } from '../telephony/mock'
 import { simulateIncomingCall, simulateCallerHangup, simulateVoicemail, randomFictionalCallerNumber } from '../services/call-simulation'
-import { ServiceError, serviceErrorBody } from '../services/settings'
+import { ServiceError, serviceErrorBody } from '../services/service-error'
 
 /** Fictional hotline number the mock answers for (555-01xx is reserved for fiction). */
 const DEFAULT_MOCK_HOTLINE_NUMBER = '+15555550100'
@@ -117,7 +117,7 @@ simulatedTelephony.get('/status',
   async (c) => {
     const hubId = c.get('hubId') ?? ''
     const available = isMockTelephonyAllowed(c.env)
-    const enabled = available && await c.get('services').settings.isHubMockTelephonyEnabled(hubId)
+    const enabled = available && await c.get('services').providerConfig.isHubMockTelephonyEnabled(hubId)
     return c.json({ available, enabled })
   },
 )
@@ -139,12 +139,12 @@ simulatedTelephony.put('/mock',
     const hubId = c.get('hubId') ?? ''
     try {
       if (enabled) {
-        await services.settings.enableHubMockTelephony(hubId, phoneNumber ?? DEFAULT_MOCK_HOTLINE_NUMBER, {
+        await services.providerConfig.enableHubMockTelephony(hubId, phoneNumber ?? DEFAULT_MOCK_HOTLINE_NUMBER, {
           webhookSecret,
           serverKek: c.env.SERVER_KEK,
         })
       } else {
-        await services.settings.disableHubMockTelephony(hubId)
+        await services.providerConfig.disableHubMockTelephony(hubId)
       }
     } catch (err) {
       if (err instanceof ServiceError) return c.json(serviceErrorBody(err), err.status as 409)
@@ -282,7 +282,7 @@ simulatedTelephony.post('/simulate/provider-recovers',
   validator('json', providerRecoversBodySchema),
   async (c) => {
     const hubId = c.get('hubId') ?? ''
-    if (!await c.get('services').settings.isHubMockTelephonyEnabled(hubId)) {
+    if (!await c.get('services').providerConfig.isHubMockTelephonyEnabled(hubId)) {
       return c.json({ error: 'mock-not-enabled' }, 409)
     }
     recoverMockRecording(c.req.valid('json').recordingSid)

@@ -14,7 +14,7 @@ import { permissionGranted, resolveHubPermissions } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
 import { checkRoleScope, hubsWithPermission } from '../lib/hub-scope'
 import { resolveHubDefaultMemberRoles } from '../lib/hub-default-role'
-import { HubNotFoundError, ServiceError, serviceErrorBody } from '../services/settings'
+import { HubNotFoundError, ServiceError, serviceErrorBody } from '../services/service-error'
 
 const invites = new Hono<AppEnv>()
 
@@ -31,10 +31,10 @@ const invites = new Hono<AppEnv>()
  *  - otherwise ambiguous
  */
 async function resolveInviteHubId(
-  services: { settings: { getHubs(): Promise<{ hubs: Array<{ id: string; status: string }> }> } },
+  services: { hubs: { getHubs(): Promise<{ hubs: Array<{ id: string; status: string }> }> } },
   user: { hubRoles?: Array<{ hubId: string }> },
 ): Promise<string | null | 'ambiguous'> {
-  const { hubs } = await services.settings.getHubs()
+  const { hubs } = await services.hubs.getHubs()
   const active = hubs.filter(h => h.status === 'active')
   if (active.length === 0) return null
   if (active.length === 1) return active[0].id
@@ -66,7 +66,7 @@ invites.get('/validate/:code',
     const services = c.get('services')
     const code = c.req.param('code')
     // Rate limit invite validation to prevent enumeration
-    const limited = await checkRateLimit(services.settings, `invite-validate:${routeRateLimitClient(c)}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `invite-validate:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
     const result = await services.identity.validateInvite(code)
     return c.json(result)
@@ -123,7 +123,7 @@ invites.post('/redeem',
     }
 
     // Rate limit redemption attempts
-    const limited = await checkRateLimit(services.settings, `invite-redeem:${routeRateLimitClient(c)}`, 5)
+    const limited = await checkRateLimit(services.rateLimits, `invite-redeem:${routeRateLimitClient(c)}`, 5)
     if (limited) return c.json({ error: 'Too many requests' }, 429)
 
     const { admission } = await services.identity.redeemInvite({ code: body.code, pubkey: body.pubkey })
@@ -218,7 +218,7 @@ invites.post('/',
     // with their permissions IN that hub: a hub admin's grant lives in
     // `hubRoles` only, and a super-admin holds everything in every hub.
     try {
-      await services.settings.getHub(hubId)
+      await services.hubs.getHub(hubId)
     } catch (err) {
       if (err instanceof HubNotFoundError) {
         return c.json(serviceErrorBody(err), 404)
@@ -235,7 +235,7 @@ invites.post('/',
     const requested = body.roleIds ?? []
     const roleIds = requested.length > 0
       ? requested
-      : await resolveHubDefaultMemberRoles(services.settings, hubId)
+      : await resolveHubDefaultMemberRoles(services, hubId)
     // An invite names the role it grants (#2194). A member with none can do
     // nothing and is picked up by no shift or ring group, so an invite that
     // would grant none is refused and the inviter chooses one.

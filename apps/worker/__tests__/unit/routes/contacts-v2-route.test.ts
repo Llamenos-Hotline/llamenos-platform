@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 
 // Valid test fixtures matching schema requirements
 const VALID_UUID_1 = '550e8400-e29b-41d4-a716-446655440000'

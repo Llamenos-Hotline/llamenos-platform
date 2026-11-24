@@ -24,7 +24,7 @@ import { messageReaders } from '../lib/device-recipients'
 import { resourceInPathHub } from '../lib/hub-scope'
 import { assertAdminCanRead } from '../lib/admin-envelopes'
 import { devSurfacesEnabled } from '../lib/dev-surfaces'
-import { ServiceError } from '../services/settings'
+import { ServiceError } from '../services/service-error'
 import { toConversationResponse, toMessageResponse } from '../services/conversations'
 
 const logger = createLogger('routes.conversations')
@@ -433,7 +433,8 @@ conversations.post('/:id/messages',
           withRetry(
             () => routeOutboundMessage(
               {
-                settingsService: services.settings,
+                messagingConfig: services.messagingConfig,
+                providerConfig: services.providerConfig,
                 suppression: services.messagingSuppression,
                 notifierUrl: c.env.NOTIFIER_URL,
                 notifierApiKey: c.env.NOTIFIER_API_KEY,

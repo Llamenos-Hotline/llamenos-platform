@@ -22,7 +22,7 @@ import { inArray } from 'drizzle-orm'
 import '../../db/pg-array-patch'
 import { createDatabase } from '../../db'
 import { hubs, shifts, users } from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { ShiftsService } from '../../services/shifts'
 import { createHubBodySchema, updateHubBodySchema } from '@protocol/schemas/hubs'
 
@@ -31,7 +31,7 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const shiftsService = new ShiftsService(db)
 
 const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -55,7 +55,7 @@ async function foundHub(body: { timezone?: string }): Promise<string> {
   const id = `hub-timezone-${suite}-${counter++}`
   const parsed = createHubBodySchema.parse({ name: id, slug: id, ...body })
   const now = new Date().toISOString()
-  await settings.createHub(
+  await settings.hubs.createHub(
     { id, name: parsed.name, slug: id, status: 'active', timezone: parsed.timezone, createdBy: founder, createdAt: now, updatedAt: now },
     { pubkey: founder },
   )
@@ -82,15 +82,15 @@ describe('hub time zone: storage', () => {
     await db.insert(hubs).values({ id, name: id, slug: id, createdBy: founder })
     createdHubs.push(id)
 
-    const { hub } = await settings.getHub(id)
+    const { hub } = await settings.hubs.getHub(id)
     expect(hub.timezone).toBe('UTC')
   })
 
   it('a hub created without a zone in the body is UTC; one created with a zone keeps it', async () => {
     const plain = await foundHub({})
     const berlin = await foundHub({ timezone: 'Europe/Berlin' })
-    expect((await settings.getHub(plain)).hub.timezone).toBe('UTC')
-    expect((await settings.getHub(berlin)).hub.timezone).toBe('Europe/Berlin')
+    expect((await settings.hubs.getHub(plain)).hub.timezone).toBe('UTC')
+    expect((await settings.hubs.getHub(berlin)).hub.timezone).toBe('Europe/Berlin')
   })
 
   it('a PATCH that omits timezone leaves the zone unchanged (#1643)', async () => {
@@ -99,18 +99,18 @@ describe('hub time zone: storage', () => {
     // Exactly what `PATCH /hubs/:id` hands the service: the parsed body.
     const body = updateHubBodySchema.parse({ name: 'Renamed' })
     expect('timezone' in body).toBe(false)
-    await settings.updateHub(id, body)
+    await settings.hubs.updateHub(id, body)
 
-    const { hub } = await settings.getHub(id)
+    const { hub } = await settings.hubs.getHub(id)
     expect(hub.name).toBe('Renamed')
     expect(hub.timezone).toBe('America/New_York')
   })
 
   it('a PATCH that names a zone changes it, and only it', async () => {
     const id = await foundHub({ timezone: 'America/New_York' })
-    await settings.updateHub(id, updateHubBodySchema.parse({ timezone: 'Asia/Kolkata' }))
+    await settings.hubs.updateHub(id, updateHubBodySchema.parse({ timezone: 'Asia/Kolkata' }))
 
-    const { hub } = await settings.getHub(id)
+    const { hub } = await settings.hubs.getHub(id)
     expect(hub.timezone).toBe('Asia/Kolkata')
     expect(hub.name).toBe(id)
   })
@@ -141,7 +141,7 @@ describe('hub time zone: the roster follows the stored zone', () => {
     setSystemTime(new Date('2026-07-15T10:00:00Z'))
     expect(await shiftsService.getCurrentVolunteers(hubId)).toContain(pubkey) // 10:00 UTC
 
-    await settings.updateHub(hubId, updateHubBodySchema.parse({ timezone: 'America/New_York' }))
+    await settings.hubs.updateHub(hubId, updateHubBodySchema.parse({ timezone: 'America/New_York' }))
     expect(await shiftsService.getCurrentVolunteers(hubId)).not.toContain(pubkey) // 06:00 EDT
   })
 

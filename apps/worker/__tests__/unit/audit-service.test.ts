@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { AuditService, audit, computeEntryHash } from '@worker/services/audit'
-import { ServiceError } from '@worker/services/settings'
+import { ServiceError } from '@worker/services/service-error'
 import { createMockDb } from './mock-db'
 
 // ---------------------------------------------------------------------------

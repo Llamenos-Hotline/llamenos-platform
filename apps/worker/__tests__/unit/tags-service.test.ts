@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TagsService } from '../../services/tags'
-import { ServiceError } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
 
 // ---------------------------------------------------------------------------
 // Row helper

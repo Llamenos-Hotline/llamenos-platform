@@ -181,7 +181,7 @@ describe('an ordinary caller leaves no hash on the server', () => {
 
   it('the rate-limit key written for a caller is not a hash of the number', async () => {
     const { callerRateLimitDigest } = await import('../../lib/crypto')
-    await services.settings.checkRateLimit({ key: `phone:hub-a:${callerRateLimitDigest(ORDINARY)}`, maxPerMinute: 5 })
+    await services.rateLimits.checkRateLimit({ key: `phone:hub-a:${callerRateLimitDigest(ORDINARY)}`, maxPerMinute: 5 })
     const dump = await dumpDatabase()
     expect(dump).not.toContain(hashPhone(ORDINARY, HMAC_SECRET).slice(0, 32))
     expect(dump).not.toContain(banHash(ORDINARY, hubScope('hub-a'), BAN_HASH_KEY).slice(0, 32))

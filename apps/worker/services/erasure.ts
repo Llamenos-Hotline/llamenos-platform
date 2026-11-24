@@ -25,7 +25,7 @@ import {
   securityEvents,
   userSignalContacts,
 } from '../db/schema'
-import { HubNotFoundError, ServiceError } from './settings'
+import { HubNotFoundError, ServiceError } from './service-error'
 import { adminStateOf, assertHubsKeepAnAdmin, listAdminPubkeys, type HubRoleAssignment } from '../lib/hub-admin'
 import { markHubKeyRotationDue } from '../lib/hub-key'
 import { createLogger } from '../lib/logger'

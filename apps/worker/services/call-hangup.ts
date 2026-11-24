@@ -37,8 +37,8 @@ export async function hangUpCallerLeg(
   let adapter
   try {
     adapter = hubId !== ''
-      ? await getHubTelephonyFromService(env, services.settings, hubId)
-      : await getTelephonyFromService(env, services.settings)
+      ? await getHubTelephonyFromService(env, services.providerConfig, hubId)
+      : await getTelephonyFromService(env, services.providerConfig)
   } catch (err) {
     logger.error('Could not resolve telephony adapter for hang-up', err, { callId: call.callId, hubId })
     return 'failed'

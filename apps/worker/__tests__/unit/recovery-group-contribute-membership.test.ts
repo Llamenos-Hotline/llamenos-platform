@@ -5,7 +5,7 @@
  * The defect these tests pin: `contributeShare` authorized a contributor
  * purely on presence in `hub_recovery_group_shares` for the session's hub.
  * Nothing on any removal path deletes those rows — `IdentityService.removeHubRole`,
- * the GDPR cascade `ErasureService.executeErasure`, and `SettingsService.purgeHub`
+ * the GDPR cascade `ErasureService.executeErasure`, and `HubService.purgeHub`
  * all omit the table, and `hub_recovery_groups.hubId` has no FK to `hubs.id` for
  * a cascade to travel through. So a member removed from a hub stayed a valid
  * threshold participant in reconstructing that hub's recovery secret,

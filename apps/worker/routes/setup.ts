@@ -47,7 +47,7 @@ setup.get('/state', requirePermission('settings:manage-setup'),
   }),
   async (c) => {
     const services = c.get('services')
-    const result = await services.settings.getSetupState()
+    const result = await services.setupState.getSetupState()
     return c.json(result)
   })
 
@@ -73,7 +73,7 @@ setup.patch('/state', requirePermission('settings:manage-setup'),
     const pubkey = c.get('pubkey')
     const body = c.req.valid('json')
     const services = c.get('services')
-    const result = await services.settings.updateSetupState(body as Record<string, unknown> as Parameters<typeof services.settings.updateSetupState>[0])
+    const result = await services.setupState.updateSetupState(body as Record<string, unknown> as Parameters<typeof services.setupState.updateSetupState>[0])
     await audit(services.audit, 'setupStateUpdated', pubkey, body as Record<string, unknown>, undefined, null)
     return c.json(result)
   })
@@ -107,7 +107,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
     // wizard instead of an empty dashboard with zero hubs and no error.
     // (Issue #1150: this used to swallow the error and mark setup complete
     // anyway.)
-    const { hubs } = await services.settings.getHubs()
+    const { hubs } = await services.hubs.getHubs()
     if (hubs.length === 0) {
       // The setup admin founds the hub as its admin, and must be a READER of it
       // from the first message (#1034, operator ruling 2026-11-05): their own
@@ -132,7 +132,7 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
       // the wizard's provider step saved, else the TWILIO_* env vars. Reading
       // only the env var left a wizard-configured deployment's hub with no
       // number, and every call to it routed to no hub (#2460).
-      const platformProvider = await services.settings.getTelephonyProvider()
+      const platformProvider = await services.providerConfig.getTelephonyProvider()
       const defaultHub = {
         id: crypto.randomUUID(),
         name: hotlineName,
@@ -150,10 +150,10 @@ setup.post('/complete', requirePermission('settings:manage-setup'),
       // permission (`hubFounderRoleIds`), never a role id. Their instance-wide
       // authority is their global role; inside the hub they hold exactly what
       // any hub admin holds, which is what makes them its reader (D1).
-      await services.settings.createHub(defaultHub, { pubkey })
+      await services.hubs.createHub(defaultHub, { pubkey })
     }
 
-    const result = await services.settings.updateSetupState({ setupCompleted: true })
+    const result = await services.setupState.updateSetupState({ setupCompleted: true })
 
     await audit(services.audit, 'setupCompleted', pubkey, {}, undefined, null)
     return c.json(result)
@@ -396,7 +396,7 @@ setup.get('/signal/account', requirePermission('settings:manage-messaging'),
   }),
   async (c) => {
     const services = c.get('services')
-    const config = await services.settings.getMessagingConfig()
+    const config = await services.messagingConfig.getMessagingConfig()
 
     if (!config?.signal) {
       return c.json({

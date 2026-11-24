@@ -25,7 +25,7 @@ function createApp(opts: {
   app.use('*', async (c, next) => {
     c.set('services', {
       identity: { validateInvite },
-      settings: { checkRateLimit },
+      rateLimits: { checkRateLimit },
     } as unknown as AppEnv['Variables']['services'])
     await next()
   })

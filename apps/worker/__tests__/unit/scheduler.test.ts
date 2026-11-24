@@ -122,7 +122,10 @@ const WORKERS = [
 function serviceDeps(): TaskSchedulerServiceDeps {
   return {
     blastsService: { __svc: 'blasts' } as never,
-    settingsService: { __svc: 'settings' } as never,
+    ttlCleanupService: { __svc: 'ttlCleanup' } as never,
+    rateLimitService: { __svc: 'rateLimits' } as never,
+    platformSettingsService: { __svc: 'platformSettings' } as never,
+    messagingConfigService: { __svc: 'messagingConfig' } as never,
     retentionService: { __svc: 'retention' } as never,
     auditService: { __svc: 'audit' } as never,
     erasureService: { __svc: 'erasure' } as never,
@@ -252,7 +255,7 @@ describe('TaskScheduler', () => {
       }
     })
 
-    it('passes identityService and settingsService to the periodic cleanup worker (drives IdentityService.cleanup() / SettingsService.runCleanup())', () => {
+    it('passes identityService, ttlCleanupService and rateLimitService to the periodic cleanup worker (drives IdentityService.cleanup() / TtlCleanupService.runCleanup())', () => {
       const { scheduler } = setup()
       const d = deps()
 
@@ -260,7 +263,8 @@ describe('TaskScheduler', () => {
 
       expect(startPeriodicCleanupWorker).toHaveBeenCalledWith({
         identityService: d.identityService,
-        settingsService: d.settingsService,
+        ttlCleanupService: d.ttlCleanupService,
+        rateLimitService: d.rateLimitService,
       })
     })
 

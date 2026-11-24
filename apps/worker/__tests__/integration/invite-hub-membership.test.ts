@@ -26,7 +26,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
-import { SettingsService } from '../../services/settings'
+import { createSettingsDomain, type SettingsDomainServices } from '../../services/settings-domain'
 import { IdentityService } from '../../services/identity'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..')
@@ -44,13 +44,13 @@ function urlFor(name: string): string {
 
 let sql: ReturnType<typeof postgres>
 let db: Database
-let settings: SettingsService
+let settings: SettingsDomainServices
 let identity: IdentityService
 
 let hubCounter = 0
 async function createHub(status = 'active'): Promise<string> {
   const id = `hub-${++hubCounter}-${Math.random().toString(36).slice(2, 8)}`
-  await settings.createHub({
+  await settings.hubs.createHub({
     id,
     name: `Hub ${id}`,
     slug: id,
@@ -105,7 +105,7 @@ beforeAll(async () => {
 
   sql = postgres(urlFor(DB_NAME), { max: 4 })
   db = drizzle(sql, { schema }) as unknown as Database
-  settings = new SettingsService(db)
+  settings = createSettingsDomain(db)
   identity = new IdentityService(db)
 }, 180_000)
 

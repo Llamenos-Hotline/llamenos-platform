@@ -7,7 +7,7 @@
 import { eq, and, inArray } from 'drizzle-orm'
 import type { Database } from '../db'
 import { ringGroups, ringGroupMembers } from '../db/schema'
-import { ServiceError } from './settings'
+import { ServiceError } from './service-error'
 
 // ---------------------------------------------------------------------------
 // Inferred row types from Drizzle schema

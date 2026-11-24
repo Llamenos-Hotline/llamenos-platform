@@ -22,7 +22,7 @@
  *     both hubs (the multi-hub axiom): hub B's resource through hub B's URL is
  *     served to them, and still refused through hub A's.
  *
- * The real `hubContext` runs (real SettingsService, real hub rows, real
+ * The real `hubContext` runs (real settings services, real hub rows, real
  * `resolveHubPermissions`), so the caller is admitted exactly as in production
  * and the only thing under test is what the handlers do after admission.
  *
@@ -47,7 +47,8 @@ import { ContactsService } from '../../services/contacts'
 import { FirehoseService } from '../../services/firehose'
 import { ConversationsService } from '../../services/conversations'
 import { RecordsService } from '../../services/records'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import conversationsRoutes from '../../routes/conversations'
 import reportsRoutes from '../../routes/reports'
@@ -72,7 +73,7 @@ const svc = {
   // here is the key ENVELOPE is addressed to. The identity service itself is not
   // under test in this file.
   identity: { listAdminEnvelopeRecipients: async () => [ENVELOPE.pubkey] },
-  settings: new SettingsService(db),
+  ...createSettingsDomain(db),
   audit,
   records: new RecordsService(db, audit),
   conversations: new ConversationsService(db),

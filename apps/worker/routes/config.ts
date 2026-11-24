@@ -71,20 +71,20 @@ config.get('/',
       voice: false, sms: false, whatsapp: false, signal: false, rcs: false, telegram: false, reports: false,
     }
     try {
-      channels = await services.settings.getEnabledChannels(c.env)
+      channels = await services.messagingConfig.getEnabledChannels(c.env)
     } catch { /* default to all-disabled on fetch failure */ }
 
     // Get phone number from telephony provider config or env
     let hotlineNumber = c.env.TWILIO_PHONE_NUMBER || ''
     try {
-      const prov = await services.settings.getTelephonyProvider()
+      const prov = await services.providerConfig.getTelephonyProvider()
       if (prov?.phoneNumber) hotlineNumber = prov.phoneNumber
     } catch { /* ignore */ }
 
     // Fetch setup state
     let setupCompleted = true
     try {
-      setupCompleted = (await services.settings.getSetupState()).setupCompleted
+      setupCompleted = (await services.setupState.getSetupState()).setupCompleted
     } catch { /* setup state unreadable — assume complete */ }
 
     // Check if bootstrap is needed (no admin exists)

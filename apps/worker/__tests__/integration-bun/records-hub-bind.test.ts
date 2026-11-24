@@ -43,7 +43,8 @@ import {
 } from '../../db/schema'
 import { AuditService } from '../../services/audit'
 import { CasesService } from '../../services/cases'
-import { ServiceError, SettingsService } from '../../services/settings'
+import { ServiceError } from '../../services/service-error'
+import { createSettingsDomain } from '../../services/settings-domain'
 import { hubContext } from '../../middleware/hub'
 import recordsRoutes from '../../routes/records'
 import type { AppEnv } from '../../types'
@@ -54,9 +55,9 @@ const DATABASE_URL =
   'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
 
 const db = createDatabase(DATABASE_URL)
-const settings = new SettingsService(db)
+const settings = createSettingsDomain(db)
 const svc = {
-  settings,
+  ...settings,
   audit: new AuditService(db),
   cases: new CasesService(db),
   // The auto-assign branch reads these; the entity types seeded here have
@@ -167,12 +168,12 @@ const sequenceValue = async (hubId: string, prefix: string) =>
     .filter(r => r.prefix === prefix).map(r => r.nextValue)
 
 beforeAll(async () => {
-  priorCrossHub = (await settings.getCrossHubSharingEnabled()).enabled
+  priorCrossHub = (await settings.platformSettings.getCrossHubSharingEnabled()).enabled
   for (const [id, owner] of [[HUB_A, ADMIN_A], [HUB_B, ADMIN_B]] as const) {
     await db.insert(hubs).values({ id, name: id, slug: id, createdBy: owner.pubkey })
   }
-  typeA = (await settings.createEntityType(typeBody(HUB_A, 'bind_a', PREFIX_A))).id
-  typeB = (await settings.createEntityType(typeBody(HUB_B, 'bind_b', PREFIX_B))).id
+  typeA = (await settings.entitySchema.createEntityType(typeBody(HUB_A, 'bind_a', PREFIX_A))).id
+  typeB = (await settings.entitySchema.createEntityType(typeBody(HUB_B, 'bind_b', PREFIX_B))).id
   const insertContact = async (hubId: string) =>
     (await db.insert(contacts).values({ hubId, encryptedSummary: 'x' }).returning())[0].id
   contactA = await insertContact(HUB_A)
@@ -206,7 +207,7 @@ afterAll(async () => {
   await db.delete(caseNumberSequences).where(inArray(caseNumberSequences.hubId, ids))
   await db.delete(entityTypeDefinitions).where(inArray(entityTypeDefinitions.hubId, ids))
   await db.delete(hubs).where(inArray(hubs.id, ids))
-  await settings.setCrossHubSharingEnabled({ enabled: priorCrossHub })
+  await settings.platformSettings.setCrossHubSharingEnabled({ enabled: priorCrossHub })
 })
 
 // ── POST / : entity type ───────────────────────────────────────────
@@ -348,7 +349,7 @@ describe('POST /convert-from-report — entity type', () => {
 
 describe('GET /?crossHub=true honours crossHubSharingEnabled', () => {
   it('is refused for a caller who holds cases:read-cross-hub while sharing is off', async () => {
-    await settings.setCrossHubSharingEnabled({ enabled: false })
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: false })
     const asSuper = await call(SUPER, HUB_A, 'GET', '?crossHub=true')
     const asAdmin = await call(ADMIN_A, HUB_A, 'GET', '?crossHub=true')
     expect(asSuper.status).toBe(403)
@@ -357,32 +358,32 @@ describe('GET /?crossHub=true honours crossHubSharingEnabled', () => {
   })
 
   it('leaves the ordinary hub-scoped list alone while sharing is off', async () => {
-    await settings.setCrossHubSharingEnabled({ enabled: false })
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: false })
     const res = await call(ADMIN_A, HUB_A, 'GET', `?entityTypeId=${typeA}`)
     expect(res.status).toBe(200)
   })
 
   it('lists again once sharing is switched on', async () => {
-    await settings.setCrossHubSharingEnabled({ enabled: true })
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: true })
     const res = await call(ADMIN_A, HUB_A, 'GET', '?crossHub=true')
     expect(res.status).toBe(200)
   })
 
   it('has ONE stored switch: the platform-settings feature flag moves the same value the list enforces', async () => {
-    await settings.setCrossHubSharingEnabled({ enabled: false })
-    expect(((await settings.getPlatformSettings()).featureFlags as Record<string, unknown>).crossHubSharingEnabled).toBe(false)
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: false })
+    expect(((await settings.platformSettings.getPlatformSettings()).featureFlags as Record<string, unknown>).crossHubSharingEnabled).toBe(false)
 
-    await settings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: true } })
+    await settings.platformSettings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: true } })
     expect((await call(ADMIN_A, HUB_A, 'GET', '?crossHub=true')).status).toBe(200)
-    expect(((await settings.getPlatformSettings()).featureFlags as Record<string, unknown>).crossHubSharingEnabled).toBe(true)
+    expect(((await settings.platformSettings.getPlatformSettings()).featureFlags as Record<string, unknown>).crossHubSharingEnabled).toBe(true)
 
-    await settings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: false } })
+    await settings.platformSettings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: false } })
     expect((await call(ADMIN_A, HUB_A, 'GET', '?crossHub=true')).status).toBe(403)
-    expect((await settings.getCrossHubSharingEnabled()).enabled).toBe(false)
+    expect((await settings.platformSettings.getCrossHubSharingEnabled()).enabled).toBe(false)
   })
 
   it('keeps no second stored copy of the flag in the platform-settings document', async () => {
-    await settings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: true, mlsEnabled: false } })
+    await settings.platformSettings.updatePlatformSettings({ featureFlags: { crossHubSharingEnabled: true, mlsEnabled: false } })
     const [row] = await db.select({ doc: systemSettings.platformSettings }).from(systemSettings).where(eq(systemSettings.id, 1))
     const flags = ((row.doc ?? {}) as { featureFlags?: Record<string, unknown> }).featureFlags ?? {}
     expect(flags).not.toHaveProperty('crossHubSharingEnabled')
@@ -397,10 +398,10 @@ describe('GET /?crossHub=true honours crossHubSharingEnabled', () => {
 // coming back.
 
 describe('the service enforces the binding without the router', () => {
-  it("SettingsService.getEntityTypeById resolves a type only inside its own hub", async () => {
-    expect((await settings.getEntityTypeById(typeA, HUB_A)).id).toBe(typeA)
-    await expect(settings.getEntityTypeById(typeB, HUB_A)).rejects.toMatchObject({ status: 404 })
-    await expect(settings.getEntityTypeById(MISSING_ID, HUB_A)).rejects.toMatchObject({ status: 404 })
+  it("EntitySchemaService.getEntityTypeById resolves a type only inside its own hub", async () => {
+    expect((await settings.entitySchema.getEntityTypeById(typeA, HUB_A)).id).toBe(typeA)
+    await expect(settings.entitySchema.getEntityTypeById(typeB, HUB_A)).rejects.toMatchObject({ status: 404 })
+    await expect(settings.entitySchema.getEntityTypeById(MISSING_ID, HUB_A)).rejects.toMatchObject({ status: 404 })
   })
 
   it("CasesService.create refuses a foreign entity type, parent record and contact, and writes nothing", async () => {
@@ -433,11 +434,11 @@ describe('the service enforces the binding without the router', () => {
   })
 
   it('CasesService.list refuses a cross-hub listing while sharing is off, whoever asks', async () => {
-    await settings.setCrossHubSharingEnabled({ enabled: false })
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: false })
     await expect(
       svc.cases.list({ hubId: HUB_A, crossHub: { hubIds: null, requestingPubkey: SUPER.pubkey } }),
     ).rejects.toMatchObject({ status: 403 })
-    await settings.setCrossHubSharingEnabled({ enabled: true })
+    await settings.platformSettings.setCrossHubSharingEnabled({ enabled: true })
     await expect(
       svc.cases.list({ hubId: HUB_A, crossHub: { hubIds: null, requestingPubkey: SUPER.pubkey } }),
     ).resolves.toBeDefined()
