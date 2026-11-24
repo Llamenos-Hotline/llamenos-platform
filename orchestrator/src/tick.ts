@@ -914,6 +914,15 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
         // starve the lane.
         const route = routeForDispatch({ text: `${item.title}\n${item.body}`, lane, lanes: deps.lanes, tree })
         if (route.kind === 'misrouted') {
+          // An item with an open fleet PR is held by that PR, on whichever
+          // lane opened it: relabelling it would hand it to a lane whose
+          // `findOpenPr` looks only at its own branch and dispatches a
+          // second worker, and the MISROUTED row would mask the failed
+          // verification the reverify shepherd keys on.
+          if (await holdForOpenPr(deps, rows, item, lane, 'misrouted')) {
+            allRejections.push({ id: item.id, reason: 'pr-already-open' })
+            continue
+          }
           allRejections.push({ id: item.id, reason: 'misrouted' })
           misrouted.push({ id: item.id, from: lane.id, to: route.to, paths: route.paths })
           await reportMisroute(deps, rows, lane, item, route)
@@ -954,9 +963,9 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
         // #705/#724/#729/#775/#784/#785's failure mode (three wasted worker
         // attempts each, rediscovering a PR that was already open) even if
         // whatever misclassified those prior attempts is never found.
-        const openPr = await deps.findOpenPr(lane, item)
-        if (openPr !== undefined) {
-          deps.log(`item ${item.id} rejected before dispatch: pr-already-open (pr ${openPr})`)
+        // Across ALL lanes, not just this one: a PR another lane opened
+        // for the same item (a human moved the label) still holds it.
+        if (await holdForOpenPr(deps, rows, item, lane, 'rejected before dispatch')) {
           allRejections.push({ id: item.id, reason: 'pr-already-open' })
           continue
         }
@@ -1109,6 +1118,36 @@ function baseFor(deps: TickDeps, laneId: string, lane: Lane | undefined, item: W
 }
 
 /**
+ * #2979: an item's open fleet PR on ANY lane — `claiming` (the lane whose
+ * label the item carries, if any) first, then every other configured lane,
+ * `off` included, because a PR outlives its lane's mode. Returns the holder,
+ * or `undefined` when no lane has one (a `gh` read failure included, the
+ * `findOpenPr` default).
+ *
+ * An item that is held is never relabelled, routed or dispatched: its PR is
+ * waiting on GitHub, not on a worker. When the holder is not the claiming
+ * lane, the main loop never reaches the item on the holder's behalf, so this
+ * runs the holder's reverify shepherd (#2738) itself — live and outside its
+ * quota cooldown only, exactly the conditions the main loop applies.
+ */
+async function holdForOpenPr(
+  deps: TickDeps, rows: RunRecord[], item: WorkItem, claiming: Lane | undefined, context: string,
+): Promise<{ lane: Lane; pr: string } | undefined> {
+  const order = claiming === undefined ? deps.lanes : [claiming, ...deps.lanes.filter((l) => l.id !== claiming.id)]
+  for (const lane of order) {
+    const pr = await deps.findOpenPr(lane, item)
+    if (pr === undefined) continue
+    deps.log(`item ${item.id} ${context}: pr-already-open (pr ${pr} on lane ${lane.id}) — held by its PR`)
+    if (lane.id !== claiming?.id && lane.mode === 'live' &&
+      !inQuotaCooldown(rows, providerOf(lane.engine, lane.model), deps.now(), LIMITS)) {
+      await reenterFailedOpenPr(deps, lane, item, rows, baseFor(deps, lane.id, lane, item))
+    }
+    return { lane, pr }
+  }
+  return undefined
+}
+
+/**
  * #1764: the audit trail and the re-route for an item whose lane owns none of
  * its cited paths. One MISROUTED row and one issue comment per distinct
  * verdict; the relabel is attempted on every pass until it lands, because it
@@ -1165,6 +1204,9 @@ async function routeUnlabelled(
     if (labels.some((l) => l.startsWith(LANE_LABEL_PREFIX))) continue
     if (!active.some((l) => labels.includes(l.requireLabel) && !labels.some((v) => l.vetoLabels.includes(v)))) continue
     unrouted.push(item.id)
+    // Held by an open PR on any lane: never labelled, and its shepherd still
+    // runs (no lane claims an unlabelled item, so nothing else would run it).
+    if (await holdForOpenPr(deps, rows, item, undefined, 'not routed')) continue
     if (tree === undefined) continue
     const paths = surfaceOf(`${item.title}\n${item.body}`, tree)
     const decision = authorFor(attributePaths(paths, deps.lanes), deps.lanes, { breakTies: false })

@@ -816,6 +816,90 @@ describe('tick: ownership is checked BEFORE dispatch (#1764, #2623, #2979)', () 
     expect(d.relabelLane).not.toHaveBeenCalled()
   })
 
+  // #2979 review: routing ran before the pr-already-open guard, so an item
+  // already held by an open fleet PR was relabelled, the destination lane's
+  // own-branch `findOpenPr` found nothing, and a second worker was launched —
+  // while the MISROUTED row masked the failed verification the reverify
+  // shepherd keys on. VERIFY BY BREAKING IT: drop `holdForOpenPr` from either
+  // routing path in tick.ts and the matching test below fails.
+  describe('an item held by an open fleet PR on ANY lane is never re-routed (#2979)', () => {
+    const OLD = 'a'.repeat(40)
+    const NEW = 'b'.repeat(40)
+    const failedVerification = (laneId: string, itemId: string): RunRecord => row({
+      lane: laneId, itemId, outcome: 'REJECTED',
+      note: `rounds=1 scope=pass impact=low tests=orchestrator:fail review=not-run sha=${OLD}`,
+      verification: { failedSha: OLD, runnerCrashed: false },
+    })
+    const shepherd = (laneId: string, itemId: string, pr: string): Partial<TickDeps> => ({
+      readLedger: () => [failedVerification(laneId, itemId)],
+      findOpenPr: async (l: Lane, i: WorkItem) => (l.id === laneId && i.id === itemId ? pr : undefined),
+      prHead: vi.fn(async () => ({ sha: NEW, branch: `fleet/${laneId}/${itemId}` })),
+      verifyOpenPrHead: vi.fn(async () => passingVerify),
+      claimReentry: vi.fn(() => ({ ok: true as const, release: () => {} })),
+    })
+    const outcomes = (d: TickDeps) => vi.mocked(d.record).mock.calls.map(([x]) => x.outcome)
+
+    it('misrouted, with an open PR on its old lane: no relabel, no dispatch, no MISROUTED row — and the shepherd still runs', async () => {
+      const d = misrouteDeps(shepherd('ios', '1', '77'))
+      const r = await tick(d)
+      expect(d.relabelLane).not.toHaveBeenCalled()
+      expect(d.commentOnIssue).not.toHaveBeenCalled()
+      expect(d.dispatch).not.toHaveBeenCalled()
+      expect(outcomes(d)).not.toContain('MISROUTED')
+      expect(r.misrouted).toEqual([])
+      expect(r.rejections).toContainEqual({ id: '1', reason: 'pr-already-open' })
+      expect(d.verifyOpenPrHead).toHaveBeenCalledWith(expect.objectContaining({ pr: '77', headSha: NEW, branch: 'fleet/ios/1' }))
+    })
+
+    it('misrouted, with an open PR on its old lane: the shepherd still runs on the NEXT pass, over what this pass recorded', async () => {
+      // Pass 1 cannot claim the re-entry, so whatever it records is the routing's own.
+      const first = misrouteDeps({ ...shepherd('ios', '1', '77'), claimReentry: vi.fn(() => ({ ok: false as const, reason: 'in flight' })) })
+      await tick(first)
+      const ledger = [failedVerification('ios', '1'), ...vi.mocked(first.record).mock.calls.map(([x]) => x)]
+      const second = misrouteDeps({ ...shepherd('ios', '1', '77'), readLedger: () => ledger })
+      await tick(second)
+      expect(second.verifyOpenPrHead).toHaveBeenCalledWith(expect.objectContaining({ pr: '77', headSha: NEW }))
+      expect(second.dispatch).not.toHaveBeenCalled()
+    })
+
+    it('misrouted in a shadow lane with an open PR: still no MISROUTED row to mask the failed verification', async () => {
+      const d = misrouteDeps({ ...shepherd('ios', '1', '77'), lanes: [{ ...ios, mode: 'shadow' }, infra] })
+      await tick(d)
+      expect(outcomes(d)).not.toContain('MISROUTED')
+      expect(d.dispatch).not.toHaveBeenCalled()
+    })
+
+    it('correctly labelled, but its open PR is on another lane: the claiming lane does not dispatch a second worker, and the holder\'s shepherd runs', async () => {
+      const d = misrouteDeps({ ...shepherd('ios', '1', '77'), readLabels: async () => ['agent-dispatchable', 'lane:infra'] })
+      const r = await tick(d)
+      expect(d.dispatch).not.toHaveBeenCalled()
+      expect(r.rejections).toContainEqual({ id: '1', reason: 'pr-already-open' })
+      expect(d.verifyOpenPrHead).toHaveBeenCalledWith(expect.objectContaining({ pr: '77', branch: 'fleet/ios/1' }))
+    })
+
+    it('#2623 unlabelled, with an open PR on its old lane: never labelled, never dispatched — and the shepherd still runs', async () => {
+      const own: WorkItem = { id: '3', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
+      const d = misrouteDeps({
+        ...shepherd('infra', '3', '78'),
+        listItems: async () => ({ ok: true as const, items: [own] }),
+        readLabels: async () => ['agent-dispatchable'],
+      })
+      const r = await tick(d)
+      expect(d.relabelLane).not.toHaveBeenCalled()
+      expect(d.commentOnIssue).not.toHaveBeenCalled()
+      expect(d.dispatch).not.toHaveBeenCalled()
+      expect(outcomes(d)).not.toContain('MISROUTED')
+      expect(r.misrouted).toEqual([])
+      expect(d.verifyOpenPrHead).toHaveBeenCalledWith(expect.objectContaining({ pr: '78', headSha: NEW, branch: 'fleet/infra/3' }))
+    })
+
+    it('control: the same items with no open PR anywhere are routed exactly as before', async () => {
+      const d = misrouteDeps({ readLedger: () => [failedVerification('ios', '1')] })
+      await tick(d)
+      expect(d.relabelLane).toHaveBeenCalledWith('1', 'ios', 'infra')
+    })
+  })
+
   it('#2623: a vetoed unlabelled item is not "unrouted" — the veto is its reason', async () => {
     const d = misrouteDeps({ readLabels: async () => ['agent-dispatchable', 'needs-human'] })
     const r = await tick(d)
