@@ -46,6 +46,13 @@ Given('I am authenticated as a regular volunteer', async ({ request, world }) =>
   setActorSeed(world, user.seedHex)
 })
 
+// A request that omits a stored credential keeps it (#3031), so a scenario about a channel saved
+// WITHOUT its webhook secret has to start from a channel that holds none.
+Given('the Telegram and RCS channels are not configured', async ({ request, world }) => {
+  const { status } = await apiPatch(request, '/settings/messaging', { telegram: null, rcs: null }, getCS(world).actorSeed)
+  expect(status).toBe(200)
+})
+
 Given('I do not have the {string} permission', ({ world }, _permission: string) => {
   // Declarative: the current user is expected to lack this permission
   setCS(world, { actorSeed: getCS(world).actorSeed })
