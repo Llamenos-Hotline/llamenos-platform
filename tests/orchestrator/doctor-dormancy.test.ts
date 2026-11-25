@@ -64,6 +64,29 @@ describe('unitProblems (expected units vs the host)', () => {
     expect(p.join('\n')).toMatch(/NO next trigger/)
   })
 
+  it('an active timer with an empty nextElapse is NOT reported while its own service runs — systemd leaves NextElapseUSecRealtime empty for the whole run (the watchdog-watches-itself false positive)', () => {
+    for (const running of ['active', 'activating', 'deactivating']) {
+      const p = unitProblems(units, probeOf({
+        'a.timer': healthy({ nextElapse: '' }),
+        'a.service': healthy({ unitFileState: 'static', activeState: running }),
+      }))
+      expect(p).toEqual([])
+    }
+  })
+
+  it('an empty nextElapse with the service FAILED is still reported — a finished unit means the timer really has re-armed to nothing', () => {
+    const p = unitProblems(units, probeOf({
+      'a.timer': healthy({ nextElapse: '' }),
+      'a.service': healthy({ unitFileState: 'static', activeState: 'failed', result: 'exit-code' }),
+    }))
+    expect(p.join('\n')).toMatch(/NO next trigger/)
+  })
+
+  it('an empty nextElapse with the service unqueryable is still reported — fail safe, never a silent pass', () => {
+    const p = unitProblems([timer('a.timer')], (u) => (u === 'a.timer' ? healthy({ nextElapse: '' }) : undefined))
+    expect(p.join('\n')).toMatch(/NO next trigger/)
+  })
+
   it('a service whose last run failed is reported, naming that its timer keeps firing it', () => {
     const p = unitProblems(units, probeOf({ ...allGood, 'a.service': healthy({ unitFileState: 'static', activeState: 'failed', result: 'exit-code' }) }))
     expect(p.join('\n')).toMatch(/a\.service last run did not succeed.*its timer keeps firing/)
