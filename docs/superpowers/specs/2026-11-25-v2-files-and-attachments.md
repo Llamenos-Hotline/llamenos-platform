@@ -43,6 +43,12 @@ named here.
 - **Integrity checks compare a stored hash with itself** (#1145).
 - **Content is never deleted.** The shred removes envelopes only. Abandoned uploads are never collected. Per-hub buckets are dead code (#3005).
 - **Inbound message media is dropped and stays with the provider** (#3006). **Call recordings are sealed with the server's KEK** (#2959).
+- **Update, from #3009 (the #3003 fix):**
+  - Desktop couldn't open *any* stored file. `unwrapFileKey` and `decryptFileMetadata` threw "removed in v3", and the webview's open-key allow-list refused the file labels.
+  - #3009 restores format-1 file reads on desktop.
+  - It makes `FileFieldValue` `{fileId, uploadedAt}` (`packages/protocol/schemas/entity-schema.ts`), so the name, type and key now come from the file's own sealed metadata. **That is F1's shape already: an entity field references a file by id and holds no key material.**
+  - It deduplicates the uploader's envelope when the uploader is also an admin.
+  - It adds the first cross-platform file vector (`file-content-vectors.json`), run through the mobile FFI entry point. That vector is not run on device, and neither is anything else yet. On-device runs are part of this spec's per-client gate (§9).
 
 ---
 
