@@ -7,7 +7,7 @@
 - the files spec (PR #3007, F7);
 - the operator decisions D7a, D7b and D7c recorded on #2186 and #2188.
 
-**Status:** DRAFT for operator decisions R1–R10.
+**Status:** SIGNED OFF by the operator, 2026-11-25: R1–R10 as recommended.
 
 Stage 3 of #2978 (audio and transcripts off the server: #2959, #2781, #2953, #2952) and stage 4
 (#2189, the published policy) are not in this spec. Stage 3 changes *who can read* recordings, not
@@ -25,7 +25,7 @@ It never needs plaintext, and never needs a client to be online.
 |---|---|---|---|
 | R1 | Retention for document types | **Every definition declares it** (clock, period, and what happens at expiry), and the validator refuses a definition without it. It is carried in the write policy, so the server purges blind | 2 |
 | R2 | Retention for everything else | **A closed list of server categories**, every table assigned to one or explicitly bounded by its own TTL. Default rows are inserted at hub creation (D7a) | 3 |
-| R3 | Defaults and limits | **Platform defaults and a platform maximum per category**, in deploy config. Hubs choose within `[floor, max]` | 4 |
+| R3 | Defaults and limits | **Platform default, floor and maximum per category**, held in the API's platform settings and changeable at runtime. Hubs choose within `[floor, max]` | 4 |
 | R4 | What "delete" means | **A hard delete, in a fixed order** (provider media → our blobs → headers and tokens → rows → credentials), fail-loud at each step. No soft deletes | 5 |
 | R5 | Backups and old keys | **Stated, not hidden:** a deleted document survives in backups for the backup window, and members' old epoch secrets can open it there | 5.3 |
 | R6 | Holds | **An opt-in `hold` per document type**, a plaintext flag set by `doc:<type>:hold`, that pauses expiry for that document | 6 |
@@ -59,7 +59,7 @@ From #2186 (audited @ `22501b41f`) and #3005 (@ `d2bf23b38`), re-checked against
 
 ---
 
-## 2. R1: retention is part of every definition — OPERATOR DECISION
+## 2. R1: retention is part of every definition — decided
 
 ```jsonc
 "retention": {
@@ -81,7 +81,7 @@ From #2186 (audited @ `22501b41f`) and #3005 (@ `d2bf23b38`), re-checked against
 
 ---
 
-## 3. R2: everything outside the document store — OPERATOR DECISION
+## 3. R2: everything outside the document store — decided
 
 Every table falls under one of three things: a definition (R1), a **server category** below, or
 its own bounded TTL (sessions, nonces, rooms and the others #2186 lists as already bounded). A CI
@@ -106,15 +106,19 @@ changes because of the move.
 
 ---
 
-## 4. R3: defaults, floors and the maximum — OPERATOR DECISION
+## 4. R3: defaults, floors and the maximum — decided
 
-**Deploy config, per category:** `default_days`, `floor_days` (the existing floors) and `max_days`
-(new, D7a).
+**Platform settings, per category:** `default_days`, `floor_days` and `max_days`. They live in the API's
+shared platform settings, extending the existing `retention_platform_floors` table (which already
+records `updated_by`), not in deploy config, so the operator can change them later without a
+redeploy (operator, 2026-11-25).
+- Changing them is a platform-operator action, audited like the floors are today.
+- Lowering `max_days` below a hub's current choice clamps that hub at once and notifies its admins. Raising `floor_days` above it does the same in the other direction.
 - Hub creation inserts one `retention_settings` row per category, at the default.
 - Admins choose within `[floor, max]`.
 - A definition's `days` is clamped into its category's range when the policy is published, and the clamp is shown to the admin.
 
-**Suggested defaults (the operator sets the real numbers):**
+**Starting values (accepted by the operator, 2026-11-25; adjustable later in platform settings):**
 
 | Category | Default | Max | Reasoning |
 |---|---|---|---|
@@ -133,7 +137,7 @@ changes because of the move.
 
 ---
 
-## 5. R4: what deleting means — OPERATOR DECISION
+## 5. R4: what deleting means — decided
 
 ### 5.1 One order, fail-loud
 
@@ -164,7 +168,7 @@ not a hidden flag that keeps the data.
 
 ---
 
-## 6. R6: holds — OPERATOR DECISION
+## 6. R6: holds — decided
 
 The operator's framing on #2188: a caller may want their record kept until a case closes or a
 lawsuit is won, and erased afterwards.
@@ -176,7 +180,7 @@ lawsuit is won, and erased afterwards.
 
 ---
 
-## 7. R7: caller erasure under v2 — OPERATOR DECISION
+## 7. R7: caller erasure under v2 — decided
 
 D7b is already decided: reader-side, by record id, the server never learns the number, the audit
 entry holds counts only, `calls:erase-caller`, and the typed confirmation.
@@ -201,7 +205,7 @@ which records were refused and why, and the caller can ask again later.
 
 ---
 
-## 8. R8: orphans and stale uploads — OPERATOR DECISION
+## 8. R8: orphans and stale uploads — decided
 
 - **Stale uploads** (#3005 item 2): a scheduled job deletes uploads not completed within 24 hours, **blobs first**, then rows. It runs `cleanupStaleFiles`, which has no caller today, rebuilt on the §5 routine.
 - **Orphans** (#2364 gap 2): a bounded, paginated `list()` over each hub prefix, compared with the rows that reference the blobs.
@@ -210,7 +214,7 @@ which records were refused and why, and the caller can ask again later.
 
 ---
 
-## 9. R9: purging the audit log without breaking the chain — OPERATOR DECISION
+## 9. R9: purging the audit log without breaking the chain — decided
 
 #1143: purging old entries truncates the hash chain, so the verifier reports tampering on data
 nobody touched.
@@ -224,7 +228,7 @@ nobody touched.
 
 ---
 
-## 10. R10: proving it — OPERATOR DECISION
+## 10. R10: proving it — decided
 
 - **Every deletion test asserts on storage** (the bucket listing, the provider API in the provider suites) and on the rows. A test that checks rows alone passes against every defect in #2364 and #3005.
 - **The `retention-coverage` CI check** (§3).
