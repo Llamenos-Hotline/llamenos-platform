@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
 vi.mock('@/lib/key-manager', () => ({ getPublicKeyHex: () => DEVICE }))
-vi.mock('@/lib/platform', () => ({ encryptMessage: mocks.encryptMessage }))
+vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), encryptMessage: mocks.encryptMessage }))
 vi.mock('@/lib/admin-recipient', () => ({ activeHubAdminReaders: mocks.activeHubAdminReaders }))
 vi.mock('@/lib/api', () => ({
   bulkCreateContacts: mocks.bulkCreateContacts,
