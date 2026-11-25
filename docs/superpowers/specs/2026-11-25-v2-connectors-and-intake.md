@@ -7,7 +7,7 @@
 - the v2 files spec (PR #3007, signed off 2026-11-25): raw-source evidence is a v2 file;
 - the reader groups in #2961 and the hub chain in #2963.
 
-**Status:** DRAFT for operator decisions C1–C11.
+**Status:** SIGNED OFF by the operator, 2026-11-25: C1–C11 as recommended.
 
 Stages 3 and 4 of #2977 (releases, #2941; reference collections, #2945) get their own spec. This
 one fixes the parts they build on, and reserves their manifest fields now so the manifest format
@@ -51,7 +51,7 @@ Surveyed against `origin/main` @ `bf99f880d`.
 
 ---
 
-## 2. C1: a connector is its own principal kind — OPERATOR DECISION
+## 2. C1: a connector is its own principal kind — decided
 
 **Shape.**
 
@@ -79,7 +79,7 @@ adds release fetch and acknowledgement. Stage 4 adds reference-collection sync.
 
 ---
 
-## 3. C2: enrollment — OPERATOR DECISION
+## 3. C2: enrollment — decided
 
 ### 3.1 Who does what
 
@@ -124,7 +124,7 @@ here would need either a QR on a headless host, or a SAS comparison to stop the 
 swapping the admin's ephemeral key and reading `R`. The reversed code is shorter, needs no SAS,
 and uses a symmetric secret, so it has no post-quantum gap (D16).
 
-### 3.4 C5: manifest changes and key rotation — OPERATOR DECISION
+### 3.4 C5: manifest changes and key rotation — decided
 
 - **Recommended:** a new `connector_enroll` link for the **same** `connector` id is valid, and the latest one is in force. It carries the new `manifestHash`, and new keys if they are being rotated. A key rotation also appends a `group_epoch` for `connector:<id>` with `epoch + 1`.
 - The HMAC key is **not** in the chain. It carries over on the host, so dedup survives (#2940, update 2026-11-23).
@@ -134,7 +134,7 @@ and uses a symmetric secret, so it has no post-quantum gap (D16).
 
 ---
 
-## 4. C3: the manifest — OPERATOR DECISION
+## 4. C3: the manifest — decided
 
 ### 4.1 Two parts, one commitment
 
@@ -178,7 +178,7 @@ exactly that.
 
 ---
 
-## 5. C4: capabilities come from the manifest, not from roles — OPERATOR DECISION
+## 5. C4: capabilities come from the manifest, not from roles — decided
 
 #2939 proposed `integration:ingest`, `integration:release-consume` and `integration:reference-sync`
 as catalog scopes that no default role carries.
@@ -213,7 +213,7 @@ F6's uploader device signature. Its F6 plaintext commitment is the integrity has
 server. That is the "never indexed" rule for external identifiers, enforced by construction.
 Reviewers search the inbox on their client. It is bounded by the retention in §6.5.
 
-### 6.2 C6: the `intake` reader purpose — OPERATOR DECISION
+### 6.2 C6: the `intake` reader purpose — decided
 
 - **Recommended:** add `intake: ['intake:review']` to `READER_PURPOSE_PERMISSIONS`. `intake:review` goes into the admin roles by default. The `intake` group is chain-signed like every purpose group, and the connector verifies its epoch key before sealing (#2963, "a server-substituted `admins` key is refused").
 - This lets a hub hand triage to reviewers who are not admins. Today that would mean making them admins.
@@ -259,7 +259,7 @@ An item that fails any of these is shown as **invalid** and cannot be confirmed.
 The volunteer-facing label is "External feed: <alias>". The alias is hub vocabulary, so it is
 sealed under `members` (#2191). The connector never knows it.
 
-### 6.4 C7: dedup without an update-frequency leak — OPERATOR DECISION
+### 6.4 C7: dedup without an update-frequency leak — decided
 
 #2940's update accepted that matching HMACs show the server how often a source object changes.
 This removes that leak at no cost.
@@ -273,7 +273,7 @@ dedupTag = HMAC(K_hmac, L_INTAKE_DEDUP ‖ lp(sourceId) ‖ H(normalisedSourceBy
 - Reviewers link revisions on their client through the stable `sourceHmac` in the sealed tier, and see "updated version of item …".
 - The connector's local dedup state stays as #2939 described: HMACs only, with a TTL.
 
-### 6.5 C9: confirming an item — OPERATOR DECISION
+### 6.5 C9: confirming an item — decided
 
 1. The reviewer's client opens the item, shows the draft beside the raw source, and lets the reviewer edit it.
 2. It **creates a record** of the item's type, or **merges** the draft into an existing record. Either way it computes the record's index tokens under the field's searching-group index key (#2961 A5), which the connector never had.
@@ -285,7 +285,7 @@ dedupTag = HMAC(K_hmac, L_INTAKE_DEDUP ‖ lp(sourceId) ‖ H(normalisedSourceBy
 unresolved items expire after a hub-set period, and tombstones after the audit window. The numbers
 belong to #2978. This spec requires only that `intake` never defaults to "keep forever".
 
-### 6.6 C10: abuse limits — OPERATOR DECISION
+### 6.6 C10: abuse limits — decided
 
 A compromised connector, or a hostile source behind it, can flood the inbox. Triage contains bad
 *content*. Volume needs limits.
@@ -297,7 +297,7 @@ A compromised connector, or a hostile source behind it, can flood the inbox. Tri
 
 ---
 
-## 7. C8: revocation, verified from the chain — OPERATOR DECISION
+## 7. C8: revocation, verified from the chain — decided
 
 **Epic gate (#2977, stage 1):** "a revoked connector can't read or write anything, which is
 verified from the chain, not from the server's word."
@@ -319,7 +319,7 @@ same shape as D13's stale-signer window.
 
 ---
 
-## 8. C11: SDK and runtime — OPERATOR DECISION
+## 8. C11: SDK and runtime — decided
 
 **One implementation.**
 
