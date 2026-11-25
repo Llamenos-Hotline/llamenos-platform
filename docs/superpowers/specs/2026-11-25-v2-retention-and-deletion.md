@@ -266,4 +266,4 @@ and the shared confirmation component.
 
 ## 12. Sign-off
 
-The operator signs off R1–R10 (including the default numbers in §4, or replaces them) on #2978.
+The operator signed off R1–R10 on #2978 on 2026-11-25, every decision as recommended. Build briefs are on #2978.
