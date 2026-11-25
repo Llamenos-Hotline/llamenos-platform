@@ -23,6 +23,10 @@ Hub-only: there is no unscoped `/api/contacts` (#2395).
 
 E2EE contact directory with affinity groups and relationships. Mounted at `/api/directory`. Hub-scoped only.
 
+**Never-orphaned write guard (#2174).** The server never holds the key of anything a client seals, so a sealed write whose envelopes leave no admin reader stores a record nobody can ever open, and nothing can repair it afterwards. It is refused at the boundary, by the same rule as notes (§4.7, `assertAdminCanRead`): every envelope set the request carries must include one addressed to a member of the record's hub's `admin` reader set (§2.4.2) or, transitionally, to `ADMIN_DECRYPTION_PUBKEY`. A set that names no admin, or an absent or empty one, is `422`; a hub with no resolvable admin recipient at all is `503`. Nothing is stored or numbered when a write is refused.
+
+Applies to `POST /directory` and `PATCH /directory/:id` (`summaryEnvelopes`, `piiEnvelopes`), `POST /directory/merge` (`mergedSummaryEnvelopes`), `POST /directory/bulk-create` (each contact's `summaryEnvelopes`; one refused contact refuses the batch), `POST`/`PATCH` affinity groups (`detailEnvelopes`) and `POST /directory/:id/relationships` (`notesEnvelopes`).
+
 ```
 GET    /api/hubs/:hubId/directory/envelope-recipients
 Permission: contacts:view | contacts:create | contacts:edit | contacts:manage-relationships | contacts:manage-groups
@@ -79,7 +83,8 @@ Response: { "groups": AffinityGroup[] }
 
 POST   /api/hubs/:hubId/directory/merge
 Permission: contacts:edit
-Body: { "primaryId": string, "secondaryId": string, "reEncryptedProfiles": {...} }
+Body: { "primaryId": string, "secondaryId": string, "mergedEncryptedSummary": string, "mergedSummaryEnvelopes": { "pubkey", "enc", "ct" }[], "mergedBlindIndexes": {...}, ... }
+       (the envelopes are stored verbatim as the contact's `summaryEnvelopes`, so they are the same `{pubkey, enc, ct}` envelope as on create — never a reduced `{recipientPubkey, encryptedKey}` form, which drops `ct` and leaves a summary nobody can open)
 Response: { "primaryId": string, "secondaryId": string }
 
 POST   /api/hubs/:hubId/directory/bulk

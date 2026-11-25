@@ -39,6 +39,7 @@ import { KIND_RECORD_CREATED, KIND_RECORD_UPDATED, KIND_RECORD_ASSIGNED } from '
 import { publishEvent } from '../lib/ws-events'
 import { resolveHubRoleIds, resolvePermissions } from '@shared/permissions'
 import { determineEnvelopeRecipients } from '../lib/envelope-recipients'
+import { assertSealedTiersReadable, type SealedTier } from '../lib/admin-envelopes'
 import type { HubMemberInfo } from '../lib/envelope-recipients'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import type { Services } from '../services'
@@ -107,6 +108,26 @@ async function resolveHubMembers(services: Services, hubId: string): Promise<Hub
       .map(key => hpkeRecipientPubkey(key))
       .filter((key): key is HpkeRecipientPubkey => !!key),
   }))
+}
+
+/**
+ * The sealed tiers a case write carries. Each is opened only by its own
+ * envelope set, so each must name an admin (#2174); the one place the tier list
+ * lives, shared by create and update.
+ */
+function recordTiers(body: {
+  encryptedSummary?: string
+  summaryEnvelopes?: SealedTier['envelopes']
+  encryptedFields?: string
+  fieldEnvelopes?: SealedTier['envelopes']
+  encryptedPII?: string
+  piiEnvelopes?: SealedTier['envelopes']
+}): SealedTier[] {
+  return [
+    { what: 'A case summary', content: body.encryptedSummary, envelopes: body.summaryEnvelopes },
+    { what: 'A case fields tier', content: body.encryptedFields, envelopes: body.fieldEnvelopes },
+    { what: 'A case PII tier', content: body.encryptedPII, envelopes: body.piiEnvelopes },
+  ]
 }
 
 // First path segments of the literal (non-record-id) routes below.
@@ -578,6 +599,10 @@ records.post('/',
     const services = c.get('services')
     const body = c.req.valid('json')
 
+    // Refused before anything is numbered or stored: a case no admin can open is
+    // a lost case, and the case number would be spent on it.
+    await assertSealedTiersReadable(services, c.env, pathHubId(c), recordTiers(body), { authorPubkey: pubkey })
+
     // The entity type must be one of THIS hub's. A type that is another hub's,
     // or does not exist, is a 404 — the old "proceed without numbering" swallow
     // turned a failed check into a confident pass (#2605).
@@ -694,6 +719,16 @@ records.patch('/:id',
     }
 
     const body = c.req.valid('json')
+
+    // New content is sealed under a new key, so the envelopes that arrive with it
+    // are the only ones that can open it (the stored set wraps the OLD key); a
+    // bare envelope swap can drop the admin. Each tier the request touches is
+    // checked.
+    await assertSealedTiersReadable(services, c.env, pathHubId(c), [
+      ...recordTiers(body),
+      { what: 'A case status-change comment', content: body.statusChangeContent, envelopes: body.statusChangeEnvelopes },
+    ], { recordId: id, authorPubkey: pubkey })
+
     const updated = await services.cases.update(id, { ...body, authorPubkey: pubkey })
 
     // Publish update event
@@ -1100,6 +1135,11 @@ records.post('/:id/interactions',
     }
 
     const body = c.req.valid('json')
+
+    await assertSealedTiersReadable(services, c.env, pathHubId(c), [
+      { what: 'A case comment', content: body.encryptedContent, envelopes: body.contentEnvelopes },
+    ], { recordId: id, authorPubkey: pubkey })
+
     const interaction = await services.cases.createInteraction(id, pubkey, body)
 
     await audit(services.audit, 'interactionCreated', pubkey, {

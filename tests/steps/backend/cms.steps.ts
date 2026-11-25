@@ -13,6 +13,7 @@ import { getScenarioState } from './common.steps'
 import type { TemplateSummary } from '../../api-helpers'
 import {
   ADMIN_SEED,
+  adminPlaceholderEnvelopes,
   addHubMemberViaApi,
   createEntityTypeViaApi,
   listEntityTypesViaApi,
@@ -314,7 +315,7 @@ When('the admin updates the contact encrypted summary', async ({ request, world 
   const updated = await updateContactViaApi(
     request,
     getCmsState(world).lastContact!.id as string,
-    { encryptedSummary: 'dXBkYXRlZCBjb250YWN0' },
+    { encryptedSummary: 'dXBkYXRlZCBjb250YWN0', summaryEnvelopes: adminPlaceholderEnvelopes() },
     hubId,
   )
   getCmsState(world).lastContact = updated
@@ -783,11 +784,7 @@ When('the admin updates the record status with change metadata', async ({ reques
       statusHash: 'status_updated',
       statusChangeTypeHash: 'status_change_hash',
       statusChangeContent: 'dGVzdCBzdGF0dXMgY2hhbmdl',
-      statusChangeEnvelopes: [{
-        pubkey: 'a'.repeat(64),
-        ct: 'b'.repeat(64),
-        enc: 'a'.repeat(64),
-      }],
+      statusChangeEnvelopes: adminPlaceholderEnvelopes(),
     },
     getScenarioState(world).hubId,
   )

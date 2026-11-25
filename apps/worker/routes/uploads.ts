@@ -12,6 +12,7 @@ import { hubOnly, pathHubId } from '../lib/hub-scope'
 import { isReport, verifyReportAccess } from '../lib/report-access'
 import { incCounter } from './metrics'
 import { createLogger } from '../lib/logger'
+import { assertAdminCanRead } from '../lib/admin-envelopes'
 
 const logger = createLogger('routes.uploads')
 
@@ -74,6 +75,12 @@ uploads.post('/init',
       return c.json({ error: 'Forbidden', required: 'evidence:upload' }, 403)
     }
 
+    // The file key is wrapped only by the uploader, for exactly these recipients,
+    // and the chunks that follow are ciphertext under it: a file whose envelopes
+    // name no admin can never be opened by one (#2174). Refused here, before a
+    // row exists and before any chunk is uploaded.
+    await assertAdminCanRead(services, c.env, hubId, body.recipientEnvelopes, 'A file', { authorPubkey: pubkey })
+
     const uploadId = crypto.randomUUID()
 
     // The owner must exist inside the path hub (404 otherwise).
@@ -82,7 +89,7 @@ uploads.post('/init',
       hubId,
       owner: body.owner,
       uploadedBy: pubkey,
-      recipientEnvelopes: body.recipientEnvelopes || [],
+      recipientEnvelopes: body.recipientEnvelopes ?? [],
       encryptedMetadata: body.encryptedMetadata || [],
       totalSize: body.totalSize,
       totalChunks: body.totalChunks,

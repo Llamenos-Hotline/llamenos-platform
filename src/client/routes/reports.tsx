@@ -281,9 +281,10 @@ function ReportsPage() {
 
           {/* Report detail */}
           <div data-testid="report-detail" className="flex flex-1 flex-col rounded-lg border border-border bg-card overflow-hidden">
-            {selectedReport ? (
+            {selectedReport && hubId ? (
               <ReportDetail
                 report={selectedReport}
+                hubId={hubId}
                 messages={messages}
                 messagesLoading={messagesLoading}
                 replyText={replyText}
@@ -373,8 +374,10 @@ function ReportCard({ report, isSelected, onSelect, reportTypes }: {
   )
 }
 
-function ReportDetail({ report, messages, messagesLoading, replyText, onReplyChange, onSend, sending, onAssign, onClose, isAdmin, hasPermission, showFileUpload, onToggleFileUpload, onFileUploadComplete }: {
+function ReportDetail({ report, hubId, messages, messagesLoading, replyText, onReplyChange, onSend, sending, onAssign, onClose, isAdmin, hasPermission, showFileUpload, onToggleFileUpload, onFileUploadComplete }: {
   report: Report
+  /** The hub the report is in: a selection exists only in the hub being browsed, so this is the active hub. */
+  hubId: string
   messages: ConversationMessage[]
   messagesLoading: boolean
   replyText: string
@@ -445,7 +448,7 @@ function ReportDetail({ report, messages, messagesLoading, replyText, onReplyCha
         <div className="border-t border-border px-4 py-3">
           <FileUpload
             conversationId={report.id}
-            recipientPubkeys={[publicKey]}
+            hubId={hubId}
             onUploadComplete={onFileUploadComplete}
           />
         </div>

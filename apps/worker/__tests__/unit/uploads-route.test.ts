@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import type { AppEnv } from '../../types'
 import uploadsRouter from '../../routes/uploads'
+import { serviceErrorHandler } from '../helpers/service-error-handler'
 
 // ---------------------------------------------------------------------------
 // Test app factory
@@ -37,6 +38,12 @@ const BLOB_STUB = {
 const BLOB_BINDINGS = { BLOB_STORAGE: BLOB_STUB }
 
 const HUB = 'hub-1'
+// The hub's admin recipient: a file's key must be wrapped for it (#2174).
+const ADMIN = 'ad'.repeat(32)
+const NON_ADMIN = 'ee'.repeat(32)
+const fileKeyFor = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-file-key' })
+/** An init body's key envelopes, sealed to the admin. */
+const SEALED = { recipientEnvelopes: [fileKeyFor(ADMIN), fileKeyFor(NON_ADMIN)] }
 const COMPLETED_AT = new Date('2026-11-05T12:00:00.000Z')
 
 function makeApp(opts: {
@@ -72,7 +79,10 @@ function makeApp(opts: {
     markFileComplete: vi.fn().mockResolvedValue(COMPLETED_AT),
   }
 
+  const mockIdentity = { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([ADMIN]) }
+
   const app = new Hono<AppEnv>()
+  app.onError(serviceErrorHandler)
   app.use('*', async (c, next) => {
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
@@ -81,6 +91,7 @@ function makeApp(opts: {
     c.set('services', {
       audit: mockAudit,
       conversations: mockConversations,
+      identity: mockIdentity,
     } as unknown as AppEnv['Variables']['services'])
     await next()
   })
@@ -90,7 +101,7 @@ function makeApp(opts: {
   const request = (input: string, init?: RequestInit) =>
     app.request(input, init, BLOB_BINDINGS)
 
-  return { app, request, mockConversations, mockAudit }
+  return { app, request, mockConversations, mockAudit, mockIdentity }
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +114,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(403)
   })
@@ -115,7 +126,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'entity_field' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'entity_field' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(404)
     expect(mockConversations.createFile).not.toHaveBeenCalled()
@@ -138,7 +149,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(403)
     expect(mockConversations.getByIdForHub).toHaveBeenCalledWith('c1', HUB)
@@ -151,7 +162,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'r1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'r1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(403)
     expect(mockConversations.createFile).not.toHaveBeenCalled()
@@ -162,7 +173,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(403)
     expect(mockConversations.createFile).not.toHaveBeenCalled()
@@ -173,7 +184,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'case_record', caseRecordId: 'case-1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(200)
     expect(mockConversations.createFile).toHaveBeenCalledWith(
@@ -219,7 +230,7 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     expect(res.status).toBe(200)
   })
@@ -229,6 +240,48 @@ describe('uploads route — hub-scoped permission gate (files:upload)', () => {
 // POST /init — size limits
 // ---------------------------------------------------------------------------
 
+describe('POST /uploads/init — a file an admin can open (#2174)', () => {
+  const init = (request: ReturnType<typeof makeApp>['request'], body: Record<string, unknown>) =>
+    request('/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1, ...body }),
+    })
+
+  it('accepts a file key wrapped for an admin among other recipients', async () => {
+    const { request, mockConversations, mockIdentity } = makeApp()
+    const res = await init(request, { recipientEnvelopes: [fileKeyFor(NON_ADMIN), fileKeyFor(ADMIN)] })
+    expect(res.status).toBe(200)
+    expect(mockConversations.createFile).toHaveBeenCalledOnce()
+    expect(mockIdentity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, HUB)
+  })
+
+  it('REFUSES (422) a file whose key no admin can unwrap, and creates no row', async () => {
+    const { request, mockConversations, mockAudit } = makeApp()
+    const res = await init(request, { recipientEnvelopes: [fileKeyFor(NON_ADMIN)] })
+    expect(res.status).toBe(422)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+    expect(mockAudit.log).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (422) a file sent with no key envelopes at all', async () => {
+    const { request, mockConversations } = makeApp()
+    for (const body of [{}, { recipientEnvelopes: [] }]) {
+      const res = await init(request, body)
+      expect(res.status).toBe(422)
+    }
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+
+  it('REFUSES (503) when the hub has no admin recipient at all', async () => {
+    const { request, mockConversations, mockIdentity } = makeApp()
+    mockIdentity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
+    const res = await init(request, SEALED)
+    expect(res.status).toBe(503)
+    expect(mockConversations.createFile).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /uploads/init', () => {
   it('rejects files over 100 MB', async () => {
     const { request } = makeApp()
@@ -236,7 +289,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: oversized, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: oversized, totalChunks: 1 }),
     })
     expect(res.status).toBe(400)
     const body = await res.json() as { error: string }
@@ -249,7 +302,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: exactly100MB, totalChunks: 10 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: exactly100MB, totalChunks: 10 }),
     })
     expect(res.status).toBe(200)
   })
@@ -259,7 +312,7 @@ describe('POST /uploads/init', () => {
     const res = await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 1024, totalChunks: 3 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 1024, totalChunks: 3 }),
     })
     expect(res.status).toBe(200)
     const body = await res.json() as { uploadId: string; totalChunks: number }
@@ -272,7 +325,7 @@ describe('POST /uploads/init', () => {
     await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'conv-1' }, totalSize: 500, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'conv-1' }, totalSize: 500, totalChunks: 1 }),
     })
     expect(mockConversations.createFile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -290,7 +343,7 @@ describe('POST /uploads/init', () => {
     await request('/init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
+      body: JSON.stringify({ ...SEALED, owner: { kind: 'conversation', conversationId: 'c1' }, totalSize: 100, totalChunks: 1 }),
     })
     const started = mockAudit.log.mock.calls.find((call: unknown[]) => call[0] === 'fileUploadStarted')
     expect(started).toBeDefined()

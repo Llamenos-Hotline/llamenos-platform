@@ -5,6 +5,7 @@ import { mergeContacts, type DirectoryContact } from '@/lib/api'
 import { loadDecryptedContacts, matchesContactQuery } from '@/lib/contact-directory'
 import { encryptMessage } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 import {
   Dialog,
   DialogContent,
@@ -78,18 +79,16 @@ export function ContactMergeDialog({
         mergedAt: new Date().toISOString(),
       })
 
-      const { encryptedContent, readerEnvelopes } = await encryptMessage(mergedPayload, [
-        devicePubkey,
-      ])
+      // The merging user and every admin of the hub: a merged summary sealed to
+      // one person alone is refused (#2174) — no admin could open it.
+      const readers = [...new Set([devicePubkey, ...await activeHubAdminReaders()])]
+      const { encryptedContent, readerEnvelopes } = await encryptMessage(mergedPayload, readers)
 
       await mergeContacts({
         primaryId: primaryContact.id,
         secondaryId: selected.id,
         mergedEncryptedSummary: encryptedContent,
-        mergedSummaryEnvelopes: readerEnvelopes.map((e) => ({
-          recipientPubkey: e.pubkey,
-          encryptedKey: e.enc,
-        })),
+        mergedSummaryEnvelopes: readerEnvelopes,
         mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
         mergedTrigramTokens: [],
       })

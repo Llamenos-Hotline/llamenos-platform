@@ -16,7 +16,7 @@ import {
   createVolunteerViaApi,
   createEntityTypeViaApi,
   enableCaseManagementViaApi,
-  generateTestKeypair,
+  adminDeviceKey,
   uniqueName,
   encryptForTest,
   ADMIN_SEED,
@@ -96,7 +96,6 @@ When('the admin converts the submitted report to a case', async ({ request, worl
   }
 
   // Create case record
-  const kp = generateTestKeypair()
   const { data, status } = await apiPost<{ id?: string; record?: { id: string } }>(
     request,
     `/hubs/${workerHub}/records`,
@@ -104,7 +103,7 @@ When('the admin converts the submitted report to a case', async ({ request, worl
       entityTypeId: getTransitionState(world).entityTypeId,
       statusHash: 'open',
       encryptedSummary: 'transition-case-summary',
-      summaryEnvelopes: [{ pubkey: kp.pubkey, ct: 'key', enc: kp.pubkey }],
+      summaryEnvelopes: [{ pubkey: adminDeviceKey(), ct: 'key', enc: 'b'.repeat(64) }],
     },
   )
 

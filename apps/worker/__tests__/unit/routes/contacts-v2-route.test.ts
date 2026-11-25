@@ -9,6 +9,7 @@ import { Hono } from 'hono'
 import type { AppEnv } from '@worker/types'
 import contactsV2Routes from '@worker/routes/contacts-v2'
 import { ServiceError } from '@worker/services/service-error'
+import { serviceErrorHandler } from '../../helpers/service-error-handler'
 
 // Valid test fixtures matching schema requirements
 const VALID_UUID_1 = '550e8400-e29b-41d4-a716-446655440000'
@@ -18,6 +19,8 @@ const VALID_ENVELOPE = {
   enc: 'b'.repeat(64),
   ct: 'wrapped-key-hex',
 }
+// VALID_ENVELOPE's key is the hub's one admin recipient (#2174); this one is not.
+const NON_ADMIN_ENVELOPE = { ...VALID_ENVELOPE, pubkey: 'e'.repeat(64) }
 
 // ---------------------------------------------------------------------------
 // Test app factory
@@ -61,16 +64,23 @@ function makeApp(opts: {
     addMember: vi.fn(),
     removeMember: vi.fn().mockResolvedValue({ ok: true }),
     listMembers: vi.fn().mockResolvedValue([]),
+    mergeContacts: vi.fn().mockResolvedValue({ primaryId: VALID_UUID_1, secondaryId: VALID_UUID_2, mergedAt: new Date().toISOString() }),
+    bulkCreate: vi.fn().mockResolvedValue({ created: 1, contactIds: [VALID_UUID_1] }),
   }
+  const mockIdentity = { listAdminEnvelopeRecipients: vi.fn().mockResolvedValue([VALID_ENVELOPE.pubkey]) }
 
   const app = new Hono<AppEnv>()
+  app.onError(serviceErrorHandler)
   app.use('*', async (c, next) => {
+    // No ADMIN_DECRYPTION_PUBKEY: the admin recipients come from the identity mock.
+    Object.defineProperty(c, 'env', { value: {}, configurable: true })
     c.set('pubkey', pubkey)
     c.set('permissions', permissions)
     c.set('hubId', hubId)
     c.set('services', {
       audit: { log: auditLog },
       contacts: mockContacts,
+      identity: mockIdentity,
       ...(services as Record<string, unknown>),
     } as unknown as AppEnv['Variables']['services'])
     c.set('requestId', 'test-req')
@@ -78,7 +88,7 @@ function makeApp(opts: {
   })
   app.route('/', contactsV2Routes)
 
-  return { app, auditLog, mockContacts }
+  return { app, auditLog, mockContacts, mockIdentity }
 }
 
 const baseContact = {
@@ -272,7 +282,7 @@ describe('PATCH /contacts/:id', () => {
     const res = await app.request('/contact-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encryptedSummary: 'new-summary' }),
+      body: JSON.stringify({ encryptedSummary: 'new-summary', summaryEnvelopes: [VALID_ENVELOPE] }),
     })
 
     expect(res.status).toBe(200)
@@ -287,7 +297,7 @@ describe('PATCH /contacts/:id', () => {
     const res = await app.request('/contact-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encryptedSummary: 'x' }),
+      body: JSON.stringify({ encryptedSummary: 'x', summaryEnvelopes: [VALID_ENVELOPE] }),
     })
 
     expect(res.status).toBe(404)
@@ -556,7 +566,7 @@ describe('PATCH /contacts/groups/:groupId — update group', () => {
     const res = await app.request('/groups/grp-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encryptedDetails: 'new-details' }),
+      body: JSON.stringify({ encryptedDetails: 'new-details', detailEnvelopes: [VALID_ENVELOPE] }),
     })
 
     expect(res.status).toBe(200)
@@ -571,7 +581,7 @@ describe('PATCH /contacts/groups/:groupId — update group', () => {
     const res = await app.request('/groups/grp-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ encryptedDetails: 'new-details' }),
+      body: JSON.stringify({ encryptedDetails: 'new-details', detailEnvelopes: [VALID_ENVELOPE] }),
     })
 
     expect(res.status).toBe(404)
@@ -630,5 +640,188 @@ describe('GET /contacts/groups/:groupId/members — list members', () => {
     const json = await res.json() as Record<string, unknown>
     expect((json.members as unknown[]).length).toBe(1)
     expect(mockContacts.listMembers).toHaveBeenCalledWith('grp-1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The never-orphaned guard on every sealed contact write (#2174)
+// ---------------------------------------------------------------------------
+
+describe('contact writes name an admin reader (#2174)', () => {
+  const send = (app: ReturnType<typeof makeApp>['app'], method: string, path: string, body: unknown) =>
+    app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  describe('POST /contacts', () => {
+    const body = { hubId: 'hub-1', encryptedSummary: 'enc', summaryEnvelopes: [VALID_ENVELOPE] }
+
+    it('accepts a summary sealed to an admin among other readers', async () => {
+      const { app, mockContacts, mockIdentity } = makeApp()
+      mockContacts.create.mockResolvedValue(baseContact)
+      const res = await send(app, 'POST', '/', { ...body, summaryEnvelopes: [NON_ADMIN_ENVELOPE, VALID_ENVELOPE] })
+      expect(res.status).toBe(201)
+      expect(mockIdentity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
+    })
+
+    it('REFUSES (422) a summary no admin can open, and stores nothing', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/', { ...body, summaryEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.create).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (422) PII sealed to no admin beside a readable summary', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/', { ...body, encryptedPII: 'enc-pii', piiEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.create).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (503) when the hub has no admin recipient at all', async () => {
+      const { app, mockContacts, mockIdentity } = makeApp()
+      mockIdentity.listAdminEnvelopeRecipients.mockResolvedValueOnce([])
+      const res = await send(app, 'POST', '/', body)
+      expect(res.status).toBe(503)
+      expect(mockContacts.create).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('PATCH /contacts/:id', () => {
+    it('REFUSES (422) a re-sealed summary no admin can open', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'PATCH', '/contact-1', { encryptedSummary: 'new', summaryEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.update).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (422) new ciphertext sent without envelopes — the stored set wraps the old key', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'PATCH', '/contact-1', { encryptedPII: 'new' })
+      expect(res.status).toBe(422)
+      expect(mockContacts.update).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (422) a bare envelope swap that drops the admin', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'PATCH', '/contact-1', { piiEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.update).not.toHaveBeenCalled()
+    })
+
+    it('checks against the contact\'s own hub, and not for an update that seals nothing', async () => {
+      const { app, mockContacts, mockIdentity } = makeApp()
+      mockContacts.update.mockResolvedValue(baseContact)
+      const sealed = await send(app, 'PATCH', '/contact-1', { encryptedSummary: 'new', summaryEnvelopes: [VALID_ENVELOPE] })
+      expect(sealed.status).toBe(200)
+      expect(mockIdentity.listAdminEnvelopeRecipients).toHaveBeenCalledWith(undefined, 'hub-1')
+
+      mockIdentity.listAdminEnvelopeRecipients.mockClear()
+      const unsealed = await send(app, 'PATCH', '/contact-1', { statusHash: 'closed' })
+      expect(unsealed.status).toBe(200)
+      expect(mockIdentity.listAdminEnvelopeRecipients).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /contacts/groups and PATCH /contacts/groups/:groupId', () => {
+    const group = { encryptedDetails: 'enc', detailEnvelopes: [VALID_ENVELOPE], members: [{ contactId: VALID_UUID_1 }] }
+
+    it('accepts a group sealed to an admin', async () => {
+      const { app, mockContacts } = makeApp()
+      mockContacts.createGroup.mockResolvedValue({ id: 'grp-1' })
+      const res = await send(app, 'POST', '/groups', group)
+      expect(res.status).toBe(201)
+    })
+
+    it('REFUSES (422) a new group no admin can open', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/groups', { ...group, detailEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.createGroup).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (422) re-sealed group details no admin can open', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'PATCH', '/groups/grp-1', { encryptedDetails: 'new', detailEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.updateGroup).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /contacts/:id/relationships', () => {
+    const rel = { contactIdB: VALID_UUID_2, relationshipType: 'family' }
+
+    it('accepts notes sealed to an admin, and a relationship with no notes', async () => {
+      const { app, mockContacts } = makeApp()
+      mockContacts.createRelationship.mockResolvedValue({ id: 'rel-1' })
+      const sealed = await send(app, 'POST', '/contact-1/relationships', { ...rel, encryptedNotes: 'n', notesEnvelopes: [VALID_ENVELOPE] })
+      expect(sealed.status).toBe(201)
+      const bare = await send(app, 'POST', '/contact-1/relationships', rel)
+      expect(bare.status).toBe(201)
+    })
+
+    it('REFUSES (422) notes no admin can open, and stores no relationship', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/contact-1/relationships', { ...rel, encryptedNotes: 'n', notesEnvelopes: [NON_ADMIN_ENVELOPE] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.createRelationship).not.toHaveBeenCalled()
+    })
+
+    it('REFUSES (422) notes sent without envelopes', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/contact-1/relationships', { ...rel, encryptedNotes: 'n' })
+      expect(res.status).toBe(422)
+      expect(mockContacts.createRelationship).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /contacts/merge', () => {
+    const merge = (envelopes: (typeof VALID_ENVELOPE)[]) => ({
+      primaryId: VALID_UUID_1,
+      secondaryId: VALID_UUID_2,
+      mergedEncryptedSummary: 'merged',
+      mergedSummaryEnvelopes: envelopes,
+      mergedBlindIndexes: {},
+    })
+
+    it('accepts a merged summary sealed to an admin', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/merge', merge([VALID_ENVELOPE]))
+      expect(res.status).toBe(200)
+      expect(mockContacts.mergeContacts).toHaveBeenCalledOnce()
+    })
+
+    it('REFUSES (422) a merged summary no admin can open, and merges nothing', async () => {
+      const { app, mockContacts } = makeApp()
+      for (const envelopes of [[], [NON_ADMIN_ENVELOPE]]) {
+        const res = await send(app, 'POST', '/merge', merge(envelopes))
+        expect(res.status).toBe(422)
+      }
+      expect(mockContacts.mergeContacts).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('POST /contacts/bulk-create', () => {
+    const entry = (envelope: typeof VALID_ENVELOPE) => ({
+      encryptedSummary: 'enc',
+      summaryEnvelopes: [envelope],
+      blindIndexes: {},
+    })
+
+    it('accepts a batch whose every contact is sealed to an admin', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE), entry(VALID_ENVELOPE)] })
+      expect(res.status).toBe(201)
+      expect(mockContacts.bulkCreate).toHaveBeenCalledOnce()
+    })
+
+    it('REFUSES (422) the whole batch when any one contact is sealed to no admin', async () => {
+      const { app, mockContacts } = makeApp()
+      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE), entry(NON_ADMIN_ENVELOPE)] })
+      expect(res.status).toBe(422)
+      expect(mockContacts.bulkCreate).not.toHaveBeenCalled()
+    })
   })
 })
