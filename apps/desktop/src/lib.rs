@@ -210,10 +210,9 @@ pub fn run() {
             crypto::sign_ws_challenge_from_state,
             crypto::ed25519_verify,
             // HPKE envelope encryption
-            crypto::hpke_seal,
-            crypto::hpke_open_from_state,
-            crypto::hpke_seal_key,
-            crypto::hpke_open_key_from_state,
+            crypto::shape_seal,
+            crypto::shape_open_from_state,
+            crypto::shape_content_aad,
             crypto::seal_case_from_state,
             crypto::open_case_from_state,
             // PUK (Per-User Key — seed stays in Rust CryptoState)
@@ -233,8 +232,7 @@ pub fn run() {
             crypto::forget_hub_key,
             crypto::wrap_hub_key_for_member,
             crypto::set_server_event_keys,
-            crypto::decrypt_hub_event,
-            crypto::decrypt_server_event,
+            crypto::open_server_event,
             crypto::encrypt_hub_field,
             crypto::decrypt_hub_field,
             // Device-local sealing (drafts, offline queue) — key derived from the device seed
