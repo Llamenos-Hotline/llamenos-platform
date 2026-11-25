@@ -368,8 +368,8 @@ class EventsViewModel @Inject constructor(
      *
      * The title and description are sealed on this device as a case summary
      * ([CasePurpose.SUMMARY]) to the readers the server names for a new record of
-     * this type, plus this device and the admin; the server only ever receives the
-     * ciphertext and its envelopes. With no admin key configured the write is
+     * this type, plus this device and every admin of the hub; the server only ever receives the
+     * ciphertext and its envelopes. With no admin able to read, the write is
      * refused (see [NoAdminReaderException]) rather than stored where no admin could
      * read it.
      */
@@ -381,10 +381,9 @@ class EventsViewModel @Inject constructor(
                 val entityType = _uiState.value.entityTypes.find { it.id == entityTypeId }
                 val defaultStatus = entityType?.defaultStatus ?: "active"
 
-                sessionState.ensureAdminPubkeyLoaded(apiService)
                 val readers = RecordReaderSet.forNewRecord(
                     author = cryptoService.encryptionPubkeyHex,
-                    adminDecryptionPubkey = sessionState.adminDecryptionPubkey,
+                    adminReaders = { sessionState.adminReaders(apiService) },
                 ) {
                     apiService.request<EnvelopeRecipientsResponse>(
                         "GET",

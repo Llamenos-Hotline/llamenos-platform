@@ -117,7 +117,7 @@ final class RecordReadersTests: XCTestCase {
     func testStoredSummaryNamesTheServersReadersAsWellAsAuthorAndAdmin() async throws {
         let w = try world()
         let readers = try await RecordReaderSet.creationReaders(
-            author: w.device, adminDecryptionPubkey: w.admin.x25519PubkeyHex
+            author: w.device, adminReaders: { [w.admin.x25519PubkeyHex] }
         ) { try self.tiers(summary: [w.volunteer.x25519PubkeyHex], fields: []) }
 
         XCTAssertEqual(readers.summary, [w.device, w.volunteer.x25519PubkeyHex, w.admin.x25519PubkeyHex])
@@ -128,7 +128,7 @@ final class RecordReadersTests: XCTestCase {
     func testTheServerNamedReaderCanActuallyDecryptWhatWasStored() async throws {
         let w = try world()
         let readers = try await RecordReaderSet.creationReaders(
-            author: w.device, adminDecryptionPubkey: w.admin.x25519PubkeyHex
+            author: w.device, adminReaders: { [w.admin.x25519PubkeyHex] }
         ) { try self.tiers(summary: [w.volunteer.x25519PubkeyHex], fields: []) }
         let sealed = try sealSummary(w, readers: readers.summary)
 
@@ -142,7 +142,7 @@ final class RecordReadersTests: XCTestCase {
         let w = try world()
         // The server names nobody beyond the admin; the volunteer is NOT a reader.
         let readers = try await RecordReaderSet.creationReaders(
-            author: w.device, adminDecryptionPubkey: w.admin.x25519PubkeyHex
+            author: w.device, adminReaders: { [w.admin.x25519PubkeyHex] }
         ) { try self.tiers(summary: [], fields: []) }
         let sealed = try sealSummary(w, readers: readers.summary)
 
@@ -157,7 +157,7 @@ final class RecordReadersTests: XCTestCase {
         struct Offline: Error {}
         let w = try world()
         let readers = try await RecordReaderSet.creationReaders(
-            author: w.device, adminDecryptionPubkey: w.admin.x25519PubkeyHex
+            author: w.device, adminReaders: { [w.admin.x25519PubkeyHex] }
         ) { throw Offline() }
 
         XCTAssertEqual(readers.summary, [w.device, w.admin.x25519PubkeyHex])
@@ -171,20 +171,50 @@ final class RecordReadersTests: XCTestCase {
 
     // MARK: - No admin reader
 
-    func testNoAdminRecipientRefusesTheWriteWithoutAskingTheServer() async throws {
+    func testNoAdminReaderRefusesTheWriteWithoutAskingTheServer() async throws {
         let w = try world()
-        for bad in [nil, "", "not-hex", String(repeating: "ab", count: 16), String(repeating: "g", count: 64)] {
-            var asked = false
-            do {
-                _ = try await RecordReaderSet.creationReaders(author: w.device, adminDecryptionPubkey: bad) {
-                    asked = true
-                    return try self.tiers(summary: [], fields: [])
-                }
-                XCTFail("an envelope set with no admin reader was produced for admin key \(String(describing: bad))")
-            } catch {
-                XCTAssertEqual(error as? RecordReadersError, .noAdminReader)
+        var asked = false
+        do {
+            _ = try await RecordReaderSet.creationReaders(author: w.device, adminReaders: { [] }) {
+                asked = true
+                return try self.tiers(summary: [], fields: [])
             }
-            XCTAssertFalse(asked, "asked the server before refusing for \(String(describing: bad))")
+            XCTFail("an envelope set with no admin reader was produced")
+        } catch {
+            XCTAssertEqual(error as? RecordReadersError, .noAdminReader)
+        }
+        XCTAssertFalse(asked, "asked the server before refusing")
+    }
+
+    /// The crate decides which server entries are readers (#1035); a set with nothing
+    /// usable is a refusal, never a write sealed to the author alone.
+    func testAHubWhoseReaderSetHoldsNoUsableKeyIsRefused() throws {
+        for unusable in [[], [""], ["not-hex"], [String(repeating: "ab", count: 16)], [String(repeating: "g", count: 64)]] {
+            XCTAssertThrowsError(try HubAdminReaders.admins(from: unusable), "readers \(unusable)") {
+                XCTAssertEqual($0 as? RecordReadersError, .noAdminReader)
+            }
+        }
+    }
+
+    /// #1035: a second admin is a reader too — the scalar `adminDecryptionPubkey` held one.
+    func testEveryAdminOfTheHubCanOpenWhatWasStored() async throws {
+        let w = try world()
+        let second = try XCTUnwrap(try loadFixture().readers.first { $0.name == "volunteer" })
+        let admins = try HubAdminReaders.admins(
+            from: [w.admin.x25519PubkeyHex.uppercased(), second.x25519PubkeyHex, w.admin.x25519PubkeyHex]
+        )
+        XCTAssertEqual(admins, [w.admin.x25519PubkeyHex, second.x25519PubkeyHex], "normalised, deduplicated, in server order")
+
+        let readers = try await RecordReaderSet.creationReaders(author: w.device, adminReaders: { admins }) {
+            try self.tiers(summary: [], fields: [])
+        }
+        let sealed = try sealSummary(w, readers: readers.summary)
+        for admin in [w.admin, second] {
+            XCTAssertEqual(
+                try open(sealed, secretHex: admin.x25519SecretHex, pubkey: admin.x25519PubkeyHex, record: w.summaryRecord),
+                "{\"title\":\"Welfare check\"}",
+                "\(admin.name) cannot open what the hub's admins must be able to read"
+            )
         }
     }
 
@@ -195,7 +225,7 @@ final class RecordReadersTests: XCTestCase {
         let admin = String(repeating: "c3", count: 32), author = String(repeating: "d4", count: 32)
         let readers = try RecordReaderSet.compose(
             serverTiers: try tiers(summary: [a, b, "garbage"], fields: [b, b, author], pii: [a]),
-            author: author, adminDecryptionPubkey: admin
+            author: author, adminReaders: [admin]
         )
         XCTAssertEqual(readers.summary, [author, a, b, admin])
         XCTAssertEqual(readers.fields, [author, b, admin])      // the summary-only member `a` is not here

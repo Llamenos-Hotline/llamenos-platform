@@ -26,6 +26,7 @@ import org.llamenos.hotline.crypto.EncryptedCase
 import org.llamenos.hotline.crypto.EncryptedNote
 import org.llamenos.hotline.crypto.HpkeEnvelope
 import org.llamenos.hotline.crypto.KeyValueStore
+import org.llamenos.hotline.crypto.NoAdminReaderException
 import org.llamenos.hotline.crypto.NoteEnvelope
 import org.llamenos.hotline.hub.ActiveHubState
 import org.llamenos.hotline.telephony.EndedCallHold
@@ -91,8 +92,7 @@ class NotesViewModelRecipientsTest {
 
     private fun makeSessionState(): SessionState {
         val sessionState = mockk<SessionState>(relaxed = true)
-        every { sessionState.adminPubkeys } returns listOf(adminPub)
-        every { sessionState.adminDecryptionPubkey } returns adminPub
+        coEvery { sessionState.adminReaders(any(), any()) } returns listOf(adminPub)
         return sessionState
     }
 
@@ -190,5 +190,54 @@ class NotesViewModelRecipientsTest {
         coVerify(exactly = 1) { cryptoService.sealCase(CasePurpose.COMMENT, "case comment", capture(readersSlot)) }
         assertEquals(listOf(authorPub, adminPub), readersSlot.captured)
         coVerify(exactly = 0) { cryptoService.encryptNote(any(), any()) }
+    }
+
+    /** #1035: a second admin is a reader too. The scalar `adminDecryptionPubkey` held one. */
+    @Test
+    fun `createNote seals to every admin of the hub, not just the first`() = runTest {
+        val secondAdminPub = "b1".repeat(32)
+        val cryptoService = makeCryptoService()
+        val session = makeSessionState()
+        coEvery { session.adminReaders(any(), any()) } returns listOf(adminPub, secondAdminPub)
+        val vm = NotesViewModel(
+            apiService = makeApiService(),
+            cryptoService = cryptoService,
+            sessionState = session,
+            activeHubState = mockk<ActiveHubState>(relaxed = true) {
+                every { activeHubId } returns MutableStateFlow(null)
+            },
+            endedCallHold = EndedCallHold(),
+        )
+
+        vm.createNote(text = "call note", fieldValues = emptyMap(), callId = "call-1")
+
+        val recipientsSlot = slot<List<String>>()
+        coVerify(exactly = 1) { cryptoService.encryptNote(any(), capture(recipientsSlot)) }
+        assertEquals(listOf(authorPub, adminPub, secondAdminPub), recipientsSlot.captured)
+    }
+
+    /**
+     * #1035: a hub with no admin able to read refuses the write before anything is sealed.
+     * The note is never encrypted to its author alone, and the author sees why.
+     */
+    @Test
+    fun `createNote seals nothing and says why when the hub has no admin reader`() = runTest {
+        val cryptoService = makeCryptoService()
+        val session = makeSessionState()
+        coEvery { session.adminReaders(any(), any()) } throws NoAdminReaderException()
+        val vm = NotesViewModel(
+            apiService = makeApiService(),
+            cryptoService = cryptoService,
+            sessionState = session,
+            activeHubState = mockk<ActiveHubState>(relaxed = true) {
+                every { activeHubId } returns MutableStateFlow(null)
+            },
+            endedCallHold = EndedCallHold(),
+        )
+
+        vm.createNote(text = "call note", fieldValues = emptyMap(), callId = "call-1")
+
+        coVerify(exactly = 0) { cryptoService.encryptNote(any(), any()) }
+        assertEquals(NoAdminReaderException().message, vm.uiState.value.saveError)
     }
 }

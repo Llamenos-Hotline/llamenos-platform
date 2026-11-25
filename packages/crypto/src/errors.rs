@@ -65,4 +65,8 @@ pub enum CryptoError {
 
     #[error("Future timestamp: message timestamp is ahead of current time")]
     FutureTimestamp,
+
+    /// The hub has no admin reader to seal to. See [`crate::readers`].
+    #[error("No admin reader: the hub has no admin with a registered device and no escrow key, so nobody could read what is about to be written")]
+    NoAdminReader,
 }

@@ -35,8 +35,12 @@ enum ShiftFieldReaders {
     /// Admin readers first, then the purpose's own readers; lowercase,
     /// deduplicated, non-64-hex entries dropped rather than repaired.
     static func compose(admin: [String], others: [String]) throws -> [String] {
-        let admins = normalise(admin)
-        guard !admins.isEmpty else { throw ShiftFieldReadersError.noAdminReader }
+        let admins: [String]
+        do {
+            admins = try HubAdminReaders.admins(from: admin)
+        } catch RecordReadersError.noAdminReader {
+            throw ShiftFieldReadersError.noAdminReader
+        }
         var seen = Set<String>()
         return (admins + normalise(others)).filter { seen.insert($0).inserted }
     }

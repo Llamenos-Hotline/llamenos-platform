@@ -130,7 +130,7 @@ class ConversationsReplyDeliveryTest {
             cryptoService = cryptoService,
             webSocketService = webSocketService,
             sessionState = mockk<SessionState>(relaxed = true).also {
-                every { it.adminPubkeys } returns listOf(ADMIN_ENCRYPTION_KEY)
+                coEvery { it.adminReaders(any(), any()) } returns listOf(ADMIN_ENCRYPTION_KEY)
             },
             activeHubState = server.activeHubState,
         )

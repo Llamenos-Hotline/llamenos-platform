@@ -18,7 +18,6 @@ final class ConversationsViewModel {
     private let cryptoService: CryptoService
     private let webSocketService: WebSocketService
     private let hubContext: HubContext
-    var adminPubkeys: [String]
 
     // MARK: - Public State
 
@@ -101,12 +100,11 @@ final class ConversationsViewModel {
 
     // MARK: - Initialization
 
-    init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext, adminPubkeys: [String] = []) {
+    init(apiService: APIService, cryptoService: CryptoService, webSocketService: WebSocketService, hubContext: HubContext) {
         self.apiService = apiService
         self.cryptoService = cryptoService
         self.webSocketService = webSocketService
         self.hubContext = hubContext
-        self.adminPubkeys = adminPubkeys
     }
 
     // MARK: - Data Loading
@@ -286,8 +284,10 @@ final class ConversationsViewModel {
             // key a message can be sealed to. Another device reads this reply through its own
             // registered key's envelope, which the server adds (assignee re-wrap, #1512).
 
-            // Include admin pubkeys so admins can decrypt messages
-            for adminPubkey in adminPubkeys where !readerPubkeys.contains(adminPubkey) {
+            // Every admin of the conversation's hub, asked now, so each can decrypt the
+            // reply. A hub with none refuses the reply and keeps the text on screen (#1035).
+            let admins = try await HubAdminReaders.resolve(apiService: apiService, hubId: loadedHubId)
+            for adminPubkey in admins where !readerPubkeys.contains(adminPubkey) {
                 readerPubkeys.append(adminPubkey)
             }
 

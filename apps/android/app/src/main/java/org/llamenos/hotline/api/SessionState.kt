@@ -1,7 +1,11 @@
 package org.llamenos.hotline.api
 
 import org.llamenos.hotline.crypto.KeyValueStore
-import org.llamenos.hotline.model.MeResponse
+import org.llamenos.core.CryptoException
+import org.llamenos.core.mobileResolveAdminReaders
+import org.llamenos.hotline.crypto.NoAdminReaderException
+import org.llamenos.protocol.HubReadersResponse
+import org.llamenos.protocol.ReaderPurpose
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -13,43 +17,53 @@ import javax.inject.Singleton
 class SessionState @Inject constructor(
     private val keyValueStore: KeyValueStore,
 ) {
-    /** Admin decryption pubkey for E2EE envelope encryption. */
-    @Volatile
-    var adminDecryptionPubkey: String? = keyValueStore.retrieve(KEY_ADMIN_DECRYPTION_PUBKEY)
-        set(value) {
-            field = value
-            if (value != null) {
-                keyValueStore.store(KEY_ADMIN_DECRYPTION_PUBKEY, value)
-            } else {
-                keyValueStore.delete(KEY_ADMIN_DECRYPTION_PUBKEY)
-            }
-        }
-
-    /** Convenience: returns a list containing the admin pubkey, or empty if not set. */
-    val adminPubkeys: List<String>
-        get() = listOfNotNull(adminDecryptionPubkey)
-
     /**
-     * Ensure admin decryption pubkey is loaded before encryption.
-     * If already cached (from persistence or prior fetch), returns immediately.
-     * Otherwise fetches from /api/auth/me.
+     * The hub's admin reader set — every key hub content must be sealed to so that
+     * every admin of that hub can read it (#1035).
+     *
+     * Asked of the server at write time, for the hub the row lands in: the
+     * registered device X25519 keys of every member holding the admin minimum
+     * there, plus the hub's escrow key. [hubId] is the hub of the ROW being
+     * written (a call's hub for a call note), `null` for the hub being browsed
+     * (a row that does not exist yet). The instance-wide `adminDecryptionPubkey`
+     * `/auth/me` still publishes is one env-configured key — one admin at most,
+     * none on a wizard-bootstrapped deployment — and is never consulted.
+     *
+     * Which entries count is decided by the crate (`mobileResolveAdminReaders`):
+     * malformed keys dropped, duplicates removed.
+     *
+     * @throws NoAdminReaderException when the hub has no admin able to read. The
+     *   caller reports it and writes nothing; it never substitutes another key.
      */
-    suspend fun ensureAdminPubkeyLoaded(apiService: ApiService) {
-        if (adminDecryptionPubkey != null) return
-        try {
-            val me = apiService.request<MeResponse>("GET", "/api/auth/me")
-            adminDecryptionPubkey = me.adminDecryptionPubkey
-        } catch (_: Exception) {
-            // Non-fatal — use whatever is cached (may be empty on very first login)
+    suspend fun adminReaders(apiService: ApiService, hubId: String? = null): List<String> {
+        // The route is spelled inside each call so the mobile route scanner and the
+        // API contract guard can read what it reaches.
+        val response = if (hubId != null) {
+            apiService.request<HubReadersResponse>(
+                "GET",
+                apiService.hubPath(hubId, "/api/readers?purpose=${ReaderPurpose.Admin.value}"),
+            )
+        } else {
+            apiService.request<HubReadersResponse>(
+                "GET",
+                apiService.activeHubPath("/api/readers?purpose=${ReaderPurpose.Admin.value}"),
+            )
+        }
+        return try {
+            mobileResolveAdminReaders(response.recipients)
+        } catch (_: CryptoException.NoAdminReader) {
+            throw NoAdminReaderException()
         }
     }
 
     /** Clear session state (on logout). */
     fun clear() {
-        adminDecryptionPubkey = null
+        // Nothing is cached: reader sets are asked of the server at write time.
+        // Drops the key a pre-#1035 build persisted, which nothing reads any more.
+        keyValueStore.delete(LEGACY_KEY_ADMIN_DECRYPTION_PUBKEY)
     }
 
-    companion object {
-        private const val KEY_ADMIN_DECRYPTION_PUBKEY = "admin-decryption-pubkey"
+    private companion object {
+        const val LEGACY_KEY_ADMIN_DECRYPTION_PUBKEY = "admin-decryption-pubkey"
     }
 }

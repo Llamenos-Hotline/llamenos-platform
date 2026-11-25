@@ -31,43 +31,36 @@ enum RecordReadersError: LocalizedError, Equatable {
     case noAdminReader
 
     var errorDescription: String? {
-        NSLocalizedString("cases_no_admin_recipient", comment: "No admin decryption key is configured")
+        NSLocalizedString("shifts_no_admin_reader", comment: "No admin of this hub could read this text")
     }
 }
 
 enum RecordReaderSet {
 
-    /// The admin decryption key as an HPKE recipient, or nil when the
-    /// deployment has none or it is not a 64-hex key.
-    static func adminRecipient(_ hex: String?) -> String? {
-        guard let trimmed = hex?.trimmingCharacters(in: .whitespaces).lowercased(),
-              isHex64(trimmed) else { return nil }
-        return trimmed
-    }
-
-    /// Author + the server's tier + the admin recipient, in that order.
+    /// Author + the server's tier + the hub's admin readers, in that order.
+    ///
+    /// `adminReaders` is the hub's admin set exactly as ``HubAdminReaders`` resolved
+    /// it (the crate's rule, #1035) — every admin, never one key.
     ///
     /// `serverTiers == nil` is a failed lookup and not an error: it is advice
     /// about who ELSE may read, and a crisis hotline cannot fail to record a
     /// call because an HTTP request for it failed. The author keeps their own
-    /// envelope and the admin keeps theirs; what the fallback never does is
+    /// envelope and every admin keeps theirs; what the fallback never does is
     /// name some other key to stand in — a made-up reader is an envelope
     /// nobody can open (#1021).
     ///
-    /// Throws ``RecordReadersError/noAdminReader`` without an admin recipient.
+    /// Throws ``RecordReadersError/noAdminReader`` when `adminReaders` is empty.
     /// Server entries that are not 64-hex are dropped, not repaired.
     static func compose(
         serverTiers: EnvelopeRecipientsResponse?,
         author: String,
-        adminDecryptionPubkey: String?
+        adminReaders: [String]
     ) throws -> RecordReaders {
-        guard let admin = adminRecipient(adminDecryptionPubkey) else {
-            throw RecordReadersError.noAdminReader
-        }
+        guard !adminReaders.isEmpty else { throw RecordReadersError.noAdminReader }
         func tier(_ server: [String]?) -> [String] {
             var seen = Set<String>()
             var out: [String] = []
-            for key in [author] + (server ?? []).map({ $0.lowercased() }).filter(isHex64) + [admin] {
+            for key in [author] + (server ?? []).map({ $0.lowercased() }).filter(isHex64) + adminReaders {
                 if seen.insert(key.lowercased()).inserted { out.append(key) }
             }
             return out
@@ -81,18 +74,19 @@ enum RecordReaderSet {
 
     /// Readers of a record that does not exist yet.
     ///
-    /// `lookup` asks `GET /api/records/envelope-recipients?entityTypeId=&assignedTo=`
-    /// with the intended assignees' account keys. The admin check runs before
-    /// the request: with no admin recipient the write is refused without
-    /// spending a round trip.
+    /// `adminReaders` resolves the hub's admin set and `lookup` asks
+    /// `GET /api/records/envelope-recipients?entityTypeId=&assignedTo=` with the
+    /// intended assignees' account keys. The admin set is resolved first: with no
+    /// admin reader the write is refused without spending the second round trip.
     static func creationReaders(
         author: String,
-        adminDecryptionPubkey: String?,
+        adminReaders: () async throws -> [String],
         lookup: () async throws -> EnvelopeRecipientsResponse
     ) async throws -> RecordReaders {
-        _ = try compose(serverTiers: nil, author: author, adminDecryptionPubkey: adminDecryptionPubkey)
+        let admins = try await adminReaders()
+        _ = try compose(serverTiers: nil, author: author, adminReaders: admins)
         let tiers = try? await lookup()
-        return try compose(serverTiers: tiers, author: author, adminDecryptionPubkey: adminDecryptionPubkey)
+        return try compose(serverTiers: tiers, author: author, adminReaders: admins)
     }
 
     /// The hub-scoped request for the by-entity-type variant.

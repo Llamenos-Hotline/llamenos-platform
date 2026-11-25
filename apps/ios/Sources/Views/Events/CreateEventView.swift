@@ -161,10 +161,16 @@ struct CreateEventView: View {
             return
         }
 
-        // Resolve the admin decryption pubkey before encrypting: the server
-        // stores `detailEnvelopes` verbatim, so details wrapped only for the
-        // author stay permanently unreadable to admins.
-        await appState.ensureAdminPubkeyLoaded()
+        // Resolve the hub's admins before encrypting: the server stores
+        // `detailEnvelopes` verbatim, so details wrapped only for the author stay
+        // permanently unreadable to admins. A hub with none refuses the save (#1035).
+        let adminPubkeys: [String]
+        do {
+            adminPubkeys = try await HubAdminReaders.resolve(apiService: appState.apiService)
+        } catch {
+            submitError = error.localizedDescription
+            return
+        }
 
         let success = await viewModel.createEvent(
             entityTypeId: entityTypeId,
@@ -177,7 +183,7 @@ struct CreateEventView: View {
             location: location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? nil
                 : location.trimmingCharacters(in: .whitespacesAndNewlines),
-            adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
+            adminPubkeys: adminPubkeys
         )
 
         if success {

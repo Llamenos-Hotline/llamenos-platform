@@ -24,7 +24,6 @@ import org.llamenos.hotline.MountedRoutes.Companion.json
 import org.llamenos.hotline.MountedRoutes.Route
 import org.llamenos.hotline.MountedServer
 import org.llamenos.hotline.api.AnalyticsRepository
-import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
@@ -101,7 +100,6 @@ class DashboardEndedCallTest {
             crypto,
             ws,
             server.apiService,
-            mockk<SessionState>(relaxed = true),
             server.activeHubState,
             mockk<AnalyticsRepository>(relaxed = true),
             ShiftClockRepository(mockk(relaxed = true)),

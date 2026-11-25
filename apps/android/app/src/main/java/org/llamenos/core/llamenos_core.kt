@@ -789,6 +789,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_seal_case(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_seal_shift_field(
@@ -981,6 +983,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: Rus
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(`shareEnvelope`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`challengeHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_resolve_admin_readers(`serverRecipients`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_seal_case(`purpose`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,`readerPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1356,6 +1360,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers() != 2006.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
@@ -2908,6 +2915,11 @@ sealed class CryptoException(message: String): kotlin.Exception(message) {
         
         class FutureTimestamp(message: String) : CryptoException(message)
         
+    /**
+     * The hub has no admin reader to seal to. See [`crate::readers`].
+     */
+        class NoAdminReader(message: String) : CryptoException(message)
+        
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<CryptoException> {
         override fun lift(error_buf: RustBuffer.ByValue): CryptoException = FfiConverterTypeCryptoError.lift(error_buf)
@@ -2941,6 +2953,7 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
             18 -> CryptoException.InvalidSignature(FfiConverterString.read(buf))
             19 -> CryptoException.StaleTimestamp(FfiConverterString.read(buf))
             20 -> CryptoException.FutureTimestamp(FfiConverterString.read(buf))
+            21 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -3030,6 +3043,10 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
             }
             is CryptoException.FutureTimestamp -> {
                 buf.putInt(20)
+                Unit
+            }
+            is CryptoException.NoAdminReader -> {
+                buf.putInt(21)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -4423,6 +4440,25 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_recovery_share_liveness_proof(
     
         FfiConverterTypeHpkeEnvelope.lower(`shareEnvelope`),FfiConverterString.lower(`hubId`),FfiConverterString.lower(`challengeHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The admin reader set of a hub, from `GET /api/hubs/:hubId/readers?purpose=admin`.
+         *
+         * The one place mobile decides which keys count as readers of hub content
+         * (#1035): normalises, drops malformed entries, deduplicates, and returns
+         * `CryptoError.NoAdminReader` when nothing is left, so the caller refuses the
+         * write instead of sealing to the author alone. See [`crate::readers`].
+         */
+    @Throws(CryptoException::class) fun `mobileResolveAdminReaders`(`serverRecipients`: List<kotlin.String>): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_resolve_admin_readers(
+    
+        FfiConverterSequenceString.lower(`serverRecipients`),_status)
 }
     )
     }

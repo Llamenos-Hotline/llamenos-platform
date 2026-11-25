@@ -20,6 +20,7 @@ There is no WASM build: the Playwright test build aliases the Tauri IPC layer to
 | `labels` | Domain separation constants. Strings: `../../packages/protocol/crypto-labels.json`. Numeric `labelId`: the index into `LABEL_REGISTRY`, pinned append-only by `label-registry.wire.snapshot` (never read a labelId from the JSON; never restate the count) |
 | `hpke_envelope` | HPKE key wrapping/unwrapping (RFC 9180 X25519-HKDF-SHA256-AES256-GCM) |
 | `encryption` | Per-note/message/file envelope encryption (HPKE + AES-256-GCM), stored multi-reader records, drafts, hub fields |
+| `readers` | The one rule for turning a hub's server-served admin reader list into HPKE recipients (normalise, drop malformed, dedupe, refuse empty). Mobile calls it as `mobileResolveAdminReaders`; no client decides who counts as a reader (#1035) |
 | `envelope_aad` | The one definition of an envelope AAD (mirrors `packages/shared/envelope-aad.ts`) |
 | `case_record` | Case records + case comments, sealed per purpose — no platform chooses the label or AAD |
 | `audit_key` | Per-user audit key (AES-256-GCM) and its HPKE wrapping |

@@ -825,11 +825,14 @@ struct TypedReportCreateView: View {
     @MainActor
     private func uploadEncryptedFile(fieldName: String, data: Data, fileName: String, mimeType: String) async {
         do {
-            // Seal to this device and the admin key — the reader set every other
+            // Seal to this device and every admin of the hub — the reader set every other
             // record this form writes uses — so the file is readable, not just stored.
             var recipients: [String] = []
             if let own = appState.cryptoService.encryptionPubkeyHex { recipients.append(own) }
-            if let admin = appState.adminDecryptionPubkey, !recipients.contains(admin) { recipients.append(admin) }
+            for admin in try await HubAdminReaders.resolve(apiService: appState.apiService)
+            where !recipients.contains(admin) {
+                recipients.append(admin)
+            }
 
             let encrypted = try appState.cryptoService.encryptFile(
                 data: data, fileName: fileName, mimeType: mimeType, recipientPubkeys: recipients

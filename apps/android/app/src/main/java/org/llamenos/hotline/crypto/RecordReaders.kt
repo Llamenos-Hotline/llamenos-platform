@@ -34,38 +34,37 @@ data class RecordReaders(
  * reports it and writes nothing; it never substitutes a key.
  */
 class NoAdminReaderException : IllegalStateException(
-    "Cannot save: no admin decryption key is configured, so no admin could read it. " +
-        "Ask an administrator to configure one.",
+    "Cannot save: this hub has no admin able to read it. " +
+        "Ask an administrator to register a device and try again.",
 )
 
 object RecordReaderSet {
 
     private val HEX64 = Regex("^[0-9a-f]{64}$")
 
-    /** The admin decryption key as an HPKE recipient, or null when absent or not 64-hex. */
-    fun adminRecipient(hex: String?): String? =
-        hex?.trim()?.lowercase()?.takeIf { HEX64.matches(it) }
-
     /**
-     * Author + the server's tier + the admin recipient, in that order.
+     * Author + the server's tier + the hub's admin readers, in that order.
      *
-     * `serverTiers == null` is a failed lookup and not an error: it is advice
-     * about who ELSE may read, and a crisis hotline cannot fail to record
-     * because an HTTP request for it failed. The author keeps their own
-     * envelope and the admin keeps theirs; what the fallback never does is name
-     * some other key to stand in — a made-up reader is an envelope nobody can
-     * open (#1021). Server entries that are not 64-hex are dropped, not repaired.
+     * [adminReaders] is the hub's admin reader set exactly as
+     * `SessionState.adminReaders` resolved it (the crate's rule, #1035), never a
+     * single key. `serverTiers == null` is a failed lookup and not an error: it
+     * is advice about who ELSE may read, and a crisis hotline cannot fail to
+     * record because an HTTP request for it failed. The author keeps their own
+     * envelope and every admin keeps theirs; what the fallback never does is
+     * name some other key to stand in — a made-up reader is an envelope nobody
+     * can open (#1021). Server entries that are not 64-hex are dropped, not
+     * repaired.
      *
-     * @throws NoAdminReaderException without an admin recipient.
+     * @throws NoAdminReaderException when [adminReaders] is empty.
      */
     fun compose(
         serverTiers: EnvelopeRecipientsResponse?,
         author: String?,
-        adminDecryptionPubkey: String?,
+        adminReaders: List<String>,
     ): RecordReaders {
-        val admin = adminRecipient(adminDecryptionPubkey) ?: throw NoAdminReaderException()
+        if (adminReaders.isEmpty()) throw NoAdminReaderException()
         fun tier(server: List<String>?): List<String> =
-            (listOfNotNull(author) + (server ?: emptyList()).map { it.lowercase() }.filter { HEX64.matches(it) } + admin)
+            (listOfNotNull(author) + (server ?: emptyList()).map { it.lowercase() }.filter { HEX64.matches(it) } + adminReaders)
                 .distinctBy { it.lowercase() }
         return RecordReaders(
             summary = tier(serverTiers?.summary),
@@ -77,16 +76,18 @@ object RecordReaderSet {
     /**
      * Readers of an existing record, asked at write time.
      *
-     * [lookup] performs `GET /api/records/:id/envelope-recipients`. The admin
-     * check runs before it: with no admin recipient the write is refused
-     * without spending a round trip.
+     * [adminReaders] resolves the hub's admin set (`GET /api/hubs/:hubId/readers`)
+     * and [lookup] performs `GET /api/records/:id/envelope-recipients`. The admin
+     * set is resolved first: with no admin reader the write is refused without
+     * spending the second round trip, and nothing has been written.
      */
     suspend fun forRecord(
         author: String?,
-        adminDecryptionPubkey: String?,
+        adminReaders: suspend () -> List<String>,
         lookup: suspend () -> EnvelopeRecipientsResponse,
     ): RecordReaders {
-        compose(null, author, adminDecryptionPubkey)
+        val admins = adminReaders()
+        compose(null, author, admins)
         val tiers = try {
             lookup()
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -94,7 +95,7 @@ object RecordReaderSet {
         } catch (_: Exception) {
             null
         }
-        return compose(tiers, author, adminDecryptionPubkey)
+        return compose(tiers, author, admins)
     }
 
     /**
@@ -107,7 +108,7 @@ object RecordReaderSet {
      */
     suspend fun forNewRecord(
         author: String?,
-        adminDecryptionPubkey: String?,
+        adminReaders: suspend () -> List<String>,
         lookup: suspend () -> EnvelopeRecipientsResponse,
-    ): RecordReaders = forRecord(author, adminDecryptionPubkey, lookup)
+    ): RecordReaders = forRecord(author, adminReaders, lookup)
 }

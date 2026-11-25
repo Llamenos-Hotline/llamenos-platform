@@ -92,7 +92,7 @@ class NoteCreateCallTest {
             )
         }
         val session = mockk<SessionState>(relaxed = true)
-        every { session.adminPubkeys } returns listOf(adminPub)
+        coEvery { session.adminReaders(any(), any()) } returns listOf(adminPub)
         return NotesViewModel(server.apiService, crypto, session, server.activeHubState, hold)
     }
 

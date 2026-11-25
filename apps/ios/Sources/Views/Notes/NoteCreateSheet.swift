@@ -33,13 +33,18 @@ struct NoteCreateSheet: View {
             isLoadingChoices: choices.isLoading,
             choicesError: choices.errorMessage,
             onSave: { text, fields, call, transcript in
-                await appState.ensureAdminPubkeyLoaded()
+                // The hub the note is filed in: the call's own hub, else the one browsed.
+                // A hub with no admin able to read refuses the save (#1035).
+                let adminPubkeys = try await HubAdminReaders.resolve(
+                    apiService: appState.apiService,
+                    hubId: call.hubId
+                )
                 try await notes.createNote(
                     text: text,
                     fields: fields,
                     call: call,
                     transcript: transcript,
-                    adminPubkeys: [appState.adminDecryptionPubkey].compactMap { $0 }
+                    adminPubkeys: adminPubkeys
                 )
                 onSaved(call)
                 dismiss()

@@ -304,8 +304,10 @@ class ConversationsViewModel @Inject constructor(
             _uiState.update { it.copy(isSending = true, sendError = null) }
 
             try {
-                sessionState.ensureAdminPubkeyLoaded(apiService)
-                // Reader pubkeys (X25519 encryption keys): this device + admins.
+                // The admins of the conversation's own hub, asked before anything is sealed:
+                // a hub with none refuses the reply instead of sealing it to nobody (#1035).
+                val adminReaders = sessionState.adminReaders(apiService, loadedHubId)
+                // Reader pubkeys (X25519 encryption keys): this device + the hub's admins.
                 //
                 // NOT the assignee: `conversation.assignedTo` is the assignee's Ed25519
                 // signing (auth) pubkey, not a key a message can be sealed to. The HPKE
@@ -317,7 +319,7 @@ class ConversationsViewModel @Inject constructor(
                 val readerPubkeys = buildList {
                     cryptoService.encryptionPubkeyHex?.let { add(it) }
                     // Include admin pubkeys so admins can decrypt messages
-                    sessionState.adminPubkeys.forEach { adminPub ->
+                    adminReaders.forEach { adminPub ->
                         if (adminPub !in this) add(adminPub)
                     }
                 }

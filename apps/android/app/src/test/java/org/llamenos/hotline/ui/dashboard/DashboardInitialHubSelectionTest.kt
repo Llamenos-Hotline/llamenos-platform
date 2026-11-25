@@ -27,7 +27,6 @@ import org.llamenos.hotline.api.ApiException
 import org.llamenos.hotline.api.ApiService
 import org.llamenos.hotline.api.AuthInterceptor
 import org.llamenos.hotline.api.RetryInterceptor
-import org.llamenos.hotline.api.SessionState
 import org.llamenos.hotline.api.ShiftClockRepository
 import org.llamenos.hotline.api.WebSocketService
 import org.llamenos.hotline.crypto.CryptoService
@@ -141,7 +140,6 @@ class DashboardInitialHubSelectionTest {
                 mockk<CryptoService>(relaxed = true),
                 mockWebSocketService(),
                 makeApiService(activeHubState),
-                mockk<SessionState>(relaxed = true),
                 activeHubState,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
@@ -177,7 +175,6 @@ class DashboardInitialHubSelectionTest {
                 mockk<CryptoService>(relaxed = true),
                 mockWebSocketService(),
                 makeApiService(state),
-                mockk<SessionState>(relaxed = true),
                 state,
                 mockk<AnalyticsRepository>(relaxed = true),
                 ShiftClockRepository(mockk(relaxed = true)),
