@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 
 // Stand-ins for the Rust-backed primitives. The AEAD mock prepends a 12-byte
 // nonce and appends a 16-byte tag so ciphertext length differs from plaintext.
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   hpkeWrapKey: vi.fn(async () => ({ enc: 'enc', ct: 'ct' })),
   aesGcmEncrypt: vi.fn(async (plaintextHexOrJson: string) => {
     const body = Array.from(new TextEncoder().encode(plaintextHexOrJson), (b) => b.toString(16).padStart(2, '0')).join('')

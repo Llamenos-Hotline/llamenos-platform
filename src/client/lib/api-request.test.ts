@@ -19,7 +19,8 @@ import * as keyManager from './key-manager'
 import { offlineQueue, OfflineQueueStorageError } from './offline-queue'
 import * as platform from './platform'
 
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   createAuthToken: vi.fn(async () => JSON.stringify({ timestamp: Date.now(), token: 'mock-token' })),
   encryptDraft: vi.fn(async (text: string) => text),
   decryptDraft: vi.fn(async (text: string) => text),

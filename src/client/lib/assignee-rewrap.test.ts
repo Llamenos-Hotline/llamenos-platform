@@ -14,7 +14,7 @@ vi.mock('./api/conversations', () => ({
   getAssigneeEnvelopeGaps: vi.fn(),
   listActiveConversationsInHub: vi.fn(),
 }))
-vi.mock('./platform', () => ({ rewrapMessageKey: vi.fn() }))
+vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), rewrapMessageKey: vi.fn() }))
 vi.mock('./auth', () => ({ useAuth: vi.fn() }))
 vi.mock('./member-hubs', () => ({ useMemberHubIds: vi.fn() }))
 vi.mock('./relay/hooks', () => ({ useRelaySubscriptions: vi.fn() }))

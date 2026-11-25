@@ -20,7 +20,8 @@ const DIRECTORY: Record<string, { displayName: string; phone: string }> = {
   'contact-carlos': { displayName: 'Carlos Ruiz', phone: '+15559990000' },
 }
 
-vi.mock('@/lib/platform', () => ({
+vi.mock('@/lib/platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/platform')>()),
   createAuthToken: vi.fn(async () => 'token'),
   lockCrypto: vi.fn(async () => {}),
   // The test "ciphertext" is the contact id; the plaintext is looked up from DIRECTORY.

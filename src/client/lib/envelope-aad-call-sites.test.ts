@@ -31,7 +31,8 @@ const mocks = vi.hoisted(() => ({
 }))
 const { aesGcmEncrypt, aesGcmSealBytes, aesGcmOpenBytes, hpkeWrapKey } = mocks
 
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   aesGcmEncrypt: mocks.aesGcmEncrypt,
   aesGcmSealBytes: mocks.aesGcmSealBytes,
   aesGcmOpenBytes: mocks.aesGcmOpenBytes,

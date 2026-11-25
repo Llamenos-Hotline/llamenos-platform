@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { initPanicWipe, performPanicWipe, _resetPanicWipeState } from './panic-wipe'
 import * as keyManager from './key-manager'
 
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   lockCrypto: vi.fn(async () => {}),
   decryptWithPin: vi.fn(async () => null),
   clearStoredKey: vi.fn(async () => {}),

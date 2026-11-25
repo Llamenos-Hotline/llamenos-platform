@@ -37,7 +37,7 @@ vi.mock('@/lib/auth', () => ({
   }),
 }))
 vi.mock('@/lib/toast', () => ({ useToast: () => ({ toast }) }))
-vi.mock('@/lib/platform', () => ({ encryptMessage: async () => ({ encryptedContent: 'ct', readerEnvelopes: [] }) }))
+vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), encryptMessage: async () => ({ encryptedContent: 'ct', readerEnvelopes: [] }) }))
 vi.mock('@/components/ReportForm', () => ({ ReportForm: () => null }))
 vi.mock('@/components/FileUpload', () => ({ FileUpload: () => null }))
 vi.mock('@/components/ConversationThread', () => ({ ConversationThread: () => null }))

@@ -52,7 +52,7 @@ vi.mock('./api', () => ({
   NoActiveHubError: class NoActiveHubError extends Error {},
 }))
 vi.mock('./api/records', () => ({ getRecordEnvelopeRecipients: mocks.getRecordEnvelopeRecipients }))
-vi.mock('./platform', () => ({ sealCase: mocks.sealCase }))
+vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), sealCase: mocks.sealCase }))
 vi.mock('./evidence-upload', () => ({ prepareEvidenceUpload: mocks.prepareEvidenceUpload }))
 vi.mock('./chunked-upload', () => ({ chunkedUpload: mocks.chunkedUpload }))
 

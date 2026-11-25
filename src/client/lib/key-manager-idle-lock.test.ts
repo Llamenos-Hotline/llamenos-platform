@@ -7,7 +7,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   lockCrypto: vi.fn(async () => {}),
   wipeVaultFile: vi.fn(async () => {}),
   decryptWithPin: vi.fn(async () => null),

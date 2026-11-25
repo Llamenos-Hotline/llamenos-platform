@@ -38,7 +38,8 @@ vi.mock('./note-sheet-context', () => ({ useNoteSheet: () => state.sheet }))
 vi.mock('./calls-context', () => ({ useCalls: () => ({ dismissEndedCall: state.dismissEndedCall }) }))
 vi.mock('./toast', () => ({ useToast: () => ({ toast: state.toast }) }))
 vi.mock('./key-manager', () => ({ isUnlocked: () => true }))
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   encryptNote: state.encryptNote,
   encryptDraft: vi.fn(async (s: string) => s),
   decryptDraft: vi.fn(async (s: string) => s),

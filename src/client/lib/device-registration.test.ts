@@ -14,7 +14,7 @@ const request = vi.hoisted(() => vi.fn())
 const getDevicePubkeys = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/api', () => ({ request }))
-vi.mock('@/lib/platform', () => ({ getDevicePubkeys }))
+vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), getDevicePubkeys }))
 
 const DEVICE_STATE = {
   deviceId: 'device-1',

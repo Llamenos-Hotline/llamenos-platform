@@ -5,7 +5,7 @@ const platform = vi.hoisted(() => ({
   persistApiBase: vi.fn(async (origin: string) => origin),
   clearConfiguredApiBase: vi.fn(async () => {}),
 }))
-vi.mock('./platform', () => platform)
+vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), ...platform }))
 
 type ApiConfig = typeof import('./api-config')
 

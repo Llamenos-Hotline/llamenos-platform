@@ -6040,3 +6040,82 @@ describe('rail: review-and-merge is view-only by default and cannot recurse (#27
     }
   })
 })
+
+// #3029. A hand-written `vi.mock('@/lib/platform', () => ({ ...listed exports }))`
+// factory is a latent trap: the next export added to platform.ts is silently
+// `undefined` in that suite, and the red surfaces as an unrelated assertion
+// mismatch far from the cause (#3000 was ejected from the merge queue twice
+// that way, and a false "main is broken" alarm followed). A factory must derive
+// from the real module — `async importOriginal => ({ ...(await importOriginal()),
+// <the stubs> })` — so an added export flows through and a removed one fails
+// loudly at import.
+const PLATFORM_MODULE = /(^|\/)platform$/
+const MOCK_CALLEES = new Set(['mock', 'doMock'])
+
+/** The `vi.mock`/`vi.doMock` calls in `text` that replace a `platform` module
+ *  with a factory that does not call its `importOriginal`/`importActual`
+ *  parameter — as `file:line` strings. */
+function handWrittenPlatformMocks(file: string, text: string): string[] {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+  const bad: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'vi'
+      && MOCK_CALLEES.has(node.expression.name.text)
+    ) {
+      const [spec, factory] = node.arguments
+      if (spec && ts.isStringLiteralLike(spec) && PLATFORM_MODULE.test(spec.text)) {
+        const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1
+        const hasParam = factory !== undefined && (ts.isArrowFunction(factory) || ts.isFunctionExpression(factory))
+          && factory.parameters.length > 0 && ts.isIdentifier(factory.parameters[0].name)
+        let derives = false
+        if (hasParam) {
+          const fn = factory as ts.ArrowFunction | ts.FunctionExpression
+          const param = (fn.parameters[0].name as ts.Identifier).text
+          const find = (n: ts.Node): void => {
+            if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === param) derives = true
+            ts.forEachChild(n, find)
+          }
+          find(fn.body)
+        }
+        if (!derives) bad.push(`${file}:${line}`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return bad
+}
+
+describe('rail: a platform mock derives from the real module (#3029)', () => {
+  it('flags a hand-written factory, in every spelling', () => {
+    for (const hand of [
+      "vi.mock('@/lib/platform', () => ({ a: 1 }))",
+      "vi.mock('./platform', () => platform)",
+      "vi.doMock('../platform', () => ({ a: 1 }))",
+      "vi.mock('./platform', async importOriginal => ({ a: 1 }))",
+      "vi.mock('./platform')",
+    ]) {
+      expect(handWrittenPlatformMocks('x.test.ts', hand), hand).toHaveLength(1)
+    }
+  })
+
+  it('accepts a factory that spreads the real module', () => {
+    for (const derived of [
+      "vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), a: 1 }))",
+      "vi.mock('./platform', async (orig) => ({ ...(await orig<object>()), a: 1 }))",
+      "vi.mock('./platform', async function (importActual) { return { ...(await importActual()), a: 1 } })",
+      "vi.mock('./not-a-platform-module', () => ({ a: 1 }))",
+    ]) {
+      expect(handWrittenPlatformMocks('x.test.ts', derived), derived).toEqual([])
+    }
+  })
+
+  it('no test hand-writes a platform mock factory', () => {
+    const tests = trackedFiles().filter((f) => /^(src|tests)\/.*\.test\.tsx?$/.test(f))
+    expect(tests.length, 'found no test files to scan').toBeGreaterThan(50)
+    const bad = tests.flatMap((f) => handWrittenPlatformMocks(f, readFileSync(f, 'utf8')))
+    expect(bad, 'derive these from `importOriginal`, overriding only what the test stubs (#3029)').toEqual([])
+  })
+})
