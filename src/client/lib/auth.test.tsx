@@ -17,7 +17,8 @@ const { getMyHubPermissionsMock, MockApiError, configState } = vi.hoisted(() => 
   }
 })
 
-vi.mock('./platform', () => ({
+vi.mock('./platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('./platform')>()),
   deviceImportAndLoad: vi.fn(async () => ({
     state: {
       signingPubkeyHex: 'mock-pubkey',

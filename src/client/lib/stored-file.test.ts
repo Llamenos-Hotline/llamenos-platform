@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   decryptFileMetadata: vi.fn(),
 }))
 
-vi.mock('./platform', () => ({ getDevicePubkeys: mocks.getDevicePubkeys }))
+vi.mock('./platform', async importOriginal => ({ ...(await importOriginal<typeof import('./platform')>()), getDevicePubkeys: mocks.getDevicePubkeys }))
 vi.mock('./api', () => ({
   downloadFile: mocks.downloadFile,
   getFileEnvelopes: mocks.getFileEnvelopes,

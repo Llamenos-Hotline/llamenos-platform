@@ -37,7 +37,8 @@ vi.mock('@/lib/admin-recipient', () => ({ activeHubAdminReaders: async () => ['p
 const toastFns = vi.hoisted(() => ({ value: undefined as unknown as { toast: (m: string, t?: string) => void } }))
 vi.mock('@/lib/toast', () => ({ useToast: () => toastFns.value }))
 toastFns.value = { toast: () => {} }
-vi.mock('@/lib/platform', () => ({
+vi.mock('@/lib/platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/platform')>()),
   encryptMessage: vi.fn(async (plaintext: string) => ({
     encryptedContent: `ct:${plaintext.length}`,
     readerEnvelopes: [{ pubkey: 'pk-self', enc: 'e', ct: 'c' }],

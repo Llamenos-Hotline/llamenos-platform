@@ -31,7 +31,8 @@ vi.mock('@/lib/admin-recipient', () => ({
   activeHubAdminReaders: async () => ['pk-admin'],
   NoAdminReaderError: class NoAdminReaderError extends Error {},
 }))
-vi.mock('@/lib/platform', () => ({
+vi.mock('@/lib/platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/platform')>()),
   encryptNote: async () => ({ encryptedContent: 'ct', authorEnvelope: undefined, adminEnvelopes: [] }),
   encryptMessage: async () => ({ encryptedContent: 'ct', readerEnvelopes: [] }),
   decryptNote: async () => null,

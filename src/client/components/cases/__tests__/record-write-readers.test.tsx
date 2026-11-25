@@ -130,7 +130,8 @@ vi.mock('@/lib/auth', () => ({
   }),
 }))
 
-vi.mock('@/lib/platform', () => ({
+vi.mock('@/lib/platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/platform')>()),
   // The author's device is the sealing device, as `seal_case_from_state` does.
   sealCase: (purpose: CasePurposeMock, plaintext: string, readers: readonly string[]) =>
     sealCaseMock(purpose, plaintext, readers, { encryptionPubkeyHex: author.device, signingPubkeyHex: author.account }),

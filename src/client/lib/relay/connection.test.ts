@@ -20,7 +20,8 @@ const wipeKey = vi.fn(async () => {})
 
 vi.mock('../key-manager', () => ({ wipeKey }))
 
-vi.mock('../platform', () => ({
+vi.mock('../platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('../platform')>()),
   signWsChallenge: vi.fn(async () => '00'.repeat(64)),
   ed25519Verify: vi.fn(async (messageHex: string, sigHex: string, pubkeyHex: string) => {
     try {

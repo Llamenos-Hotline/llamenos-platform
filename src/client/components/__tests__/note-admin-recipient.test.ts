@@ -83,7 +83,7 @@ vi.mock('@/lib/use-draft', () => ({
   }),
 }))
 
-vi.mock('@/lib/platform', () => ({ encryptNote: mocks.encryptNote }))
+vi.mock('@/lib/platform', async importOriginal => ({ ...(await importOriginal<typeof import('@/lib/platform')>()), encryptNote: mocks.encryptNote }))
 
 vi.mock('@/lib/api', () => ({
   createNote: mocks.createNote,
