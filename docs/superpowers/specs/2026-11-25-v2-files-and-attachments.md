@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-25 · **Base:** `origin/main` @ `d2bf23b38` · **Epic:** #2974, stage 3 (first consumers)
 **Builds on:** the v2 wire format (PR #2996, signed off 2026-11-24) and the reader groups in #2961
-**Status:** DRAFT. Every choice marked **OPERATOR DECISION** needs sign-off before any code is written.
+**Status:** SIGNED OFF by the operator on 2026-11-25. F1–F8 are accepted as recommended (#2974, "Stage 3: files sign-off").
 
 This spec moves every file the platform stores onto the v2 model. That covers evidence, entity
 `file` fields, report and conversation attachments, inbound message media, and call recordings.
