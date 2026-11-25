@@ -51,7 +51,7 @@ API reference documentation.
 | `RELAY_OPERATIONS.md` | WebSocket relay operations |
 | `CAPACITY_PLANNING.md` | Scaling and capacity planning guidance |
 | `QUICK_REFERENCE.md` | Developer quick-reference card |
-| `NEXT_BACKLOG.md` | Pending work items (single source of truth) |
+| `NEXT_BACKLOG.md` | Pointer only — pending work is tracked as GitHub epics; planning index is #2988 |
 | `HUMAN_INSTRUCTIONS.md` | Instructions for human contributors |
 | `DESIGN.md` | Original design notes and threat model rationale |
 | `COMPLETED_BACKLOG.md` | Historical record of completed work |
