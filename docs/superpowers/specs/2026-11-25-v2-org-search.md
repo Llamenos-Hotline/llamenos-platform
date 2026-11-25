@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-25 · **Base:** `origin/main` @ `417d525ac` · **Epic:** #2974 stage 4 (organisations, #2294, M3)
 **Builds on:** #2961 A6 (organisations and reader groups), the document definitions spec (PR #3025: E2 readers, E5 indexes), and the hub chain (wire spec §5).
-**Status:** DRAFT for operator decisions X1–X7.
+**Status:** SIGNED OFF by the operator, 2026-11-25: X1–X7 as recommended.
 
 A member of several hubs in one organisation wants one search box: "has any of our hubs seen this
 plate?". This spec says how to do it without undoing the property that per-hub index keys exist
@@ -33,7 +33,7 @@ for. **The server must not be able to tell that two hubs hold the same value** (
 
 ---
 
-## 2. X1: the client fans out — OPERATOR DECISION
+## 2. X1: the client fans out — decided
 
 1. The searcher's client selects the eligible hubs (§4).
 2. For each hub, it computes the tokens for the query value under **that hub's** index key for the field's searching group (#3025 E5, D7). Tokens differ from hub to hub by construction.
@@ -46,7 +46,7 @@ query needed.
 
 ---
 
-## 3. X2: what a search still reveals, and how it's bounded — OPERATOR DECISION
+## 3. X2: what a search still reveals, and how it's bounded — decided
 
 **The residual.** One user querying several hubs within seconds lets the server guess that the
 token sent to hub A and the token sent to hub B are the same value. Every org search therefore
@@ -68,7 +68,7 @@ reference collections, which are already org-shared and matched on the client (#
 
 ---
 
-## 4. X3: which hubs a search may reach — OPERATOR DECISION
+## 4. X3: which hubs a search may reach — decided
 
 A hub is eligible only when all three hold, each checked by the client from chains it verifies:
 
@@ -81,7 +81,7 @@ client never sends to an ineligible hub, so a lying server can't widen the fan-o
 
 ---
 
-## 5. X4: which fields — OPERATOR DECISION
+## 5. X4: which fields — decided
 
 - A field opts in with `"orgSearch": true` in its definition (#3025). It must be `index.kind = exact`.
 - **`validate_definition` refuses `orgSearch`** on fields of type `checkbox`, `select` with fewer than 50 options, dates and locations, and on any field the definition marks `lowEntropy`.
@@ -89,7 +89,7 @@ client never sends to an ineligible hub, so a lying server can't widen the fan-o
 
 ---
 
-## 6. X5: results — OPERATOR DECISION
+## 6. X5: results — decided
 
 - Each result is opened in its own hub, with the searcher's grants there, and shown with that hub's alias.
 - Nothing is copied, re-sealed or linked across hubs by the search.
@@ -97,7 +97,7 @@ client never sends to an ineligible hub, so a lying server can't widen the fan-o
 
 ---
 
-## 7. X6: the deployment toggle goes — OPERATOR DECISION
+## 7. X6: the deployment toggle goes — decided
 
 Delete, with no fallback, once X1 to X4 ship:
 - `platform_settings.cross_hub_sharing_enabled` and `cross_hub_settings`;
@@ -110,7 +110,7 @@ already keeps M1 filtering on the client.
 
 ---
 
-## 8. X7: each hub sees who searched it — OPERATOR DECISION
+## 8. X7: each hub sees who searched it — decided
 
 - A per-hub request carrying an `org_search` marker writes an entry in **that hub's** audit log: `org.search {searcher, field_ref, results: n}`, with no tokens.
 - Hub admins see "N org searches by M members this week" in the lifetime report (#3026, R10). They can turn the policy link off (X3).
