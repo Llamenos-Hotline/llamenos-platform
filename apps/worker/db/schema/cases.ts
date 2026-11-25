@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { files } from './conversations'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // case_records
@@ -26,7 +27,9 @@ export const caseRecords = pgTable(
     id: text('id')
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    hubId: text('hub_id'),
+    // NOT NULL (#2964, #2510): a hubless record could never take the hub-bound
+    // content AAD the next crypto format requires, so it would be unmigratable.
+    hubId: text('hub_id').notNull(),
     entityTypeId: text('entity_type_id'),
     caseNumber: text('case_number'),
     statusHash: text('status_hash').notNull(),
@@ -65,8 +68,10 @@ export const caseRecords = pgTable(
       .notNull()
       .defaultNow(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('case_records', table.cryptoFormat),
     index('case_records_hub_id_idx').on(table.hubId),
     index('case_records_hub_id_status_hash_idx').on(
       table.hubId,
@@ -126,8 +131,10 @@ export const events = pgTable(
       .notNull()
       .defaultNow(),
     deprecatedAt: timestamp('deprecated_at', { withTimezone: true }),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('events', table.cryptoFormat),
     index('events_hub_id_idx').on(table.hubId),
     index('events_parent_event_id_idx').on(table.parentEventId),
     index('events_hub_id_status_hash_idx').on(table.hubId, table.statusHash),
@@ -201,8 +208,9 @@ export const reportCases = pgTable(
     linkedBy: text('linked_by').notNull(),
     encryptedNotes: text('encrypted_notes'),
     notesEnvelopes: jsonb('notes_envelopes'),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (table) => [primaryKey({ columns: [table.reportId, table.caseId] })],
+  (table) => [cryptoFormatCheck('report_cases', table.cryptoFormat), primaryKey({ columns: [table.reportId, table.caseId] })],
 )
 
 // ---------------------------------------------------------------------------
@@ -227,8 +235,10 @@ export const caseInteractions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('case_interactions', table.cryptoFormat),
     index('case_interactions_case_id_created_at_idx').on(
       table.caseId,
       table.createdAt,
@@ -274,8 +284,9 @@ export const evidence = pgTable(
       .defaultNow(),
     uploadedBy: text('uploaded_by').notNull(),
     custodyEntryCount: integer('custody_entry_count').notNull().default(0),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (table) => [index('evidence_case_id_idx').on(table.caseId)],
+  (table) => [cryptoFormatCheck('evidence', table.cryptoFormat), index('evidence_case_id_idx').on(table.caseId)],
 )
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import {
   unique,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // subscribers
@@ -35,8 +36,10 @@ export const subscribers = pgTable(
     subscribedAt: timestamp('subscribed_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('subscribers', table.cryptoFormat),
     unique('subscribers_hub_identifier_idx').on(
       table.hubId,
       table.identifierHash,

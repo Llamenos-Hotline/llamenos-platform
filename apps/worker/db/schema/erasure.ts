@@ -13,6 +13,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // erasure_requests
@@ -150,4 +151,5 @@ export const auditUserKeys = pgTable('audit_user_keys', {
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('audit_user_keys', table.cryptoFormat)])

@@ -4,7 +4,7 @@ Feature: Encrypted Backup Restore
   I want to restore my device key from the encrypted backup I downloaded
   So that I can sign in again without my old device
 
-  # The backup format itself (container v4, both KDFs, the cipher) is proven by
+  # The backup format itself (container v5, both KDFs, the cipher) is proven by
   # the round-trip tests over the real Rust codec in packages/crypto/src/backup.rs.
   # These scenarios prove the UI around it: that a backup written by the app can
   # be read back by the app, that a wrong credential is reported where it was

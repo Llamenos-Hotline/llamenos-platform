@@ -20,6 +20,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // hub_recovery_groups
@@ -105,8 +106,10 @@ export const hubRecoveryGroupShares = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('hub_recovery_group_shares', table.cryptoFormat),
     primaryKey({ columns: [table.hubId, table.holderPubkey] }),
   ],
 )
@@ -161,8 +164,10 @@ export const userRecoveryEnvelopes = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('user_recovery_envelopes', table.cryptoFormat),
     primaryKey({ columns: [table.userPubkey, table.hubId] }),
   ],
 )
@@ -219,8 +224,10 @@ export const recoverySessionContributions = pgTable(
     contributedAt: timestamp('contributed_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('recovery_session_contributions', table.cryptoFormat),
     primaryKey({ columns: [table.sessionId, table.contributorPubkey] }),
   ],
 )

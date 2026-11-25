@@ -68,8 +68,11 @@ pub mod case_record;
 // === Free-text shift fields (availability reason, override note), sealed per purpose (#2777, #2778) ===
 pub mod shift_record;
 
-// === Offline key backup — the one canonical backup file format (v4) ===
+// === Offline key backup — the one canonical backup file format (v5) ===
 pub mod backup;
+
+// === crypto_format of a sealed row: readers refuse unknown formats (#2964) ===
+pub mod crypto_format;
 
 // === Erasure override + device wipe signatures ===
 pub mod erasure;

@@ -12,6 +12,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // signal_message_queue
@@ -47,8 +48,10 @@ export const signalMessageQueue = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('signal_message_queue', table.cryptoFormat),
     // Partial index for efficient polling of pending messages ready for retry
     index('signal_queue_pending_idx')
       .on(table.nextRetryAt)

@@ -21,6 +21,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { users } from './users'
 import { roles } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // user_role_envelopes
@@ -56,8 +57,10 @@ export const userRoleEnvelopes = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('user_role_envelopes', table.cryptoFormat),
     index('user_role_envelopes_role_id_idx').on(table.roleId),
     index('user_role_envelopes_user_pubkey_idx').on(table.userPubkey),
     // One envelope per (user, role) pair

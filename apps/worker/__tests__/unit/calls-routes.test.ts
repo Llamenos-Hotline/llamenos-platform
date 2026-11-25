@@ -9,6 +9,7 @@ import { ServiceError } from '@worker/services/service-error'
 import { cancelLosingLegs, canAnswerInApp } from '@worker/services/ringing'
 import { DEFAULT_ROLES } from '@shared/permissions'
 import type { Role } from '@shared/permissions'
+import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
 
 // Ring-leg cancellation and the in-app-leg check talk to the telephony provider and the
 // PBX — both covered in ringing-service.test.ts. Here we only assert the answer route
@@ -43,6 +44,7 @@ function activeCallRow(overrides: Partial<typeof activeCalls.$inferSelect> = {})
     answeredAt: null,
     endedAt: null,
     duration: null,
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,
   }
 }
@@ -65,6 +67,7 @@ function callRecordRow(overrides: Partial<typeof callRecords.$inferSelect> = {})
     encryptedContent: '',
     adminEnvelopes: [],
     createdAt: new Date('2026-09-30T10:05:00.000Z'),
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,
   }
 }

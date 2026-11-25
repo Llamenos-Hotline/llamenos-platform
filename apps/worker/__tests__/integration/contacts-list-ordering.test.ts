@@ -41,6 +41,7 @@ const TEST_SCHEMA = `test_contacts_order_${Date.now()}_${Math.random().toString(
 // Mirrors apps/worker/db/schema/contacts.ts `contacts` table.
 const CONTACTS_DDL = `
   CREATE TABLE ${TEST_SCHEMA}.contacts (
+    crypto_format SMALLINT NOT NULL DEFAULT 1,
     id                    TEXT PRIMARY KEY,
     hub_id                TEXT NOT NULL,
     identifier_hashes     TEXT[] NOT NULL DEFAULT '{}'::text[],

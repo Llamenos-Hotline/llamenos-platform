@@ -16,6 +16,7 @@ import {
   unique,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // system_settings (singleton, id always = 1)
@@ -126,7 +127,8 @@ export const hubs = pgTable('hubs', {
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('hubs', table.cryptoFormat)])
 
 // ---------------------------------------------------------------------------
 // hub_settings
@@ -153,8 +155,9 @@ export const hubKeys = pgTable(
     recipientPubkey: text('recipient_pubkey').notNull(),
     enc: text('enc').notNull(),
     ct: text('ct').notNull(),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (t) => [primaryKey({ columns: [t.hubId, t.recipientPubkey] })],
+  (t) => [cryptoFormatCheck('hub_keys', t.cryptoFormat), primaryKey({ columns: [t.hubId, t.recipientPubkey] })],
 )
 
 /**
@@ -198,7 +201,9 @@ export const roles = pgTable('roles', {
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
+  cryptoFormat: cryptoFormatColumn(),
 }, (t) => [
+  cryptoFormatCheck('roles', t.cryptoFormat),
   check(
     'roles_hub_role_is_sealed',
     sql`${t.hubId} IS NULL OR ${t.encryptedName} IS NOT NULL`,
@@ -228,8 +233,9 @@ export const platformRoleEnvelopes = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (table) => [unique().on(table.roleId, table.adminPubkey)],
+  (table) => [cryptoFormatCheck('platform_role_envelopes', table.cryptoFormat), unique().on(table.roleId, table.adminPubkey)],
 )
 
 // ---------------------------------------------------------------------------

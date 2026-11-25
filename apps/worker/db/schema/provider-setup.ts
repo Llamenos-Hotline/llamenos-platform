@@ -9,6 +9,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 export const providerConfigs = pgTable('provider_configs', {
   id: text('id').primaryKey(),
@@ -32,7 +33,8 @@ export const providerConfigs = pgTable('provider_configs', {
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-})
+  cryptoFormat: cryptoFormatColumn(),
+}, (table) => [cryptoFormatCheck('provider_configs', table.cryptoFormat)])
 
 export const oauthStates = pgTable('oauth_states', {
   id: text('id').primaryKey(),

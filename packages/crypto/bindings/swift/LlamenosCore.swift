@@ -2693,6 +2693,18 @@ fileprivate struct FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer {
     }
 }
 /**
+ * Accept a row's `crypto_format` only if this build can read it.
+ *
+ * Call before opening any sealed row. An unknown value is
+ * [`CryptoError::InvalidFormat`]; there is no fallback to a known layout.
+ */
+public func checkCryptoFormat(format: UInt32)throws   {try rustCallWithError(FfiConverterTypeCryptoError_lift) {
+    uniffi_llamenos_core_fn_func_check_crypto_format(
+        FfiConverterUInt32.lower(format),$0
+    )
+}
+}
+/**
  * Decrypt a draft produced by [`encrypt_draft`].
  */
 public func decryptDraft(packedHex: String, secretKeyHex: String)throws  -> String  {
@@ -3871,6 +3883,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_llamenos_core_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_llamenos_core_checksum_func_check_crypto_format() != 33101) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_llamenos_core_checksum_func_decrypt_draft() != 58624) {
         return InitializationResult.apiChecksumMismatch

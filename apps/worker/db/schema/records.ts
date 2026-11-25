@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // notes
@@ -48,8 +49,10 @@ export const notes = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('notes', table.cryptoFormat),
     index('notes_hub_id_idx').on(table.hubId),
     index('notes_author_pubkey_idx').on(table.authorPubkey),
     index('notes_contact_hash_idx').on(table.contactHash),
@@ -76,8 +79,9 @@ export const noteReplies = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (table) => [index('note_replies_note_id_idx').on(table.noteId)],
+  (table) => [cryptoFormatCheck('note_replies', table.cryptoFormat), index('note_replies_note_id_idx').on(table.noteId)],
 )
 
 // ---------------------------------------------------------------------------

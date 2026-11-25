@@ -8,6 +8,7 @@ import * as metrics from '@worker/routes/metrics'
 import { ServiceError } from '@worker/services/service-error'
 import type { conversations as conversationsTable, messages as messagesTable } from '@worker/db/schema'
 import { conversationListResponseSchema, messageListResponseSchema } from '@protocol/schemas/conversations'
+import { CRYPTO_FORMAT_CURRENT } from '@protocol/crypto-format'
 
 /**
  * A conversation row as the service returns it: the database's shape, with
@@ -51,6 +52,7 @@ function msgRow(over: Partial<typeof messagesTable.$inferSelect> = {}): typeof m
     failureReason: null,
     retryCount: 0,
     createdAt: new Date('2026-11-01T12:00:00.000Z'),
+    cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...over,
   }
 }

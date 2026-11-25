@@ -10,6 +10,7 @@ import {
   unique,
 } from 'drizzle-orm/pg-core'
 import { hubs } from './settings'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // tags
@@ -30,8 +31,10 @@ export const tags = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('tags', table.cryptoFormat),
     unique('tags_hub_name_unique').on(table.hubId, table.name),
     index('tags_hub_idx').on(table.hubId),
   ],

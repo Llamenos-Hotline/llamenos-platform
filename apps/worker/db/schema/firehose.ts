@@ -16,6 +16,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // firehose_connections
@@ -43,8 +44,10 @@ export const firehoseConnections = pgTable(
     status: text('status').notNull().default('pending'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('firehose_connections', table.cryptoFormat),
     index('firehose_connections_hub_idx').on(table.hubId),
     index('firehose_connections_signal_group_idx').on(table.signalGroupId),
   ],
@@ -69,8 +72,10 @@ export const firehoseMessageBuffer = pgTable(
     extractedReportId: text('extracted_report_id'),
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('firehose_message_buffer', table.cryptoFormat),
     index('firehose_buffer_connection_idx').on(table.connectionId),
     index('firehose_buffer_expires_idx').on(table.expiresAt),
     index('firehose_buffer_window_key_idx').on(table.windowKeyId),
@@ -94,8 +99,10 @@ export const firehoseWindowKeys = pgTable(
     windowEnd: timestamp('window_end', { withTimezone: true }).notNull(),
     messageCount: integer('message_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('firehose_window_keys', table.cryptoFormat),
     index('firehose_window_keys_connection_idx').on(table.connectionId),
     index('firehose_window_keys_window_idx').on(table.connectionId, table.windowStart),
   ],

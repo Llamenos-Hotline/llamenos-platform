@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, index } from 'drizzle-orm/pg-core'
 import type { RecipientEnvelope } from '@protocol/schemas/common'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 export const userAvailabilityBlocks = pgTable('user_availability_blocks', {
   id: text('id').primaryKey(),
@@ -14,7 +15,9 @@ export const userAvailabilityBlocks = pgTable('user_availability_blocks', {
   encryptedReason: text('encrypted_reason'),
   reasonEnvelopes: jsonb('reason_envelopes').$type<RecipientEnvelope[]>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  cryptoFormat: cryptoFormatColumn(),
 }, (table) => [
+  cryptoFormatCheck('user_availability_blocks', table.cryptoFormat),
   index('availability_blocks_hub_user_idx').on(table.hubId, table.userPubkey),
   index('availability_blocks_hub_date_idx').on(table.hubId, table.startDate, table.endDate),
 ])

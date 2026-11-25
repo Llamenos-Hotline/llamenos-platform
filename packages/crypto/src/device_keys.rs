@@ -83,6 +83,23 @@ pub struct DeviceSecrets {
     pub encryption_seed: [u8; 32],
 }
 
+/// Redacting `Debug`: prints the public keys only, never a seed, so a
+/// `Result<DeviceSecrets, _>` can be `expect_err`'d or logged without leaking.
+impl std::fmt::Debug for DeviceSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceSecrets")
+            .field(
+                "signing_pubkey",
+                &hex::encode(self.signing_pubkey().to_bytes()),
+            )
+            .field(
+                "encryption_pubkey",
+                &hex::encode(self.encryption_pubkey().to_bytes()),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl DeviceSecrets {
     /// Derive the Ed25519 signing key from the seed.
     pub fn signing_key(&self) -> SigningKey {

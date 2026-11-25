@@ -13,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import { sql } from 'drizzle-orm'
 import { jsonb } from '../bun-jsonb'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // active_calls
@@ -64,8 +65,10 @@ export const activeCalls = pgTable(
     answeredAt: timestamp('answered_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),
     duration: integer('duration'),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('active_calls', table.cryptoFormat),
     index('active_calls_hub_id_status_idx').on(table.hubId, table.status),
     index('active_calls_started_at_idx').on(table.startedAt.desc()),
   ],
@@ -100,8 +103,10 @@ export const callRecords = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
   (table) => [
+    cryptoFormatCheck('call_records', table.cryptoFormat),
     index('call_records_hub_id_idx').on(table.hubId),
     index('call_records_started_at_idx').on(table.startedAt.desc()),
     // Own call history (#1342): hub + answerer + answer time, newest first.

@@ -22,7 +22,7 @@
 //! duplication is what produced the three-way split, and the webview must not
 //! handle device key material at all (desktop-security-audit wave 2, HIGH).
 //!
-//! # Canonical format (v4)
+//! # Canonical format (v5)
 //!
 //! Field names are short and generic so a backup found on a seized device does
 //! not advertise which application wrote it, and no plaintext device identifier
@@ -34,19 +34,35 @@
 //!
 //! ```json
 //! {
-//!   "v": 4,
+//!   "v": 5,
 //!   "id": "a1b2c3",
 //!   "t": 1760000000,
 //!   "d": { "kv": 2, "s": "<32B hex>", "m": 65536, "i": 3, "p": 4,
-//!          "n": "<12B hex>", "c": "<hex>" },
-//!   "r": { "kv": 1, "s": "<32B hex>", "n": "<12B hex>", "c": "<hex>" }
+//!          "n": "<12B hex>", "c": "<80B hex>" },
+//!   "r": { "kv": 1, "s": "<32B hex>", "n": "<12B hex>", "c": "<80B hex>" }
 //! }
 //! ```
 //!
-//! Both blocks encrypt the **same plaintext**: the 32-byte Ed25519 signing seed.
-//! The X25519 encryption seed is not stored — it is HKDF-derived from the
-//! signing seed (`LABEL_DEVICE_ENCRYPTION_SEED`), so storing it would only
-//! duplicate secret material.
+//! Both blocks encrypt the **same 64-byte plaintext**: the Ed25519 signing seed
+//! followed by the X25519 encryption seed (`signing_seed || encryption_seed`,
+//! the same layout as the on-disk device-key blob in [`crate::device_keys`]).
+//!
+//! ## Why both seeds (#2140)
+//!
+//! v4 stored only the signing seed and documented the encryption seed as
+//! "HKDF-derived from the signing seed". That was false for every key an app
+//! generates: [`crate::device_keys::generate_device_keys`] draws the two seeds
+//! independently (PROTOCOL.md §2.11 seed independence — holding the signing seed
+//! must not mean holding the decryption key). Restore therefore re-derived a
+//! *different* X25519 key: the user kept their identity and lost the ability to
+//! open anything sealed to them before the backup — and if that user was the
+//! hub's only admin, every admin envelope on the deployment.
+//!
+//! The fix keeps seed independence and stores the encryption seed. The backup
+//! is the device's whole secret, and [`open_backup`] returns a complete
+//! [`DeviceSecrets`], so no caller is left holding half a key and choosing how
+//! to fill in the rest. A restored device publishes the *same* X25519 pubkey it
+//! had before, and every envelope sealed to it still opens.
 //!
 //! | | credential | KDF | key bytes fed to the KDF |
 //! |---|---|---|---|
@@ -76,10 +92,12 @@
 //!
 //! ## Compatibility
 //!
-//! v4 is a clean break. No `v:1` or `v:3` file is readable, and none is
-//! expected to exist: the writer has never produced a readable file, so there is
-//! nothing in the field to migrate. [`open_backup`] rejects any other version
-//! loudly rather than guessing.
+//! v5 is a clean break. No `v:1`, `v:3` or `v:4` file is readable. v1/v3 were
+//! never readable by anything. A v4 file holds only a signing seed, and the only
+//! way to "restore" one is to invent an encryption key — precisely the #2140
+//! defect — so it is refused loudly rather than half-restored. The project is
+//! pre-production and v4 never left internal testing, so a v4 holder makes a
+//! fresh v5 backup from a device that still holds the key.
 
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
@@ -91,13 +109,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+use crate::device_keys::DeviceSecrets;
 use crate::errors::CryptoError;
 use crate::kdf_params::{ARGON2_M_COST_KIB, ARGON2_P_COST, ARGON2_T_COST, KDF_VERSION};
 use crate::labels::{LABEL_BACKUP, LABEL_BACKUP_HKDF_INFO};
 
 /// Container version written by [`create_backup`] and the only one
 /// [`open_backup`] accepts.
-pub const BACKUP_FORMAT_VERSION: u8 = 4;
+pub const BACKUP_FORMAT_VERSION: u8 = 5;
 
 /// KDF version recorded in the recovery-key block (1 = HKDF-SHA256).
 const RECOVERY_KDF_VERSION: u8 = 1;
@@ -116,8 +135,11 @@ const MAX_BACKUP_ARGON2_P_COST: u32 = 255;
 const BACKUP_SALT_LEN: usize = 32;
 /// AES-256-GCM nonce length, in bytes.
 const BACKUP_NONCE_LEN: usize = 12;
-/// Sealed payload length: a 32-byte signing seed plus the 16-byte GCM tag.
-const BACKUP_CIPHERTEXT_LEN: usize = 32 + 16;
+/// Sealed plaintext length: the 32-byte signing seed then the 32-byte
+/// encryption seed.
+const BACKUP_PLAINTEXT_LEN: usize = 64;
+/// Sealed payload length: the plaintext plus the 16-byte GCM tag.
+const BACKUP_CIPHERTEXT_LEN: usize = BACKUP_PLAINTEXT_LEN + 16;
 
 /// RFC 4648 base32 alphabet, upper-case, no padding.
 const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -143,7 +165,7 @@ pub struct PinBlock {
     pub p: u32,
     /// AES-256-GCM nonce, hex (12 bytes).
     pub n: String,
-    /// AES-256-GCM ciphertext of the signing seed, hex.
+    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed`, hex.
     pub c: String,
 }
 
@@ -156,7 +178,7 @@ pub struct RecoveryBlock {
     pub s: String,
     /// AES-256-GCM nonce, hex (12 bytes).
     pub n: String,
-    /// AES-256-GCM ciphertext of the signing seed, hex.
+    /// AES-256-GCM ciphertext of `signing_seed || encryption_seed`, hex.
     pub c: String,
 }
 
@@ -169,9 +191,9 @@ pub struct BackupFile {
     pub id: String,
     /// Creation time, unix seconds, rounded to the nearest hour.
     pub t: u64,
-    /// PIN-protected copy of the signing seed.
+    /// PIN-protected copy of both device seeds.
     pub d: PinBlock,
-    /// Recovery-key-protected copy of the signing seed.
+    /// Recovery-key-protected copy of both device seeds.
     pub r: RecoveryBlock,
 }
 
@@ -369,13 +391,13 @@ fn seal(kek: &[u8; 32], plaintext: &[u8], aad: &str) -> Result<(String, String),
     Ok((hex::encode(nonce_bytes), hex::encode(ciphertext)))
 }
 
-/// AES-256-GCM open, returning the 32-byte signing seed.
-fn open_seed(
+/// AES-256-GCM open, returning both device seeds.
+fn open_secrets(
     kek: &[u8; 32],
     nonce_hex: &str,
     ciphertext_hex: &str,
     aad: &str,
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+) -> Result<DeviceSecrets, CryptoError> {
     let nonce_bytes = hex::decode(nonce_hex)?;
     if nonce_bytes.len() != BACKUP_NONCE_LEN {
         return Err(CryptoError::InvalidFormat(format!(
@@ -384,7 +406,7 @@ fn open_seed(
         )));
     }
     let ciphertext = hex::decode(ciphertext_hex)?;
-    // Exactly one sealed signing seed. v4 stores nothing else, so holding the
+    // Exactly one sealed seed pair. v5 stores nothing else, so holding the
     // length here keeps a crafted file from handing AES-GCM a large buffer.
     if ciphertext.len() != BACKUP_CIPHERTEXT_LEN {
         return Err(CryptoError::InvalidFormat(format!(
@@ -405,31 +427,41 @@ fn open_seed(
             )
             .map_err(|_| CryptoError::DecryptionFailed)?,
     );
-    if plaintext.len() != 32 {
+    if plaintext.len() != BACKUP_PLAINTEXT_LEN {
         return Err(CryptoError::InvalidFormat(format!(
-            "Backup payload must be a 32-byte signing seed, got {}",
+            "Backup payload must be {BACKUP_PLAINTEXT_LEN} bytes of device seeds, got {}",
             plaintext.len()
         )));
     }
-    let mut seed = Zeroizing::new([0u8; 32]);
-    seed.copy_from_slice(&plaintext);
-    Ok(seed)
+    // Seeds are copied straight into the zeroize-on-drop struct; no `Copy`
+    // array is left behind on any path.
+    let mut secrets = DeviceSecrets {
+        signing_seed: [0u8; 32],
+        encryption_seed: [0u8; 32],
+    };
+    secrets.signing_seed.copy_from_slice(&plaintext[..32]);
+    secrets.encryption_seed.copy_from_slice(&plaintext[32..]);
+    Ok(secrets)
 }
 
-/// Write a v4 backup of `signing_seed`, protected by both `pin` and
-/// `recovery_key`.
+/// Write a v5 backup of a device's secrets — both seeds — protected by both
+/// `pin` and `recovery_key`.
 ///
 /// `recovery_key` is accepted exactly as [`generate_recovery_key`] produced it —
-/// base32 with dashes. `created_at_unix` is supplied by the caller (this crate
-/// targets wasm, where a wall clock is not always available) and is rounded to
-/// the hour before it is stored.
+/// base32 with dashes. `created_at_unix` is supplied by the caller (so the crate
+/// stays clock-free and deterministic under test) and is rounded to the hour
+/// before it is stored.
 pub fn create_backup(
-    signing_seed: &[u8; 32],
-    signing_pubkey_hex: &str,
+    secrets: &DeviceSecrets,
     pin: &str,
     recovery_key: &str,
     created_at_unix: u64,
 ) -> Result<BackupFile, CryptoError> {
+    let signing_pubkey_hex = hex::encode(secrets.signing_pubkey().to_bytes());
+    let mut plaintext = Zeroizing::new([0u8; BACKUP_PLAINTEXT_LEN]);
+    plaintext[..32].copy_from_slice(&secrets.signing_seed);
+    plaintext[32..].copy_from_slice(&secrets.encryption_seed);
+
     // Independent per-backup salts, both random. Nothing in this file derives a
     // KEK under a fixed salt.
     let pin_salt = random_salt();
@@ -442,15 +474,15 @@ pub fn create_backup(
         ARGON2_T_COST,
         ARGON2_P_COST,
     )?;
-    let (pin_nonce, pin_ciphertext) = seal(&pin_kek, signing_seed, LABEL_BACKUP)?;
+    let (pin_nonce, pin_ciphertext) = seal(&pin_kek, plaintext.as_ref(), LABEL_BACKUP)?;
 
     let recovery_kek = derive_recovery_kek(recovery_key, &recovery_salt)?;
     let (recovery_nonce, recovery_ciphertext) =
-        seal(&recovery_kek, signing_seed, LABEL_BACKUP_HKDF_INFO)?;
+        seal(&recovery_kek, plaintext.as_ref(), LABEL_BACKUP_HKDF_INFO)?;
 
     Ok(BackupFile {
         v: BACKUP_FORMAT_VERSION,
-        id: truncated_pubkey_id(signing_pubkey_hex),
+        id: truncated_pubkey_id(&signing_pubkey_hex),
         t: round_to_hour(created_at_unix),
         d: PinBlock {
             kv: KDF_VERSION,
@@ -470,14 +502,18 @@ pub fn create_backup(
     })
 }
 
-/// Recover the 32-byte Ed25519 signing seed from a v4 backup.
+/// Recover a device's secrets — both seeds — from a v5 backup.
+///
+/// The returned [`DeviceSecrets`] is the exact key pair the backup was written
+/// from, so the restored device's X25519 pubkey equals the original's and
+/// everything sealed to it before the backup still opens (#2140).
 ///
 /// A wrong credential is indistinguishable from a corrupted file: both surface
 /// as [`CryptoError::DecryptionFailed`] from the AEAD tag check.
 pub fn open_backup(
     backup: &BackupFile,
     credential: BackupCredential<'_>,
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+) -> Result<DeviceSecrets, CryptoError> {
     if backup.v != BACKUP_FORMAT_VERSION {
         return Err(CryptoError::InvalidFormat(format!(
             "Unsupported backup version {} (this build reads v{})",
@@ -496,7 +532,7 @@ pub fn open_backup(
             validate_pin_kdf_params(&backup.d)?;
             let salt = decode_salt(&backup.d.s)?;
             let kek = derive_pin_kek(pin, &salt, backup.d.m, backup.d.i, backup.d.p)?;
-            open_seed(&kek, &backup.d.n, &backup.d.c, LABEL_BACKUP)
+            open_secrets(&kek, &backup.d.n, &backup.d.c, LABEL_BACKUP)
         }
         BackupCredential::RecoveryKey(recovery_key) => {
             if backup.r.kv != RECOVERY_KDF_VERSION {
@@ -507,7 +543,7 @@ pub fn open_backup(
             }
             let salt = decode_salt(&backup.r.s)?;
             let kek = derive_recovery_kek(recovery_key, &salt)?;
-            open_seed(&kek, &backup.r.n, &backup.r.c, LABEL_BACKUP_HKDF_INFO)
+            open_secrets(&kek, &backup.r.n, &backup.r.c, LABEL_BACKUP_HKDF_INFO)
         }
     }
 }
@@ -518,18 +554,43 @@ mod tests {
     use crate::kdf_params::{ARGON2_M_COST_KIB, ARGON2_P_COST, ARGON2_T_COST};
 
     const PIN: &str = "correct-horse-8";
-    const PUBKEY_HEX: &str = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29";
 
-    fn seed() -> [u8; 32] {
-        let mut s = [0u8; 32];
-        for (i, b) in s.iter_mut().enumerate() {
+    /// A device whose two seeds are unrelated — the shape every app-generated
+    /// key has. A fixture whose encryption seed were derived from its signing
+    /// seed could not tell a working backup from the #2140 defect.
+    fn secrets() -> DeviceSecrets {
+        let mut s = DeviceSecrets {
+            signing_seed: [0u8; 32],
+            encryption_seed: [0u8; 32],
+        };
+        for (i, b) in s.signing_seed.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
+        }
+        for (i, b) in s.encryption_seed.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(11).wrapping_add(101);
         }
         s
     }
 
+    fn signing_pubkey_hex() -> String {
+        hex::encode(secrets().signing_pubkey().to_bytes())
+    }
+
     fn write(recovery_key: &str) -> BackupFile {
-        create_backup(&seed(), PUBKEY_HEX, PIN, recovery_key, 1_760_000_123).expect("create_backup")
+        create_backup(&secrets(), PIN, recovery_key, 1_760_000_123).expect("create_backup")
+    }
+
+    /// Both seeds came back, byte for byte.
+    fn assert_restored(recovered: &DeviceSecrets) {
+        let original = secrets();
+        assert_eq!(
+            recovered.signing_seed, original.signing_seed,
+            "signing seed"
+        );
+        assert_eq!(
+            recovered.encryption_seed, original.encryption_seed,
+            "encryption seed — a mismatch here is #2140"
+        );
     }
 
     #[test]
@@ -557,7 +618,7 @@ mod tests {
             let backup = write(&key);
             let recovered = open_backup(&backup, BackupCredential::RecoveryKey(&key))
                 .expect("recovery-key open");
-            assert_eq!(recovered.as_ref(), &seed());
+            assert_restored(&recovered);
         }
     }
 
@@ -584,14 +645,14 @@ mod tests {
         let backup = write(&key);
         let recovered =
             open_backup(&backup, BackupCredential::RecoveryKey(&key)).expect("recovery-key open");
-        assert_eq!(recovered.as_ref(), &seed());
+        assert_restored(&recovered);
     }
 
     #[test]
     fn round_trips_the_pin() {
         let backup = write(&generate_recovery_key());
         let recovered = open_backup(&backup, BackupCredential::Pin(PIN)).expect("pin open");
-        assert_eq!(recovered.as_ref(), &seed());
+        assert_restored(&recovered);
     }
 
     #[test]
@@ -608,7 +669,7 @@ mod tests {
         ] {
             let recovered = open_backup(&backup, BackupCredential::RecoveryKey(&variant))
                 .unwrap_or_else(|e| panic!("variant {variant:?} failed: {e}"));
-            assert_eq!(recovered.as_ref(), &seed());
+            assert_restored(&recovered);
         }
     }
 
@@ -683,9 +744,10 @@ mod tests {
         // AAD, so nothing here needs a constant key, and a literal one would be
         // a hard-coded cryptographic value whether or not it is a test.
         let kek: [u8; 32] = rand::rngs::OsRng.gen();
-        let (nonce, ciphertext) = seal(&kek, &seed(), LABEL_BACKUP).unwrap();
-        assert!(open_seed(&kek, &nonce, &ciphertext, LABEL_BACKUP).is_ok());
-        let err = open_seed(&kek, &nonce, &ciphertext, LABEL_BACKUP_HKDF_INFO)
+        let plaintext = [0x5au8; BACKUP_PLAINTEXT_LEN];
+        let (nonce, ciphertext) = seal(&kek, &plaintext, LABEL_BACKUP).unwrap();
+        assert!(open_secrets(&kek, &nonce, &ciphertext, LABEL_BACKUP).is_ok());
+        let err = open_secrets(&kek, &nonce, &ciphertext, LABEL_BACKUP_HKDF_INFO)
             .expect_err("role mismatch must fail the AEAD check");
         assert!(matches!(err, CryptoError::DecryptionFailed));
     }
@@ -694,15 +756,33 @@ mod tests {
     fn rejects_other_container_versions() {
         let key = generate_recovery_key();
         let mut backup = write(&key);
-        for version in [1u8, 3, 5] {
+        for version in [1u8, 3, 4, 6] {
             backup.v = version;
             let err = open_backup(&backup, BackupCredential::RecoveryKey(&key))
-                .expect_err("only v4 is readable");
+                .expect_err("only v5 is readable");
             assert!(
                 matches!(err, CryptoError::InvalidFormat(_)),
                 "v{version} gave {err}"
             );
         }
+    }
+
+    #[test]
+    fn refuses_a_signing_seed_only_payload() {
+        // The v4 shape — one 32-byte seed — must never be half-restored by
+        // inventing the encryption seed, even if relabelled as v5 and sealed
+        // under the right recovery key. That invention is #2140.
+        let key = generate_recovery_key();
+        let mut backup = write(&key);
+        let salt = decode_salt(&backup.r.s).unwrap();
+        let kek = derive_recovery_kek(&key, &salt).unwrap();
+        let (nonce, ciphertext) =
+            seal(&kek, &secrets().signing_seed, LABEL_BACKUP_HKDF_INFO).unwrap();
+        backup.r.n = nonce;
+        backup.r.c = ciphertext;
+        let err = open_backup(&backup, BackupCredential::RecoveryKey(&key))
+            .expect_err("a signing-seed-only payload must be refused");
+        assert!(matches!(err, CryptoError::InvalidFormat(_)), "got {err}");
     }
 
     #[test]
@@ -779,8 +859,8 @@ mod tests {
 
     #[test]
     fn rejects_fields_that_are_not_the_written_length() {
-        // Everything but the ciphertext is fixed-length in v4, and the
-        // ciphertext is exactly one sealed seed. Nothing variable reaches a
+        // Everything but the ciphertext is fixed-length in v5, and the
+        // ciphertext is exactly one sealed seed pair. Nothing variable reaches a
         // primitive.
         let key = generate_recovery_key();
         let base = write(&key);
@@ -824,7 +904,7 @@ mod tests {
         let backup = write(&key);
         let json = serde_json::to_string(&backup).unwrap();
         assert!(
-            !json.contains(PUBKEY_HEX),
+            !json.contains(&signing_pubkey_hex()),
             "the signing pubkey must not appear in the file"
         );
         assert!(!json.contains("deviceId"), "no plaintext device id");
@@ -842,6 +922,6 @@ mod tests {
         let parsed: BackupFile = serde_json::from_str(&json).unwrap();
         let recovered =
             open_backup(&parsed, BackupCredential::RecoveryKey(&key)).expect("open after reparse");
-        assert_eq!(recovered.as_ref(), &seed());
+        assert_restored(&recovered);
     }
 }

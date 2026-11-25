@@ -6,6 +6,7 @@
 import { index, pgTable, text, boolean, integer, timestamp } from 'drizzle-orm/pg-core'
 import { jsonb } from '../bun-jsonb'
 import { users } from './users'
+import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
 
 // ---------------------------------------------------------------------------
 // user_signal_contacts
@@ -46,8 +47,9 @@ export const userSignalContacts = pgTable(
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    cryptoFormat: cryptoFormatColumn(),
   },
-  (table) => [index('user_signal_contacts_hash_idx').on(table.identifierHash)]
+  (table) => [cryptoFormatCheck('user_signal_contacts', table.cryptoFormat), index('user_signal_contacts_hash_idx').on(table.identifierHash)]
 )
 
 export type UserSignalContactRow = typeof userSignalContacts.$inferSelect

@@ -1,5 +1,5 @@
 /**
- * Reader-side guards for the v4 backup container.
+ * Reader-side guards for the v5 backup container.
  *
  * This file deliberately does NOT test backup cryptography: there is none in
  * the webview any more. The format round-trip — generate a recovery key, write
@@ -21,19 +21,19 @@ function asFile(content: unknown): File {
   return new File([text], 'backup-deadbeef.json', { type: 'application/json' })
 }
 
-function v4(): BackupFile {
+function v5(): BackupFile {
   return {
     v: BACKUP_FORMAT_VERSION,
     id: 'a1b2c3',
     t: 1_760_000_400,
-    d: { kv: 2, s: 'aa'.repeat(32), m: 65_536, i: 3, p: 4, n: 'bb'.repeat(12), c: 'cc'.repeat(48) },
-    r: { kv: 1, s: 'dd'.repeat(32), n: 'ee'.repeat(12), c: 'ff'.repeat(48) },
+    d: { kv: 2, s: 'aa'.repeat(32), m: 65_536, i: 3, p: 4, n: 'bb'.repeat(12), c: 'cc'.repeat(80) },
+    r: { kv: 1, s: 'dd'.repeat(32), n: 'ee'.repeat(12), c: 'ff'.repeat(80) },
   }
 }
 
 describe('readBackupFile', () => {
-  it('accepts a v4 container', async () => {
-    expect(await readBackupFile(asFile(v4()))).toEqual(v4())
+  it('accepts a v5 container', async () => {
+    expect(await readBackupFile(asFile(v5()))).toEqual(v5())
   })
 
   it('rejects the v1 container the old TypeScript writer produced', async () => {
@@ -58,22 +58,26 @@ describe('readBackupFile', () => {
     expect(await readBackupFile(asFile(v3))).toBeNull()
   })
 
-  it('rejects a v4 container with a missing or malformed block', async () => {
-    const noRecovery: Record<string, unknown> = { ...v4() }
+  it('rejects the v4 container, which held only the signing seed (#2140)', async () => {
+    expect(await readBackupFile(asFile({ ...v5(), v: 4 }))).toBeNull()
+  })
+
+  it('rejects a v5 container with a missing or malformed block', async () => {
+    const noRecovery: Record<string, unknown> = { ...v5() }
     delete noRecovery.r
     expect(await readBackupFile(asFile(noRecovery))).toBeNull()
 
-    const badHex = { ...v4(), r: { ...v4().r, c: 'not hex at all' } }
+    const badHex = { ...v5(), r: { ...v5().r, c: 'not hex at all' } }
     expect(await readBackupFile(asFile(badHex))).toBeNull()
 
-    const missingArgonParams = { ...v4(), d: { kv: 2, s: 'aa', n: 'bb', c: 'cc' } }
+    const missingArgonParams = { ...v5(), d: { kv: 2, s: 'aa', n: 'bb', c: 'cc' } }
     expect(await readBackupFile(asFile(missingArgonParams))).toBeNull()
   })
 
   it('rejects files that are not backups at all', async () => {
     expect(await readBackupFile(asFile('not json'))).toBeNull()
     expect(await readBackupFile(asFile(null))).toBeNull()
-    expect(await readBackupFile(asFile([v4()]))).toBeNull()
+    expect(await readBackupFile(asFile([v5()]))).toBeNull()
     expect(await readBackupFile(asFile({}))).toBeNull()
   })
 })

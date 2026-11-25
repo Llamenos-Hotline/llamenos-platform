@@ -290,9 +290,13 @@ Then('my encrypted backup is saved and its location is shown', async ({ page }) 
   const saved = await page.evaluate(() => window.__TEST_SAVED_BACKUPS ?? [])
   expect(saved, 'exactly one backup should have reached disk').toHaveLength(1)
   await expect(page.getByTestId(TestIds.BACKUP_SAVED_PATH)).toContainText(saved[0].path)
-  // The saved file is the v4 container that login's restore path reads.
+  // The saved file is the v5 container that login's restore path reads. v5 is the
+  // first container that carries the X25519 decryption key; v4 held only the
+  // signing seed and every reader (Rust, backup.ts, the desktop write gate) now
+  // rejects it (#2140). Pinned as a literal so a drifting writer cannot also drift
+  // the expectation.
   const container = JSON.parse(saved[0].contents) as Record<string, unknown>
-  expect(container.v).toBe(4)
+  expect(container.v).toBe(5)
   await expect(page.getByTestId(TestIds.BACKUP_ERROR)).toHaveCount(0)
   await page.getByTestId(Ids.ONBOARDING_BACKUP_ACK).check()
   await expect(page.getByTestId(Ids.ONBOARDING_CONTINUE_BTN)).toBeEnabled()

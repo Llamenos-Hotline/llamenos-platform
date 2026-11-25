@@ -14,7 +14,7 @@
 //!   outside the webview's DOM, so a compromised renderer cannot pick a path);
 //! * the webview holds **no `fs` plugin grant** — this command is the only way it
 //!   can put a file on disk, and it only writes what [`validate_backup_contents`]
-//!   accepts: a v4 backup container, size-capped. It is not a generic writer;
+//!   accepts: a v5 backup container, size-capped. It is not a generic writer;
 //! * the result is the **absolute path actually written**, which the UI shows, or
 //!   `None` when the user dismissed the dialog (nothing was written). Callers
 //!   must treat only `Some(path)` as "backup saved".
@@ -26,7 +26,7 @@ use tauri_plugin_dialog::DialogExt;
 
 /// Container version this build writes. Must match `BACKUP_FORMAT_VERSION` in
 /// `packages/crypto/src/backup.rs` and `src/client/lib/backup.ts`.
-const BACKUP_FORMAT_VERSION: u64 = 4;
+const BACKUP_FORMAT_VERSION: u64 = 5;
 
 /// A real backup is a few hundred bytes (two small ciphertext blocks); anything
 /// near this cap is not a backup and must not be written.
@@ -101,10 +101,10 @@ mod tests {
     use super::*;
 
     const VALID: &str =
-        r#"{"v":4,"id":"e49cd3","t":1700000000,"d":{"kv":2,"c":"00"},"r":{"kv":1,"c":"00"}}"#;
+        r#"{"v":5,"id":"e49cd3","t":1700000000,"d":{"kv":2,"c":"00"},"r":{"kv":1,"c":"00"}}"#;
 
     #[test]
-    fn accepts_a_v4_container() {
+    fn accepts_a_v5_container() {
         assert!(validate_backup_contents(VALID).is_ok());
     }
 
@@ -115,9 +115,11 @@ mod tests {
             "[]",
             "\"v\"",
             r#"{"v":3,"d":{},"r":{}}"#,
+            // v4 held only the signing seed and cannot restore the decryption key (#2140).
+            r#"{"v":4,"d":{},"r":{}}"#,
             r#"{"d":{},"r":{}}"#,
-            r#"{"v":4,"d":{}}"#,
-            r#"{"v":4,"d":"x","r":"y"}"#,
+            r#"{"v":5,"d":{}}"#,
+            r#"{"v":5,"d":"x","r":"y"}"#,
         ] {
             assert!(validate_backup_contents(bad).is_err(), "{bad}");
         }
@@ -126,7 +128,7 @@ mod tests {
     #[test]
     fn rejects_oversized_content() {
         let big = format!(
-            r#"{{"v":4,"d":{{}},"r":{{}},"pad":"{}"}}"#,
+            r#"{{"v":5,"d":{{}},"r":{{}},"pad":"{}"}}"#,
             "a".repeat(MAX_BACKUP_BYTES)
         );
         assert!(validate_backup_contents(&big).is_err());
