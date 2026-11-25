@@ -256,13 +256,19 @@ export class ReportTypesService {
     }
   }
 
+  /**
+   * A report type of `hubId`. The hub is required for the same reason as
+   * {@link EntitySchemaService.getEntityTypeById}'s: a type of another hub is
+   * indistinguishable from one that does not exist (#2631).
+   */
   async getCmsReportTypeById(
     id: string,
+    hubId: string,
   ): Promise<ReportTypeDefinition> {
     const [row] = await this.db
       .select()
       .from(reportTypeDefinitions)
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(and(eq(reportTypeDefinitions.id, id), eq(reportTypeDefinitions.hubId, hubId)))
     if (!row) {
       throw new ServiceError(404, 'Report type not found')
     }
@@ -341,14 +347,17 @@ export class ReportTypesService {
     return this.rowToReportTypeDefinition(created)
   }
 
+  /** Update a report type of `hubId` — the hub is required and part of every statement's WHERE (#2631). */
   async updateCmsReportType(
     id: string,
+    hubId: string,
     data: Record<string, unknown>,
   ): Promise<ReportTypeDefinition> {
+    const inHub = and(eq(reportTypeDefinitions.id, id), eq(reportTypeDefinitions.hubId, hubId))
     const [existing] = await this.db
       .select()
       .from(reportTypeDefinitions)
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(inHub)
     if (!existing) {
       throw new ServiceError(404, 'Report type not found')
     }
@@ -391,12 +400,12 @@ export class ReportTypesService {
     await this.db
       .update(reportTypeDefinitions)
       .set(updates)
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(inHub)
 
     const [updated] = await this.db
       .select()
       .from(reportTypeDefinitions)
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(inHub)
     return this.rowToReportTypeDefinition(updated)
   }
 
@@ -439,13 +448,16 @@ export class ReportTypesService {
     return { reportTypes: data.reportTypes }
   }
 
+  /** Archive a report type of `hubId` — the hub is required, as for {@link updateCmsReportType}. */
   async deleteCmsReportType(
     id: string,
+    hubId: string,
   ): Promise<{ archived: true; id: string }> {
+    const inHub = and(eq(reportTypeDefinitions.id, id), eq(reportTypeDefinitions.hubId, hubId))
     const [existing] = await this.db
       .select()
       .from(reportTypeDefinitions)
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(inHub)
     if (!existing) {
       throw new ServiceError(404, 'Report type not found')
     }
@@ -457,7 +469,7 @@ export class ReportTypesService {
         isArchived: true,
         updatedAt: new Date(),
       })
-      .where(eq(reportTypeDefinitions.id, id))
+      .where(inHub)
 
     return { archived: true, id }
   }

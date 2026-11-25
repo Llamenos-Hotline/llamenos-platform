@@ -95,14 +95,14 @@ describe('entity-types wire contract', () => {
     expect(on.notifyContactsOnStatusChange).toBe(true)
     expect((await settings.entitySchema.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(true)
 
-    const flipped = await settings.entitySchema.updateEntityType(on.id, { notifyContactsOnStatusChange: false })
+    const flipped = await settings.entitySchema.updateEntityType(on.id, hubId, { notifyContactsOnStatusChange: false })
     expect(flipped.notifyContactsOnStatusChange).toBe(false)
     expect((await settings.entitySchema.getEntityTypeById(on.id, hubId)).notifyContactsOnStatusChange).toBe(false)
 
     // A PATCH that does not mention the flag must not reset it.
-    const set = await settings.entitySchema.updateEntityType(on.id, { notifyContactsOnStatusChange: true })
+    const set = await settings.entitySchema.updateEntityType(on.id, hubId, { notifyContactsOnStatusChange: true })
     expect(set.notifyContactsOnStatusChange).toBe(true)
-    const untouched = await settings.entitySchema.updateEntityType(on.id, { label: 'renamed' })
+    const untouched = await settings.entitySchema.updateEntityType(on.id, hubId, { label: 'renamed' })
     expect(untouched.notifyContactsOnStatusChange).toBe(true)
   })
 })
