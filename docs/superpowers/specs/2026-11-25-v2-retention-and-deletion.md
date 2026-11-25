@@ -72,8 +72,10 @@ From #2186 (audited @ `22501b41f`) and #3005 (@ `d2bf23b38`), re-checked against
 ```
 
 - **`validate_definition` refuses a definition without `retention`.** A new type never inherits "keep forever" (#2186).
-- **The clock must be a kind the definition makes plaintext.** `closed` needs the `closed` kind, and its clock starts at the hour the flag was set, which the server records. A type with no status uses `created` or `updated`.
-- **Children follow their parent.** Sub-records, comments, edges and `file` fields are deleted with the parent (F1, F7). They have no clock of their own, so a child never outlives its parent. A child type may declare a *shorter* period, never a longer one.
+- **The clock must be a kind the definition makes plaintext.** `closed` needs the `closed` and `closed_hour` kinds (#3025 E4). A type with no status uses `created` or `updated`.
+- **The server stamps every clock column** from its own time at the write, and refuses client-supplied values (#3025 E4). Otherwise a member holding only `update` could backdate a document into the purge. A malicious server can delete anyway, so what this protects is the honesty of the lifetime report (R10), not the data.
+- **Children follow their parent.** Sub-records, comments and `file` fields are deleted with the parent (F1, F7). They have no clock of their own, so a child never outlives its parent. A child type may declare a *shorter* period, never a longer one.
+- **The server must be able to find the children.** `validate_definition` requires plaintext `parent` on any type that follows its parent's clock (#3025 E4, E6). A child type that keeps its parent sealed must declare its own clock. Files already carry their parent in clear (F1). Sealed relation edges are not children: they are deleted with the document that holds them.
 - **Into the write policy (E8):** `{clock, days, onExpiry, hold}`. The server's daily purge selects expired documents by `type_ref` and clock, and deletes them per §5. It reads no ciphertext.
 - **What the server learns:** the period and clock for each opaque type. That is configuration, not content, and it is stated.
 
@@ -139,12 +141,12 @@ Every deletion uses one routine: retention, a user's delete, caller erasure, rec
 deletion. It deletes in this order:
 
 1. **Provider-held media** (#2304's fail-loud deletion), while the credentials still exist. This closes #2364 gap 1.
-2. **Our blobs:** the file segments and recordings under the document's or hub's prefix (F7: hub-prefixed keys, delete by prefix, which settles #3005 item 3).
-3. **Headers, index tokens and grants** for the document.
+2. **Our blobs.** For a document: find its file documents by their clear parent ref (F1), and delete each through **F7's file-delete path**, which uses F7's `deleting` row state. Blobs live under `hubs/<hub>/files/<file_id>/…` (F2), so there is no per-document prefix. For a hub: delete by the hub prefix (F7). Either way this settles #3005 item 3.
+3. **The document's headers and index tokens.** Grants are per group epoch, not per document, so they are untouched, except on a hub deletion, which deletes every grant and epoch key (#2961).
 4. **Rows**, including the plaintext columns.
 5. **Credentials and keys** last, and only for a hub deletion.
 
-A step that fails stops the routine. The routine records `deletion_pending` (counts only), retries,
+A step that fails stops the routine. For files, the pending state is F7's `deleting` row state. For everything else, the routine records `deletion_pending` (counts only). It retries,
 and raises the provider-media incident (#2353) after the retry budget. **Nothing is reported as
 deleted while any earlier step is pending.**
 
@@ -170,7 +172,7 @@ lawsuit is won, and erased afterwards.
 - A type that declares `retention.hold: true` gets a plaintext `held` flag (a new E4 kind, `held`) and the permission `doc:<type>:hold`.
 - A held document is skipped by the retention purge. It is **not** exempt from caller erasure, which is the subject's own choice (D7b).
 - **Holds expire.** A hold carries a review date at most 1 year out, and the admins get a notice before it lapses. An indefinite hold is a "keep forever" by another name.
-- **What the server learns:** which documents are held. That is stated in the definition's `why`.
+- **What the server learns:** which documents are held and until when (`held`, `hold_until`, #3025 E4). **That marks documents under a legal process or dispute**, which is itself a signal to anyone who reads the database. The definition's `why` must say so, and holds stay opt-in per type for that reason.
 
 ---
 
@@ -180,7 +182,9 @@ D7b is already decided: reader-side, by record id, the server never learns the n
 entry holds counts only, `calls:erase-caller`, and the typed confirmation.
 
 **Finding the records.**
-- Under v2, every document that names a caller carries an `exact` token on the caller identifier, under the call-history group (#3025 E5).
+- Under v2, every document that names a caller carries an `exact` token on the caller identifier, under the `perm:calls:read-history` group (#3025 E5).
+- **Call records are documents** of the system type `call` (#3025 E11). The server writes them, but can't compute tokens (D7), so the **answering volunteer's client writes the caller token on first open**. A call record not yet opened by anyone has no token, and erasure finds it by the call's thread instead (the conversation or call is opened, and its call records are listed by parent). The eraser's device reports how many it could not reach.
+- Contacts and cases carry the token when their definition indexes the caller identifier under the same group.
 - The eraser's device computes the token for the number it was given, asks for matching doc ids, opens them, confirms the matches locally, and deletes by id. **This replaces "decrypt everything and scan".**
 - The token shows the server which documents share a caller, but not who the caller is. Today's `HMAC_SECRET` hashes show the server the same thing, under a key the server holds itself.
 
@@ -211,7 +215,9 @@ which records were refused and why, and the caller can ask again later.
 #1143: purging old entries truncates the hash chain, so the verifier reports tampering on data
 nobody touched.
 
-- **Recommended:** the purge writes a `checkpoint` entry first. It carries the sequence and hash of the last entry being purged, the purge cutoff, and the count. The verifier accepts a chain that starts at a checkpoint.
+- **Recommended:** the purge writes a `checkpoint` entry first. It carries the sequence and hash of the last entry being purged, the purge cutoff, and the count. The verifier accepts a chain that starts at a checkpoint, with two guards against a server truncating recent history (review finding 12):
+  - **The checkpoint is signed by an admin device**, as a hub-chain-anchored statement. The server proposes the purge, and an admin client signs it. A purge waits for an admin, which is acceptable for a daily job.
+  - **The verifier refuses a checkpoint whose cutoff is younger than the hub's `audit_log` period.** So a checkpoint can't jump past a fresh `definition.update` or release entry.
 - What a checkpoint cannot show is whether the purged entries were themselves intact. That is the point of purging them, and it is stated.
 - Release audit entries are signed (#2941), and their signatures are checked before the purge. A failed check stops the purge and raises an incident.
 - **Alternative:** never purge the audit log. Its `max_days` would then be infinite, which goes against D7a.
