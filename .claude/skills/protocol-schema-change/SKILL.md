@@ -134,10 +134,9 @@ Handles a quicktype limitation: quicktype doesn't emit Kotlin default values fro
 
 1. Strips quicktype's verbose convenience initializer extensions (keeps struct/enum + CodingKeys only)
 2. Adds `Sendable` conformance to all structs/enums
-3. Renames 15 types that shadow Swift built-ins or framework types:
+3. Renames types that shadow Swift built-ins or framework types:
    - `Error` → `InviteError`, `Event` → `ProtocolEvent`, `Record` → `CaseLinkRecord`
    - `Location` → `EventLocation`, `Value` → `FieldValue`, `Category` → `ReportTypeCategory`
-   - `KeyEnvelope` → `ProtocolKeyEnvelope` (avoids UniFFI collision)
    - See `codegen.ts` lines 124-251 for full list
 
 ## Schema Change Workflow

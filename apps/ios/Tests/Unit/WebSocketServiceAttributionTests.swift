@@ -10,7 +10,7 @@ import Testing
 /// matches the hub ID passed in from the server message (new protocol — hub is not inferred
 /// from key-trial, it is provided directly in the event envelope).
 ///
-/// Real AES-256-GCM decryption happens in Rust via `CryptoService.decryptServerEvent`.
+/// Real decryption happens in Rust via `CryptoService.openServerEvent`, under the per-hub event key the crate holds (#2999).
 /// These tests use `WebSocketService.decryptionHandler` — a `#if DEBUG` closure that
 /// overrides the CryptoService call — to return predetermined plaintext JSON without
 /// requiring actual encrypted payloads or stored server event keys.

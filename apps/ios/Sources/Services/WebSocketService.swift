@@ -656,9 +656,9 @@ final class WebSocketService {
         let json: String?
         #if DEBUG
         json = decryptionHandler(payload, epoch)
-            ?? cryptoService.decryptServerEvent(ciphertextHex: payload, epoch: epoch)
+            ?? kind.flatMap { cryptoService.openServerEvent(hubId: hubId, kind: $0, epoch: epoch, payloadHex: payload) }
         #else
-        json = cryptoService.decryptServerEvent(ciphertextHex: payload, epoch: epoch)
+        json = kind.flatMap { cryptoService.openServerEvent(hubId: hubId, kind: $0, epoch: epoch, payloadHex: payload) }
         #endif
         guard let json else { return nil }
         if kind == Self.kindHubIncident {

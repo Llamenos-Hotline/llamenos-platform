@@ -30,26 +30,6 @@ extension EncryptedKeyData: Codable {
     }
 }
 
-extension KeyEnvelope: Codable {
-    enum CodingKeys: String, CodingKey {
-        case enc, ct
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            enc: try container.decode(String.self, forKey: .enc),
-            ct: try container.decode(String.self, forKey: .ct)
-        )
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(enc, forKey: .enc)
-        try container.encode(ct, forKey: .ct)
-    }
-}
-
 extension RecipientKeyEnvelope: Codable {
     enum CodingKeys: String, CodingKey {
         case pubkey, enc, ct
@@ -94,16 +74,16 @@ extension DeviceKeyState: Codable {
     }
 }
 
+/// The one HPKE envelope (spec D1, D2): `{enc, ct}`, lowercase hex. No version
+/// and no `labelId` — the label is the shape's, supplied by the crate.
 extension HpkeEnvelope: Codable {
     enum CodingKeys: String, CodingKey {
-        case v, labelId, enc, ct
+        case enc, ct
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            v: try container.decode(UInt8.self, forKey: .v),
-            labelId: try container.decode(UInt8.self, forKey: .labelId),
             enc: try container.decode(String.self, forKey: .enc),
             ct: try container.decode(String.self, forKey: .ct)
         )
@@ -111,8 +91,6 @@ extension HpkeEnvelope: Codable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(v, forKey: .v)
-        try container.encode(labelId, forKey: .labelId)
         try container.encode(enc, forKey: .enc)
         try container.encode(ct, forKey: .ct)
     }

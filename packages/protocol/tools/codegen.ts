@@ -840,9 +840,6 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   output = output.replace(/^enum Error: String/gm, 'enum InviteError: String')
   output = output.replace(/\blet error: Error\?/g, 'let error: InviteError?')
 
-  // `KeyEnvelope` conflicts with UniFFI's KeyEnvelope — rename to ProtocolKeyEnvelope.
-  output = output.replace(/\bKeyEnvelope\b/g, 'ProtocolKeyEnvelope')
-
   // `Group` shadows SwiftUI's Group view — rename to AffinityGroupElement.
   output = output.replace(/^(struct |\/\/ MARK: - )Group\b/gm, '$1AffinityGroupElement')
   output = output.replace(/\blet groups: \[Group\]/g, 'let groups: [AffinityGroupElement]')

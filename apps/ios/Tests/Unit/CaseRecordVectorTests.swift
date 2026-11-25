@@ -6,21 +6,17 @@ import Foundation
 ///
 /// `packages/crypto/tests/fixtures/case-record-vectors.json` holds a case
 /// summary, case fields and a case comment as the server stored and returned
-/// them (`packages/crypto/scripts/gen-case-record-vectors.ts`). The label and
-/// AAD each record was sealed under are read out of the fixture, never spelled
-/// in Swift, and every assertion has one side that is not `CryptoService`:
+/// them (`packages/crypto/scripts/gen-case-record-vectors.ts`). Each fixture
+/// reader is unlocked as this device through `mobileUnlock`, from the PIN blob
+/// the crate emits for it (`v2/fixture-reader-devices.json`), and every open
+/// goes through the production reader:
 ///
-/// * the server's ciphertext bytes are opened by `CryptoService.openCase` —
-///   the production reader — after the fixture reader's content key is
-///   re-wrapped to this device under the fixture's declared label and AAD;
-/// * what `CryptoService.sealCase` writes is opened by the fixture's readers
-///   (loaded as the wake key, a real HPKE opener on the same binary) under the
-///   fixture's declared label and AAD;
-/// * and the stored-message reading (`LABEL_MESSAGE`, no AAD) — what desktop
-///   and Android used before #2499 — opens none of it.
-///
-/// The fixture's reader secrets cannot be loaded as the *device* key (the FFI
-/// has no import), hence the wake key and the re-wrap.
+/// * the server's ciphertext bytes are opened by `CryptoService.openCase` as
+///   each of their readers;
+/// * what `CryptoService.sealCase` writes is opened by each fixture reader's
+///   device in turn;
+/// * and the stored-message reading (`decryptMessage`) — what desktop and
+///   Android used before #2499 — opens none of it.
 final class CaseRecordVectorTests: XCTestCase {
 
     // MARK: - Fixture
@@ -64,53 +60,17 @@ final class CaseRecordVectorTests: XCTestCase {
     override func setUp() {
         super.setUp()
         CryptoService().lock()
-        mobileClearWakeKey()
     }
 
     override func tearDown() {
-        mobileClearWakeKey()
         CryptoService().lock()
         super.tearDown()
     }
 
     // MARK: - Helpers
 
-    private func ffiEnvelope(label: String, enc: String, ct: String) throws -> HpkeEnvelope {
-        HpkeEnvelope(
-            v: 3,
-            labelId: try mobileLabelToId(label: label),
-            enc: try mobileHexToBase64url(hexStr: enc),
-            ct: try mobileHexToBase64url(hexStr: ct)
-        )
-    }
-
-    /// The content key of `envelope`, opened as `reader` (loaded as the wake key).
-    private func contentKey(as reader: Fixture.Reader, label: String, keyWrapAadHex: String, envelope: (enc: String, ct: String)) throws -> String {
-        try mobileLoadWakeKey(secretHex: reader.x25519SecretHex)
-        return try mobileHpkeOpenWithWakeKey(
-            envelope: try ffiEnvelope(label: label, enc: envelope.enc, ct: envelope.ct),
-            expectedLabel: label,
-            aadHex: keyWrapAadHex
-        )
-    }
-
-    private func openAsFixtureReader(_ reader: Fixture.Reader, label: String, aad: Fixture.AAD, encryptedContent: String, envelope: (enc: String, ct: String)) throws -> String {
-        let keyHex = try contentKey(as: reader, label: label, keyWrapAadHex: aad.keyWrap, envelope: envelope)
-        let plaintextHex = try mobileSymmetricDecrypt(ciphertextHex: encryptedContent, keyHex: keyHex, aadHex: aad.content)
-        return try XCTUnwrap(String(data: try XCTUnwrap(Self.data(fromHex: plaintextHex)), encoding: .utf8))
-    }
-
-    private static func data(fromHex hex: String) -> Data? {
-        guard hex.count % 2 == 0 else { return nil }
-        var data = Data(capacity: hex.count / 2)
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
-            data.append(byte)
-            index = next
-        }
-        return data
+    private static func hex(_ text: String) -> String {
+        Data(text.utf8).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - The fixture itself
@@ -121,8 +81,9 @@ final class CaseRecordVectorTests: XCTestCase {
         XCTAssertEqual(Set(f.records.map(\.purpose)), Set(expected.keys))
         for rec in f.records {
             XCTAssertEqual(rec.label, expected[rec.purpose])
-            XCTAssertEqual(rec.aadHex.content, try mobileContentAadHex(label: rec.label))
-            XCTAssertEqual(rec.aadHex.keyWrap, try mobileKeyWrapAadHex(label: rec.label))
+            // The format-1 case AADs (crate `case_record.rs`), as the fixture declares them.
+            XCTAssertEqual(rec.aadHex.content, Self.hex(rec.label))
+            XCTAssertEqual(rec.aadHex.keyWrap, Self.hex("\(rec.label):key-wrap"))
             XCTAssertEqual(rec.readerEnvelopes.map(\.pubkey), f.readers.map(\.x25519PubkeyHex))
         }
     }
@@ -132,27 +93,15 @@ final class CaseRecordVectorTests: XCTestCase {
     func testOpenCaseReadsTheServerPersistedBytes() throws {
         let f = try loadFixture()
         let service = CryptoService()
-        _ = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
-        let device = try XCTUnwrap(service.encryptionPubkeyHex)
-
         for rec in f.records {
             for reader in f.readers {
-                let env = try XCTUnwrap(rec.readerEnvelopes.first { $0.pubkey == reader.x25519PubkeyHex })
-                let keyHex = try contentKey(as: reader, label: rec.label, keyWrapAadHex: rec.aadHex.keyWrap, envelope: (env.enc, env.ct))
-                // Re-wrap the server's content key to this device under the
-                // fixture's label and AAD — outside CryptoService.
-                let wrap = try mobileHpkeSealKey(keyHex: keyHex, recipientPubkeyHex: device, label: rec.label, aadHex: rec.aadHex.keyWrap)
-                let deviceEnvelope = RecipientEnvelope(
-                    ct: try mobileBase64urlToHex(b64: wrap.ct),
-                    enc: try mobileBase64urlToHex(b64: wrap.enc),
-                    pubkey: device
-                )
+                try unlockAsFixtureReader(service, x25519PubkeyHex: reader.x25519PubkeyHex)
                 let opened = try service.openCase(
                     purpose: try purpose(rec),
                     encryptedContent: rec.encryptedContent,
-                    envelopes: [deviceEnvelope]
+                    envelopes: rec.readerEnvelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
                 )
-                XCTAssertEqual(opened, rec.plaintext, "openCase could not read the server-persisted \(rec.name) via \(reader.name)'s key")
+                XCTAssertEqual(opened, rec.plaintext, "openCase could not read the server-persisted \(rec.name) as \(reader.name)")
             }
         }
     }
@@ -175,8 +124,9 @@ final class CaseRecordVectorTests: XCTestCase {
                 XCTAssertEqual(env.ct.count, fixtureEnvelope.ct.count)
             }
             for reader in f.readers {
-                let env = try XCTUnwrap(sealed.envelopes.first { $0.pubkey == reader.x25519PubkeyHex })
-                let opened = try openAsFixtureReader(reader, label: rec.label, aad: rec.aadHex, encryptedContent: sealed.encryptedContent, envelope: (env.enc, env.ct))
+                let readerService = CryptoService()
+                try unlockAsFixtureReader(readerService, x25519PubkeyHex: reader.x25519PubkeyHex)
+                let opened = try readerService.openCase(purpose: try purpose(rec), encryptedContent: sealed.encryptedContent, envelopes: sealed.envelopes)
                 XCTAssertEqual(opened, plaintext, "\(reader.name) cannot open the \(rec.purpose) iOS sealed")
             }
         }
@@ -187,10 +137,14 @@ final class CaseRecordVectorTests: XCTestCase {
     func testTheStoredMessageReadingOpensNoneOfIt() throws {
         let f = try loadFixture()
         let reader = try XCTUnwrap(f.readers.first)
+        let service = CryptoService()
+        try unlockAsFixtureReader(service, x25519PubkeyHex: reader.x25519PubkeyHex)
         for rec in f.records {
-            let env = try XCTUnwrap(rec.readerEnvelopes.first { $0.pubkey == reader.x25519PubkeyHex })
             XCTAssertThrowsError(
-                try contentKey(as: reader, label: CryptoLabels.LABEL_MESSAGE, keyWrapAadHex: "", envelope: (env.enc, env.ct)),
+                try service.decryptMessage(
+                    encryptedContent: rec.encryptedContent,
+                    readerEnvelopes: rec.readerEnvelopes.map { RecipientEnvelope(ct: $0.ct, enc: $0.enc, pubkey: $0.pubkey) }
+                ),
                 "\(rec.name) opened as a stored message"
             )
         }
