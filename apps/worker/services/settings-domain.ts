@@ -51,7 +51,7 @@ export interface SettingsDomainServices {
   platformSettings: PlatformSettingsService
 }
 
-export function createSettingsDomain(db: Database): SettingsDomainServices {
+export function createSettingsDomain(db: Database, serverKek?: string): SettingsDomainServices {
   const hubSettings = new HubSettingsService(db)
   const providerConfig = new ProviderConfigService(db)
   return {
@@ -68,7 +68,7 @@ export function createSettingsDomain(db: Database): SettingsDomainServices {
     callSettings: new CallSettingsService(db, hubSettings),
     ivrSettings: new IvrSettingsService(db, hubSettings, providerConfig),
     providerConfig,
-    messagingConfig: new MessagingConfigService(db, hubSettings),
+    messagingConfig: new MessagingConfigService(db, hubSettings, serverKek),
     setupState: new SetupStateService(db),
     customFields: new CustomFieldsService(db),
     reportTypes: new ReportTypesService(db),

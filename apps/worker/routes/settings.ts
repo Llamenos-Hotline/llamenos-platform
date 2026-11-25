@@ -54,6 +54,7 @@ import {
 import { okResponseSchema, errorResponseSchema } from '@protocol/schemas/common'
 import { authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
+import { redactMessagingConfig } from '../services/messaging-secrets'
 import { ServiceError } from '../services/service-error'
 import { validateExternalUrlWithDns } from '../lib/ssrf-guard'
 import {
@@ -728,8 +729,9 @@ deployment.get('/messaging',
   requirePermission('settings:manage-messaging'),
   async (c) => {
     const services = c.get('services')
+    // Credentials are write-only over the API: the response says whether each is set.
     const result = await services.messagingConfig.getMessagingConfig()
-    return c.json(result)
+    return c.json(redactMessagingConfig(result as unknown as Record<string, unknown>))
   },
 )
 
@@ -756,8 +758,16 @@ deployment.patch('/messaging',
     const body = c.req.valid('json')
     const services = c.get('services')
     const result = await services.messagingConfig.updateMessagingConfig(body)
-    await audit(services.audit, 'messagingConfigUpdated', pubkey, body as Record<string, unknown>, undefined, null)
-    return c.json(result)
+    // The audit record names what changed, never the credentials it carried.
+    await audit(
+      services.audit,
+      'messagingConfigUpdated',
+      pubkey,
+      redactMessagingConfig(body as Record<string, unknown>),
+      undefined,
+      null,
+    )
+    return c.json(redactMessagingConfig(result as unknown as Record<string, unknown>))
   },
 )
 

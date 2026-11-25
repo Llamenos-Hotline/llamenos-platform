@@ -47,7 +47,11 @@ Feature: Channel Configuration
       | telegram.botUsername   | @TestBot                    |
       | telegram.webhookSecret | tg-webhook-secret           |
     Then the channel config response status is 200
-    And the response "telegram.botToken" is "123456:ABC-DEF"
+    # Credentials are write-only: the response says whether one is stored, never what it is (#3031).
+    And the response "telegram.botToken" is absent
+    And the response "telegram.webhookSecret" is absent
+    And the response "telegram.botTokenSet" is true
+    And the response "telegram.botUsername" is "@TestBot"
 
   Scenario: A Telegram bot without a webhook secret is refused at configure time
     When I PATCH "/settings/messaging" with:

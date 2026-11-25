@@ -56,7 +56,7 @@ const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const svc = {
-  ...createSettingsDomain(db),
+  ...createSettingsDomain(db, 'cd'.repeat(32)), // SERVER_KEK: the telegram credentials in CASES are sealed at rest (#3031)
   audit: new AuditService(db),
   identity: new IdentityService(db),
 }

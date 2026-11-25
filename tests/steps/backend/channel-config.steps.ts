@@ -124,6 +124,14 @@ Then('the response {string} is {string}', ({ world }, field: string, value: stri
   expect(getNestedField(getCS(world).lastData, field)).toBe(value)
 })
 
+Then('the response {string} is absent', ({ world }, field: string) => {
+  expect(getNestedField(getCS(world).lastData, field)).toBeUndefined()
+})
+
+Then('the response {string} is true', ({ world }, field: string) => {
+  expect(getNestedField(getCS(world).lastData, field)).toBe(true)
+})
+
 Then('the response has a {string} boolean field', ({ world }, field: string) => {
   expect(typeof getNestedField(getCS(world).lastData, field)).toBe('boolean')
 })

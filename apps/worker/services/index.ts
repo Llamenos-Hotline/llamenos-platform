@@ -125,7 +125,7 @@ export function createServices(db: Database, opts?: ServicesOpts): Services {
   // Register provider implementations once during service initialization (not at module import)
   registerAllProviders()
 
-  const settingsDomain = createSettingsDomain(db)
+  const settingsDomain = createSettingsDomain(db, opts?.serverKek)
   const { hubSettings, roles, customFields } = settingsDomain
   const identity = new IdentityService(db, opts?.env?.ADMIN_PUBKEY)
   const hubShred = new HubShredService(db, opts?.blobStorage)
