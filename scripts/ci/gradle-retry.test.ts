@@ -190,6 +190,16 @@ describe('gradle-retry.sh', () => {
     expect(r.invocations[1]).toContain('connectedDebugAndroidTest')
   })
 
+  // #2971: the emulator run is `--offline` with ONE attempt. A retry would add --refresh-dependencies, which
+  // asks Central for everything again: the wrong move against a throttled address, and meaningless offline.
+  test('#2971: GRADLE_RETRY_ATTEMPTS=1 runs once and never sends --refresh-dependencies, --offline passes through', () => {
+    const r = run(['utp-miss', 'ok'], ['connectedDebugAndroidTest', '--offline', '--console=plain'], { GRADLE_RETRY_ATTEMPTS: '1' })
+    expect(r.code).toBe(1)
+    expect(r.invocations).toHaveLength(1)
+    expect(r.invocations[0]).toContain('--offline')
+    expect(r.invocations[0]).not.toContain('--refresh-dependencies')
+  })
+
   test('the retry stays bounded: a persistent #2969 miss runs exactly GRADLE_RETRY_ATTEMPTS times (default 3) and fails', () => {
     const r = run(['utp-miss'], ['connectedDebugAndroidTest'])
     expect(r.code).toBe(1)

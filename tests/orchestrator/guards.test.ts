@@ -5724,6 +5724,38 @@ ${cause}
       expect(calls[0]).toContain('bash ../../scripts/ci/gradle-retry.sh connectedDebugAndroidTest')
     })
 
+    // #2971: Maven Central 429s the hosted runners' shared egress address, and a retry cannot clear a per-IP
+    // throttle. The emulator step therefore must not be ABLE to ask: --offline, one attempt, and a check before boot.
+    it('#2971: the emulator run is --offline with a single attempt', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const calls = job.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('connectedDebugAndroidTest'))
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toContain('GRADLE_RETRY_ATTEMPTS=1')
+      expect(calls[0]).toContain('--offline')
+      expect(calls[0]).not.toContain('--refresh-dependencies')
+    })
+
+    it('#2971: android-e2e proves the cache covers the emulator step before the emulator boots, on the retry too', () => {
+      const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
+      const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
+      const runs = job.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('assert-connected-test-offline.sh'))
+      expect(runs, 'the pre-boot check and the retry-prep check').toHaveLength(2)
+      const check = job.indexOf('assert-connected-test-offline.sh')
+      expect(check).toBeGreaterThan(job.indexOf('resolveConnectedTestDependencies'))
+      expect(check).toBeLessThan(job.indexOf('reactivecircus/android-emulator-runner'))
+      const prep = job.slice(job.indexOf('Prepare the infrastructure retry'), job.indexOf('infrastructure retry\n', job.indexOf('Prepare the infrastructure retry')))
+      expect(prep).toContain('assert-connected-test-offline.sh')
+      expect(existsSync(join(process.cwd(), 'scripts', 'ci', 'assert-connected-test-offline.sh'))).toBe(true)
+    })
+
+    it('#2971: the main-branch cache warmer primes the connected-test classpaths too, and re-runs when the init script changes', () => {
+      const warm = readFileSync(join(process.cwd(), '.github', 'workflows', 'android-cache-warm.yml'), 'utf8')
+      const runs = warm.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('gradle-retry.sh'))
+      expect(runs.some((l) => l.includes('-I ../../scripts/ci/gradle-resolve-connected-test.init.gradle.kts') && l.includes('resolveConnectedTestDependencies'))).toBe(true)
+      expect(warm).toContain('"scripts/ci/gradle-resolve-connected-test.init.gradle.kts"')
+    })
+
     it('#2969: the pre-emulator resolve (and the retry\'s) also resolves the Unified Test Platform classpaths, and the init script exists', () => {
       const ci = readFileSync(join(process.cwd(), '.github', 'workflows', 'ci.yml'), 'utf8')
       const job = ci.slice(ci.indexOf('\n  android-e2e:'), ci.indexOf('\n  e2e:', ci.indexOf('\n  android-e2e:')))
