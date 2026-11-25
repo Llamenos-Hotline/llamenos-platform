@@ -15,6 +15,12 @@ import { createSocket as createDgramSocket } from 'node:dgram'
 export interface RegisterResult {
   status: number
   reason: string
+  /**
+   * On a 200, the expiry the REGISTRAR granted this binding — the `expires`
+   * parameter on our Contact in the 200's Contact header (RFC 3261 §10.3
+   * step 8), else the 200's Expires header. Undefined when neither is there.
+   */
+  grantedExpiry?: number
 }
 
 // RFC 3261 §22.4 mandates MD5 for SIP digest authentication — the PBX
@@ -193,7 +199,14 @@ async function registerOverTransport(
     cseq += 1
     sendRegister(digestAuthorization(parsed, { username, password }, 'REGISTER', uri, cnonce))
     const final = await readSipMessage(socket, state)
-    return { status: final.status, reason: final.reason }
+    const contactExpires = /;\s*expires=(\d+)/i.exec(final.headers['contact'] ?? '')?.[1]
+    const expiresHeader = final.headers['expires']
+    const granted = contactExpires ?? expiresHeader
+    return {
+      status: final.status,
+      reason: final.reason,
+      ...(final.status === 200 && granted !== undefined ? { grantedExpiry: Number(granted) } : {}),
+    }
   } finally {
     socket.destroy()
   }

@@ -212,6 +212,44 @@ function timingSafeEqualString(a: string, b: string): boolean {
 }
 
 /**
+ * The granted registration expiry respects the server's cap (plan Task 12).
+ *
+ * The desktop shell requests REGISTRATION_MAX_EXPIRY_SECONDS (600) and clamps
+ * anything larger client-side; the server must ALSO bound it, because a client
+ * that asks for more (any other SIP client, an older build) would otherwise
+ * hold a binding the registrar's own reachability model does not expect.
+ * Measured on the credential the API actually provisioned, through the edge.
+ */
+test('the granted REGISTER expiry never exceeds the server cap of 600 s', async ({ request }) => {
+  await configureAsteriskProvider(request)
+  const hubId = await createHub(request, 'Registrar expiry E2E')
+  const volunteer = await createUserViaApi(request, { name: 'Registrar Expiry E2E Volunteer' })
+  await updateUserViaApi(request, volunteer.pubkey, { callPreference: 'both' })
+  await addHubMemberViaApi(request, hubId, volunteer.pubkey)
+  const token = await apiGet<SipTokenResponse>(request, '/telephony/sip-token', volunteer.seedHex)
+  expect(token.status, 'the volunteer SIP token is issued').toBe(200)
+  const { sip } = token.data
+
+  const caPem = sipEdgeTrustAnchor()
+  const register = (expires: number) => registerOverTls({
+    host: SIP_EDGE_HOST,
+    port: SIP_EDGE_TLS_PORT,
+    domain: REGISTRAR_DOMAIN,
+    username: sip.username,
+    password: sip.password,
+    caPem,
+    expires,
+  })
+  const over = await register(3600)
+  expect(over.status, `REGISTER: ${over.reason}`).toBe(200)
+  expect(over.grantedExpiry, 'a granted expiry is reported').toBeDefined()
+  expect(over.grantedExpiry ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(600)
+  const at = await register(600)
+  expect(at.status, `REGISTER: ${at.reason}`).toBe(200)
+  expect(at.grantedExpiry).toBe(600)
+})
+
+/**
  * The gap #1573's review found in this route, closed and proven at the PBX.
  *
  * Revoking a removed volunteer's SIP identity is worth nothing if they can
