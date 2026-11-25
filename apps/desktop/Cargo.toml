@@ -52,14 +52,19 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"
 argon2 = "0.5"
 subtle = "2"
-zeroize = "1"
+# `std` for Zeroizing<CString>/Vec, `serde` so the /sip-token wire type
+# deserializes its secrets straight into Zeroizing<String> (#1770).
+zeroize = { version = "1", features = ["std", "serde"] }
 # Runtime-enforced network egress (#739) — the webview's CSP connect-src allows
 # only `ipc:`; all HTTP/WS traffic to the user-configured backend is proxied
 # through these commands (see src/net.rs) instead of a browser fetch/WebSocket.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio = { version = "1", features = ["sync", "net"] }
+tokio = { version = "1", features = ["sync", "net", "time"] }
+# Desktop in-app audio (#1770). Always linked for its event/parameter types;
+# the liblinphone core itself only with the `voice` feature below.
+llamenos-voice = { path = "voice", default-features = false }
 url = "2"
 base64 = "0.22"
 # Native OS confirmation dialog for api_config_request_clear (#788) — rendered
@@ -97,3 +102,9 @@ tokio = { version = "1", features = ["rt", "io-util"] }
 default = ["custom-protocol", "updater"]
 custom-protocol = ["tauri/custom-protocol"]
 updater = ["dep:tauri-plugin-updater"]
+# In-app audio through the pinned liblinphone SDK (#1770). Needs the vendored
+# SDK for the build target (scripts/fetch-linphone-sdk.sh <target>). Not yet a
+# default: the linux-x86_64 tarball is pinned but not yet published to the
+# release origin (#719), so a default build could not fetch it. Without it
+# every voice_* command reports in-app audio as unavailable for this build.
+voice = ["llamenos-voice/linphone"]

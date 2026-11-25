@@ -66,7 +66,7 @@ impl PinnedNet {
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
-    fn get(&self) -> Option<PinnedContext> {
+    pub(crate) fn get(&self) -> Option<PinnedContext> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
@@ -224,7 +224,7 @@ fn is_forbidden_request_header(name: &str) -> bool {
 /// the configured backend is reached through the pinned client (`PinnedNet`)
 /// and the first-run probe through `cert_pin::build_probe_client`.
 #[cfg(test)]
-fn http_client() -> &'static reqwest::Client {
+pub(crate) fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -365,6 +365,51 @@ async fn fetch_json_with(
     }
     let bytes = base64_decode(&res.body_base64)?;
     serde_json::from_slice(&bytes).map_err(|e| format!("server returned invalid JSON: {e}"))
+}
+
+/// Authenticated `GET` whose response body is a SECRET (the `/sip-token`
+/// credential, #1770): same allowlist and pins as `fetch_json`, but the body
+/// is handed back as `Zeroizing` bytes and never passes through the base64
+/// `NetResponse` or a `serde_json::Value` (both of which would leave plain,
+/// uncleared copies). The status is returned rather than mapped, so the
+/// caller decides which statuses fail closed.
+#[cfg_attr(not(feature = "voice"), allow(dead_code))]
+pub(crate) async fn fetch_secret(
+    app: &AppHandle,
+    pinned: &PinnedNet,
+    path: &str,
+    bearer: &str,
+) -> Result<(u16, zeroize::Zeroizing<Vec<u8>>), String> {
+    let configured = allowed_origin(app)?;
+    let ctx = pinned
+        .get()
+        .ok_or_else(|| "backend not fully configured: missing certificate pins".to_string())?;
+    fetch_secret_with(&ctx.client, &configured, path, bearer).await
+}
+
+#[cfg_attr(not(feature = "voice"), allow(dead_code))]
+pub(crate) async fn fetch_secret_with(
+    client: &reqwest::Client,
+    configured: &Url,
+    path: &str,
+    bearer: &str,
+) -> Result<(u16, zeroize::Zeroizing<Vec<u8>>), String> {
+    let target = configured
+        .join(path)
+        .map_err(|e| format!("invalid request path: {e}"))?;
+    check_http_target(configured, &target)?;
+    let res = client
+        .get(target)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .send()
+        .await
+        .map_err(|e| format!("network error: {e}"))?;
+    let status = res.status().as_u16();
+    let bytes = res
+        .bytes()
+        .await
+        .map_err(|e| format!("network error reading response body: {e}"))?;
+    Ok((status, zeroize::Zeroizing::new(bytes.to_vec())))
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +612,7 @@ pub async fn net_ws_close(registry: State<'_, WsRegistry>, id: String) -> Result
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -710,12 +755,12 @@ mod tests {
 
     /// Minimal HTTP/1.1 server: records each raw request (head + body) and
     /// answers every request with `response`.
-    struct TestServer {
-        origin: String,
-        requests: Arc<Mutex<Vec<String>>>,
+    pub(crate) struct TestServer {
+        pub(crate) origin: String,
+        pub(crate) requests: Arc<Mutex<Vec<String>>>,
     }
 
-    fn spawn_server(response: String) -> TestServer {
+    pub(crate) fn spawn_server(response: String) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));

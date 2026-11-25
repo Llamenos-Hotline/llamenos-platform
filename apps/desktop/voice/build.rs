@@ -3,6 +3,9 @@
 //! The paths come from llamenos-voice-sys (`links = "linphone"`), which has
 //! already refused a missing or stale vendored tree.
 fn main() {
+    if std::env::var_os("CARGO_FEATURE_LINPHONE").is_none() {
+        return;
+    }
     let root =
         std::env::var("DEP_LINPHONE_SDK_ROOT").expect("llamenos-voice-sys exports its SDK root");
     let lib =

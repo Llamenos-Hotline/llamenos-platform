@@ -124,7 +124,10 @@ function listenedEventNames(): string[] {
   const fixed = [...src.matchAll(/platformListen\(\s*'([^']+)'/g)].map(m => m[1])
   const updater = read('src/client/lib/updater.ts')
   const fromUpdater = [...updater.matchAll(/platformListen\(\s*'([^']+)'/g)].map(m => m[1])
-  return [...new Set([...fixed, ...fromUpdater])]
+  // In-app audio (#1770): the channels go through `listenVoice('<channel>', …)`.
+  const voice = [...src.matchAll(/listenVoice\(\s*'([^']+)'/g)].map(m => m[1])
+  expect(voice.sort()).toEqual(['voice:call', 'voice:error', 'voice:registration'])
+  return [...new Set([...fixed, ...fromUpdater, ...voice])]
 }
 
 function sorted(s: Set<string>): string[] {
@@ -294,6 +297,8 @@ describe('desktop IPC boundary', () => {
       { cmd: 'plugin:event|listen', payload: { event: 'net-ws:' } },
       { cmd: 'plugin:event|listen', payload: { event: 'net-ws:x y' } },
       { cmd: 'plugin:event|listen', payload: { event: 'xnet-ws:abc' } },
+      { cmd: 'plugin:event|listen', payload: { event: 'voice:anything' } },
+      { cmd: 'plugin:event|listen', payload: { event: 'voice:' } },
       { cmd: 'plugin:event|listen', payload: {} },
       { cmd: 'plugin:event|unlisten', payload: { event: 'anything', eventId: 1 } },
       { cmd: 'plugin:event|unlisten', payload: { event: 'net-ws:abc' } },

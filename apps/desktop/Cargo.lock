@@ -2803,6 +2803,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "llamenos-core",
+ "llamenos-voice",
  "pbkdf2",
  "rand 0.8.6",
  "rcgen",

@@ -4,6 +4,7 @@ mod cert_pin;
 mod crypto;
 mod deep_link;
 mod net;
+mod voice;
 
 use tauri::{Emitter, Manager};
 
@@ -69,6 +70,8 @@ pub fn run() {
         .manage(api_config::ClearConfirmState::default())
         // Invite code delivered by a `llamenos://hub-invite` link (#1128)
         .manage(deep_link::PendingInvite::default())
+        // In-app audio (#1770): lifecycle policy + the liblinphone core
+        .manage(voice::VoiceState::default())
         .setup(|app| {
             // Rehydrate the pinned TLS client/connector from whatever backend
             // was already configured on a previous run (#775). Must happen
@@ -163,7 +166,9 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        // Zeroize crypto state before exit
+                        // Unregister in-app audio (best-effort: nothing on disk
+                        // depends on it), then zeroize crypto state before exit
+                        voice::shutdown(app);
                         if let Some(state) = app.try_state::<CryptoState>() {
                             state.lock();
                         }
@@ -187,6 +192,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Destroyed = event {
+                        voice::shutdown(&app_handle);
                         if let Some(state) = app_handle.try_state::<CryptoState>() {
                             state.lock();
                         }
@@ -284,6 +290,15 @@ pub fn run() {
             net::net_ws_close,
             // Invite deep link (#1128) — the code, handed over once
             deep_link::take_pending_invite,
+            // Voice (SIP/WebRTC — credential confined to the shell, #1770)
+            voice::voice_sync_registrations,
+            voice::voice_unregister_all,
+            voice::voice_answer,
+            voice::voice_decline,
+            voice::voice_hangup,
+            voice::voice_set_muted,
+            voice::voice_list_audio_devices,
+            voice::voice_select_audio_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

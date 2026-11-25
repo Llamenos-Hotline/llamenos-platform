@@ -17,8 +17,9 @@ use std::time::Duration;
 
 use llamenos_voice_sys::ffi;
 
+use crate::account::{apply_registration, cstr_opt};
 use crate::events::*;
-use crate::register::{apply_registration, cstr_opt, SipRegistrationParams, APP_CALL_ID_HEADER};
+use crate::register::{SipRegistrationParams, APP_CALL_ID_HEADER};
 use crate::VoiceError;
 
 const ITERATE_INTERVAL: Duration = Duration::from_millis(20);
@@ -165,6 +166,31 @@ pub struct VoiceCore {
     pump: Option<std::thread::JoinHandle<()>>,
 }
 
+/// A cheap, cloneable way to post to the pump without holding the
+/// [`VoiceCore`] (which owns the pump's lifetime). The shell gives one to its
+/// IPC handlers, so a handler waiting on the pump never holds the lock the
+/// pump's event sink needs.
+#[derive(Clone)]
+pub struct VoiceHandle {
+    cmd_tx: Sender<VoiceCommand>,
+}
+
+impl VoiceHandle {
+    /// Non-blocking, from any thread. The outcome arrives as a [`VoiceEvent`].
+    pub fn post(&self, cmd: VoiceCommand) {
+        if self.cmd_tx.send(cmd).is_err() {
+            eprintln!("llamenos-voice: command dropped, pump thread has exited");
+        }
+    }
+
+    /// Enumerate audio devices, answered by the pump within `timeout`.
+    pub fn list_audio_devices(&self, timeout: Duration) -> Result<AudioDevices, VoiceError> {
+        let (tx, rx) = channel();
+        self.post(VoiceCommand::ListAudioDevices(tx));
+        rx.recv_timeout(timeout).map_err(|_| VoiceError::PumpDied)
+    }
+}
+
 /// One call the pump is tracking. The `LinphoneCall` is ref'd while held.
 struct CallSlot {
     call: *mut ffi::LinphoneCall,
@@ -203,6 +229,13 @@ fn emit(ev: VoiceEvent) {
 }
 
 impl VoiceCore {
+    /// A cloneable poster to this core's pump, until shutdown.
+    pub fn handle(&self) -> Option<VoiceHandle> {
+        self.cmd_tx
+            .as_ref()
+            .map(|tx| VoiceHandle { cmd_tx: tx.clone() })
+    }
+
     pub fn start(config: VoiceConfig) -> Result<Self, VoiceError> {
         use std::sync::atomic::Ordering;
         if CORE_LIVE
@@ -584,6 +617,7 @@ unsafe fn dispatch(core: *mut ffi::LinphoneCore, cmd: VoiceCommand) {
                 emit(VoiceEvent::Registration(RegistrationEvent {
                     state: RegistrationState::Failed,
                     reason: Some(e.to_string()),
+                    rejected_by_registrar: false,
                 }));
             }
         }
@@ -863,7 +897,7 @@ unsafe fn refresh_media_paths() {
 
 unsafe extern "C" fn on_registration_state_changed(
     _core: *mut ffi::LinphoneCore,
-    _account: *mut ffi::LinphoneAccount,
+    account: *mut ffi::LinphoneAccount,
     state: ffi::LinphoneRegistrationState,
     message: *const c_char,
 ) {
@@ -879,9 +913,17 @@ unsafe extern "C" fn on_registration_state_changed(
         ffi::LinphoneRegistrationState::LinphoneRegistrationFailed => RegistrationState::Failed,
         _ => return,
     };
+    let rejected_by_registrar = mapped == RegistrationState::Failed
+        && !account.is_null()
+        && matches!(
+            ffi::linphone_account_get_error(account),
+            ffi::LinphoneReason::LinphoneReasonUnauthorized
+                | ffi::LinphoneReason::LinphoneReasonForbidden
+        );
     emit(VoiceEvent::Registration(RegistrationEvent {
         state: mapped,
         reason: cstr_opt(message),
+        rejected_by_registrar,
     }));
 }
 

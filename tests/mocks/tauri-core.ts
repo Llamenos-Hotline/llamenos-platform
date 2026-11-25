@@ -631,6 +631,56 @@ function emitNetWsEvent(id: string, payload: unknown): void {
 
 const mockWsConnections = new Map<string, WebSocket>()
 
+// ── In-app audio (#1770) — the shell's stand-in for Tier 3 ──────────────
+//
+// apps/desktop/src/voice.rs + apps/desktop/voice/ as a state machine: the same
+// commands, the same `voice:*` events, no SIP and no audio. Tests drive the
+// far side (a ring arriving, the registrar's verdict) through the mock-only
+// `voice_test_*` commands below.
+
+/** Emits a `voice:*` payload to listeners registered via platform.ts's `listenVoice*` (PLAYWRIGHT_TEST branch). */
+function emitVoiceEvent(channel: 'voice:registration' | 'voice:call' | 'voice:error', payload: unknown): void {
+  const win = window as unknown as Record<string, unknown>
+  const map = (win.__VOICE_LISTENERS__ ?? {}) as Record<string, Array<(p: unknown) => void>>
+  for (const handler of map[channel] ?? []) handler(payload)
+}
+
+type MockVoiceRegistration = 'unregistered' | 'registering' | 'registered' | 'failed' | 'unavailable' | 'credential-revoked'
+interface MockVoiceCall {
+  appCallId?: string
+  state: 'incoming' | 'connecting' | 'active' | 'ended' | 'error'
+  muted: boolean
+}
+
+const mockVoice = {
+  registration: 'unregistered' as MockVoiceRegistration,
+  /** Set by `voice_test_registration`: what the "registrar" answers every sync with. */
+  forced: null as { state: MockVoiceRegistration; reason?: string } | null,
+  calls: new Map<string, MockVoiceCall>(),
+  devices: {
+    input: [{ id: 'mock-mic', name: 'Mock microphone', selected: true }, { id: 'mock-headset-mic', name: 'Mock headset', selected: false }],
+    output: [{ id: 'mock-speaker', name: 'Mock speaker', selected: true }, { id: 'mock-headset', name: 'Mock headset', selected: false }],
+  },
+}
+
+function setMockVoiceRegistration(state: MockVoiceRegistration, reason?: string): void {
+  mockVoice.registration = state
+  emitVoiceEvent('voice:registration', reason ? { state, reason } : { state })
+}
+
+function emitMockVoiceCall(callId: string): void {
+  const call = mockVoice.calls.get(callId)
+  if (!call) return
+  emitVoiceEvent('voice:call', { callId, ...(call.appCallId ? { appCallId: call.appCallId } : {}), state: call.state, muted: call.muted, ...(call.state === 'active' ? { mediaPath: 'relay' } : {}) })
+  if (call.state === 'ended' || call.state === 'error') mockVoice.calls.delete(callId)
+}
+
+function requireMockVoiceCall(callId: string, allowed: MockVoiceCall['state'][]): MockVoiceCall {
+  const call = mockVoice.calls.get(callId)
+  if (!call || !allowed.includes(call.state)) throw new Error(`no ${allowed.join('/')} call ${callId} on this device`)
+  return call
+}
+
 type Args = Record<string, unknown>
 type CommandHandler = (a: Args) => unknown | Promise<unknown>
 
@@ -645,6 +695,10 @@ type MockOnlyCommand =
   | 'get_pin_lockout_state'
   | 'reset_pin_lockout'
   | 'expire_pin_lockout'
+  // In-app audio (#1770): the far side of the shell, for tests/voice-desktop.spec.ts
+  | 'voice_test_ring'
+  | 'voice_test_registration'
+  | 'voice_test_remote_hangup'
 
 /**
  * Sign an auth token exactly as `packages/crypto/src/auth.rs` does: build the
@@ -1725,6 +1779,75 @@ const commands: Record<TauriIpcCommand | MockOnlyCommand, CommandHandler> = {
     const code = mockPendingInvite
     mockPendingInvite = null
     return code
+  },
+
+  // --- In-app audio (#1770) — mirrors apps/desktop/src/voice.rs ---
+
+  voice_sync_registrations: async (a) => {
+    if (a.onShift !== true) {
+      if (mockVoice.registration !== 'unregistered') setMockVoiceRegistration('unregistered')
+      return
+    }
+    if (mockVoice.registration === 'credential-revoked') {
+      setMockVoiceRegistration('credential-revoked')
+      return
+    }
+    setMockVoiceRegistration('registering')
+    const outcome = mockVoice.forced ?? { state: 'registered' as const }
+    setMockVoiceRegistration(outcome.state, outcome.reason)
+  },
+  voice_unregister_all: async () => {
+    if (mockVoice.registration !== 'unregistered') setMockVoiceRegistration('unregistered')
+  },
+  voice_answer: async (a) => {
+    const id = a.callId as string
+    const call = requireMockVoiceCall(id, ['incoming'])
+    call.state = 'connecting'
+    emitMockVoiceCall(id)
+    call.state = 'active'
+    emitMockVoiceCall(id)
+  },
+  voice_decline: async (a) => {
+    const id = a.callId as string
+    requireMockVoiceCall(id, ['incoming']).state = 'ended'
+    emitMockVoiceCall(id)
+  },
+  voice_hangup: async (a) => {
+    const id = a.callId as string
+    requireMockVoiceCall(id, ['incoming', 'connecting', 'active']).state = 'ended'
+    emitMockVoiceCall(id)
+  },
+  voice_set_muted: async (a) => {
+    const id = a.callId as string
+    requireMockVoiceCall(id, ['connecting', 'active']).muted = a.muted === true
+    emitMockVoiceCall(id)
+  },
+  voice_list_audio_devices: async () => structuredClone(mockVoice.devices),
+  voice_select_audio_device: async (a) => {
+    const list = a.kind === 'input' ? mockVoice.devices.input : a.kind === 'output' ? mockVoice.devices.output : null
+    if (!list || !list.some(d => d.id === a.id)) throw new Error(`no ${String(a.kind)} audio device ${String(a.id)}`)
+    for (const d of list) d.selected = d.id === a.id
+  },
+
+  // Mock-only: an INVITE arriving at the registered endpoint. `appCallId` is
+  // what the bridge names the app's call in (X-Llamenos-Call-Id).
+  voice_test_ring: async (a) => {
+    if (mockVoice.registration !== 'registered') throw new Error('voice_test_ring: the endpoint is not registered, so the PBX cannot ring it')
+    const id = a.callId as string
+    mockVoice.calls.set(id, { appCallId: a.appCallId as string | undefined, state: 'incoming', muted: false })
+    emitMockVoiceCall(id)
+  },
+  // Mock-only: the registrar's verdict, applied now and to every later sync.
+  voice_test_registration: async (a) => {
+    const state = a.state as MockVoiceRegistration
+    mockVoice.forced = { state, reason: a.reason as string | undefined }
+    setMockVoiceRegistration(state, a.reason as string | undefined)
+  },
+  // Mock-only: the caller hung up.
+  voice_test_remote_hangup: async (a) => {
+    const id = a.callId as string
+    requireMockVoiceCall(id, ['incoming', 'connecting', 'active']).state = 'ended'
+    emitMockVoiceCall(id)
   },
 }
 

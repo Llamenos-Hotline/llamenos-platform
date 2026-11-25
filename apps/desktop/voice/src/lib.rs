@@ -7,19 +7,34 @@
 //! reports registration and call state as [`VoiceEvent`]s. Unsafe FFI lives in
 //! `llamenos-voice-sys`; the `unsafe` here is the call sites into it.
 
+//! Without the `linphone` feature only the pure half compiles — the event and
+//! parameter types the shell shares with the webview and the wire — so the
+//! shell builds where the pinned SDK is not installed (see apps/desktop's
+//! `voice` feature).
+
+#[cfg(feature = "linphone")]
+mod account;
+#[cfg(feature = "linphone")]
 mod core;
 mod events;
 mod register;
 #[cfg(feature = "e2e")]
 mod stats;
 
-pub use crate::core::{EventSink, VoiceCommand, VoiceConfig, VoiceCore};
+#[cfg(feature = "linphone")]
+pub use crate::core::{EventSink, VoiceCommand, VoiceConfig, VoiceCore, VoiceHandle};
 pub use crate::events::*;
 pub use crate::register::{
     IceServer, SipRegistrationParams, APP_CALL_ID_HEADER, REGISTRATION_MAX_EXPIRY_SECONDS,
 };
 #[cfg(feature = "e2e")]
 pub use crate::stats::AudioStats;
+
+/// The vendored SDK's `share/` (belr grammars, sounds) as this build found it.
+/// For development builds of the shell, which run against the vendored SDK
+/// rather than a bundle; a release bundle ships the directory as a resource.
+#[cfg(feature = "linphone")]
+pub const VENDORED_SDK_SHARE: &str = env!("LLAMENOS_VOICE_SDK_SHARE");
 
 /// Why the stack could not do what it was asked. Never carries a credential.
 #[derive(Debug)]
@@ -55,7 +70,7 @@ impl std::fmt::Display for VoiceError {
 
 impl std::error::Error for VoiceError {}
 
-#[cfg(test)]
+#[cfg(all(test, feature = "linphone"))]
 pub(crate) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};

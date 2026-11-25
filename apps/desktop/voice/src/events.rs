@@ -20,6 +20,11 @@ pub struct RegistrationEvent {
     pub state: RegistrationState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The registrar itself refused the credential (401/403 after issuance) —
+    /// the shell's lifecycle policy treats that as possible revocation (spec
+    /// §7.1). Shell-internal: never serialized to the webview.
+    #[serde(skip)]
+    pub rejected_by_registrar: bool,
 }
 
 /// `unavailable` and `credential-revoked` are decided by the shell's lifecycle
