@@ -635,6 +635,8 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_llamenos_core_checksum_func_check_crypto_format(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_decrypt_draft(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_decrypt_note(
@@ -828,7 +830,9 @@ internal object UniffiLib {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "llamenos_core"))
         
     }
-    external fun uniffi_llamenos_core_fn_func_decrypt_draft(`packedHex`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_llamenos_core_fn_func_check_crypto_format(`format`: Int,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+external fun uniffi_llamenos_core_fn_func_decrypt_draft(`packedHex`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_decrypt_note(`encryptedContent`: RustBuffer.ByValue,`envelope`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1127,6 +1131,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
+    if (lib.uniffi_llamenos_core_checksum_func_check_crypto_format() != 33101.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_draft() != 58624.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -3224,6 +3231,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
         }
     }
 }
+        /**
+         * Accept a row's `crypto_format` only if this build can read it.
+         *
+         * Call before opening any sealed row. An unknown value is
+         * [`CryptoError::InvalidFormat`]; there is no fallback to a known layout.
+         */
+    @Throws(CryptoException::class) fun `checkCryptoFormat`(`format`: kotlin.UInt)
+        = 
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_check_crypto_format(
+    
+        FfiConverterUInt.lower(`format`),_status)
+}
+    
+    
+
         /**
          * Decrypt a draft produced by [`encrypt_draft`].
          */
