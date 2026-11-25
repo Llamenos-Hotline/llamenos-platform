@@ -18,7 +18,7 @@
  */
 import { type SQL, sql } from 'drizzle-orm'
 import { type AnyPgColumn, check, smallint } from 'drizzle-orm/pg-core'
-import { CRYPTO_FORMAT_CURRENT, CRYPTO_FORMATS_KNOWN } from '../../../packages/protocol/crypto-format'
+import { CRYPTO_FORMAT_CURRENT, CRYPTO_FORMATS_KNOWN } from '@protocol/crypto-format'
 
 /** `crypto_format smallint NOT NULL DEFAULT <current>`. */
 export function cryptoFormatColumn() {

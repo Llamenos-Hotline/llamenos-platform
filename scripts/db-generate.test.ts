@@ -53,7 +53,7 @@ function bun(root: string, script: string, ...args: string[]): { code: number; o
 function mainRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'db-generate-'))
   scratch.push(root)
-  for (const p of ['drizzle', 'scripts', 'apps/worker/db', 'deploy/docker/docker-compose.dev.yml', 'package.json', 'tsconfig.json']) {
+  for (const p of ['drizzle', 'scripts', 'apps/worker/db', 'packages/protocol/crypto-format.ts', 'packages/protocol/crypto-formats.json', 'deploy/docker/docker-compose.dev.yml', 'package.json', 'tsconfig.json']) {
     cpSync(join(ROOT, p), join(root, p), { recursive: true })
   }
   symlinkSync(join(ROOT, 'node_modules'), join(root, 'node_modules'))
