@@ -108,7 +108,7 @@ object RecordReaderSet {
      */
     suspend fun forNewRecord(
         author: String?,
-        adminDecryptionPubkey: String?,
+        adminReaders: suspend () -> List<String>,
         lookup: suspend () -> EnvelopeRecipientsResponse,
-    ): RecordReaders = forRecord(author, adminDecryptionPubkey, lookup)
+    ): RecordReaders = forRecord(author, adminReaders, lookup)
 }

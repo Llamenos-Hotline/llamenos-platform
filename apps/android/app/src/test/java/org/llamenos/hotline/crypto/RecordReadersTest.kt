@@ -128,7 +128,7 @@ class RecordReadersTest {
 
     @Test
     fun `a new record is sealed to the author, the server's summary tier and the admin`() = runTest {
-        val readers = RecordReaderSet.forNewRecord(author, admin) { tiers }
+        val readers = RecordReaderSet.forNewRecord(author, { listOf(admin) }) { tiers }
         assertEquals(listOf(author, summaryOnly, editor, assignee, admin), readers.summary)
         assertFalse(outsider in readers.summary)
     }
@@ -137,7 +137,7 @@ class RecordReadersTest {
     fun `a new record with no admin recipient is refused before the lookup`() = runTest {
         var asked = false
         assertThrows(NoAdminReaderException::class.java) {
-            kotlinx.coroutines.runBlocking { RecordReaderSet.forNewRecord(author, null) { asked = true; tiers } }
+            kotlinx.coroutines.runBlocking { RecordReaderSet.forNewRecord(author, { emptyList() }) { asked = true; tiers } }
         }
         assertFalse(asked)
     }
