@@ -399,5 +399,4 @@ is dropped. Each follows when its client's v2 sealed store is in place.
 
 ## 12. Sign-off
 
-The operator signs off C1–C11 on #2977. Until then this is a draft, and no unit under #2939, #2940
-or #2942 is dispatchable.
+The operator signed off C1–C11 on #2977 on 2026-11-25, every decision as recommended. Build briefs are on #2977.
