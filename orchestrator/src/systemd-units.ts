@@ -120,7 +120,27 @@ export function unitProblems(
       } else if (f.nextElapse === '') {
         // README: is-enabled and is-active both say yes while systemd schedules
         // nothing. Only a next-trigger time proves the timer will fire.
-        problems.push(`${unit.name} is active but has NO next trigger scheduled — it will never fire; check its OnCalendar and run systemctl --user daemon-reload`)
+        //
+        // BUT an empty NextElapseUSecRealtime is ALSO what systemd reports for
+        // the whole time the timer's own activated unit is running — verified
+        // empirically 2026-11-25 with a recurring transient timer
+        // (`systemd-run --user --on-calendar='*:0/1' … sleep 75`: the property
+        // reads empty mid-run even though the next minute-boundary elapse
+        // exists). So the value alone cannot distinguish "broken OnCalendar,
+        // never fires" from "fired a minute ago, service still running". This
+        // mattered in production: every watchdog run examines the fleet WHILE
+        // its own service is active, so it WARNed on its own timer every hour,
+        // and on the tick timer whenever a long tick was in flight (watchdog
+        // briefs 11100600, 11220800, 11240700, 11250102, 11251600, …). Only an
+        // idle service makes an empty next-trigger damning.
+        // Fleet timers never set `Unit=`, so the activated unit is always the
+        // same-named .service (verified across orchestrator/systemd/*.timer).
+        const triggered = probe(unit.name.replace(/\.timer$/, '.service'))
+        const triggeredRunning = triggered !== undefined &&
+          (triggered.activeState === 'active' || triggered.activeState === 'activating' || triggered.activeState === 'deactivating')
+        if (!triggeredRunning) {
+          problems.push(`${unit.name} is active but has NO next trigger scheduled — it will never fire; check its OnCalendar and run systemctl --user daemon-reload`)
+        }
       }
     } else if (f.activeState === 'failed' || (f.result !== '' && f.result !== 'success')) {
       const owner = timers.has(unit.name.replace(/\.service$/, '')) ? ' (its timer keeps firing a failing service)' : ''
