@@ -39,13 +39,15 @@ vi.mock('@/lib/api', () => ({
   uploadChunk: mocks.uploadChunk,
   completeUpload: mocks.completeUpload,
 }))
-vi.mock('@/lib/platform', () => ({
+// Derived from the real module: an export this test does not stub resolves to the real
+// implementation (which fails loudly without Tauri) instead of being silently `undefined`.
+vi.mock('@/lib/platform', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/lib/platform')>()),
   hpkeWrapKey: mocks.hpkeWrapKey,
   aesGcmEncrypt: async () => 'ciphertext-hex',
-  unwrapFileKey: vi.fn(),
-  decryptFileMetadata: vi.fn(),
-  rewrapFileKey: vi.fn(),
-  aesGcmDecrypt: vi.fn(),
+  aesGcmSealBytes: async (plaintext: Uint8Array) => plaintext,
+  // The reader keys in this test are already encryption keys; resolution is the identity.
+  resolveEncryptionPubkey: async (pubkey: string) => pubkey,
 }))
 
 import { FileUpload } from '../FileUpload'
