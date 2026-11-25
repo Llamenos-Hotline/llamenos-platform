@@ -405,12 +405,28 @@ pub(crate) async fn fetch_secret_with(
         .await
         .map_err(|e| format!("network error: {e}"))?;
     let status = res.status().as_u16();
+    if res
+        .content_length()
+        .is_some_and(|n| n > SECRET_BODY_MAX_BYTES as u64)
+    {
+        return Err("response body too large".into());
+    }
     let bytes = res
         .bytes()
         .await
         .map_err(|e| format!("network error reading response body: {e}"))?;
-    Ok((status, zeroize::Zeroizing::new(bytes.to_vec())))
+    if bytes.len() > SECRET_BODY_MAX_BYTES {
+        return Err("response body too large".into());
+    }
+    // `Vec::from(Bytes)` takes over the receive buffer when it is uniquely
+    // owned (the normal case for a fully-read body) instead of copying it, so
+    // the Zeroizing wrapper owns — and clears — the bytes the client read.
+    Ok((status, zeroize::Zeroizing::new(Vec::from(bytes))))
 }
+
+/// A `/sip-token` response is well under a kilobyte; anything this large is
+/// not one, and is refused before it is held as a secret.
+const SECRET_BODY_MAX_BYTES: usize = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // First-run health probe

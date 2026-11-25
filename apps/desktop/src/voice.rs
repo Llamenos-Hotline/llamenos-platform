@@ -608,6 +608,18 @@ mod with_core {
                 Err(e) => {
                     s.policy.on_fetch_result(Err(e.clone()));
                     let revoked = s.policy.state() == LifecycleState::CredentialRevoked;
+                    if revoked {
+                        // A device already registered (a TURN refresh, or the
+                        // one refresh after a REGISTER rejection) must not keep
+                        // answering on a revoked identity: unregister and drop
+                        // the core's in-memory credential now.
+                        if let Some(r) = s.refresh.take() {
+                            r.abort();
+                        }
+                        if let Some(h) = s.core.as_ref().and_then(VoiceCore::handle) {
+                            h.post(VoiceCommand::UnregisterAll);
+                        }
+                    }
                     drop(s);
                     emit_registration(
                         &app,
