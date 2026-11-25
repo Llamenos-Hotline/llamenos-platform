@@ -2,7 +2,7 @@
  * Key backup & recovery — container types and the restore-side file reader.
  *
  * The backup format, both KDFs and the cipher are defined once, in Rust:
- * `packages/crypto/src/backup.rs` (container v4). That module's doc comment is
+ * `packages/crypto/src/backup.rs` (container v5). That module's doc comment is
  * the specification; read it before changing anything here.
  *
  * This file deliberately contains **no cryptography**. It used to hold a second,
