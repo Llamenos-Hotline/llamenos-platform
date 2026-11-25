@@ -34,10 +34,10 @@ function makeWin64Zip(name: string, omit?: string): { path: string; sha256: stri
   return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
 }
 
-function run(target: string, pins: string, vendorRoot: string) {
+function run(target: string, pins: string, vendorRoot: string, extra: string[] = []) {
   const checksums = join(tmp, `pins-${Math.random().toString(36).slice(2)}.txt`)
   writeFileSync(checksums, pins)
-  const r = Bun.spawnSync(['bash', SCRIPT, target], {
+  const r = Bun.spawnSync(['bash', SCRIPT, target, ...extra], {
     cwd: import.meta.dir,
     env: {
       ...process.env,
@@ -48,11 +48,34 @@ function run(target: string, pins: string, vendorRoot: string) {
   return { code: r.exitCode, stderr: r.stderr.toString(), stdout: r.stdout.toString() }
 }
 
+/** A tarball shaped like scripts/build-linphone-sdk-linux.sh's output, optionally missing one file. */
+function makeLinuxTarball(name: string, omit?: string): { path: string; sha256: string } {
+  const src = join(tmp, `src-${name}`)
+  const files = [
+    'linphone-sdk/linux-x86_64/include/linphone/core.h',
+    'linphone-sdk/linux-x86_64/lib/liblinphone.so',
+    'linphone-sdk/linux-x86_64/lib/libmediastreamer2.so',
+    'linphone-sdk/linux-x86_64/share/belr/grammars/sip_grammar.belr',
+  ].filter((f) => f !== omit)
+  for (const f of files) {
+    mkdirSync(join(src, f, '..'), { recursive: true })
+    writeFileSync(join(src, f), `fixture ${f}\n`)
+  }
+  const path = join(tmp, `${name}.tar.gz`)
+  const tar = Bun.spawnSync(['tar', '-czf', path, 'linphone-sdk'], { cwd: src })
+  if (tar.exitCode !== 0) throw new Error(`tar failed: ${tar.stderr.toString()}`)
+  return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
+}
+
 let good: { path: string; sha256: string }
 let incomplete: { path: string; sha256: string }
+let linuxGood: { path: string; sha256: string }
+let linuxNoGrammar: { path: string; sha256: string }
 beforeAll(() => {
   good = makeWin64Zip('good')
   incomplete = makeWin64Zip('incomplete', 'linphone-sdk/win64/bin/liblinphone.dll')
+  linuxGood = makeLinuxTarball('linux-good')
+  linuxNoGrammar = makeLinuxTarball('linux-nogrammar', 'linphone-sdk/linux-x86_64/share/belr/grammars/sip_grammar.belr')
 })
 
 describe('fetch-linphone-sdk.sh gate', () => {
@@ -100,12 +123,32 @@ describe('fetch-linphone-sdk.sh gate', () => {
     expect(existsSync(join(vendor, 'windows-x86_64'))).toBe(false)
   })
 
-  test('linux-x86_64 is refused even with a pin line, naming the open decision', () => {
+  test('linux-x86_64 installs our tarball layout through the same digest gate', () => {
     const vendor = join(tmp, 'v-linux')
-    const r = run('linux-x86_64', `linux-x86_64  file://${good.path}  ${good.sha256}\n`, vendor)
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('#1770')
+    const r = run('linux-x86_64', `linux-x86_64  file://${linuxGood.path}  ${linuxGood.sha256}\n`, vendor)
+    expect(r.stderr).toBe('')
+    expect(r.code).toBe(0)
+    expect(existsSync(join(vendor, 'linux-x86_64', 'share', 'belr', 'grammars', 'sip_grammar.belr'))).toBe(true)
+    expect(readFileSync(join(vendor, 'linux-x86_64', '.sdk-sha256'), 'utf8').trim()).toBe(linuxGood.sha256)
+  })
+
+  test('linux-x86_64 without the belr grammars is refused (liblinphone aborts without them)', () => {
+    const vendor = join(tmp, 'v-linux-nogrammar')
+    const r = run('linux-x86_64', `linux-x86_64  file://${linuxNoGrammar.path}  ${linuxNoGrammar.sha256}\n`, vendor)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('lacks linphone-sdk/linux-x86_64/share/belr/grammars/sip_grammar.belr')
     expect(existsSync(join(vendor, 'linux-x86_64'))).toBe(false)
+  })
+
+  test('--local reads a local artifact but still refuses one that is not the pinned digest', () => {
+    const vendor = join(tmp, 'v-local')
+    const ok = run('linux-x86_64', `linux-x86_64  https://example.invalid/never-fetched.tar.gz  ${linuxGood.sha256}\n`, vendor, ['--local', linuxGood.path])
+    expect(ok.stderr).toBe('')
+    expect(ok.code).toBe(0)
+    const bad = run('linux-x86_64', `linux-x86_64  https://example.invalid/never-fetched.tar.gz  ${'deadbeef'.repeat(8)}\n`, join(tmp, 'v-local-bad'), ['--local', linuxGood.path])
+    expect(bad.code).toBe(1)
+    expect(bad.stderr).toContain('CHECKSUM MISMATCH for linux-x86_64')
+    expect(existsSync(join(tmp, 'v-local-bad', 'linux-x86_64'))).toBe(false)
   })
 
   test('an unknown target is refused even with a pin line', () => {
@@ -127,16 +170,41 @@ describe('apps/desktop/linphone-sdk-checksums.txt', () => {
     for (const e of entries) {
       expect(e).toHaveLength(3)
       const [target, url, sha] = e
-      expect(['macos-arm64', 'windows-x86_64']).toContain(target)
-      expect(url.startsWith('https://download.linphone.org/releases/')).toBe(true)
+      expect(['linux-x86_64', 'macos-arm64', 'windows-x86_64']).toContain(target)
+      // Upstream's artifacts come from upstream; OUR Linux build comes only from
+      // our own release origin — never a third-party host (#1770 operator decision).
+      const origin = target === 'linux-x86_64'
+        ? 'https://updates.llamenos-hotline.org/desktop/linphone-sdk/'
+        : 'https://download.linphone.org/releases/'
+      expect(url.startsWith(origin)).toBe(true)
       expect(sha).toMatch(/^[0-9a-f]{64}$/)
     }
     expect(new Set(entries.map((e) => e[0])).size).toBe(entries.length)
+    expect(entries.map((e) => e[0]).sort()).toEqual(['linux-x86_64', 'macos-arm64', 'windows-x86_64'])
   })
 
   test('every pin is the same release (one liblinphone dialect across desktop targets)', () => {
-    const versions = new Set(entries.map((e) => /-(\d+\.\d+\.\d+)\.zip$/.exec(e[1])?.[1]))
+    const versions = new Set(entries.map((e) => /-(\d+\.\d+\.\d+)\.(zip|tar\.gz)$/.exec(e[1])?.[1]))
     expect(versions).toEqual(new Set(['5.5.39']))
     expect(readFileSync(PINS, 'utf8')).toContain('# Version: 5.5.39')
+  })
+})
+
+describe('apps/desktop/linphone-sdk-linux-x86_64.Dockerfile (the linux-x86_64 pin is rebuilt from it)', () => {
+  const dockerfile = readFileSync(join(import.meta.dir, '..', 'apps', 'desktop', 'linphone-sdk-linux-x86_64.Dockerfile'), 'utf8')
+
+  test('every input it builds from is pinned, at the same version as the checksums file', () => {
+    // Base image by digest, never by a mutable tag alone.
+    expect(dockerfile).toMatch(/^ARG BASE=\S+@sha256:[0-9a-f]{64}$/m)
+    // Source by tag AND commit; the build refuses a tag that has moved.
+    expect([...dockerfile.matchAll(/^ARG LINPHONE_SDK_VERSION=(\S+)$/gm)].map((m) => m[1])).toEqual(['5.5.39', '5.5.39'])
+    expect(dockerfile).toMatch(/^ARG LINPHONE_SDK_COMMIT=[0-9a-f]{40}$/m)
+    // The archive by snapshot date.
+    expect(dockerfile).toMatch(/^ARG UBUNTU_SNAPSHOT=\d{8}T\d{6}Z$/m)
+  })
+
+  test('both sound backends are required, not best-effort', () => {
+    for (const lib of ['libasound', 'libpulse']) expect(dockerfile).toContain(`NEEDED.*${lib}\\.so`)
+    for (const opt of ['ENABLE_ALSA', 'ENABLE_PULSEAUDIO']) expect(dockerfile).toContain(opt)
   })
 })

@@ -5,6 +5,14 @@ edition = "2024"
 rust-version = "1.90.0"
 license = "AGPL-3.0-or-later"
 
+# One lockfile and one target/ for the shell and the in-app audio crates (#1770).
+# Default members stay the shell alone: `cargo build`/`cargo test` here never
+# reach the voice crates (which need the vendored liblinphone SDK) unless the
+# `voice` feature is on or a voice crate is named with -p.
+[workspace]
+members = [".", "voice", "voice/sys"]
+default-members = ["."]
+
 [lib]
 name = "llamenos_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

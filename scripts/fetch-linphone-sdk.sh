@@ -7,8 +7,14 @@
 # whose sha256 differs from the pinned line is never extracted, and an existing
 # vendored tree is left exactly as it was.
 #
-# Usage: scripts/fetch-linphone-sdk.sh <target>
-#   <target> is a line name in the checksums file (macos-arm64, windows-x86_64).
+# Usage: scripts/fetch-linphone-sdk.sh <target> [--local <artifact>]
+#   <target> is a line name in the checksums file (linux-x86_64, macos-arm64,
+#   windows-x86_64).
+#   --local <artifact> reads the artifact from a local file instead of the
+#   pinned URL — for the linux-x86_64 tarball built by
+#   scripts/build-linphone-sdk-linux.sh before (or instead of) it being fetched
+#   from the release origin. It changes WHERE the bytes come from, never what
+#   they are checked against: the same pinned sha256 gates both paths.
 #
 # Installs into apps/desktop/vendor/linphone-sdk/<target>/ (gitignored) and
 # writes <that dir>/.sdk-sha256 holding the verified digest, so a build can tell
@@ -28,7 +34,14 @@ VENDOR_ROOT="${LLAMENOS_LINPHONE_VENDOR_ROOT:-$ROOT/apps/desktop/vendor/linphone
 
 die() { local code="$1"; shift; printf 'fetch-linphone-sdk: %s\n' "$*" >&2; exit "$code"; }
 
-[ "$#" -eq 1 ] || die 2 "usage: fetch-linphone-sdk.sh <target>"
+LOCAL=""
+case "$#" in
+  1) ;;
+  3) [ "$2" = "--local" ] || die 2 "usage: fetch-linphone-sdk.sh <target> [--local <artifact>]"
+     LOCAL="$3"
+     [ -f "$LOCAL" ] || die 2 "local artifact not found: $LOCAL" ;;
+  *) die 2 "usage: fetch-linphone-sdk.sh <target> [--local <artifact>]" ;;
+esac
 TARGET="$1"
 [[ "$TARGET" =~ ^[a-z0-9_-]+$ ]] || die 2 "invalid target name '$TARGET'"
 [ -f "$CHECKSUMS" ] || die 2 "checksums file not found: $CHECKSUMS"
@@ -38,23 +51,29 @@ TARGET="$1"
 # differently (headers in include/ on Windows, inside the framework on macOS),
 # so the expected shape is stated per target rather than assumed.
 case "$TARGET" in
+  linux-x86_64)
+    # Built from apps/desktop/linphone-sdk-linux-x86_64.Dockerfile (upstream
+    # publishes no Linux SDK). The two backends are checked by that build; the
+    # layout is checked here, including the belr grammars liblinphone aborts
+    # without at Core creation.
+    FORMAT="tar.gz"
+    INNER="linphone-sdk/linux-x86_64"
+    REQUIRED=("include/linphone/core.h" "lib/liblinphone.so" "lib/libmediastreamer2.so" "share/belr/grammars/sip_grammar.belr")
+    ;;
   macos-arm64)
+    FORMAT="zip"
     INNER="linphone-sdk/macos"
     REQUIRED=("Frameworks/linphone.framework/Headers/core.h")
     ;;
   windows-x86_64)
+    FORMAT="zip"
     INNER="linphone-sdk/win64"
     REQUIRED=("include/linphone/core.h" "bin/liblinphone.dll" "lib/liblinphone.lib")
-    ;;
-  linux-x86_64)
-    die 2 "no pinned linux-x86_64 artifact: upstream publishes no Linux SDK, and the
-  choice of Linux source is an open operator decision on #1770 (see the header of
-  apps/desktop/linphone-sdk-checksums.txt for what was found)."
     ;;
   *)
     # A layout this script does not know cannot be checked, so it is refused
     # even if someone adds a pin line for it.
-    die 2 "unknown target '$TARGET' (known: macos-arm64, windows-x86_64)"
+    die 2 "unknown target '$TARGET' (known: linux-x86_64, macos-arm64, windows-x86_64)"
     ;;
 esac
 
@@ -81,16 +100,21 @@ sha256_of() {
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# https only for real pins (file:// exists solely so the gate's own test can
-# serve a fixture); no redirect may downgrade the scheme.
-curl -fsSL --retry 3 --proto '=https,file' --proto-redir '=https' "$url" -o "$tmp/sdk.zip" \
-  || die 1 "download failed for $TARGET from $url"
+artifact="$tmp/sdk.$FORMAT"
+if [ -n "$LOCAL" ]; then
+  cp "$LOCAL" "$artifact"
+else
+  # https only for real pins (file:// exists solely so the gate's own test can
+  # serve a fixture); no redirect may downgrade the scheme.
+  curl -fsSL --retry 3 --proto '=https,file' --proto-redir '=https' "$url" -o "$artifact" \
+    || die 1 "download failed for $TARGET from $url"
+fi
 
-actual="$(sha256_of "$tmp/sdk.zip")"
+actual="$(sha256_of "$artifact")"
 if [ "$actual" != "$expected" ]; then
   {
     echo "CHECKSUM MISMATCH for $TARGET"
-    echo "  url:      $url"
+    echo "  source:   ${LOCAL:-$url}"
     echo "  expected: $expected"
     echo "  actual:   $actual"
     echo "  Refusing to install. If the pin is being deliberately bumped,"
@@ -100,7 +124,10 @@ if [ "$actual" != "$expected" ]; then
 fi
 
 mkdir -p "$tmp/x"
-unzip -q "$tmp/sdk.zip" -d "$tmp/x"
+case "$FORMAT" in
+  zip) unzip -q "$artifact" -d "$tmp/x" ;;
+  tar.gz) tar -xzf "$artifact" -C "$tmp/x" ;;
+esac
 staged="$tmp/x/$INNER"
 [ -d "$staged" ] || die 1 "verified artifact for $TARGET has no $INNER/ directory"
 for rel in "${REQUIRED[@]}"; do
