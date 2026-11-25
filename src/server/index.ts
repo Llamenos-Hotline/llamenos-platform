@@ -121,6 +121,10 @@ console.log('[llamenos] Services initialized')
 // A failure here must stop the boot: a server without roles cannot authorise.
 await services.settingsBootstrap.ensureInit()
 await services.identity.ensurePlatformAdmin()
+// Seal any messaging credential an older release stored in the clear (#3031).
+if (await services.messagingConfig.sealStoredSecrets()) {
+  console.log('[llamenos] Sealed plaintext messaging credentials at rest')
+}
 console.log('[llamenos] Default settings, roles and platform admin ensured')
 
 // --- Ban list vs ban key (#2829) ---

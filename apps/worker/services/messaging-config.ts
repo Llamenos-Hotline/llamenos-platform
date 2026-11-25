@@ -13,6 +13,12 @@ import { webhookSecretProblem } from '../messaging/webhook-secret'
 import { ServiceError } from './service-error'
 import { SINGLETON_ID, getSettings } from './system-settings-row'
 import type { HubSettingsService } from './hub-settings'
+import {
+  carryOverSecrets,
+  hasPlaintextSecrets,
+  openMessagingConfig,
+  sealMessagingConfig,
+} from './messaging-secrets'
 
 /**
  * Messaging channel configuration and which channels are enabled.
@@ -21,14 +27,39 @@ export class MessagingConfigService {
   constructor(
     protected db: Database,
     private readonly hubSettings: HubSettingsService,
+    /** SERVER_KEK: seals the channel credentials at rest (#3031). */
+    private readonly serverKek?: string,
   ) {}
 
+  /**
+   * The messaging config with its credentials in the clear, for the adapters
+   * that send with them. Never return this from an API: go through
+   * `redactMessagingConfig`.
+   */
   async getMessagingConfig(): Promise<MessagingConfig> {
     const row = await getSettings(this.db)
-    const config = row.messagingConfig as MessagingConfig | null
-    return config && Object.keys(config).length > 0
-      ? config
+    const stored = row.messagingConfig as Record<string, unknown> | null
+    return stored && Object.keys(stored).length > 0
+      ? (openMessagingConfig(stored, this.serverKek) as unknown as MessagingConfig)
       : DEFAULT_MESSAGING_CONFIG
+  }
+
+  /**
+   * Seal any credential still stored in the clear. Run at boot: a row written
+   * before #3031 holds them as plain jsonb, and a SQL migration cannot seal
+   * them because the key lives in the application's environment. Idempotent;
+   * returns whether a row was rewritten.
+   */
+  async sealStoredSecrets(): Promise<boolean> {
+    const row = await getSettings(this.db)
+    const stored = row.messagingConfig as Record<string, unknown> | null
+    if (!stored || !hasPlaintextSecrets(stored)) return false
+    const sealed = sealMessagingConfig(openMessagingConfig(stored, this.serverKek), this.serverKek)
+    await this.db
+      .update(systemSettings)
+      .set({ messagingConfig: sealed })
+      .where(eq(systemSettings.id, SINGLETON_ID))
+    return true
   }
 
   async updateMessagingConfig(
@@ -37,11 +68,15 @@ export class MessagingConfigService {
     // Judge only what this request writes: a stored config that predates the
     // requirement must not block an unrelated edit, and it stays fail-closed
     // anyway (its adapter refuses to build and its webhook is rejected).
-    const secretProblem = webhookSecretProblem(data)
+    const current = await this.getMessagingConfig()
+    // A client that read the redacted config never held the secrets, so a
+    // channel it sends back keeps the stored ones it leaves out.
+    const incoming = carryOverSecrets(data, current)
+
+    const secretProblem = webhookSecretProblem(incoming)
     if (secretProblem) throw new ServiceError(400, secretProblem)
 
-    const current = await this.getMessagingConfig()
-    const updated = { ...current, ...data }
+    const updated = { ...current, ...incoming }
 
     // Derive enabledChannels from individual channel configs unless caller set it explicitly
     if (!('enabledChannels' in data)) {
@@ -72,7 +107,7 @@ export class MessagingConfigService {
 
     await this.db
       .update(systemSettings)
-      .set({ messagingConfig: updated })
+      .set({ messagingConfig: sealMessagingConfig(updated, this.serverKek) })
       .where(eq(systemSettings.id, SINGLETON_ID))
     return updated
   }

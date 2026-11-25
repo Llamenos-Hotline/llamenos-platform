@@ -70,6 +70,9 @@ function makeRole(overrides: Record<string, unknown> = {}) {
   }
 }
 
+// SERVER_KEK stand-in: messaging credentials are sealed under it at rest (#3031).
+const SERVER_KEK = 'ab'.repeat(32)
+
 function setup() {
   const { db } = createMockDb()
   // updateHubSettings (#1144) now reads its merged result back via
@@ -77,7 +80,7 @@ function setup() {
   // non-empty default row so tests that don't care about the exact
   // persisted shape don't have to set one up themselves.
   db.$setInsertResult([{ settings: {} }])
-  const service = createSettingsDomain(db as any)
+  const service = createSettingsDomain(db as any, SERVER_KEK)
   return { db, service }
 }
 
