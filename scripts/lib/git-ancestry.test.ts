@@ -9,13 +9,17 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureAncestor, type GitRunner, spawnGit } from './git-ancestry'
+import { ensureAncestor, ensureMergeBase, type GitRunner, spawnGit } from './git-ancestry'
 
 let tmp: string
 let origin: string
 /** main's first-parent chain, oldest first: commits[0] is the root, commits[DEPTH] is HEAD. */
 let commits: string[] = []
 let sideCommit = ''
+
+/** Where `feature` forks off main, and how many commits it adds on top. */
+const FORK = 65
+const FEATURE_COMMITS = 3
 
 /** Deeper than the old --deepen=10 guess AND than the first two steps. */
 const DEPTH = 70
@@ -28,7 +32,9 @@ function run(git: GitRunner, ...args: string[]): string {
 
 /**
  * The fixture history as ONE `git fast-import` stream: c0 on main, c999 on a
- * side branch off c0 that main never contains, then c1..c70 on main.
+ * side branch off c0 that main never contains, then c1..c70 on main; then
+ * `feature` (f1..f3) forked off c65, and `orphan` (o1), which shares no
+ * history with main at all.
  *
  * Built in a single git process on purpose (#2477). Committing it one
  * `add` + `commit` + `rev-parse` at a time was ~215 serial spawns, ~4 s on a
@@ -55,14 +61,28 @@ function fixtureStream(): string {
   const parts = [commit('refs/heads/main', 0)]
   const root = mark
   parts.push(commit('refs/heads/side', 999, root))
+  // c_i is mark i + 2: c0 is :1, the side commit :2.
   for (let i = 1; i <= DEPTH; i++) parts.push(commit('refs/heads/main', i))
+  parts.push(commit('refs/heads/feature', 1001, FORK + 2))
+  for (let i = 2; i <= FEATURE_COMMITS; i++) parts.push(commit('refs/heads/feature', 1000 + i))
+  mark++
+  parts.push(
+    [
+      'commit refs/heads/orphan',
+      `mark :${mark}`,
+      `committer t <t@t> ${1_700_000_000 + mark} +0000`,
+      data('o1'),
+      'M 100644 inline f',
+      data('orphan'),
+    ].join('\n'),
+  )
   return `${parts.join('\n')}\n`
 }
 
-/** A depth-1 clone of origin at HEAD, the way actions/checkout leaves it. */
-function shallowClone(name: string): GitRunner {
+/** A depth-1 clone of origin at HEAD (or at `branch`), the way actions/checkout leaves it. */
+function shallowClone(name: string, branch?: string): GitRunner {
   const dir = join(tmp, name)
-  const r = Bun.spawnSync(['git', 'clone', '-q', '--depth=1', `file://${origin}`, dir])
+  const r = Bun.spawnSync(['git', 'clone', '-q', '--depth=1', ...(branch ? ['--branch', branch] : []), `file://${origin}`, dir])
   if (r.exitCode !== 0) throw new Error(r.stderr.toString())
   return spawnGit(dir)
 }
@@ -93,6 +113,10 @@ beforeAll(() => {
   if (commits.length !== DEPTH + 1) throw new Error(`fixture main has ${commits.length} commits, expected ${DEPTH + 1}`)
   if (run(originGit, 'log', '-1', '--format=%s', 'main') !== `c${DEPTH}`) throw new Error('fixture main tip is not c70')
   if (run(originGit, 'log', '-1', '--format=%s', 'side') !== 'c999') throw new Error('fixture side tip is not c999')
+  if (run(originGit, 'merge-base', 'feature', 'main') !== commits[FORK]) throw new Error('fixture feature does not fork at c65')
+  if (run(originGit, 'rev-list', '--count', 'main..feature') !== String(FEATURE_COMMITS)) {
+    throw new Error(`fixture feature does not add ${FEATURE_COMMITS} commits`)
+  }
 })
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }))
@@ -161,5 +185,49 @@ describe('ensureAncestor', () => {
   test('a fetch that is killed is reported as a kill, not as an exit status', () => {
     const git = killing(shallowClone('killed-fetch'), (a) => a[0] === 'fetch')
     expect(() => ensureAncestor(git, commits[0])).toThrow(/git fetch .* failed \(killed by SIGKILL\)/)
+  })
+})
+
+describe('ensureMergeBase (#3023)', () => {
+  test('on the branch itself the base is its own tip, with only the tip fetched', () => {
+    const git = shallowClone('mb-self')
+    const r = ensureMergeBase(git, 'main')
+    expect(r.mergeBase).toBe(commits[DEPTH])
+    expect(r.target).toBe(commits[DEPTH])
+    expect(r.steps).toEqual(['fetch --depth=1 main'])
+  })
+
+  test('a branch forked a few commits back resolves to its fork point, not to the moved-on tip', () => {
+    const git = shallowClone('mb-feature', 'feature')
+    // The condition the dispatch run failed in: no common history in the clone yet.
+    expect(git(['merge-base', 'HEAD', commits[DEPTH]]).exitCode).not.toBe(0)
+    const r = ensureMergeBase(git, 'main')
+    expect(r.mergeBase).toBe(commits[FORK])
+    expect(r.target).toBe(commits[DEPTH])
+    expect(r.steps.some((s) => s.includes('unshallow'))).toBe(false)
+  })
+
+  test('a fork point 70 commits back is reached by deepening both sides', () => {
+    const git = shallowClone('mb-side', 'side')
+    const r = ensureMergeBase(git, 'main')
+    expect(r.mergeBase).toBe(commits[0])
+  })
+
+  test('BREAK IT: unrelated history is null only after the FULL history was fetched', () => {
+    const git = shallowClone('mb-orphan', 'orphan')
+    const r = ensureMergeBase(git, 'main')
+    expect(r.mergeBase).toBeNull()
+    // It really did get the whole history; null is a fact about the refs, not the clone.
+    expect(git(['rev-parse', '--is-shallow-repository']).stdout.trim()).toBe('false')
+  })
+
+  test('BREAK IT: a branch the remote does not have throws instead of answering', () => {
+    const git = shallowClone('mb-nobranch')
+    expect(() => ensureMergeBase(git, 'no-such-branch')).toThrow(/git fetch .* failed/)
+  })
+
+  test('BREAK IT: a killed merge-base throws instead of reading as "no common history"', () => {
+    const git = killing(shallowClone('mb-killed', 'feature'), (a) => a[0] === 'merge-base')
+    expect(() => ensureMergeBase(git, 'main')).toThrow(/git merge-base .* failed \(killed by SIGKILL\)/)
   })
 })
