@@ -307,7 +307,7 @@ One admin-client job, run after #2963's hub chains exist. **The release that del
 
 ## 12. Contract surface and gates
 
-**Contract PR (#2294's, one PR; org search's O-A is part of it):**
+**One full-stack PR (#2294's; org search's O-A is part of it).** It carries the crate, protocol, vectors, bindings, worker **and every client**, per the #2979 lane model. A contract bug found while adopting is fixed in this PR.
 - **Crate:**
   - the org chain verifier;
   - the two-sided membership and address-acceptance functions;
@@ -334,7 +334,7 @@ One admin-client job, run after #2963's hub chains exist. **The release that del
   - an org link and a hub link with identical bodies that fail to cross-verify;
   - an `org_search` opt-in naming a former org (**void**).
 
-**Then adoption, one PR per client:**
+**Client work in the same PR:**
 - creating an org;
 - the org admin screens;
 - the invite and accept flow, showing the sealed org name;
@@ -343,7 +343,7 @@ One admin-client job, run after #2963's hub chains exist. **The release that del
 - the alert for traffic on an unaccepted address;
 - the provisioning anchors.
 
-Desktop comes first. Mobile gets the invite, acceptance, alerts and read-only org views.
+Mobile gets the invite, acceptance, alerts and read-only org views. iOS is verified in the PR (`ssh mac` or CI `ios-build-test`).
 
 **Gates (#2974 stage 4):**
 - On real clients, an org admin with no hub role can't read any record in their org's hubs, and can't append a valid hub link.
