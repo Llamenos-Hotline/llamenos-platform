@@ -5,11 +5,20 @@ import { Button } from '@/components/ui/button'
 import { UploadProgress } from '@/components/UploadProgress'
 import { encryptFile } from '@/lib/file-crypto'
 import { chunkedUpload } from '@/lib/chunked-upload'
+import { hubAdminReaders } from '@/lib/admin-recipient'
+import { useAuth } from '@/lib/auth'
 import { useToast } from '@/lib/toast'
 
 interface FileUploadProps {
   conversationId: string
-  recipientPubkeys: string[]
+  /**
+   * The hub of the conversation (`conversation.hubId`): the file is sealed to
+   * that hub's admins and the uploader, and stored in it. It is a hub, not a
+   * list of keys, because a file sealed to the uploader alone is refused by the
+   * server — no admin could ever open it (#2174) — and a caller that names its
+   * own recipients is a caller that can forget the admins.
+   */
+  hubId: string
   onUploadComplete: (fileIds: string[]) => void
   disabled?: boolean
 }
@@ -22,8 +31,9 @@ interface FileUploadState {
   fileId?: string
 }
 
-export function FileUpload({ conversationId, recipientPubkeys, onUploadComplete, disabled }: FileUploadProps) {
+export function FileUpload({ conversationId, hubId, onUploadComplete, disabled }: FileUploadProps) {
   const { t } = useTranslation()
+  const { publicKey } = useAuth()
   const { toast } = useToast()
   const [uploads, setUploads] = useState<FileUploadState[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -48,7 +58,10 @@ export function FileUpload({ conversationId, recipientPubkeys, onUploadComplete,
       const uploadIndex = uploads.length + i
 
       try {
-        const encrypted = await encryptFile(file, recipientPubkeys)
+        // The uploader, then every admin of the conversation's hub — which may
+        // not be the hub being browsed — each key once.
+        const recipients = [...new Set([...(publicKey ? [publicKey] : []), ...await hubAdminReaders(hubId)])]
+        const encrypted = await encryptFile(file, recipients)
 
         setUploads(prev => prev.map((u, idx) =>
           idx === uploadIndex ? { ...u, status: 'uploading', totalChunks: Math.ceil(encrypted.encryptedContent.length / (5 * 1024 * 1024)) || 1 } : u
@@ -57,6 +70,7 @@ export function FileUpload({ conversationId, recipientPubkeys, onUploadComplete,
         const result = await chunkedUpload({
           encrypted,
           owner: { kind: 'conversation', conversationId },
+          hubId,
           onProgress: (completed, total) => {
             setUploads(prev => prev.map((u, idx) =>
               idx === uploadIndex ? { ...u, completedChunks: completed, totalChunks: total } : u
@@ -80,7 +94,7 @@ export function FileUpload({ conversationId, recipientPubkeys, onUploadComplete,
     if (completedIds.length > 0) {
       onUploadComplete(completedIds)
     }
-  }, [conversationId, recipientPubkeys, disabled, uploads.length, toast, t, onUploadComplete])
+  }, [conversationId, hubId, publicKey, disabled, uploads.length, toast, t, onUploadComplete])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()

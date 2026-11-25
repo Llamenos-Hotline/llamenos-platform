@@ -4,6 +4,7 @@ import { useToast } from '@/lib/toast'
 import { bulkCreateContacts } from '@/lib/api'
 import { encryptMessage } from '@/lib/platform'
 import * as keyManager from '@/lib/key-manager'
+import { activeHubAdminReaders } from '@/lib/admin-recipient'
 import {
   Dialog,
   DialogContent,
@@ -88,6 +89,10 @@ export function ContactImportDialog({
     let imported = 0
 
     try {
+      // The importer and every admin of the hub the contacts are created in: a
+      // contact sealed to the importer alone is refused (#2174) — no admin could open it.
+      const readers = [...new Set([devicePubkey, ...await activeHubAdminReaders()])]
+
       // Process in batches of BATCH_SIZE
       for (let i = 0; i < parsed.length; i += BATCH_SIZE) {
         const batch = parsed.slice(i, i + BATCH_SIZE)
@@ -99,9 +104,7 @@ export function ContactImportDialog({
               contactType: contact.contactType,
               tags: contact.tags,
             })
-            const { encryptedContent, readerEnvelopes } = await encryptMessage(payload, [
-              devicePubkey,
-            ])
+            const { encryptedContent, readerEnvelopes } = await encryptMessage(payload, readers)
             return {
               encryptedSummary: encryptedContent,
               summaryEnvelopes: readerEnvelopes.map((e) => ({
