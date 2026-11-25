@@ -34,11 +34,10 @@ import contactsRoutes from '../../routes/contacts-v2'
 import uploadsRoutes from '../../routes/uploads'
 import evidenceRoutes from '../../routes/evidence'
 import type { AppEnv } from '../../types'
+import { requireDatabaseUrl } from '../helpers/database-url'
 import { DEFAULT_ROLES, resolvePermissions, type Role } from '@shared/permissions'
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  'postgres://llamenos:dev@localhost:5432/llamenos?sslmode=disable'
+const DATABASE_URL = requireDatabaseUrl()
 
 const db = createDatabase(DATABASE_URL)
 const identity = new IdentityService(db)
