@@ -6,7 +6,7 @@
 - the v2 files spec (PR #3007): `file` fields;
 - the reader groups in #2961, and the connectors spec (PR #3021), which consumes definitions for intake.
 
-**Status:** DRAFT for operator decisions E1–E12.
+**Status:** SIGNED OFF by the operator, 2026-11-25: E1–E12 as recommended.
 
 #1597 asked how far the entity model should reach, and named five tensions any answer must
 resolve. #2947 is slice 1 of the mechanism, in M2. #2938 holds the M3 slices. This spec is the
@@ -61,7 +61,7 @@ Surveyed against `origin/main` @ `417d525ac`.
 
 ---
 
-## 2. E1: a definition is a signed, sealed document — OPERATOR DECISION
+## 2. E1: a definition is a signed, sealed document — decided
 
 A definition is a document of the system meta-type `definition` in the generic sealed store. Its
 `summary` tier is sealed to `members`, because every member's client needs it to render forms. It
@@ -96,7 +96,7 @@ holds:
 
 ---
 
-## 3. E2: how a tier names its readers — OPERATOR DECISION
+## 3. E2: how a tier names its readers — decided
 
 Tiers are the crate's closed enum: `summary`, `fields`, `pii`, `hub` and `file` (wire §2.1, and tier 7 from the files spec). `thread_key`
 and `message` belong to conversations and are not used by definitions. A `file` field names the tier its files inherit (F1): `fields` by default, or `pii`. A `recording` capability (for the `call` type, §12) names the tier recordings inherit. A tier's reader list is
@@ -137,7 +137,7 @@ work automatically (#2961 §5–6).
 
 ---
 
-## 4. E3: per-type permissions — OPERATOR DECISION
+## 4. E3: per-type permissions — decided
 
 Each definition gets permission ids `doc:<type_ref>:<action>` for these actions: `read-summary`,
 `read-fields`, `read-pii`, `create`, `update`, `update-own`, `close`, `delete`, `assign` and
@@ -156,7 +156,7 @@ Each definition gets permission ids `doc:<type_ref>:<action>` for these actions:
 
 ---
 
-## 5. E4: what may stay plaintext — OPERATOR DECISION
+## 5. E4: what may stay plaintext — decided
 
 Plaintext is a closed list of kinds the crate knows. A definition opts into each kind with a
 `why`, which is sealed with the definition. **Free text, options and field values can never be
@@ -183,7 +183,7 @@ plaintext.** No kind exists for them.
 
 ---
 
-## 6. E5: indexes — OPERATOR DECISION
+## 6. E5: indexes — decided
 
 | Kind | Token | For |
 |---|---|---|
@@ -199,7 +199,7 @@ plaintext.** No kind exists for them.
 
 ---
 
-## 7. E6: relations and sub-records — OPERATOR DECISION
+## 7. E6: relations and sub-records — decided
 
 - A relation type is declared in the source definition: the target type refs, cardinality, roles, and join fields, which are sealed with the edge.
 - **An edge lives in the source document's `fields` tier:** `{relation, target, role, joinFields}`.
@@ -211,7 +211,7 @@ plaintext.** No kind exists for them.
 
 ---
 
-## 8. E7: changing a definition — OPERATOR DECISION
+## 8. E7: changing a definition — decided
 
 ### 8.1 Every change raises the version
 
@@ -244,7 +244,7 @@ truly needs it creates a new type and migrates.
 
 ---
 
-## 9. E8: the write policy the server enforces — OPERATOR DECISION
+## 9. E8: the write policy the server enforces — decided
 
 The server can't read a sealed definition, but it has to refuse bad writes. Each definition version
 therefore publishes a **policy** made only of opaque ids:
@@ -270,7 +270,7 @@ policy = { tiers: [{tier, groups: [group_id…], dynamic: [assignees|author]}],
 
 ---
 
-## 10. E9: one API, no per-type codegen — OPERATOR DECISION
+## 10. E9: one API, no per-type codegen — decided
 
 In the crate, exposed once each through UniFFI, Tauri and `ffi_server`:
 
@@ -290,7 +290,7 @@ from the policy *type*, not per definition.
 
 ---
 
-## 11. E10: porting case records, with semantic parity — OPERATOR DECISION
+## 11. E10: porting case records, with semantic parity — decided
 
 #2947 asked for byte-for-byte parity with `case_record.rs`. Under v2, the content AAD binds
 `(format, hub, type, doc, tier, schema version)` (wire §2.4), so byte parity can't hold.
@@ -323,7 +323,7 @@ Deleted with no fallback, once each client is ported:
 
 ---
 
-## 12. E11: what unifies, and when — OPERATOR DECISION
+## 12. E11: what unifies, and when — decided
 
 | Thing | Document type? | When | Note |
 |---|---|---|---|
