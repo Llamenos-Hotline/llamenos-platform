@@ -7,7 +7,7 @@
 - the v2 wire format (#2996): grants (§2.8), D13, D14 and D16;
 - reader groups (#2961).
 
-**Status:** DRAFT for operator decisions L1–L7.
+**Status:** SIGNED OFF by the operator, 2026-11-25: L1–L7 as recommended.
 
 The 2026-10-10 decision fixed *how* a device links. This spec fixes what changes once records are
 sealed to groups. It also settles the two questions the wire spec handed to #1972: how pilot
@@ -42,7 +42,7 @@ trust-on-first-use that #2963 §3 forbids.
 
 ---
 
-## 2. L1: the payload — OPERATOR DECISION
+## 2. L1: the payload — decided
 
 The §6.12 target bundle (decision §4.4) gains one field, and its PUK wraps change suite:
 
@@ -64,7 +64,7 @@ unwrapped, or an optional authorisation proof.
 
 ---
 
-## 3. L2: self-grants — OPERATOR DECISION
+## 3. L2: self-grants — decided
 
 Wire §2.8 check 3 requires the granter's user to be able to *manage* the group. For a volunteer's
 new phone, that means an admin must be online before the phone can read anything beyond the user's
@@ -86,7 +86,7 @@ or granting to the PUK or escrow.
 
 ---
 
-## 4. L3: the provisioning channel and D16 — OPERATOR DECISION
+## 4. L3: the provisioning channel and D16 — decided
 
 D16 says the room that carries device secrets "seals with X-Wing too".
 
@@ -102,7 +102,7 @@ data that isn't secret.
 
 ---
 
-## 5. L4: giving pilot devices an X-Wing key — OPERATOR DECISION
+## 5. L4: giving pilot devices an X-Wing key — decided
 
 Pilot devices hold X25519 encryption keys (D16). Before their hub's migration genesis (wire §3.2),
 each needs an X-Wing key that grants and headers can be sealed to.
@@ -119,7 +119,7 @@ each needs an X-Wing key that grants and headers can be sealed to.
 
 ---
 
-## 6. L5: binding keys to their owner (#2496) — OPERATOR DECISION
+## 6. L5: binding keys to their owner (#2496) — decided
 
 #2496: a member can register another user's encryption key as their own device.
 
@@ -134,7 +134,7 @@ each needs an X-Wing key that grants and headers can be sealed to.
 
 ---
 
-## 7. L6: removing a device — OPERATOR DECISION
+## 7. L6: removing a device — decided
 
 A removed device holds every epoch secret its user had. Removing it is therefore a removal from
 every group the user is in.
@@ -150,7 +150,7 @@ and wiped" from "lost" would rest on the user's word about a device nobody can i
 
 ---
 
-## 8. L7: recovery onto a new device — OPERATOR DECISION
+## 8. L7: recovery onto a new device — decided
 
 The recovery link is wire D14: K-of-N approvals, a delay, and the emergency floor. After it lands:
 
