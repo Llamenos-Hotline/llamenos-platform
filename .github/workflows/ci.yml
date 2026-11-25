@@ -188,6 +188,10 @@ jobs:
       android: ${{ steps.filter.outputs.android }}
       ios: ${{ steps.filter.outputs.ios }}
       ios_tier: ${{ steps.filter.outputs.ios_tier }}
+      # The NARROW iOS flag: true only when the diff touches something
+      # `ios-compile-check` reads (#3012). `ios` is a blast-radius flag and
+      # would hand a Mac slot to every scripts/ or packages/shared/ edit.
+      ios_compile: ${{ steps.filter.outputs.ios_compile }}
       desktop: ${{ steps.filter.outputs.desktop }}
       backend: ${{ steps.filter.outputs.backend }}
       crypto: ${{ steps.filter.outputs.crypto }}
@@ -3061,7 +3065,13 @@ jobs:
   # can again land on a hosted macOS image without an allowlisted reason.
   ios-compile-check:
     needs: changes
-    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios == 'true'
+    # Gated on `ios_compile`, NOT `ios` (#3012): `ios` is true for every
+    # blast-radius edit (scripts/, packages/shared/, vitest configs), and this
+    # job runs on one of two 16 GiB Macs that swap with just two iOS jobs. The
+    # flag's regex is bound to this job's real inputs by
+    # tests/orchestrator/ios-compile-inputs.test.ts, so a dependency added to
+    # the build cannot silently fall outside it.
+    if: needs.changes.outputs.pr_gate == 'true' && needs.changes.outputs.ios_compile == 'true'
     runs-on: [self-hosted, macOS, ARM64, ios-e2e]
     permissions:
       contents: read
@@ -3899,6 +3909,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           IOS: ${{ needs.changes.outputs.ios }}
+          IOS_COMPILE: ${{ needs.changes.outputs.ios_compile }}
           ANDROID: ${{ needs.changes.outputs.android }}
           DESKTOP: ${{ needs.changes.outputs.desktop }}
           BACKEND: ${{ needs.changes.outputs.backend }}
@@ -3923,8 +3934,8 @@ jobs:
             # paths changed — a skip here is wiring drift between the gate's
             # `if:` and the path map, and ci-status would otherwise report
             # plain success for a platform nothing verified.
+            if [ "$IOS_COMPILE" = "true" ] && [ "$R_IOS_COMPILE" = "skipped" ]; then gap="$gap ios-compile-check"; fi
             if [ "$IOS" = "true" ]; then
-              if [ "$R_IOS_COMPILE" = "skipped" ]; then gap="$gap ios-compile-check"; fi
               if [ "$R_IOS_BUILD" = "skipped" ]; then deferred="$deferred ios-build-test(full)"; fi
               if [ "$R_IOS_E2E" = "skipped" ]; then deferred="$deferred ios-e2e"; fi
             fi
@@ -3967,7 +3978,7 @@ jobs:
           fi
 
           if [ -n "$deferred" ]; then
-            echo "::warning title=Platform suites deferred to the merge queue::This diff touches paths these suites cover, but their full verdicts only run in the merge queue (#1426's recorded trade):$deferred. The PR-head compile gates DID run, so green here means compiled, not fully tested."
+            echo "::warning title=Platform suites deferred to the merge queue::This diff touches paths these suites cover, but their full verdicts only run in the merge queue (#1426's recorded trade):$deferred. The PR-head compile gates that cover the changed paths DID run (iOS only when a path it compiles from changed, #3012), so green here means compiled, not fully tested."
             {
               echo "### Platform suites deferred to the merge queue"
               echo ""

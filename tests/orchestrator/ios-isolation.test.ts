@@ -138,7 +138,7 @@ describe('the content checks — the change, not the file name', () => {
 
   it('the real ci.yml\'s iOS gate jobs are the ones the marker finds', () => {
     const blocks = ciJobBlocks(ci)
-    const ios = [...(blocks?.jobs ?? [])].filter(([, b]) => /\boutputs\.ios\b/.test(b)).map(([n]) => n)
+    const ios = [...(blocks?.jobs ?? [])].filter(([, b]) => /\boutputs\.ios(?:_compile)?\b/.test(b)).map(([n]) => n)
     expect(ios).toEqual(expect.arrayContaining(['changes', 'ios-build-test', 'ios-compile-check', 'ios-e2e']))
   })
 })
