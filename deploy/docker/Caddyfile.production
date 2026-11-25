@@ -12,6 +12,25 @@
 # Only api.* proxies to app:3000; app.* and crypto.* are pure file_servers
 # on distinct origins.
 #
+# WHICH DEPLOY PATH THIS IS. This file is the ingress of the Docker Compose
+# path (docker-compose.yml + docker-compose.production.yml). The Ansible deploy
+# in deploy/ansible/ does NOT read it: that path renders
+# deploy/ansible/roles/llamenos-caddy/templates/caddy.j2, which serves the API
+# (and the updater origin) only, with no SPA or crypto origin. The two files
+# describe different layouts, but they MUST agree on every security directive
+# they share. Change one, change the other.
+#
+# COMPRESSION (#3018). `encode` appears ONLY on the two file_server origins
+# (app.*, crypto.*): they serve the same public, content-hashed bytes to
+# everyone, so compressing them leaks nothing. It is deliberately ABSENT from
+# every origin that proxies a backend — above all api.*, and caddy.j2 omits it
+# for the same reason. API responses carry session tokens, WebAuthn challenges
+# and sealed envelopes alongside caller- and attacker-influenced content;
+# compressing that makes response length an oracle on the secret
+# (BREACH/CRIME). And it would buy almost nothing: sealed payloads are
+# ciphertext, which does not compress. Enforced for every Caddy config in the
+# repo by deploy/ansible/scripts/check-caddy-compression.py.
+#
 # KNOWN GAP: /srv/crypto/ (the sandboxed crypto iframe served at
 # crypto.$CRYPTO_DOMAIN) is currently EMPTY — that app was developed on an
 # unmerged branch and never landed on main. crypto.* will 404 until it is
@@ -60,7 +79,12 @@
 
 # ─── API origin — api.<parent> ──────────────────────────────────────
 {$API_DOMAIN} {
-	encode gzip zstd
+	# NO `encode` here, on purpose — see COMPRESSION at the top of this file.
+	# The mobile HTTP stacks (OkHttp, URLSession) and browsers send
+	# Accept-Encoding by default, so an `encode` line would compress nearly
+	# every authenticated API response, not just the large ones. There is no
+	# safe subset to carve out: the large responses (note, conversation and
+	# contact listings) are exactly the ones made of sealed envelopes.
 
 	# Auth endpoint rate limiting — strict (login, register, WebAuthn).
 	# Requires the caddy-ratelimit plugin (github.com/mholt/caddy-ratelimit),
@@ -171,7 +195,9 @@
 # Serves desktop release artifacts (AppImage, DMG, EXE, checksums)
 # from the RustFS /releases/ bucket. Files are public; no auth needed.
 {$DOWNLOADS_DOMAIN} {
-	encode gzip zstd
+	# No `encode`: this origin proxies object storage (see COMPRESSION at the
+	# top), and what it serves — installers and checksums — is already
+	# compressed or too small to matter.
 
 	# Proxy to RustFS S3 API for /releases/ bucket
 	handle /releases/* {
@@ -205,7 +231,10 @@
 # Serves Tauri updater metadata and signature files from RustFS.
 # The Tauri updater polls this endpoint for new versions.
 {$UPDATES_DOMAIN} {
-	encode gzip zstd
+	# No `encode`: this origin proxies object storage (see COMPRESSION at the
+	# top), and what it serves — signed updater bundles (already compressed
+	# archives), their .sig files and latest.json (a few hundred bytes) — gains
+	# nothing from it. caddy.j2's updater vhost does not compress either.
 
 	# Staging bucket — pre-release builds for testing
 	handle /staging/* {

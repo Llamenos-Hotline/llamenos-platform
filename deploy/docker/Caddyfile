@@ -34,7 +34,12 @@
 		-Server
 	}
 
-	encode gzip zstd
+	# No `encode` (#3018): every route here proxies the app, and API
+	# responses mix session tokens and sealed envelopes with caller- and
+	# attacker-influenced content, so compressing them would turn response
+	# length into an oracle on the secret (BREACH/CRIME). Same posture as
+	# Caddyfile.production's api.* and the Ansible caddy.j2; enforced by
+	# deploy/ansible/scripts/check-caddy-compression.py.
 
 	# JSON access logging for structured log aggregation (Loki, ELK, CloudWatch)
 	log {

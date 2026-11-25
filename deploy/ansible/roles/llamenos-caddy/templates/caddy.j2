@@ -86,6 +86,22 @@
     header_up -Forwarded
 }
 
+# Compression (#3018): NO site in this file has `encode`, and that is a
+# decision, not an omission. Every vhost here proxies a backend (the API, the
+# push broker) or serves updater artifacts that are already compressed archives
+# or a few hundred bytes of JSON. API responses carry session tokens, WebAuthn
+# challenges and sealed envelopes alongside caller- and attacker-influenced
+# content; compressing them would make response length an oracle on the secret
+# (BREACH/CRIME), for almost no saving, since ciphertext does not compress.
+#
+# deploy/docker/Caddyfile.production — the Docker Compose path's ingress — holds
+# the same posture: `encode` only on its two pure file_server origins (the SPA
+# and the crypto sandbox, which this layout does not serve), never on api.*. The
+# two files describe different layouts but must agree on every security
+# directive they share. deploy/ansible/scripts/check-caddy-compression.py
+# enforces this one across every Caddy config in the repo: `encode` only on a
+# site that serves files with `file_server` and proxies nothing.
+
 # Security headers for threat model: nation states, right-wing groups, private hacking firms
 (security_headers) {
     header {

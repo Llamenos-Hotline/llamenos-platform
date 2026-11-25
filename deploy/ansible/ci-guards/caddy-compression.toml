@@ -1,0 +1,13 @@
+name = "Check no Caddy config compresses a proxied response"
+run = "python3 deploy/ansible/scripts/check-caddy-compression.py"
+why = """
+deploy/docker/Caddyfile.production compressed the API origin while
+roles/llamenos-caddy/templates/caddy.j2 -- what the Ansible deploy renders --
+did not, so a reader of either file learned something false about the other
+path (#3018). Compressing an API response that carries tokens or sealed
+envelopes next to attacker-influenced content makes its length an oracle on the
+secret (BREACH/CRIME). One rule, applied to every Caddy config in the repo so
+the paths cannot drift: `encode` only on a site that serves files with
+`file_server` and proxies nothing. deploy/docker/ changes reach this job via
+the backend path filter.
+"""
