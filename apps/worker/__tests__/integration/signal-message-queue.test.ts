@@ -28,6 +28,7 @@ const SERVER_KEK = 'c'.repeat(64)
 
 const LEGACY_QUEUE_DDL = `
   CREATE TABLE ${TEST_SCHEMA}.signal_message_queue (
+    crypto_format SMALLINT NOT NULL DEFAULT 1,
     id                              TEXT PRIMARY KEY,
     hub_id                          TEXT NOT NULL,
     conversation_id                 TEXT NOT NULL,

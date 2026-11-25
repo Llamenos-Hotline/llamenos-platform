@@ -27,6 +27,7 @@ const TEST_SCHEMA = `test_callhist_${Date.now()}_${Math.random().toString(36).sl
 
 const DDL = `
   CREATE TABLE ${TEST_SCHEMA}.active_calls (
+    crypto_format SMALLINT NOT NULL DEFAULT 1,
     call_id TEXT PRIMARY KEY,
     push_ref TEXT UNIQUE,
     hub_id TEXT,
@@ -44,6 +45,7 @@ const DDL = `
     duration INTEGER
   );
   CREATE TABLE ${TEST_SCHEMA}.call_records (
+    crypto_format SMALLINT NOT NULL DEFAULT 1,
     call_id TEXT PRIMARY KEY,
     hub_id TEXT,
     started_at TIMESTAMPTZ NOT NULL,

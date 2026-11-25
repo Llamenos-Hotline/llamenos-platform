@@ -117,6 +117,7 @@ const DDL = `
 
   -- Not FK'd to devices: PUK envelopes are keyed by sigchain device ID (#1050).
   CREATE TABLE ${TEST_SCHEMA}.puk_envelopes (
+    crypto_format SMALLINT NOT NULL DEFAULT 1,
     id          TEXT PRIMARY KEY,
     user_pubkey TEXT NOT NULL REFERENCES ${TEST_SCHEMA}.users(pubkey) ON DELETE CASCADE,
     device_id   TEXT NOT NULL,
