@@ -58,8 +58,9 @@ class CaseRecordVectorTest {
         assertEquals(expected.keys, fixture.records.map { it.purpose }.toSet())
         for (rec in fixture.records) {
             assertEquals(expected[rec.purpose], rec.label)
-            assertEquals(org.llamenos.core.mobileContentAadHex(rec.label), rec.aadHex.content)
-            assertEquals(org.llamenos.core.mobileKeyWrapAadHex(rec.label), rec.aadHex.keyWrap)
+            // The format-1 case AADs the fixture declares (crate `case_record.rs`).
+            assertEquals(rec.label.toByteArray(Charsets.UTF_8).toFixtureHex(), rec.aadHex.content)
+            assertEquals("${rec.label}:key-wrap".toByteArray(Charsets.UTF_8).toFixtureHex(), rec.aadHex.keyWrap)
             assertEquals(fixture.readers.map { it.x25519PubkeyHex }, rec.readerEnvelopes.map { it.pubkey })
         }
     }
@@ -114,8 +115,8 @@ class CaseRecordVectorTest {
 
     /**
      * The writer half — and the comment defect: a comment this app seals opens for
-     * this app (it could not before) and for the other fixture reader, under the
-     * fixture's declared label and AAD, with the primitives rather than [CryptoService.openCase].
+     * this app (it could not before) and for the other fixture reader — a different
+     * device, opening through its own production reader.
      */
     @Test
     fun whatThisAppSealsIsTheServerPersistedFormat(): Unit = runBlocking {
@@ -128,24 +129,8 @@ class CaseRecordVectorTest {
             assertEquals(listOf(volunteer.x25519PubkeyHex, admin.x25519PubkeyHex), sealed.envelopes.map { it.pubkey })
             assertEquals(plaintext, writer.openCase(rec.casePurpose(), sealed.ciphertextHex, sealed.envelopes))
 
-            unlockedAs(admin)
-            val wire = sealed.envelopes.first { it.pubkey == admin.x25519PubkeyHex }
-            val keyHex = org.llamenos.core.mobileHpkeOpenKey(
-                envelope = org.llamenos.core.HpkeEnvelope(
-                    v = HpkeEnvelope.CURRENT_VERSION.toUByte(),
-                    labelId = org.llamenos.core.mobileLabelToId(rec.label),
-                    enc = org.llamenos.core.mobileHexToBase64url(wire.enc),
-                    ct = org.llamenos.core.mobileHexToBase64url(wire.ct),
-                ),
-                expectedLabel = rec.label,
-                aadHex = rec.aadHex.keyWrap,
-            )
-            val opened = org.llamenos.core.mobileSymmetricDecrypt(
-                ciphertextHex = sealed.ciphertextHex,
-                keyHex = keyHex,
-                aadHex = rec.aadHex.content,
-            )
-            assertEquals(plaintext, String(fixtureHexToBytes(opened), Charsets.UTF_8))
+            val reader = unlockedAs(admin)
+            assertEquals(plaintext, reader.openCase(rec.casePurpose(), sealed.ciphertextHex, sealed.envelopes))
         }
     }
 

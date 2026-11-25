@@ -39,7 +39,7 @@ class WebSocketServiceTest {
         decryptResult: String?,
     ): Pair<WebSocketService, HubActivityService> {
         val crypto = mockk<CryptoService>()
-        every { crypto.decryptServerEventWithStoredKeys(any(), any()) } returns decryptResult
+        every { crypto.openServerEvent(any(), any(), any(), any()) } returns decryptResult
         val activity = HubActivityService()
         val service = WebSocketService(
             cryptoService = crypto,
@@ -54,14 +54,14 @@ class WebSocketServiceTest {
         """{"type":"event","v":1,"hubId":"$hubId","kind":$kind,"payload":"$payload","epoch":$epoch,"ts":1730000000000,"sig":"ab"}"""
 
     /**
-     * #2117: the relay seals every frame under an epoch-scoped AAD, so the epoch
-     * the envelope carries must reach the opener. The Rust opener is exercised
-     * against the server's own bytes by `ServerEventInteropTest` (instrumented).
+     * #2999: the frame's hub, kind and epoch are bound in its AAD and select its
+     * key, so the envelope's own values must reach the opener. The Rust opener is
+     * exercised against the crate's vectors by `ServerEventInteropTest` (instrumented).
      */
     @Test
-    fun `the envelope epoch is handed to the decryptor`() = runBlocking {
+    fun `the envelope hub, kind and epoch are handed to the opener`() = runBlocking {
         val crypto = mockk<CryptoService>()
-        every { crypto.decryptServerEventWithStoredKeys("cafe", 20750L) } returns
+        every { crypto.openServerEvent("hub-a", 1000, 20750L, "cafe") } returns
             """{"type":"call:ring","callId":"call-1"}"""
         val service = WebSocketService(
             cryptoService = crypto,
@@ -80,15 +80,16 @@ class WebSocketServiceTest {
     @Test
     fun `a frame no stored key opens is retried once after refreshing the event keys`() = runBlocking {
         val crypto = mockk<CryptoService>(relaxed = true)
-        every { crypto.decryptServerEventWithStoredKeys("cafe", 20751L) } returnsMany listOf(
+        every { crypto.openServerEvent("hub-b", 1000, 20751L, "cafe") } returnsMany listOf(
             null,
             """{"type":"call:ring","callId":"call-2"}""",
         )
         val api = mockk<ApiService>(relaxed = true)
-        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(
-            serverEventKeyHex = "11".repeat(32),
-            serverEventKeyPrevHex = "22".repeat(32),
+        val keys = listOf(
+            org.llamenos.protocol.RelayEventKey(epoch = 20751, hubID = "hub-b", keyHex = "11".repeat(32)),
+            org.llamenos.protocol.RelayEventKey(epoch = 20750, hubID = "hub-b", keyHex = "22".repeat(32)),
         )
+        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(serverEventKeys = keys)
         val service = WebSocketService(
             cryptoService = crypto,
             keystoreService = mockk<KeyValueStore>(relaxed = true),
@@ -102,15 +103,24 @@ class WebSocketServiceTest {
         val attributed = withTimeout(5_000) { received.await() }
         assertEquals("hub-b", attributed.hubId)
         assertEquals(LlamenosEvent.CallRing("call-2"), attributed.event)
-        verify(exactly = 1) { crypto.setServerEventKeys("11".repeat(32), "22".repeat(32)) }
+        verify(exactly = 1) {
+            crypto.setServerEventKeys(
+                listOf(
+                    org.llamenos.core.ServerEventKey(hubId = "hub-b", epoch = 20751uL, keyHex = "11".repeat(32)),
+                    org.llamenos.core.ServerEventKey(hubId = "hub-b", epoch = 20750uL, keyHex = "22".repeat(32)),
+                ),
+            )
+        }
     }
 
     @Test
     fun `a frame that still fails after the key refresh is dropped`() = runBlocking {
         val crypto = mockk<CryptoService>(relaxed = true)
-        every { crypto.decryptServerEventWithStoredKeys(any(), any()) } returns null
+        every { crypto.openServerEvent(any(), any(), any(), any()) } returns null
         val api = mockk<ApiService>(relaxed = true)
-        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(serverEventKeyHex = "11".repeat(32))
+        coEvery { api.getAuthMe() } returns AuthMeEventKeysResponse(
+            serverEventKeys = listOf(org.llamenos.protocol.RelayEventKey(epoch = 1, hubID = "hub-a", keyHex = "11".repeat(32))),
+        )
         val activity = HubActivityService()
         val service = WebSocketService(
             cryptoService = crypto,

@@ -65,7 +65,8 @@ class AdminSidebarViewModelTest {
         """{"pubkey":"${"a".repeat(64)}","roles":["role-hub-admin"],"permissions":$permissions,
             "primaryRole":null,"name":"Admin","transcriptionEnabled":false,"spokenLanguages":["en"],
             "uiLanguage":"en","profileCompleted":true,"onBreak":false,"callPreference":"phone",
-            "webauthnRequired":false,"webauthnRegistered":false}""",
+            "webauthnRequired":false,"webauthnRegistered":false,
+            "serverEventKeys":[],"eventKeyEpoch":20000,"eventKeyEpochDuration":86400}""",
     )
 
     private fun newViewModel(): AdminSidebarViewModel {

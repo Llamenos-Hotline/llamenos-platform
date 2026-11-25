@@ -88,7 +88,8 @@ class CryptoServiceTest {
 
     @Test(expected = IllegalStateException::class)
     fun `decryptNote throws without native lib`(): Unit = runBlocking {
-        val envelope = HpkeEnvelope(v = 3, labelId = 0, enc = "test", ct = "test")
+        val envelope = HpkeEnvelope(
+                enc = "test", ct = "test")
         cryptoService.decryptNote("test", envelope)
     }
 

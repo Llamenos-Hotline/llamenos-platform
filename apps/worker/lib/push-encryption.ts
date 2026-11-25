@@ -12,16 +12,17 @@ import type { WakePayload, FullPushPayload } from '../types'
 
 /**
  * HPKE-seal a push payload for one device through the crate's push shape (the
- * crate chooses the label and AAD). Returns hex `enc(32) || ct` — the push
- * transport carries one string, which clients split at 64 characters.
+ * crate chooses the label and AAD). Returns the one envelope wire form (spec D1):
+ * the JSON `{enc, ct}`, lowercase hex — what the iOS and Android wake handlers
+ * decode. (This returned `hex(enc || ct)` while both clients parsed a JSON
+ * envelope, so no wake payload could ever open.)
  */
 function hpkeEncryptPayload(
   plaintext: string,
   recipientPubkeyHex: string,
   shape: 'push-wake' | 'push-full',
 ): string {
-  const { enc, ct } = shapeSeal(shape, hexToBytes(recipientPubkeyHex), [], utf8ToBytes(plaintext))
-  return enc + ct
+  return JSON.stringify(shapeSeal(shape, hexToBytes(recipientPubkeyHex), [], utf8ToBytes(plaintext)))
 }
 
 /**

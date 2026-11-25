@@ -9,17 +9,17 @@ import kotlinx.serialization.Serializable
 typealias MeResponse = org.llamenos.protocol.MeResponse
 
 /**
- * Subset of `GET /api/auth/me` carrying the relay event decryption keys.
- *
- * The server returns `serverEventKeyHex` / `serverEventKeyPrevHex`
- * (`apps/worker/routes/auth.ts`), but the protocol schema
- * (`packages/protocol/schemas/auth.ts`) does not declare them yet — the
- * generated [MeResponse] therefore drops them. Decoded with this local model
- * until the schema catches up; iOS does the same (`AuthMeResponse`).
+ * Subset of `GET /api/auth/me` carrying the relay-event keys (#2999): one per
+ * (hub, epoch), for the current and previous epoch of every active hub the user
+ * belongs to. The element type is the generated protocol type.
  */
 @Serializable
 data class AuthMeEventKeysResponse(
     val adminDecryptionPubkey: String? = null,
-    val serverEventKeyHex: String? = null,
-    val serverEventKeyPrevHex: String? = null,
-)
+    val serverEventKeys: List<org.llamenos.protocol.RelayEventKey> = emptyList(),
+) {
+    /** The keys as the crate's UniFFI record, for `CryptoService.setServerEventKeys`. */
+    fun toFfiKeys(): List<org.llamenos.core.ServerEventKey> = serverEventKeys.map {
+        org.llamenos.core.ServerEventKey(hubId = it.hubID, epoch = it.epoch.toULong(), keyHex = it.keyHex)
+    }
+}

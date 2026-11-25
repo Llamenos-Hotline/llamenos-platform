@@ -167,6 +167,9 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
  * mobile rename, not a codegen tweak.
  */
 const REFERENCED_BY_NAME = new Set([
+  // #2999 — `serverEventKeys` items would otherwise be named `ServerEventKey`,
+  // which is the crate's UniFFI record of the same shape: a Swift-module collision.
+  'RelayEventKey',
   // #2046 — assignee re-wrap: `messages` / `envelopes` items
   'AssigneeEnvelopeGap',
   'AssigneeRecipient',

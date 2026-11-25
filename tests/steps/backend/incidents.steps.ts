@@ -16,7 +16,7 @@ import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, After, getState, setState } from './fixtures'
 import { RelayCapture, type CapturedEvent } from '../../helpers/relay-capture'
 import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
-import type { ServerEventKey } from '@protocol/schemas/auth'
+import type { RelayEventKey } from '@protocol/schemas/auth'
 import { hexToBytes } from '@shared/encoding'
 import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import {
@@ -64,7 +64,7 @@ interface IncidentState {
   holders: Record<string, Member>
   volunteer?: Member
   relay?: RelayCapture
-  serverEventKeys?: ServerEventKey[]
+  serverEventKeys?: RelayEventKey[]
 }
 
 function st(world: Record<string, unknown>): IncidentState {

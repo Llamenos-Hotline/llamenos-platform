@@ -657,15 +657,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_compute_shared_x_hex(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_decrypt_server_event_hex(
-    ): Short
     external fun uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_encrypt_note_for_recipients(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_hpke_unwrap_key_hex(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_hpke_wrap_key_hex(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_recovery_group_generate_keypair(
     ): Short
@@ -687,8 +681,6 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_get_public_key(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex(
-    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_build_auth_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key(
@@ -699,7 +691,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_wake_key(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_content_aad_hex(
+    external fun uniffi_llamenos_core_checksum_func_mobile_content_open(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_content_seal(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_create_auth_token(
     ): Short
@@ -711,19 +705,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_draft(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_event_with_attribution(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial(
-    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_message(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event_with_epoch(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_ecdh_complete(
     ): Short
@@ -749,25 +733,9 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_has_wake_key(
     ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hex_to_base64url(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hpke_open(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hpke_open_key(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hpke_open_with_wake_key(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hpke_seal(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_hpke_seal_key(
-    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_is_unlocked(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_is_valid_pin(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_key_wrap_aad_hex(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_label_to_id(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_load_hub_key(
     ): Short
@@ -776,6 +744,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_lock(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_open_case(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_open_sealed_content(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_open_server_event(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_open_shift_field(
     ): Short
@@ -801,6 +773,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_set_server_event_keys(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_shape_open(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_shape_open_with_wake_key(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_shape_seal(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_create_link(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_verify(
@@ -808,10 +786,6 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_verify_link(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_sign(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt(
-    ): Short
-    external fun uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_unlock(
     ): Short
@@ -854,15 +828,9 @@ external fun uniffi_llamenos_core_fn_func_compute_sas_code(`sharedXHex`: RustBuf
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_compute_shared_x_hex(`ourSecretHex`: RustBuffer.ByValue,`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_decrypt_server_event_hex(`encryptedHex`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_decrypt_with_shared_key_hex(`ciphertextHex`: RustBuffer.ByValue,`sharedXHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_encrypt_note_for_recipients(`payloadJson`: RustBuffer.ByValue,`authorPubkey`: RustBuffer.ByValue,`adminPubkeys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_hpke_unwrap_key_hex(`envelope`: RustBuffer.ByValue,`secretKeyHex`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_hpke_wrap_key_hex(`keyHex`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_recovery_group_generate_keypair(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -884,8 +852,6 @@ external fun uniffi_llamenos_core_fn_func_generate_ephemeral_keypair_mobile(unif
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_get_public_key(`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(`b64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_build_auth_message(`pubkeyHex`: RustBuffer.ByValue,`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`nonce`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_clear_ephemeral_key(uniffi_out_err: UniffiRustCallStatus, 
@@ -896,7 +862,9 @@ external fun uniffi_llamenos_core_fn_func_mobile_clear_server_event_keys(uniffi_
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_clear_wake_key(uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-external fun uniffi_llamenos_core_fn_func_mobile_content_aad_hex(`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+external fun uniffi_llamenos_core_fn_func_mobile_content_open(`shape`: RustBuffer.ByValue,`ciphertextHex`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_content_seal(`shape`: RustBuffer.ByValue,`plaintextHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_create_auth_token(`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -908,19 +876,9 @@ external fun uniffi_llamenos_core_fn_func_mobile_decrypt_call_metadata(`encrypte
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_draft(`packedHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_decrypt_event_with_attribution(`ciphertextHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event(`ciphertextHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(`packedHex`: RustBuffer.ByValue,`hubId`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_message(`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_decrypt_server_event(`encryptedHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_decrypt_server_event_with_epoch(`encryptedHex`: RustBuffer.ByValue,`epoch`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_ecdh_complete(`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -946,25 +904,9 @@ external fun uniffi_llamenos_core_fn_func_mobile_has_hub_key(`hubId`: RustBuffer
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_has_wake_key(uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
-external fun uniffi_llamenos_core_fn_func_mobile_hex_to_base64url(`hexStr`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hpke_open(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hpke_open_key(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hpke_open_with_wake_key(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hpke_seal(`plaintextHex`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_hpke_seal_key(`keyHex`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`label`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_is_unlocked(uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_is_valid_pin(`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): Byte
-external fun uniffi_llamenos_core_fn_func_mobile_key_wrap_aad_hex(`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_label_to_id(`label`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_load_hub_key(`hubId`: RustBuffer.ByValue,`enc`: RustBuffer.ByValue,`ct`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -974,6 +916,10 @@ external fun uniffi_llamenos_core_fn_func_mobile_lock(uniffi_out_err: UniffiRust
 ): Unit
 external fun uniffi_llamenos_core_fn_func_mobile_open_case(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_open_sealed_content(`shape`: RustBuffer.ByValue,`ciphertextHex`: RustBuffer.ByValue,`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_open_server_event(`hubId`: RustBuffer.ByValue,`kind`: Int,`epoch`: Long,`payloadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_open_shift_field(`purpose`: RustBuffer.ByValue,`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_create(uniffi_out_err: UniffiRustCallStatus, 
@@ -982,7 +928,7 @@ external fun uniffi_llamenos_core_fn_func_mobile_puk_derive_state(`seedHex`: Rus
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_puk_rotate(`oldSeedHex`: RustBuffer.ByValue,`oldGen`: Int,`remainingDevicesJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: RustBuffer.ByValue,`expectedLabel`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+external fun uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_random_bytes_hex(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -996,8 +942,14 @@ external fun uniffi_llamenos_core_fn_func_mobile_seal_shift_field(`purpose`: Rus
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_set_hub_key(`hubId`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-external fun uniffi_llamenos_core_fn_func_mobile_set_server_event_keys(`currentHex`: RustBuffer.ByValue,`previousHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+external fun uniffi_llamenos_core_fn_func_mobile_set_server_event_keys(`keys`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+external fun uniffi_llamenos_core_fn_func_mobile_shape_open(`shape`: RustBuffer.ByValue,`aadFields`: RustBuffer.ByValue,`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_shape_open_with_wake_key(`shape`: RustBuffer.ByValue,`envelope`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_shape_seal(`shape`: RustBuffer.ByValue,`recipientPubkeyHex`: RustBuffer.ByValue,`aadFields`: RustBuffer.ByValue,`plaintextHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_sigchain_create_link(`id`: RustBuffer.ByValue,`seq`: Long,`prevHash`: RustBuffer.ByValue,`timestamp`: RustBuffer.ByValue,`payloadJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify(`linksJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1005,10 +957,6 @@ external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify(`linksJson`: Ru
 external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify_link(`linkJson`: RustBuffer.ByValue,`expectedSignerPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 external fun uniffi_llamenos_core_fn_func_mobile_sign(`messageHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_symmetric_decrypt(`ciphertextHex`: RustBuffer.ByValue,`keyHex`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
-): RustBuffer.ByValue
-external fun uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(`plaintextHex`: RustBuffer.ByValue,`aadHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_unlock(`data`: RustBuffer.ByValue,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1141,7 +1089,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_draft() != 58624.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_note() != 12866.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_decrypt_note() != 34382.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_pin() != 1896.toShort()) {
@@ -1168,19 +1116,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_compute_shared_x_hex() != 4280.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_decrypt_server_event_hex() != 59916.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_llamenos_core_checksum_func_decrypt_with_shared_key_hex() != 38820.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_encrypt_note_for_recipients() != 17380.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_hpke_unwrap_key_hex() != 31587.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_hpke_wrap_key_hex() != 2090.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_group_generate_keypair() != 55070.toShort()) {
@@ -1213,9 +1152,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_get_public_key() != 4118.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_base64url_to_hex() != 33582.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1225,13 +1161,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_clear_hub_keys() != 49932.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_clear_server_event_keys() != 57036.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_clear_server_event_keys() != 4711.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_clear_wake_key() != 9240.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_content_aad_hex() != 6418.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_content_open() != 18027.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_content_seal() != 61193.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_create_auth_token() != 23090.toShort()) {
@@ -1249,25 +1188,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_draft() != 61700.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_event_with_attribution() != 985.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event() != 47164.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_event_trial() != 46122.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_hub_field() != 13981.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event() != 16015.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_server_event_with_epoch() != 46532.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_ecdh_complete() != 49203.toShort()) {
@@ -1306,34 +1230,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_has_wake_key() != 11945.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hex_to_base64url() != 50779.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hpke_open() != 47930.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hpke_open_key() != 8328.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hpke_open_with_wake_key() != 53247.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hpke_seal() != 41122.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_hpke_seal_key() != 45617.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_is_unlocked() != 56931.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_is_valid_pin() != 59853.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_key_wrap_aad_hex() != 54336.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_label_to_id() != 53045.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 48594.toShort()) {
@@ -1348,6 +1248,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_open_case() != 8292.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_open_sealed_content() != 38913.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_open_server_event() != 8406.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_open_shift_field() != 64391.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1360,7 +1266,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_rotate() != 2119.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed() != 14373.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_puk_unwrap_seed() != 11222.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_random_bytes_hex() != 24092.toShort()) {
@@ -1369,7 +1275,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_recovery_share_liveness_proof() != 35897.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers() != 2006.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_resolve_admin_readers() != 60217.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_seal_case() != 38711.toShort()) {
@@ -1381,7 +1287,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_set_hub_key() != 25956.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_set_server_event_keys() != 35873.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_set_server_event_keys() != 43749.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_shape_open() != 14968.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_shape_open_with_wake_key() != 39009.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_shape_seal() != 22598.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_sigchain_create_link() != 21640.toShort()) {
@@ -1394,12 +1309,6 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_sign() != 19728.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_symmetric_decrypt() != 31396.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_symmetric_encrypt() != 33330.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_unlock() != 24233.toShort()) {
@@ -2140,7 +2049,7 @@ data class EncryptedNote (
     /**
      * Note key wrapped for the author
      */
-    val `authorEnvelope`: KeyEnvelope
+    val `authorEnvelope`: HpkeEnvelope
     , 
     /**
      * Note key wrapped for each admin
@@ -2163,20 +2072,20 @@ public object FfiConverterTypeEncryptedNote: FfiConverterRustBuffer<EncryptedNot
     override fun read(buf: ByteBuffer): EncryptedNote {
         return EncryptedNote(
             FfiConverterString.read(buf),
-            FfiConverterTypeKeyEnvelope.read(buf),
+            FfiConverterTypeHpkeEnvelope.read(buf),
             FfiConverterSequenceTypeRecipientKeyEnvelope.read(buf),
         )
     }
 
     override fun allocationSize(value: EncryptedNote) = (
             FfiConverterString.allocationSize(value.`encryptedContent`) +
-            FfiConverterTypeKeyEnvelope.allocationSize(value.`authorEnvelope`) +
+            FfiConverterTypeHpkeEnvelope.allocationSize(value.`authorEnvelope`) +
             FfiConverterSequenceTypeRecipientKeyEnvelope.allocationSize(value.`adminEnvelopes`)
     )
 
     override fun write(value: EncryptedNote, buf: ByteBuffer) {
             FfiConverterString.write(value.`encryptedContent`, buf)
-            FfiConverterTypeKeyEnvelope.write(value.`authorEnvelope`, buf)
+            FfiConverterTypeHpkeEnvelope.write(value.`authorEnvelope`, buf)
             FfiConverterSequenceTypeRecipientKeyEnvelope.write(value.`adminEnvelopes`, buf)
     }
 }
@@ -2286,26 +2195,16 @@ public object FfiConverterTypeEphemeralKeyPair: FfiConverterRustBuffer<Ephemeral
 
 
 /**
- * HPKE v3 envelope — the wire format for all encrypted fields.
+ * The one HPKE envelope: `{enc, ct}`, both lowercase hex.
  */
 data class HpkeEnvelope (
     /**
-     * Envelope version — must be 3
-     */
-    val `v`: kotlin.UByte
-    , 
-    /**
-     * Numeric label ID mapping to a CryptoLabel constant
-     */
-    val `labelId`: kotlin.UByte
-    , 
-    /**
-     * Base64url-encoded HPKE encapsulated key (32 bytes for X25519)
+     * Lowercase hex: the HPKE encapsulated key (32 bytes under X25519).
      */
     val `enc`: kotlin.String
     , 
     /**
-     * Base64url-encoded AEAD ciphertext
+     * Lowercase hex: the AEAD ciphertext, tag included.
      */
     val `ct`: kotlin.String
     
@@ -2324,72 +2223,17 @@ data class HpkeEnvelope (
 public object FfiConverterTypeHpkeEnvelope: FfiConverterRustBuffer<HpkeEnvelope> {
     override fun read(buf: ByteBuffer): HpkeEnvelope {
         return HpkeEnvelope(
-            FfiConverterUByte.read(buf),
-            FfiConverterUByte.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
         )
     }
 
     override fun allocationSize(value: HpkeEnvelope) = (
-            FfiConverterUByte.allocationSize(value.`v`) +
-            FfiConverterUByte.allocationSize(value.`labelId`) +
             FfiConverterString.allocationSize(value.`enc`) +
             FfiConverterString.allocationSize(value.`ct`)
     )
 
     override fun write(value: HpkeEnvelope, buf: ByteBuffer) {
-            FfiConverterUByte.write(value.`v`, buf)
-            FfiConverterUByte.write(value.`labelId`, buf)
-            FfiConverterString.write(value.`enc`, buf)
-            FfiConverterString.write(value.`ct`, buf)
-    }
-}
-
-
-
-/**
- * A symmetric key wrapped via HPKE for a single recipient.
- *
- * Wire format uses hex-encoded enc/ct (not the base64url HpkeEnvelope format).
- */
-data class KeyEnvelope (
-    /**
-     * hex: 32-byte HPKE encapsulated key
-     */
-    val `enc`: kotlin.String
-    , 
-    /**
-     * hex: AEAD ciphertext (encrypted 32-byte symmetric key)
-     */
-    val `ct`: kotlin.String
-    
-){
-    
-
-    
-
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeKeyEnvelope: FfiConverterRustBuffer<KeyEnvelope> {
-    override fun read(buf: ByteBuffer): KeyEnvelope {
-        return KeyEnvelope(
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: KeyEnvelope) = (
-            FfiConverterString.allocationSize(value.`enc`) +
-            FfiConverterString.allocationSize(value.`ct`)
-    )
-
-    override fun write(value: KeyEnvelope, buf: ByteBuffer) {
             FfiConverterString.write(value.`enc`, buf)
             FfiConverterString.write(value.`ct`, buf)
     }
@@ -2453,11 +2297,12 @@ public object FfiConverterTypePukState: FfiConverterRustBuffer<PukState> {
 
 
 /**
- * A KeyEnvelope tagged with the recipient's pubkey (for multi-recipient scenarios).
+ * An [`HpkeEnvelope`] tagged with the recipient's address, for multi-reader
+ * records. `enc` and `ct` are lowercase hex (spec D2).
  */
 data class RecipientKeyEnvelope (
     /**
-     * recipient's X25519 pubkey (hex, 32 bytes / 64 hex chars)
+     * recipient's address: their X25519 key, or their Ed25519 account key (hex)
      */
     val `pubkey`: kotlin.String
     , 
@@ -2467,7 +2312,7 @@ data class RecipientKeyEnvelope (
     val `enc`: kotlin.String
     , 
     /**
-     * hex: AEAD ciphertext (encrypted 32-byte symmetric key)
+     * hex: AEAD ciphertext (encrypted 32-byte symmetric key + tag)
      */
     val `ct`: kotlin.String
     
@@ -2606,6 +2451,61 @@ public object FfiConverterTypeRotatePukResult: FfiConverterRustBuffer<RotatePukR
             FfiConverterTypePukState.write(value.`state`, buf)
             FfiConverterSequenceTypeDevicePukEnvelope.write(value.`deviceEnvelopes`, buf)
             FfiConverterString.write(value.`clkrChainLinkHex`, buf)
+    }
+}
+
+
+
+/**
+ * One relay-event key as the server hands it to a member (`GET /api/auth/me`).
+ */
+data class ServerEventKey (
+    /**
+     * The hub whose frames this key opens.
+     */
+    val `hubId`: kotlin.String
+    , 
+    /**
+     * The epoch (UTC day number) it is valid for.
+     */
+    val `epoch`: kotlin.ULong
+    , 
+    /**
+     * The 32-byte key, lowercase hex.
+     */
+    val `keyHex`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeServerEventKey: FfiConverterRustBuffer<ServerEventKey> {
+    override fun read(buf: ByteBuffer): ServerEventKey {
+        return ServerEventKey(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ServerEventKey) = (
+            FfiConverterString.allocationSize(value.`hubId`) +
+            FfiConverterULong.allocationSize(value.`epoch`) +
+            FfiConverterString.allocationSize(value.`keyHex`)
+    )
+
+    override fun write(value: ServerEventKey, buf: ByteBuffer) {
+            FfiConverterString.write(value.`hubId`, buf)
+            FfiConverterULong.write(value.`epoch`, buf)
+            FfiConverterString.write(value.`keyHex`, buf)
     }
 }
 
@@ -2923,6 +2823,16 @@ sealed class CryptoException(message: String): kotlin.Exception(message) {
         class FutureTimestamp(message: String) : CryptoException(message)
         
     /**
+     * An identifier outside the §2.1 profile (`^[0-9a-z][0-9a-z-]{0,63}$` or lowercase hex).
+     */
+        class InvalidIdentifier(message: String) : CryptoException(message)
+        
+    /**
+     * No relay-event key is held for this hub and epoch.
+     */
+        class NoEventKey(message: String) : CryptoException(message)
+        
+    /**
      * The hub has no admin reader to seal to. See [`crate::readers`].
      */
         class NoAdminReader(message: String) : CryptoException(message)
@@ -2960,7 +2870,9 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
             18 -> CryptoException.InvalidSignature(FfiConverterString.read(buf))
             19 -> CryptoException.StaleTimestamp(FfiConverterString.read(buf))
             20 -> CryptoException.FutureTimestamp(FfiConverterString.read(buf))
-            21 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
+            21 -> CryptoException.InvalidIdentifier(FfiConverterString.read(buf))
+            22 -> CryptoException.NoEventKey(FfiConverterString.read(buf))
+            23 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -3052,14 +2964,134 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
                 buf.putInt(20)
                 Unit
             }
-            is CryptoException.NoAdminReader -> {
+            is CryptoException.InvalidIdentifier -> {
                 buf.putInt(21)
+                Unit
+            }
+            is CryptoException.NoEventKey -> {
+                buf.putInt(22)
+                Unit
+            }
+            is CryptoException.NoAdminReader -> {
+                buf.putInt(23)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
 }
+
+
+
+/**
+ * What an HPKE envelope is. Closed: a host names one of these and nothing else.
+ *
+ * Carried as a UniFFI enum (Swift/Kotlin), a kebab-case string on the Tauri IPC
+ * (`"note-key"`), and a byte on the server's C ABI ([`Shape::from_u8`]).
+ */
+
+enum class Shape(val value: kotlin.UByte) {
+    
+    /**
+     * A note's per-note content key.
+     */
+    NOTE_KEY(0u),
+    /**
+     * A file's content key.
+     */
+    FILE_KEY(1u),
+    /**
+     * A file's metadata key.
+     */
+    FILE_METADATA_KEY(2u),
+    /**
+     * A contact's profile-tier key.
+     */
+    CONTACT_PROFILE_KEY(3u),
+    /**
+     * A contact's identifier-tier key.
+     */
+    CONTACT_ID_KEY(4u),
+    /**
+     * A hub key wrapped to a member.
+     */
+    HUB_KEY(5u),
+    /**
+     * A firehose buffer window key wrapped to the agent.
+     */
+    FIREHOSE_WINDOW_KEY(6u),
+    /**
+     * A stored message's content key (no AAD: client- and server-sealed messages
+     * share a conversation with no format marker, see `crate::envelope_aad`).
+     */
+    MESSAGE_KEY(7u),
+    /**
+     * A call record's metadata content key (no AAD, same reason).
+     */
+    CALL_META_KEY(8u),
+    /**
+     * A PUK seed sealed to one device. Field: the device id.
+     */
+    PUK_SEED(9u),
+    /**
+     * A per-user audit key wrapped to an admin. Field: the audited user's pubkey.
+     */
+    AUDIT_USER_KEY(10u),
+    /**
+     * A wake-tier push payload (text).
+     */
+    PUSH_WAKE(11u),
+    /**
+     * A full-tier push payload (text).
+     */
+    PUSH_FULL(12u),
+    /**
+     * A platform role's name (text). Field: the role id.
+     */
+    PLATFORM_ROLE_NAME(13u),
+    /**
+     * A platform role's description (text). Field: the role id.
+     */
+    PLATFORM_ROLE_DESCRIPTION(14u),
+    /**
+     * A recovery share sealed to its holder's device.
+     */
+    RECOVERY_GROUP_SHARE(15u),
+    /**
+     * A recovery share contributed back to an admin. Fields: the recovery
+     * session id, then the contributing device's signing pubkey.
+     */
+    RECOVERY_SHARE_CONTRIBUTION(16u),
+    /**
+     * A PUK seed sealed to a recovery group's public key.
+     */
+    RECOVERY_PUK_SEED(17u);
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeShape: FfiConverterRustBuffer<Shape> {
+    override fun read(buf: ByteBuffer) = try {
+        Shape.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: Shape) = 4UL
+
+    override fun write(value: Shape, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -3227,6 +3259,34 @@ public object FfiConverterSequenceTypeRecipientKeyEnvelope: FfiConverterRustBuff
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeServerEventKey: FfiConverterRustBuffer<List<ServerEventKey>> {
+    override fun read(buf: ByteBuffer): List<ServerEventKey> {
+        val len = buf.getInt()
+        return List<ServerEventKey>(len) {
+            FfiConverterTypeServerEventKey.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ServerEventKey>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeServerEventKey.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ServerEventKey>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeServerEventKey.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<ShamirShare>> {
     override fun read(buf: ByteBuffer): List<ShamirShare> {
         val len = buf.getInt()
@@ -3281,12 +3341,12 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
         /**
          * Decrypt a note using the appropriate envelope for the current user.
          */
-    @Throws(CryptoException::class) fun `decryptNote`(`encryptedContent`: kotlin.String, `envelope`: KeyEnvelope, `secretKeyHex`: kotlin.String): kotlin.String {
+    @Throws(CryptoException::class) fun `decryptNote`(`encryptedContent`: kotlin.String, `envelope`: HpkeEnvelope, `secretKeyHex`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(CryptoException) { _status ->
     UniffiLib.uniffi_llamenos_core_fn_func_decrypt_note(
     
-        FfiConverterString.lower(`encryptedContent`),FfiConverterTypeKeyEnvelope.lower(`envelope`),FfiConverterString.lower(`secretKeyHex`),_status)
+        FfiConverterString.lower(`encryptedContent`),FfiConverterTypeHpkeEnvelope.lower(`envelope`),FfiConverterString.lower(`secretKeyHex`),_status)
 }
     )
     }
@@ -3409,26 +3469,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Decrypt a server-encrypted event payload (AES-256-GCM).
-         *
-         * Input: hex(nonce_12 + ciphertext), 32-byte key as hex.
-         * Output: decrypted UTF-8 string (JSON).
-         *
-         * Used by mobile platforms to decrypt Nostr relay events encrypted
-         * with the server event key (from GET /api/auth/me serverEventKeyHex).
-         */
-    @Throws(CryptoException::class) fun `decryptServerEventHex`(`encryptedHex`: kotlin.String, `keyHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_decrypt_server_event_hex(
-    
-        FfiConverterString.lower(`encryptedHex`),FfiConverterString.lower(`keyHex`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Decrypt a UTF-8 payload that was encrypted with a provisioning shared key.
          *
          * `ciphertext_hex`: hex(nonce_12 + ciphertext + tag_16) — AES-256-GCM (provisioning protocol)
@@ -3462,35 +3502,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_encrypt_note_for_recipients(
     
         FfiConverterString.lower(`payloadJson`),FfiConverterString.lower(`authorPubkey`),FfiConverterSequenceString.lower(`adminPubkeys`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Unwrap a 32-byte symmetric key from a wire-format KeyEnvelope using HPKE.
-         */
-    @Throws(CryptoException::class) fun `hpkeUnwrapKeyHex`(`envelope`: KeyEnvelope, `secretKeyHex`: kotlin.String, `label`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_hpke_unwrap_key_hex(
-    
-        FfiConverterTypeKeyEnvelope.lower(`envelope`),FfiConverterString.lower(`secretKeyHex`),FfiConverterString.lower(`label`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Wrap a 32-byte symmetric key (hex) for a recipient using HPKE.
-         * Returns a wire-format KeyEnvelope (hex-encoded enc/ct).
-         */
-    @Throws(CryptoException::class) fun `hpkeWrapKeyHex`(`keyHex`: kotlin.String, `recipientPubkeyHex`: kotlin.String, `label`: kotlin.String): KeyEnvelope {
-            return FfiConverterTypeKeyEnvelope.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_hpke_wrap_key_hex(
-    
-        FfiConverterString.lower(`keyHex`),FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`label`),_status)
 }
     )
     }
@@ -3654,21 +3665,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Convert the base64url a UniFFI [`HpkeEnvelope`] carries back to wire-format
-         * hex. See [`mobile_hex_to_base64url`].
-         */
-    @Throws(CryptoException::class) fun `mobileBase64urlToHex`(`b64`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_base64url_to_hex(
-    
-        FfiConverterString.lower(`b64`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Build the canonical auth message bytes — the one construction path, exposed
          * so platform code never hand-builds the signed string.
          *
@@ -3712,7 +3708,7 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Clear server event keys from Rust memory.
+         * Clear the relay-event keys from Rust memory.
          */ fun `mobileClearServerEventKeys`()
         = 
     uniffiRustCall() { _status ->
@@ -3736,20 +3732,30 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.
-         *
-         * Exported over UniFFI so Kotlin and Swift derive the AAD from
-         * [`crate::envelope_aad`], the same definition `encryption.rs` and the
-         * server-side `packages/shared/envelope-aad.ts` use, instead of writing out
-         * `label` and `${label}:key-wrap` at each call site. Errors on a label that
-         * is not in the generated registry.
+         * Open a content ciphertext of `shape` with its key. Returns the plaintext as hex.
          */
-    @Throws(CryptoException::class) fun `mobileContentAadHex`(`label`: kotlin.String): kotlin.String {
+    @Throws(CryptoException::class) fun `mobileContentOpen`(`shape`: Shape, `ciphertextHex`: kotlin.String, `keyHex`: kotlin.String): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_content_aad_hex(
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_content_open(
     
-        FfiConverterString.lower(`label`),_status)
+        FfiConverterTypeShape.lower(`shape`),FfiConverterString.lower(`ciphertextHex`),FfiConverterString.lower(`keyHex`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal `plaintext_hex` under a fresh content key with `shape`'s content AAD.
+         * Returns `[ciphertext_hex, key_hex]`; the key is what the shape's HPKE layer
+         * wraps for each reader (`mobile_shape_seal`).
+         */
+    @Throws(CryptoException::class) fun `mobileContentSeal`(`shape`: Shape, `plaintextHex`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_content_seal(
+    
+        FfiConverterTypeShape.lower(`shape`),FfiConverterString.lower(`plaintextHex`),_status)
 }
     )
     }
@@ -3839,52 +3845,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Try to decrypt a relay event against ALL stored hub keys.
-         * Returns [hub_id, decrypted_json] for the first key that succeeds.
-         */
-    @Throws(CryptoException::class) fun `mobileDecryptEventWithAttribution`(`ciphertextHex`: kotlin.String): List<kotlin.String> {
-            return FfiConverterSequenceString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_event_with_attribution(
-    
-        FfiConverterString.lower(`ciphertextHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Decrypt a hub event payload (AES-256-GCM) using the stored hub key.
-         */
-    @Throws(CryptoException::class) fun `mobileDecryptHubEvent`(`ciphertextHex`: kotlin.String, `hubId`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event(
-    
-        FfiConverterString.lower(`ciphertextHex`),FfiConverterString.lower(`hubId`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Try to decrypt an event by trial-decrypting with all cached hub keys.
-         *
-         * Returns `[hub_id, plaintext_json]` for the first key that succeeds,
-         * or an error if no key works. Equivalent to `mobile_decrypt_event_with_attribution`.
-         */
-    @Throws(CryptoException::class) fun `mobileDecryptHubEventTrial`(`encryptedHex`: kotlin.String): List<kotlin.String> {
-            return FfiConverterSequenceString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_hub_event_trial(
-    
-        FfiConverterString.lower(`encryptedHex`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Open a field sealed by `mobile_encrypt_hub_field` (or the desktop
          * `encrypt_hub_field`) under the stored hub key.
          */
@@ -3909,42 +3869,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_message(
     
         FfiConverterString.lower(`encryptedContent`),FfiConverterSequenceTypeRecipientKeyEnvelope.lower(`envelopes`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Decrypt a server-published event using stored server event keys.
-         * Tries current key first, falls back to previous key (epoch rotation).
-         */
-    @Throws(CryptoException::class) fun `mobileDecryptServerEvent`(`encryptedHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_server_event(
-    
-        FfiConverterString.lower(`encryptedHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Decrypt a server-published event using the epoch-aware AAD and padding format.
-         *
-         * The server pads plaintext to a power-of-2 bucket (min 512B) before encrypting:
-         * `[4-byte LE actual-length][plaintext JSON bytes][random padding]`
-         * AAD = `"llamenos:hub-event:{epoch}"` (includes epoch for domain separation).
-         *
-         * Tries the stored current key first, then the previous key for epoch rotation.
-         * Returns the decrypted JSON string with padding stripped.
-         */
-    @Throws(CryptoException::class) fun `mobileDecryptServerEventWithEpoch`(`encryptedHex`: kotlin.String, `epoch`: kotlin.ULong): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_decrypt_server_event_with_epoch(
-    
-        FfiConverterString.lower(`encryptedHex`),FfiConverterULong.lower(`epoch`),_status)
 }
     )
     }
@@ -4139,99 +4063,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Convert a wire-format hex string to the base64url the UniFFI
-         * [`HpkeEnvelope`] record carries.
-         *
-         * `PROTOCOL.md` §2.3/§2.4 specify `enc` and `ct` as **hex** on the wire, while
-         * `hpke_envelope.rs` encodes both as base64url inside the record. Mobile was
-         * handing wire hex straight to `mobile_hpke_open_key`, which base64url-decoded
-         * it into garbage — so even with a correct AAD the envelope could not open.
-         * Exported so the conversion is done once here rather than reimplemented in
-         * Kotlin and again in Swift.
-         */
-    @Throws(CryptoException::class) fun `mobileHexToBase64url`(`hexStr`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hex_to_base64url(
-    
-        FfiConverterString.lower(`hexStr`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * HPKE open: decrypt an envelope using the device's X25519 key from mobile state.
-         */
-    @Throws(CryptoException::class) fun `mobileHpkeOpen`(`envelope`: HpkeEnvelope, `expectedLabel`: kotlin.String, `aadHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hpke_open(
-    
-        FfiConverterTypeHpkeEnvelope.lower(`envelope`),FfiConverterString.lower(`expectedLabel`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * HPKE open a 32-byte key from an envelope using mobile state.
-         */
-    @Throws(CryptoException::class) fun `mobileHpkeOpenKey`(`envelope`: HpkeEnvelope, `expectedLabel`: kotlin.String, `aadHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hpke_open_key(
-    
-        FfiConverterTypeHpkeEnvelope.lower(`envelope`),FfiConverterString.lower(`expectedLabel`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * HPKE open using the stored wake key (not the device key).
-         * Used for decrypting push notification payloads when the device is locked.
-         */
-    @Throws(CryptoException::class) fun `mobileHpkeOpenWithWakeKey`(`envelope`: HpkeEnvelope, `expectedLabel`: kotlin.String, `aadHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hpke_open_with_wake_key(
-    
-        FfiConverterTypeHpkeEnvelope.lower(`envelope`),FfiConverterString.lower(`expectedLabel`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * HPKE seal: encrypt plaintext for a recipient's X25519 pubkey (stateless).
-         */
-    @Throws(CryptoException::class) fun `mobileHpkeSeal`(`plaintextHex`: kotlin.String, `recipientPubkeyHex`: kotlin.String, `label`: kotlin.String, `aadHex`: kotlin.String): HpkeEnvelope {
-            return FfiConverterTypeHpkeEnvelope.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hpke_seal(
-    
-        FfiConverterString.lower(`plaintextHex`),FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`label`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * HPKE seal a 32-byte key for a recipient (stateless convenience wrapper).
-         */
-    @Throws(CryptoException::class) fun `mobileHpkeSealKey`(`keyHex`: kotlin.String, `recipientPubkeyHex`: kotlin.String, `label`: kotlin.String, `aadHex`: kotlin.String): HpkeEnvelope {
-            return FfiConverterTypeHpkeEnvelope.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_hpke_seal_key(
-    
-        FfiConverterString.lower(`keyHex`),FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterString.lower(`label`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
          * Check if the mobile crypto state is unlocked.
          */ fun `mobileIsUnlocked`(): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -4252,43 +4083,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_is_valid_pin(
     
         FfiConverterString.lower(`pin`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * `UTF-8("{label}:key-wrap")` as hex — the AAD bound to an envelope's
-         * *key-wrap* layer. See [`mobile_content_aad_hex`].
-         */
-    @Throws(CryptoException::class) fun `mobileKeyWrapAadHex`(`label`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_key_wrap_aad_hex(
-    
-        FfiConverterString.lower(`label`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * The numeric registry ID for a domain separation label.
-         *
-         * `HpkeEnvelope.labelId` is a wire field that must agree with the label the
-         * envelope is opened under — `hpke_open_key` rejects a mismatch before
-         * touching any key material (the Albrecht defense). Both mobile clients kept
-         * their own hand-written tables of these indices, and iOS's had drifted:
-         * `CryptoService.swift` built call-metadata and hub-key envelopes with
-         * `labelId: 0` (LABEL_NOTE_KEY), which that check rejects. Derive the ID from
-         * the label instead of transcribing the registry a third and fourth time.
-         */
-    @Throws(CryptoException::class) fun `mobileLabelToId`(`label`: kotlin.String): kotlin.UByte {
-            return FfiConverterUByte.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_label_to_id(
-    
-        FfiConverterString.lower(`label`),_status)
 }
     )
     }
@@ -4363,6 +4157,37 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Open the content of `shape` in one call: unwrap the content key from
+         * `envelope` with the device key, then open `ciphertext_hex`. The content key
+         * never leaves Rust. Returns the plaintext as hex.
+         */
+    @Throws(CryptoException::class) fun `mobileOpenSealedContent`(`shape`: Shape, `ciphertextHex`: kotlin.String, `envelope`: HpkeEnvelope): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_sealed_content(
+    
+        FfiConverterTypeShape.lower(`shape`),FfiConverterString.lower(`ciphertextHex`),FfiConverterTypeHpkeEnvelope.lower(`envelope`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Open one relay frame of `hub_id` with the key held for its epoch (D9). The
+         * frame's `hubId`, `kind` and `epoch` are bound in the AAD.
+         */
+    @Throws(CryptoException::class) fun `mobileOpenServerEvent`(`hubId`: kotlin.String, `kind`: kotlin.UInt, `epoch`: kotlin.ULong, `payloadHex`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_open_server_event(
+    
+        FfiConverterString.lower(`hubId`),FfiConverterUInt.lower(`kind`),FfiConverterULong.lower(`epoch`),FfiConverterString.lower(`payloadHex`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Open a shift field as this device from all of its envelopes; Rust picks the
          * one addressed to this device's X25519 key.
          */
@@ -4421,14 +4246,15 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Unwrap a PUK seed from an HPKE envelope using the device's X25519 key.
+         * Unwrap a PUK seed sealed to this device (`Shape::PukSeed`, bound to this
+         * device's id) using the device's X25519 key.
          */
-    @Throws(CryptoException::class) fun `mobilePukUnwrapSeed`(`envelope`: HpkeEnvelope, `expectedLabel`: kotlin.String, `aadHex`: kotlin.String): kotlin.String {
+    @Throws(CryptoException::class) fun `mobilePukUnwrapSeed`(`envelope`: HpkeEnvelope): kotlin.String {
             return FfiConverterString.lift(
     uniffiRustCallWithError(CryptoException) { _status ->
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_puk_unwrap_seed(
     
-        FfiConverterTypeHpkeEnvelope.lower(`envelope`),FfiConverterString.lower(`expectedLabel`),FfiConverterString.lower(`aadHex`),_status)
+        FfiConverterTypeHpkeEnvelope.lower(`envelope`),_status)
 }
     )
     }
@@ -4469,6 +4295,8 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * `UTF-8(label)` as hex — the AAD bound to an envelope's *content* layer.
+         *
          * The admin reader set of a hub, from `GET /api/hubs/:hubId/readers?purpose=admin`.
          *
          * The one place mobile decides which keys count as readers of hub content
@@ -4540,16 +4368,65 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
-         * Store server event keys (current + optional previous for epoch rotation).
+         * Replace the relay-event keys held in Rust with the server's list (one entry per
+         * hub the user belongs to and epoch it hands out, `GET /api/auth/me`). The keys
+         * never come back out (#2999).
          */
-    @Throws(CryptoException::class) fun `mobileSetServerEventKeys`(`currentHex`: kotlin.String, `previousHex`: kotlin.String?)
+    @Throws(CryptoException::class) fun `mobileSetServerEventKeys`(`keys`: List<ServerEventKey>)
         = 
     uniffiRustCallWithError(CryptoException) { _status ->
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_set_server_event_keys(
     
-        FfiConverterString.lower(`currentHex`),FfiConverterOptionalString.lower(`previousHex`),_status)
+        FfiConverterSequenceTypeServerEventKey.lower(`keys`),_status)
 }
     
+    
+
+        /**
+         * Open an envelope of `shape` with the device's X25519 key from mobile state.
+         * Returns the plaintext as hex.
+         */
+    @Throws(CryptoException::class) fun `mobileShapeOpen`(`shape`: Shape, `aadFields`: List<kotlin.String>, `envelope`: HpkeEnvelope): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_shape_open(
+    
+        FfiConverterTypeShape.lower(`shape`),FfiConverterSequenceString.lower(`aadFields`),FfiConverterTypeHpkeEnvelope.lower(`envelope`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Open a push payload of `shape` with the stored wake key (not the device key),
+         * for decrypting push notifications while the device is locked. Only the
+         * push shapes are accepted: the wake key opens nothing else.
+         */
+    @Throws(CryptoException::class) fun `mobileShapeOpenWithWakeKey`(`shape`: Shape, `envelope`: HpkeEnvelope): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_shape_open_with_wake_key(
+    
+        FfiConverterTypeShape.lower(`shape`),FfiConverterTypeHpkeEnvelope.lower(`envelope`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Seal `plaintext_hex` as `shape` to `recipient_pubkey_hex` (stateless).
+         * The crate chooses the label and AAD; `aad_fields` are the per-record values
+         * the shape binds (see [`Shape::arity`]).
+         */
+    @Throws(CryptoException::class) fun `mobileShapeSeal`(`shape`: Shape, `recipientPubkeyHex`: kotlin.String, `aadFields`: List<kotlin.String>, `plaintextHex`: kotlin.String): HpkeEnvelope {
+            return FfiConverterTypeHpkeEnvelope.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_shape_seal(
+    
+        FfiConverterTypeShape.lower(`shape`),FfiConverterString.lower(`recipientPubkeyHex`),FfiConverterSequenceString.lower(`aadFields`),FfiConverterString.lower(`plaintextHex`),_status)
+}
+    )
+    }
     
 
         /**
@@ -4603,54 +4480,6 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_sign(
     
         FfiConverterString.lower(`messageHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Decrypt AES-256-GCM ciphertext, binding `aad_hex`.
-         * Input: hex(nonce_12 || ciphertext || tag_16), key_hex, aad_hex.
-         *
-         * The AAD must match the one bound at encryption byte for byte or the GCM tag
-         * check fails and this returns [`CryptoError::DecryptionFailed`]. That is the
-         * point: it is the only thing separating a key-wrap envelope from a content
-         * envelope carried under the same label. See [`crate::envelope_aad`].
-         */
-    @Throws(CryptoException::class) fun `mobileSymmetricDecrypt`(`ciphertextHex`: kotlin.String, `keyHex`: kotlin.String, `aadHex`: kotlin.String): kotlin.String {
-            return FfiConverterString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_symmetric_decrypt(
-    
-        FfiConverterString.lower(`ciphertextHex`),FfiConverterString.lower(`keyHex`),FfiConverterString.lower(`aadHex`),_status)
-}
-    )
-    }
-    
-
-        /**
-         * Encrypt plaintext with a random AES-256-GCM key, binding `aad_hex`.
-         * Returns (ciphertext_hex, key_hex) where ciphertext = hex(nonce_12 || ciphertext || tag_16).
-         *
-         * `aad_hex` is required, not defaulted. The canonical-AAD envelopes (notes,
-         * files, contact identifiers — `docs/protocol/PROTOCOL.md` §2.3) bind
-         * `UTF-8(label)` to the content layer and `UTF-8("{label}:key-wrap")` to the
-         * key wrap; this function previously had no AAD parameter at all, so Android
-         * and iOS were structurally incapable of producing or reading a conformant
-         * content ciphertext. A defaulted empty AAD would have reproduced exactly
-         * that defect while appearing to fix it. Derive the value with
-         * [`crate::envelope_aad::content_aad_hex`] — exported to mobile as
-         * `mobile_content_aad_hex` — and pass `""` for the envelopes every
-         * implementation agrees carry no AAD: stored records (messages, call
-         * metadata — #1393, read by `open_record_for_reader` / `mobile_decrypt_message`)
-         * and the hub-key/PUK flows. Never pass `""` beside a canonical label.
-         */
-    @Throws(CryptoException::class) fun `mobileSymmetricEncrypt`(`plaintextHex`: kotlin.String, `aadHex`: kotlin.String): List<kotlin.String> {
-            return FfiConverterSequenceString.lift(
-    uniffiRustCallWithError(CryptoException) { _status ->
-    UniffiLib.uniffi_llamenos_core_fn_func_mobile_symmetric_encrypt(
-    
-        FfiConverterString.lower(`plaintextHex`),FfiConverterString.lower(`aadHex`),_status)
 }
     )
     }

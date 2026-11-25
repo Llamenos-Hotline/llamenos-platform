@@ -15,9 +15,9 @@ import { HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
 import type { Shape } from '@shared/crypto-shapes'
 import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { AdminHpkeRecipient } from './admin-recipient'
-import type { KeyEnvelope, ServerEventKey } from '@protocol/schemas'
+import type { KeyEnvelope, RelayEventKey } from '@protocol/schemas'
 
-export type { KeyEnvelope, ServerEventKey, Shape }
+export type { KeyEnvelope, RelayEventKey, Shape }
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -589,7 +589,7 @@ export async function wrapHubKeyForMember(hubId: string, recipientPubkeyHex: str
  * one per (hub, epoch) for the hubs this user belongs to (`GET /api/auth/me`,
  * #2999). The keys never come back to JavaScript.
  */
-export async function setServerEventKeys(keys: readonly ServerEventKey[]): Promise<void> {
+export async function setServerEventKeys(keys: readonly RelayEventKey[]): Promise<void> {
   if (useTauri) {
     await tauriInvoke<void>('set_server_event_keys', { keys })
     return

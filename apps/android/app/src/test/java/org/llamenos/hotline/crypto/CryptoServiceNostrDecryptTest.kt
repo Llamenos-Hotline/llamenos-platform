@@ -29,33 +29,6 @@ class CryptoServiceNostrDecryptTest {
     // ---- Hub event decrypt API contract ----
 
     @Test
-    fun `decryptHubEvent returns null for any input without native lib`() {
-        // Even with a test key injected, decrypt requires native Rust
-        cryptoService.injectHubKeyForTest("hub-1", "aa".repeat(32))
-        assertNull(cryptoService.decryptHubEvent("deadbeef", "hub-1"))
-    }
-
-    @Test
-    fun `decryptHubEventTrial returns null without native lib`() {
-        cryptoService.injectHubKeyForTest("hub-1", "aa".repeat(32))
-        assertNull(cryptoService.decryptHubEventTrial("deadbeef"))
-    }
-
-    // ---- Server event decrypt API contract ----
-
-    @Test
-    fun `decryptServerEventWithStoredKeys returns null without native lib`() {
-        assertNull(cryptoService.decryptServerEventWithStoredKeys("deadbeef", 1L))
-    }
-
-    @Test
-    fun `decryptServerEvent with explicit key returns null without native lib`() {
-        assertNull(cryptoService.decryptServerEvent("deadbeef", "aa".repeat(32)))
-    }
-
-    // ---- Key state isolation ----
-
-    @Test
     fun `hub keys injected in test mode are isolated per hub`() {
         cryptoService.injectHubKeyForTest("hub-a", "aa".repeat(32))
         cryptoService.injectHubKeyForTest("hub-b", "bb".repeat(32))
@@ -82,8 +55,15 @@ class CryptoServiceNostrDecryptTest {
 
     // ---- setServerEventKeys hard-fail ----
 
+    @Test
+    fun `openServerEvent returns null without native lib`() {
+        assertNull(cryptoService.openServerEvent("hub-1", 1000, 1L, "deadbeef"))
+    }
+
     @Test(expected = IllegalStateException::class)
-    fun `setServerEventKeys with epoch rotation throws without native lib`() {
-        cryptoService.setServerEventKeys("aa".repeat(32), "bb".repeat(32))
+    fun `setServerEventKeys throws without native lib`() {
+        cryptoService.setServerEventKeys(
+            listOf(org.llamenos.core.ServerEventKey(hubId = "hub-1", epoch = 1uL, keyHex = "aa".repeat(32))),
+        )
     }
 }

@@ -944,7 +944,9 @@ class CryptoSteps : BaseSteps() {
     @Then("it should contain version, nonce, ciphertext, and reader keys fields")
     fun itShouldContainVersionNonceCiphertextAndReaderKeysFields() {
         try {
-            assertNotNull("Envelope version should be present", noteA!!.envelopes[0].hpkeEnvelope.v)
+            // The one envelope shape (spec D1, D2): `{enc, ct}`, lowercase hex, no version field.
+            assertTrue("enc is 32 bytes of lowercase hex", Regex("^[0-9a-f]{64}$").matches(noteA!!.envelopes[0].hpkeEnvelope.enc))
+            assertTrue("ct is a 48-byte key wrap", Regex("^[0-9a-f]{96}$").matches(noteA!!.envelopes[0].hpkeEnvelope.ct))
             assertTrue("Ciphertext (AES-GCM nonce + payload) should be present", noteA!!.ciphertextHex.isNotEmpty())
             assertTrue("HPKE enc field (ephemeral key) should be present", noteA!!.envelopes[0].hpkeEnvelope.enc.isNotEmpty())
             assertTrue("Reader keys (envelopes) should be present", noteA!!.envelopes.isNotEmpty())

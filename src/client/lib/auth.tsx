@@ -1,4 +1,4 @@
-import type { ServerEventKey } from '@protocol/schemas'
+import type { RelayEventKey } from '@protocol/schemas'
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { ensureDeviceRegistered, resetDeviceRegistrationCache } from '@/lib/device-registration'
 import { useTranslation } from 'react-i18next'
@@ -41,7 +41,7 @@ interface AuthState {
   adminPubkey: string
   adminDecryptionPubkey: string
   /** Relay-event keys per (hub, epoch), for the hubs this user belongs to (#2999). */
-  serverEventKeys: ServerEventKey[]
+  serverEventKeys: RelayEventKey[]
   eventKeyEpoch: number | undefined
   eventKeyEpochDuration: number | undefined
   webauthnRequired: boolean

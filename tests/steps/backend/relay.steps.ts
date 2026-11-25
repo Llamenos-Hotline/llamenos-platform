@@ -18,7 +18,7 @@ import {
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
-import type { ServerEventKey } from '@protocol/schemas/auth'
+import type { RelayEventKey } from '@protocol/schemas/auth'
 import {
   ADMIN_SEED,
   addHubMemberViaApi,
@@ -49,7 +49,7 @@ interface RelayStepState {
   lastCapturedEvent?: CapturedEvent
   serverPubkey?: string
   /** The subscriber's relay-event keys, per (hub, epoch), from GET /api/auth/me */
-  serverEventKeys?: ServerEventKey[]
+  serverEventKeys?: RelayEventKey[]
   /** A user who belongs to a different hub only (never to the scenario hub) */
   otherHubMember?: { seedHex: string; hubId: string }
   /** A user who belongs to BOTH the scenario hub and a second hub */
@@ -418,7 +418,7 @@ Then("the event pubkey should match the server's configured pubkey", async ({ re
  * Open a captured frame with the subscriber's per-hub key (#2999). There is no
  * plaintext fallback: the relay never sends an unsealed frame.
  */
-function decryptEventPayload(event: CapturedEvent, keys?: readonly ServerEventKey[]): Record<string, unknown> | null {
+function decryptEventPayload(event: CapturedEvent, keys?: readonly RelayEventKey[]): Record<string, unknown> | null {
   if (!keys) throw new Error('[relay.steps] no relay-event keys were fetched for the subscriber')
   return openRelayEvent(keys, event)
 }
