@@ -16,7 +16,7 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from '@noble/hashes/utils.js'
 import { LABEL_CASE_COMMENT, LABEL_CASE_FIELDS, LABEL_CASE_SUMMARY } from '../../packages/shared/crypto-labels'
 import { contentAad, keyWrapAad } from '../../packages/shared/envelope-aad'
-import { base64urlDecode, base64urlEncode, hpkeOpenMock, hpkeSealMock, labelToId } from './hpke-mock'
+import { hpkeOpenMock, hpkeSealMock } from './hpke-mock'
 
 /** Mirrors `CasePurpose` (serde lowercase) in packages/crypto/src/case_record.rs. */
 export type CasePurposeMock = 'summary' | 'fields' | 'comment'
@@ -54,8 +54,7 @@ export async function sealCaseMock(
   const iv = randomBytes(12)
   const ct = gcm(key, iv, contentAad(label)).encrypt(utf8ToBytes(plaintext))
   const readerEnvelopes = await Promise.all(readers.map(async (pubkey) => {
-    const env = await hpkeSealMock(key, pubkey, label, keyWrapAad(label))
-    return { pubkey, enc: bytesToHex(base64urlDecode(env.enc)), ct: bytesToHex(base64urlDecode(env.ct)) }
+    return { pubkey, ...await hpkeSealMock(key, pubkey, label, keyWrapAad(label)) }
   }))
   return { encryptedContent: bytesToHex(new Uint8Array([...iv, ...ct])), readerEnvelopes }
 }
@@ -71,7 +70,7 @@ export async function openCaseMock(
   const ours = sealed.readerEnvelopes.find(e => e.pubkey === device.encryptionPubkeyHex)
   if (!ours) throw new Error('decryption failed')
   const key = await hpkeOpenMock(
-    { v: 3, labelId: labelToId(label), enc: base64urlEncode(hexToBytes(ours.enc)), ct: base64urlEncode(hexToBytes(ours.ct)) },
+    { enc: ours.enc, ct: ours.ct },
     encryptionSecretHex,
     label,
     keyWrapAad(label),

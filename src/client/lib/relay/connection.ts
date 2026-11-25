@@ -11,7 +11,7 @@
  * - Time-bucketed event deduplication
  */
 
-import { signWsChallenge, ed25519Verify, decryptServerEvent } from '../platform'
+import { signWsChallenge, ed25519Verify, openServerEvent } from '../platform'
 import { createRelaySocket } from '../net'
 import { bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { wsServerMessageSchema } from '@protocol/schemas/ws-messages'
@@ -321,8 +321,9 @@ export class RelayConnection {
     const dedupKey = `${msg.hubId}:${msg.kind}:${msg.ts}:${msg.sig.slice(0, 16)}`
     if (!this.deduplicator.isNew(dedupKey, msg.ts)) return
 
-    // Decrypt content via Rust CryptoState
-    const decrypted = await decryptServerEvent(msg.payload, msg.epoch)
+    // Open via Rust CryptoState: the key is the frame's hub's, and the AAD binds
+    // its hub, kind and epoch (#2999).
+    const decrypted = await openServerEvent(msg.hubId, msg.kind, msg.epoch, msg.payload)
     if (!decrypted) return
 
     const content = parseEventContent(decrypted, msg.kind)

@@ -380,11 +380,12 @@ When('the unauthenticated \\/api\\/config endpoint is queried', async ({ request
   getNetworkSecState(world).configData = await res.json() as Record<string, unknown>
 })
 
-Then('the response should not contain serverEventKeyHex', async ({ world }) => {
-  expect(getNetworkSecState(world).configData).toBeDefined()
-  // C1: serverEventKeyHex replaced with per-hub hubEventKeys — neither should be in public config
-  expect(getNetworkSecState(world).configData!.serverEventKeyHex).toBeUndefined()
-  expect(getNetworkSecState(world).configData!.hubEventKeys).toBeUndefined()
+Then('the response should not contain any relay-event key', async ({ world }) => {
+  const config = getNetworkSecState(world).configData
+  expect(config).toBeDefined()
+  expect(config!.serverEventKeys).toBeUndefined()
+  expect(config!.serverEventKeyHex).toBeUndefined()
+  expect(JSON.stringify(config)).not.toMatch(/eventKey/i)
 })
 
 Given('an authenticated user', async ({ request, world }) => {
@@ -398,11 +399,22 @@ When('they query \\/api\\/auth\\/me', async ({ request, world }) => {
   getNetworkSecState(world).webhookResult = { status: result.status, data: result.data }
 })
 
-Then('the response should contain serverEventKeyHex', async ({ world }) => {
-  // C1: serverEventKeyHex replaced with per-hub hubEventKeys.
-  // Verify the authenticated /me endpoint succeeds and returns hub event keys.
-  expect(getNetworkSecState(world).webhookResult).toBeDefined()
-  expect(getNetworkSecState(world).webhookResult!.status).toBe(200)
+Then('the response should contain the current and previous epoch key of each of their hubs', async ({ world }) => {
+  const result = getNetworkSecState(world).webhookResult
+  expect(result?.status).toBe(200)
+  const me = getNetworkSecState(world).meData as {
+    serverEventKeys: Array<{ hubId: string; epoch: number; keyHex: string }>
+    eventKeyEpoch: number
+  }
+  expect(Array.isArray(me.serverEventKeys)).toBe(true)
+  const hubs = [...new Set(me.serverEventKeys.map(k => k.hubId))]
+  for (const hubId of hubs) {
+    const epochs = me.serverEventKeys.filter(k => k.hubId === hubId).map(k => k.epoch).sort()
+    expect(epochs).toEqual([me.eventKeyEpoch - 1, me.eventKeyEpoch])
+  }
+  for (const k of me.serverEventKeys) expect(k.keyHex).toMatch(/^[0-9a-f]{64}$/)
+  // Keys differ per hub and per epoch.
+  expect(new Set(me.serverEventKeys.map(k => k.keyHex)).size).toBe(me.serverEventKeys.length)
 })
 
 // ── Invite Privilege Escalation Steps ────────────────────────────

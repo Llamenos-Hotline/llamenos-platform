@@ -198,7 +198,8 @@ function sealForPubkeys(
     ...shapeSeal(shape, hexToBytes(pk), [], key),
   }))
   key.fill(0)
-  return { encryptedContent: bytesToHex(packed), envelopes }
+  const encryptedContent = bytesToHex(packed)
+  return { encryptedContent, envelopes }
 }
 
 /**

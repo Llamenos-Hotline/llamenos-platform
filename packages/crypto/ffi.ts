@@ -6,6 +6,7 @@
  */
 import { dlopen, FFIType, ptr } from 'bun:ffi'
 import { resolve } from 'path'
+import { SHAPES, type Shape } from '../shared/crypto-shapes'
 
 // Resolve library path — configurable via LLAMENOS_CRYPTO_LIB env var
 const LIB_PATH = process.env.LLAMENOS_CRYPTO_LIB ??
@@ -280,34 +281,7 @@ export function symmetricDecrypt(key: Uint8Array, ciphertext: Uint8Array, aad: U
 
 // ── HPKE envelopes, by shape (spec D1) ───────────────────────────────
 
-/**
- * The closed set of HPKE envelope shapes — `packages/crypto/src/shape.rs`
- * `Shape`, in byte order (the index IS the C-ABI byte; the order is pinned by
- * `tests/fixtures/v2/hpke-wrap.json`, whose positives list every shape in this
- * order). The crate maps each shape to its label and AAD; nothing here names a
- * label or builds an AAD.
- */
-export const SHAPES = [
-  'note-key',
-  'file-key',
-  'file-metadata-key',
-  'contact-profile-key',
-  'contact-id-key',
-  'hub-key',
-  'firehose-window-key',
-  'message-key',
-  'call-meta-key',
-  'puk-seed',
-  'audit-user-key',
-  'push-wake',
-  'push-full',
-  'platform-role-name',
-  'platform-role-description',
-  'recovery-group-share',
-  'recovery-share-contribution',
-  'recovery-puk-seed',
-] as const
-export type Shape = (typeof SHAPES)[number]
+export { SHAPES, type Shape } from '../shared/crypto-shapes'
 
 function shapeByte(shape: Shape): number {
   const i = SHAPES.indexOf(shape)

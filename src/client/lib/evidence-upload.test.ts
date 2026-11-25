@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('./platform', async importOriginal => ({
   ...(await importOriginal<typeof import('./platform')>()),
   hpkeWrapKey: vi.fn(async () => ({ enc: 'enc', ct: 'ct' })),
+  shapeContentAadHex: vi.fn(async () => ''),
   aesGcmEncrypt: vi.fn(async (plaintextHexOrJson: string) => {
     const body = Array.from(new TextEncoder().encode(plaintextHexOrJson), (b) => b.toString(16).padStart(2, '0')).join('')
     return '11'.repeat(12) + body + '22'.repeat(16)

@@ -1,3 +1,4 @@
+import type { ServerEventKey } from '@protocol/schemas'
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { ensureDeviceRegistered, resetDeviceRegistrationCache } from '@/lib/device-registration'
 import { useTranslation } from 'react-i18next'
@@ -39,8 +40,8 @@ interface AuthState {
   sessionExpired: boolean
   adminPubkey: string
   adminDecryptionPubkey: string
-  serverEventKeyHex: string | null
-  serverEventKeyPrevHex: string | null
+  /** Relay-event keys per (hub, epoch), for the hubs this user belongs to (#2999). */
+  serverEventKeys: ServerEventKey[]
   eventKeyEpoch: number | undefined
   eventKeyEpochDuration: number | undefined
   webauthnRequired: boolean
@@ -103,8 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionExpired: false,
     adminPubkey: '',
     adminDecryptionPubkey: '',
-    serverEventKeyHex: null,
-    serverEventKeyPrevHex: null,
+    serverEventKeys: [],
     eventKeyEpoch: undefined,
     eventKeyEpochDuration: undefined,
     webauthnRequired: false,
@@ -259,8 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             callPreference: me.callPreference ?? 'phone',
             adminPubkey: me.adminDecryptionPubkey || '',
             adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-            serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+            serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
             webauthnRequired: me.webauthnRequired ?? false,
@@ -300,8 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             callPreference: me.callPreference ?? 'phone',
             adminPubkey: me.adminDecryptionPubkey || '',
             adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-            serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+            serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
             webauthnRequired: me.webauthnRequired ?? false,
@@ -359,8 +357,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -408,8 +405,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -451,8 +447,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -496,8 +491,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -533,8 +527,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -566,8 +559,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callPreference: me.callPreference ?? 'phone',
         adminPubkey: me.adminDecryptionPubkey || '',
         adminDecryptionPubkey: me.adminDecryptionPubkey || '',
-        serverEventKeyHex: me.serverEventKeyHex ?? null,
-        serverEventKeyPrevHex: me.serverEventKeyPrevHex ?? null,
+        serverEventKeys: me.serverEventKeys,
         eventKeyEpoch: me.eventKeyEpoch,
         eventKeyEpochDuration: me.eventKeyEpochDuration,
         webauthnRequired: me.webauthnRequired ?? false,
@@ -625,8 +617,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       callPreference: 'phone',
       adminPubkey: '',
       adminDecryptionPubkey: '',
-      serverEventKeyHex: null,
-      serverEventKeyPrevHex: null,
+      serverEventKeys: [],
       eventKeyEpoch: undefined,
       eventKeyEpochDuration: undefined,
       webauthnRequired: false,

@@ -372,12 +372,10 @@ describe('hub key lifecycle', () => {
 
     // The server replaces the admin's wrap with one of a key IT chose — anyone
     // can seal to the admin's public X25519 key.
-    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
-    const { keyWrapAad } = await import('@shared/envelope-aad')
-    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
-    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
-    const forged = await hpkeSealMock(randomBytes(32), admin.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
-    server.wraps.set(admin.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+    const { shapeSealMock } = await import('../../../tests/mocks/hpke-mock')
+    const { randomBytes } = await import('@noble/hashes/utils.js')
+    const forged = await shapeSealMock('hub-key', admin.encryptionPubkey, [], randomBytes(32))
+    server.wraps.set(admin.me, forged)
 
     const volunteer = await device('volunteer', { manager: false })
     expect(await admin.hubKeys.distributeHubKey(HUB)).toBe(1)
@@ -513,12 +511,10 @@ describe('hub key lifecycle', () => {
 
     // The server "rotates" on its own: a key IT chose, wrapped to the member's
     // public key, and a statement it can only make up — it never held the old key.
-    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
-    const { keyWrapAad } = await import('@shared/envelope-aad')
-    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
+    const { shapeSealMock } = await import('../../../tests/mocks/hpke-mock')
     const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
-    const forged = await hpkeSealMock(randomBytes(32), staying.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
-    server.wraps.set(staying.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+    const forged = await shapeSealMock('hub-key', staying.encryptionPubkey, [], randomBytes(32))
+    server.wraps.set(staying.me, forged)
     server.epoch = 1
     server.rotation = { proof: bytesToHex(randomBytes(64)), check: bytesToHex(randomBytes(64)) }
 
@@ -535,12 +531,10 @@ describe('hub key lifecycle', () => {
 
     // The proof opens under the member's old key, but the server hands the
     // member a wrap of a key of its own instead of the rotated-in one.
-    const { hpkeSealMock, base64urlDecode } = await import('../../../tests/mocks/hpke-mock')
-    const { keyWrapAad } = await import('@shared/envelope-aad')
-    const { LABEL_HUB_KEY_WRAP } = await import('@shared/crypto-labels')
-    const { bytesToHex, randomBytes } = await import('@noble/hashes/utils.js')
-    const forged = await hpkeSealMock(randomBytes(32), staying.encryptionPubkey, LABEL_HUB_KEY_WRAP, keyWrapAad(LABEL_HUB_KEY_WRAP))
-    server.wraps.set(staying.me, { enc: bytesToHex(base64urlDecode(forged.enc)), ct: bytesToHex(base64urlDecode(forged.ct)) })
+    const { shapeSealMock } = await import('../../../tests/mocks/hpke-mock')
+    const { randomBytes } = await import('@noble/hashes/utils.js')
+    const forged = await shapeSealMock('hub-key', staying.encryptionPubkey, [], randomBytes(32))
+    server.wraps.set(staying.me, forged)
 
     expect(await staying.hubKeys.adoptHubKeyRotation(HUB)).toBe('unverifiable')
     expect(await staying.platform.decryptHubField(HUB, sealed, 'llamenos:hub-role-encrypt:v1')).toBe('Legal observer')

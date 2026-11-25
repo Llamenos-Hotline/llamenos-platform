@@ -44,6 +44,7 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/platform', async importOriginal => ({
   ...(await importOriginal<typeof import('@/lib/platform')>()),
   hpkeWrapKey: mocks.hpkeWrapKey,
+  shapeContentAadHex: async () => '',
   aesGcmEncrypt: async () => 'ciphertext-hex',
   aesGcmSealBytes: async (plaintext: Uint8Array) => plaintext,
   // The reader keys in this test are already encryption keys; resolution is the identity.

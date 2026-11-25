@@ -32,7 +32,7 @@ export const meResponseSchema = z.object({
   uiLanguage: z.string(),
   profileCompleted: z.boolean(),
   onBreak: z.boolean(),
-  callPreference: z.string(),
+  callPreference: z.enum(['phone', 'browser', 'both']),
   webauthnRequired: z.boolean(),
   webauthnRegistered: z.boolean(),
   adminDecryptionPubkey: z.string().optional(),
@@ -43,6 +43,7 @@ export const meResponseSchema = z.object({
   /** Seconds per epoch. */
   eventKeyEpochDuration: z.number().int().positive(),
 })
+export type MeResponse = z.infer<typeof meResponseSchema>
 
 // --- Input schemas ---
 

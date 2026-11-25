@@ -22,8 +22,7 @@ import { x25519 } from '@noble/curves/ed25519.js'
 import type { AppEnv } from '../../types'
 import * as schema from '../../db/schema'
 import type { MessagingAdapter, IncomingMessage } from '../../messaging/adapter'
-import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE } from '@shared/crypto-labels'
+import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { insertHubFounder } from '../helpers/hub-founder'
 
 vi.mock('@llamenos/crypto/ffi', async () => await import('../mocks/llamenos-crypto-ffi'))
@@ -68,7 +67,6 @@ async function registerDevice(p: ReturnType<typeof person>) {
 
 /** Open a stored message with a reader's device secret; `null` if no envelope opens. */
 function open(secret: Uint8Array, row: { encryptedContent: string; readerEnvelopes: unknown }): string | null {
-  const noAad = new Uint8Array(0)
   for (const env of row.readerEnvelopes as Array<{ enc: string; ct: string }>) {
     try {
       const key = shapeOpen('message-key', secret, [], env)

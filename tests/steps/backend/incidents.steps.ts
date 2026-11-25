@@ -15,7 +15,8 @@
 import { expect, type APIRequestContext } from '@playwright/test'
 import { Given, When, Then, After, getState, setState } from './fixtures'
 import { RelayCapture, type CapturedEvent } from '../../helpers/relay-capture'
-import { decryptHubEvent } from '../../helpers/relay-crypto'
+import { fetchServerEventKeys, openRelayEvent } from '../../helpers/relay-crypto'
+import type { ServerEventKey } from '@protocol/schemas/auth'
 import { hexToBytes } from '@shared/encoding'
 import { KIND_HUB_INCIDENT } from '@shared/event-kinds'
 import {
@@ -63,7 +64,7 @@ interface IncidentState {
   holders: Record<string, Member>
   volunteer?: Member
   relay?: RelayCapture
-  serverEventKeyHex?: string
+  serverEventKeys?: ServerEventKey[]
 }
 
 function st(world: Record<string, unknown>): IncidentState {
@@ -106,12 +107,9 @@ async function waitForPushes(request: APIRequestContext, hubId: string, count: n
 }
 
 function decrypt(world: Record<string, unknown>, event: CapturedEvent): Record<string, unknown> {
-  const keyHex = st(world).serverEventKeyHex
-  if (keyHex) {
-    return decryptHubEvent(event.payload, hexToBytes(keyHex), event.epoch) as Record<string, unknown>
-  }
-  // A server without SERVER_SECRET publishes plain JSON.
-  return JSON.parse(event.payload) as Record<string, unknown>
+  const keys = st(world).serverEventKeys
+  if (!keys) throw new Error('no relay-event keys were fetched for the volunteer')
+  return openRelayEvent(keys, event)
 }
 
 async function relayEvents(world: Record<string, unknown>, settleMs = 1_500): Promise<Record<string, unknown>[]> {
@@ -156,8 +154,7 @@ Given('the volunteer is connected to the relay for the incident hub', async ({ r
     hubId: s.hubId,
     kinds: [KIND_HUB_INCIDENT],
   })
-  const { status, data } = await apiGet<{ serverEventKeyHex?: string }>(request, '/auth/me', ADMIN_SEED)
-  if (status === 200) s.serverEventKeyHex = data?.serverEventKeyHex
+  s.serverEventKeys = await fetchServerEventKeys(request, s.volunteer.seedHex)
 })
 
 After(async ({ world }) => {

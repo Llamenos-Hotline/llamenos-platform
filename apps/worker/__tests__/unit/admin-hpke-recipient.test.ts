@@ -30,7 +30,7 @@ import {
 } from '@worker/lib/hpke-recipient'
 import { encryptMessageForStorage } from '@worker/lib/crypto'
 import { shapeOpen } from '@llamenos/crypto/ffi'
-import { LABEL_MESSAGE, LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import { deriveAdminKeys } from '../../../../scripts/bootstrap-admin'
 
 /** The admin seed every test harness in this repo already uses. */

@@ -175,7 +175,19 @@ describe('desktop IPC boundary', () => {
     // share, encrypt the seeds to a webview-chosen key. They are gone from all
     // four places a command must exist in to work — the Rust registration, the
     // isolation allowlist, the TS command union, and the Playwright mock.
-    const removed = ['ed25519_sign_from_state', 'provision_encrypt_for_device']
+    const removed = [
+      'ed25519_sign_from_state',
+      'provision_encrypt_for_device',
+      // The raw-label HPKE commands (spec D1): the webview named a label and an
+      // AAD. It now names a shape; Rust supplies both.
+      'hpke_seal',
+      'hpke_seal_key',
+      'hpke_open_from_state',
+      'hpke_open_key_from_state',
+      // The hub-key event reader and the epoch-only event opener (D9, #2999).
+      'decrypt_hub_event',
+      'decrypt_server_event',
+    ]
     const platform = read('src/client/lib/platform.ts')
     const mock = read('tests/mocks/tauri-core.ts')
     for (const cmd of removed) {
@@ -188,20 +200,21 @@ describe('desktop IPC boundary', () => {
     expect(platform).not.toMatch(/export async function (ed25519Sign|signMessage|signBytes)\b/)
     expect(platform).not.toMatch(/export async function provisionEncryptForDevice\b/)
 
-    // The Rust-side allow-lists are what refuse the hub key and the PUK seed; the
-    // mock must carry the same ones so the suite cannot pass against a looser surface.
+    // The Rust-side shape allow-list is what refuses the hub key and the PUK seed;
+    // the mock must carry the same one so the suite cannot pass against a looser surface.
     const rust = read('apps/desktop/src/crypto.rs')
-    const rustList = (name: string) =>
-      [...(rust.match(new RegExp(`const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\];`))?.[1] ?? '').matchAll(/LABEL_[A-Z_]+/g)].map(m => m[0]).sort()
-    const mockList = (name: string) =>
-      [...(mock.match(new RegExp(`const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\]`))?.[1] ?? '').matchAll(/LABEL_[A-Z_]+/g)].map(m => m[0]).sort()
-    for (const name of ['OPEN_ALLOWED_LABELS', 'OPEN_KEY_ALLOWED_LABELS']) {
-      expect(rustList(name).length, `${name} not found in crypto.rs`).toBeGreaterThan(0)
-      expect(mockList(name), `${name} differs between crypto.rs and the mock`).toEqual(rustList(name))
-    }
-    for (const denied of ['LABEL_HUB_KEY_WRAP', 'LABEL_PUK_WRAP_TO_DEVICE']) {
-      expect(rustList('OPEN_ALLOWED_LABELS')).not.toContain(denied)
-      expect(rustList('OPEN_KEY_ALLOWED_LABELS')).not.toContain(denied)
+    const rustShapes = [...(rust.match(/const WEBVIEW_OPENABLE_SHAPES: &\[Shape\] = &\[([\s\S]*?)\];/)?.[1] ?? '')
+      .matchAll(/Shape::(\w+)/g)]
+      .map(m => m[1].replace(/[A-Z]/g, (c, i) => (i ? '-' : '') + c.toLowerCase()))
+      .sort()
+    const mockShapes = [...(mock.match(/const WEBVIEW_OPENABLE_SHAPES: readonly Shape\[\] = \[([\s\S]*?)\]/)?.[1] ?? '')
+      .matchAll(/'([a-z-]+)'/g)]
+      .map(m => m[1])
+      .sort()
+    expect(rustShapes.length, 'WEBVIEW_OPENABLE_SHAPES not found in crypto.rs').toBeGreaterThan(0)
+    expect(mockShapes, 'WEBVIEW_OPENABLE_SHAPES differs between crypto.rs and the mock').toEqual(rustShapes)
+    for (const denied of ['hub-key', 'puk-seed', 'recovery-group-share', 'audit-user-key']) {
+      expect(rustShapes).not.toContain(denied)
     }
   })
 

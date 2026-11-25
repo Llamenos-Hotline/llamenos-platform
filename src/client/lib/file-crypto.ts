@@ -6,14 +6,13 @@
  */
 
 import type { EncryptedFileMetadata, FileKeyEnvelope } from '@shared/types'
-import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
-import { contentAadHex } from '@shared/envelope-aad'
 import { bytesToHex } from '@shared/encoding'
 import {
   unwrapFileKey as platformUnwrapFileKey,
   decryptFileMetadata as platformDecryptFileMetadata,
   rewrapFileKey as platformRewrapFileKey,
   hpkeWrapKey,
+  shapeContentAadHex,
   resolveEncryptionPubkey,
   aesGcmEncrypt,
   aesGcmSealBytes,
@@ -119,20 +118,19 @@ export async function encryptFile(
   // Generate random symmetric key for file content
   const fileKeyHex = bytesToHex(randomBytes(32))
 
-  // AES-256-GCM encrypt file content under the canonical content AAD for
-  // LABEL_FILE_KEY — the same derivation every other implementation binds, so
-  // the file opens on any client. `hpkeWrapKey` seals the key under the
-  // matching key-wrap AAD.
+  // AES-256-GCM encrypt file content under the file shape's content AAD, which
+  // the crate supplies (`shapeContentAadHex`) — the same AAD every client binds,
+  // so the file opens on any of them. `hpkeWrapKey` seals the key as the same shape.
   //
   // The RAW file bytes are sealed — not their hex text. Every client seals and
   // opens raw bytes through the crate (`mobile_symmetric_encrypt` hex-decodes
   // its input first), so the ciphertext is n+28 bytes and opens everywhere.
-  const encryptedContent = await aesGcmSealBytes(plaintextBytes, fileKeyHex, contentAadHex(LABEL_FILE_KEY))
+  const encryptedContent = await aesGcmSealBytes(plaintextBytes, fileKeyHex, await shapeContentAadHex('file-key'))
 
   // Wrap the file key for each recipient using HPKE via Rust
   const recipientEnvelopes: FileKeyEnvelope[] = await Promise.all(
     recipientPubkeys.map(async (pubkey) => {
-      const { enc, ct } = await hpkeWrapKey(fileKeyHex, pubkey, LABEL_FILE_KEY)
+      const { enc, ct } = await hpkeWrapKey(fileKeyHex, pubkey, 'file-key')
       return { pubkey, enc, ct }
     })
   )
@@ -142,8 +140,8 @@ export async function encryptFile(
   const encryptedMetadataList = await Promise.all(
     recipientPubkeys.map(async (pubkey) => {
       const metadataKeyHex = bytesToHex(randomBytes(32))
-      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex, contentAadHex(LABEL_FILE_METADATA))
-      const { enc, ct } = await hpkeWrapKey(metadataKeyHex, pubkey, LABEL_FILE_METADATA)
+      const encContent = await aesGcmEncrypt(metadataJson, metadataKeyHex, await shapeContentAadHex('file-metadata-key'))
+      const { enc, ct } = await hpkeWrapKey(metadataKeyHex, pubkey, 'file-metadata-key')
       return { pubkey, encryptedContent: encContent, enc, ct }
     })
   )
@@ -166,7 +164,7 @@ export async function decryptFile(
 ): Promise<{ blob: Blob; checksum: string }> {
   const fileKeyHex = await platformUnwrapFileKey(envelope)
 
-  const plaintext = await aesGcmOpenBytes(new Uint8Array(encryptedContent), fileKeyHex, contentAadHex(LABEL_FILE_KEY))
+  const plaintext = await aesGcmOpenBytes(new Uint8Array(encryptedContent), fileKeyHex, await shapeContentAadHex('file-key'))
 
   // Compute checksum for verification
   const hashBuffer = await crypto.subtle.digest('SHA-256', plaintext as Uint8Array<ArrayBuffer>)

@@ -26,8 +26,7 @@ import { IdentityService } from '../../services/identity'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
 import { contentOpen, shapeOpen } from '@llamenos/crypto/ffi'
-import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { LABEL_MESSAGE } from '@shared/crypto-labels'
+import { bytesToHex, hexToBytes } from '@shared/encoding'
 import { requireDatabaseUrl } from '../helpers/database-url'
 
 const DATABASE_URL = requireDatabaseUrl()

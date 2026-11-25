@@ -80,14 +80,8 @@ export class CryptoError extends Error {
   }
 }
 
-export const SHAPES = [
-  'note-key', 'file-key', 'file-metadata-key', 'contact-profile-key', 'contact-id-key',
-  'hub-key', 'firehose-window-key', 'message-key', 'call-meta-key', 'puk-seed',
-  'audit-user-key', 'push-wake', 'push-full', 'platform-role-name',
-  'platform-role-description', 'recovery-group-share', 'recovery-share-contribution',
-  'recovery-puk-seed',
-] as const
-export type Shape = (typeof SHAPES)[number]
+export { SHAPES, type Shape } from '@shared/crypto-shapes'
+import type { Shape } from '@shared/crypto-shapes'
 export interface HpkeEnvelope { enc: string; ct: string }
 
 const enc8 = (s: string) => new TextEncoder().encode(s)

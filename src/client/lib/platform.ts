@@ -11,11 +11,13 @@
  * Import from here instead of directly from @tauri-apps/*.
  */
 
-import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, LABEL_FILE_KEY, LABEL_FILE_METADATA, HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
-import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
+import { HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
+import type { Shape } from '@shared/crypto-shapes'
 import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { AdminHpkeRecipient } from './admin-recipient'
-import type { PukHpkeEnvelope } from '@protocol/schemas'
+import type { KeyEnvelope, ServerEventKey } from '@protocol/schemas'
+
+export type { KeyEnvelope, ServerEventKey, Shape }
 
 // ── Backend detection ────────────────────────────────────────────────
 
@@ -54,10 +56,9 @@ export type TauriIpcCommand =
   | 'create_nonceless_auth_token_from_state'
   | 'sign_ws_challenge_from_state'
   | 'ed25519_verify'
-  | 'hpke_seal'
-  | 'hpke_open_from_state'
-  | 'hpke_seal_key'
-  | 'hpke_open_key_from_state'
+  | 'shape_seal'
+  | 'shape_open_from_state'
+  | 'shape_content_aad'
   | 'seal_case_from_state'
   | 'open_case_from_state'
   | 'puk_create_from_state'
@@ -73,8 +74,7 @@ export type TauriIpcCommand =
   | 'forget_hub_key'
   | 'wrap_hub_key_for_member'
   | 'set_server_event_keys'
-  | 'decrypt_hub_event'
-  | 'decrypt_server_event'
+  | 'open_server_event'
   | 'encrypt_hub_field'
   | 'decrypt_hub_field'
   | 'seal_device_local_from_state'
@@ -123,14 +123,6 @@ async function tauriInvoke<T>(cmd: TauriIpcCommand, args?: Record<string, unknow
 
 // ── Crypto types (v3) ───────────────────────────────────────────────
 
-/** HPKE envelope — RFC 9180 sealed payload. */
-export interface HpkeEnvelope {
-  v: number       // Version (3)
-  labelId: number  // Label registry ID
-  enc: string     // Base64url-encoded encapsulated key (32 bytes)
-  ct: string      // Base64url-encoded ciphertext
-}
-
 /** Device key state — public info only, no secrets. */
 export interface DeviceKeyState {
   deviceId: string
@@ -163,18 +155,18 @@ export interface PukState {
 
 /**
  * PUK creation result. Seed stays in Rust CryptoState — never exposed to JS.
- * `envelope` is the v3 HPKE envelope of the seed, sealed to this device under
- * LABEL_PUK_WRAP_TO_DEVICE with AAD `<label>:<deviceId>` (packages/crypto puk.rs).
+ * `envelope` is the seed sealed to this device as the crate's `puk-seed` shape,
+ * bound to this device's id (packages/crypto puk.rs).
  */
 export interface PukCreateResult {
   pukState: PukState
-  envelope: PukHpkeEnvelope
+  envelope: KeyEnvelope
 }
 
 /** PUK rotation result. */
 export interface PukRotateResult {
   state: PukState
-  deviceEnvelopes: Array<{ deviceId: string; envelope: HpkeEnvelope }>
+  deviceEnvelopes: Array<{ deviceId: string; envelope: KeyEnvelope }>
   clkrChainLinkHex: string
 }
 
@@ -375,88 +367,66 @@ export async function ed25519Verify(
   return false
 }
 
-// ── HPKE envelope encryption ───────────────────────────────────────
+// ── HPKE envelopes, by shape (spec D1) ──────────────────────────────
+//
+// The webview names a SHAPE — a closed enum (`@shared/crypto-shapes`) — and
+// never a label, a `labelId` or an AAD: Rust maps the shape to all three
+// (`packages/crypto/src/shape.rs`). Envelopes are `{enc, ct}`, lowercase hex.
 
 /**
- * HPKE seal: encrypt plaintext for a recipient's X25519 pubkey (stateless).
+ * Seal `plaintextHex` as `shape` to a recipient's X25519 pubkey (stateless).
+ * `aadFields` are the per-record values the shape binds (most shapes bind none).
  */
-export async function hpkeSeal(
+export async function shapeSeal(
+  shape: Shape,
+  recipientPubkeyHex: string,
   plaintextHex: string,
-  recipientPubkeyHex: string,
-  label: string,
-  aadHex: string,
-): Promise<HpkeEnvelope> {
+  aadFields: readonly string[] = [],
+): Promise<KeyEnvelope> {
   if (useTauri) {
-    return tauriInvoke<HpkeEnvelope>('hpke_seal', {
+    return tauriInvoke<KeyEnvelope>('shape_seal', {
+      shape,
+      recipientPubkeyHex,
+      aadFields,
       plaintextHex,
-      recipientPubkeyHex,
-      label,
-      aadHex,
     })
   }
-  throw new Error('WASM hpke seal not yet implemented')
+  throw new Error('shape_seal requires the Tauri runtime')
 }
 
 /**
- * HPKE open: decrypt an envelope using the device's X25519 key from CryptoState.
- *
- * Rust refuses every label except the platform-role name/description labels, so
- * this cannot be used to open the hub-key, PUK or recovery-share envelopes.
+ * Open an envelope of `shape` with the device's X25519 key from CryptoState and
+ * return the plaintext (hex). Rust opens only the per-item content-key and
+ * platform-role shapes for the webview; the hub key, PUK seed and recovery
+ * shares are refused (they have Rust-only commands).
  */
-export async function hpkeOpenFromState(
-  envelope: HpkeEnvelope,
-  expectedLabel: string,
-  aadHex: string,
+export async function shapeOpenFromState(
+  shape: Shape,
+  envelope: KeyEnvelope,
+  aadFields: readonly string[] = [],
 ): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('hpke_open_from_state', {
-      envelope,
-      expectedLabel,
-      aadHex,
-    })
+    return tauriInvoke<string>('shape_open_from_state', { shape, aadFields, envelope: { enc: envelope.enc, ct: envelope.ct } })
   }
-  throw new Error('WASM hpke open not yet implemented')
+  throw new Error('shape_open_from_state requires the Tauri runtime')
 }
 
-/**
- * HPKE seal a 32-byte key for a recipient (convenience wrapper).
- */
-export async function hpkeSealKey(
-  keyHex: string,
-  recipientPubkeyHex: string,
-  label: string,
-  aadHex: string,
-): Promise<HpkeEnvelope> {
-  if (useTauri) {
-    return tauriInvoke<HpkeEnvelope>('hpke_seal_key', {
-      keyHex,
-      recipientPubkeyHex,
-      label,
-      aadHex,
-    })
-  }
-  throw new Error('WASM hpke seal key not yet implemented')
-}
+const contentAadCache = new Map<Shape, Promise<string>>()
 
 /**
- * HPKE open a 32-byte PER-ITEM content key (note, message or call record).
- *
- * Rust refuses every other label, so this cannot be used to open the hub-key or
- * PUK seed envelopes.
+ * The content-layer AAD of `shape` (hex), from Rust. The webview runs AES-GCM
+ * over item bytes with WebCrypto (#3003) and takes the AAD from here; it never
+ * builds one. Cached: it is a constant per shape.
  */
-export async function hpkeOpenKeyFromState(
-  envelope: HpkeEnvelope,
-  expectedLabel: string,
-  aadHex: string,
-): Promise<string> {
-  if (useTauri) {
-    return tauriInvoke<string>('hpke_open_key_from_state', {
-      envelope,
-      expectedLabel,
-      aadHex,
-    })
+export function shapeContentAadHex(shape: Shape): Promise<string> {
+  let aad = contentAadCache.get(shape)
+  if (!aad) {
+    if (!useTauri) throw new Error('shape_content_aad requires the Tauri runtime')
+    aad = tauriInvoke<string>('shape_content_aad', { shape })
+    contentAadCache.set(shape, aad)
+    aad.catch(() => contentAadCache.delete(shape))
   }
-  throw new Error('WASM hpke open key not yet implemented')
+  return aad
 }
 
 // ── PUK (Per-User Key) ─────────────────────────────────────────────
@@ -490,17 +460,10 @@ export async function pukRotateFromState(
  * Unwrap a PUK seed from an HPKE envelope and store it in CryptoState.
  * The PUK seed NEVER enters JavaScript — it goes from HPKE decryption straight to state.
  */
-export async function pukUnwrapSeedFromState(
-  envelope: HpkeEnvelope,
-  expectedLabel: string,
-  aadHex: string,
-): Promise<void> {
+export async function pukUnwrapSeedFromState(envelope: KeyEnvelope): Promise<void> {
   if (useTauri) {
-    await tauriInvoke<void>('puk_unwrap_seed_from_state', {
-      envelope,
-      expectedLabel,
-      aadHex,
-    })
+    // The puk-seed shape binds this device's own id; Rust supplies it.
+    await tauriInvoke<void>('puk_unwrap_seed_from_state', { envelope: { enc: envelope.enc, ct: envelope.ct } })
     return
   }
   throw new Error('WASM puk unwrap seed not yet implemented')
@@ -622,30 +585,16 @@ export async function wrapHubKeyForMember(hubId: string, recipientPubkeyHex: str
 }
 
 /**
- * Store server event keys (epoch-scoped) in Rust CryptoState.
- * Called after receiving keys from /api/auth/me.
+ * Replace the relay-event keys held in Rust CryptoState with the server's list —
+ * one per (hub, epoch) for the hubs this user belongs to (`GET /api/auth/me`,
+ * #2999). The keys never come back to JavaScript.
  */
-export async function setServerEventKeys(keys: Array<[number, string]>): Promise<void> {
+export async function setServerEventKeys(keys: readonly ServerEventKey[]): Promise<void> {
   if (useTauri) {
     await tauriInvoke<void>('set_server_event_keys', { keys })
     return
   }
-  throw new Error('WASM set_server_event_keys not yet implemented')
-}
-
-/**
- * Decrypt hub event content using `hubId`'s key stored in Rust CryptoState.
- * The hub key NEVER enters JavaScript — decryption happens entirely in Rust.
- */
-export async function decryptHubEvent(hubId: string, ciphertextHex: string): Promise<string | null> {
-  if (useTauri) {
-    try {
-      return await tauriInvoke<string>('decrypt_hub_event', { hubId, ciphertextHex })
-    } catch {
-      return null
-    }
-  }
-  throw new Error('WASM decrypt_hub_event not yet implemented')
+  throw new Error('set_server_event_keys requires the Tauri runtime')
 }
 
 /**
@@ -678,23 +627,29 @@ export async function decryptHubField(hubId: string, ciphertextHex: string, labe
 }
 
 /**
- * Decrypt a server-published relay event using the epoch-keyed server event key
- * stored in Rust CryptoState.
+ * Open one relay frame with the key Rust CryptoState holds for its hub and epoch
+ * (spec D9). The frame's hub, kind and epoch are bound in its AAD, so a frame
+ * moved between hubs or kinds does not open.
  */
-export async function decryptServerEvent(ciphertextHex: string, epoch: number): Promise<string | null> {
+export async function openServerEvent(
+  hubId: string,
+  kind: number,
+  epoch: number,
+  payloadHex: string,
+): Promise<string | null> {
   if (useTauri) {
     try {
-      return await tauriInvoke<string>('decrypt_server_event', { ciphertextHex, epoch })
+      return await tauriInvoke<string>('open_server_event', { hubId, kind, epoch, payloadHex })
     } catch (err) {
-      // An event for an epoch whose key this client no longer holds is routine
-      // around key rotation; anything else is a defect. Either way it must
-      // leave a trace: a silent null here hid that NO relay event decoded on
+      // A frame for an epoch whose key this client no longer holds is routine
+      // around rotation; anything else is a defect. Either way it must leave a
+      // trace: a silent null here once hid that NO relay event decoded on
       // desktop (#2046), because REST polling papered over every one.
-      console.warn(`[relay] server event (epoch ${epoch}) did not decrypt — ${ipcErrorMessage(err)}`)
+      console.warn(`[relay] event (hub ${hubId}, kind ${kind}, epoch ${epoch}) did not open — ${ipcErrorMessage(err)}`)
       return null
     }
   }
-  throw new Error('WASM decrypt_server_event not yet implemented')
+  throw new Error('open_server_event requires the Tauri runtime')
 }
 
 // ── SFrame key derivation ───────────────────────────────────────────
@@ -857,22 +812,19 @@ export async function wipeVaultFile(): Promise<void> {
 
 // ══════════════════════════════════════════════════════════════════════
 // Convenience types and wrappers for callers that need wire-format
-// KeyEnvelope (hex-encoded enc/ct) rather than raw HpkeEnvelope.
+// KeyEnvelope (hex-encoded enc/ct) rather than raw KeyEnvelope.
 // ══════════════════════════════════════════════════════════════════════
 
 // --- Wire-format type re-exports ---
 
 import type {
-  KeyEnvelope as _KeyEnvelope,
   RecipientEnvelope as _RecipientEnvelope,
   RecipientKeyEnvelope as _RecipientKeyEnvelope,
 } from '@shared/types'
 
-/** @deprecated Use HpkeEnvelope instead. */
-export type KeyEnvelope = _KeyEnvelope
-/** @deprecated Use HpkeEnvelope instead. */
+/** A key envelope addressed to one reader: `{pubkey, enc, ct}`. */
 export type RecipientEnvelope = _RecipientEnvelope
-/** @deprecated Use HpkeEnvelope instead. */
+/** @deprecated Use RecipientEnvelope instead. */
 export type RecipientKeyEnvelope = _RecipientKeyEnvelope
 
 /** @deprecated Use EncryptedDeviceKeys instead. */
@@ -908,11 +860,6 @@ export interface EncryptedMessageResult {
   readerEnvelopes: RecipientEnvelope[]
 }
 
-/** @deprecated Use HpkeEnvelope instead. */
-export interface FileKeyEnvelope {
-  enc: string
-  ct: string
-}
 
 // --- Legacy function wrappers ---
 
@@ -947,19 +894,6 @@ export async function decryptWithPin(pin: string): Promise<string | null> {
  */
 export function isValidSeedHex(seedHex: string): boolean {
   return /^[0-9a-f]{64}$/i.test(seedHex)
-}
-
-// ── Helpers: base64url ↔ hex conversion for HPKE enc field ──────────
-
-function base64urlToHex(b64url: string): string {
-  const padded = b64url.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - (b64url.length % 4)) % 4)
-  const binary = atob(padded)
-  return Array.from(binary, c => c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
-}
-
-function hexToBase64url(hex: string): string {
-  const bytes = (hex.match(/.{2}/g) ?? []).map(b => String.fromCharCode(parseInt(b, 16))).join('')
-  return btoa(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 // ── AES-256-GCM content encryption (WebCrypto) ─────────────────────
@@ -1040,46 +974,21 @@ export async function resolveEncryptionPubkey(signingOrEncPubkey: string): Promi
 }
 
 /**
- * The wire form of a sealed key envelope: `enc` and `ct` BOTH hex.
- *
- * `docs/protocol/PROTOCOL.md` §2.4 specifies hex for both, and that is what
- * `encryptMessageForStorage` writes and what `decryptMessage` is specified to
- * read. The Tauri IPC `HpkeEnvelope` carries base64url instead (see
- * `packages/crypto/src/hpke_envelope.rs`), so the two always need converting —
- * and the conversion used to be written out per call site, which converted
- * `enc` and left `ct` in whichever encoding it happened to arrive in. The
- * desktop therefore wrote base64url `ct` and read base64url `ct`:
- * self-consistent, and unreadable to every other implementation.
- *
- * These two functions are now the only crossing of that boundary.
- */
-function toIpcEnvelope(labelId: number, wire: { enc: string; ct: string }): HpkeEnvelope {
-  return { v: 3, labelId, enc: hexToBase64url(wire.enc), ct: hexToBase64url(wire.ct) }
-}
-
-/** The wire form of an IPC envelope: hex `enc`, hex `ct`. */
-function toWireEnvelope(ipc: HpkeEnvelope): { enc: string; ct: string } {
-  return { enc: base64urlToHex(ipc.enc), ct: base64urlToHex(ipc.ct) }
-}
-
-/**
- * Wrap a symmetric key for a recipient using HPKE.
- * Resolves signing pubkey to encryption pubkey if needed,
- * and returns hex-encoded enc/ct wire format.
- *
- * The wrap is sealed under `keyWrapAad(label)` — the canonical convention
- * Rust's `hpke_wrap_key` binds — for the canonical-AAD envelopes (file and
- * metadata keys, notes, contacts). Stored records (messages, call metadata)
- * do NOT go through here: they carry empty AAD (see `encryptMessage`).
+ * Wrap a symmetric key for a recipient as `shape` (the key-wrap layer of a
+ * note, file, contact or message). Resolves this device's signing pubkey to its
+ * encryption pubkey when needed. Returns `{enc, ct}`, lowercase hex.
  */
 export async function hpkeWrapKey(
   keyHex: string,
   recipientPubkey: string,
-  label: string,
+  shape: Shape,
 ): Promise<KeyEnvelope> {
-  const encPubkey = await resolveEncryptionPubkey(recipientPubkey)
-  const envelope = await hpkeSealKey(keyHex, encPubkey, label, keyWrapAadHex(label))
-  return toWireEnvelope(envelope)
+  return shapeSeal(shape, await resolveEncryptionPubkey(recipientPubkey), keyHex)
+}
+
+/** A fresh 32-byte content key, hex. */
+function freshContentKeyHex(): string {
+  return bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
 }
 
 /**
@@ -1116,25 +1025,11 @@ export async function encryptNote(
   authorPubkey: string,
   adminPubkeys: AdminHpkeRecipient[],
 ): Promise<EncryptedNoteResult> {
-  // Generate random 32-byte content key
-  const keyBytes = crypto.getRandomValues(new Uint8Array(32))
-  const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
-
-  // AES-256-GCM encrypt content
-  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, contentAadHex(LABEL_NOTE_KEY))
-
-  // HPKE-wrap key for author
-  const authorEncPub = await resolveEncryptionPubkey(authorPubkey)
-  const authorHpke = await hpkeSealKey(keyHex, authorEncPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
-  const authorEnvelope: KeyEnvelope = toWireEnvelope(authorHpke)
-
-  // HPKE-wrap key for each admin
+  const keyHex = freshContentKeyHex()
+  const encryptedContent = await aesGcmEncrypt(payloadJson, keyHex, await shapeContentAadHex('note-key'))
+  const authorEnvelope = await hpkeWrapKey(keyHex, authorPubkey, 'note-key')
   const adminEnvelopes: RecipientEnvelope[] = await Promise.all(
-    adminPubkeys.map(async (pubkey) => {
-      const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
-      return { pubkey, ...toWireEnvelope(hpke) }
-    }),
+    adminPubkeys.map(async (pubkey) => ({ pubkey, ...await hpkeWrapKey(keyHex, pubkey, 'note-key') })),
   )
 
   return { encryptedContent, authorEnvelope, adminEnvelopes }
@@ -1184,10 +1079,8 @@ export async function decryptNote(
   envelope: KeyEnvelope,
 ): Promise<string | null> {
   try {
-    // Reconstruct HpkeEnvelope from the stored key envelope
-    const hpkeEnvelope = toIpcEnvelope(0 /* LABEL_NOTE_KEY */, envelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_NOTE_KEY, keyWrapAadHex(LABEL_NOTE_KEY))
-    return await aesGcmDecrypt(encryptedContent, keyHex, contentAadHex(LABEL_NOTE_KEY))
+    const keyHex = await shapeOpenFromState('note-key', envelope)
+    return await aesGcmDecrypt(encryptedContent, keyHex, await shapeContentAadHex('note-key'))
   } catch (err) {
     reportEnvelopeOpenFailure('note', err)
     return null
@@ -1278,17 +1171,10 @@ export async function encryptMessage(
   plaintext: string,
   readerPubkeys: string[],
 ): Promise<EncryptedMessageResult> {
-  const keyBytes = crypto.getRandomValues(new Uint8Array(32))
-  const keyHex = Array.from(keyBytes, b => b.toString(16).padStart(2, '0')).join('')
-
-  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, '')
-
+  const keyHex = freshContentKeyHex()
+  const encryptedContent = await aesGcmEncrypt(plaintext, keyHex, await shapeContentAadHex('message-key'))
   const readerEnvelopes: RecipientEnvelope[] = await Promise.all(
-    readerPubkeys.map(async (pubkey) => {
-      const encPub = await resolveEncryptionPubkey(pubkey)
-      const hpke = await hpkeSealKey(keyHex, encPub, LABEL_MESSAGE, '')
-      return { pubkey, ...toWireEnvelope(hpke) }
-    }),
+    readerPubkeys.map(async (pubkey) => ({ pubkey, ...await hpkeWrapKey(keyHex, pubkey, 'message-key') })),
   )
 
   return { encryptedContent, readerEnvelopes }
@@ -1307,7 +1193,7 @@ async function findOwnMessageEnvelope(
 
 /** Open a stored message's content key from this device's own envelope. */
 async function openMessageKey(envelope: RecipientEnvelope): Promise<string> {
-  return hpkeOpenKeyFromState(toIpcEnvelope(5 /* LABEL_MESSAGE */, envelope), LABEL_MESSAGE, '')
+  return shapeOpenFromState('message-key', envelope)
 }
 
 /**
@@ -1322,7 +1208,7 @@ export async function decryptMessage(
 
   try {
     const keyHex = await openMessageKey(myEnvelope)
-    return await aesGcmDecrypt(encryptedContent, keyHex, '')
+    return await aesGcmDecrypt(encryptedContent, keyHex, await shapeContentAadHex('message-key'))
   } catch (err) {
     // An envelope addressed to this device that will not open is a defect, not
     // a permission boundary: either the writer sealed to the wrong key or the
@@ -1361,8 +1247,7 @@ export async function rewrapMessageKey(
 
   const keyHex = await openMessageKey(myEnvelope)
   return Promise.all(recipients.map(async (pubkey) => {
-    const sealed = await hpkeSealKey(keyHex, pubkey, LABEL_MESSAGE, '')
-    return { pubkey, ...toWireEnvelope(sealed) }
+    return { pubkey, ...await shapeSeal('message-key', pubkey, keyHex) }
   }))
 }
 
@@ -1387,9 +1272,8 @@ export async function decryptCallRecord(
   if (!myEnvelope) return null
 
   try {
-    const hpkeEnvelope = toIpcEnvelope(6 /* LABEL_CALL_META */, myEnvelope)
-    const keyHex = await hpkeOpenKeyFromState(hpkeEnvelope, LABEL_CALL_META, '')
-    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, '')
+    const keyHex = await shapeOpenFromState('call-meta-key', myEnvelope)
+    const plaintext = await aesGcmDecrypt(encryptedContent, keyHex, await shapeContentAadHex('call-meta-key'))
     return JSON.parse(plaintext)
   } catch (err) {
     reportEnvelopeOpenFailure('call-record', err)
@@ -1472,11 +1356,7 @@ export async function openOfflineQueue(ciphertextHex: string): Promise<string> {
  * The key is per file and unlocks that file's ciphertext only.
  */
 export async function unwrapFileKey(envelope: KeyEnvelope): Promise<string> {
-  return hpkeOpenKeyFromState(
-    toIpcEnvelope(1 /* LABEL_FILE_KEY */, envelope),
-    LABEL_FILE_KEY,
-    keyWrapAadHex(LABEL_FILE_KEY),
-  )
+  return shapeOpenFromState('file-key', envelope)
 }
 
 /**
@@ -1489,12 +1369,8 @@ export async function decryptFileMetadata(entry: {
   enc: string
   ct: string
 }): Promise<string> {
-  const keyHex = await hpkeOpenKeyFromState(
-    toIpcEnvelope(2 /* LABEL_FILE_METADATA */, entry),
-    LABEL_FILE_METADATA,
-    keyWrapAadHex(LABEL_FILE_METADATA),
-  )
-  return aesGcmDecrypt(entry.encryptedContent, keyHex, contentAadHex(LABEL_FILE_METADATA))
+  const keyHex = await shapeOpenFromState('file-metadata-key', entry)
+  return aesGcmDecrypt(entry.encryptedContent, keyHex, await shapeContentAadHex('file-metadata-key'))
 }
 
 /**
@@ -1507,7 +1383,7 @@ export async function rewrapFileKey(
   newRecipientPubkeyHex: string,
 ): Promise<KeyEnvelope> {
   const keyHex = await unwrapFileKey(envelope)
-  return hpkeWrapKey(keyHex, newRecipientPubkeyHex, LABEL_FILE_KEY)
+  return hpkeWrapKey(keyHex, newRecipientPubkeyHex, 'file-key')
 }
 
 /** @deprecated Use hpkeUnwrapAndSetHubKey — hub key stays in Rust CryptoState. */
@@ -1702,7 +1578,7 @@ export async function banDigestFinalize(phone: string, blindHex: string, evaluat
 export interface RecoveryGroupCreateResult {
   publicKeyHex: string
   /** One HPKE envelope per holder, in `holderEncryptionPubkeys` order. */
-  shareEnvelopes: HpkeEnvelope[]
+  shareEnvelopes: KeyEnvelope[]
   commitments: string[]
   /** One liveness verifying key per share, same order — sent to the server as each holder's `livenessPublicKey` (#2782). */
   livenessPublicKeys: string[]
@@ -1748,7 +1624,7 @@ export interface RecoveryShareContribution {
  * compromised webview cannot choose the key a share is sealed to.
  */
 export async function recoveryShareContribute(
-  envelope: HpkeEnvelope,
+  envelope: KeyEnvelope,
   commitmentHex: string,
   sessionId: string,
 ): Promise<RecoveryShareContribution> {
@@ -1770,7 +1646,7 @@ export async function recoveryShareContribute(
  * enters JavaScript.
  */
 export async function recoveryShareLivenessProof(
-  envelope: HpkeEnvelope,
+  envelope: KeyEnvelope,
   hubId: string,
   challengeHex: string,
 ): Promise<string> {
@@ -1784,9 +1660,11 @@ export async function recoveryShareLivenessProof(
   throw new Error('WASM recovery share liveness proof not yet implemented')
 }
 
-/** Encrypted share envelope for recovery group reconstruction. */
+/** A contributed share for recovery group reconstruction. */
 export interface EncryptedShareEnvelope {
-  envelope: HpkeEnvelope
+  envelope: KeyEnvelope
+  /** The contributing holder's signing pubkey — bound in the contribution's AAD. */
+  contributorPubkey: string
 }
 
 /**
@@ -1795,12 +1673,12 @@ export interface EncryptedShareEnvelope {
  */
 export async function recoveryGroupReconstructFromShares(
   envelopes: EncryptedShareEnvelope[],
-  label: string,
+  sessionId: string,
 ): Promise<{ success: boolean }> {
   if (useTauri) {
     return tauriInvoke<{ success: boolean }>('recovery_group_reconstruct_from_shares', {
       envelopesJson: JSON.stringify(envelopes),
-      label,
+      sessionId,
     })
   }
   throw new Error('WASM recovery group reconstruct not yet implemented')
@@ -1811,15 +1689,9 @@ export async function recoveryGroupReconstructFromShares(
  * The key is zeroized after use (one-shot).
  * Returns only the decrypted plaintext hex — key material never enters JS.
  */
-export async function recoveryGroupDecrypt(
-  ciphertextJson: string,
-  label: string,
-): Promise<string> {
+export async function recoveryGroupDecrypt(ciphertextJson: string): Promise<string> {
   if (useTauri) {
-    return tauriInvoke<string>('recovery_group_decrypt', {
-      ciphertextHex: ciphertextJson,
-      label,
-    })
+    return tauriInvoke<string>('recovery_group_decrypt', { ciphertextHex: ciphertextJson })
   }
   throw new Error('WASM recovery group decrypt not yet implemented')
 }

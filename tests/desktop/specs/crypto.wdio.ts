@@ -10,7 +10,7 @@
  *
  * Tauri converts Rust snake_case command args to camelCase for JS, and every
  * `#[serde(rename_all = "camelCase")]` struct returns camelCase fields too
- * (e.g. `encryptionPubkeyHex`, `labelId`). The IPC surface exercised here is
+ * (e.g. `encryptionPubkeyHex`). The IPC surface exercised here is
  * the v3 device-key API registered in apps/desktop/src/lib.rs:173-233 —
  * migrated off the pre-HPKE nsec commands (generate_keypair, is_valid_nsec,
  * get_public_key, key_pair_from_nsec, encrypt_with_pin, decrypt_with_pin)
@@ -38,10 +38,8 @@ interface EncryptedDeviceKeys {
   state: DeviceKeyState
 }
 
-/** `hpke_envelope::HpkeEnvelope` IPC response (camelCase via serde). */
+/** `hpke_envelope::HpkeEnvelope` IPC response: `{enc, ct}`, lowercase hex. */
 interface HpkeEnvelope {
-  v: number
-  labelId: number
   enc: string
   ct: string
 }
@@ -160,14 +158,12 @@ describe('Native Crypto IPC', () => {
     expect(result.unlockedAfterCorrectPin).toBe(true)
   })
 
-  it('should round-trip an HPKE (RFC 9180) seal/open through the real Rust crate', async () => {
+  it('should round-trip a shape seal/open through the real Rust crate', async () => {
     const result = await browser.execute(async () => {
       try {
         const invoke = window.__TAURI_INTERNALS__?.invoke
         if (!invoke) return { success: false as const, error: 'invoke not available' }
 
-        // Fresh unlocked device — hpke_open_from_state decrypts with
-        // whatever X25519 secret is currently loaded in CryptoState.
         const encrypted = await invoke('device_generate_and_load', {
           pin: '11112222',
           deviceId: 'wdio-test-device-3',
@@ -178,67 +174,54 @@ describe('Native Crypto IPC', () => {
         const plaintextHex = Array.from(new TextEncoder().encode(plaintext))
           .map((b) => b.toString(16).padStart(2, '0'))
           .join('')
-        const aadHex = '' // no additional authenticated data for this smoke test
 
-        // hpke_open_from_state only opens the platform-role text labels.
-        const OPENABLE = 'llamenos:platform-role-name-encrypt:v1'
-        const envelope = await invoke('hpke_seal', {
-          plaintextHex,
+        // The webview names a shape and its fields; Rust supplies label and AAD.
+        const envelope = await invoke('shape_seal', {
+          shape: 'platform-role-name',
           recipientPubkeyHex,
-          label: OPENABLE,
-          aadHex,
+          aadFields: ['role-wdio'],
+          plaintextHex,
         }) as HpkeEnvelope
 
-        const decryptedHex = await invoke('hpke_open_from_state', {
+        const decryptedHex = await invoke('shape_open_from_state', {
+          shape: 'platform-role-name',
+          aadFields: ['role-wdio'],
           envelope,
-          expectedLabel: OPENABLE,
-          aadHex,
         }) as string
-
-        const decrypted = decryptedHex.match(/.{1,2}/g)
-          ?.map((byte) => parseInt(byte, 16))
-          ?? []
+        const decrypted = decryptedHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []
         const decryptedText = new TextDecoder().decode(new Uint8Array(decrypted))
 
-        // Opening with the WRONG label must fail (Albrecht defense — domain
-        // separation enforced at decrypt).
-        let wrongLabelRejected = false
+        // Another shape (so another label as HPKE info) must fail.
+        let wrongShapeRejected = false
         try {
-          await invoke('hpke_open_from_state', {
-            envelope,
-            expectedLabel: 'llamenos:platform-role-desc-encrypt:v1',
-            aadHex,
-          })
-        } catch {
-          wrongLabelRejected = true
+          await invoke('shape_open_from_state', { shape: 'platform-role-description', aadFields: ['role-wdio'], envelope })
+        } catch (e) {
+          wrongShapeRejected = /decryption_failed/.test(String(e))
         }
 
-        // The hub-key and PUK-seed envelopes must stay in Rust: sealed under
-        // their OWN label (so a label mismatch cannot be the reason) they are
-        // still refused by both generic open commands.
+        // The hub-key and PUK-seed envelopes stay in Rust: sealed as their OWN
+        // shape (so a mismatch cannot be the reason), they are still refused.
         const refused: Record<string, boolean> = {}
-        for (const label of ['llamenos:hub-key-wrap', 'llamenos:puk:wrap:device:v1']) {
-          const sealed = await invoke('hpke_seal', {
-            plaintextHex: '07'.repeat(32),
+        for (const [shape, aadFields] of [['hub-key', []], ['puk-seed', ['wdio-test-device-3']]] as const) {
+          const sealed = await invoke('shape_seal', {
+            shape,
             recipientPubkeyHex,
-            label,
-            aadHex,
+            aadFields,
+            plaintextHex: '07'.repeat(32),
           }) as HpkeEnvelope
-          for (const cmd of ['hpke_open_from_state', 'hpke_open_key_from_state']) {
-            try {
-              await invoke(cmd, { envelope: sealed, expectedLabel: label, aadHex })
-              refused[`${cmd}:${label}`] = false
-            } catch (e) {
-              refused[`${cmd}:${label}`] = /not openable from the webview/.test(String(e))
-            }
+          try {
+            await invoke('shape_open_from_state', { shape, aadFields, envelope: sealed })
+            refused[shape] = false
+          } catch (e) {
+            refused[shape] = /not openable from the webview/.test(String(e))
           }
         }
 
         return {
           success: true as const,
-          envelopeVersion: envelope.v,
+          envelopeKeys: Object.keys(envelope).sort(),
           roundTrip: decryptedText === plaintext,
-          wrongLabelRejected,
+          wrongShapeRejected,
           refused,
         }
       } catch (e: unknown) {
@@ -247,9 +230,9 @@ describe('Native Crypto IPC', () => {
     })
 
     if (!result.success) throw new Error(`IPC failed: ${result.error}`)
-    expect(result.envelopeVersion).toBe(3)
+    expect(result.envelopeKeys).toEqual(['ct', 'enc'])
     expect(result.roundTrip).toBe(true)
-    expect(result.wrongLabelRejected).toBe(true)
-    expect(Object.values(result.refused)).toEqual([true, true, true, true])
+    expect(result.wrongShapeRejected).toBe(true)
+    expect(Object.values(result.refused)).toEqual([true, true])
   })
 })
