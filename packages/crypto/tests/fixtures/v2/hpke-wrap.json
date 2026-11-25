@@ -298,6 +298,23 @@
       "shape": "recovery-puk-seed"
     }
   ],
+  "recipientDeviceKeys": {
+    "blob": {
+      "argon2MCost": 65536,
+      "argon2PCost": 4,
+      "argon2TCost": 3,
+      "ciphertext": "dfb66ab34e1355c3a58d09f2c0c7a3904f0886e87de73ddcf104c8a07020865460164421b4ea02e27f35ff18b9cf5173167903c0ea1efc68875f442e64e4481278b7666c9fef8cc2486e4ee1b2f42fe0",
+      "kdfVersion": 2,
+      "nonce": "da809e97f5022343a15221ba",
+      "salt": "c9352697bc554efa2be2f4705c884e4fffbecd2e0e17f06e993267a7e3a058dd",
+      "state": {
+        "deviceId": "v2-vectors",
+        "encryptionPubkeyHex": "bf4cfd7efcad7981c321db21eb62a88980ce62fa39c99aa5570717dc824b8f4e",
+        "signingPubkeyHex": "ad26c110016a974a2f552614e74ebbd60cba9ea92de58d55db5d28b112906858"
+      }
+    },
+    "pin": "24681357"
+  },
   "recipientPubkeyHex": "bf4cfd7efcad7981c321db21eb62a88980ce62fa39c99aa5570717dc824b8f4e",
   "recipientSecretHex": "fe0e6e0d950498e17538265d01e252b1efbdaf3fe37661c3ebb224da6daafd11",
   "suite": {

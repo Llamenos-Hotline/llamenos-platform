@@ -967,16 +967,10 @@ pub fn mobile_clear_ephemeral_key() {
 /// Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
 ///
 /// `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
-/// **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
-/// envelope version, registry `labelId`, label and AAD are fixed here, by
-/// [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
-/// loader calls — so no client hardcodes a protocol constant.
-///
-/// The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
-/// [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
-/// until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
-/// the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
-/// server ever stored could open on Android.
+/// lowercase **hex**, the one wire encoding (spec D2; base64url and uppercase are
+/// refused as `invalid_format`, never normalised). The label and AAD are the
+/// hub-key shape's, fixed by the crate (spec D1) — the same shape the desktop
+/// loader opens — so no client names a protocol constant.
 #[uniffi::export]
 pub fn mobile_load_hub_key(hub_id: String, enc: String, ct: String) -> Result<(), CryptoError> {
     let key = with_secrets(|secrets, _| {
@@ -2303,33 +2297,19 @@ mod v2_vector_tests {
         mobile_clear_server_event_keys();
     }
 
-    /// The mobile reader opens with the device key, so load the vectors'
-    /// recipient as this device.
+    /// The mobile reader opens with the device key, so unlock the vectors'
+    /// recipient as this device through the production `mobile_unlock`, from the
+    /// PIN blob the vectors carry — exactly what the iOS XCTest does.
     #[test]
     fn every_hpke_wrap_vector_opens_or_fails_with_its_code() {
         let f = load("hpke-wrap.json");
-        let seed: [u8; 32] = hex::decode(f["recipientSecretHex"].as_str().unwrap())
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let secrets = DeviceSecrets {
-            signing_seed: [1u8; 32],
-            encryption_seed: seed,
-        };
-        let ds = DeviceKeyState {
-            device_id: "vector-device".into(),
-            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
-            encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
-        };
+        let dk = &f["recipientDeviceKeys"];
+        let blob: EncryptedDeviceKeys = serde_json::from_value(dk["blob"].clone()).unwrap();
+        let ds = mobile_unlock(blob, dk["pin"].as_str().unwrap().into()).unwrap();
         assert_eq!(
             ds.encryption_pubkey_hex,
             f["recipientPubkeyHex"].as_str().unwrap()
         );
-        {
-            let mut g = state().lock().unwrap();
-            g.secrets = Some(secrets);
-            g.device_state = Some(ds);
-        }
         let shape_of =
             |v: &serde_json::Value| -> Shape { serde_json::from_value(v.clone()).unwrap() };
         for p in f["positives"].as_array().unwrap() {

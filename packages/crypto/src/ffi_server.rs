@@ -986,7 +986,12 @@ pub extern "C" fn ffi_case_seal(
         return -5;
     };
     let reader_slice = unsafe { std::slice::from_raw_parts(readers, readers_len) };
-    let reader_pubkeys: Vec<String> = reader_slice.chunks_exact(32).map(hex::encode).collect();
+    let reader_pubkeys: Vec<String> = reader_slice
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(hex::encode)
+        .collect();
 
     let sealed = match crate::case_record::seal(purpose, pt_str, &reader_pubkeys) {
         Ok(s) => s,

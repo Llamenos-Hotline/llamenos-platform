@@ -1236,7 +1236,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_is_valid_pin() != 59853.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 48594.toShort()) {
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_load_hub_key() != 59873.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_load_wake_key() != 41647.toShort()) {
@@ -4092,16 +4092,10 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
          * Unwrap a hub key from the server's stored wrap and hold it in state, per hub.
          *
          * `enc` and `ct` are the wrap exactly as `GET /api/hubs/:hubId/key` returns it:
-         * **hex**, the one wire encoding (`hpkeEncSchema`; PROTOCOL.md §2.7). The
-         * envelope version, registry `labelId`, label and AAD are fixed here, by
-         * [`crate::encryption::hpke_unwrap_key`] — the same function the desktop
-         * loader calls — so no client hardcodes a protocol constant.
-         *
-         * The AAD is `key_wrap_aad(LABEL_HUB_KEY_WRAP)`, what
-         * [`crate::encryption::hpke_wrap_key`] seals a hub key under. This passed `&[]`
-         * until #1631, and until #2788's follow-up it read `enc`/`ct` as base64url —
-         * the in-memory `HpkeEnvelope` encoding, not the wire one — so no wrap a
-         * server ever stored could open on Android.
+         * lowercase **hex**, the one wire encoding (spec D2; base64url and uppercase are
+         * refused as `invalid_format`, never normalised). The label and AAD are the
+         * hub-key shape's, fixed by the crate (spec D1) — the same shape the desktop
+         * loader opens — so no client names a protocol constant.
          */
     @Throws(CryptoException::class) fun `mobileLoadHubKey`(`hubId`: kotlin.String, `enc`: kotlin.String, `ct`: kotlin.String)
         = 

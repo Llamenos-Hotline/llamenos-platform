@@ -25,6 +25,7 @@ use crate::hpke_envelope::{self, HpkeEnvelope};
 use crate::shape::{self, Payload, Shape};
 
 const HPKE_WRAP_PATH: &str = "tests/fixtures/v2/hpke-wrap.json";
+const FIXTURE_DEVICES_PATH: &str = "tests/fixtures/v2/fixture-reader-devices.json";
 const SERVER_EVENT_PATH: &str = "tests/fixtures/v2/server-event.json";
 
 fn rng(label: &str) -> ChaCha20Rng {
@@ -187,7 +188,7 @@ pub(crate) fn generate_hpke_wrap() -> Value {
         ),
     ];
 
-    json!({
+    let mut out = json!({
         "description": "v2 HPKE envelopes (spec D1, D2): one {enc, ct} per shape, lowercase hex. \
                         The label is the shape's, as HPKE info; the AAD is the shape's format-1 bytes. \
                         Every platform opens `positives` with recipientSecretHex through its production \
@@ -198,8 +199,41 @@ pub(crate) fn generate_hpke_wrap() -> Value {
         "recipientPubkeyHex": pubkey,
         "positives": positives,
         "negatives": negatives,
-    })
+    });
+    // The recipient as a PIN-encrypted device-key blob, for clients that can load
+    // a device only through `mobile_unlock` (iOS has no raw-secret import, by
+    // design). Production Argon2id parameters; omitted under `test-kdf`, whose
+    // parameters no shipped XCFramework uses.
+    if !cfg!(feature = "test-kdf") {
+        let secrets = crate::device_keys::DeviceSecrets {
+            signing_seed: bytes32(&mut r),
+            encryption_seed: secret,
+        };
+        let state = crate::device_keys::DeviceKeyState {
+            device_id: "v2-vectors".into(),
+            signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+            encryption_pubkey_hex: pubkey.clone(),
+        };
+        let mut nonce = [0u8; 12];
+        r.fill_bytes(&mut nonce);
+        let blob = crate::device_keys::encrypt_device_secrets_with(
+            &secrets,
+            DEVICE_BLOB_PIN,
+            &state,
+            &bytes32(&mut r),
+            &nonce,
+        )
+        .unwrap();
+        out["recipientDeviceKeys"] = json!({
+            "pin": DEVICE_BLOB_PIN,
+            "blob": serde_json::to_value(&blob).unwrap(),
+        });
+    }
+    out
 }
+
+/// The PIN of the vector recipient's device-key blob (test-only, guards nothing).
+const DEVICE_BLOB_PIN: &str = "24681357";
 
 /// `server-event.json`: frames of two hubs over two epochs, the keys a member of
 /// hub A (only) holds, and the negative cases (#2999).
@@ -346,6 +380,59 @@ pub(crate) fn generate_server_event() -> Value {
     })
 }
 
+/// `fixture-reader-devices.json`: every reader of the format-1 fixtures as a
+/// PIN-encrypted device blob (production Argon2id), so a client that can load a
+/// device only through `mobile_unlock` — iOS — opens those server-persisted bytes
+/// through its production readers. Android builds the same blob in Kotlin
+/// (`FixtureReaderUnlock.kt`); this is the crate doing it once for everyone.
+pub(crate) fn generate_fixture_reader_devices() -> Value {
+    let mut r = rng("llamenos v2 vectors: fixture-reader-devices");
+    let mut devices = serde_json::Map::new();
+    for fixture in ["case-record-vectors.json", "stored-record-vectors.json"] {
+        let f = load(&format!("tests/fixtures/{fixture}"));
+        for reader in f["readers"].as_array().unwrap() {
+            let pk = reader["x25519PubkeyHex"].as_str().unwrap().to_string();
+            if devices.contains_key(&pk) {
+                continue;
+            }
+            let seed: [u8; 32] = hex::decode(reader["x25519SecretHex"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let secrets = crate::device_keys::DeviceSecrets {
+                signing_seed: bytes32(&mut r),
+                encryption_seed: seed,
+            };
+            assert_eq!(hex::encode(secrets.encryption_pubkey().to_bytes()), pk);
+            let state = crate::device_keys::DeviceKeyState {
+                device_id: format!("fixture-{}", reader["name"].as_str().unwrap()),
+                signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
+                encryption_pubkey_hex: pk.clone(),
+            };
+            let mut nonce = [0u8; 12];
+            r.fill_bytes(&mut nonce);
+            let blob = crate::device_keys::encrypt_device_secrets_with(
+                &secrets,
+                DEVICE_BLOB_PIN,
+                &state,
+                &bytes32(&mut r),
+                &nonce,
+            )
+            .unwrap();
+            devices.insert(pk, serde_json::to_value(&blob).unwrap());
+        }
+    }
+    json!({
+        "description": "The readers of case-record-vectors.json and stored-record-vectors.json as \
+                        PIN-encrypted device-key blobs (production Argon2id), keyed by X25519 pubkey. \
+                        A client unlocks one with mobile_unlock and opens the fixture through its \
+                        production readers.",
+        "generator": "packages/crypto/src/vectors.rs (seeded ChaCha20; LLAMENOS_WRITE_VECTORS=1 cargo test --lib vectors)",
+        "pin": DEVICE_BLOB_PIN,
+        "devices": Value::Object(devices),
+    })
+}
+
 fn render(v: &Value) -> String {
     let mut s = serde_json::to_string_pretty(v).unwrap();
     s.push('\n');
@@ -395,6 +482,25 @@ fn envelope(v: &Value) -> HpkeEnvelope {
 fn vectors_are_generated_by_this_crate() {
     check_or_write(HPKE_WRAP_PATH, &generate_hpke_wrap());
     check_or_write(SERVER_EVENT_PATH, &generate_server_event());
+    // Production Argon2id only (see generate_fixture_reader_devices).
+    if !cfg!(feature = "test-kdf") {
+        check_or_write(FIXTURE_DEVICES_PATH, &generate_fixture_reader_devices());
+    }
+}
+
+#[test]
+fn every_fixture_reader_device_unlocks_to_its_reader() {
+    if cfg!(feature = "test-kdf") {
+        return;
+    }
+    let f = load(FIXTURE_DEVICES_PATH);
+    let pin = f["pin"].as_str().unwrap();
+    for (pk, blob) in f["devices"].as_object().unwrap() {
+        let blob: crate::device_keys::EncryptedDeviceKeys =
+            serde_json::from_value(blob.clone()).unwrap();
+        let secrets = crate::device_keys::unlock_device_keys(&blob, pin).unwrap();
+        assert_eq!(&hex::encode(secrets.encryption_pubkey().to_bytes()), pk);
+    }
 }
 
 #[test]

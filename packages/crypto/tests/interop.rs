@@ -1089,34 +1089,36 @@ fn call_record_admin_only_decryption() {
 #[test]
 fn domain_separation_all_labels() {
     let admin_x25519 = x25519_pubkey(TEST_ADMIN_SECRET_KEY);
+    let sk: [u8; 32] = hex::decode(TEST_ADMIN_SECRET_KEY)
+        .unwrap()
+        .try_into()
+        .unwrap();
     let key = [0x42; 32];
 
-    // Wrap same key with different labels
-    let labels = [
-        LABEL_NOTE_KEY,
-        LABEL_MESSAGE,
-        LABEL_HUB_KEY_WRAP,
-        LABEL_CALL_META,
-    ];
-    let envelopes: Vec<_> = labels
+    // Every key-payload shape that takes no AAD fields: the same key sealed as
+    // each one opens only as that one. Shapes with fields bind them too; the
+    // per-field cases are the crate's shape tests and the v2 negative vectors.
+    let shapes: Vec<Shape> = Shape::ALL
         .iter()
-        .map(|l| hpke_wrap_key(&key, &admin_x25519, l).unwrap())
+        .copied()
+        .filter(|s| s.arity() == 0 && matches!(s.payload(), llamenos_core::shape::Payload::Key))
+        .collect();
+    assert!(
+        shapes.len() >= 8,
+        "too few key shapes to mean anything: {shapes:?}"
+    );
+    let envelopes: Vec<_> = shapes
+        .iter()
+        .map(|s| seal_to(&admin_x25519, *s, &[], &key).unwrap())
         .collect();
 
-    // Each envelope only unwraps with its own label
     for (i, env) in envelopes.iter().enumerate() {
-        for (j, label) in labels.iter().enumerate() {
-            let result = hpke_unwrap_key(env, TEST_ADMIN_SECRET_KEY, label);
+        for (j, shape) in shapes.iter().enumerate() {
+            let result = open_key_from(&sk, *shape, &[], env);
             if i == j {
-                assert!(result.is_ok(), "Same label must succeed: {label}");
-                assert_eq!(*result.unwrap(), key);
+                assert_eq!(*result.expect("same shape must open"), key, "{shape:?}");
             } else {
-                assert!(
-                    result.is_err(),
-                    "Cross-label {}/{} must fail",
-                    labels[i],
-                    label
-                );
+                assert!(result.is_err(), "{:?} opened as {shape:?}", shapes[i]);
             }
         }
     }
