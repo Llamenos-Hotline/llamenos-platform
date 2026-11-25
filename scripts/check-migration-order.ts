@@ -52,9 +52,20 @@ import { listMigrationFiles } from './lib/migration-statements'
 
 const MIGRATIONS = 'drizzle/migrations'
 
+/**
+ * A flag's value; undefined only when the flag is absent. A flag given WITHOUT
+ * a value is a caller error (exit 2, "did not run"), never the default: CI once
+ * passed `--base ""` and this gate silently judged against origin/main (#3023).
+ */
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name)
-  return i >= 0 ? process.argv[i + 1] : undefined
+  if (i === -1) return undefined
+  const v = process.argv[i + 1]
+  if (v === undefined || v === '' || v.startsWith('--')) {
+    console.error(`${name} needs a value`)
+    process.exit(2)
+  }
+  return v
 }
 
 function git(root: string, ...args: string[]): string {

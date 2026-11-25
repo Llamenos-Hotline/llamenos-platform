@@ -115,6 +115,20 @@ const ghCalled = (r: Repo) => existsSync(join(r.root, 'gh-called'))
 const OLDER = '2026-10-29T10:00:00Z'
 const NEWER = '2026-10-30T10:00:00Z'
 
+describe('the CLI', () => {
+  test('BREAK IT: --base with no value exits 2 instead of judging against origin/main (#3023)', () => {
+    const r = repo()
+    for (const base of [[''], []]) {
+      const p = Bun.spawnSync([process.execPath, join(ROOT, 'scripts', 'check-migration-claims.ts'), '--root', r.root, '--base', ...base], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(p.exitCode).toBe(2)
+      expect(p.stderr.toString()).toContain('--base needs a value')
+    }
+  })
+})
+
 describe('numbered migrations (the PRs in flight at the cutover)', () => {
   test('BREAK IT: two open PRs claiming the same number — the newer one fails, naming the older', () => {
     const r = repo()

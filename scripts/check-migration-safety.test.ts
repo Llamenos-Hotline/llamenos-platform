@@ -802,6 +802,14 @@ describe('--ci end to end, with no database', () => {
     })
   })
 
+  test('BREAK IT: --base with no value exits 2 instead of being read as a base (#3023)', () => {
+    for (const argv of [['--ci', '--base', ''], ['--ci', '--base']]) {
+      const r = Bun.spawnSync([process.execPath, join(ROOT, 'scripts', 'check-migration-safety.ts'), ...argv], { stderr: 'pipe' })
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr.toString()).toContain('--base needs a value')
+    }
+  })
+
   test('the mode is mandatory and singular', () => {
     for (const argv of [[], ['--ci', '--target']]) {
       const r = Bun.spawnSync([process.execPath, join(ROOT, 'scripts', 'check-migration-safety.ts'), ...argv])

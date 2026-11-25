@@ -42,6 +42,19 @@ describe('upgradePlans', () => {
   })
 })
 
+describe('the CLI', () => {
+  test('BREAK IT: --base with no value exits 2 instead of judging against origin/main (#3023)', () => {
+    for (const base of [[''], []]) {
+      const r = Bun.spawnSync([process.execPath, join(ROOT, 'scripts', 'check-migration-order.ts'), '--ci', '--base', ...base], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(r.exitCode).toBe(2)
+      expect(r.stderr.toString()).toContain('--base needs a value')
+    }
+  })
+})
+
 describe('proveOrders, in Postgres', () => {
   let scratch: Scratch
   const dirs: string[] = []

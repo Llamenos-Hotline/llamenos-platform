@@ -3463,9 +3463,7 @@ jobs:
     # A gate that did not execute (exit 2) fails its step, labelled — and says so
     # here too, so ci-status can report "did not run" instead of "failed" (#2455).
     outputs:
-      did_not_run: ${{ steps.safety.outputs.did_not_run || steps.claims.outputs.did_not_run || steps.order.outputs.did_not_run }}
-    env:
-      MIGRATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+      did_not_run: ${{ steps.base.outputs.did_not_run || steps.safety.outputs.did_not_run || steps.claims.outputs.did_not_run || steps.order.outputs.did_not_run }}
 
     steps:
       - name: Checkout
@@ -3478,6 +3476,23 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # The commit the three base-relative gates below judge this tree against,
+      # exported as MIGRATION_BASE. It was a job-level `env:` expression that
+      # had no arm for workflow_dispatch, so a manual run handed every gate an
+      # empty base and failed regardless of the change (#3023). A dispatched
+      # branch is judged against its merge-base with the default branch (see
+      # scripts/ci/migration-base.ts for each event's base and why). A base it
+      # cannot resolve fails this step as DID NOT RUN; it is never left empty.
+      - name: Resolve migration base
+        id: base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: scripts/ci-run-gate.sh migration-base -- bun scripts/ci/migration-base.ts
 
       - name: Check migration drift
         run: bun run migration:check --ci
@@ -3526,7 +3541,7 @@ jobs:
         run: >-
           bun test scripts/check-migration-safety.test.ts scripts/check-migration-claims.test.ts
           scripts/check-migration-order.test.ts scripts/db-generate.test.ts scripts/lib/migration-graph.test.ts
-          scripts/lib/git-ancestry.test.ts scripts/ci-run-gate.test.ts
+          scripts/lib/git-ancestry.test.ts scripts/ci-run-gate.test.ts scripts/ci/migration-base.test.ts
 
   # WHO authored the PR and every commit on it (#2916). Authorship is an input to
   # the merge gates (`fleet-review.yml` branches on it; a code-owner approval is

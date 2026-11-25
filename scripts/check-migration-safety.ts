@@ -1470,7 +1470,7 @@ function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name)
   if (i === -1) return undefined
   const v = process.argv[i + 1]
-  if (v === undefined || v.startsWith('--')) {
+  if (v === undefined || v === '' || v.startsWith('--')) {
     console.error(`${name} needs a value`)
     process.exit(2)
   }

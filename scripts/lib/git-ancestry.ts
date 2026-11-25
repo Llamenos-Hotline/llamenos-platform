@@ -102,3 +102,61 @@ export function ensureAncestor(git: GitRunner, base: string, remote = 'origin'):
   }
   return { ancestor: false, steps }
 }
+
+export interface MergeBaseResult {
+  /** The best common ancestor of HEAD and `target`, or null when they share no history at all. */
+  mergeBase: string | null
+  /** The branch tip HEAD was compared against, pinned once so a moving branch cannot change the answer mid-walk. */
+  target: string
+  /** What was fetched, in order, for the log. */
+  steps: string[]
+}
+
+/**
+ * `git merge-base HEAD <target>`: 0 with the commit, 1 when the clone holds no
+ * common ancestor (yet). Anything else is no answer and throws.
+ */
+function mergeBaseOf(git: GitRunner, target: string): string | null {
+  const args = ['merge-base', 'HEAD', target]
+  const r = git(args)
+  if (r.exitCode === 0) return r.stdout.trim()
+  if (r.exitCode === 1) return null
+  throw gitFailure(args, r)
+}
+
+/**
+ * The commit HEAD forked from `branch` on `remote` (#3023), answerable in a
+ * shallow clone: fetch the branch tip, then deepen BOTH sides in the same
+ * growing steps as `ensureAncestor` until git can name a common ancestor,
+ * finishing with a full unshallow.
+ *
+ * `mergeBase: null` is returned only once the whole history is present and
+ * HEAD still shares no commit with the branch — a fact about the refs. A fetch
+ * or git invocation that fails throws: the question went unanswered.
+ */
+export function ensureMergeBase(git: GitRunner, branch: string, remote = 'origin'): MergeBaseResult {
+  const steps: string[] = []
+  const tracking = `refs/remotes/${remote}/${branch}`
+  steps.push(`fetch --depth=1 ${branch}`)
+  mustGit(git, ['fetch', '--no-tags', '--depth=1', remote, `+refs/heads/${branch}:${tracking}`])
+  const target = mustGit(git, ['rev-parse', '--verify', `${tracking}^{commit}`])
+  const head = mustGit(git, ['rev-parse', 'HEAD'])
+  const shallow = () => mustGit(git, ['rev-parse', '--is-shallow-repository']) === 'true'
+
+  let found = mergeBaseOf(git, target)
+  if (found !== null) return { mergeBase: found, target, steps }
+
+  for (const n of DEEPEN_STEPS) {
+    if (!shallow()) break
+    steps.push(`fetch --deepen=${n}`)
+    mustGit(git, ['fetch', '--no-tags', `--deepen=${n}`, remote, head, target])
+    found = mergeBaseOf(git, target)
+    if (found !== null) return { mergeBase: found, target, steps }
+  }
+  if (shallow()) {
+    steps.push('fetch --unshallow')
+    mustGit(git, ['fetch', '--no-tags', '--unshallow', remote, head, target])
+    found = mergeBaseOf(git, target)
+  }
+  return { mergeBase: found, target, steps }
+}
