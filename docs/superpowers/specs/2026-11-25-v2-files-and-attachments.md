@@ -48,7 +48,7 @@ named here.
   - #3009 restores format-1 file reads on desktop.
   - It makes `FileFieldValue` `{fileId, uploadedAt}` (`packages/protocol/schemas/entity-schema.ts`), so the name, type and key now come from the file's own sealed metadata. **That is F1's shape already: an entity field references a file by id and holds no key material.**
   - It deduplicates the uploader's envelope when the uploader is also an admin.
-  - It adds the first cross-platform file vector (`file-content-vectors.json`), run through the mobile FFI entry point. That vector is not run on device, and neither is anything else yet. On-device runs are part of this spec's per-client gate (§9).
+  - It adds the first cross-platform file vector (`file-content-vectors.json`), run through the mobile FFI entry point. That vector is not run on device, and neither is anything else yet. On-device runs are part of this spec's gate on every client (§9).
 
 ---
 
@@ -284,6 +284,11 @@ The volume is small before the pilot. A file that no current admin or escrow can
 
 ## 10. Sign-off
 
-The operator signs off F1–F8 on #2974. After that, the work ships as one contract PR (the crate,
-`packages/protocol`, the worker and the vectors), followed by one adoption PR per client. Those
-adoption PRs also add the download paths iOS and Android lack today.
+The operator signed off F1–F8 on #2974. The work ships as **one full-stack PR**: the crate,
+`packages/protocol`, the worker, the vectors, the bindings **and all three clients**, including the
+download paths iOS and Android lack today. A contract bug found while adopting is fixed in that PR.
+Server-sealed files (F8) and the format-1 migration follow as their own PRs, because they have their
+own dependencies.
+
+*Revised 2026-11-25 by operator decision.* The original text said "followed by one adoption PR per
+client". F1–F8 are unchanged.

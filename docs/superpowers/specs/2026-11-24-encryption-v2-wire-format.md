@@ -1017,6 +1017,11 @@ unused, and stay in the registry as they are. Tombstoning them is a wire change 
 The operator signs off D1–D16, the open question in §5.5, and whether #2999 joins the contract PR,
 on #2974. After that:
 
-1. **One contract PR:** crate + `packages/protocol` + worker + the §6 vectors and the §6.3 tests.
-2. **One adoption PR per client.** A contract bug found during adoption goes back as a new contract
-   PR, never as a per-client patch (#2974, "How this ships").
+1. **One full-stack PR per stage:** crate + `packages/protocol` + worker + the §6 vectors and the
+   §6.3 tests + bindings **+ every client consumer**, per the #2979 lane model.
+2. **No separate adoption PRs.** A contract bug found while adopting is fixed **in that same PR**,
+   before anything lands. Stages split only at real dependencies, never by platform.
+
+   *Revised 2026-11-25 by operator decision.* The original text said "one adoption PR per client",
+   with contract bugs going back as a new contract PR. Every D-decision and every byte above is
+   unchanged. Only how the work ships changed.
