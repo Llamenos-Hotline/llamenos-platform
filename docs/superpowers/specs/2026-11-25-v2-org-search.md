@@ -142,4 +142,4 @@ already keeps M1 filtering on the client.
 
 ## 10. Sign-off
 
-The operator signs off X1–X7 on #2294. Until then, this is a draft.
+The operator signed off X1–X7 on #2294 on 2026-11-25, every decision as recommended. Build briefs are on #2294.
