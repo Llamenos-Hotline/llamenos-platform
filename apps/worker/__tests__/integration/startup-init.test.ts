@@ -124,6 +124,9 @@ async function bootServer(
     HOTLINE_NAME: 'Boot Test',
     ENVIRONMENT: 'production',
     WEBHOOK_BASE_URL: 'https://boot-test.invalid',
+    // Production refuses to boot without an allowlist posture (#1622); these
+    // tests are about startup ordering, not the control, so opt out explicitly.
+    WEBHOOK_IP_ALLOWLIST: 'disabled',
     // Blob storage is constructed at boot but never contacted by these tests.
     STORAGE_ENDPOINT: 'http://127.0.0.1:1',
     STORAGE_ACCESS_KEY: 'boot-test',

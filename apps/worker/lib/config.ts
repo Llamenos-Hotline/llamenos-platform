@@ -16,6 +16,9 @@ import fs from 'node:fs'
 
 const HEX_RE = /^[0-9a-f]+$/
 
+/** The one accepted value of WEBHOOK_IP_ALLOWLIST: the allowlist is off on purpose (#1622). */
+const WEBHOOK_IP_ALLOWLIST_DISABLED = 'disabled'
+
 /** Where a file-only secret is mounted unless `<NAME>_FILE` points elsewhere (dev, CI). */
 const SECRETS_DIR = '/run/secrets'
 
@@ -346,12 +349,54 @@ export function validateConfig(
   // middleware/webhook-auth.ts, middleware/webhook-ip-allowlist.ts and
   // messaging/router.ts each read `<PROVIDER>_WEBHOOK_IPS` and return next()
   // when it is absent, so an unconfigured allowlist is indistinguishable at
-  // request time from one that passed. Nothing rendered the var on any deploy
-  // path before #1624, so the control had never run anywhere, and nothing
-  // said so. This does not change the semantics -- whether unset should fail
-  // closed, or require an explicit opt-out, is #1622's decision -- it only
-  // makes the state visible at boot, where an operator can act on it.
-  if (!Object.keys(env).some((k) => k.endsWith('_WEBHOOK_IPS') && env[k]?.trim())) {
+  // request time from one that passed. Before #1624 nothing rendered the var on
+  // any deploy path, so the control had never run anywhere, and nothing said so.
+  //
+  // "Not configured" and "deliberately off" are therefore different states and
+  // production must say which one it is in:
+  //   - at least one `<PROVIDER>_WEBHOOK_IPS` is set: the control is on, or
+  //   - `WEBHOOK_IP_ALLOWLIST=disabled`: signature-only authentication, chosen
+  //     on purpose and logged on every boot.
+  // Neither is refused in production rather than skipped silently. Both is a contradiction
+  // (the operator meant one of them), refused too. Anything other than
+  // `disabled` in WEBHOOK_IP_ALLOWLIST is refused rather than read as off: a
+  // typo such as `disable` must not switch a security control off.
+  // Outside production the old warning stands -- dev and test hosts have no
+  // provider-published ranges to pin.
+  const allowlistMode = env['WEBHOOK_IP_ALLOWLIST']?.trim() ?? ''
+  if (allowlistMode.length > 0 && allowlistMode !== WEBHOOK_IP_ALLOWLIST_DISABLED) {
+    throw new Error(
+      `[llamenos] WEBHOOK_IP_ALLOWLIST=${allowlistMode} is not a recognised value. ` +
+      `The only accepted value is "${WEBHOOK_IP_ALLOWLIST_DISABLED}" (deliberately run ` +
+      'without the inbound webhook IP allowlist); to switch the control on, set ' +
+      '<PROVIDER>_WEBHOOK_IPS per provider and leave WEBHOOK_IP_ALLOWLIST unset.',
+    )
+  }
+  const allowlistDisabled = allowlistMode === WEBHOOK_IP_ALLOWLIST_DISABLED
+  const allowlistVars = Object.keys(env).filter((k) => k.endsWith('_WEBHOOK_IPS') && env[k]?.trim())
+  if (allowlistDisabled && allowlistVars.length > 0) {
+    throw new Error(
+      `[llamenos] WEBHOOK_IP_ALLOWLIST=${WEBHOOK_IP_ALLOWLIST_DISABLED} contradicts ` +
+      `${allowlistVars.join(', ')}. Either the allowlist is on (remove WEBHOOK_IP_ALLOWLIST) ` +
+      'or it is deliberately off (remove the <PROVIDER>_WEBHOOK_IPS values).',
+    )
+  }
+  if (allowlistDisabled) {
+    logger.warn(
+      'WEBHOOK_IP_ALLOWLIST=disabled — inbound webhooks are authenticated by provider ' +
+      'signature alone; no source-IP restriction is applied. Set <PROVIDER>_WEBHOOK_IPS ' +
+      'per provider (Ansible: webhook_ip_allowlists) to switch the control on.',
+    )
+  } else if (allowlistVars.length === 0) {
+    if (environment === 'production') {
+      throw new Error(
+        '[llamenos] No <PROVIDER>_WEBHOOK_IPS is configured in production, so the inbound ' +
+        'webhook IP allowlist is not running and nothing would say so. Set it per provider ' +
+        '(Ansible: webhook_ip_allowlists) to switch the control on, or set ' +
+        `WEBHOOK_IP_ALLOWLIST=${WEBHOOK_IP_ALLOWLIST_DISABLED} (Ansible: ` +
+        'webhook_ip_allowlist_disabled: true) to run on provider signatures alone on purpose.',
+      )
+    }
     logger.warn(
       'No <PROVIDER>_WEBHOOK_IPS configured — inbound webhooks are authenticated by ' +
       'provider signature alone and the IP allowlist middleware is inert. Set it per ' +

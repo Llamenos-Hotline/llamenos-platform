@@ -68,6 +68,7 @@ jobs:
           helm template llamenos-ci "$CHART" \
             --set app.image.repository=example.invalid/llamenos \
             --set app.env.WEBHOOK_BASE_URL=https://hotline.example.invalid \
+            --set app.env.WEBHOOK_IP_ALLOWLIST=disabled \
             --set secrets.postgresPassword=ci-placeholder \
             --set secrets.hmacSecret=0000000000000000000000000000000000000000000000000000000000000000 \
             --set secrets.serverSecret=1111111111111111111111111111111111111111111111111111111111111111 \
@@ -77,6 +78,58 @@ jobs:
             --set rustfs.credentials.accessKey=ci-placeholder \
             --set rustfs.credentials.secretKey=ci-placeholder \
             > /dev/null
+
+      # The webhook IP allowlist posture (#1622). Production must say whether the
+      # allowlist is on (app.webhookIps) or deliberately off
+      # (app.env.WEBHOOK_IP_ALLOWLIST=disabled); the app refuses to boot with
+      # neither, so the chart refuses to render it. Each arm is rendered and
+      # asserted by its OUTPUT, and each refusal is asserted to fail for its own
+      # reason: a render that fails for any other reason would pass the negative
+      # checks without testing them.
+      - name: Verify the webhook IP allowlist renders ON (a configured provider)
+        run: |
+          helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set app.env.WEBHOOK_IP_ALLOWLIST= \
+            --set 'app.webhookIps.telephony={203.0.113.0/24,198.51.100.0/24}' \
+            > /tmp/allowlist-on.yaml
+          grep -A1 'name: TELEPHONY_WEBHOOK_IPS' /tmp/allowlist-on.yaml | grep -q 'value: "203.0.113.0/24,198.51.100.0/24"'
+          if grep -q 'name: WEBHOOK_IP_ALLOWLIST' /tmp/allowlist-on.yaml; then
+            echo "::error::an allowlist that is ON rendered WEBHOOK_IP_ALLOWLIST too — the app refuses that contradiction (#1622)."
+            exit 1
+          fi
+
+      - name: Verify the webhook IP allowlist renders OFF only when disabled on purpose
+        run: |
+          helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" > /tmp/allowlist-off.yaml
+          grep -A1 'name: WEBHOOK_IP_ALLOWLIST' /tmp/allowlist-off.yaml | grep -q 'value: "disabled"'
+          if grep -q '_WEBHOOK_IPS' /tmp/allowlist-off.yaml; then
+            echo "::error::a disabled allowlist rendered a <PROVIDER>_WEBHOOK_IPS value (#1622)."
+            exit 1
+          fi
+
+      - name: Verify the chart refuses production with no allowlist posture
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set app.env.WEBHOOK_IP_ALLOWLIST= > /tmp/should-have-failed-allowlist-1.yaml 2>/tmp/should-have-failed-allowlist-1.log; then
+            echo "::error::helm template succeeded in production with neither app.webhookIps nor WEBHOOK_IP_ALLOWLIST=disabled — the guard in templates/deployment-app.yaml regressed (#1622)."
+            exit 1
+          fi
+          grep -q "webhook IP allowlist must be configured" /tmp/should-have-failed-allowlist-1.log
+
+      - name: Verify the chart refuses an allowlist that is both on and disabled, or a typo for disabled
+        run: |
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set 'app.webhookIps.telephony={203.0.113.0/24}' > /tmp/should-have-failed-allowlist-2.yaml 2>/tmp/should-have-failed-allowlist-2.log; then
+            echo "::error::helm template succeeded with both app.webhookIps and WEBHOOK_IP_ALLOWLIST=disabled (#1622)."
+            exit 1
+          fi
+          grep -q "contradicts app.webhookIps" /tmp/should-have-failed-allowlist-2.log
+          if helm template llamenos-ci "$CHART" -f "$CHART/ci-values.yaml" \
+            --set app.env.WEBHOOK_IP_ALLOWLIST=disable > /tmp/should-have-failed-allowlist-3.yaml 2>/tmp/should-have-failed-allowlist-3.log; then
+            echo "::error::helm template read WEBHOOK_IP_ALLOWLIST=disable as a valid value — a typo must not switch a security control off (#1622)."
+            exit 1
+          fi
+          grep -q "is not a recognised value" /tmp/should-have-failed-allowlist-3.log
 
       # D6 (#2171): each key has one role and the chart must never render an
       # empty one. serverKek lands in the "-secrets" Secret, banHashKey and

@@ -32,6 +32,15 @@ app:
     # telephony/messaging webhooks are delivered to. The app refuses to boot
     # without it rather than trust the spoofable Host header.
     WEBHOOK_BASE_URL: ""
+    # Required while ENVIRONMENT is "production" (#1622): say whether the inbound
+    # webhook IP allowlist is on or off. The app refuses to boot when it is neither,
+    # because an unset allowlist silently skips the check.
+    #   ON:  list provider-published CIDRs under app.webhookIps (below), and leave
+    #        this empty.
+    #   OFF: set this to "disabled" -- webhooks are then authenticated by provider
+    #        signature alone, and the app logs that on every boot.
+    # Setting both is refused. Any other value is refused: "disable" is not "off".
+    WEBHOOK_IP_ALLOWLIST: ""
     # Optional — the invite page's "Get the app" link: an absolute https:// URL
     # to a store listing or download page (the app refuses to boot on anything
     # else). Empty: the page offers "Open in app" alone.
@@ -39,6 +48,13 @@ app:
     # Set for ONE boot to acknowledge a deliberately replaced ban-hash-key (#2829); the app's
     # refusal prints the value. Leave empty otherwise.
     BAN_KEY_REPLACED_ACK: ""
+  # <PROVIDER>_WEBHOOK_IPS, one entry per provider the app reads it for:
+  # telephony, messaging, sms, whatsapp, signal, telegram, rcs. Each value is a
+  # list of CIDRs copied from what the provider itself publishes; a stale CIDR
+  # rejects real webhooks, so only list ranges you will keep current.
+  # webhookIps:
+  #   telephony: ["54.172.60.0/23", "34.203.250.0/23"]
+  webhookIps: {}
 
 # PostgreSQL connection
 postgres:
