@@ -19,7 +19,7 @@ listed, with its reason, and everything else is sealed by the same code on every
 
 | # | Decision | Recommendation | § |
 |---|---|---|---|
-| E1 | Where a definition lives | **A signed, sealed document of the meta-type `definition`, under `members`.** Type and field refs are random per hub. The server never stores a type name, field name or option label | 2 |
+| E1 | Where a definition lives | **A sealed document of the meta-type `definition`, under `members`, whose current version is pinned by a hub-chain link.** Type and field refs are random per hub. The server never stores a type name, field name or option label | 2 |
 | E2 | How a tier names its readers | **A closed grammar:** `admins` (required), `perm:<permission>`, `assignees` and `author`. Never a role id or name | 3 |
 | E3 | Permissions | **Per type:** `doc:<type>:<action>`, with a `doc:*:<action>` wildcard. `cases:*`, `events:*` and `reports:*` retire into it | 4 |
 | E4 | Plaintext fields | **A closed list of server-visible kinds** (hour-truncated timestamps, server-assigned numbers, assignees, the parent ref), each with a reason. Free text can never be plaintext | 5 |
@@ -28,7 +28,7 @@ listed, with its reason, and everything else is sealed by the same code on every
 | E7 | Changing a definition | **Versioned,** and each kind of change maps to a named job. Nothing moves a field to plaintext once documents exist | 8 |
 | E8 | What the server enforces | **A write policy derived from the definition,** with opaque ids only. Clients recompute it and alert on a mismatch. This is the structural #2174/#2190 guard | 9 |
 | E9 | One API | `validate_definition`, `seal_document`, `open_document` and `policy_of` in the crate, exposed once per binding. **No per-type codegen** | 10 |
-| E10 | The case-record port | **Semantic parity**, not byte parity, which v2's AAD makes impossible. The gate re-opens every pilot row | 11 |
+| E10 | The case-record port | **Semantic parity plus a per-row reader diff**, not byte parity, which v2's AAD makes impossible. The reader changes the port makes are listed for sign-off | 11 |
 | E11 | What unifies, and when | Case records and contacts in M2 (#2947). Incident, reports, notes and actor types in M3 (#2938). Conversations, messages and calls are **not** documents of this kind | 12 |
 | E12 | Who may change readers | **`definitions:manage`, in the admin bundle only.** Every reader change shows a "who can read this" diff and is audited | 8.3 |
 
@@ -47,7 +47,7 @@ Surveyed against `origin/main` @ `417d525ac`.
   - the server's three tiers (`apps/worker/lib/envelope-recipients.ts:82,109,131`);
   - desktop: author + server tier + the hub's admin readers (`src/client/lib/record-recipients.ts`);
   - iOS (`RecordReaders.swift:59`) and Android (`RecordReaders.kt:61-74`): author + server tier + the single `adminDecryptionPubkey`. So mobile and desktop disagree on who an admin reader is.
-  - iOS case comments are sealed to admins alone (`CaseManagementViewModel.swift:526-538`).
+  - iOS case comments are sealed to the author's device plus admins (`CaseManagementViewModel.swift:526-538`, via `seal_as_device`, `case_record.rs:179-194`).
 - **The crate seals case records only** (`case_record.rs`: summary, fields and comment purposes, AAD = the label). There is no PII purpose.
 - **Blind indexes exist in the crate but have no binding** (`blind_index.rs`). Every client sends status and severity as their **plaintext values** in the `*_hash` columns (#2779, M1).
 - **Plaintext case columns:** `status_hash`, `severity_hash`, `category_hash`, `assigned_to[]`, `event_ids[]`, `report_ids[]`, `parent_record_id`, `merged_into_id`, `created_by`, `case_number`, and full-precision timestamps (`apps/worker/db/schema/cases.ts:23-93`).
@@ -87,23 +87,27 @@ holds:
 
 - **Refs are random per hub.** A type ref is `t-` plus 16 random bytes in hex, and field refs are `f-…`. They meet the wire spec's identifier profile (§2.1). The mapping from ref to name exists only inside the sealed definition (#2191).
 - **System and template definitions** ship in `packages/protocol` under canonical names. An admin's client instantiates them into a hub, minting its refs, at hub creation or when a template is applied (#1204). The canonical `kind` stays inside the sealed document.
-- **Signed.** Each definition version carries an Ed25519 signature by an admin device, over `H(lp(L_DEFINITION_SIG) ‖ lp(hub) ‖ lp(type_ref) ‖ u32(version) ‖ H(canonical(definition)) ‖ H(canonical(policy)))`, where the policy is the server-visible projection in §9. The definition uses the D10 profile for its structure; its free-text values are committed by hash, like the connector manifest's private part. Clients verify three things: that the signer held `definitions:manage` in the chain-derived state at the head the signature names; that versions only rise; and that every version is kept. **Without the signature, a server could not forge a definition, but it could serve an older one and narrow the readers of new writes.**
+- **Pinned by the hub chain (review finding 2).** A signature alone can't stop a server from serving an old version, because "versions only rise" is only local memory, and a new device has none. So each version is published as a hub-chain link, `policy {kind: "definition", type, version, hash}`, where `hash = H(lp(L_DEFINITION) ‖ H(canonical(definition)) ‖ H(canonical(policy)))`.
+  - The link is signed under role management **and** `definitions:manage` (wire §5.4 gains that rule).
+  - The definition uses the D10 profile for its structure. Its free-text values are committed by hash, like the connector manifest's private part.
+  - **Readers check the version against the writer's head.** Every header AAD binds the writer's validated head (wire §2.4). A reader opening a tier written under `schema_version v` at head `h` requires `v` to be the version in force at `h`. A write made under a stale definition is shown as invalid, not opened silently.
+  - A writer seals only under the version in force at the head it validated. A removed admin can't publish a definition, because the link needs current authority.
 - **Every version is kept,** because documents are opened under the version they were written with.
 
 ---
 
 ## 3. E2: how a tier names its readers — OPERATOR DECISION
 
-Tiers are the crate's closed enum: `summary`, `fields`, `pii` and `hub` (wire §2.1). `thread_key`
-and `message` belong to conversations and are not used by definitions. A tier's reader list is
+Tiers are the crate's closed enum: `summary`, `fields`, `pii`, `hub` and `file` (wire §2.1, and tier 7 from the files spec). `thread_key`
+and `message` belong to conversations and are not used by definitions. A `file` field names the tier its files inherit (F1): `fields` by default, or `pii`. A `recording` capability (for the `call` type, §12) names the tier recordings inherit. A tier's reader list is
 built only from these entries:
 
 | Entry | Resolves to | Group kind |
 |---|---|---|
 | `admins` | the admin purpose group | role group (exists) |
-| `perm:<permission>` | members whose chain-derived permissions include `<permission>`, wildcards resolved | a **permission group**: one group per distinct permission named, created on first use |
-| `assignees` | the user group of each user in the document's assignee set (§5). A team assignment expands to its members at write time | user groups |
-| `author` | the writer's own user group | user group |
+| `perm:<permission>` | members whose chain-derived permissions include `<permission>`, wildcards resolved | a **permission group**: one group per distinct permission named. It is created by the same admin action that publishes the definition (review finding 3) |
+| `assignees` | the user group of each user in the document's **signed assignment** (below). A team assignment expands only through a signed team roster | user groups |
+| `author` | the user group of the document's **creator**, recorded in the sealed summary at creation and kept on every rewrite (review finding 5) | user group |
 
 **Rules, checked by `validate_definition`:**
 
@@ -113,19 +117,23 @@ built only from these entries:
 4. A tier has at most 8 entries.
 
 **Wire addendum.** A permission group is a `group_epoch` with `kind: purpose` and
-`subject: perm:<permission>`. That fits the D10 string profile. Membership is derived as for any
-purpose group, which is why §5.5's answer (permission ids in clear) matters: connectors and
-verifiers can evaluate it.
+`subject: perm:<permission>`. That fits the D10 string profile. The addendum must state three things:
+- the membership rule: members whose chain-derived permissions grant `<permission>`, wildcards resolved;
+- that only role managers create one (wire §5.4), so every permission group a definition names exists **before** the definition link is appended, in the same admin action;
+- that `(kind, subject)` is unique per hub. A second `group_epoch` with `epoch = 1` for an existing subject is invalid.
+
+This is why §5.5's answer (permission ids in clear) matters: connectors and verifiers can evaluate membership.
 
 **Cost, stated.** Each distinct `perm:` entry is one group with its own epochs and grants.
 Templates reuse a few permissions per type (§4), so a hub with 10 types has about 30 permission
 groups. A member's removal rotates only the groups that member was in. An admin client does that
 work automatically (#2961 §5–6).
 
-**Assignee changes.**
-- Adding an assignee is a header for their user group, written by any client that can open the DEK and holds `doc:<type>:assign`.
-- Removing one deletes that header. What they have already read is not recalled, and the UI says so.
-- A team's membership change is a re-wrap job over that team's assigned documents.
+**Assignments are signed, never taken from the server's column (review finding 1).** A plaintext assignee column alone would let the server add a reader: the next client to edit would seal to whoever the column names.
+- An assignment is a signed object `{doc, assignees (sorted), assigner, head, sig}`. The assigner must hold `doc:<type>:assign` at `head`, checked from the chain. It is stored beside the document, and a copy goes in the sealed summary.
+- **A writer seals to the assignees of the latest valid signed assignment**, never to the server's `assignees` column. That column (§5) exists only for routing notifications. The write guard checks headers against the signed assignment, not the column.
+- Removing an assignee is a new signed assignment, and the next write drops their header. What they have already read is not recalled, and the UI says so.
+- **Teams** expand to members only through a **signed team roster** (members sorted, signed by a holder of `teams:manage` at a head). Today's `team_members` table (`apps/worker/db/schema/teams.ts:48-61`) is a plain server table, so until rosters are signed, a team assignment does not expand readers. A roster change is a re-wrap job over that team's assigned documents.
 
 ---
 
@@ -160,11 +168,15 @@ plaintext.** No kind exists for them.
 | `closed` | boolean | the open/closed split for list views and retention clocks | on for types with statuses |
 | `number` | the server-assigned sequence number | the server assigns it, so it knows it already | on when `numbering` is on |
 | `assignees` | user pubkeys | the server must route notifications and serve "assigned to me". It sees who reads anyway, through header group ids | on when the type allows assignment |
-| `parent` | parent doc id, for sub-records only | cascade on delete, and fetching children in one query | off (E6 prefers sealed) |
+| `parent` | parent doc id, for sub-records only | cascade on delete, retention of children (#3026 R1), and fetching children in one query | **required** for any type whose retention follows its parent; otherwise off |
+| `closed_hour` | the hour `closed` was last set | the `closed` retention clock (#3026 R1) | with `closed` |
+| `held`, `hold_until` | boolean, and a review date (day) | retention holds (#3026 R6). **This marks documents under a legal process or dispute, and the definition's `why` must say so** | only when the type allows holds |
+
+**The server stamps every clock column itself** (`created_hour`, `updated_hour`, `closed_hour`) from its own time at the write. The guard refuses client-supplied values. Otherwise a member holding only `update` could backdate a document into the purge, turning `update` into `delete` (review finding 9).
 
 **Removed from the plaintext surface:**
 - full-precision timestamps;
-- `created_by` (the author is in the sealed tier; the server knows the writer from auth only at write time, and does not store it per row);
+- `created_by` as a column. **This hides nothing from the server**, which can read the author and every assignee from the header recipient ids, because the chain names each user group's subject (wire §5.6). The column goes because it is redundant, not because it is secret;
 - `status_hash`, `severity_hash` and `category_hash`, which become `exact` tokens (§6). This is #2779's structural end state;
 - `event_ids[]` and `report_ids[]` (§7);
 - `merged_into_id`, which moves into the sealed tier, with a token.
@@ -182,7 +194,8 @@ plaintext.** No kind exists for them.
 
 - **One searching group per indexed field** (#2961 A5). It must be one of the tier's readers, and the validator checks that. Tokens use that group's current index key version (D7).
 - **No trigram tokens.** Substring tokens over names make every name in the hub linkable and partly guessable from the token table. Free-text search runs on the client over bounded, decrypted sets, as #2779 decided for M1. `blind_index.rs`'s `name_trigram_indexes`, which nothing calls, is deleted.
-- **What a token still shows, stated (#2779):** equality. A four-value status field gives away its distribution. It does not give away the value.
+- **What a token still shows, stated (#2779):** equality, and **whatever correlates with it** (review finding 4). Tokens sit next to plaintext kinds that can label them: the status token that always appears with `closed = 1` is "closed"; day-bucket tokens line up with `created_hour`; and token transitions across rewrites, set against a known workflow, label each status. A low-entropy token is a hidden label, not a hidden value.
+- **`validate_definition` refuses** an `exact` or `date` index on a field that a declared plaintext kind derives from or tracks (status with `closed`, a creation date with `created_hour`), unless the field's `why` states the correlation.
 
 ---
 
@@ -192,7 +205,7 @@ plaintext.** No kind exists for them.
 - **An edge lives in the source document's `fields` tier:** `{relation, target, role, joinFields}`.
 - For reverse lookup ("cases linked to this contact"), the writer adds an `exact` token on the target's doc id, under the relation's searching group.
 - **The server sees no graph.** It sees tokens whose equality shows that two documents point at the same target, but not which target or what kind of link. That is the degree of a hidden node, not an identity, and it is stated.
-- **Sub-records:** the parent ref is sealed the same way, unless the definition opts into plaintext `parent` (§5).
+- **Sub-records:** a child type whose retention follows its parent **must** declare plaintext `parent` (§5), or the blind purge can't find it (review finding 8). A child type that keeps its parent ref sealed must declare its own retention clock.
 - **Cascade delete becomes a client job.** The deleter's client walks the edges it can open. Edges it can't open are reported, never skipped silently. Retention-driven cascades belong to #2978.
 - **Base relation types that connectors supply** (#2943, #2944) use the same declaration, with `provider: connector`.
 
@@ -284,13 +297,20 @@ from the policy *type*, not per definition.
 #2947's own later comment already noted that binding the new AAD is a full re-encryption.
 
 **The gate instead (in CI, against the real crate, never a mock; #2947 comment 4):**
-1. For every format-1 fixture, and in the pilot job for every real row: open it with the format-1 reader, seal it with `seal_document`, open that, and compare the field values. They must be equal.
-2. Every row the job can't open is reported by id, never skipped (#2174 class).
-3. The format-1 reader stays until the wire spec's cutover (§3.5), and is then deleted.
+1. **Values.** For every format-1 fixture, and in the pilot job for every real row: open it with the format-1 reader, seal it with `seal_document`, open that, and compare the field values. The plaintext-derived values are compared too: status, severity, category, events, reports, case number and assignees come from columns, not envelopes. All must be equal.
+2. **Readers (review finding 10).** For every row: diff the format-1 recipients against the members of the v2 groups the row is sealed to. Every difference must be one of the declared changes below. Any other difference fails the gate.
+3. **Unopenable rows.** Every row the job can't open is reported by id, never skipped (#2174 class). Mobile rows sealed to the instance `adminDecryptionPubkey` are the likely ones. **Each named row needs the operator's sign-off** (re-create it, or accept the loss) before cutover. "Named" alone is not a pass.
+4. The format-1 reader stays until the wire spec's cutover (§3.5), and is then deleted.
+
+**Reader changes the port makes on purpose. Each needs the operator's sign-off as part of E10:**
+- **Summary tier:** today every holder of `cases:read-own` or `cases:read-assigned` gets every summary (`envelope-recipients.ts:82-96`). In v2 they get only their own (`author`) or assigned (`assignees`) documents. **Narrower.**
+- **Fields tier:** today `cases:read-all` holders are not readers unless they are assignees or editors (:109-129). In v2 `doc:*:read-fields` makes them readers. **Wider, for admins and reviewers.**
+- **PII tier:** today every client adds the author. In v2 rule 3 removes subjects from PII unless the type opts in. **Narrower.**
+- **Mobile admin reader:** today one instance key; in v2 the `admins` group. **This corrects the desktop/mobile disagreement.**
 
 **Mapping from today:**
 - the summary, fields and PII envelopes → tiers 1–3, readers per §3;
-- the comment purpose → a system sub-type `comment`, with tiers `[author, admins, assignees]`;
+- the comment purpose → a system sub-type `comment` with tiers `[author, admins, assignees]` and plaintext `parent` (it follows the case's retention);
 - status, severity and category → `exact` tokens;
 - `event_ids[]` and `report_ids[]` → sealed relations;
 - `case_number` → `number`;
@@ -314,7 +334,8 @@ Deleted with no fallback, once each client is ported:
 | Reports | yes | M3, #1309 | ends "reports are conversations" |
 | Actor and observation types | yes, `provider: connector` capable | M3, #2943 / #2944 | |
 | Notes | yes: tiers `[author, admins]`, which is per-note forward secrecy with a per-document DEK | M3, last (#1597) | |
-| Conversations, messages, calls | **no** | — | thread-key shape, server-written, readers change on claim (#2961, thread keys) |
+| Call records (the history entry, notes, recording and transcript) | yes, a system type `call`: tiers `summary`/`fields` to `[admins, perm:calls:read-history, assignees]`, a `recording` capability for F1/F8, and an `exact` caller token | **M2** with #2947 (the files spec's F8 already needs its recording tier) | **the caller token** is written by the answering volunteer's client on first open, under the `perm:calls:read-history` group's index key, because the server can't compute tokens (D7). That is what caller erasure finds records by (#3026 R7) |
+| Conversations, messages, live calls | **no** | — | thread-key shape, server-written, readers change on claim (#2961, thread keys) |
 | Shifts, schedules, settings, bans, audit | **no** | — | operational data the server must act on, or its own mechanism (OPRF bans, the audit chain) |
 
 **Nothing is dropped.** Every "yes" row has a milestone, and every "no" row has the mechanism that
