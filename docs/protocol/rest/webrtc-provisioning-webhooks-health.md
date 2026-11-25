@@ -15,6 +15,60 @@ Auth: Required
 Response: { "available": boolean, "provider": "twilio"|"signalwire"|null }
 ```
 
+#### SIP identity for in-app calling (self-hosted Asterisk)
+
+The per-volunteer SIP identity the desktop, iOS and Android clients register
+with to receive in-app calls through the hub's SIP edge. Issued only when the
+hub's provider is the self-hosted Asterisk; every other provider is refused.
+Schema: `sipTokenResponseSchema` (`packages/protocol/schemas/webrtc.ts`).
+
+```
+GET /api/telephony/sip-status
+Auth: Required
+Response: { "available": boolean, "provider": "asterisk"|null }
+
+GET /api/telephony/sip-token
+Auth: Required (device session token)
+Response 200:
+{
+  "provider": "asterisk",
+  "sip": {
+    "domain": "<SIP edge domain>",
+    "transport": "tls" | "tcp" | "udp",
+    "username": "vol_<pubkey16>",
+    "password": "<per-endpoint derived secret>",
+    "iceServers": [ { "url": "stun:<host>:3478" },
+                    { "url": "turn:<host>:3478?transport=udp", "username": "<expiry>:vol_<pubkey16>", "credential": "<base64>" } ],
+    "mediaEncryption": "dtls-srtp" | "srtp" | "zrtp" | "none",
+    "tlsTrustAnchorPem": "-----BEGIN CERTIFICATE-----…"   // optional
+  }
+}
+Errors: 400 call preference is phone-only
+        403 no hub membership, or the identity was revoked
+        503 the registrar is unreachable (the server refuses to issue a credential that cannot register)
+```
+
+Semantics:
+
+- The identity is **per volunteer, not per hub**: one registration carries
+  calls for every hub the volunteer is on shift for. Which hub a call belongs to
+  travels on the relay channel (`call:ring`), never in SIP.
+- `iceServers[].url` is singular, in the RFC 7064/7065 `scheme:host:port[?transport=…]`
+  form. TURN entries carry RFC 8489 time-limited credentials (TTL 3600 s);
+  clients re-fetch at about 80% of the TTL. Re-issuance is idempotent: the same
+  identity and secret until revoked.
+- Clients follow **only** `transport: "tls"` and `mediaEncryption: "dtls-srtp"`.
+  The schema still admits the other values; a client treats them as a server
+  misconfiguration to surface, never as something to follow.
+- `tlsTrustAnchorPem` absent means "verify against the client's trust store". It
+  never means "do not verify". When present it replaces, rather than extends,
+  the client's trust store for the SIP edge.
+- The credential is a secret on the client: the desktop shell fetches and holds
+  it in its Rust process and never passes it to the webview (the in-app audio
+  spec §1.4); no client writes it to disk.
+- Registration expiry: the endpoint is meant to bound a binding to 600 s
+  (`REGISTRATION_MAX_EXPIRY_SECONDS`), and the desktop client never asks for more.
+
 ### 4.19 Device Provisioning
 
 These are the endpoints the deployed server implements today (`apps/worker/routes/provisioning.ts`). Section 6 specifies the full linking ceremony and marks, per subsection, which parts are in force and which are specified but not yet implemented; §6.14 is the authoritative conformance matrix.
