@@ -77,8 +77,9 @@
 		-Server
 	}
 
-	# Compression
-	encode gzip zstd
+	# No `encode` (#3018): this site proxies the app; see the compression
+	# note in roles/llamenos-caddy/templates/caddy.j2. Enforced by
+	# scripts/check-caddy-compression.py.
 
   # Access logging
 	log {
@@ -94,7 +95,7 @@
 {% if downloads_domain is defined %}
 # ─── Downloads origin — downloads.<parent> ────────────────────────
 {{ downloads_domain }} {
-	encode gzip zstd
+	# No `encode` (#3018): proxies object storage; see above.
 
 	# Proxy to RustFS S3 API for /releases/ bucket
 	handle /releases/* {
@@ -124,7 +125,7 @@
 {% if updates_domain is defined %}
 # ─── Updates origin — updates.<parent> ────────────────────────────
 {{ updates_domain }} {
-	encode gzip zstd
+	# No `encode` (#3018): proxies object storage; see above.
 
 	# Staging bucket — pre-release builds for testing
 	handle /staging/* {
