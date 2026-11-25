@@ -416,6 +416,7 @@ object SimulationClient {
      * purged periodically.
      */
     fun createTestHub(name: String? = null): HubResponse {
+        ensureAdminDeviceRegistered()
         val hubName = name ?: "android-test-${System.currentTimeMillis()}"
         val body = """{"name":"${escapeJson(hubName)}"}"""
         val path = "/api/hubs"
@@ -423,6 +424,47 @@ object SimulationClient {
         // POST /api/hubs answers 201 with `{"hub":{"id":...}}`; the dev route
         // answered 200 with a bare `{"id":...}`.
         return json.decodeFromString<HubEnvelope>(responseText).hub
+    }
+
+    /**
+     * The X25519 key the test admin is addressed by (CI's `TEST_ADMIN_DECRYPTION_PUBKEY`),
+     * derived from [ADMIN_SEED_HEX] by `tests/crypto-helpers.ts` `adminHpkeRecipient()`. It is
+     * not the Ed25519 signing pubkey and is never derived from it (#1283).
+     */
+    private const val ADMIN_X25519_HEX =
+        "27f9c3be4b64aa793509386bc20da41a1ce70df8f360d574f20035a17726a177"
+
+    @Volatile
+    private var adminDeviceRegistered = false
+
+    /**
+     * Make the test admin a hub admin that can READ: a registered device key.
+     *
+     * Everything a user writes in a hub is sealed to `readersFor(hub, 'admin')` — the
+     * registered device X25519 keys of the hub's admins — and the app refuses to write
+     * when that set is empty (`NoAdminReaderException`, #1035). `POST /api/hubs` makes this
+     * admin each scenario hub's founder, but a founder with no registered device reads
+     * nothing, so a hub of only that is the hub the refusal exists to reject: "Adding a
+     * comment to the timeline" failed on it. The desktop registers its device on unlock and
+     * the setup wizard before it founds the hub (#1034); this is the same
+     * `POST /api/devices/register`, idempotent per `pushToken`. Nothing relaxes the server
+     * or the app: the fixture supplies the admin a real hub always has.
+     *
+     * Called by [createTestHub], so no scenario hub exists without a reader. Throws on a
+     * non-2xx — a hub with no reader is not a state to carry on from.
+     */
+    @Synchronized
+    private fun ensureAdminDeviceRegistered() {
+        if (adminDeviceRegistered) return
+        val edPubkey = mobileCreateAuthTokenFromSigningKey(
+            ADMIN_SEED_HEX, System.currentTimeMillis().toULong(), "GET", "/",
+        ).pubkey
+        authorizedRequest(
+            "POST",
+            "/api/devices/register",
+            """{"platform":"android","pushToken":"test-device-cucumber-admin","wakeKeyPublic":"$ADMIN_X25519_HEX","ed25519Pubkey":"$edPubkey","x25519Pubkey":"$ADMIN_X25519_HEX","deviceName":"cucumber admin"}""",
+        )
+        adminDeviceRegistered = true
     }
 
     // ─── Invite verification (#764) ───────────────────────────────
