@@ -22,7 +22,8 @@ use llamenos_core::backup::{
     BACKUP_FORMAT_VERSION,
 };
 use llamenos_core::device_keys::{generate_device_keys, unlock_device_keys, DeviceSecrets};
-use llamenos_core::encryption::{decrypt_note, encrypt_note, EncryptedNote, KeyEnvelope};
+use llamenos_core::encryption::{decrypt_note, encrypt_note, EncryptedNote};
+use llamenos_core::hpke_envelope::HpkeEnvelope as KeyEnvelope;
 use serde::{Deserialize, Serialize};
 
 const DEVICE_PIN: &str = "24681357";

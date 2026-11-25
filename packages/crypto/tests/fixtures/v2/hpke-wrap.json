@@ -1,0 +1,308 @@
+{
+  "description": "v2 HPKE envelopes (spec D1, D2): one {enc, ct} per shape, lowercase hex. The label is the shape's, as HPKE info; the AAD is the shape's format-1 bytes. Every platform opens `positives` with recipientSecretHex through its production shape reader and asserts each negative's `expect` code.",
+  "generator": "packages/crypto/src/vectors.rs (seeded ChaCha20; LLAMENOS_WRITE_VECTORS=1 cargo test --lib vectors)",
+  "negatives": [
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f313"
+      },
+      "expect": "decryption_failed",
+      "name": "wrong-shape-is-wrong-label",
+      "shape": "file-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "_mh2coidhmpdGtTNfR2Csoe-CuG9cMmqNXOhugil8xM"
+      },
+      "expect": "invalid_format",
+      "name": "base64url-enc",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "9dDsz9tn61iQkqnTKK6AKPnXpPURfBcx2H9FvyHWEu1IuEsGF7ykMT_-jD2uaED_",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f313"
+      },
+      "expect": "invalid_format",
+      "name": "base64url-ct",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "FE687672889D866A5D1AD4CD7D1D82B287BE0AE1BD70C9AA3573A1BA08A5F313"
+      },
+      "expect": "invalid_format",
+      "name": "uppercase-enc",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "F5D0ECCFDB67EB589092A9D328AE8028F9D7A4F5117C1731D87F45BF21D612ED48B84B0617BCA4313FFE8C3DAE6840FF",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f313"
+      },
+      "expect": "invalid_format",
+      "name": "uppercase-ct",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff00",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f313"
+      },
+      "expect": "invalid_format",
+      "name": "key-wrap-ct-not-96-chars",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f3130000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expect": "invalid_format",
+      "name": "enc-of-another-suite-length",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f31"
+      },
+      "expect": "invalid_format",
+      "name": "odd-length-hex",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [
+        "0b7c5a1e-2d4f-4c8a-9e1b-3f6d2a7c9e00"
+      ],
+      "envelope": {
+        "ct": "bcc17291d708270297f6d0b0f8d332444e322318c6c3e83f523c7adfa13876b58879ccab7d481fccf9efee76a5c17a3a",
+        "enc": "2bd5756aec4316d3fa789884c83c7831d327fbca2da49cbe11bf9c75bec12f1d"
+      },
+      "expect": "decryption_failed",
+      "name": "aad-field-swapped",
+      "shape": "audit-user-key"
+    },
+    {
+      "aadFields": [],
+      "envelope": {
+        "ct": "bcc17291d708270297f6d0b0f8d332444e322318c6c3e83f523c7adfa13876b58879ccab7d481fccf9efee76a5c17a3a",
+        "enc": "2bd5756aec4316d3fa789884c83c7831d327fbca2da49cbe11bf9c75bec12f1d"
+      },
+      "expect": "invalid_input",
+      "name": "aad-field-missing",
+      "shape": "audit-user-key"
+    }
+  ],
+  "positives": [
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a6e6f74652d6b65793a6b65792d77726170",
+      "envelope": {
+        "ct": "f5d0eccfdb67eb589092a9d328ae8028f9d7a4f5117c1731d87f45bf21d612ed48b84b0617bca4313ffe8c3dae6840ff",
+        "enc": "fe687672889d866a5d1ad4cd7d1d82b287be0ae1bd70c9aa3573a1ba08a5f313"
+      },
+      "plaintextHex": "563f355ec29ba5ad2952cb19d39571f9015e3e62122cc8ec14e26d2bfdb33b3d",
+      "shape": "note-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a66696c652d6b65793a6b65792d77726170",
+      "envelope": {
+        "ct": "9dc94a22169214d55d4937eb39b8df78fd4989928d9f309bcc56336773af433142be18e7598f060e300e249f29602e5d",
+        "enc": "0df2bf995f92718f582cde0557198adbefb5111f0d1672ab34dd84ee432a387e"
+      },
+      "plaintextHex": "1942fa31e6918408000ce58a160c5ec6b79c33f5441d36c57dcfff2e58a7b980",
+      "shape": "file-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a66696c652d6d657461646174613a6b65792d77726170",
+      "envelope": {
+        "ct": "a2e6f9d7e704d259b73e7a998187403623bdd339542d4fd3fb84af704c60b50e1f27f27b4666619e3402b0234513646d",
+        "enc": "3d028e8f8aaa677224ef7bcf5125363b12df8daff72ccca5084d6feb0fb4d540"
+      },
+      "plaintextHex": "b85d944d5efeaa8fdd06d6d6108466f696f4ceee2b8c46c39dfdf2ce0377846d",
+      "shape": "file-metadata-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a636f6e746163742d70726f66696c653a6b65792d77726170",
+      "envelope": {
+        "ct": "e3f0ad1ccdb1b6aedfce6e4501282e1dc06dd277d5960e1ebc50268bf0411e52a60f2dffdc774566be6e3a0a4f47d3bb",
+        "enc": "68efc1c0075bba0e80b01b22676da2c816e05a372c02e61b6c33ce4e6d967c10"
+      },
+      "plaintextHex": "803c9f04331d3e77cde575b419bdc2b023826eab2e9cad9178ec396a1e3c7294",
+      "shape": "contact-profile-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a636f6e746163742d6964656e7469666965723a6b65792d77726170",
+      "envelope": {
+        "ct": "b1df1bd9dcfbd58f13c1c0bc4431a5d40325934a2591783450c2196db5d26b31e95c0c21476a203dedabf804046bc9f0",
+        "enc": "64ab06e5922eaceed2c94a1d8d8624eba389bb0826fab267adb20e2f8a39573c"
+      },
+      "plaintextHex": "9163ade81124b9f373cd3e04dcb5624c8248c2be5ffb80022985d37eca694ff6",
+      "shape": "contact-id-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a6875622d6b65792d777261703a6b65792d77726170",
+      "envelope": {
+        "ct": "6a0d1dce180cdd726290d3e89cdde4e4ab61f0fc4c75f65a0f7764f2f67c2f59add4995af6c0381fbb346d4bf030f73e",
+        "enc": "3c0cb79554549878d4e85c31cc9070ab0813d5dfe088dc7c2e9b6c3239de5459"
+      },
+      "plaintextHex": "46ec2b4f04f7e0a07a246884666d6c28014d85d0fd71b7d31e281c59168fdf2d",
+      "shape": "hub-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a66697265686f73653a6275666665722d656e63727970743a6b65792d77726170",
+      "envelope": {
+        "ct": "29234bc291243d46ee4dde19cf7b91b246e77492c78fdfc27c574b14b1e5329151beec758f4f7b795295f707a20e0f76",
+        "enc": "f1f8a1eb7de05685b123f230841ae0345cca590a1b4f83f450ceff23366fa845"
+      },
+      "plaintextHex": "86f20dbf7d2cc1451703e683c3fc16f676e5cabfc38b0c8ab60723efd4658855",
+      "shape": "firehose-window-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "",
+      "envelope": {
+        "ct": "a04f07aa0e06d55830ce962a4770c0f6cb30f2a538ef0681466c35bbd408611365903a42c8fb3af040ae04ac69cef0a2",
+        "enc": "1a3a5669b391d2d990bc29acc1a0b2e9b4b648b9556a798fb7c1dc2f12b59c2a"
+      },
+      "plaintextHex": "545e7a9bc85f4bab0bfc083a9038b21f37bcc3fc99a25257a0c796b76dddc902",
+      "shape": "message-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "",
+      "envelope": {
+        "ct": "5f059d37657ef758d5bf083721491185b0bfdd9a7dadaebdfba0c2cee04683d8ec29cc0068a1b82400b18a7b48ff3c5b",
+        "enc": "bccfd0672c9e64cfc601861be61e0fc1d678f64c873e88655dc841fd7b93a330"
+      },
+      "plaintextHex": "f803194b441417695224d8b2c83fc965818e7d2ff78ea2164b0a6c74a4d6fbfe",
+      "shape": "call-meta-key"
+    },
+    {
+      "aadFields": [
+        "0b7c5a1e-2d4f-4c8a-9e1b-3f6d2a7c9e0f"
+      ],
+      "aadHex": "6c6c616d656e6f733a70756b3a777261703a6465766963653a76313a30623763356131652d326434662d346338612d396531622d336636643261376339653066",
+      "envelope": {
+        "ct": "f341f276d48c821511844821b7735fc6166168cc7448559cd05eacd9fb70d3d034b8edd2ee4d7f8c93b85b83dc560f25",
+        "enc": "31307b3c8e1146df5cebd24a96a5ca4117c924ab6761e3139bfefdc886907e2c"
+      },
+      "plaintextHex": "6d2799622b33b76c2df180fb474e98972510f50d11f619300b4048beb91fdbf9",
+      "shape": "puk-seed"
+    },
+    {
+      "aadFields": [
+        "0b7c5a1e-2d4f-4c8a-9e1b-3f6d2a7c9e0f"
+      ],
+      "aadHex": "6c6c616d656e6f733a61756469742d757365722d6b65792d777261703a76313a30623763356131652d326434662d346338612d396531622d336636643261376339653066",
+      "envelope": {
+        "ct": "bcc17291d708270297f6d0b0f8d332444e322318c6c3e83f523c7adfa13876b58879ccab7d481fccf9efee76a5c17a3a",
+        "enc": "2bd5756aec4316d3fa789884c83c7831d327fbca2da49cbe11bf9c75bec12f1d"
+      },
+      "plaintextHex": "16ddf2fe841189608da139f21413bd75bfda43b943c2aaa7bc1021ba41bb79e6",
+      "shape": "audit-user-key"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a707573682d77616b653a70757368",
+      "envelope": {
+        "ct": "8499c7ac1e0ccd740b25574159def853e9939ce0f7456eb96742a572baa252c9fbd663b01d",
+        "enc": "183727490560b835b38d789640916fdb0bd9dc79806988c06718be27b238ee11"
+      },
+      "plaintextHex": "7b227368617065223a22707573682d77616b65227d",
+      "shape": "push-wake"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "6c6c616d656e6f733a707573682d66756c6c3a70757368",
+      "envelope": {
+        "ct": "c52d70cf79b86e858bbdd3fc9754329560618b21d360787813243e9137ac810adc38bda14e",
+        "enc": "6f8f3310fce7035833f425cd9c1cca5d170307626ecd785024c9d4c50c3b530a"
+      },
+      "plaintextHex": "7b227368617065223a22707573682d66756c6c227d",
+      "shape": "push-full"
+    },
+    {
+      "aadFields": [
+        "0b7c5a1e-2d4f-4c8a-9e1b-3f6d2a7c9e0f"
+      ],
+      "aadHex": "30623763356131652d326434662d346338612d396531622d3366366432613763396530663a6e616d65",
+      "envelope": {
+        "ct": "1a9b10a368536c57184c0c5ed958dd8894dedbff281f5428835f6111f8d0539f06837db16f9fb10b6129033226c9",
+        "enc": "74eecf1c8a030758e86ee31a52f1a61439817105d4baf1b65febf156e4a2a57c"
+      },
+      "plaintextHex": "7b227368617065223a22706c6174666f726d2d726f6c652d6e616d65227d",
+      "shape": "platform-role-name"
+    },
+    {
+      "aadFields": [
+        "0b7c5a1e-2d4f-4c8a-9e1b-3f6d2a7c9e0f"
+      ],
+      "aadHex": "30623763356131652d326434662d346338612d396531622d3366366432613763396530663a6465736372697074696f6e",
+      "envelope": {
+        "ct": "225ab3790483a40d93025e77b07c3d5f5b1732d174396bd5cce46036b271a64e5a049adc50cb53ed702f2c6f4465c9316b8e1a6167",
+        "enc": "65c79ccb91ad026b6a7202e6c3dc2a0f60c3613a9663497c24df1fbe3ca2492f"
+      },
+      "plaintextHex": "7b227368617065223a22706c6174666f726d2d726f6c652d6465736372697074696f6e227d",
+      "shape": "platform-role-description"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "",
+      "envelope": {
+        "ct": "652f9c133f71542d89b4e82efa038f5b739d0c4d3b1a57a447db1153e6b2b58280e9e9ddc3fd7c77da6b2a288d054fa4",
+        "enc": "998212d6840f1e9698b0f162f04fb307a03ecb92ef7d8ea504f2c0b495cb895d"
+      },
+      "plaintextHex": "7b227368617065223a227265636f766572792d67726f75702d7368617265227d",
+      "shape": "recovery-group-share"
+    },
+    {
+      "aadFields": [
+        "session-7",
+        "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988"
+      ],
+      "aadHex": "73657373696f6e2d373a31663265336434633562366137393838316632653364346335623661373938383166326533643463356236613739383831663265336434633562366137393838",
+      "envelope": {
+        "ct": "21683db9a6dafa1cbd32ecc1b752b82f843ca24fc24e5d39b000a572ada308ab5a53098c9e5dd5b9d0f116b6b24b316dfb344e43161f08",
+        "enc": "12e0a911075420e490707f9db3e0ef5cffb5ff3ee703042bcc9269b906e0371b"
+      },
+      "plaintextHex": "7b227368617065223a227265636f766572792d73686172652d636f6e747269627574696f6e227d",
+      "shape": "recovery-share-contribution"
+    },
+    {
+      "aadFields": [],
+      "aadHex": "",
+      "envelope": {
+        "ct": "518e51c06d597ebfacbf254d4272c0d7bc43fc83da3fe39f3852d3e87812db427b1a92708e5062d7f06d2929d851a252",
+        "enc": "f74af2ff9e589dd2a44929cbf59e34c75bef8d9c5b4f9eba4cb585e2737b0514"
+      },
+      "plaintextHex": "97ef2aff6a95260b9cda4de6ac884270775025a6e43ee3599bf303a0ba0e8182",
+      "shape": "recovery-puk-seed"
+    }
+  ],
+  "recipientPubkeyHex": "bf4cfd7efcad7981c321db21eb62a88980ce62fa39c99aa5570717dc824b8f4e",
+  "recipientSecretHex": "fe0e6e0d950498e17538265d01e252b1efbdaf3fe37661c3ebb224da6daafd11",
+  "suite": {
+    "aeadId": 2,
+    "kdfId": 1,
+    "kemId": 32
+  }
+}

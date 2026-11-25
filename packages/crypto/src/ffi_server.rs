@@ -371,186 +371,361 @@ pub extern "C" fn ffi_aes256gcm_decrypt(
     0
 }
 
-// ── Asymmetric: HPKE ──────────────────────────────────────────────────
+// ── HPKE, by shape (D1) ───────────────────────────────────────────────
 
-/// HPKE seal (encrypt for a recipient). Output = enc(32) || ciphertext || tag(16).
-/// Output buffer must be at least 32 + pt_len + 16 bytes.
-///
-/// The `label` parameter must be a valid UTF-8 domain separation label registered
-/// in the label registry (Albrecht defense). Raw info bytes are NOT accepted —
-/// all HPKE operations must use a registered label for domain separation.
+/// Report a crate error as `"{code}: {message}"`, so a caller (and a negative
+/// vector) can assert the closed rejection code (spec §6.1).
+/// Returns the matching return code: -5 for input faults, -1 for cryptographic failure.
+fn set_crypto_error(e: &crate::errors::CryptoError) -> i32 {
+    set_error(&format!("{}: {e}", e.code()));
+    match e.code() {
+        "decryption_failed" => -1,
+        _ => -5,
+    }
+}
+
+/// Parse the JSON array of AAD fields a shape binds (`[]` for most shapes).
+fn parse_fields(fields: &[u8]) -> Result<Vec<String>, crate::errors::CryptoError> {
+    if fields.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_slice(fields).map_err(|e| {
+        crate::errors::CryptoError::InvalidInput(format!(
+            "aad fields must be a JSON string array: {e}"
+        ))
+    })
+}
+
+/// Seal `plaintext` as `shape` (the closed [`crate::shape::Shape`] byte) to a
+/// 32-byte X25519 recipient. `fields` is a UTF-8 JSON array of the AAD fields the
+/// shape binds, or empty. There is no label and no AAD argument: the crate
+/// derives both. Output = enc(32) || ct; `out_len` ≥ 32 + pt_len + 16.
 #[no_mangle]
-pub extern "C" fn ffi_hpke_seal(
+pub extern "C" fn ffi_shape_seal(
+    shape: u8,
     recipient_pk: *const u8,
     pk_len: usize,
+    fields: *const u8,
+    fields_len: usize,
     plaintext: *const u8,
     pt_len: usize,
-    label: *const u8,
-    label_len: usize,
-    aad: *const u8,
-    aad_len: usize,
     out: *mut u8,
     out_len: usize,
 ) -> i32 {
     clear_error();
     check_null!(recipient_pk, out);
-    check_input_size!(pt_len, label_len, aad_len);
-
+    check_input_size!(pt_len, fields_len);
     if pk_len != 32 {
         set_error("HPKE recipient public key must be 32 bytes");
         return -5;
     }
-
-    // Label is required — reject null/empty
-    if label.is_null() || label_len == 0 {
-        set_error("HPKE label is required (domain separation)");
-        return -5;
-    }
-
-    let label_slice = unsafe { std::slice::from_raw_parts(label, label_len) };
-    let label_str = match std::str::from_utf8(label_slice) {
-        Ok(s) => s,
-        Err(_) => {
-            set_error("HPKE label must be valid UTF-8");
-            return -5;
-        }
-    };
-
-    // Albrecht defense: validate label against the registry
-    if crate::labels::label_to_id(label_str).is_none() {
-        set_error(&format!("unknown crypto label: {label_str}"));
-        return -5;
-    }
-
     let required_out = 32 + pt_len + 16;
     check_output_size!(out_len, required_out);
-
-    let pk_slice = unsafe { std::slice::from_raw_parts(recipient_pk, 32) };
-    let pt_slice = nullable_slice!(plaintext, pt_len);
-    let aad_slice = nullable_slice!(aad, aad_len);
-
-    // Route through hpke_envelope which enforces label as HPKE info
-    let pk_hex = hex::encode(pk_slice);
-    let envelope = match hpke_envelope::hpke_seal(pt_slice, &pk_hex, label_str, aad_slice) {
+    let fields = match parse_fields(nullable_slice!(fields, fields_len)) {
+        Ok(f) => f,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let shape = match crate::shape::Shape::from_u8(shape) {
+        Ok(s) => s,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let pk_hex = hex::encode(unsafe { std::slice::from_raw_parts(recipient_pk, 32) });
+    let pt = nullable_slice!(plaintext, pt_len);
+    let envelope = match crate::shape::seal_to(&pk_hex, shape, &fields, pt) {
         Ok(env) => env,
         Err(e) => {
-            set_error(&format!("HPKE seal failed: {e}"));
-            return -1;
+            return set_crypto_error(&e);
         }
     };
-
-    // Convert HpkeEnvelope (base64url) back to binary: enc(32) || ct
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    let enc_bytes = match URL_SAFE_NO_PAD.decode(&envelope.enc) {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(&format!("internal error decoding enc: {e}"));
-            return -1;
-        }
+    let (Ok(enc), Ok(ct)) = (hex::decode(&envelope.enc), hex::decode(&envelope.ct)) else {
+        set_error("internal error: sealed envelope is not hex");
+        return -1;
     };
-    let ct_bytes = match URL_SAFE_NO_PAD.decode(&envelope.ct) {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(&format!("internal error decoding ct: {e}"));
-            return -1;
-        }
-    };
-
     let out_slice = unsafe { std::slice::from_raw_parts_mut(out, required_out) };
-    out_slice[..32].copy_from_slice(&enc_bytes);
-    out_slice[32..].copy_from_slice(&ct_bytes);
+    out_slice[..32].copy_from_slice(&enc);
+    out_slice[32..].copy_from_slice(&ct);
     0
 }
 
-/// HPKE open (decrypt). Input = enc(32) || ciphertext || tag(16).
-/// Output buffer must be at least env_len - 48 bytes.
-///
-/// The `label` parameter must be a valid UTF-8 domain separation label registered
-/// in the label registry (Albrecht defense). The label is verified against the
-/// envelope's embedded label_id before decryption proceeds.
+/// Open `envelope` = enc(32) || ct as `shape` with a 32-byte X25519 secret.
+/// Writes the plaintext (env_len − 48 bytes) into `out`.
 #[no_mangle]
-pub extern "C" fn ffi_hpke_open(
+pub extern "C" fn ffi_shape_open(
+    shape: u8,
     secret_key: *const u8,
     sk_len: usize,
+    fields: *const u8,
+    fields_len: usize,
     envelope: *const u8,
     env_len: usize,
-    label: *const u8,
-    label_len: usize,
-    aad: *const u8,
-    aad_len: usize,
     out: *mut u8,
     out_len: usize,
 ) -> i32 {
     clear_error();
     check_null!(secret_key, envelope, out);
-    check_input_size!(env_len, label_len, aad_len);
-
+    check_input_size!(env_len, fields_len);
     if sk_len != 32 {
         set_error("HPKE secret key must be 32 bytes");
         return -5;
     }
-
-    // Label is required — reject null/empty
-    if label.is_null() || label_len == 0 {
-        set_error("HPKE label is required (domain separation)");
-        return -5;
-    }
-
-    let label_slice = unsafe { std::slice::from_raw_parts(label, label_len) };
-    let label_str = match std::str::from_utf8(label_slice) {
-        Ok(s) => s,
-        Err(_) => {
-            set_error("HPKE label must be valid UTF-8");
-            return -5;
-        }
-    };
-
-    // Albrecht defense: validate label against the registry
-    let label_id = match crate::labels::label_to_id(label_str) {
-        Some(id) => id,
-        None => {
-            set_error(&format!("unknown crypto label: {label_str}"));
-            return -5;
-        }
-    };
-
-    // enc(32) + tag(16) = 48 bytes minimum
     if env_len < 48 {
-        set_error("HPKE envelope too short (need at least 48 bytes for enc + tag)");
+        set_error("invalid_format: HPKE envelope too short (need enc + tag)");
         return -5;
     }
-
     let pt_len = env_len - 48;
     check_output_size!(out_len, pt_len);
-
-    let sk_slice = unsafe { std::slice::from_raw_parts(secret_key, 32) };
-    let env_slice = unsafe { std::slice::from_raw_parts(envelope, env_len) };
-    let aad_slice = nullable_slice!(aad, aad_len);
-
-    // Reconstruct HpkeEnvelope for the envelope layer to validate
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-
-    let hpke_env = hpke_envelope::HpkeEnvelope {
-        v: 3,
-        label_id,
-        enc: URL_SAFE_NO_PAD.encode(&env_slice[..32]),
-        ct: URL_SAFE_NO_PAD.encode(&env_slice[32..]),
-    };
-
-    let sk_hex = hex::encode(sk_slice);
-    let plaintext = match hpke_envelope::hpke_open(&hpke_env, &sk_hex, label_str, aad_slice) {
-        Ok(pt) => pt,
-        Err(_) => {
-            set_error("HPKE open failed: decryption error");
-            return -1;
+    let fields = match parse_fields(nullable_slice!(fields, fields_len)) {
+        Ok(f) => f,
+        Err(e) => {
+            return set_crypto_error(&e);
         }
     };
-
-    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, pt_len) };
+    let shape = match crate::shape::Shape::from_u8(shape) {
+        Ok(s) => s,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let mut sk = zeroize::Zeroizing::new([0u8; 32]);
+    sk.copy_from_slice(unsafe { std::slice::from_raw_parts(secret_key, 32) });
+    let env_slice = unsafe { std::slice::from_raw_parts(envelope, env_len) };
+    let env = hpke_envelope::HpkeEnvelope {
+        enc: hex::encode(&env_slice[..32]),
+        ct: hex::encode(&env_slice[32..]),
+    };
+    let plaintext = match crate::shape::open_from(&sk, shape, &fields, &env) {
+        Ok(pt) => pt,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, plaintext.len()) };
     out_slice.copy_from_slice(&plaintext);
     0
+}
+
+/// Seal `plaintext` under a fresh content key with `shape`'s content AAD.
+/// Writes the key (32 bytes) to `out_key` and nonce(12) || ct || tag(16) to `out`
+/// (`out_len` ≥ pt_len + 28).
+#[no_mangle]
+pub extern "C" fn ffi_content_seal(
+    shape: u8,
+    plaintext: *const u8,
+    pt_len: usize,
+    out_key: *mut u8,
+    out_key_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(out_key, out);
+    check_input_size!(pt_len);
+    check_output_size!(out_key_len, 32);
+    check_output_size!(out_len, pt_len + 28);
+    let shape = match crate::shape::Shape::from_u8(shape) {
+        Ok(s) => s,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let pt = nullable_slice!(plaintext, pt_len);
+    let sealed = match crate::shape::content_seal(shape, pt) {
+        Ok(s) => s,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    unsafe {
+        std::slice::from_raw_parts_mut(out_key, 32).copy_from_slice(&*sealed.key);
+        std::slice::from_raw_parts_mut(out, sealed.packed.len()).copy_from_slice(&sealed.packed);
+    }
+    0
+}
+
+/// Open nonce(12) || ct || tag(16) of `shape` with its 32-byte key. Writes the
+/// plaintext (packed_len − 28 bytes) to `out`.
+#[no_mangle]
+pub extern "C" fn ffi_content_open(
+    shape: u8,
+    key: *const u8,
+    key_len: usize,
+    packed: *const u8,
+    packed_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(key, packed, out);
+    check_input_size!(packed_len);
+    if key_len != 32 || packed_len < 28 {
+        set_error("invalid_format: content key must be 32 bytes and ciphertext at least 28");
+        return -5;
+    }
+    check_output_size!(out_len, packed_len - 28);
+    let shape = match crate::shape::Shape::from_u8(shape) {
+        Ok(s) => s,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let mut k = zeroize::Zeroizing::new([0u8; 32]);
+    k.copy_from_slice(unsafe { std::slice::from_raw_parts(key, 32) });
+    let packed_slice = unsafe { std::slice::from_raw_parts(packed, packed_len) };
+    let pt = match crate::shape::content_open(shape, packed_slice, &k) {
+        Ok(p) => p,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    unsafe { std::slice::from_raw_parts_mut(out, pt.len()) }.copy_from_slice(&pt);
+    0
+}
+
+// ── Relay events (D9, #2999) ──────────────────────────────────────────
+
+fn utf8_arg<'a>(bytes: &'a [u8], what: &str) -> Result<&'a str, i32> {
+    std::str::from_utf8(bytes).map_err(|_| {
+        set_error(&format!("invalid_input: {what} must be UTF-8"));
+        -5
+    })
+}
+
+/// Derive the relay-event key of `hub_id` for `epoch` (what `GET /api/auth/me`
+/// hands a member of that hub). Writes 32 bytes to `out`.
+#[no_mangle]
+pub extern "C" fn ffi_server_event_key(
+    server_secret: *const u8,
+    secret_len: usize,
+    hub_id: *const u8,
+    hub_len: usize,
+    epoch: u64,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(server_secret, hub_id, out);
+    check_input_size!(secret_len, hub_len);
+    check_output_size!(out_len, 32);
+    let secret = unsafe { std::slice::from_raw_parts(server_secret, secret_len) };
+    let hub = match utf8_arg(
+        unsafe { std::slice::from_raw_parts(hub_id, hub_len) },
+        "hub id",
+    ) {
+        Ok(h) => h,
+        Err(code) => return code,
+    };
+    match crate::events::derive_server_event_key(secret, hub, epoch) {
+        Ok(key) => {
+            unsafe { std::slice::from_raw_parts_mut(out, 32) }.copy_from_slice(&*key);
+            0
+        }
+        Err(e) => set_crypto_error(&e),
+    }
+}
+
+/// Seal one relay frame of `hub_id` / `kind` / `epoch`: derives the hub's key
+/// for the epoch and seals the UTF-8 JSON. Writes nonce || ct || tag (raw bytes)
+/// to `out` and returns the number of bytes written.
+#[no_mangle]
+pub extern "C" fn ffi_seal_server_event(
+    server_secret: *const u8,
+    secret_len: usize,
+    hub_id: *const u8,
+    hub_len: usize,
+    kind: u32,
+    epoch: u64,
+    json: *const u8,
+    json_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(server_secret, hub_id, json, out);
+    check_input_size!(secret_len, hub_len, json_len);
+    let secret = unsafe { std::slice::from_raw_parts(server_secret, secret_len) };
+    let hub = match utf8_arg(
+        unsafe { std::slice::from_raw_parts(hub_id, hub_len) },
+        "hub id",
+    ) {
+        Ok(h) => h,
+        Err(code) => return code,
+    };
+    let json = match utf8_arg(
+        unsafe { std::slice::from_raw_parts(json, json_len) },
+        "event JSON",
+    ) {
+        Ok(j) => j,
+        Err(code) => return code,
+    };
+    let payload = crate::events::derive_server_event_key(secret, hub, epoch)
+        .and_then(|key| crate::events::seal_server_event(&key, hub, kind, epoch, json));
+    let payload = match payload {
+        Ok(p) => p,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    let Ok(bytes) = hex::decode(payload) else {
+        set_error("internal error: event payload is not hex");
+        return -1;
+    };
+    check_output_size!(out_len, bytes.len());
+    unsafe { std::slice::from_raw_parts_mut(out, bytes.len()) }.copy_from_slice(&bytes);
+    bytes.len() as i32
+}
+
+/// Open one relay frame with its 32-byte key (the server never needs this; the
+/// worker's conformance tests and BDD steps use it to read what the relay sent).
+/// Writes the UTF-8 JSON to `out` and returns the number of bytes written.
+#[no_mangle]
+pub extern "C" fn ffi_open_server_event(
+    key: *const u8,
+    key_len: usize,
+    hub_id: *const u8,
+    hub_len: usize,
+    kind: u32,
+    epoch: u64,
+    payload_hex: *const u8,
+    payload_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(key, hub_id, payload_hex, out);
+    check_input_size!(hub_len, payload_len);
+    if key_len != 32 {
+        set_error("invalid_format: event key must be 32 bytes");
+        return -5;
+    }
+    let mut k = zeroize::Zeroizing::new([0u8; 32]);
+    k.copy_from_slice(unsafe { std::slice::from_raw_parts(key, 32) });
+    let hub = match utf8_arg(
+        unsafe { std::slice::from_raw_parts(hub_id, hub_len) },
+        "hub id",
+    ) {
+        Ok(h) => h,
+        Err(code) => return code,
+    };
+    let payload = match utf8_arg(
+        unsafe { std::slice::from_raw_parts(payload_hex, payload_len) },
+        "payload",
+    ) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let json = match crate::events::open_server_event(&k, hub, kind, epoch, payload) {
+        Ok(j) => j,
+        Err(e) => {
+            return set_crypto_error(&e);
+        }
+    };
+    check_output_size!(out_len, json.len());
+    unsafe { std::slice::from_raw_parts_mut(out, json.len()) }.copy_from_slice(json.as_bytes());
+    json.len() as i32
 }
 
 // ── Asymmetric: Ed25519 ───────────────────────────────────────────────
@@ -1268,214 +1443,184 @@ mod tests {
         assert_ne!(pubkey1, [0u8; 32]);
     }
 
-    #[test]
-    fn test_hpke_roundtrip() {
+    fn x25519_pair() -> ([u8; 32], [u8; 32]) {
         use hpke::kem::X25519HkdfSha256;
         use hpke::{Kem as KemTrait, Serializable};
-
-        // Generate keypair
         let mut rng = hpke_envelope::OsRng09;
         let (sk, pk) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let sk_bytes = sk.to_bytes();
-        let pk_bytes = pk.to_bytes();
-        let sk_slice: &[u8] = sk_bytes.as_ref();
-        let pk_slice: &[u8] = pk_bytes.as_ref();
+        (sk.to_bytes().into(), pk.to_bytes().into())
+    }
 
-        let plaintext = b"secret for HPKE";
-        let label = crate::labels::LABEL_NOTE_KEY.as_bytes();
-        let aad = b"test-aad";
-
-        let env_len = 32 + plaintext.len() + 16;
-        let mut envelope = vec![0u8; env_len];
-
-        let ret = ffi_hpke_seal(
-            pk_slice.as_ptr(),
+    fn shape_seal(shape: u8, pk: &[u8; 32], fields: &[u8], pt: &[u8]) -> (i32, Vec<u8>) {
+        let mut env = vec![0u8; 32 + pt.len() + 16];
+        let ret = ffi_shape_seal(
+            shape,
+            pk.as_ptr(),
             32,
-            plaintext.as_ptr(),
-            plaintext.len(),
-            label.as_ptr(),
-            label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            envelope.as_mut_ptr(),
-            env_len,
+            fields.as_ptr(),
+            fields.len(),
+            pt.as_ptr(),
+            pt.len(),
+            env.as_mut_ptr(),
+            env.len(),
         );
-        assert_eq!(ret, 0);
+        (ret, env)
+    }
 
-        let mut decrypted = vec![0u8; plaintext.len()];
-        let ret = ffi_hpke_open(
-            sk_slice.as_ptr(),
+    fn shape_open(shape: u8, sk: &[u8; 32], fields: &[u8], env: &[u8]) -> (i32, Vec<u8>) {
+        let mut out = vec![0u8; env.len() - 48];
+        let ret = ffi_shape_open(
+            shape,
+            sk.as_ptr(),
             32,
-            envelope.as_ptr(),
-            env_len,
-            label.as_ptr(),
-            label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            decrypted.as_mut_ptr(),
-            plaintext.len(),
+            fields.as_ptr(),
+            fields.len(),
+            env.as_ptr(),
+            env.len(),
+            out.as_mut_ptr(),
+            out.len(),
         );
-        assert_eq!(ret, 0);
-        assert_eq!(&decrypted, plaintext);
+        (ret, out)
+    }
+
+    fn last_error() -> String {
+        let mut buf = [0u8; 512];
+        let n = ffi_last_error(buf.as_mut_ptr(), buf.len());
+        String::from_utf8_lossy(&buf[..n.max(0) as usize]).into_owned()
     }
 
     #[test]
-    fn test_hpke_wrong_key() {
-        use hpke::kem::X25519HkdfSha256;
-        use hpke::{Kem as KemTrait, Serializable};
-
-        let mut rng = hpke_envelope::OsRng09;
-        let (_, pk) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let (wrong_sk, _) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let pk_bytes = pk.to_bytes();
-        let wrong_sk_bytes = wrong_sk.to_bytes();
-        let pk_slice: &[u8] = pk_bytes.as_ref();
-        let wrong_sk_slice: &[u8] = wrong_sk_bytes.as_ref();
-
-        let plaintext = b"test";
-        let label = crate::labels::LABEL_NOTE_KEY.as_bytes();
-        let aad = b"aad";
-        let env_len = 32 + plaintext.len() + 16;
-        let mut envelope = vec![0u8; env_len];
-
-        ffi_hpke_seal(
-            pk_slice.as_ptr(),
-            32,
-            plaintext.as_ptr(),
-            plaintext.len(),
-            label.as_ptr(),
-            label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            envelope.as_mut_ptr(),
-            env_len,
-        );
-
-        let mut decrypted = vec![0u8; plaintext.len()];
-        let ret = ffi_hpke_open(
-            wrong_sk_slice.as_ptr(),
-            32,
-            envelope.as_ptr(),
-            env_len,
-            label.as_ptr(),
-            label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            decrypted.as_mut_ptr(),
-            plaintext.len(),
-        );
+    fn test_shape_roundtrip_and_cross_shape_rejection() {
+        use crate::shape::Shape;
+        let (sk, pk) = x25519_pair();
+        let key = [7u8; 32];
+        let (ret, env) = shape_seal(Shape::NoteKey as u8, &pk, b"", &key);
+        assert_eq!(ret, 0);
+        let (ret, out) = shape_open(Shape::NoteKey as u8, &sk, b"", &env);
+        assert_eq!(ret, 0);
+        assert_eq!(out, key);
+        // Another shape (so another label as HPKE info) fails with its code.
+        let (ret, _) = shape_open(Shape::FileKey as u8, &sk, b"", &env);
         assert_eq!(ret, -1);
+        assert!(last_error().starts_with("decryption_failed"));
+        // Wrong key.
+        let (wrong_sk, _) = x25519_pair();
+        assert_eq!(shape_open(Shape::NoteKey as u8, &wrong_sk, b"", &env).0, -1);
     }
 
     #[test]
-    fn test_hpke_rejects_unknown_label() {
-        use hpke::kem::X25519HkdfSha256;
-        use hpke::{Kem as KemTrait, Serializable};
-
-        let mut rng = hpke_envelope::OsRng09;
-        let (_, pk) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let pk_bytes = pk.to_bytes();
-        let pk_slice: &[u8] = pk_bytes.as_ref();
-
-        let plaintext = b"test";
-        let bad_label = b"not-a-registered-label";
-        let aad = b"aad";
-        let env_len = 32 + plaintext.len() + 16;
-        let mut envelope = vec![0u8; env_len];
-
-        let ret = ffi_hpke_seal(
-            pk_slice.as_ptr(),
-            32,
-            plaintext.as_ptr(),
-            plaintext.len(),
-            bad_label.as_ptr(),
-            bad_label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            envelope.as_mut_ptr(),
-            env_len,
+    fn test_shape_binds_its_fields() {
+        use crate::shape::Shape;
+        let (sk, pk) = x25519_pair();
+        let (ret, env) = shape_seal(Shape::AuditUserKey as u8, &pk, br#"["aa"]"#, &[1u8; 32]);
+        assert_eq!(ret, 0);
+        assert_eq!(
+            shape_open(Shape::AuditUserKey as u8, &sk, br#"["aa"]"#, &env).0,
+            0
         );
-        assert_eq!(ret, -5, "ffi_hpke_seal must reject unknown labels");
-    }
-
-    #[test]
-    fn test_hpke_rejects_null_label() {
-        use hpke::kem::X25519HkdfSha256;
-        use hpke::{Kem as KemTrait, Serializable};
-
-        let mut rng = hpke_envelope::OsRng09;
-        let (_, pk) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let pk_bytes = pk.to_bytes();
-        let pk_slice: &[u8] = pk_bytes.as_ref();
-
-        let plaintext = b"test";
-        let aad = b"aad";
-        let env_len = 32 + plaintext.len() + 16;
-        let mut envelope = vec![0u8; env_len];
-
-        let ret = ffi_hpke_seal(
-            pk_slice.as_ptr(),
-            32,
-            plaintext.as_ptr(),
-            plaintext.len(),
-            std::ptr::null(),
-            0,
-            aad.as_ptr(),
-            aad.len(),
-            envelope.as_mut_ptr(),
-            env_len,
+        assert_eq!(
+            shape_open(Shape::AuditUserKey as u8, &sk, br#"["bb"]"#, &env).0,
+            -1
         );
-        assert_eq!(ret, -5, "ffi_hpke_seal must reject null label");
+        // The wrong field count is refused before HPKE runs.
+        assert_eq!(
+            shape_seal(Shape::AuditUserKey as u8, &pk, b"", &[1u8; 32]).0,
+            -5
+        );
     }
 
     #[test]
-    fn test_hpke_label_mismatch_rejected() {
-        use hpke::kem::X25519HkdfSha256;
-        use hpke::{Kem as KemTrait, Serializable};
+    fn test_shape_rejects_unknown_shape_byte() {
+        let (_, pk) = x25519_pair();
+        assert_eq!(shape_seal(200, &pk, b"", &[0u8; 32]).0, -5);
+    }
 
-        let mut rng = hpke_envelope::OsRng09;
-        let (sk, pk) = X25519HkdfSha256::gen_keypair(&mut rng);
-        let sk_bytes = sk.to_bytes();
-        let pk_bytes = pk.to_bytes();
-        let sk_slice: &[u8] = sk_bytes.as_ref();
-        let pk_slice: &[u8] = pk_bytes.as_ref();
-
-        let plaintext = b"test";
-        let seal_label = crate::labels::LABEL_NOTE_KEY.as_bytes();
-        let open_label = crate::labels::LABEL_FILE_KEY.as_bytes();
-        let aad = b"aad";
-        let env_len = 32 + plaintext.len() + 16;
-        let mut envelope = vec![0u8; env_len];
-
-        let ret = ffi_hpke_seal(
-            pk_slice.as_ptr(),
+    #[test]
+    fn test_content_roundtrip() {
+        use crate::shape::Shape;
+        let pt = b"note body";
+        let mut key = [0u8; 32];
+        let mut packed = vec![0u8; pt.len() + 28];
+        let ret = ffi_content_seal(
+            Shape::NoteKey as u8,
+            pt.as_ptr(),
+            pt.len(),
+            key.as_mut_ptr(),
             32,
-            plaintext.as_ptr(),
-            plaintext.len(),
-            seal_label.as_ptr(),
-            seal_label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            envelope.as_mut_ptr(),
-            env_len,
+            packed.as_mut_ptr(),
+            packed.len(),
         );
         assert_eq!(ret, 0);
+        let mut out = vec![0u8; pt.len()];
+        let open = |shape: u8, out: &mut Vec<u8>| {
+            ffi_content_open(
+                shape,
+                key.as_ptr(),
+                32,
+                packed.as_ptr(),
+                packed.len(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        assert_eq!(open(Shape::NoteKey as u8, &mut out), 0);
+        assert_eq!(out, pt);
+        assert_eq!(open(Shape::FileKey as u8, &mut out), -1);
+    }
 
-        // Try to open with a different label — must fail
-        let mut decrypted = vec![0u8; plaintext.len()];
-        let ret = ffi_hpke_open(
-            sk_slice.as_ptr(),
+    #[test]
+    fn test_server_event_seal_and_open() {
+        let secret = [0x5au8; 32];
+        let hub = b"hub-a";
+        let json = br#"{"type":"call:ring"}"#;
+        let mut packed = vec![0u8; 1024];
+        let n = ffi_seal_server_event(
+            secret.as_ptr(),
             32,
-            envelope.as_ptr(),
-            env_len,
-            open_label.as_ptr(),
-            open_label.len(),
-            aad.as_ptr(),
-            aad.len(),
-            decrypted.as_mut_ptr(),
-            plaintext.len(),
+            hub.as_ptr(),
+            hub.len(),
+            1000,
+            7,
+            json.as_ptr(),
+            json.len(),
+            packed.as_mut_ptr(),
+            packed.len(),
         );
-        assert_eq!(ret, -1, "ffi_hpke_open must reject label mismatch");
+        assert_eq!(n, 12 + 512 + 16);
+        let payload = hex::encode(&packed[..n as usize]);
+        let mut key = [0u8; 32];
+        assert_eq!(
+            ffi_server_event_key(
+                secret.as_ptr(),
+                32,
+                hub.as_ptr(),
+                hub.len(),
+                7,
+                key.as_mut_ptr(),
+                32
+            ),
+            0
+        );
+        let mut out = vec![0u8; 64];
+        let open = |hub: &[u8], kind: u32, out: &mut Vec<u8>| {
+            ffi_open_server_event(
+                key.as_ptr(),
+                32,
+                hub.as_ptr(),
+                hub.len(),
+                kind,
+                7,
+                payload.as_ptr(),
+                payload.len(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        let n = open(hub, 1000, &mut out);
+        assert_eq!(&out[..n as usize], json);
+        assert_eq!(open(b"hub-b", 1000, &mut out), -1);
+        assert!(last_error().starts_with("decryption_failed"));
+        assert_eq!(open(hub, 1001, &mut out), -1);
     }
 
     #[test]

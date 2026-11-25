@@ -14,11 +14,12 @@ use llamenos_core::auth::{
 };
 use llamenos_core::encryption::{
     decrypt_draft, decrypt_note, decrypt_with_pin, encrypt_draft, encrypt_export, encrypt_note,
-    encrypt_with_pin, hpke_unwrap_key, hpke_wrap_key, open_record_for_reader,
-    seal_record_for_readers, EncryptedKeyData, EncryptedMessage, EncryptedNote, KeyEnvelope,
-    RecipientKeyEnvelope, RecordReader,
+    encrypt_with_pin, open_record_for_reader, seal_record_for_readers, EncryptedKeyData,
+    EncryptedMessage, EncryptedNote, RecipientKeyEnvelope, RecordReader,
 };
+use llamenos_core::hpke_envelope::HpkeEnvelope as KeyEnvelope;
 use llamenos_core::labels::*;
+use llamenos_core::shape::{open_key_from, seal_to, Shape};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -35,6 +36,34 @@ const TEST_ADMIN_SECRET_KEY: &str =
 /// Third test keypair for adversarial / "wrong key" tests.
 const TEST_WRONG_SECRET_KEY: &str =
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+/// The shape a label's key wrap is sealed as (this file names wraps by label).
+fn shape_of(label: &str) -> Shape {
+    match label {
+        l if l == LABEL_NOTE_KEY => Shape::NoteKey,
+        l if l == LABEL_MESSAGE => Shape::MessageKey,
+        l if l == LABEL_HUB_KEY_WRAP => Shape::HubKey,
+        l if l == LABEL_FILE_KEY => Shape::FileKey,
+        other => panic!("no shape for {other}"),
+    }
+}
+
+fn hpke_wrap_key(
+    key: &[u8; 32],
+    pk: &str,
+    label: &str,
+) -> Result<KeyEnvelope, llamenos_core::CryptoError> {
+    seal_to(pk, shape_of(label), &[], key)
+}
+
+fn hpke_unwrap_key(
+    env: &KeyEnvelope,
+    sk_hex: &str,
+    label: &str,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, llamenos_core::CryptoError> {
+    let sk: [u8; 32] = hex::decode(sk_hex).unwrap().try_into().unwrap();
+    open_key_from(&sk, shape_of(label), &[], env)
+}
 
 /// Test PIN for key encryption vectors.
 const TEST_PIN: &str = "12345678";

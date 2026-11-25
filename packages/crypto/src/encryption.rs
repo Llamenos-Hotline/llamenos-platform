@@ -9,7 +9,6 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use argon2::Argon2;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
@@ -21,87 +20,57 @@ use crate::errors::CryptoError;
 use crate::hpke_envelope::{self, HpkeEnvelope};
 use crate::kdf_params::{ARGON2_M_COST_KIB, ARGON2_P_COST, ARGON2_T_COST};
 use crate::labels::*;
+use crate::shape::{self, Shape};
 
 // ── Envelope types (hex-encoded wire format) ─────────────────────────
 
-/// A symmetric key wrapped via HPKE for a single recipient.
-///
-/// Wire format uses hex-encoded enc/ct (not the base64url HpkeEnvelope format).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
-pub struct KeyEnvelope {
-    /// hex: 32-byte HPKE encapsulated key
-    pub enc: String,
-    /// hex: AEAD ciphertext (encrypted 32-byte symmetric key)
-    pub ct: String,
-}
-
-/// A KeyEnvelope tagged with the recipient's pubkey (for multi-recipient scenarios).
+/// An [`HpkeEnvelope`] tagged with the recipient's address, for multi-reader
+/// records. `enc` and `ct` are lowercase hex (spec D2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "mobile", derive(uniffi::Record))]
 pub struct RecipientKeyEnvelope {
-    /// recipient's X25519 pubkey (hex, 32 bytes / 64 hex chars)
+    /// recipient's address: their X25519 key, or their Ed25519 account key (hex)
     pub pubkey: String,
     /// hex: 32-byte HPKE encapsulated key
     pub enc: String,
-    /// hex: AEAD ciphertext (encrypted 32-byte symmetric key)
+    /// hex: AEAD ciphertext (encrypted 32-byte symmetric key + tag)
     pub ct: String,
 }
 
-// ── Helpers: HPKE key wrap/unwrap → wire format ──────────────────────
-
-/// Wrap a 32-byte symmetric key for a recipient using HPKE.
-/// Returns a wire-format `KeyEnvelope` (hex-encoded enc/ct).
-pub fn hpke_wrap_key(
-    key: &[u8; 32],
-    recipient_pubkey_hex: &str,
-    label: &str,
-) -> Result<KeyEnvelope, CryptoError> {
-    let aad = crate::envelope_aad::key_wrap_aad(label);
-    let envelope = hpke_envelope::hpke_seal_key(key, recipient_pubkey_hex, label, &aad)?;
-    // Convert from base64url → hex wire format
-    let enc_bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.enc)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url enc: {e}")))?;
-    let ct_bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.ct)
-        .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url ct: {e}")))?;
-    Ok(KeyEnvelope {
-        enc: hex::encode(enc_bytes),
-        ct: hex::encode(ct_bytes),
-    })
-}
-
-/// Unwrap a 32-byte symmetric key from a wire-format `KeyEnvelope` using HPKE.
-/// Returns the key wrapped in `Zeroizing` so it is erased from memory on drop.
-pub fn hpke_unwrap_key(
-    envelope: &KeyEnvelope,
-    secret_key_hex: &str,
-    label: &str,
-) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    let aad = crate::envelope_aad::key_wrap_aad(label);
-    let enc_bytes = hex::decode(&envelope.enc).map_err(CryptoError::HexError)?;
-    let ct_bytes = hex::decode(&envelope.ct).map_err(CryptoError::HexError)?;
-    let label_id = crate::labels::label_to_id(label)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))?;
-    let hpke_env = HpkeEnvelope {
-        v: 3,
-        label_id,
-        enc: URL_SAFE_NO_PAD.encode(&enc_bytes),
-        ct: URL_SAFE_NO_PAD.encode(&ct_bytes),
-    };
-    hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, &aad)
+impl RecipientKeyEnvelope {
+    /// The envelope without its address.
+    pub fn envelope(&self) -> HpkeEnvelope {
+        HpkeEnvelope {
+            enc: self.enc.clone(),
+            ct: self.ct.clone(),
+        }
+    }
 }
 
 // ── Helpers: AES-256-GCM symmetric encryption ───────────────────────
 
 /// Encrypt plaintext with AES-256-GCM. Returns nonce(12) || ciphertext || tag(16).
-fn aes256gcm_encrypt(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub(crate) fn aes256gcm_encrypt(
+    key: &[u8; 32],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
+    aes256gcm_encrypt_with_nonce(key, &nonce_bytes, plaintext, aad)
+}
+
+/// [`aes256gcm_encrypt`] under a caller-chosen nonce — for seeded test vectors
+/// only; every production caller takes a fresh random nonce.
+pub(crate) fn aes256gcm_encrypt_with_nonce(
+    key: &[u8; 32],
+    nonce_bytes: &[u8; 12],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::from_slice(nonce_bytes);
     let ciphertext = cipher
         .encrypt(
             nonce,
@@ -112,13 +81,17 @@ fn aes256gcm_encrypt(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec
         )
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
     let mut packed = Vec::with_capacity(12 + ciphertext.len());
-    packed.extend_from_slice(&nonce_bytes);
+    packed.extend_from_slice(nonce_bytes);
     packed.extend_from_slice(&ciphertext);
     Ok(packed)
 }
 
 /// Decrypt AES-256-GCM. Input: nonce(12) || ciphertext || tag(16).
-fn aes256gcm_decrypt(key: &[u8; 32], packed: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+pub(crate) fn aes256gcm_decrypt(
+    key: &[u8; 32],
+    packed: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
     if packed.len() < 28 {
         // 12 nonce + 16 tag minimum
         return Err(CryptoError::InvalidCiphertext);
@@ -154,7 +127,7 @@ pub struct EncryptedNote {
     /// hex: nonce(12) + ciphertext
     pub encrypted_content: String,
     /// Note key wrapped for the author
-    pub author_envelope: KeyEnvelope,
+    pub author_envelope: HpkeEnvelope,
     /// Note key wrapped for each admin
     pub admin_envelopes: Vec<RecipientKeyEnvelope>,
 }
@@ -165,32 +138,24 @@ pub fn encrypt_note(
     author_pubkey: &str,
     admin_pubkeys: &[String],
 ) -> Result<EncryptedNote, CryptoError> {
-    let note_key = Zeroizing::new(random_bytes_32());
-
-    let packed = aes256gcm_encrypt(
-        &note_key,
-        payload_json.as_bytes(),
-        LABEL_NOTE_KEY.as_bytes(),
-    )?;
-
-    let author_envelope = hpke_wrap_key(&note_key, author_pubkey, LABEL_NOTE_KEY)?;
-
-    let admin_envelopes: Result<Vec<RecipientKeyEnvelope>, CryptoError> = admin_pubkeys
+    let sealed = shape::content_seal(Shape::NoteKey, payload_json.as_bytes())?;
+    let author_envelope = shape::seal_to(author_pubkey, Shape::NoteKey, &[], &*sealed.key)?;
+    let admin_envelopes = admin_pubkeys
         .iter()
         .map(|pk| {
-            let env = hpke_wrap_key(&note_key, pk, LABEL_NOTE_KEY)?;
+            let env = shape::seal_to(pk, Shape::NoteKey, &[], &*sealed.key)?;
             Ok(RecipientKeyEnvelope {
                 pubkey: pk.clone(),
                 enc: env.enc,
                 ct: env.ct,
             })
         })
-        .collect();
+        .collect::<Result<Vec<_>, CryptoError>>()?;
 
     Ok(EncryptedNote {
-        encrypted_content: hex::encode(&packed),
+        encrypted_content: hex::encode(&sealed.packed),
         author_envelope,
-        admin_envelopes: admin_envelopes?,
+        admin_envelopes,
     })
 }
 
@@ -198,16 +163,13 @@ pub fn encrypt_note(
 #[cfg_attr(feature = "mobile", uniffi::export)]
 pub fn decrypt_note(
     encrypted_content: &str,
-    envelope: &KeyEnvelope,
+    envelope: &HpkeEnvelope,
     secret_key_hex: &str,
 ) -> Result<String, CryptoError> {
-    let note_key = hpke_unwrap_key(envelope, secret_key_hex, LABEL_NOTE_KEY)?;
-    let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
-    let plaintext = Zeroizing::new(aes256gcm_decrypt(
-        &note_key,
-        &data,
-        LABEL_NOTE_KEY.as_bytes(),
-    )?);
+    let secret = secret_from_hex(secret_key_hex)?;
+    let note_key = shape::open_key_from(&secret, Shape::NoteKey, &[], envelope)?;
+    let data = hpke_envelope::decode_hex_min("encryptedContent", encrypted_content, 28)?;
+    let plaintext = shape::content_open(Shape::NoteKey, &data, &note_key)?;
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -237,10 +199,9 @@ pub struct EncryptedMessage {
 //     pubkey = the reader's address — their account (Ed25519) key or their X25519
 //              key. A lookup tag only: the wrap is always sealed to an X25519 key.
 //
-// `enc` and `ct` are hex as sealed here and by the server. Clients also write
-// base64url (desktop `ct`, iOS/Android both, #1022), so the reader takes either;
-// the two encodings of a fixed-length field have different lengths, so this is
-// decoding, not trial decryption.
+// `enc` and `ct` are lowercase hex, exactly 32 and 48 bytes. Anything else —
+// base64url, uppercase, a wrong length — is `InvalidFormat` at the boundary,
+// never decoded leniently (spec D2, #1649).
 //
 // There is no AAD because the envelope carries no format marker, and the same
 // conversation holds client-sealed and server-sealed messages side by side: a
@@ -301,30 +262,6 @@ pub(crate) fn normalise_x25519_readers(
     Ok(readers)
 }
 
-/// Decode a fixed-length wire field written as hex or as unpadded base64url.
-fn decode_wire_bytes<const N: usize>(field: &str, value: &str) -> Result<[u8; N], CryptoError> {
-    let bytes = if value.len() == 2 * N {
-        hex::decode(value).map_err(CryptoError::HexError)?
-    } else if value.len() == (4 * N).div_ceil(3) {
-        URL_SAFE_NO_PAD
-            .decode(value)
-            .map_err(|e| CryptoError::InvalidFormat(format!("invalid base64url {field}: {e}")))?
-    } else {
-        return Err(CryptoError::InvalidFormat(format!(
-            "{field} must be {N} bytes as hex or base64url, got {} chars",
-            value.len()
-        )));
-    };
-    let mut out = [0u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-/// HPKE encapsulated key (X25519): 32 bytes.
-const WIRE_ENC_LEN: usize = 32;
-/// HPKE-sealed 32-byte content key: key + 16-byte AES-GCM tag.
-const WIRE_KEY_CT_LEN: usize = 48;
-
 /// Seal `plaintext` for several readers in the stored-record format.
 pub fn seal_record_for_readers(
     plaintext: &[u8],
@@ -361,12 +298,10 @@ pub(crate) fn seal_multi_reader(
                 label,
                 wrap_aad,
             )?;
-            let enc: [u8; WIRE_ENC_LEN] = decode_wire_bytes("enc", &sealed.enc)?;
-            let ct: [u8; WIRE_KEY_CT_LEN] = decode_wire_bytes("ct", &sealed.ct)?;
             Ok(RecipientKeyEnvelope {
                 pubkey: reader.address.clone(),
-                enc: hex::encode(enc),
-                ct: hex::encode(ct),
+                enc: sealed.enc,
+                ct: sealed.ct,
             })
         })
         .collect::<Result<Vec<_>, CryptoError>>()?;
@@ -421,17 +356,10 @@ pub(crate) fn open_multi_reader(
     }
     let envelope = found.ok_or(CryptoError::DecryptionFailed)?;
 
-    let label_id = crate::labels::label_to_id(label)
-        .ok_or_else(|| CryptoError::InvalidInput(format!("unknown crypto label: {label}")))?;
-    let hpke_env = HpkeEnvelope {
-        v: 3,
-        label_id,
-        enc: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_ENC_LEN>("enc", &envelope.enc)?),
-        ct: URL_SAFE_NO_PAD.encode(decode_wire_bytes::<WIRE_KEY_CT_LEN>("ct", &envelope.ct)?),
-    };
-    let content_key = hpke_envelope::hpke_open_key(&hpke_env, secret_key_hex, label, wrap_aad)?;
+    let content_key =
+        hpke_envelope::hpke_open_key(&envelope.envelope(), secret_key_hex, label, wrap_aad)?;
 
-    let data = hex::decode(encrypted_content).map_err(CryptoError::HexError)?;
+    let data = hpke_envelope::decode_hex_min("encryptedContent", encrypted_content, 28)?;
     Ok(Zeroizing::new(aes256gcm_decrypt(
         &content_key,
         &data,
@@ -578,39 +506,6 @@ pub fn decrypt_hub_field(
     require_registered_label(label)?;
     let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
     let plaintext = Zeroizing::new(aes256gcm_decrypt(hub_key, &data, label.as_bytes())?);
-    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
-}
-
-/// Decrypt a hub-key-encrypted relay event: `hex(nonce_12 ‖ ciphertext ‖ tag_16)`
-/// under the hub key, AAD = `LABEL_HUB_EVENT`. Returns the event's JSON.
-///
-/// Stateless counterpart of the mobile `mobile_decrypt_hub_event`, so desktop
-/// (which keeps the hub key in its own process state) does not carry a second
-/// AES-GCM implementation of the same wire format.
-pub fn decrypt_hub_event(packed_hex: &str, hub_key: &[u8; 32]) -> Result<String, CryptoError> {
-    let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
-    let plaintext = Zeroizing::new(aes256gcm_decrypt(
-        hub_key,
-        &data,
-        LABEL_HUB_EVENT.as_bytes(),
-    )?);
-    String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
-}
-
-/// Decrypt a server-published relay event sealed under the epoch-keyed server
-/// event key: `hex(nonce_12 ‖ ciphertext ‖ tag_16)`, AAD =
-/// `"{LABEL_HUB_EVENT_EPOCH}:{epoch}"`. The server pads every event to a
-/// power-of-2 bucket before sealing (see [`crate::padding`]); the padding is
-/// stripped before the JSON is returned.
-pub fn decrypt_server_event(
-    packed_hex: &str,
-    key: &[u8; 32],
-    epoch: u64,
-) -> Result<String, CryptoError> {
-    let data = hex::decode(packed_hex).map_err(CryptoError::HexError)?;
-    let aad = format!("{LABEL_HUB_EVENT_EPOCH}:{epoch}");
-    let padded = Zeroizing::new(aes256gcm_decrypt(key, &data, aad.as_bytes())?);
-    let plaintext = Zeroizing::new(crate::padding::unpad(&padded)?);
     String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::DecryptionFailed)
 }
 
@@ -822,7 +717,7 @@ mod tests {
 
         // Admin1 can decrypt
         let admin1_env = &encrypted.admin_envelopes[0];
-        let admin1_envelope = KeyEnvelope {
+        let admin1_envelope = HpkeEnvelope {
             enc: admin1_env.enc.clone(),
             ct: admin1_env.ct.clone(),
         };
@@ -905,62 +800,6 @@ mod tests {
                 "decrypt opened a field bound to unregistered label {label:?}"
             );
         }
-    }
-
-    #[test]
-    fn hub_event_opens_only_under_the_hub_event_label_and_key() {
-        let packed = aes256gcm_encrypt(
-            &HUB_FIELD_KEY,
-            br#"{"type":"call:ring"}"#,
-            LABEL_HUB_EVENT.as_bytes(),
-        )
-        .unwrap();
-        let hex_packed = hex::encode(&packed);
-        assert_eq!(
-            decrypt_hub_event(&hex_packed, &HUB_FIELD_KEY).unwrap(),
-            r#"{"type":"call:ring"}"#
-        );
-        assert!(
-            decrypt_hub_event(&hex_packed, &random_bytes_32()).is_err(),
-            "wrong key"
-        );
-
-        // A hub FIELD sealed under another label is not a hub event.
-        let field = aes256gcm_encrypt(&HUB_FIELD_KEY, b"x", LABEL_TAG_ENCRYPT.as_bytes()).unwrap();
-        assert!(decrypt_hub_event(&hex::encode(&field), &HUB_FIELD_KEY).is_err());
-        assert!(decrypt_hub_event("zz", &HUB_FIELD_KEY).is_err(), "not hex");
-        assert!(
-            decrypt_hub_event(&"07".repeat(27), &HUB_FIELD_KEY).is_err(),
-            "too short"
-        );
-    }
-
-    #[test]
-    fn server_event_is_bound_to_its_epoch_and_unpadded() {
-        let json = r#"{"type":"presence"}"#;
-        let padded = crate::padding::pad_to_bucket(json.as_bytes());
-        let aad = format!("{LABEL_HUB_EVENT_EPOCH}:7");
-        let packed =
-            hex::encode(aes256gcm_encrypt(&HUB_FIELD_KEY, &padded, aad.as_bytes()).unwrap());
-
-        assert_eq!(
-            decrypt_server_event(&packed, &HUB_FIELD_KEY, 7).unwrap(),
-            json
-        );
-        assert!(
-            decrypt_server_event(&packed, &HUB_FIELD_KEY, 8).is_err(),
-            "other epoch"
-        );
-        assert!(
-            decrypt_server_event(&packed, &random_bytes_32(), 7).is_err(),
-            "other key"
-        );
-
-        // The hub-event label is a different domain from the epoch-keyed one.
-        let as_hub_event = hex::encode(
-            aes256gcm_encrypt(&HUB_FIELD_KEY, &padded, LABEL_HUB_EVENT.as_bytes()).unwrap(),
-        );
-        assert!(decrypt_server_event(&as_hub_event, &HUB_FIELD_KEY, 7).is_err());
     }
 
     #[test]
@@ -1115,7 +954,7 @@ mod tests {
         let payload = r#"{"text":"Secret note"}"#;
         let encrypted = encrypt_note(payload, &author_pk, std::slice::from_ref(&admin_pk)).unwrap();
 
-        let admin_envelope = KeyEnvelope {
+        let admin_envelope = HpkeEnvelope {
             enc: encrypted.admin_envelopes[0].enc.clone(),
             ct: encrypted.admin_envelopes[0].ct.clone(),
         };
@@ -1258,7 +1097,7 @@ mod tests {
 
         for (i, admin_sk) in admin_sks.iter().enumerate() {
             let env = &encrypted.admin_envelopes[i];
-            let envelope = KeyEnvelope {
+            let envelope = HpkeEnvelope {
                 enc: env.enc.clone(),
                 ct: env.ct.clone(),
             };
@@ -1294,6 +1133,7 @@ mod tests {
     }
 
     fn b64(hex_str: &str) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         URL_SAFE_NO_PAD.encode(hex::decode(hex_str).unwrap())
     }
 
@@ -1330,8 +1170,11 @@ mod tests {
         ));
     }
 
+    /// D2: lowercase hex is the one encoding. base64url and uppercase — which
+    /// desktop, iOS and Android once wrote (#1022) — are refused at the boundary
+    /// as `invalid_format`, never decoded leniently.
     #[test]
-    fn stored_record_opens_every_encoding_clients_write() {
+    fn stored_record_opens_hex_and_refuses_every_other_encoding() {
         let (sk, pk) = gen_keypair();
         let sealed = seal_record_for_readers(
             b"{\"callerNumber\":\"+15555550100\"}",
@@ -1340,24 +1183,32 @@ mod tests {
         )
         .unwrap();
         let env = &sealed.reader_envelopes[0];
-        // hex/hex (server), hex enc + base64url ct (desktop, demo seeder), base64url both (iOS, Android)
+        let with = |enc: String, ct: String| EncryptedMessage {
+            encrypted_content: sealed.encrypted_content.clone(),
+            reader_envelopes: vec![RecipientKeyEnvelope {
+                pubkey: pk.clone(),
+                enc,
+                ct,
+            }],
+        };
+        assert_eq!(
+            open_utf8(
+                &with(env.enc.clone(), env.ct.clone()),
+                &pk,
+                &sk,
+                LABEL_CALL_META
+            )
+            .unwrap(),
+            "{\"callerNumber\":\"+15555550100\"}"
+        );
         for (enc, ct) in [
-            (env.enc.clone(), env.ct.clone()),
             (env.enc.clone(), b64(&env.ct)),
             (b64(&env.enc), b64(&env.ct)),
+            (env.enc.to_uppercase(), env.ct.clone()),
+            (env.enc.clone(), env.ct.to_uppercase()),
         ] {
-            let record = EncryptedMessage {
-                encrypted_content: sealed.encrypted_content.clone(),
-                reader_envelopes: vec![RecipientKeyEnvelope {
-                    pubkey: pk.clone(),
-                    enc,
-                    ct,
-                }],
-            };
-            assert_eq!(
-                open_utf8(&record, &pk, &sk, LABEL_CALL_META).unwrap(),
-                "{\"callerNumber\":\"+15555550100\"}"
-            );
+            let err = open_utf8(&with(enc, ct), &pk, &sk, LABEL_CALL_META).unwrap_err();
+            assert_eq!(err.code(), "invalid_format");
         }
     }
 
@@ -1384,14 +1235,12 @@ mod tests {
         let key = Zeroizing::new(random_bytes_32());
         let packed = aes256gcm_encrypt(&key, b"inbound sms", content_aad).unwrap();
         let sealed = hpke_envelope::hpke_seal_key(&key, pk, LABEL_MESSAGE, wrap_aad).unwrap();
-        let enc: [u8; WIRE_ENC_LEN] = decode_wire_bytes("enc", &sealed.enc).unwrap();
-        let ct: [u8; WIRE_KEY_CT_LEN] = decode_wire_bytes("ct", &sealed.ct).unwrap();
         EncryptedMessage {
             encrypted_content: hex::encode(packed),
             reader_envelopes: vec![RecipientKeyEnvelope {
                 pubkey: pk.to_string(),
-                enc: hex::encode(enc),
-                ct: hex::encode(ct),
+                enc: sealed.enc,
+                ct: sealed.ct,
             }],
         }
     }
