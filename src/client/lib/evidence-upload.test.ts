@@ -8,7 +8,15 @@ vi.mock('./platform', () => ({
     const body = Array.from(new TextEncoder().encode(plaintextHexOrJson), (b) => b.toString(16).padStart(2, '0')).join('')
     return '11'.repeat(12) + body + '22'.repeat(16)
   }),
-  aesGcmDecrypt: vi.fn(),
+  aesGcmSealBytes: vi.fn(async (plaintext: Uint8Array) => {
+    const out = new Uint8Array(12 + plaintext.length + 16)
+    out.fill(0x11, 0, 12)
+    out.set(plaintext, 12)
+    out.fill(0x22, 12 + plaintext.length)
+    return out
+  }),
+  aesGcmOpenBytes: vi.fn(),
+  resolveEncryptionPubkey: vi.fn(async (pubkey: string) => pubkey),
   unwrapFileKey: vi.fn(),
   decryptFileMetadata: vi.fn(),
   rewrapFileKey: vi.fn(),

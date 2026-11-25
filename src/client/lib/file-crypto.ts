@@ -8,29 +8,38 @@
 import type { EncryptedFileMetadata, FileKeyEnvelope } from '@shared/types'
 import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
 import { contentAadHex } from '@shared/envelope-aad'
+import { bytesToHex } from '@shared/encoding'
 import {
   unwrapFileKey as platformUnwrapFileKey,
   decryptFileMetadata as platformDecryptFileMetadata,
   rewrapFileKey as platformRewrapFileKey,
   hpkeWrapKey,
+  resolveEncryptionPubkey,
   aesGcmEncrypt,
-  aesGcmDecrypt,
+  aesGcmSealBytes,
+  aesGcmOpenBytes,
+  type DeviceKeyState,
 } from './platform'
 
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = ''
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, '0')
-  }
-  return hex
-}
+/** The two public keys an envelope can be addressed to for one device. */
+export type FileReaderDevice = Pick<DeviceKeyState, 'signingPubkeyHex' | 'encryptionPubkeyHex'>
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16)
-  }
-  return bytes
+/**
+ * The entry of a file's envelope or metadata list addressed to THIS device —
+ * its Ed25519 account key (how the uploader names itself) or its X25519 key
+ * (how an admin of the hub is named) — and `null` when none is.
+ *
+ * There is deliberately no fallback to the first entry. An entry for someone
+ * else's key cannot be opened by this device, and handing it to the opener
+ * turns "you are not a reader of this file" into a misleading decrypt failure
+ * (or, for a server that returns every admin's entry, into a wrong-key open
+ * attempt). Refusing is the correct answer; the caller says "no access".
+ */
+export function pickAddressedTo<T extends { pubkey: string }>(
+  entries: readonly T[],
+  device: FileReaderDevice,
+): T | null {
+  return entries.find(e => e.pubkey === device.encryptionPubkeyHex || e.pubkey === device.signingPubkeyHex) ?? null
 }
 
 function randomBytes(n: number): Uint8Array {
@@ -40,27 +49,16 @@ function randomBytes(n: number): Uint8Array {
 }
 
 /**
- * Unwrap a symmetric file key using CryptoState (private key stays in Rust).
- * Returns the file key as hex string.
- */
-export async function unwrapFileKey(
-  encHex: string,
-  ctHex: string,
-): Promise<string> {
-  return platformUnwrapFileKey({ enc: encHex, ct: ctHex })
-}
-
-/**
- * Decrypt file metadata using CryptoState.
+ * Decrypt a file's metadata entry addressed to this device. `null` when the
+ * entry will not open — a metadata blob is never the reason a file is refused.
  */
 export async function decryptFileMetadata(
-  encryptedContentHex: string,
-  encHex: string,
+  entry: { encryptedContent: string; enc: string; ct: string },
 ): Promise<EncryptedFileMetadata | null> {
   try {
-    const json = await platformDecryptFileMetadata(encryptedContentHex, encHex)
-    return json ? JSON.parse(json) : null
-  } catch {
+    return JSON.parse(await platformDecryptFileMetadata(entry)) as EncryptedFileMetadata
+  } catch (err) {
+    console.error('[crypto] file metadata addressed to this device failed to open —', err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -77,14 +75,34 @@ export interface EncryptedFileUpload {
 }
 
 /**
+ * One entry per READER. An uploader who is also an admin of the hub is named
+ * twice — by their account key and by their encryption key — and sealing to
+ * both writes two envelopes for one reader, so the stored set stops describing
+ * who can open the file. Entries are compared by the encryption key they
+ * resolve to; the first spelling is kept.
+ */
+async function distinctRecipients(pubkeys: readonly string[]): Promise<string[]> {
+  const seen = new Set<string>()
+  const distinct: string[] = []
+  for (const pubkey of pubkeys) {
+    const resolved = await resolveEncryptionPubkey(pubkey)
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    distinct.push(pubkey)
+  }
+  return distinct
+}
+
+/**
  * Encrypt a file for multiple recipients.
  * Uses a single random symmetric key to encrypt the file content once (AES-256-GCM),
  * then wraps that key for each recipient using HPKE via Rust.
  */
 export async function encryptFile(
   file: File,
-  recipientPubkeys: string[],
+  allRecipientPubkeys: string[],
 ): Promise<EncryptedFileUpload> {
+  const recipientPubkeys = await distinctRecipients(allRecipientPubkeys)
   const plaintextBytes = new Uint8Array(await file.arrayBuffer())
 
   // Compute checksum
@@ -105,12 +123,11 @@ export async function encryptFile(
   // LABEL_FILE_KEY — the same derivation every other implementation binds, so
   // the file opens on any client. `hpkeWrapKey` seals the key under the
   // matching key-wrap AAD.
-  const encryptedContentHex = await aesGcmEncrypt(
-    bytesToHex(plaintextBytes),
-    fileKeyHex,
-    contentAadHex(LABEL_FILE_KEY),
-  )
-  const encryptedContent = hexToBytes(encryptedContentHex)
+  //
+  // The RAW file bytes are sealed — not their hex text. Every client seals and
+  // opens raw bytes through the crate (`mobile_symmetric_encrypt` hex-decodes
+  // its input first), so the ciphertext is n+28 bytes and opens everywhere.
+  const encryptedContent = await aesGcmSealBytes(plaintextBytes, fileKeyHex, contentAadHex(LABEL_FILE_KEY))
 
   // Wrap the file key for each recipient using HPKE via Rust
   const recipientEnvelopes: FileKeyEnvelope[] = await Promise.all(
@@ -139,47 +156,36 @@ export async function encryptFile(
 }
 
 /**
- * Decrypt a file given the encrypted content and key envelope.
- * HPKE unwrap goes through CryptoState (Rust); symmetric decryption also via IPC.
+ * Decrypt a file given the encrypted content and the key envelope addressed to
+ * this device. The content key is opened through CryptoState (Rust holds the
+ * device key); the content layer is AES-256-GCM over the raw file bytes.
  */
 export async function decryptFile(
   encryptedContent: ArrayBuffer,
   envelope: FileKeyEnvelope,
 ): Promise<{ blob: Blob; checksum: string }> {
-  const fileKeyHex = await unwrapFileKey(envelope.enc, envelope.ct)
+  const fileKeyHex = await platformUnwrapFileKey(envelope)
 
-  const data = new Uint8Array(encryptedContent)
-  const encryptedHex = bytesToHex(data)
-  const plaintextHex = await aesGcmDecrypt(encryptedHex, fileKeyHex, contentAadHex(LABEL_FILE_KEY))
-  const plaintext = hexToBytes(plaintextHex)
+  const plaintext = await aesGcmOpenBytes(new Uint8Array(encryptedContent), fileKeyHex, contentAadHex(LABEL_FILE_KEY))
 
   // Compute checksum for verification
-  const hashBuffer = await crypto.subtle.digest('SHA-256', plaintext.buffer as ArrayBuffer)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', plaintext as Uint8Array<ArrayBuffer>)
   const checksum = bytesToHex(new Uint8Array(hashBuffer))
 
   return {
-    blob: new Blob([plaintext.buffer as ArrayBuffer]),
+    blob: new Blob([plaintext as Uint8Array<ArrayBuffer>]),
     checksum,
   }
 }
 
 /**
- * Re-wrap a file's symmetric key for a new recipient via CryptoState.
- * Admin's private key stays in Rust — decrypts and re-encrypts in one IPC call.
+ * Re-wrap a file's symmetric key for a new recipient: open it with this
+ * device's key and seal it to the recipient's.
  */
 export async function rewrapFileKey(
-  encHex: string,
-  ctHex: string,
+  envelope: FileKeyEnvelope,
   newRecipientPubkeyHex: string,
 ): Promise<FileKeyEnvelope> {
-  const envelope = await platformRewrapFileKey(
-    encHex,
-    ctHex,
-    newRecipientPubkeyHex,
-  )
-  return {
-    pubkey: newRecipientPubkeyHex,
-    enc: envelope.enc,
-    ct: envelope.ct,
-  }
+  const rewrapped = await platformRewrapFileKey(envelope, newRecipientPubkeyHex)
+  return { pubkey: newRecipientPubkeyHex, enc: rewrapped.enc, ct: rewrapped.ct }
 }

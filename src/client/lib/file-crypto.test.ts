@@ -1,124 +1,137 @@
-import { describe, it, expect } from 'vitest'
+/**
+ * #3003 — a file's content layer is the RAW BYTES of the file, on every client.
+ *
+ * The desktop used to seal the hex TEXT of the file (`TextEncoder` over
+ * `bytesToHex(file)`): 2n+28 bytes of ciphertext that opened to ASCII on every
+ * client that reads the file as bytes, and a real size ceiling of half the
+ * upload limit. The vectors below were sealed by the desktop's production
+ * primitive and by the crate; `packages/crypto/src/ffi_v3.rs` opens the same
+ * bytes through the function iOS and Android call.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { gcm } from '@noble/ciphers/aes.js'
+import { bytesToHex, hexToBytes } from '@shared/encoding'
+import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
+import { contentAadHex } from '@shared/envelope-aad'
 
-function bytesToHex(bytes: Uint8Array): string {
-  let hex = ''
-  for (let i = 0; i < bytes.length; i++) {
-    hex += bytes[i].toString(16).padStart(2, '0')
+const wraps = vi.hoisted(() => ({
+  keys: [] as Array<{ keyHex: string; pubkey: string; label: string }>,
+}))
+
+vi.mock('./platform', async importOriginal => {
+  const actual = await importOriginal<typeof import('./platform')>()
+  return {
+    ...actual,
+    // No Tauri here: the HPKE half is stubbed, the AES-GCM half is the real one.
+    resolveEncryptionPubkey: vi.fn(async (pubkey: string) => (pubkey.startsWith('sig-') ? `enc-${pubkey.slice(4)}` : pubkey)),
+    hpkeWrapKey: vi.fn(async (keyHex: string, pubkey: string, label: string) => {
+      wraps.keys.push({ keyHex, pubkey, label })
+      return { enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) }
+    }),
+    unwrapFileKey: vi.fn(async () => wraps.keys.find(k => k.label === LABEL_FILE_KEY)!.keyHex),
   }
-  return hex
+})
+
+import { aesGcmOpenBytes, aesGcmSealBytes } from './platform'
+import { decryptFile, encryptFile, pickAddressedTo } from './file-crypto'
+
+interface FileContentVectors {
+  label: string
+  keyHex: string
+  aadHex: string
+  plaintextHex: string
+  desktopCiphertextHex: string
+  crateCiphertextHex: string
 }
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16)
-  }
-  return bytes
-}
+const vectors: FileContentVectors = JSON.parse(
+  readFileSync(resolve(__dirname, '../../../packages/crypto/tests/fixtures/file-content-vectors.json'), 'utf8'),
+)
 
-describe('bytesToHex', () => {
-  it('correctly pads single-digit hex values', () => {
-    const input = new Uint8Array([0, 1, 15, 16, 255])
-    const result = bytesToHex(input)
-    expect(result).toBe('00010f10ff')
-    expect(result.length).toBe(10)
+beforeEach(() => {
+  wraps.keys.length = 0
+})
+
+describe('the file-content vectors', () => {
+  it('state the canonical file-label AAD', () => {
+    expect(vectors.label).toBe(LABEL_FILE_KEY)
+    expect(vectors.aadHex).toBe(contentAadHex(LABEL_FILE_KEY))
   })
 
-  it('handles all byte values 0-255', () => {
-    const allBytes = new Uint8Array(256)
-    for (let i = 0; i < 256; i++) allBytes[i] = i
-    const hex = bytesToHex(allBytes)
-    expect(hex.length).toBe(512)
+  it.each(['desktopCiphertextHex', 'crateCiphertextHex'] as const)(
+    'the desktop reader opens the %s to the file bytes',
+    async which => {
+      const opened = await aesGcmOpenBytes(hexToBytes(vectors[which]), vectors.keyHex, vectors.aadHex)
+      expect(bytesToHex(opened)).toBe(vectors.plaintextHex)
+      // n + nonce(12) + tag(16): the bytes, not an encoding of them.
+      expect(vectors[which].length / 2).toBe(vectors.plaintextHex.length / 2 + 28)
+    },
+  )
 
-    const recovered = hexToBytes(hex)
-    for (let i = 0; i < 256; i++) {
-      expect(recovered[i]).toBe(allBytes[i])
-    }
-  })
-
-  it('handles empty array', () => {
-    expect(bytesToHex(new Uint8Array(0))).toBe('')
-  })
-
-  it('handles single byte', () => {
-    expect(bytesToHex(new Uint8Array([0]))).toBe('00')
-    expect(bytesToHex(new Uint8Array([255]))).toBe('ff')
-  })
-
-  it('produces lowercase hex', () => {
-    const result = bytesToHex(new Uint8Array([255, 254, 253]))
-    expect(result).toBe('fffefd')
-    expect(result).not.toMatch(/[A-F]/)
+  it('are bound to the file label: the metadata label’s AAD does not open them', async () => {
+    await expect(
+      aesGcmOpenBytes(hexToBytes(vectors.desktopCiphertextHex), vectors.keyHex, contentAadHex(LABEL_FILE_METADATA)),
+    ).rejects.toThrow()
   })
 })
 
-describe('hexToBytes', () => {
-  it('roundtrips all byte values', () => {
-    const allBytes = new Uint8Array(256)
-    for (let i = 0; i < 256; i++) allBytes[i] = i
-    const hex = bytesToHex(allBytes)
-    const recovered = hexToBytes(hex)
-    expect(recovered).toEqual(allBytes)
+describe('aesGcmSealBytes', () => {
+  it('seals the bytes of the file: an independent AES-GCM reader gets the bytes back, n+28 long', async () => {
+    const file = Uint8Array.from({ length: 1000 }, (_, i) => (i * 7) % 256)
+    const sealed = await aesGcmSealBytes(file, vectors.keyHex, vectors.aadHex)
+    expect(sealed.length).toBe(file.length + 28)
+
+    // What the crate does with the same layout: nonce(12) | ct | tag(16).
+    const opened = gcm(hexToBytes(vectors.keyHex), sealed.slice(0, 12), hexToBytes(vectors.aadHex)).decrypt(sealed.slice(12))
+    expect(bytesToHex(opened)).toBe(bytesToHex(file))
   })
 
-  it('handles empty string', () => {
-    const result = hexToBytes('')
-    expect(result.length).toBe(0)
-  })
-
-  it('handles odd-length hex by truncating last char', () => {
-    const result = hexToBytes('abc')
-    expect(result.length).toBe(1)
-    expect(result[0]).toBe(0xab)
-  })
-
-  it('returns empty array for single char hex', () => {
-    const result = hexToBytes('a')
-    expect(result.length).toBe(0)
-  })
-
-  it('silently returns zero for invalid hex chars', () => {
-    const result = hexToBytes('gg')
-    expect(result.length).toBe(1)
-    expect(result[0]).toBe(0)
-  })
-
-  it('handles mixed valid/invalid hex', () => {
-    const result = hexToBytes('ffgg')
-    expect(result.length).toBe(2)
-    expect(result[0]).toBe(0xff)
-    expect(result[1]).toBe(0)
+  it('opens what an independent AES-GCM writer sealed, byte for byte', async () => {
+    const file = Uint8Array.from({ length: 300 }, (_, i) => 255 - (i % 256))
+    const nonce = Uint8Array.from({ length: 12 }, (_, i) => i + 1)
+    const ct = gcm(hexToBytes(vectors.keyHex), nonce, hexToBytes(vectors.aadHex)).encrypt(file)
+    const packed = new Uint8Array(12 + ct.length)
+    packed.set(nonce)
+    packed.set(ct, 12)
+    expect(bytesToHex(await aesGcmOpenBytes(packed, vectors.keyHex, vectors.aadHex))).toBe(bytesToHex(file))
   })
 })
 
-describe('hex/bytes roundtrip edge cases', () => {
-  it('preserves leading zero bytes', () => {
-    const original = new Uint8Array([0, 0, 0, 1, 2, 3])
-    const hex = bytesToHex(original)
-    const recovered = hexToBytes(hex)
-    expect(recovered).toEqual(original)
-    expect(hex.startsWith('000000')).toBe(true)
+describe('encryptFile / decryptFile', () => {
+  it('a file of n bytes is n+28 bytes of ciphertext and round-trips', async () => {
+    const bytes = Uint8Array.from({ length: 1024 * 1024 }, (_, i) => (i * 31 + (i >> 8)) % 256)
+    const file = new File([bytes], 'scan.bin', { type: 'application/octet-stream' })
+
+    const encrypted = await encryptFile(file, ['reader-1'])
+    expect(encrypted.encryptedContent.length).toBe(bytes.length + 28)
+
+    const { blob } = await decryptFile(encrypted.encryptedContent.buffer as ArrayBuffer, encrypted.recipientEnvelopes[0])
+    expect(bytesToHex(new Uint8Array(await blob.arrayBuffer()))).toBe(bytesToHex(bytes))
   })
 
-  it('preserves trailing zero bytes', () => {
-    const original = new Uint8Array([1, 2, 3, 0, 0, 0])
-    const hex = bytesToHex(original)
-    const recovered = hexToBytes(hex)
-    expect(recovered).toEqual(original)
+  it('writes one envelope and one metadata entry per READER — an uploader who is also an admin is not named twice', async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'a.txt', { type: 'text/plain' })
+    // sig-x and enc-x are the same person: the account key and the encryption key.
+    const encrypted = await encryptFile(file, ['sig-x', 'enc-x', 'enc-y', 'enc-y'])
+
+    expect(encrypted.recipientEnvelopes.map(e => e.pubkey)).toEqual(['sig-x', 'enc-y'])
+    expect(encrypted.encryptedMetadata.map(m => m.pubkey)).toEqual(['sig-x', 'enc-y'])
+  })
+})
+
+describe('pickAddressedTo', () => {
+  const device = { signingPubkeyHex: 'sig-me', encryptionPubkeyHex: 'enc-me' }
+  const entry = (pubkey: string) => ({ pubkey })
+
+  it('finds the entry addressed to the device’s account key or its encryption key', () => {
+    expect(pickAddressedTo([entry('enc-other'), entry('sig-me')], device)).toEqual(entry('sig-me'))
+    expect(pickAddressedTo([entry('enc-other'), entry('enc-me')], device)).toEqual(entry('enc-me'))
   })
 
-  it('handles alternating zero/non-zero pattern', () => {
-    const original = new Uint8Array([0, 255, 0, 255, 0, 255])
-    const hex = bytesToHex(original)
-    const recovered = hexToBytes(hex)
-    expect(recovered).toEqual(original)
-  })
-
-  it('handles large arrays', () => {
-    const large = new Uint8Array(10000)
-    for (let i = 0; i < large.length; i++) large[i] = i % 256
-    const hex = bytesToHex(large)
-    const recovered = hexToBytes(hex)
-    expect(recovered).toEqual(large)
+  it('refuses rather than handing back someone else’s entry', () => {
+    expect(pickAddressedTo([entry('enc-other'), entry('enc-third')], device)).toBeNull()
+    expect(pickAddressedTo([], device)).toBeNull()
   })
 })

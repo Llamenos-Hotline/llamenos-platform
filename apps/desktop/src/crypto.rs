@@ -19,9 +19,10 @@ use llamenos_core::{
     encryption::RecipientKeyEnvelope,
     hpke_envelope,
     labels::{
-        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_HUB_KEY_WRAP, LABEL_MESSAGE,
-        LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-        LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
+        LABEL_CALL_META, LABEL_DEVICE_ENCRYPTION_SEED, LABEL_FILE_KEY, LABEL_FILE_METADATA,
+        LABEL_HUB_KEY_WRAP, LABEL_MESSAGE, LABEL_NOTE_KEY, LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
+        LABEL_PLATFORM_ROLE_NAME_ENCRYPT, LABEL_RECOVERY_GROUP_SHARE_WRAP,
+        LABEL_RECOVERY_SHARE_CONTRIBUTE, LABEL_WS_CHALLENGE,
     },
     puk, recovery_liveness, sas, shamir, sigchain,
 };
@@ -100,10 +101,19 @@ const OPEN_ALLOWED_LABELS: &[&str] = &[
 ];
 
 /// Labels whose 32-byte plaintext is a PER-ITEM content key (one note, one
-/// message, one call record) that the webview needs to run the AES-GCM content
-/// layer. Each key unlocks exactly one record, and the caller already holds that
-/// record's ciphertext — it is not a long-lived secret.
-const OPEN_KEY_ALLOWED_LABELS: &[&str] = &[LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META];
+/// message, one call record, one file's content or one file's metadata) that the
+/// webview needs to run the AES-GCM content layer. Each key unlocks exactly one
+/// record, and the caller already holds that record's ciphertext — it is not a
+/// long-lived secret. The file labels are here because the desktop opens a
+/// file's bytes in the webview (WebCrypto, raw bytes) the way it opens a note:
+/// without them no file could be opened on desktop at all (#3003).
+const OPEN_KEY_ALLOWED_LABELS: &[&str] = &[
+    LABEL_NOTE_KEY,
+    LABEL_MESSAGE,
+    LABEL_CALL_META,
+    LABEL_FILE_KEY,
+    LABEL_FILE_METADATA,
+];
 
 fn require_allowed_label(command: &str, label: &str, allowed: &[&str]) -> Result<(), String> {
     if allowed.contains(&label) {

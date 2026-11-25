@@ -10,13 +10,18 @@ import { Lock, ArrowDown, Loader2, Check, CheckCheck, Clock, AlertCircle } from 
 
 interface ConversationThreadProps {
   conversationId: string
+  /**
+   * The hub the conversation belongs to; its attachments are requested through
+   * it. Omit it where the thread is of the hub being browsed.
+   */
+  hubId?: string
   messages: ConversationMessage[]
   isLoading: boolean
   /** Compact mode for note reply threads — smaller bubbles */
   compact?: boolean
 }
 
-export function ConversationThread({ conversationId: _conversationId, messages, isLoading, compact }: ConversationThreadProps) {
+export function ConversationThread({ conversationId: _conversationId, hubId, messages, isLoading, compact }: ConversationThreadProps) {
   const { t } = useTranslation()
   const { hasDeviceKey, publicKey } = useAuth()
   const [decryptedContent, setDecryptedContent] = useState<Map<string, string>>(new Map())
@@ -140,7 +145,7 @@ export function ConversationThread({ conversationId: _conversationId, messages, 
                 {msg.hasAttachments && msg.attachmentIds && msg.attachmentIds.length > 0 && (
                   <div className="mt-2 space-y-2">
                     {msg.attachmentIds.map(fileId => (
-                      <FilePreview key={fileId} fileId={fileId} />
+                      <FilePreview key={fileId} fileId={fileId} hubId={hubId} />
                     ))}
                   </div>
                 )}

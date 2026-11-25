@@ -1813,6 +1813,69 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
+    /// A file's content layer is the RAW BYTES of the file, on every client (#3003).
+    ///
+    /// `tests/fixtures/file-content-vectors.json` holds one file sealed by the
+    /// desktop's production primitive (WebCrypto) and one sealed by the crate's
+    /// C-ABI, both under the canonical `LABEL_FILE_KEY` content AAD
+    /// (`scripts/gen-file-content-vectors.ts`). `mobile_symmetric_decrypt` is
+    /// what iOS and Android call, so opening the DESKTOP vector here is "a file
+    /// sealed on desktop opens on iOS and Android"; the same bytes opening
+    /// through the desktop's reader (`src/client/lib/file-crypto-wire.test.ts`)
+    /// is the reverse. The desktop used to seal the hex TEXT of the file, which
+    /// this test cannot open: it would yield ASCII, 2n bytes long.
+    #[test]
+    fn a_file_sealed_by_the_desktop_opens_through_the_mobile_entry_point() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/file-content-vectors.json"))
+                .expect("file-content-vectors.json does not parse");
+        let field = |name: &str| fixture[name].as_str().unwrap().to_string();
+
+        assert_eq!(field("label"), crate::labels::LABEL_FILE_KEY);
+        assert_eq!(
+            field("aadHex"),
+            mobile_content_aad_hex(crate::labels::LABEL_FILE_KEY.into()).unwrap(),
+            "the fixture's AAD is not the canonical content AAD for the file label"
+        );
+        let plaintext_hex = field("plaintextHex");
+        let plaintext_len = plaintext_hex.len() / 2;
+
+        for sealer in ["desktopCiphertextHex", "crateCiphertextHex"] {
+            let ct_hex = field(sealer);
+            assert_eq!(
+                ct_hex.len() / 2,
+                plaintext_len + 28,
+                "{sealer}: a content ciphertext is nonce(12) + file bytes + tag(16) — \
+                 anything longer sealed an encoding of the file, not the file"
+            );
+            let opened = mobile_symmetric_decrypt(ct_hex.clone(), field("keyHex"), field("aadHex"))
+                .unwrap_or_else(|e| panic!("{sealer} does not open through mobile: {e}"));
+            assert_eq!(opened, plaintext_hex, "{sealer} opened to different bytes");
+
+            // Verify by breaking it: the open is bound to the file label's AAD.
+            assert!(
+                mobile_symmetric_decrypt(
+                    ct_hex,
+                    field("keyHex"),
+                    mobile_content_aad_hex(crate::labels::LABEL_FILE_METADATA.into()).unwrap(),
+                )
+                .is_err(),
+                "{sealer} opened under another label's AAD"
+            );
+        }
+    }
+
+    /// The mobile sealer is raw-bytes too: `n` file bytes seal to `n + 28`, not `2n + 28`.
+    #[test]
+    fn mobile_seals_the_bytes_of_a_file_not_their_hex_text() {
+        let file: Vec<u8> = (0..=255u8).collect();
+        let aad = mobile_content_aad_hex(crate::labels::LABEL_FILE_KEY.into()).unwrap();
+        let sealed = mobile_symmetric_encrypt(hex::encode(&file), aad.clone()).unwrap();
+        assert_eq!(hex::decode(&sealed[0]).unwrap().len(), file.len() + 28);
+        let opened = mobile_symmetric_decrypt(sealed[0].clone(), sealed[1].clone(), aad).unwrap();
+        assert_eq!(hex::decode(opened).unwrap(), file);
+    }
+
     /// The AAD parameter must be *load-bearing*, not merely accepted.
     ///
     /// An ignored parameter would decrypt under every AAD, which is

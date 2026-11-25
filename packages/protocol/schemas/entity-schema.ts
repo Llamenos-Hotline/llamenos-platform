@@ -382,15 +382,21 @@ export const enabledResponseSchema = z.object({
 
 // --- Entity field file value (EP06-A2) ---
 
+/**
+ * What a `file` field of a record stores: the file's id, and nothing the file
+ * itself already carries.
+ *
+ * The file's name, type, size and content key are sealed in the file's OWN
+ * envelopes and metadata entries (`GET /files/:id/envelopes`, `/metadata`),
+ * one per reader, and every reader resolves them from there. This value used to
+ * copy a fragment of them — one reader's metadata ciphertext without its HPKE
+ * wrap, a key `ct` without its `enc`, and empty strings for type and size — so
+ * no reader could open it (#3003). A second copy of any of them in the record
+ * could only ever be wrong or a leak; the schema is the defect, not a missing
+ * field. The file's hub is the hub of the record that holds this value.
+ */
 export const fileFieldValueSchema = z.object({
   fileId: z.uuid(),
-  encryptedName: z.string(),
-  encryptedMimeType: z.string(),
-  encryptedSize: z.string(),
-  recipientEnvelopes: z.array(z.object({
-    recipientPubkey: z.string(),
-    encryptedKey: z.string(),
-  })),
   uploadedAt: z.iso.datetime(),
 })
 export type FileFieldValue = z.infer<typeof fileFieldValueSchema>

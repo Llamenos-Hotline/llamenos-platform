@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { Upload, X, File as FileIcon } from 'lucide-react'
+import { Upload, X } from 'lucide-react'
+import { FilePreview } from '@/components/FilePreview'
 import { encryptFile } from '@/lib/file-crypto'
 import { chunkedUpload } from '@/lib/chunked-upload'
 import { useAuth } from '@/lib/auth'
@@ -61,20 +62,9 @@ export function EntityFileField({
         onProgress: (completed, total) => setProgress(30 + Math.round((completed / total) * 70)),
       })
 
-      // Build first metadata envelope for encryptedName (if available)
-      const firstMeta = encrypted.encryptedMetadata[0]
-      const fieldValue: FileFieldValue = {
-        fileId,
-        encryptedName: firstMeta?.encryptedContent ?? '',
-        encryptedMimeType: '',
-        encryptedSize: '',
-        recipientEnvelopes: encrypted.recipientEnvelopes.map(e => ({
-          recipientPubkey: e.pubkey,
-          encryptedKey: e.ct,
-        })),
-        uploadedAt,
-      }
-      onChange(fieldValue)
+      // The value is the file's id. Its name, type and key are resolved by each
+      // reader from the file's own envelopes and metadata (`openStoredFile`).
+      onChange({ fileId, uploadedAt })
     } catch {
       toast(t('cms.fileUploadError', { defaultValue: 'Upload failed' }), 'error')
     } finally {
@@ -84,11 +74,10 @@ export function EntityFileField({
 
   if (value) {
     return (
-      <div className="flex items-center gap-2 rounded-md border px-3 py-2" data-testid="entity-file-value">
-        <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate text-sm text-muted-foreground">
-          {t('cms.fileAttached', { defaultValue: 'File attached' })}
-        </span>
+      <div className="flex items-center gap-2" data-testid="entity-file-value">
+        <div className="min-w-0 flex-1">
+          <FilePreview fileId={value.fileId} hubId={hubId} />
+        </div>
         {!disabled && (
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => onChange(null)}>
             <X className="h-3.5 w-3.5" />
