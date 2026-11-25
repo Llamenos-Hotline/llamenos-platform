@@ -4799,5 +4799,17 @@
     "push": "Hattınızda göz atılması gereken bir etkinlik var.",
     "signalAlert": "Hat uyarısı — {{category}}: {{state}}. Ayrıntılar için uygulamayı açın.",
     "title": "Etkin olaylar"
+  },
+  "softphone": {
+    "registered": "Uygulama içi aramalar etkin",
+    "registering": "Uygulama içi aramalar bağlanıyor…",
+    "unavailable": "Uygulama içi ses kullanılamıyor: {{reason}}",
+    "failed": "Uygulama içi ses başarısız oldu: {{reason}}",
+    "credentialRevoked": "Uygulama içi ses erişimi iptal edildi. Aramalar telefonunuzda çalacak.",
+    "answer": "Uygulamada yanıtla",
+    "decline": "Uygulamada reddet",
+    "inputDevice": "Mikrofon",
+    "outputDevice": "Hoparlör",
+    "mediaFailed": "Arama sesi iletemedi: {{reason}}"
   }
 }

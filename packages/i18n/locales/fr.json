@@ -4801,5 +4801,17 @@
     "push": "Une activité sur votre ligne d'écoute demande votre attention.",
     "signalAlert": "Alerte de la ligne — {{category}} : {{state}}. Ouvrez l'application pour les détails.",
     "title": "Incidents en cours"
+  },
+  "softphone": {
+    "registered": "Appels dans l’app actifs",
+    "registering": "Connexion des appels dans l’app…",
+    "unavailable": "Audio dans l’app indisponible : {{reason}}",
+    "failed": "Échec de l’audio dans l’app : {{reason}}",
+    "credentialRevoked": "L’accès à l’audio dans l’app a été révoqué. Les appels sonneront sur votre téléphone.",
+    "answer": "Répondre dans l’app",
+    "decline": "Refuser dans l’app",
+    "inputDevice": "Micro",
+    "outputDevice": "Haut-parleur",
+    "mediaFailed": "L’appel n’a pas pu transmettre l’audio : {{reason}}"
   }
 }

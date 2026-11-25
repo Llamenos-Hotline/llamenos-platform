@@ -14,6 +14,7 @@ import { RelayProvider } from '@/lib/relay/context'
 import { useShiftStatus } from '@/lib/hooks'
 import { CallsProvider, useCalls } from '@/lib/calls-context'
 import { useShiftHeartbeat } from '@/lib/shift-heartbeat'
+import { useVoiceRegistrationSync } from '@/lib/voice'
 import { IncomingCallAnnouncer } from '@/components/call/incoming-call-announcer'
 import { useAssigneeRewrap } from '@/lib/assignee-rewrap'
 import { useHubKeys } from '@/lib/hub-key-manager'
@@ -298,6 +299,9 @@ function AuthenticatedLayout() {
   // A clock-in is only a true statement while something keeps telling the server
   // we are still here; one that goes quiet stops ringing and is reaped (#1142).
   useShiftHeartbeat(isAdmin || hasPermission('shifts:set-availability'))
+  // In-app audio (#1770): one SIP registration while clocked into ANY member
+  // hub, as the server reports it — the same gate as the heartbeat.
+  useVoiceRegistrationSync(isAdmin || hasPermission('shifts:set-availability'))
   const { hotlineName, hotlineNumber, channels, currentHubId } = useConfig()
   const hasMessaging = useHasMessaging()
   const { theme, setTheme } = useTheme()

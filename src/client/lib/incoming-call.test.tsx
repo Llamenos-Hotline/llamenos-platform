@@ -28,6 +28,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }))
 
 import { IncomingCallAnnouncer } from '@/components/call/incoming-call-announcer'
 import { IncomingCallCard } from '@/components/call/incoming-call-card'
+import { __resetVoiceStoreForTests, __setVoiceSnapshotForTests } from './voice'
 import { useKeyboardShortcuts } from './use-keyboard-shortcuts'
 
 function ringing(id: string, hubId: string, hubName: string | null = null): IncomingCall {
@@ -79,9 +80,39 @@ describe('IncomingCallAnnouncer', () => {
 })
 
 describe('IncomingCallCard', () => {
+  it('answers on the in-app leg the INVITE named for this call, and not by phone (#1770)', async () => {
+    __setVoiceSnapshotForTests({
+      registration: 'registered',
+      calls: new Map([['sip-1', { callId: 'sip-1', appCallId: 'CA1', state: 'incoming', muted: false }]]),
+    })
+    const onAnswer = vi.fn()
+    const onAnswerInApp = vi.fn()
+    state.incoming = [ringing('CA1', 'hub-A'), ringing('CA2', 'hub-B')]
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={onAnswer} onAnswerInApp={onAnswerInApp} />)
+    await userEvent.setup().click(screen.getByTestId('voice-answer-btn-CA1'))
+    expect(onAnswerInApp).toHaveBeenCalledWith('CA1', 'sip-1')
+    expect(onAnswer).not.toHaveBeenCalled()
+    // The other hub's ring has no in-app leg here: it keeps the phone-leg answer.
+    expect(screen.getByTestId('answer-call-btn-CA2')).toBeTruthy()
+    __resetVoiceStoreForTests()
+  })
+
+  it('offers no in-app Answer while the softphone is not registered (#1147/#1741)', () => {
+    __setVoiceSnapshotForTests({
+      registration: 'failed',
+      registrationReason: 'tls handshake',
+      calls: new Map([['sip-1', { callId: 'sip-1', appCallId: 'CA1', state: 'incoming', muted: false }]]),
+    })
+    state.incoming = [ringing('CA1', 'hub-A')]
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} onAnswerInApp={vi.fn()} />)
+    expect(screen.queryByTestId('voice-answer-btn-CA1')).toBeNull()
+    expect(screen.getByTestId('answer-call-btn-CA1')).toBeTruthy()
+    __resetVoiceStoreForTests()
+  })
+
   it('moves focus to Answer when a call starts ringing and nothing is being typed', () => {
     state.incoming = [ringing('CA1', 'hub-A')]
-    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} />)
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} onAnswerInApp={vi.fn()} />)
     expect(document.activeElement).toBe(screen.getByTestId('answer-call-btn-CA1'))
   })
 
@@ -90,14 +121,14 @@ describe('IncomingCallCard', () => {
     const note = getByTestId('note')
     note.focus()
     state.incoming = [ringing('CA1', 'hub-A')]
-    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} />)
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} onAnswerInApp={vi.fn()} />)
     expect(document.activeElement).toBe(note)
   })
 
   it('answers from the keyboard alone, with Enter and with Space, on a native button', async () => {
     const onAnswer = vi.fn()
     state.incoming = [ringing('CA1', 'hub-A')]
-    render(<IncomingCallCard incoming={state.incoming} onAnswer={onAnswer} />)
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={onAnswer} onAnswerInApp={vi.fn()} />)
     const answer = screen.getByRole('button', { name: 'Answer' })
     expect(answer.tagName).toBe('BUTTON')
 
@@ -110,7 +141,7 @@ describe('IncomingCallCard', () => {
 
   it('pulses only when the user has not asked for reduced motion', () => {
     state.incoming = [ringing('CA1', 'hub-A')]
-    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} />)
+    render(<IncomingCallCard incoming={state.incoming} onAnswer={vi.fn()} onAnswerInApp={vi.fn()} />)
     const classes = screen.getByTestId('answer-call-btn-CA1').className.split(' ')
     expect(classes).toContain('motion-safe:animate-pulse')
     expect(classes).not.toContain('animate-pulse')

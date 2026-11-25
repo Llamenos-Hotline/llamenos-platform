@@ -6,6 +6,8 @@ import { useCallTimer, useShiftStatus } from '@/lib/hooks'
 import { useCalls, useIncomingCalls } from '@/lib/calls-context'
 import { useNoteSheet } from '@/lib/note-sheet-context'
 import { IncomingCallCard } from '@/components/call/incoming-call-card'
+import { VoiceControls, VoiceRegistrationBadge } from '@/components/call/voice-controls'
+import { activeInAppLeg, useVoiceStore } from '@/lib/voice'
 import { CallEndedPrompt } from '@/components/call/call-ended-prompt'
 import { callReadiness } from '@/lib/call-readiness'
 import { useClockIn, useClockOut } from '@/lib/queries/shifts'
@@ -54,7 +56,9 @@ function DashboardPage() {
   const { isAuthenticated, isAdmin, hasDeviceKey, publicKey, onBreak, toggleBreak, hasPermission } = useAuth()
   const { toast } = useToast()
   const navigate = useNavigate()
-  const { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
+  const { calls, currentCall, endedCall, dismissEndedCall, answerCall, answerCallInApp, hangupCall, reportSpam, ringingCalls, activeCalls } = useCalls()
+  const voice = useVoiceStore()
+  const inAppLeg = activeInAppLeg(voice)
   const noteSheet = useNoteSheet()
   const incoming = useIncomingCalls()
   // A ringing call is already a live call on this hub — the count must not read 0 while one rings.
@@ -104,7 +108,11 @@ function DashboardPage() {
         onAnswer={callId => {
           answerCall(callId).catch(() => toast(t('calls.answerFailed'), 'error'))
         }}
+        onAnswerInApp={(callId, legCallId) => {
+          answerCallInApp(callId, legCallId).catch(() => toast(t('calls.answerFailed'), 'error'))
+        }}
       />
+      {inAppLeg && <VoiceControls leg={inAppLeg} />}
 
       <div className="flex items-center gap-3">
         <LayoutDashboard className="h-6 w-6 text-primary" />
@@ -148,6 +156,8 @@ function DashboardPage() {
                   : readiness === 'not-clocked-in' ? t('dashboard.notClockedIn')
                   : t('shifts.offShift')}
               </p>
+              {/* In-app audio state (#1770), with the reason when it is not working. */}
+              <VoiceRegistrationBadge />
               {/* Say what is actually true: scheduled is not the same as being rung. */}
               {readiness === 'not-clocked-in' && !currentCall && (
                 <p data-testid="dashboard-clock-in-prompt" className="text-xs text-orange-700 dark:text-orange-300">

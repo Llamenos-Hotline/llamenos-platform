@@ -4801,5 +4801,17 @@
     "push": "핫라인에 확인이 필요한 활동이 있습니다.",
     "signalAlert": "핫라인 알림 — {{category}}: {{state}}. 자세한 내용은 앱을 여세요.",
     "title": "진행 중인 사건"
+  },
+  "softphone": {
+    "registered": "앱 내 통화 활성화됨",
+    "registering": "앱 내 통화 연결 중…",
+    "unavailable": "앱 내 오디오를 사용할 수 없음: {{reason}}",
+    "failed": "앱 내 오디오 실패: {{reason}}",
+    "credentialRevoked": "앱 내 오디오 접근 권한이 취소되었습니다. 전화는 휴대전화로 울립니다.",
+    "answer": "앱에서 받기",
+    "decline": "앱에서 거절",
+    "inputDevice": "마이크",
+    "outputDevice": "스피커",
+    "mediaFailed": "통화에서 오디오를 전달할 수 없었습니다: {{reason}}"
   }
 }

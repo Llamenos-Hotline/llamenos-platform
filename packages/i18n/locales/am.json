@@ -4799,5 +4799,17 @@
     "push": "በመስመርዎ ላይ መታየት ያለበት እንቅስቃሴ አለ።",
     "signalAlert": "የመስመር ማንቂያ — {{category}}: {{state}}። ለዝርዝሮች መተግበሪያውን ይክፈቱ።",
     "title": "ንቁ ክስተቶች"
+  },
+  "softphone": {
+    "registered": "የመተግበሪያ ጥሪዎች ንቁ ናቸው",
+    "registering": "የመተግበሪያ ጥሪዎችን በማገናኘት ላይ…",
+    "unavailable": "የመተግበሪያ ድምጽ አይገኝም፦ {{reason}}",
+    "failed": "የመተግበሪያ ድምጽ አልተሳካም፦ {{reason}}",
+    "credentialRevoked": "የመተግበሪያ ድምጽ ፈቃድ ተሰርዟል። ጥሪዎች ስልክዎ ላይ ይደውላሉ።",
+    "answer": "በመተግበሪያ ውስጥ መልስ",
+    "decline": "በመተግበሪያ ውስጥ አትቀበል",
+    "inputDevice": "ማይክሮፎን",
+    "outputDevice": "ድምጽ ማጉያ",
+    "mediaFailed": "ጥሪው ድምጽ ማስተላለፍ አልቻለም፦ {{reason}}"
   }
 }

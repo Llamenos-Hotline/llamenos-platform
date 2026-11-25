@@ -22,6 +22,7 @@ const NO_SESSION_FEED: CallFeed = {
   ringingCalls: [],
   activeCalls: [],
   answerCall: () => Promise.reject(new Error('No call feed: not signed in')),
+  answerCallInApp: () => Promise.reject(new Error('No call feed: not signed in')),
   hangupCall: () => Promise.reject(new Error('No call feed: not signed in')),
   reportSpam: () => Promise.reject(new Error('No call feed: not signed in')),
 }

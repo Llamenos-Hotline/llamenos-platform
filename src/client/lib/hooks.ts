@@ -6,6 +6,7 @@ import { useMyShiftStatus } from './queries/shifts'
 import { startRinging, stopRinging } from './notifications'
 import { rememberCallHub } from './call-hubs'
 import { isUnlocked } from './key-manager'
+import { voiceAnswer } from './platform'
 import {
   listActiveCalls,
   listConversations,
@@ -218,6 +219,26 @@ export function useCallFeed() {
     }
   }, [])
 
+  /**
+   * Answer on THIS device's in-app leg (#1770). The SIP answer IS the answer:
+   * the bridge sees the leg picked up and claims the call through its
+   * single-use token, so there is no `POST /calls/:id/answer` here (spec §5.2
+   * step 3). The hub handling is the same as `answerCall`'s — the call keeps
+   * its own hub; the ring never switched it.
+   */
+  const answerCallInApp = useCallback(async (callId: string, legCallId: string) => {
+    const call = callsRef.current.find(c => c.id === callId)
+    if (!call) return
+    stopRinging()
+    setCurrentCall({ ...call, status: 'in-progress' })
+    try {
+      await voiceAnswer(legCallId)
+    } catch (err) {
+      setCurrentCall(null)
+      throw err
+    }
+  }, [])
+
   const hubOf = useCallback((callId: string): string | undefined =>
     (currentCallRef.current?.id === callId ? currentCallRef.current : callsRef.current.find(c => c.id === callId))?.hubId,
   [])
@@ -248,7 +269,7 @@ export function useCallFeed() {
   const ringingCalls = useMemo(() => calls.filter(c => c.status === 'ringing'), [calls])
   const activeCalls = useMemo(() => calls.filter(c => c.status === 'in-progress'), [calls])
 
-  return { calls, currentCall, endedCall, dismissEndedCall, answerCall, hangupCall, reportSpam, ringingCalls, activeCalls }
+  return { calls, currentCall, endedCall, dismissEndedCall, answerCall, answerCallInApp, hangupCall, reportSpam, ringingCalls, activeCalls }
 }
 
 /**

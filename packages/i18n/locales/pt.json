@@ -4801,5 +4801,17 @@
     "push": "Há atividade na sua linha que precisa de atenção.",
     "signalAlert": "Alerta da linha — {{category}}: {{state}}. Abra o aplicativo para ver os detalhes.",
     "title": "Incidentes ativos"
+  },
+  "softphone": {
+    "registered": "Chamadas no app ativas",
+    "registering": "Conectando as chamadas no app…",
+    "unavailable": "Áudio no app indisponível: {{reason}}",
+    "failed": "O áudio no app falhou: {{reason}}",
+    "credentialRevoked": "O acesso ao áudio no app foi revogado. As chamadas tocarão no seu telefone.",
+    "answer": "Atender no app",
+    "decline": "Recusar no app",
+    "inputDevice": "Microfone",
+    "outputDevice": "Alto-falante",
+    "mediaFailed": "A chamada não conseguiu transmitir áudio: {{reason}}"
   }
 }

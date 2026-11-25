@@ -5,10 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { isEditableFocused } from '@/lib/editable-focus'
 import type { IncomingCall } from '@/lib/calls-context'
+import { voiceDecline } from '@/lib/platform'
+import { inAppLegFor, useVoiceStore } from '@/lib/voice'
 
 interface Props {
   incoming: IncomingCall[]
   onAnswer: (callId: string) => void
+  /** Answer on this device's in-app leg (#1770); `legCallId` is the shell's handle for it. */
+  onAnswerInApp: (callId: string, legCallId: string) => void
 }
 
 /**
@@ -18,8 +22,9 @@ interface Props {
  * call, say): a focus jump there would send their next keystrokes to the wrong
  * field. The screen-reader announcement and the Ctrl+Shift+A shortcut cover that case.
  */
-export function IncomingCallCard({ incoming, onAnswer }: Props) {
+export function IncomingCallCard({ incoming, onAnswer, onAnswerInApp }: Props) {
   const { t } = useTranslation()
+  const voice = useVoiceStore()
   const firstAnswer = useRef<HTMLButtonElement | null>(null)
   const firstCallId = incoming[0]?.call.id
 
@@ -50,16 +55,49 @@ export function IncomingCallCard({ incoming, onAnswer }: Props) {
                 <p data-testid="call-hub-label" className="text-xs text-muted-foreground">{hubName}</p>
               )}
             </div>
-            <Button
-              ref={i === 0 ? firstAnswer : undefined}
-              data-testid={`answer-call-btn-${call.id}`}
-              size="lg"
-              onClick={() => onAnswer(call.id)}
-              className="bg-green-700 text-white hover:bg-green-800 motion-safe:animate-pulse"
-            >
-              <PhoneCall className="h-4 w-4" aria-hidden="true" />
-              {t('calls.answer')}
-            </Button>
+            {(() => {
+              // An in-app leg ringing on THIS device for this call, bound by the
+              // id the INVITE named — then Answer is the SIP answer. Otherwise the
+              // existing phone-leg answer, unchanged. A failed or unregistered
+              // softphone offers no in-app Answer at all (#1147/#1741).
+              const leg = inAppLegFor(voice, call.id)
+              if (leg?.state === 'incoming') {
+                return (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      data-testid={`voice-decline-btn-${call.id}`}
+                      size="lg"
+                      variant="outline"
+                      onClick={() => void voiceDecline(leg.callId).catch(() => {})}
+                    >
+                      {t('softphone.decline')}
+                    </Button>
+                    <Button
+                      ref={i === 0 ? firstAnswer : undefined}
+                      data-testid={`voice-answer-btn-${call.id}`}
+                      size="lg"
+                      onClick={() => onAnswerInApp(call.id, leg.callId)}
+                      className="bg-green-700 text-white hover:bg-green-800 motion-safe:animate-pulse"
+                    >
+                      <PhoneCall className="h-4 w-4" aria-hidden="true" />
+                      {t('softphone.answer')}
+                    </Button>
+                  </div>
+                )
+              }
+              return (
+                <Button
+                  ref={i === 0 ? firstAnswer : undefined}
+                  data-testid={`answer-call-btn-${call.id}`}
+                  size="lg"
+                  onClick={() => onAnswer(call.id)}
+                  className="bg-green-700 text-white hover:bg-green-800 motion-safe:animate-pulse"
+                >
+                  <PhoneCall className="h-4 w-4" aria-hidden="true" />
+                  {t('calls.answer')}
+                </Button>
+              )
+            })()}
           </div>
         ))}
       </CardContent>
