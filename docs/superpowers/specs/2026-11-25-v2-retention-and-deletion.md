@@ -239,8 +239,8 @@ nobody touched.
 ## 11. Contract surface and gates
 
 **Contract PR:**
-- `retention` in the definition format, the validator and the policy (it joins #3025's contract if both are signed off together; otherwise it follows as a format addendum);
-- the categories, deploy-config limits and default rows at hub creation;
+- `retention` in the definition format, the validator and the policy: **in #3025's contract PR (D-A)**, since both were signed off together;
+- the categories, the default/floor/max limits in platform settings (R3), and default rows at hub creation;
 - the one deletion routine with its order, `deletion_pending`, and no soft deletes;
 - the purge over policies;
 - the audit checkpoint;
