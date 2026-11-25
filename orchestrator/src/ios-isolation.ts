@@ -86,8 +86,8 @@ export const IOS_GATE_HARNESS: readonly string[] = [
 export const IOS_GATE_BUN_SCRIPTS: readonly string[] = ['codegen', 'i18n:codegen']
 
 /** The `ci.yml` jobs that are part of the iOS gate: those that read the
- *  `ios` output or produce it. Derived from the file, never listed. */
-const IOS_JOB_MARKER = /\boutputs\.ios\b/
+ *  `ios`/`ios_compile` output or produce it. Derived from the file, never listed. */
+const IOS_JOB_MARKER = /\boutputs\.ios(?:_compile)?\b/
 
 export type ContentCheck = 'plist-version' | 'en-strings' | 'package-json' | 'ci-yml'
 

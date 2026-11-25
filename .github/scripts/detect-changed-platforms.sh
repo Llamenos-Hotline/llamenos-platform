@@ -65,6 +65,30 @@ IOS_RE='^apps/ios/'
 # and the CI wiring that decides any of this. Everything else runs the smoke
 # tier: still a real iOS gate, 2 runners instead of 4.
 IOS_FULL_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|\.github/workflows/ci\.yml$|\.github/workflows/ios-e2e\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
+# `ios_compile` is the NARROW iOS question: "can this diff change what
+# `ios-compile-check` compiles?" It exists because `ios` is a blast-radius flag
+# (every SHARED_DEPS_RE hit sets it — `scripts/`, `packages/shared/`, the vitest
+# configs, ...) and `ios-compile-check` runs on one of the only two self-hosted
+# Macs, 16 GiB hosts that gate every merge and start swapping with just two iOS
+# jobs (#3012, #2243). A desktop-only or worker-only push therefore skipped
+# `ios-build-test`/`ios-e2e` (`revalidate`) but still took a Mac slot here.
+#
+# The regex is the set of paths that job READS, and it is DERIVED, not trusted:
+# tests/orchestrator/ios-compile-inputs.test.ts walks the job's real build
+# inputs — project.yml's out-of-tree sources, Package.swift's local paths, every
+# script the job's steps run (transitively), `bun run codegen`/`i18n:codegen`
+# and the TypeScript import closure of what they execute, the job's cache keys,
+# and the workflow that defines the gate — and FAILS if any of them is not
+# matched here. Add a dependency to the build and that test goes red until it
+# lands in this regex; do not edit this list from memory.
+#
+# Deliberately NOT here (the job reads none of it): `apps/worker/`,
+# `apps/desktop/`, `apps/android/`, `src/client/`, `packages/shared/`,
+# `packages/test-specs/`, the vitest configs, every other script under
+# `scripts/`. `package.json`, `bun.lock` and `tsconfig*.json` ARE here: the job
+# runs `bun install --frozen-lockfile` and then codegen, so a dependency bump
+# can change the generated Swift.
+IOS_COMPILE_RE='^(apps/ios/|packages/crypto/|packages/protocol/|packages/i18n/|package\.json$|bun\.lock|tsconfig[^/]*\.json$|scripts/ci/mac-runner-disk-guard(-wait)?\.sh$|\.github/workflows/ci\.yml$|\.github/scripts/detect-changed-platforms\.sh$)'
 ANDROID_RE='^apps/android/'
 # No `.github/workflows/desktop-e2e\.yml$` term: that workflow no longer
 # exists. Its chromium tier is ci.yml's `desktop-e2e` job, and ci.yml is in
@@ -191,6 +215,7 @@ DOCS_ONLY_EXEMPT_RE='\.md$|^site/'
 docs_only=true
 ios=false
 ios_full=false
+ios_compile=false
 android=false
 desktop=false
 backend=false
@@ -213,6 +238,7 @@ while IFS= read -r file; do
 
   echo "$file" | grep -qE "$IOS_RE" && { ios=true; echo "iOS file changed: $file" >&2; }
   echo "$file" | grep -qE "$IOS_FULL_RE" && { ios=true; ios_full=true; echo "iOS full-tier file changed: $file" >&2; }
+  echo "$file" | grep -qE "$IOS_COMPILE_RE" && { ios=true; ios_compile=true; echo "iOS compile input changed: $file" >&2; }
   echo "$file" | grep -qE "$ANDROID_RE" && { android=true; echo "Android file changed: $file" >&2; }
   echo "$file" | grep -qE "$DESKTOP_RE" && ! echo "$file" | grep -qE "$DESKTOP_EXCLUDE_RE" \
     && { desktop=true; echo "Desktop file changed: $file" >&2; }
@@ -240,6 +266,7 @@ docs_only=$docs_only
 app=$app
 ios=$ios
 ios_tier=$ios_tier
+ios_compile=$ios_compile
 android=$android
 desktop=$desktop
 backend=$backend
