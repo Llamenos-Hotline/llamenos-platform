@@ -130,7 +130,6 @@ async function call(actor: Actor, hubId: string, method: string, path: string, b
 }
 
 const sealedTo = (...keys: string[]) => keys.map(pubkey => ({ pubkey, enc: 'b'.repeat(64), ct: 'c'.repeat(32) }))
-const asRecipients = (...keys: string[]) => keys.map(recipientPubkey => ({ recipientPubkey, encryptedKey: 'k' }))
 
 // ── Seed ───────────────────────────────────────────────────────────
 
@@ -314,7 +313,7 @@ describe('contacts', () => {
 
   it('REFUSES (422) a bulk batch with one contact sealed to no admin, creating none of them', async () => {
     const before = await contactCount()
-    const entry = (key: string) => ({ encryptedSummary: 'ct', summaryEnvelopes: asRecipients(key), blindIndexes: {} })
+    const entry = (key: string) => ({ encryptedSummary: 'ct', summaryEnvelopes: sealedTo(key), blindIndexes: {} })
     const res = await call(ADMIN, HUB, 'POST', '/directory/bulk-create', { contacts: [entry(ADMIN_DEVICE), entry(VOLUNTEER_DEVICE)] })
     expect(res.status).toBe(422)
     expect(await contactCount()).toBe(before)
@@ -322,7 +321,7 @@ describe('contacts', () => {
 
   it('accepts a bulk batch whose every contact is sealed to an admin', async () => {
     const before = await contactCount()
-    const entry = { encryptedSummary: 'ct', summaryEnvelopes: asRecipients(ADMIN_DEVICE), blindIndexes: {} }
+    const entry = { encryptedSummary: 'ct', summaryEnvelopes: sealedTo(ADMIN_DEVICE), blindIndexes: {} }
     const res = await call(ADMIN, HUB, 'POST', '/directory/bulk-create', { contacts: [entry, entry] })
     expect(res.status).toBe(201)
     expect(await contactCount()).toBe(before + 2)

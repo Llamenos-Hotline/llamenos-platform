@@ -1723,28 +1723,21 @@ export function adminDeviceKey(): string {
 }
 
 /**
- * Placeholder key envelopes addressed to the admin, for an upload `init` whose
- * scenario never opens the file (a size limit, a hub boundary). `init` refuses
- * a file whose key no admin can unwrap (#2174), so a body without them never
- * reaches the check the scenario is about. A scenario that reads the file back
- * uses {@link uploadFileViaApi}, which wraps a real key.
+ * Placeholder key envelopes addressed to the admin, for a write whose scenario
+ * never opens what it seals (a size limit, a hub boundary, a merge or import
+ * that asserts on the directory, not on the ciphertext). The server refuses a
+ * sealed write whose key no admin can unwrap (#2174), so a body without them
+ * never reaches the check the scenario is about. They are stored verbatim, so
+ * they have the full `{ pubkey, enc, ct }` shape every reader of the column
+ * expects. A scenario that reads the content back wraps a real key instead
+ * ({@link uploadFileViaApi}, {@link createContactViaApi}).
  */
-export function adminFileKeyEnvelopes(): Array<{ pubkey: string; enc: string; ct: string }> {
+export function adminPlaceholderEnvelopes(): Array<{ pubkey: string; enc: string; ct: string }> {
   return [{ pubkey: adminDeviceKey(), enc: 'b'.repeat(64), ct: 'c'.repeat(32) }]
 }
 
-/**
- * The admin as a recipient in the `{ recipientPubkey, encryptedKey }` shape the
- * contact merge and bulk-create bodies carry their envelopes in. A body that
- * names no admin is refused (422, #2174), so a fixture that does not care what
- * is sealed still has to address the admin.
- */
-export function adminSummaryRecipients(): Array<{ recipientPubkey: string; encryptedKey: string }> {
-  return [{ recipientPubkey: adminDeviceKey(), encryptedKey: 'test-wrapped-key' }]
-}
-
 /** {@link realEnvelope} for the writer and the admin. */
-async function realEnvelopesForWriterAndAdmin(
+export async function realEnvelopesForWriterAndAdmin(
   contentKey: Uint8Array,
   seedHex: string,
   label = LABEL_NOTE_KEY,

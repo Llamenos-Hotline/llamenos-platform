@@ -19,7 +19,7 @@ import {
   redeemInviteViaApi,
   registerDeviceKeyViaApi,
   uploadFileViaApi,
-  adminFileKeyEnvelopes,
+  adminPlaceholderEnvelopes,
   type UploadedTestFile,
 } from '../../api-helpers'
 import { hpkeRecipientForSeed, unwrapKey, decryptContent } from '../../crypto-helpers'
@@ -138,7 +138,7 @@ Then('requesting the file through the other hub answers 404', async ({ request, 
 When('the admin starts an upload in the other hub naming that record', async ({ request, world }) => {
   const res = await apiPost(request, `/hubs/${st(world).otherHubId!}/uploads/init`, {
     totalSize: 16, totalChunks: 1, owner: { kind: 'case_record', caseRecordId: cmsRecordId(world) },
-    recipientEnvelopes: adminFileKeyEnvelopes(),
+    recipientEnvelopes: adminPlaceholderEnvelopes(),
   })
   st(world).lastStatus = res.status
 })
@@ -146,7 +146,7 @@ When('the admin starts an upload in the other hub naming that record', async ({ 
 When('the admin starts an upload on the unscoped route', async ({ request, world }) => {
   const res = await apiPost(request, '/uploads/init', {
     totalSize: 16, totalChunks: 1, owner: { kind: 'entity_field' },
-    recipientEnvelopes: adminFileKeyEnvelopes(),
+    recipientEnvelopes: adminPlaceholderEnvelopes(),
   })
   st(world).lastStatus = res.status
 })

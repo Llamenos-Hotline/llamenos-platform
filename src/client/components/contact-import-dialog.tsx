@@ -107,10 +107,7 @@ export function ContactImportDialog({
             const { encryptedContent, readerEnvelopes } = await encryptMessage(payload, readers)
             return {
               encryptedSummary: encryptedContent,
-              summaryEnvelopes: readerEnvelopes.map((e) => ({
-                recipientPubkey: e.pubkey,
-                encryptedKey: e.enc,
-              })),
+              summaryEnvelopes: readerEnvelopes,
               blindIndexes: { identifierHashes: [] as string[], tagHashes: [] as string[] },
               trigramTokens: [] as string[],
             }

@@ -769,7 +769,14 @@ Then('the ban response carries no phone number', ({ world }) => {
   expect(ban).toBeDefined()
   expect(ban).not.toHaveProperty('phone')
   expect(Object.keys(ban!).sort()).toEqual(['bannedAt', 'bannedBy', 'phoneHash', 'reason'])
-  for (const digits of BANNED_DIGITS) expect(JSON.stringify(res.data)).not.toContain(digits)
+  // phoneHash and bannedBy are hex strings of random digits: a run like "1234"
+  // appears in one by chance (~1 in 500 responses), which is not the number
+  // leaking. Their shape is pinned instead, and every other field is searched
+  // for the number's digits.
+  const { phoneHash, bannedBy, ...plainFields } = ban!
+  expect(phoneHash).toMatch(/^[0-9a-f]{128}$/)
+  expect(bannedBy).toMatch(/^[0-9a-f]{64}$/)
+  for (const digits of BANNED_DIGITS) expect(JSON.stringify(plainFields)).not.toContain(digits)
 })
 
 When('I bulk ban phones [{string}, {string}]', async ({ request, world }, phone1: string, phone2: string) => {

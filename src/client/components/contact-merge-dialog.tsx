@@ -88,10 +88,7 @@ export function ContactMergeDialog({
         primaryId: primaryContact.id,
         secondaryId: selected.id,
         mergedEncryptedSummary: encryptedContent,
-        mergedSummaryEnvelopes: readerEnvelopes.map((e) => ({
-          recipientPubkey: e.pubkey,
-          encryptedKey: e.enc,
-        })),
+        mergedSummaryEnvelopes: readerEnvelopes,
         mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
         mergedTrigramTokens: [],
       })

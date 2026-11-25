@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { recipientEnvelopeSchema } from './common'
 
 export const bulkContactActionSchema = z.discriminatedUnion('action', [
   z.object({
@@ -53,10 +54,9 @@ export const bulkContactActionResponseSchema = z.object({
 export const bulkCreateContactBodySchema = z.object({
   contacts: z.array(z.object({
     encryptedSummary: z.string(),
-    summaryEnvelopes: z.array(z.object({
-      recipientPubkey: z.string(),
-      encryptedKey: z.string(),
-    })),
+    // Stored verbatim as the contact's summaryEnvelopes: the same {pubkey, enc, ct}
+    // envelope the single-contact create carries.
+    summaryEnvelopes: z.array(recipientEnvelopeSchema),
     blindIndexes: z.object({
       identifierHashes: z.array(z.string()).optional().default([]),
       tagHashes: z.array(z.string()).optional().default([]),

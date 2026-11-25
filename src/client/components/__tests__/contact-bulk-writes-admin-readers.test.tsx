@@ -47,7 +47,7 @@ beforeEach(() => {
   mocks.activeHubAdminReaders.mockResolvedValue([ADMIN, SECOND_ADMIN])
   mocks.encryptMessage.mockImplementation(async (_plaintext: string, readers: string[]) => ({
     encryptedContent: 'ct',
-    readerEnvelopes: readers.map(pubkey => ({ pubkey, enc: 'enc' })),
+    readerEnvelopes: readers.map(pubkey => ({ pubkey, enc: 'e'.repeat(64), ct: 'c'.repeat(32) })),
   }))
   mocks.bulkCreateContacts.mockResolvedValue({ created: 2 })
   mocks.mergeContacts.mockResolvedValue({})
@@ -63,11 +63,11 @@ describe('#2174 — contact import', () => {
 
     await waitFor(() => expect(onImported).toHaveBeenCalledWith(2))
     const { contacts } = mocks.bulkCreateContacts.mock.calls[0][0] as {
-      contacts: Array<{ summaryEnvelopes: Array<{ recipientPubkey: string }> }>
+      contacts: Array<{ summaryEnvelopes: Array<{ pubkey: string }> }>
     }
     expect(contacts).toHaveLength(2)
     for (const contact of contacts) {
-      expect(contact.summaryEnvelopes.map(e => e.recipientPubkey)).toEqual([DEVICE, ADMIN, SECOND_ADMIN])
+      expect(contact.summaryEnvelopes.map(e => e.pubkey)).toEqual([DEVICE, ADMIN, SECOND_ADMIN])
     }
   })
 
@@ -97,7 +97,7 @@ describe('#2174 — contact merge', () => {
     fireEvent.click(screen.getByText('cms.mergeConfirm'))
 
     await waitFor(() => expect(onMerged).toHaveBeenCalled())
-    const body = mocks.mergeContacts.mock.calls[0][0] as { mergedSummaryEnvelopes: Array<{ recipientPubkey: string }> }
-    expect(body.mergedSummaryEnvelopes.map(e => e.recipientPubkey)).toEqual([DEVICE, ADMIN, SECOND_ADMIN])
+    const body = mocks.mergeContacts.mock.calls[0][0] as { mergedSummaryEnvelopes: Array<{ pubkey: string }> }
+    expect(body.mergedSummaryEnvelopes.map(e => e.pubkey)).toEqual([DEVICE, ADMIN, SECOND_ADMIN])
   })
 })

@@ -18,7 +18,7 @@ import {
   apiPost,
   apiGet,
   uniqueName,
-  adminSummaryRecipients,
+  adminPlaceholderEnvelopes,
 } from '../../api-helpers'
 
 interface CmsAdvancedState {
@@ -115,7 +115,7 @@ When('I merge the secondary contact into the primary contact with re-encrypted m
     primaryId,
     secondaryId,
     mergedEncryptedSummary: 'merged-ciphertext',
-    mergedSummaryEnvelopes: adminSummaryRecipients(),
+    mergedSummaryEnvelopes: adminPlaceholderEnvelopes(),
     mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
     mergedTrigramTokens: [],
   })
@@ -134,7 +134,7 @@ When('I attempt to merge a non-existent primary contact', async ({ world, reques
     primaryId: nonexistentId(),
     secondaryId: nonexistentId(),
     mergedEncryptedSummary: 'x',
-    mergedSummaryEnvelopes: adminSummaryRecipients(),
+    mergedSummaryEnvelopes: adminPlaceholderEnvelopes(),
     mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
     mergedTrigramTokens: [],
   })
@@ -152,7 +152,7 @@ When('I attempt to merge a non-existent secondary contact into the contact', asy
     primaryId,
     secondaryId: nonexistentId(),
     mergedEncryptedSummary: 'x',
-    mergedSummaryEnvelopes: adminSummaryRecipients(),
+    mergedSummaryEnvelopes: adminPlaceholderEnvelopes(),
     mergedBlindIndexes: { identifierHashes: [], tagHashes: [] },
     mergedTrigramTokens: [],
   })
@@ -251,7 +251,7 @@ When('I bulk-create {int} contacts with encrypted summaries', async ({ world, re
 
   const contacts = Array.from({ length: count }, (_, i) => ({
     encryptedSummary: `batch-enc-${i}`,
-    summaryEnvelopes: adminSummaryRecipients(),
+    summaryEnvelopes: adminPlaceholderEnvelopes(),
     blindIndexes: { identifierHashes: [], tagHashes: [] },
     trigramTokens: [],
   }))
@@ -272,7 +272,7 @@ When('I attempt to bulk-create {int} contacts', async ({ world, request }, count
 
   const contacts = Array.from({ length: count }, (_, i) => ({
     encryptedSummary: `overflow-enc-${i}`,
-    summaryEnvelopes: adminSummaryRecipients(),
+    summaryEnvelopes: adminPlaceholderEnvelopes(),
     blindIndexes: { identifierHashes: [], tagHashes: [] },
     trigramTokens: [],
   }))

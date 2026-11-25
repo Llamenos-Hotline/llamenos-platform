@@ -83,7 +83,8 @@ Response: { "groups": AffinityGroup[] }
 
 POST   /api/hubs/:hubId/directory/merge
 Permission: contacts:edit
-Body: { "primaryId": string, "secondaryId": string, "reEncryptedProfiles": {...} }
+Body: { "primaryId": string, "secondaryId": string, "mergedEncryptedSummary": string, "mergedSummaryEnvelopes": { "pubkey", "enc", "ct" }[], "mergedBlindIndexes": {...}, ... }
+       (the envelopes are stored verbatim as the contact's `summaryEnvelopes`, so they are the same `{pubkey, enc, ct}` envelope as on create — never a reduced `{recipientPubkey, encryptedKey}` form, which drops `ct` and leaves a summary nobody can open)
 Response: { "primaryId": string, "secondaryId": string }
 
 POST   /api/hubs/:hubId/directory/bulk

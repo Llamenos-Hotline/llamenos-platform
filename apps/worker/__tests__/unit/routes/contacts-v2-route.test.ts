@@ -778,7 +778,7 @@ describe('contact writes name an admin reader (#2174)', () => {
   })
 
   describe('POST /contacts/merge', () => {
-    const merge = (envelopes: { recipientPubkey: string; encryptedKey: string }[]) => ({
+    const merge = (envelopes: (typeof VALID_ENVELOPE)[]) => ({
       primaryId: VALID_UUID_1,
       secondaryId: VALID_UUID_2,
       mergedEncryptedSummary: 'merged',
@@ -788,14 +788,14 @@ describe('contact writes name an admin reader (#2174)', () => {
 
     it('accepts a merged summary sealed to an admin', async () => {
       const { app, mockContacts } = makeApp()
-      const res = await send(app, 'POST', '/merge', merge([{ recipientPubkey: VALID_ENVELOPE.pubkey, encryptedKey: 'k' }]))
+      const res = await send(app, 'POST', '/merge', merge([VALID_ENVELOPE]))
       expect(res.status).toBe(200)
       expect(mockContacts.mergeContacts).toHaveBeenCalledOnce()
     })
 
     it('REFUSES (422) a merged summary no admin can open, and merges nothing', async () => {
       const { app, mockContacts } = makeApp()
-      for (const envelopes of [[], [{ recipientPubkey: NON_ADMIN_ENVELOPE.pubkey, encryptedKey: 'k' }]]) {
+      for (const envelopes of [[], [NON_ADMIN_ENVELOPE]]) {
         const res = await send(app, 'POST', '/merge', merge(envelopes))
         expect(res.status).toBe(422)
       }
@@ -804,22 +804,22 @@ describe('contact writes name an admin reader (#2174)', () => {
   })
 
   describe('POST /contacts/bulk-create', () => {
-    const entry = (recipientPubkey: string) => ({
+    const entry = (envelope: typeof VALID_ENVELOPE) => ({
       encryptedSummary: 'enc',
-      summaryEnvelopes: [{ recipientPubkey, encryptedKey: 'k' }],
+      summaryEnvelopes: [envelope],
       blindIndexes: {},
     })
 
     it('accepts a batch whose every contact is sealed to an admin', async () => {
       const { app, mockContacts } = makeApp()
-      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE.pubkey), entry(VALID_ENVELOPE.pubkey)] })
+      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE), entry(VALID_ENVELOPE)] })
       expect(res.status).toBe(201)
       expect(mockContacts.bulkCreate).toHaveBeenCalledOnce()
     })
 
     it('REFUSES (422) the whole batch when any one contact is sealed to no admin', async () => {
       const { app, mockContacts } = makeApp()
-      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE.pubkey), entry(NON_ADMIN_ENVELOPE.pubkey)] })
+      const res = await send(app, 'POST', '/bulk-create', { contacts: [entry(VALID_ENVELOPE), entry(NON_ADMIN_ENVELOPE)] })
       expect(res.status).toBe(422)
       expect(mockContacts.bulkCreate).not.toHaveBeenCalled()
     })

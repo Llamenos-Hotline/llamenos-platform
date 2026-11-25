@@ -9,7 +9,7 @@
 import { expect } from '@playwright/test'
 import { Before, When, Then, getState, setState } from './fixtures'
 import { getScenarioState } from './common.steps'
-import { updateContactViaApi } from '../../api-helpers'
+import { ADMIN_SEED, realEnvelopesForWriterAndAdmin, updateContactViaApi } from '../../api-helpers'
 import { generateContentKey, encryptContent } from '../../crypto-helpers'
 import { LABEL_NOTE_KEY } from '@shared/crypto-labels'
 
@@ -38,12 +38,16 @@ When('the admin updates the contact\'s encrypted profile', async ({ request, wor
   const contactId = cmsState.lastContact?.id as string
   if (!contactId) throw new Error('No contact in cms state to update')
   const hubId = getScenarioState(world).hubId
+  // New content is sealed under a new key, so it travels with the envelopes that
+  // open it — and the server refuses (422) a set no admin is on (#2174).
+  const contentKey = generateContentKey()
   const updated = await updateContactViaApi(request, contactId, {
     encryptedSummary: encryptContent(
       JSON.stringify({ displayName: 'Updated Profile', contactType: 'individual', tags: [] }),
-      generateContentKey(),
+      contentKey,
       LABEL_NOTE_KEY,
     ),
+    summaryEnvelopes: await realEnvelopesForWriterAndAdmin(contentKey, ADMIN_SEED),
     identifierHashes: [`updated_${Date.now()}`],
   }, hubId)
   const cwState = getCwState(world)

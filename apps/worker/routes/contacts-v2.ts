@@ -67,14 +67,6 @@ function contactTiers(body: {
   ]
 }
 
-/**
- * The bulk-create and merge bodies name an envelope's recipient `recipientPubkey`;
- * the guard reads `pubkey`.
- */
-function addressed(envelopes: readonly { recipientPubkey: string }[]): SealedTier['envelopes'] {
-  return envelopes.map(e => ({ pubkey: e.recipientPubkey }))
-}
-
 const contactsV2 = new Hono<AppEnv>()
 
 // Inside /hubs/:hubId a contact or affinity-group id may only name a row of that
@@ -728,7 +720,7 @@ contactsV2.post('/merge',
     // The merged summary is a new ciphertext under a new key: only the envelopes
     // sent with it can open it.
     await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
-      { what: 'A merged contact summary', content: body.mergedEncryptedSummary, envelopes: addressed(body.mergedSummaryEnvelopes) },
+      { what: 'A merged contact summary', content: body.mergedEncryptedSummary, envelopes: body.mergedSummaryEnvelopes },
     ], { primaryId: body.primaryId, secondaryId: body.secondaryId, authorPubkey: c.get('pubkey') })
 
     const result = await services.contacts.mergeContacts(hubId, body)
@@ -795,7 +787,7 @@ contactsV2.post('/bulk-create',
     // one orphaned contact refuses the whole batch rather than being skipped.
     for (const [index, contact] of batch.entries()) {
       await assertSealedTiersReadable(services, c.env, c.get('hubId'), [
-        { what: `Contact ${index + 1} of the batch`, content: contact.encryptedSummary, envelopes: addressed(contact.summaryEnvelopes) },
+        { what: `Contact ${index + 1} of the batch`, content: contact.encryptedSummary, envelopes: contact.summaryEnvelopes },
       ], { authorPubkey: c.get('pubkey') })
     }
 
