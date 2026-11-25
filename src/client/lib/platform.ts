@@ -11,8 +11,9 @@
  * Import from here instead of directly from @tauri-apps/*.
  */
 
-import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
+import { LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META, LABEL_FILE_KEY, LABEL_FILE_METADATA, HKDF_CONTEXT_DRAFTS, LABEL_OFFLINE_QUEUE } from '@shared/crypto-labels'
 import { contentAadHex, keyWrapAadHex } from '@shared/envelope-aad'
+import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { AdminHpkeRecipient } from './admin-recipient'
 import type { PukHpkeEnvelope } from '@protocol/schemas'
 
@@ -984,26 +985,43 @@ function aesGcmParams(iv: Uint8Array<ArrayBuffer>, aadHex: string): AesGcmParams
   return params
 }
 
-export async function aesGcmEncrypt(plaintext: string, keyHex: string, aadHex: string): Promise<string> {
-  const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
+/**
+ * AES-256-GCM over RAW BYTES: returns `nonce_12 || ciphertext || tag_16`.
+ *
+ * This is the primitive every other form here is a thin wrapper over, and the
+ * only one a binary payload may use. The crate's mobile entry points
+ * (`mobile_symmetric_encrypt` / `mobile_symmetric_decrypt`) take their payload
+ * as hex and decode it to bytes BEFORE sealing, so "hex" is a transport
+ * encoding there and the sealed plaintext is the bytes themselves. Sealing the
+ * hex TEXT instead — which is what `aesGcmEncrypt(bytesToHex(file))` did —
+ * produces a ciphertext of 2n+28 bytes that opens to ASCII on every other
+ * client (#3003), and caps a file at half the size the upload limit allows.
+ */
+export async function aesGcmSealBytes(plaintext: Uint8Array, keyHex: string, aadHex: string): Promise<Uint8Array> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
-  const params = aesGcmParams(iv, aadHex)
-  const ct = new Uint8Array(await crypto.subtle.encrypt(params, cryptoKey, new TextEncoder().encode(plaintext)))
+  const cryptoKey = await crypto.subtle.importKey('raw', hexToBytes(keyHex) as Uint8Array<ArrayBuffer>, 'AES-GCM', false, ['encrypt'])
+  const ct = new Uint8Array(await crypto.subtle.encrypt(aesGcmParams(iv, aadHex), cryptoKey, plaintext as Uint8Array<ArrayBuffer>))
   const packed = new Uint8Array(iv.length + ct.length)
   packed.set(iv)
   packed.set(ct, iv.length)
-  return Array.from(packed, b => b.toString(16).padStart(2, '0')).join('')
+  return packed
+}
+
+/** Open `nonce_12 || ciphertext || tag_16` to the raw bytes {@link aesGcmSealBytes} sealed. */
+export async function aesGcmOpenBytes(packed: Uint8Array, keyHex: string, aadHex: string): Promise<Uint8Array> {
+  const iv = packed.slice(0, 12)
+  const ct = packed.slice(12)
+  const cryptoKey = await crypto.subtle.importKey('raw', hexToBytes(keyHex) as Uint8Array<ArrayBuffer>, 'AES-GCM', false, ['decrypt'])
+  return new Uint8Array(await crypto.subtle.decrypt(aesGcmParams(iv, aadHex), cryptoKey, ct))
+}
+
+/** AES-256-GCM over UTF-8 text; the ciphertext is hex of `nonce_12 || ciphertext || tag_16`. */
+export async function aesGcmEncrypt(plaintext: string, keyHex: string, aadHex: string): Promise<string> {
+  return bytesToHex(await aesGcmSealBytes(utf8ToBytes(plaintext), keyHex, aadHex))
 }
 
 export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string, aadHex: string): Promise<string> {
-  const data = new Uint8Array((ciphertextHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
-  const iv = data.slice(0, 12)
-  const ct = data.slice(12)
-  const keyBytes = new Uint8Array((keyHex.match(/.{2}/g) ?? []).map(b => parseInt(b, 16)))
-  const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
-  const plaintext = await crypto.subtle.decrypt(aesGcmParams(iv, aadHex), cryptoKey, ct)
-  return new TextDecoder().decode(plaintext)
+  return bytesToUtf8(await aesGcmOpenBytes(hexToBytes(ciphertextHex), keyHex, aadHex))
 }
 
 /**
@@ -1013,7 +1031,7 @@ export async function aesGcmDecrypt(ciphertextHex: string, keyHex: string, aadHe
  * device's X25519 encryption pubkey (they differ in v3). Otherwise returns
  * the pubkey as-is (assumes it's already an encryption pubkey from the server).
  */
-async function resolveEncryptionPubkey(signingOrEncPubkey: string): Promise<string> {
+export async function resolveEncryptionPubkey(signingOrEncPubkey: string): Promise<string> {
   const deviceState = await getDevicePubkeys()
   if (deviceState && signingOrEncPubkey === deviceState.signingPubkeyHex) {
     return deviceState.encryptionPubkeyHex
@@ -1449,21 +1467,47 @@ export async function openOfflineQueue(ciphertextHex: string): Promise<string> {
 
 
 
-/** @deprecated Use hpkeOpenFromState with LABEL_FILE_METADATA. */
-export async function decryptFileMetadata(
-  encryptedContentHex: string,
-  ephemeralPubkeyHex: string,
-): Promise<string | null> {
-  void [encryptedContentHex, ephemeralPubkeyHex]
-  throw new Error('decryptFileMetadata removed in v3 — use hpkeOpenFromState')
+/**
+ * Open a stored file's content key from the envelope addressed to this device.
+ * The key is per file and unlocks that file's ciphertext only.
+ */
+export async function unwrapFileKey(envelope: KeyEnvelope): Promise<string> {
+  return hpkeOpenKeyFromState(
+    toIpcEnvelope(1 /* LABEL_FILE_KEY */, envelope),
+    LABEL_FILE_KEY,
+    keyWrapAadHex(LABEL_FILE_KEY),
+  )
 }
 
-/** @deprecated Use hpkeOpenKeyFromState with LABEL_FILE_KEY. */
-export async function unwrapFileKey(
+/**
+ * Open one of a file's metadata entries (the one addressed to this device):
+ * HPKE-open its per-entry key, then AES-GCM-open the JSON under the canonical
+ * `LABEL_FILE_METADATA` content AAD. Returns the metadata JSON text.
+ */
+export async function decryptFileMetadata(entry: {
+  encryptedContent: string
+  enc: string
+  ct: string
+}): Promise<string> {
+  const keyHex = await hpkeOpenKeyFromState(
+    toIpcEnvelope(2 /* LABEL_FILE_METADATA */, entry),
+    LABEL_FILE_METADATA,
+    keyWrapAadHex(LABEL_FILE_METADATA),
+  )
+  return aesGcmDecrypt(entry.encryptedContent, keyHex, contentAadHex(LABEL_FILE_METADATA))
+}
+
+/**
+ * Re-wrap a file's content key for another reader: open it with this device's
+ * key and seal it to `newRecipientPubkeyHex`, so the key is never held anywhere
+ * but the webview's memory for the length of the call.
+ */
+export async function rewrapFileKey(
   envelope: KeyEnvelope,
-): Promise<string> {
-  void envelope
-  throw new Error('unwrapFileKey removed in v3 — use hpkeOpenKeyFromState with LABEL_FILE_KEY')
+  newRecipientPubkeyHex: string,
+): Promise<KeyEnvelope> {
+  const keyHex = await unwrapFileKey(envelope)
+  return hpkeWrapKey(keyHex, newRecipientPubkeyHex, LABEL_FILE_KEY)
 }
 
 /** @deprecated Use hpkeUnwrapAndSetHubKey — hub key stays in Rust CryptoState. */
@@ -1472,16 +1516,6 @@ export async function unwrapHubKey(
 ): Promise<string> {
   void envelope
   throw new Error('unwrapHubKey removed — use hpkeUnwrapAndSetHubKey (hub key stays in Rust)')
-}
-
-/** @deprecated Use hpkeOpenKeyFromState + hpkeSealKey composition. */
-export async function rewrapFileKey(
-  encryptedFileKeyHex: string,
-  ephemeralPubkeyHex: string,
-  newRecipientPubkeyHex: string,
-): Promise<RecipientEnvelope> {
-  void [encryptedFileKeyHex, ephemeralPubkeyHex, newRecipientPubkeyHex]
-  throw new Error('rewrapFileKey removed in v3 — compose hpkeOpenKeyFromState + hpkeSealKey')
 }
 
 /**

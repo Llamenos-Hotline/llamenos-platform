@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/lib/auth'
-import { downloadFile, getFileEnvelopes, getFileMetadata } from '@/lib/api'
-import { decryptFile, decryptFileMetadata } from '@/lib/file-crypto'
+import { FileAccessDeniedError, openStoredFile } from '@/lib/stored-file'
 import * as keyManager from '@/lib/key-manager'
 import { FileIcon, ImageIcon, VideoIcon, Music, Download, Loader2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { EncryptedFileMetadata, FileKeyEnvelope } from '@shared/types'
+import type { EncryptedFileMetadata } from '@shared/types'
 
 interface FilePreviewProps {
   fileId: string
+  /**
+   * The hub the file belongs to — the hub of the conversation it was attached
+   * to. Omit it only where the file is of the hub being browsed. The file is
+   * requested through this hub whichever hub is active (multi-hub axiom).
+   */
+  hubId?: string
 }
 
 function formatFileSize(bytes: number): string {
@@ -18,7 +23,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function FilePreview({ fileId }: FilePreviewProps) {
+export function FilePreview({ fileId, hubId }: FilePreviewProps) {
   const { t } = useTranslation()
   const { hasDeviceKey, publicKey } = useAuth()
   const [loading, setLoading] = useState(true)
@@ -38,49 +43,20 @@ export function FilePreview({ fileId }: FilePreviewProps) {
       }
 
       try {
-        const [encryptedData, { envelopes }, { metadata: metadataList }] = await Promise.all([
-          downloadFile(fileId),
-          getFileEnvelopes(fileId),
-          getFileMetadata(fileId),
-        ])
-
+        const file = await openStoredFile(fileId, hubId)
         if (!mounted) return
 
-        // Find our envelope
-        const myPubkey = publicKey
-        let envelope: FileKeyEnvelope | undefined
-        if (myPubkey) {
-          envelope = envelopes.find(e => e.pubkey === myPubkey)
-        }
-        if (!envelope && envelopes.length > 0) {
-          envelope = envelopes[0]
-        }
-        if (!envelope) {
-          setError(t('reports.noAccess', { defaultValue: 'No access to this file' }))
-          setLoading(false)
-          return
-        }
-
-        // Decrypt metadata first to get MIME type
-        let decryptedMeta: EncryptedFileMetadata | null = null
-        const myMetadata = metadataList.find(m => m.pubkey === myPubkey) || metadataList[0]
-        if (myMetadata) {
-          decryptedMeta = await decryptFileMetadata(myMetadata.encryptedContent, myMetadata.enc)
-          if (decryptedMeta && mounted) {
-            setMetadata(decryptedMeta)
-          }
-        }
-
-        // Decrypt file content
-        const { blob } = await decryptFile(encryptedData, envelope)
-        if (!mounted) return
-
-        const resolvedMime = decryptedMeta?.mimeType || 'application/octet-stream'
-        const typedBlob = new Blob([blob], { type: resolvedMime })
-        objectUrl = URL.createObjectURL(typedBlob)
+        setMetadata(file.metadata)
+        const resolvedMime = file.metadata?.mimeType || 'application/octet-stream'
+        objectUrl = URL.createObjectURL(new Blob([file.blob], { type: resolvedMime }))
         setBlobUrl(objectUrl)
-      } catch {
-        if (mounted) setError(t('reports.decryptError', { defaultValue: 'Failed to decrypt file' }))
+      } catch (err) {
+        if (!mounted) return
+        // No envelope addressed to this device is "you are not a reader", not a
+        // decrypt failure — and never a reason to try someone else's envelope.
+        setError(err instanceof FileAccessDeniedError
+          ? t('reports.noAccess', { defaultValue: 'No access to this file' })
+          : t('reports.decryptError', { defaultValue: 'Failed to decrypt file' }))
       } finally {
         if (mounted) setLoading(false)
       }
@@ -92,7 +68,7 @@ export function FilePreview({ fileId }: FilePreviewProps) {
       mounted = false
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [fileId, hasDeviceKey, publicKey, t])
+  }, [fileId, hubId, hasDeviceKey, publicKey, t])
 
   if (loading) {
     return (

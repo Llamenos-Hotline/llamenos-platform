@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { EntityTypeDefinition, EntityFieldDefinition } from '@/lib/api'
 import { LocationField, type LocationFieldValue } from '@/components/ui/location-field'
 import { EntityFileField } from './entity-file-field'
+import { FilePreview } from '@/components/FilePreview'
 import type { FileFieldValue } from '@protocol/schemas/entity-schema'
 
 export type SchemaFieldValues = Record<string, string | number | boolean | string[]>
@@ -478,9 +479,9 @@ function FieldInput({
         : null
       if (readOnly) {
         return (
-          <p id={fieldId} className="text-sm text-muted-foreground" data-testid={`input-${field.name}`}>
-            {fileVal ? '— file attached —' : '—'}
-          </p>
+          <div id={fieldId} className="text-sm text-muted-foreground" data-testid={`input-${field.name}`}>
+            {fileVal ? <FilePreview fileId={fileVal.fileId} hubId={formHubId} /> : '—'}
+          </div>
         )
       }
       return (

@@ -37,6 +37,8 @@ import {
   HKDF_CONTEXT_DRAFTS,
   HKDF_SALT,
   LABEL_CALL_META,
+  LABEL_FILE_KEY,
+  LABEL_FILE_METADATA,
   LABEL_HUB_KEY_WRAP,
   LABEL_MESSAGE,
   LABEL_NOTE_KEY,
@@ -103,7 +105,13 @@ const OPEN_ALLOWED_LABELS: readonly string[] = [
   LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
   LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
 ]
-const OPEN_KEY_ALLOWED_LABELS: readonly string[] = [LABEL_NOTE_KEY, LABEL_MESSAGE, LABEL_CALL_META]
+const OPEN_KEY_ALLOWED_LABELS: readonly string[] = [
+  LABEL_NOTE_KEY,
+  LABEL_MESSAGE,
+  LABEL_CALL_META,
+  LABEL_FILE_KEY,
+  LABEL_FILE_METADATA,
+]
 
 function requireAllowedLabel(command: string, label: string, allowed: readonly string[]): void {
   if (!allowed.includes(label)) {

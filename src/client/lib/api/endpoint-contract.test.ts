@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActiveHub, ApiError, NoActiveHubError } from './client'
 import { getRecoveryGroup } from './recovery'
 import { updateDirectoryContact } from './directory'
-import { initUpload, completeUpload, getFileEnvelopes } from './files'
+import { initUpload, completeUpload, getFileEnvelopes, getFileMetadata } from './files'
 import { createHubRole, createRole, deleteHubRole, listHubRoles, listRoles, updateHubRole } from './roles'
 import { getMyHubPermissions } from './hubs'
 import { archiveReportType, createReportType, getReportTypesAdmin, updateReportType } from './reports'
@@ -96,6 +96,15 @@ describe('files', () => {
       { method: 'POST', url: '/api/hubs/hub-1/uploads/init' },
       { method: 'POST', url: '/api/hubs/hub-1/uploads/u-1/complete' },
       { method: 'GET', url: '/api/hubs/hub-1/files/f-1/envelopes' },
+    ])
+  })
+
+  it('reads a file through the hub it belongs to, not the active one (multi-hub axiom)', async () => {
+    await getFileEnvelopes('f-1', 'hub-b')
+    await getFileMetadata('f-1', 'hub-b')
+    expect(calls).toEqual([
+      { method: 'GET', url: '/api/hubs/hub-b/files/f-1/envelopes' },
+      { method: 'GET', url: '/api/hubs/hub-b/files/f-1/metadata' },
     ])
   })
 

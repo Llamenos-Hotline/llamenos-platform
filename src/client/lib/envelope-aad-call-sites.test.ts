@@ -21,17 +21,21 @@ import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
 
 const mocks = vi.hoisted(() => ({
   aesGcmEncrypt: vi.fn(async (_pt: string, _key: string, _aadHex: string) => '00'),
-  aesGcmDecrypt: vi.fn(async (_ct: string, _key: string, _aadHex: string) => '010203'),
+  aesGcmSealBytes: vi.fn(async (_pt: Uint8Array, _key: string, _aadHex: string) => new Uint8Array(29)),
+  aesGcmOpenBytes: vi.fn(async (_ct: Uint8Array, _key: string, _aadHex: string) => new Uint8Array([1, 2, 3])),
+  resolveEncryptionPubkey: vi.fn(async (pubkey: string) => pubkey),
   hpkeWrapKey: vi.fn(async (_key: string, _pubkey: string, _label: string) => ({ enc: 'ab'.repeat(32), ct: 'cd' })),
-  unwrapFileKey: vi.fn(async (_enc: string, _ct: string) => 'cd'.repeat(32)),
-  decryptFileMetadata: vi.fn(async (_content: string, _enc: string) => null),
-  rewrapFileKey: vi.fn(async (_enc: string, _ct: string, _pub: string) => ({ enc: 'ab', ct: 'cd' })),
+  unwrapFileKey: vi.fn(async (_envelope: unknown) => 'cd'.repeat(32)),
+  decryptFileMetadata: vi.fn(async (_entry: unknown) => '{}'),
+  rewrapFileKey: vi.fn(async (_envelope: unknown, _pub: string) => ({ enc: 'ab', ct: 'cd' })),
 }))
-const { aesGcmEncrypt, aesGcmDecrypt, hpkeWrapKey } = mocks
+const { aesGcmEncrypt, aesGcmSealBytes, aesGcmOpenBytes, hpkeWrapKey } = mocks
 
 vi.mock('./platform', () => ({
   aesGcmEncrypt: mocks.aesGcmEncrypt,
-  aesGcmDecrypt: mocks.aesGcmDecrypt,
+  aesGcmSealBytes: mocks.aesGcmSealBytes,
+  aesGcmOpenBytes: mocks.aesGcmOpenBytes,
+  resolveEncryptionPubkey: mocks.resolveEncryptionPubkey,
   hpkeWrapKey: mocks.hpkeWrapKey,
   unwrapFileKey: mocks.unwrapFileKey,
   decryptFileMetadata: mocks.decryptFileMetadata,
@@ -51,9 +55,10 @@ describe('file envelopes bind the canonical AAD', () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'evidence.txt', { type: 'text/plain' })
     await encryptFile(file, [READER_PUBKEY])
 
-    expect(aesGcmEncrypt).toHaveBeenCalledTimes(2)
-    expect(aesGcmEncrypt.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
-    expect(aesGcmEncrypt.mock.calls[1][2]).toBe(contentAadHex(LABEL_FILE_METADATA))
+    expect(aesGcmSealBytes).toHaveBeenCalledTimes(1)
+    expect(aesGcmSealBytes.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
+    expect(aesGcmEncrypt).toHaveBeenCalledTimes(1)
+    expect(aesGcmEncrypt.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_METADATA))
 
     // The key wraps go through hpkeWrapKey, which seals under keyWrapAad(label).
     expect(hpkeWrapKey).toHaveBeenCalledTimes(2)
@@ -61,7 +66,7 @@ describe('file envelopes bind the canonical AAD', () => {
     expect(hpkeWrapKey.mock.calls[1][2]).toBe(LABEL_FILE_METADATA)
 
     // No layer was sealed with an empty AAD.
-    for (const call of aesGcmEncrypt.mock.calls) {
+    for (const call of [...aesGcmSealBytes.mock.calls, ...aesGcmEncrypt.mock.calls]) {
       expect(call[2]).not.toBe('')
     }
   })
@@ -69,7 +74,7 @@ describe('file envelopes bind the canonical AAD', () => {
   it('decryptFile opens the content with contentAad(FILE_KEY)', async () => {
     await decryptFile(new ArrayBuffer(4), { pubkey: READER_PUBKEY, enc: 'ab'.repeat(32), ct: 'cd' })
 
-    expect(aesGcmDecrypt).toHaveBeenCalledTimes(1)
-    expect(aesGcmDecrypt.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
+    expect(aesGcmOpenBytes).toHaveBeenCalledTimes(1)
+    expect(aesGcmOpenBytes.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
   })
 })

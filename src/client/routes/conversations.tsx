@@ -261,6 +261,7 @@ function ConversationsPage() {
             <div className="flex-1 overflow-hidden">
               <ConversationThread
                 conversationId={selectedConv.id}
+                hubId={selectedConv.hubId}
                 messages={messages}
                 isLoading={messagesLoading}
               />
