@@ -163,6 +163,7 @@ docs/
 
 ## Gotchas
 
+- **`MISROUTED` is a routing fact, not a failure**: an issue whose lane owns none of the paths it cites is re-labelled to the owning lane before any worker launches, and costs no attempt. `needs-human` means a human must act; never use it to park work that is only in the wrong lane.
 - `@noble/ciphers` and `@noble/hashes` require `.js` extension in imports (e.g., `@noble/ciphers/chacha.js`)
 - `schnorr` is a separate named export: `import { schnorr } from '@noble/curves/secp256k1.js'`
 - Hub key is random bytes, NOT derived from any identity key — see `hub-key-manager.ts`
@@ -342,7 +343,7 @@ there, do not re-paste them here.
 
 ### Parallel Agent Execution
 
-- **Dispatch agents per client in parallel**: iOS, Android, Desktop, Backend work happens simultaneously — never serialize across platforms
+- **One issue, one PR, one authoring lane** (#2979): dispatch a whole child issue or epic stage to ONE worker, never one per platform. The worker takes every file the fix needs; the orchestrator grants other lanes' paths at PR open and those lanes review. Independent issues for different platforms still run in parallel. A contract change (crate / protocol / vectors / bindings + consumers) is one PR authored by `shared`.
 - **Test-first on changes**: Before running any suite, update tests/test infra to match the change. Never run to see what breaks.
 - **After every major iteration**: Run all e2e and test suites (iOS unit, Android unit, Desktop E2E, backend BDD) to confirm green before moving on
 - **Fully complete plans**: Never mark a spec/plan done before all tasks are complete. No quiet deferral. If something is incomplete, say so and keep going.
