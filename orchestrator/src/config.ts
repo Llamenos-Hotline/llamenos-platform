@@ -90,6 +90,25 @@ export const SCOPE_ONLY_GRANT_PATHS: Readonly<Record<(typeof SCOPE_ONLY_LANE_IDS
 }
 
 /**
+ * The contract owner (#2979 point 1). It owns the cross-platform contract —
+ * the Rust crypto crate, the protocol schemas and codegen, the shared types,
+ * the cross-platform test vectors and the generated bindings committed into
+ * the client trees (its fragment lists them) — and authors a contract change
+ * TOGETHER with its consumers, as one PR. The consumer lanes review that PR;
+ * they do not each author a slice of it. `route.ts` routes an issue to this
+ * lane when it cites the contract and two or more consumer lanes.
+ *
+ * A constant in this human-gated file, not a fragment field: which lane may
+ * author every consumer's half of a change is an authority decision.
+ */
+export const CONTRACT_LANE_ID: (typeof LANE_IDS)[number] = 'shared'
+
+/** The lanes whose code consumes what the contract owner regenerates — the
+ *  server and the three clients. Infra consumes no schema or binding, so an
+ *  issue citing the contract plus a runbook is not a cross-platform change. */
+export const CONTRACT_CONSUMER_LANE_IDS: readonly (typeof LANE_IDS)[number][] = ['backend', 'desktop', 'ios', 'android']
+
+/**
  * Lane order is claim priority: the first lane to claim an item owns it, so two
  * workers never race the same issue. `shared` sits high because protocol and
  * crypto changes block the client lanes that consume their codegen.
@@ -639,10 +658,10 @@ export const GRANT_EXCLUDED_PATHS: readonly string[] = [
   // grant-excluded — a lane able to edit the scope judging it could widen its
   // own authority inside a branch, before any reviewer sees the diff.
   '.claude/',
-  // Mac CI host code (#2867/#2935). `mac` is a fragment, not a lane, so no PR's
-  // own lane can write these and a grant is refused them on purpose: they
-  // execute on the shared self-hosted runner, or are the rail judging it. Listed
-  // here so the gate says "grant-excluded" — true — rather than "owned by no lane".
+  // Mac CI host code (#2867/#2935/#2723). Infra AUTHORS these — `mac` is a
+  // fragment, not a lane, and reviews them — and a grant is refused them on
+  // purpose: they execute on the shared self-hosted runner, or are the rail
+  // judging it, so only infra's own PR may write them.
   'scripts/ci/mac-runner-disk-guard.sh',
   'scripts/mac-run.sh',
   'tests/runner-boundary.spec.ts',

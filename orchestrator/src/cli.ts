@@ -60,6 +60,8 @@ import {
 } from './worktree.js'
 import { GitHubSource, toWorkItem, type RawIssue } from './source.js'
 import { tick, type TickDeps, type TickResult, type SettleInput, type DispatchOutcome } from './tick.js'
+import { indexTree, type TreeIndex } from './route.js'
+import { LANE_LABEL_PREFIX } from './select.js'
 import { claimReentry, linkTrustedModules } from './reverify.js'
 import type { WorkItem } from './source.js'
 import { renderDigest, resumeCommand, waitingOnHuman, type DigestInput, type LaneStatus } from './digest.js'
@@ -809,6 +811,34 @@ async function commentOnIssue(itemId: string, body: string): Promise<void> {
 }
 
 /**
+ * The tree routing checks cited paths against (#1764): the runtime checkout's
+ * HEAD, which `assessRuntimeCurrency` has just confirmed is origin/main. Read
+ * from git's object store, never the working tree — nothing here depends on,
+ * or touches, checked-out files (#2590).
+ */
+async function readTrackedTree(): Promise<TreeIndex | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', REPO_ROOT, 'ls-tree', '-r', '--name-only', 'HEAD'], {
+      timeout: 30_000, maxBuffer: 64 * 1024 * 1024,
+    })
+    const files = stdout.split('\n').filter((l) => l.length > 0)
+    return files.length === 0 ? undefined : indexTree(files)
+  } catch (e) {
+    log(`routing: git ls-tree failed: ${errMsg(e)}`)
+    return undefined
+  }
+}
+
+/** #1764: move an issue's `lane:` label. One `gh issue edit`, so a failure
+ *  leaves either the old label or the new one, never neither. */
+async function relabelLane(itemId: string, from: string | undefined, to: string): Promise<void> {
+  await gh([
+    'issue', 'edit', itemId, '--add-label', `${LANE_LABEL_PREFIX}${to}`,
+    ...(from === undefined || from === to ? [] : ['--remove-label', `${LANE_LABEL_PREFIX}${from}`]),
+  ])
+}
+
+/**
  * `needsHuman` is FORWARDED, not dropped — and this mapping is a separate,
  * exported, pure function precisely because it was being dropped here, in a
  * hand-written object literal, where nothing could see it. `settle`'s one
@@ -1142,6 +1172,8 @@ async function runTick(): Promise<number> {
     requestReviewOnNewHead,
     claimReentry: (pr, sha) => claimReentry(pr, sha),
     findWedge,
+    readTree: readTrackedTree,
+    relabelLane,
     dispatch: realDispatch,
     verifyMechanical,
     prDiff,
@@ -1167,6 +1199,17 @@ async function runTick(): Promise<number> {
   process.stdout.write(
     `ran: ${r.ran} attempted: ${r.attempted} failed: ${r.failed} shadowed: ${r.shadowed} rejections: ${r.rejections.length}\n`,
   )
+  // #1764 / #2623: routing findings are printed beside the counts, so an item
+  // that will move — or that no lane can take — is never a silent rejection.
+  for (const m of r.misrouted) {
+    process.stdout.write(
+      `misrouted: #${m.id} ${m.from === undefined ? '(no lane label)' : `lane:${m.from}`} -> ` +
+      `${m.to === undefined ? 'NO LANE OWNS ITS PATHS' : `lane:${m.to}`}${m.paths.length > 0 ? ` (${m.paths.join(', ')})` : ''}\n`,
+    )
+  }
+  if (r.unrouted.length > 0) {
+    process.stdout.write(`unrouted: ${r.unrouted.length} dispatchable issue(s) claimable by no lane: ${r.unrouted.map((id) => `#${id}`).join(', ')}\n`)
+  }
 
   // Issue #2699: the standing backlog of salvage branches, once per pass, next
   // to the numbers an operator already reads.

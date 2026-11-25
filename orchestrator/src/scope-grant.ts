@@ -129,13 +129,14 @@ export type ScopeGrantOutcome =
 export function scopeGrantComment(plan: ScopeGrantPlan, applied: readonly string[]): string {
   const lines = Object.entries(plan.filesByLane)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([lane, files]) => `- \`${SCOPE_GRANT_PREFIX}${lane}\` — ${files.map((f) => `\`${f}\``).join(', ')}`)
+    .map(([lane, files]) => `- \`${SCOPE_GRANT_PREFIX}${lane}\` — lane \`${lane}\` owns and reviews ${files.map((f) => `\`${f}\``).join(', ')}`)
   return (
     `${SCOPE_GRANT_COMMENT_MARKER}\n` +
     `**Fleet-applied scope grant** (#2643) — this PR's diff crosses a lane boundary, so the orchestrator ` +
     `applied ${applied.map((l) => `\`${SCOPE_GRANT_PREFIX}${l}\``).join(', ')} and re-requested review so ` +
     `\`fleet/verify\` and \`fleet/review\` judge the change on its merits instead of stopping at ` +
-    `\`NO-VERDICT:scope\`.\n\n${lines.join('\n')}\n\n` +
+    `\`NO-VERDICT:scope\`. One issue is one PR (#2979): the authoring lane takes every file the fix needs, ` +
+    `and each lane named below reviews its own files rather than authoring a slice of them.\n\n${lines.join('\n')}\n\n` +
     `The gate still re-checks every file against these labels. CI, deploy and supply-chain paths ` +
     `(\`GRANT_EXCLUDED_PATHS\`), secrets, and paths no lane owns are never granted this way. ` +
     `If this widening is wrong, remove the label and the PR is judged on its own lane alone.`

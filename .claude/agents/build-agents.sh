@@ -19,6 +19,10 @@ set -euo pipefail
 #
 # Usage: bash .claude/agents/build-agents.sh          # regenerate in place
 #        bash .claude/agents/build-agents.sh --check  # exit 1 if a committed output is stale
+#
+# Atomic (#1840): every output is assembled and leak-checked in a scratch directory
+# first; the tree is written only when every lane passes, and a failing run names
+# every offending SOURCE file and line in one go.
 #        Run after editing any fragment or shared source file.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -64,13 +68,21 @@ if [[ ! -d "$FRAGMENTS_DIR" ]]; then
   exit 1
 fi
 
-BUILD_DIR="$SCRIPT_DIR"
-if [[ "$CHECK_MODE" == "1" ]]; then
-  BUILD_DIR="$(mktemp -d)"
-  trap 'rm -rf "$BUILD_DIR"' EXIT
-fi
+# Every run assembles into a scratch directory first and writes NOTHING into the
+# tree until every lane has passed the leak check below (#1840). A run that
+# stopped at the first offender used to leave that lane's committed definition
+# already rewritten and the rest untouched — a partial rebuild one `git commit -a`
+# away from landing.
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
+
+# An operator home or checkout path. The assembled output is committed to a public
+# repo, so one in any source would publish the operator's OS username.
+LEAK_RE='/(home|Users)/[A-Za-z0-9._-]+/|/media/[A-Za-z0-9._-]+/'
+SHARED_SOURCES=("$SHARED_FRAGMENT" "$SKILL_DIR/SKILL.md" "$SKILL_DIR/model-routing.md" "$SKILL_DIR/prompt-rules-llamenos.md" "$SKILL_DIR/prompt-template.md")
 
 built=0
+leaks=""
 for name in "${SUPERVISORS[@]}"; do
   fragment="$FRAGMENTS_DIR/$name.md"
   output="$BUILD_DIR/$name.md"
@@ -132,21 +144,29 @@ for name in "${SUPERVISORS[@]}"; do
 
   } > "$output"
 
-  # Assembled output is committed to a public repo. Two of its inputs live outside
-  # it (~/.claude/skills/...), so a hardcoded operator home/checkout path in one of
-  # them would silently re-leak the OS username on the next rebuild. Fail loudly.
-  if leak="$(grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|/media/[A-Za-z0-9._-]+/' "$output")"; then
-    echo "ERROR: $output contains an operator-specific absolute path:" >&2
-    echo "$leak" >&2
-    echo "Fix it at its source (a fragment, or a file under $SKILL_DIR) — use \$DISPATCH_REPO / \$WORKTREE_BASE / ~." >&2
-    exit 1
+  # Report the SOURCE file and line, never the generated output: the output is a
+  # file nobody may hand-edit, so pointing there sends the reader to the wrong place.
+  # Collected, not fatal on the first hit, so one run names every offender.
+  if grep -qE "$LEAK_RE" "$output"; then
+    for src in "$fragment" "${SHARED_SOURCES[@]}"; do
+      if hit="$(grep -nE "$LEAK_RE" "$src")"; then
+        while IFS= read -r line; do
+          leaks+="  $name <- ${src#"$SCRIPT_DIR"/}:$line"$'\n'
+        done <<< "$hit"
+      fi
+    done
   fi
 
   built=$((built + 1))
-  if [[ "$CHECK_MODE" != "1" ]]; then
-    echo "BUILT: $output"
-  fi
 done
+
+if [[ -n "$leaks" ]]; then
+  echo "ERROR: operator-specific absolute paths in the agent sources — nothing was written:" >&2
+  # Shared sources feed every lane; print each source line once, with every lane it reaches.
+  printf '%s' "$leaks" | sort -u >&2
+  echo "Fix each at its source (the file:line above) — use \$DISPATCH_REPO / \$WORKTREE_BASE / ~." >&2
+  exit 1
+fi
 
 if [[ "$CHECK_MODE" == "1" ]]; then
   drift=0
@@ -169,6 +189,12 @@ if [[ "$CHECK_MODE" == "1" ]]; then
   echo "Check passed: $built agent definitions match their sources."
   exit 0
 fi
+
+for name in "${SUPERVISORS[@]}"; do
+  [[ -f "$BUILD_DIR/$name.md" ]] || continue
+  cp "$BUILD_DIR/$name.md" "$SCRIPT_DIR/$name.md"
+  echo "BUILT: $SCRIPT_DIR/$name.md"
+done
 
 echo ""
 echo "Done. $built agent definitions assembled."

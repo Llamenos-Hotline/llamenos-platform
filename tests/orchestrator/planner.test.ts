@@ -18,7 +18,7 @@ vi.mock('node:fs', () => ({
 }))
 
 import {
-  proposeIssues, buildIssueCreateArgs, parseProposals, toProposedIssue,
+  proposeIssues, buildIssueCreateArgs, parseProposals, toProposedIssue, PROPOSAL_HOLD_NOTE,
   titleSimilarity, isNearDuplicate, NEEDS_HUMAN_LABEL, NEAR_DUPLICATE_THRESHOLD,
   type ProposedIssue, type PlannerInput,
 } from '../../orchestrator/src/roles/planner.js'
@@ -178,5 +178,15 @@ describe('toProposedIssue', () => {
   it('accepts a well-formed proposal with dependsOn', () => {
     expect(toProposedIssue({ title: 't', body: 'b', lane: 'shared', effort: 'xhigh', dependsOn: ['9'] }))
       .toEqual({ title: 't', body: 'b', lane: 'shared', effort: 'xhigh', dependsOn: ['9'] })
+  })
+})
+
+describe('needs-human says which act a human must take (#1815)', () => {
+  it('the created issue body names the act: accept or reject the agent proposal', () => {
+    const args = buildIssueCreateArgs({ title: 'T', body: 'B', lane: 'backend', effort: 'low' })
+    const body = args[args.indexOf('--body') + 1] ?? ''
+    expect(body.startsWith('B')).toBe(true)
+    expect(body).toContain(PROPOSAL_HOLD_NOTE)
+    expect(PROPOSAL_HOLD_NOTE).toContain('accept or reject the proposal')
   })
 })

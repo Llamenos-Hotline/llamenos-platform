@@ -103,6 +103,7 @@ function deps(over: Partial<TickDeps> = {}): TickDeps {
     listItems: async () => ({ ok: true as const, items: [item] }),
     readLabels: async () => ['agent-dispatchable', 'lane:infra'],
     findOpenPr: async () => '55', findWedge: async () => undefined,
+    readTree: async () => undefined, relabelLane: vi.fn(async () => {}),
     prHead: vi.fn(async () => ({ sha: NEW, branch: 'fleet/infra/7' })),
     verifyOpenPrHead: vi.fn(async () => passing),
     requestReviewOnNewHead: vi.fn(async () => 'Review re-requested from llamenos-auto.'),

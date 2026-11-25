@@ -3,7 +3,7 @@ import { LIMITS, MAX_ATTEMPTS_PER_ITEM, type Lane } from './config.js'
 import { providerOf } from './engines.js'
 import { failedAttemptsIn, type Outcome, type RunRecord } from './ledger.js'
 import { runReviewLoop, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
-import { judge, selectForLane, type Rejection } from './select.js'
+import { judge, selectForLane, LANE_LABEL_PREFIX, type Rejection } from './select.js'
 import type { ListResult, WorkItem } from './source.js'
 import { buildGateTrace } from './trace.js'
 import { fleetBranchFor, legacyFleetBranchFor } from './ci.js'
@@ -12,6 +12,9 @@ import {
   REENTRY_NOTE_PREFIX,
 } from './reverify.js'
 import type { VerifyInput, VerifyReport } from './verify.js'
+import {
+  attributePaths, authorFor, routeBlocked, routeForDispatch, surfaceOf, type DispatchRoute, type TreeIndex,
+} from './route.js'
 
 export interface DispatchOutcome {
   outcome: Outcome
@@ -181,6 +184,23 @@ export interface TickDeps {
    * worktree that justified it and parked four issues forever.
    */
   findWedge(lane: Lane, item: WorkItem): Promise<string | undefined>
+  /**
+   * #1764/#2623: the tracked tree of the runtime checkout (which is origin/main
+   * — runtime-sync.ts), read once per pass, so the paths an issue cites can be
+   * checked against the lane table BEFORE a worker is launched. `undefined`
+   * when it cannot be read: routing is then skipped and every item is
+   * dispatched as labelled — the behaviour before this check existed, never
+   * worse, and never a reason to re-route on a guess.
+   */
+  readTree(): Promise<TreeIndex | undefined>
+  /**
+   * Moves an item to the lane that owns it: removes `lane:<from>` (when given)
+   * and adds `lane:<to>`. THROWS on failure. The only label write routing
+   * performs — `lane:` describes what an issue touches, so correcting it makes
+   * the label true. It never adds or removes `agent-dispatchable`: what gets
+   * worked stays a human's decision.
+   */
+  relabelLane(itemId: string, from: string | undefined, to: string): Promise<void>
   dispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome>
   /** Mechanical gates: scope, never-write, diff-targeted tests. Injected so
    *  `tick` stays testable without a real worktree or a real `bunx vitest`. */
@@ -255,10 +275,25 @@ export interface TickResult {
   failed: number
   shadowed: number
   rejections: { id: string; reason: Rejection }[]
+  /** #1764: items not dispatched because their lane owns none of the paths
+   *  they cite, with where they were (or could not be) re-routed. */
+  misrouted: Misroute[]
+  /** #2623: dispatchable items carrying no `lane:` label — claimable by no
+   *  lane — whether or not this pass could route them. */
+  unrouted: string[]
+}
+
+export interface Misroute {
+  id: string
+  /** The lane the item was labelled for; `undefined` when it had none. */
+  from: string | undefined
+  /** The lane that should author it; `undefined` when no lane owns its paths. */
+  to: string | undefined
+  paths: string[]
 }
 
 const empty = (over: Partial<TickResult> = {}): TickResult =>
-  ({ ran: false, attempted: 0, failed: 0, shadowed: 0, rejections: [], ...over })
+  ({ ran: false, attempted: 0, failed: 0, shadowed: 0, rejections: [], misrouted: [], unrouted: [], ...over })
 
 let counter = 0
 function runId(now: number): string {
@@ -449,6 +484,7 @@ async function runLiveDispatch(
   item: WorkItem,
   lane: Lane,
   base: BaseRecord,
+  tree: TreeIndex | undefined,
 ): Promise<{ outcome: Outcome; threw: boolean }> {
   deps.record({ ...base, outcome: 'DISPATCHED' })
 
@@ -467,6 +503,8 @@ async function runLiveDispatch(
    * Every terminal path that did not itself arm must disarm.
    */
   let armed = false
+  /** Set when a BLOCKED report turns out to be a routing slip (#1764 ask 3). */
+  let rerouteTo: string | undefined
 
   try {
     const result = await deps.dispatch(item, lane)
@@ -693,7 +731,21 @@ async function runLiveDispatch(
       // keeping a worker that reported it cannot proceed from being
       // re-dispatched into the same wall on every pass. A person clears the
       // label once the missing grant or decision exists.
-      if (result.outcome === 'BLOCKED') needsHuman = true
+      //
+      // Unless the wall is a lane boundary (#1764 ask 3): when the paths the
+      // worker named are ones only another lane's OWN PR may write, the item
+      // is re-routed there — MISROUTED, no `needs-human`, because nobody needs
+      // to decide anything and a parked item is invisible work.
+      if (result.outcome === 'BLOCKED') {
+        const r = routeBlocked({ note: result.note ?? '', lane, lanes: deps.lanes, tree })
+        if (r.kind === 'misrouted') {
+          rerouteTo = r.to
+          final = { ...final, outcome: 'MISROUTED', note: truncateNote(`${r.why} -> ${LANE_LABEL_PREFIX}${r.to}: ${r.paths.join(', ')}`) }
+          deps.log(`item ${item.id} BLOCKED on another lane's paths — re-routing to ${r.to}: ${r.paths.join(', ')}`)
+        } else {
+          needsHuman = true
+        }
+      }
     }
   } catch (e) {
     threw = true
@@ -716,6 +768,13 @@ async function runLiveDispatch(
   }
 
   deps.record(final)
+
+  if (rerouteTo !== undefined) {
+    await moveLane(deps, item, lane.id, rerouteTo,
+      `The worker dispatched on lane \`${lane.id}\` reported BLOCKED on paths only lane \`${rerouteTo}\`'s own ` +
+      `PR may write (${final.note ?? ''}). This is a routing slip, not a decision anyone needs to make: the ` +
+      `issue has been moved to \`${LANE_LABEL_PREFIX}${rerouteTo}\` and the attempt was not counted.`)
+  }
 
   try {
     await deps.settle({ item, lane, outcome: final.outcome, worktree, branch, pr, needsHuman })
@@ -791,6 +850,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     const itemsByLane = new Map<string, WorkItem[]>()
     const allRejections: { id: string; reason: Rejection }[] = []
     const labelCache = new Map<string, string[] | undefined>()
+    const seen = new Map<string, WorkItem>()
 
     for (const lane of active) {
       const read = await deps.listItems(lane)
@@ -806,6 +866,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
       const items = read.items
       for (const item of items) {
         if (!labelCache.has(item.id)) labelCache.set(item.id, await deps.readLabels(item.id))
+        if (!seen.has(item.id)) seen.set(item.id, item)
       }
       const { candidates, rejections } = selectForLane(items, labelCache, lane)
       itemsByLane.set(lane.id, candidates)
@@ -816,6 +877,10 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
     let attempted = 0
     let failed = 0
     let shadowed = 0
+    const misrouted: Misroute[] = []
+    const tree = await readTreeSafely(deps)
+    const unrouted = await routeUnlabelled(deps, active, seen, labelCache, rows, tree, misrouted)
+    for (const id of unrouted) allRejections.push({ id, reason: 'unrouted' })
 
     for (const lane of active) {
       let taken = 0
@@ -842,8 +907,32 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
           await reenterFailedOpenPr(deps, lane, item, rows, reentryBase)
         }
 
-        if (failedAttemptsIn(rows, item.id) >= MAX_ATTEMPTS_PER_ITEM) {
-          deps.log(`item ${item.id} has exhausted ${MAX_ATTEMPTS_PER_ITEM} attempts — leaving for a human`)
+        // #1764: refuse to dispatch, instead of dispatching to refuse. Before
+        // the attempt budget, so an item parked by attempts in a lane that
+        // could never write its files is re-routed rather than left exhausted;
+        // and it takes no lane slot, so a misrouted head-of-line item cannot
+        // starve the lane.
+        const route = routeForDispatch({ text: `${item.title}\n${item.body}`, lane, lanes: deps.lanes, tree })
+        if (route.kind === 'misrouted') {
+          // An item with an open fleet PR is held by that PR, on whichever
+          // lane opened it: relabelling it would hand it to a lane whose
+          // `findOpenPr` looks only at its own branch and dispatches a
+          // second worker, and the MISROUTED row would mask the failed
+          // verification the reverify shepherd keys on.
+          if (await holdForOpenPr(deps, rows, item, lane, 'misrouted')) {
+            allRejections.push({ id: item.id, reason: 'pr-already-open' })
+            continue
+          }
+          allRejections.push({ id: item.id, reason: 'misrouted' })
+          misrouted.push({ id: item.id, from: lane.id, to: route.to, paths: route.paths })
+          await reportMisroute(deps, rows, lane, item, route)
+          continue
+        }
+
+        // Per lane (#1764): attempts another lane made before this item was
+        // routed here are not evidence this lane cannot do it.
+        if (failedAttemptsIn(rows, item.id, lane.id) >= MAX_ATTEMPTS_PER_ITEM) {
+          deps.log(`item ${item.id} has exhausted ${MAX_ATTEMPTS_PER_ITEM} attempts on lane ${lane.id} — leaving for a human`)
           continue
         }
 
@@ -852,7 +941,7 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
         const mid = await deps.checkHalt()
         if (mid.halted) {
           deps.log(`halted mid-pass: ${mid.reason ?? 'unknown'}`)
-          return { ran: true, halted: true, haltReason: mid.reason, attempted, failed, shadowed, rejections: allRejections }
+          return { ran: true, halted: true, haltReason: mid.reason, attempted, failed, shadowed, rejections: allRejections, misrouted, unrouted }
         }
 
         if (cooling) continue
@@ -874,9 +963,9 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
         // #705/#724/#729/#775/#784/#785's failure mode (three wasted worker
         // attempts each, rediscovering a PR that was already open) even if
         // whatever misclassified those prior attempts is never found.
-        const openPr = await deps.findOpenPr(lane, item)
-        if (openPr !== undefined) {
-          deps.log(`item ${item.id} rejected before dispatch: pr-already-open (pr ${openPr})`)
+        // Across ALL lanes, not just this one: a PR another lane opened
+        // for the same item (a human moved the label) still holds it.
+        if (await holdForOpenPr(deps, rows, item, lane, 'rejected before dispatch')) {
           allRejections.push({ id: item.id, reason: 'pr-already-open' })
           continue
         }
@@ -926,14 +1015,14 @@ export async function tick(deps: TickDeps): Promise<TickResult> {
           continue
         }
 
-        const { threw } = await runLiveDispatch(deps, item, lane, base)
+        const { threw } = await runLiveDispatch(deps, item, lane, base, tree)
         if (threw) failed++
         attempted++
         taken++
       }
     }
 
-    return { ran: true, attempted, failed, shadowed, rejections: allRejections }
+    return { ran: true, attempted, failed, shadowed, rejections: allRejections, misrouted, unrouted }
   } catch (e) {
     const msg = errorMessage(e)
     deps.log(`tick failed: ${msg}`)
@@ -977,4 +1066,168 @@ async function reportWedge(
   } catch (e) {
     deps.log(`wedge: could not comment on item ${item.id}: ${errorMessage(e)}`)
   }
+}
+
+/** Never throws: an unreadable tree means "do not route this pass". */
+async function readTreeSafely(deps: TickDeps): Promise<TreeIndex | undefined> {
+  try {
+    const tree = await deps.readTree()
+    if (tree === undefined) deps.log('routing: tracked tree unreadable — dispatching every item as labelled this pass')
+    return tree
+  } catch (e) {
+    deps.log(`routing: tracked tree unreadable (${errorMessage(e)}) — dispatching every item as labelled this pass`)
+    return undefined
+  }
+}
+
+/**
+ * Writes `outcome` + `note` for an item once per distinct note — the newest
+ * row for the item is the dedupe key, exactly as `reportWedge` does — and says
+ * whether it was new, so the caller comments once and not every pass.
+ */
+function recordOnce(deps: TickDeps, rows: RunRecord[], base: BaseRecord, outcome: Outcome, note: string): boolean {
+  const latest = rows.filter((r) => r.itemId === base.itemId).sort((a, b) => b.ts - a.ts)[0]
+  if (latest?.outcome === outcome && latest.note === note) return false
+  deps.record({ ...base, outcome, note })
+  return true
+}
+
+/** Relabel, then (best-effort) comment. Never throws: the next pass routes again. */
+async function moveLane(deps: TickDeps, item: WorkItem, from: string | undefined, to: string, comment: string | undefined): Promise<boolean> {
+  try {
+    await deps.relabelLane(item.id, from, to)
+    deps.log(`routing: item ${item.id} moved ${from === undefined ? '(no lane)' : `lane:${from}`} -> lane:${to}`)
+  } catch (e) {
+    deps.log(`routing: could not move item ${item.id} to lane:${to}: ${errorMessage(e)} — retried next pass`)
+    return false
+  }
+  if (comment !== undefined) {
+    try { await deps.commentOnIssue(item.id, comment) } catch (e) {
+      deps.log(`routing: could not comment on item ${item.id}: ${errorMessage(e)}`)
+    }
+  }
+  return true
+}
+
+function baseFor(deps: TickDeps, laneId: string, lane: Lane | undefined, item: WorkItem): BaseRecord {
+  const engine = lane?.engine ?? 'claude'
+  return {
+    ts: deps.now(), runId: runId(deps.now()), lane: laneId, itemId: item.id, itemName: item.title,
+    engine, provider: providerOf(engine, lane?.model),
+  }
+}
+
+/**
+ * #2979: an item's open fleet PR on ANY lane — `claiming` (the lane whose
+ * label the item carries, if any) first, then every other configured lane,
+ * `off` included, because a PR outlives its lane's mode. Returns the holder,
+ * or `undefined` when no lane has one (a `gh` read failure included, the
+ * `findOpenPr` default).
+ *
+ * An item that is held is never relabelled, routed or dispatched: its PR is
+ * waiting on GitHub, not on a worker. When the holder is not the claiming
+ * lane, the main loop never reaches the item on the holder's behalf, so this
+ * runs the holder's reverify shepherd (#2738) itself — live and outside its
+ * quota cooldown only, exactly the conditions the main loop applies.
+ */
+async function holdForOpenPr(
+  deps: TickDeps, rows: RunRecord[], item: WorkItem, claiming: Lane | undefined, context: string,
+): Promise<{ lane: Lane; pr: string } | undefined> {
+  const order = claiming === undefined ? deps.lanes : [claiming, ...deps.lanes.filter((l) => l.id !== claiming.id)]
+  for (const lane of order) {
+    const pr = await deps.findOpenPr(lane, item)
+    if (pr === undefined) continue
+    deps.log(`item ${item.id} ${context}: pr-already-open (pr ${pr} on lane ${lane.id}) — held by its PR`)
+    if (lane.id !== claiming?.id && lane.mode === 'live' &&
+      !inQuotaCooldown(rows, providerOf(lane.engine, lane.model), deps.now(), LIMITS)) {
+      await reenterFailedOpenPr(deps, lane, item, rows, baseFor(deps, lane.id, lane, item))
+    }
+    return { lane, pr }
+  }
+  return undefined
+}
+
+/**
+ * #1764: the audit trail and the re-route for an item whose lane owns none of
+ * its cited paths. One MISROUTED row and one issue comment per distinct
+ * verdict; the relabel is attempted on every pass until it lands, because it
+ * is idempotent and it is what makes the label true. Writes nothing to GitHub
+ * from a shadow lane. No attempt is recorded and no `needs-human` is added.
+ */
+async function reportMisroute(
+  deps: TickDeps, rows: RunRecord[], lane: Lane, item: WorkItem, route: Extract<DispatchRoute, { kind: 'misrouted' }>,
+): Promise<void> {
+  const dest = route.to === undefined ? 'no lane owns them' : `re-routed to ${LANE_LABEL_PREFIX}${route.to}`
+  const note = truncateNote(`${route.why}; ${dest}: ${route.paths.join(', ')}`)
+  deps.log(`item ${item.id} not dispatched: misrouted — ${note}`)
+  const fresh = recordOnce(deps, rows, baseFor(deps, lane.id, lane, item), 'MISROUTED', note)
+  if (lane.mode !== 'live') return
+  const comment = fresh
+    ? `Not dispatched to lane \`${lane.id}\`: ${route.why}.\n\nCited paths: ${route.paths.map((p) => `\`${p}\``).join(', ')}\n\n` +
+      (route.to === undefined
+        ? 'No lane owns these paths, so no lane can author this issue — that is a gap in the lane table ' +
+          '(`.claude/agents/fragments/`), not something a worker can fix. No attempt was spent.'
+        : `Moved to \`${LANE_LABEL_PREFIX}${route.to}\`. No worker was launched and no attempt was spent; lane ` +
+          `\`${route.to}\` picks it up on its next pass and reaches any other lane's paths through the grants applied ` +
+          'at PR open, with those lanes reviewing.')
+    : undefined
+  if (route.to !== undefined) await moveLane(deps, item, lane.id, route.to, comment)
+  else if (comment !== undefined) {
+    try { await deps.commentOnIssue(item.id, comment) } catch (e) {
+      deps.log(`routing: could not comment on item ${item.id}: ${errorMessage(e)}`)
+    }
+  }
+}
+
+/**
+ * #2623: an item with the require label and NO `lane:` label is rejected by
+ * every lane as `other-lane` — six correct per-lane answers adding up to one
+ * wrong global one, silently. This says it out loud, every pass, and routes
+ * what it can: when the cited paths name one authoring lane without a tie,
+ * the item gets that `lane:` label (only for a live lane — a shadow pass
+ * writes nothing). A tie, or an item citing no owned path, stays for a human,
+ * named in the log and the result.
+ */
+async function routeUnlabelled(
+  deps: TickDeps,
+  active: Lane[],
+  seen: Map<string, WorkItem>,
+  labelCache: Map<string, string[] | undefined>,
+  rows: RunRecord[],
+  tree: TreeIndex | undefined,
+  misrouted: Misroute[],
+): Promise<string[]> {
+  const unrouted: string[] = []
+  for (const item of seen.values()) {
+    const labels = labelCache.get(item.id)
+    if (labels === undefined) continue
+    if (labels.some((l) => l.startsWith(LANE_LABEL_PREFIX))) continue
+    if (!active.some((l) => labels.includes(l.requireLabel) && !labels.some((v) => l.vetoLabels.includes(v)))) continue
+    unrouted.push(item.id)
+    // Held by an open PR on any lane: never labelled, and its shepherd still
+    // runs (no lane claims an unlabelled item, so nothing else would run it).
+    if (await holdForOpenPr(deps, rows, item, undefined, 'not routed')) continue
+    if (tree === undefined) continue
+    const paths = surfaceOf(`${item.title}\n${item.body}`, tree)
+    const decision = authorFor(attributePaths(paths, deps.lanes), deps.lanes, { breakTies: false })
+    const to = decision.author
+    misrouted.push({ id: item.id, from: undefined, to, paths })
+    const target = to === undefined ? undefined : deps.lanes.find((l) => l.id === to)
+    const note = truncateNote(
+      to === undefined
+        ? `no ${LANE_LABEL_PREFIX} label, and not routable: ${paths.length === 0 ? 'the issue cites no tracked path' : decision.reason}`
+        : `no ${LANE_LABEL_PREFIX} label; routed to ${LANE_LABEL_PREFIX}${to} (${decision.reason}): ${paths.join(', ')}`,
+    )
+    const fresh = recordOnce(deps, rows, baseFor(deps, '(unrouted)', target, item), 'MISROUTED', note)
+    if (to === undefined || target?.mode !== 'live') continue
+    await moveLane(deps, item, undefined, to, fresh
+      ? `This issue is \`agent-dispatchable\` but carried no \`${LANE_LABEL_PREFIX}\` label, so no lane could claim it ` +
+        `(#2623). Its cited paths are owned by lane \`${to}\`, so it has been labelled \`${LANE_LABEL_PREFIX}${to}\`. ` +
+        'If that is wrong, change the label; nothing else was changed.'
+      : undefined)
+  }
+  if (unrouted.length > 0) {
+    deps.log(`${unrouted.length} dispatchable issue(s) claimable by no lane (no ${LANE_LABEL_PREFIX} label): ${unrouted.map((id) => `#${id}`).join(', ')}`)
+  }
+  return unrouted
 }

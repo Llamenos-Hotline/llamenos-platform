@@ -1,4 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises'
+import { appendFileSync, cpSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { describe, it, expect } from 'vitest'
@@ -108,4 +110,34 @@ describe('assembled agent definitions stay in sync with all of their sources', (
       expect(assembled.startsWith(`${fragment}\n${shared}`)).toBe(true)
     },
   )
+})
+
+/**
+ * #1840 — a failing build must leave the tree unchanged, name EVERY offender in
+ * one run, and point at the SOURCE file and line (a generated output is a file
+ * nobody may hand-edit). Audited by breaking it: run the real script on a copy
+ * of the agents directory with leaks planted in two different sources.
+ */
+describe('build-agents.sh is atomic and reports every leak at its source (#1840)', () => {
+  const snapshot = (dir: string): Record<string, string> =>
+    Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => [f, readFileSync(join(dir, f), 'utf8')]))
+
+  it('two planted leaks: exit 1, both named by source file:line, and no output rewritten', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'llamenos-build-agents-'))
+    try {
+      const agents = join(tmp, 'agents')
+      cpSync(join(FRAGMENTS_DIR, '..'), agents, { recursive: true })
+      const before = snapshot(agents)
+      appendFileSync(join(agents, 'fragments', 'ios-supervisor.md'), '\nsee /home/operator/x\n')
+      appendFileSync(join(agents, 'shared', 'model-routing.md'), '\nand /media/somebody/y\n')
+      const run = spawnSync('bash', [join(agents, 'build-agents.sh')], { encoding: 'utf8' })
+      expect(run.status).toBe(1)
+      expect(run.stderr).toContain('nothing was written')
+      expect(run.stderr).toMatch(/ios-supervisor <- fragments\/ios-supervisor\.md:\d+:see \/home\/operator\/x/)
+      expect(run.stderr).toMatch(/shared-supervisor <- shared\/model-routing\.md:\d+:and \/media\/somebody\/y/)
+      expect(snapshot(agents)).toEqual(before)
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
 })

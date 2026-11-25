@@ -647,6 +647,93 @@ Workflow `.github/workflows/fleet-review.yml`; CLI `review-gate` then
 `decideReviewGate`, `runReviewCi`) and `src/specialist.ts` (the agent
 registry).
 
+## The lane model (#2979): lanes route review, not PR boundaries
+
+Lanes decide **who authors** an issue and **who reviews** each file a PR
+touches. They do not fence what one PR may contain. One format change that
+spans the crate, the protocol, the server and the clients is one PR; slicing
+it per lane produced PRs that drifted apart, and refusing to write outside a
+lane parked work that was already diagnosed.
+
+1. **The contract owner is `shared`** (`CONTRACT_LANE_ID`, config.ts). It owns
+   `packages/crypto/`, `packages/protocol/`, `packages/shared/`, the
+   cross-platform test vectors and the generated bindings committed into the
+   client trees (its fragment lists them), and it authors a contract change
+   together with every consumer it breaks. The consumer lanes
+   (`CONTRACT_CONSUMER_LANE_IDS`: backend, desktop, ios, android) review it.
+   The router sends an issue to `shared` when it cites the contract and two or
+   more consumer lanes; a schema field one route reads stays a backend PR with
+   a `scope:shared` grant.
+2. **Every path has an owner that can hold a branch.**
+   `tests/orchestrator/lane-coverage.test.ts` fails for any tracked file owned
+   by no lane, or owned only by a fragment that is not a lane. The Mac host
+   files (`.github/workflows/ios-e2e.yml`, the two Mac scripts, the Mac runbook,
+   `tests/runner-boundary.spec.ts`) are authored by **infra** and reviewed by
+   `mac-supervisor` (#2723) — before, they were carved out to `mac`, which can
+   never hold a `fleet/<lane>/<item>` branch, so no fleet PR could change them.
+3. **Ownership is checked before dispatch, not after** (`route.ts`). Each pass
+   reads the tracked tree once (`git ls-tree HEAD` of the runtime checkout,
+   which is origin/main). For every item about to be dispatched, the paths its
+   title and body cite are matched against the lane table:
+   - the lane owns **any** cited path → dispatched (it reaches the rest through
+     grants at PR open);
+   - it owns **none** → `MISROUTED`: no worker is launched, no attempt is spent,
+     no lane slot is taken, and the issue's `lane:` label is moved to the lane
+     that owns the paths. The ledger row and the issue comment name the lane,
+     the paths and the target, once per distinct verdict. When no lane owns the
+     paths, that is reported as its own finding (a hole in the lane table) and
+     nothing is moved;
+   - a worker that reports `BLOCKED` naming paths only another lane's own PR
+     may write (grant-excluded, owned elsewhere) is re-routed the same way,
+     instead of being parked behind `needs-human`;
+   - an `agent-dispatchable` issue with **no** `lane:` label is reported every
+     pass (`unrouted:` in the tick output — six `other-lane` rejections used to
+     add up to silence, #2623) and labelled when one lane clearly owns its
+     paths. A tie, or no routable path, is left for a human, named.
+
+   The attempt budget is counted **per lane**: attempts a lane made before the
+   item was routed away say nothing about the lane that owns its files, so an
+   item parked in the wrong lane arrives at the right one with its budget
+   intact. `MISROUTED` is not a failed attempt and does not feed any breaker.
+   An unreadable tree skips routing for the pass and dispatches as labelled —
+   the behaviour before the check existed, never a guess.
+4. **The dispatch unit is an epic stage or a whole child issue**, never
+   "issue × lane". `scripts/fleet-triage.ts` uses the same router and no longer
+   emits `needs-split`: three implicated lanes is one cross-lane change
+   authored by one lane (the dominant one, or the contract owner), not a reason
+   to split. The grant comment at PR open names each lane as the reviewer of
+   its own files.
+5. **Labels say what is true.** `lane:` is corrected by routing. `needs-human`
+   means **a human must act** — see below.
+
+### What `needs-human` means (#1815)
+
+`needs-human` is a veto: every lane skips an issue carrying it. It is correct
+only when a person has to DO something no agent can: provide a credential or
+a vendor / app-store account, provision infrastructure, make a product or
+policy decision, sign off on a trust anchor, or look at a PR the fleet could
+not verify. The issue should say which act, with the recommended answer when
+there is one, so clearing it is a yes or no and not a re-investigation.
+
+The fleet itself adds it only for: a worker `BLOCKED` that is not a routing
+slip, a claimed success it could not verify, a branch mismatch, an
+`UNVERIFIED` review, and a verified PR whose auto-merge could not be armed. It
+never adds it for a misrouted item (that routes itself) or a wedged worktree
+(re-derived every pass). The planner (`llamenos-fleet plan`) attaches it to
+every issue it proposes, so an agent cannot propose work to itself and then do
+it; that is "a human must accept this proposal", and the issue body says so.
+
+### Ownership carve-outs, recorded so they stop being re-litigated (#1967)
+
+| Path | Owner | Why |
+|---|---|---|
+| `.claude/agents/fragments/` | **no lane**, grant-excluded | The fragments declare every lane's scope; a lane that could edit them could widen its own authority inside a branch. Written only on a non-fleet branch. The one deliberate `WITHHELD_BY_DESIGN` entry. |
+| `docs/security/`, `docs/protocol/`, `docs/architecture/E2EE_ARCHITECTURE.md` | shared, exclusively | Authority over the wire format and the crypto architecture is not bundled with operator tooling. |
+| the rest of `.claude/` (settings, hooks, skills, rendered agents) | infra, grant-excluded | Settings and hooks execute code and skills are instructions a worker executes. #1967 proposed leaving skills unowned; the #2935 ruling gave them an owner instead, and grant exclusion plus the CODEOWNERS catch-all keep any change to them on infra's own PR with a human reviewing it. |
+| `docs/deployment/`, `docs/runbooks/`, `docs/operations/` | infra (platform lanes own their surface's docs too) | #1967 recorded this grant as declined, because some of these documents are what an operator verifies a release against. The #2935 ruling granted it; the control that remains is the CODEOWNERS catch-all, which puts a human on every merge. |
+| `.github/ci/audit-allowlist.txt` | infra, grant-excluded | A grant cannot reach it, so no other lane can add a line to silence its own finding. "Removal-only" is not expressible as a path grant; #1967's suggested mechanism (a check that a new line carries a tracking issue and an expiry) is separate work. |
+| Mac host files | infra authors, mac reviews | See point 2. |
+
 ## Cross-lane PRs: `scope:<lane>` grants (#1115)
 
 A lane's scope is the set of paths its workers may write, parsed from

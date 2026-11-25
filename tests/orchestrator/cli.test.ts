@@ -132,7 +132,7 @@ describe('revert', () => {
 })
 
 describe('digestInputFrom', () => {
-  const baseTick: TickResult = { ran: true, attempted: 0, failed: 0, shadowed: 0, rejections: [] }
+  const baseTick: TickResult = { ran: true, attempted: 0, failed: 0, shadowed: 0, rejections: [], misrouted: [], unrouted: [] }
 
   it('populates sourceUnreadable from a TickResult aborted with source-unreadable, producing a degraded banner', () => {
     const input = digestInputFrom(

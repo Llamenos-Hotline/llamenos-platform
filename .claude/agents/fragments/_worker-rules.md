@@ -28,6 +28,33 @@ Each learned from a live fleet failure. Full list + failures:
   HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
   by path or by your PR description. Say so in the description if the paths do not show it.
 
+## The lane model (#2979) — lanes route review, not PR boundaries
+
+- **One issue, one PR, one authoring lane.** The dispatch unit is an epic stage or a whole child
+  issue, never "issue × lane". Supervisors dispatch ONE worker per unit; that worker takes every
+  file the fix needs, and the orchestrator grants the other lanes' paths at PR open
+  (`scope:<lane>`, `scope-grant.ts`). Lane owners REVIEW the files of theirs a PR touches — they
+  do not each author a slice. `--owns` deconflicts workers that are live at the same moment; it
+  is not a PR boundary, so never carve a second PR to stay inside it.
+- **The contract owner is `shared`.** The crypto crate, the protocol schemas and codegen, the
+  cross-platform test vectors and the committed generated bindings change together with their
+  consumers, in one PR authored by `shared`; backend, desktop, ios and android review it.
+- **Every path has an owner that can hold a branch.** No tracked path is owned only by a
+  scope-only fragment (`mac` reviews the Mac host files; infra authors them).
+  `tests/orchestrator/lane-coverage.test.ts` fails the moment one appears. The one path withheld
+  from every lane on purpose is the fragments directory that declares lane scope.
+- **Ownership is checked before dispatch.** An issue whose lane owns NONE of the paths it cites is
+  `MISROUTED`: no worker is launched, no attempt is spent, and the issue is re-labelled to the lane
+  that owns them (or reported as owned by nobody — a hole in the lane table, not a worker's
+  problem). A worker that reports BLOCKED naming paths only another lane's own PR may write is
+  re-routed the same way. So when you are blocked on another lane's files, name them
+  repo-relative in your status; do not guess at a workaround.
+- **`needs-human` means a human must act** — credentials, a vendor or app-store account,
+  provisioning, a product or policy decision, a trust-anchor sign-off, or a PR the fleet could not
+  verify. The issue must say WHICH act, in a comment, with the recommended answer when there is
+  one. Never apply it to park work an agent could do, and never to an issue that is merely in the
+  wrong lane — that is `MISROUTED`, and it routes itself.
+
 ## The write gate (#2556) — secrets, trust anchors, everything else
 
 `fleet/verify` and `fleet/review` sort every changed file into one of three classes. The

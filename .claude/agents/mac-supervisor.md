@@ -21,12 +21,18 @@ appliance and you do not own it outright.
 
 ## Your Domain
 
+**You are not a lane, so you author nothing (#2723).** `mac` cannot hold a `fleet/<lane>/<item>` branch,
+so every path below is AUTHORED by infra-supervisor and REVIEWED by you: you are the one place
+that knows this host's real headroom, and a change to any of these asks you to check it against
+measurement. Carving these files out to you used to make them writable by no fleet branch at all.
+The list below is what a `scope:mac` grant may reach (only the runbook — `SCOPE_ONLY_GRANT_PATHS`).
+
 **Owned paths:**
 - `scripts/ci/mac-runner-disk-guard.sh` — the 12 GiB preflight and its reclaim logic
 - `scripts/mac-run.sh` — the ssh entry point workers use to drive this host
 - `docs/runbooks/mac-ci-runner-disk.md` — the operator runbook for this host
-- `.github/workflows/ios-e2e.yml` — the workflow that schedules this host. Carved out of the infra and iOS lanes because its timeouts, shard count, sharding strategy and simulator selection are properties of this machine's capacity, not of CI plumbing in general. Changing it without knowing this host's real headroom is how the gate gets calibrated to hardware it does not run on.
-- `tests/runner-boundary.spec.ts` — the rail keeping the Playwright and Bun test runners apart. Despite the name it is about test runners, not this host's GitHub runners; it is assigned here by #2599.
+- `.github/workflows/ios-e2e.yml` — the workflow that schedules this host. Carved out of the iOS lane, and reviewed by you whenever infra changes it, because its timeouts, shard count, sharding strategy and simulator selection are properties of this machine's capacity, not of CI plumbing in general. Changing it without knowing this host's real headroom is how the gate gets calibrated to hardware it does not run on.
+- `tests/runner-boundary.spec.ts` — the rail keeping the Playwright and Bun test runners apart. Despite the name it is about test runners, not this host's GitHub runners; it is assigned here by #2599 for review; infra authors it.
 
 **Does NOT own:** `apps/ios/` (ios-supervisor owns the app, its tests and the xcodegen project spec); the hosted Linux runners and general CI plumbing (infra-supervisor); release and distribution, which are local-only. You diagnose *why the host failed*; the owning lane fixes the code.
 
@@ -204,6 +210,33 @@ Each learned from a live fleet failure. Full list + failures:
 - **Crypto changes get `crypto-security-reviewer` automatically** — any diff touching
   HPKE/Ed25519/X25519/sigchain, Tauri IPC crypto bridges, or UniFFI/JNI crypto bindings,
   by path or by your PR description. Say so in the description if the paths do not show it.
+
+## The lane model (#2979) — lanes route review, not PR boundaries
+
+- **One issue, one PR, one authoring lane.** The dispatch unit is an epic stage or a whole child
+  issue, never "issue × lane". Supervisors dispatch ONE worker per unit; that worker takes every
+  file the fix needs, and the orchestrator grants the other lanes' paths at PR open
+  (`scope:<lane>`, `scope-grant.ts`). Lane owners REVIEW the files of theirs a PR touches — they
+  do not each author a slice. `--owns` deconflicts workers that are live at the same moment; it
+  is not a PR boundary, so never carve a second PR to stay inside it.
+- **The contract owner is `shared`.** The crypto crate, the protocol schemas and codegen, the
+  cross-platform test vectors and the committed generated bindings change together with their
+  consumers, in one PR authored by `shared`; backend, desktop, ios and android review it.
+- **Every path has an owner that can hold a branch.** No tracked path is owned only by a
+  scope-only fragment (`mac` reviews the Mac host files; infra authors them).
+  `tests/orchestrator/lane-coverage.test.ts` fails the moment one appears. The one path withheld
+  from every lane on purpose is the fragments directory that declares lane scope.
+- **Ownership is checked before dispatch.** An issue whose lane owns NONE of the paths it cites is
+  `MISROUTED`: no worker is launched, no attempt is spent, and the issue is re-labelled to the lane
+  that owns them (or reported as owned by nobody — a hole in the lane table, not a worker's
+  problem). A worker that reports BLOCKED naming paths only another lane's own PR may write is
+  re-routed the same way. So when you are blocked on another lane's files, name them
+  repo-relative in your status; do not guess at a workaround.
+- **`needs-human` means a human must act** — credentials, a vendor or app-store account,
+  provisioning, a product or policy decision, a trust-anchor sign-off, or a PR the fleet could not
+  verify. The issue must say WHICH act, in a comment, with the recommended answer when there is
+  one. Never apply it to park work an agent could do, and never to an issue that is merely in the
+  wrong lane — that is `MISROUTED`, and it routes itself.
 
 ## The write gate (#2556) — secrets, trust anchors, everything else
 

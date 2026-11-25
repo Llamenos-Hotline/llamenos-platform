@@ -120,14 +120,26 @@ describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
     expect(unownedVerdicts('docs/runbooks/deploy-official.md', infraNoDocs, withoutDocs).length).toBeGreaterThan(0)
   })
 
-  it('the old ratchet was blind to these: owned by the mac fragment, narrowed out of the grantable lane, so grant-excluded', () => {
+  it('every tracked file has an AUTHORING owner — a lane that can hold a branch — or is withheld by design (#2723)', () => {
+    // A fragment that is not a lane (mac) can review a path and be granted onto
+    // one, but can never author it: `fleet/mac/<n>` is "unknown lane". A path
+    // only such a fragment owns is writable by no fleet branch at all — the
+    // shape of .github/workflows/ios-e2e.yml before #2723.
+    const authorOwns = (f: string): boolean => lanes.some((l) => l.scope.owned.length > 0 && checkScope([f], l.scope, []).strayed.length === 0)
+    const orphans = tracked.filter((f) => !authorOwns(f) && !withheld(f))
+    expect(orphans, `owned by no authoring lane and not in WITHHELD_BY_DESIGN:\n  ${orphans.join('\n  ')}`).toEqual([])
+  })
+
+  it('the Mac host files are authored by infra and grant-excluded for every other lane (#2723) — mac reviews them', () => {
     const infra = lanes.find((l) => l.id === 'infra')
     if (infra === undefined) throw new Error('no infra lane')
-    for (const f of ['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts']) {
+    for (const f of ['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts', '.github/workflows/ios-e2e.yml']) {
       expect(tracked, f).toContain(f)
-      expect(fragmentOwns(f), `${f} is owned by the mac fragment`).toBe(true)
+      expect(checkScope([f], infra.scope, []).strayed, `infra authors ${f}`).toEqual([])
       expect(GRANT_EXCLUDED_PATHS.some((p) => matchesPath(f, p)), `${f} must be grant-excluded`).toBe(true)
-      expect(planScopeGrants([f], infra, grantable).refused).toEqual([{ file: f, reason: 'grant-excluded' }])
+      for (const own of lanes.filter((l) => l.id !== 'infra')) {
+        expect(planScopeGrants([f], own, grantable).refused, `${f} on a ${own.id} PR`).toEqual([{ file: f, reason: 'grant-excluded' }])
+      }
     }
   })
 
@@ -270,19 +282,16 @@ describe('documentation lands with what it documents (#2935)', () => {
     expect(across(['apps/worker/lib/config.ts', 'docs/runbooks/rollback.md'], lane('infra'), [])).toEqual(['apps/worker/lib/config.ts'])
   })
 
-  it('the mac runbook stays with the mac fragment: infra does not take it back through docs/', () => {
-    expect(checkScope([MAC_RUNBOOK], lane('infra').scope, []).strayed).toEqual([MAC_RUNBOOK])
+  it('infra authors the mac runbook through docs/ (#2723); scope:mac still reaches exactly that one file', () => {
+    expect(checkScope([MAC_RUNBOOK], lane('infra').scope, []).strayed).toEqual([])
     for (const l of lanes) {
       if (l.id === 'infra') continue
       expect(checkScope([MAC_RUNBOOK], l.scope, []).strayed, `${l.id} must not own the mac runbook`).toEqual([MAC_RUNBOOK])
     }
-    // Still granted, and only by the narrow scope-only grant: scope:mac carries exactly this one file.
-    expect(across([MAC_RUNBOOK], lane('infra'), [lane('backend')])).toEqual([MAC_RUNBOOK])
-    expect(across([MAC_RUNBOOK], lane('infra'), [lane('mac')])).toEqual([])
-    const plan = planScopeGrants([MAC_RUNBOOK, 'docs/runbooks/deploy-official.md'], lane('infra'), grantable)
-    expect(plan.refused).toEqual([])
-    expect(plan.grants).toEqual(['mac'])
-    expect(plan.filesByLane).toEqual({ mac: [MAC_RUNBOOK] })
+    // An infra PR needs no grant for it; another lane's PR reaches it with scope:mac, and scope:mac reaches nothing else.
+    expect(across([MAC_RUNBOOK, 'docs/runbooks/deploy-official.md'], lane('infra'), [])).toEqual([])
+    expect(across([MAC_RUNBOOK], lane('ios'), [lane('mac')])).toEqual([])
+    expect(across(['docs/runbooks/deploy-official.md'], lane('ios'), [lane('mac')])).toEqual(['docs/runbooks/deploy-official.md'])
   })
 
   it('the docs tree is owned by infra and by the surface it documents, and nothing is left over', () => {
@@ -290,7 +299,7 @@ describe('documentation lands with what it documents (#2935)', () => {
     expect(docs.length).toBeGreaterThan(300)
     // Infra owns every doc except the three carve-outs, each of which has its own owner.
     const CARVED_OUT = (f: string): boolean =>
-      f === MAC_RUNBOOK || f.startsWith('docs/security/') || f.startsWith('docs/protocol/') || f === 'docs/architecture/E2EE_ARCHITECTURE.md'
+      f.startsWith('docs/security/') || f.startsWith('docs/protocol/') || f === 'docs/architecture/E2EE_ARCHITECTURE.md'
     expect(docs.filter((f) => !CARVED_OUT(f) && checkScope([f], lane('infra').scope, []).strayed.length > 0)).toEqual([])
     expect(docs.filter((f) => CARVED_OUT(f) && checkScope([f], lane('infra').scope, []).strayed.length === 0)).toEqual([])
     // …and the carve-outs are exclusive to the lane that owned them before the ruling.

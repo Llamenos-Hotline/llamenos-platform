@@ -216,15 +216,22 @@ export function buildIssueCreateArgs(issue: ProposedIssue): string[] {
   const dependsSection = issue.dependsOn && issue.dependsOn.length > 0
     ? `\n\nDepends on: ${issue.dependsOn.map((d) => `#${d}`).join(', ')}`
     : ''
-  const labels = [
-    `${LANE_LABEL_PREFIX}${issue.lane}`,
-    `${EFFORT_LABEL_PREFIX}${issue.effort}`,
-    NEEDS_HUMAN_LABEL,
-  ]
   return [
     'issue', 'create',
     '--title', issue.title,
-    '--body', `${issue.body}${dependsSection}`,
-    '--label', labels.join(','),
+    '--body', `${issue.body}${dependsSection}\n\n${PROPOSAL_HOLD_NOTE}`,
+    '--label', [`${LANE_LABEL_PREFIX}${issue.lane}`, `${EFFORT_LABEL_PREFIX}${issue.effort}`, NEEDS_HUMAN_LABEL].join(','),
   ]
 }
+
+/**
+ * #1815: `needs-human` means a human must act, so a planner-created issue says
+ * WHICH act. Without this, an agent proposal wearing the veto read exactly like
+ * an issue blocked on credentials, and eleven ordinary M1 issues sat buried
+ * because nobody reading them could see a question to answer. The act is a
+ * yes/no on the proposal — and the planner can never take it itself.
+ */
+export const PROPOSAL_HOLD_NOTE =
+  `---\n**Why \`${NEEDS_HUMAN_LABEL}\`:** an agent (the fleet planner) proposed this issue. A human must ` +
+  `accept or reject the proposal: to accept, remove \`${NEEDS_HUMAN_LABEL}\` and add \`agent-dispatchable\`; to ` +
+  'reject, close it. The planner never does either itself, so an agent cannot propose work to itself and then do it.'
