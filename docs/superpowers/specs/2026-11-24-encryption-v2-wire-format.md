@@ -1,7 +1,7 @@
 # Encryption model v2: wire format (stage 0 + stage 1 formats)
 
 **Date:** 2026-11-24 · **Base:** `origin/main` @ `fa575b14b` · **Epic:** #2974 (M2 critical path)
-**Status:** DRAFT. Every choice marked **OPERATOR DECISION** needs sign-off before any code is written.
+**Status:** SIGNED OFF by the operator on 2026-11-24. D1–D16 are accepted as recommended (#2974). The §5.5 open question (how connectors read bundle permissions) is still open; it affects only M3 connector enrollment (#2977) and does not block the contract PR.
 
 This document makes the wire decisions that stage 0 of #2974 ("one wire format") is waiting on.
 #2961 says #2771's envelope encoding "is decided together with this header, not before", so this
