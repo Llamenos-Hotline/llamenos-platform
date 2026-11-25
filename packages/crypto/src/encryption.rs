@@ -747,6 +747,59 @@ mod tests {
         generate_x25519_keypair()
     }
 
+    /// #2552: a client that hands an account's Ed25519 *signing* pubkey to the
+    /// seal as a reader gets no error — HPKE takes any 32 bytes as an X25519
+    /// point — and the envelope it writes is addressed to a key nobody holds the
+    /// private half of. The crate cannot tell the two key types apart by their
+    /// bytes, so this is pinned here as a fact the callers must respect, not a
+    /// check the crate can make: readers are X25519 encryption pubkeys only
+    /// (this device's, the admins' — never an assignee's `assignedTo`).
+    #[test]
+    fn sealing_to_a_signing_pubkey_succeeds_and_cannot_be_opened_by_its_owner() {
+        let (own_sk, own_pk) = gen_keypair();
+        // The assignee's account: an Ed25519 signing key and, separately, the
+        // X25519 device key that actually reads messages.
+        let mut seed = [0u8; 32];
+        getrandom::getrandom(&mut seed).unwrap();
+        let signing_pk = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&seed)
+                .verifying_key()
+                .to_bytes(),
+        );
+        let (assignee_enc_sk, assignee_enc_pk) = gen_keypair();
+
+        let readers: Vec<RecordReader> = [&own_pk, &signing_pk, &assignee_enc_pk]
+            .into_iter()
+            .map(|pk| RecordReader {
+                address: pk.clone(),
+                encryption_pubkey: pk.clone(),
+            })
+            .collect();
+        let sealed =
+            seal_record_for_readers(b"we hear you", &readers, crate::labels::LABEL_MESSAGE)
+                .expect("the seal cannot reject a signing key: it is 32 bytes like any X25519 key");
+        assert_eq!(sealed.reader_envelopes.len(), 3);
+
+        let open = |address: &str, sk: &str| {
+            open_record_for_reader(
+                &sealed.encrypted_content,
+                &sealed.reader_envelopes,
+                &[address],
+                sk,
+                crate::labels::LABEL_MESSAGE,
+            )
+        };
+        // The real readers open their own envelopes ...
+        assert_eq!(&*open(&own_pk, &own_sk).unwrap(), b"we hear you");
+        assert_eq!(
+            &*open(&assignee_enc_pk, &assignee_enc_sk).unwrap(),
+            b"we hear you"
+        );
+        // ... and the entry addressed to the signing key is dead weight: the
+        // assignee's device key does not open it.
+        assert!(open(&signing_pk, &assignee_enc_sk).is_err());
+    }
+
     #[test]
     fn roundtrip_note_encryption() {
         let (author_sk, author_pk) = gen_keypair();

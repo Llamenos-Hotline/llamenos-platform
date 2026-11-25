@@ -232,6 +232,8 @@ decryptMessage(encrypted_content_hex, reader_envelopes[], device_x25519_secret_k
   4. Return UTF-8 string
 ```
 
+**Reader keys are X25519 encryption keys.** A client sealing a message names its readers by X25519 device encryption pubkey: its own device and each admin. A conversation's `assignedTo` is the assignee's account (Ed25519 signing) pubkey and is **never** passed as a reader — HPKE accepts any 32 bytes as an X25519 point, so the seal would succeed and write an envelope nobody holds the private half of (#2552). The assignee's devices read through their own registered keys, added by the server for new messages and by the client re-wrap (§2.4.1) for earlier ones. iOS and Android build the same recipient set.
+
 #### Server-Side Encryption (Inbound Webhooks)
 
 When the server receives an inbound message via a messaging webhook (SMS/WhatsApp/Signal), it encrypts the plaintext immediately using the same envelope pattern:
