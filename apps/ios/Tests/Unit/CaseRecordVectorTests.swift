@@ -114,6 +114,9 @@ final class CaseRecordVectorTests: XCTestCase {
         _ = try service.generateDeviceKeys(deviceId: UUID().uuidString, pin: "12345678")
         let device = try XCTUnwrap(service.encryptionPubkeyHex)
 
+        // Seal every record first: the crate's mobile state is process-wide, so
+        // unlocking a fixture reader below replaces this device as the sealer.
+        var sealedRecords: [(rec: Fixture.Record, plaintext: String, sealed: (encryptedContent: String, envelopes: [RecipientEnvelope]))] = []
         for rec in f.records {
             let plaintext = "ios-sealed \(rec.purpose): ¿estás a salvo?"
             let sealed = try service.sealCase(purpose: try purpose(rec), plaintext: plaintext, readerPubkeys: f.readers.map(\.x25519PubkeyHex))
@@ -123,9 +126,12 @@ final class CaseRecordVectorTests: XCTestCase {
                 XCTAssertEqual(env.enc.count, fixtureEnvelope.enc.count)
                 XCTAssertEqual(env.ct.count, fixtureEnvelope.ct.count)
             }
-            for reader in f.readers {
-                let readerService = CryptoService()
-                try unlockAsFixtureReader(readerService, x25519PubkeyHex: reader.x25519PubkeyHex)
+            sealedRecords.append((rec, plaintext, sealed))
+        }
+        for reader in f.readers {
+            let readerService = CryptoService()
+            try unlockAsFixtureReader(readerService, x25519PubkeyHex: reader.x25519PubkeyHex)
+            for (rec, plaintext, sealed) in sealedRecords {
                 let opened = try readerService.openCase(purpose: try purpose(rec), encryptedContent: sealed.encryptedContent, envelopes: sealed.envelopes)
                 XCTAssertEqual(opened, plaintext, "\(reader.name) cannot open the \(rec.purpose) iOS sealed")
             }
