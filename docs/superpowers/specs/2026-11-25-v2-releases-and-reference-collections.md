@@ -305,7 +305,7 @@ For a source that won't allow bulk export:
 
 ## 14. Contract surface and gates
 
-**Contract PR (stage 3, releases):**
+**Stage 3, releases: one full-stack PR** (crate, protocol, vectors, bindings, worker **and every client**, per the #2979 lane model; a contract bug found while adopting is fixed in this PR):
 - **Crate:**
   - `render_release`, the descriptor, and the value-shape checker;
   - the class rules and the class-change refusal (#3025 addenda);
@@ -343,7 +343,7 @@ For a source that won't allow bulk export:
   - a superseded profile version, refused;
   - a server-forged release, refused.
 
-**Contract PR (stage 4, reference collections; after stage 3):**
+**Stage 4, reference collections: one full-stack PR, after stage 3:**
 - **Crate:** version signing and verification with `hubHead`, the Merkle root and proofs, the matcher, and the actor rules.
 - **Addenda:** the `reference` purpose; C11's co-hosting rule.
 - **Worker:** per-hub version storage with padding, and confirmed edges with `reverse: none`.
@@ -357,11 +357,11 @@ For a source that won't allow bulk export:
   - an unmapped column, refused;
   - a changed row after confirmation, refused for release.
 
-**Then adoption, one PR per client per stage:**
+**Client work, inside each stage's PR:**
 - **Stage 3:** the release dialog (preview, note, relays statement, re-identification warnings, approval), the approval queue, the retraction view, and the gap alert.
 - **Stage 4:** candidates (with the recency flag), confirmation and unconfirmation.
 
-Desktop comes first, then iOS and Android.
+All three clients are in each PR, and iOS is verified in the PR (`ssh mac` or CI `ios-build-test`).
 
 **Gates (#2977):**
 - **Stage 3:**
