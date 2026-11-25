@@ -386,4 +386,4 @@ covers it instead.
 
 ## 15. Sign-off
 
-The operator signs off E1–E12 on #2974. Until then, #2947's contract unit is not dispatchable.
+The operator signed off E1–E12 on #2974 on 2026-11-25, every decision as recommended. Build briefs are on #2974.
