@@ -37,7 +37,8 @@ function makeOutbox() {
 }
 
 function makeEnv(): Env {
-  return {} as Env
+  // publishEvent drops an event it cannot seal; give it the secret it seals with.
+  return { SERVER_SECRET: 'a'.repeat(64) } as Env
 }
 
 describe('publishEvent — outbox delivery tracking (#1136)', () => {

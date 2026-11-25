@@ -18,7 +18,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { Hono } from 'hono'
 import { ed25519, x25519 } from '@noble/curves/ed25519.js'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
@@ -76,12 +76,9 @@ function tryOpen(
   envelope: RecipientEnvelope,
   encryptedContent: string,
 ): string | null {
-  const labelBytes = utf8ToBytes(LABEL_MESSAGE)
-  const noAad = new Uint8Array(0)
   try {
-    const sealed = new Uint8Array([...hexToBytes(envelope.enc), ...hexToBytes(envelope.ct)])
-    const messageKey = hpkeOpen(secret, sealed, labelBytes, noAad)
-    return new TextDecoder().decode(symmetricDecrypt(messageKey, hexToBytes(encryptedContent), noAad))
+    const messageKey = shapeOpen('message-key', secret, [], envelope)
+    return new TextDecoder().decode(contentOpen('message-key', messageKey, hexToBytes(encryptedContent)))
   } catch {
     return null
   }

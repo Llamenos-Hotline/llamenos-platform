@@ -36,7 +36,7 @@ import '../mocks/llamenos-crypto-ffi'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { shapeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
 import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_AUDIT_DETAILS, LABEL_AUDIT_USER_KEY_WRAP } from '@shared/crypto-labels'
 import * as schema from '../../db/schema'
@@ -81,13 +81,7 @@ async function keyRow(userPubkey: string) {
 
 /** The offline admin path: unwrap the audit key from its envelope. */
 function unwrapAuditKey(admin: ReturnType<typeof reader>, envelope: { enc: string; ct: string }, userPubkey: string): Uint8Array {
-  const bytes = new Uint8Array([...hexToBytes(envelope.enc), ...hexToBytes(envelope.ct)])
-  return hpkeOpen(
-    admin.secret,
-    bytes,
-    utf8ToBytes(LABEL_AUDIT_USER_KEY_WRAP),
-    utf8ToBytes(`${LABEL_AUDIT_USER_KEY_WRAP}:${userPubkey}`),
-  )
+  return shapeOpen('audit-user-key', admin.secret, [userPubkey], envelope)
 }
 
 /** audit_key.rs-compatible details decryption: nonce_hex:ciphertext_hex. */

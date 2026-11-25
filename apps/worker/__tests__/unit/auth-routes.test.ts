@@ -38,12 +38,6 @@ vi.mock('@worker/services/audit', () => ({
   audit: (...args: unknown[]) => mockAudit(...args),
 }))
 
-vi.mock('@worker/lib/hub-event-crypto', () => ({
-  deriveServerEventKey: (_secret: string, _hubId?: string, _epoch?: number) => new Uint8Array(32),
-  getCurrentEpoch: (_ts?: number) => 19999,
-  EVENT_KEY_EPOCH_DURATION: 86400,
-}))
-
 vi.mock('@worker/middleware/auth', () => ({
   auth: vi.fn().mockImplementation(async (_c: unknown, next: () => Promise<void>) => next()),
 }))
@@ -152,6 +146,15 @@ function createApp() {
     activeShifts: {
       clockOutEverywhere: vi.fn().mockResolvedValue([]),
     },
+    hubs: {
+      getHubs: vi.fn().mockResolvedValue({
+        hubs: [
+          { id: 'hub-a', status: 'active' },
+          { id: 'hub-b', status: 'active' },
+          { id: 'hub-c', status: 'archived' },
+        ],
+      }),
+    },
     audit: {},
   }
 
@@ -177,6 +180,7 @@ function createApp() {
 
 const defaultEnv = {
   ENVIRONMENT: 'production',
+  SERVER_SECRET: 'a'.repeat(64),
   HMAC_SECRET: 'test-hmac',
   HOTLINE_NAME: 'Test Hotline',
   ADMIN_PUBKEY: 'admin-pk',
@@ -374,6 +378,32 @@ describe('auth routes', () => {
       expect(body.roles).toEqual(['role-volunteer'])
       expect(body.permissions).toEqual(['calls:answer'])
       expect(body.primaryRole).toMatchObject({ id: 'role-volunteer' })
+    })
+
+    /**
+     * #2999: relay-event keys are per hub. A member of hub A is handed hub A's
+     * keys (current and previous epoch) and nothing for hub B, nor for a hub
+     * that is not active — the same membership the relay checks at subscribe.
+     */
+    it('hands out event keys only for the active hubs the user belongs to', async () => {
+      const { app, user } = createApp()
+      Object.assign(user, { hubRoles: [{ hubId: 'hub-a', roleIds: ['role-volunteer'] }, { hubId: 'hub-c', roleIds: ['role-volunteer'] }] })
+
+      const res = await app.request('/auth/me', {}, defaultEnv)
+      expect(res.status).toBe(200)
+      const body = await res.json() as { serverEventKeys: Array<{ hubId: string; epoch: number; keyHex: string }>; eventKeyEpoch: number }
+      expect(body.serverEventKeys.map(k => [k.hubId, k.epoch])).toEqual([
+        ['hub-a', body.eventKeyEpoch],
+        ['hub-a', body.eventKeyEpoch - 1],
+      ])
+      for (const k of body.serverEventKeys) expect(k.keyHex).toMatch(/^[0-9a-f]{64}$/)
+      expect(body.serverEventKeys[0].keyHex).not.toBe(body.serverEventKeys[1].keyHex)
+    })
+
+    it('refuses to answer without SERVER_SECRET rather than handing out no keys', async () => {
+      const { app } = createApp()
+      const res = await app.request('/auth/me', {}, { ...defaultEnv as Record<string, string>, SERVER_SECRET: '' } as never)
+      expect(res.status).toBe(500)
     })
 
     /**

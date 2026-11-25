@@ -21,11 +21,11 @@ import {
   sigchainGenesisPayloadSchema,
   sigchainPukEpochPayloadSchema,
   type AppendSigchainLinkBody,
-  type PukHpkeEnvelope,
   type SigchainLinkRecord,
   type SigchainLinkType,
   type SigchainResponse,
 } from '@protocol/schemas/sigchain'
+import type { KeyEnvelope } from '@protocol/schemas/common'
 import { apiGet, apiPost } from './api-helpers'
 import {
   createInitialPukMock,
@@ -141,7 +141,7 @@ export function toMockSigchainLink(record: SigchainLinkRecord): MockSigchainLink
 }
 
 /** A PUK seed envelope sealed to `device`, as `puk::create_initial_puk` / `rotate_puk` seal it. */
-export async function sealPukSeed(seed: Uint8Array, device: TestDevice): Promise<PukHpkeEnvelope> {
+export async function sealPukSeed(seed: Uint8Array, device: TestDevice): Promise<KeyEnvelope> {
   const env = await hpkeSealMock(seed, device.encryptionPubkeyHex, LABEL_PUK_WRAP_TO_DEVICE, pukWrapAad(device.deviceId))
   return { v: 3, labelId: env.labelId, enc: env.enc, ct: env.ct }
 }
@@ -207,7 +207,7 @@ export interface PageIdentity {
   deviceId: string
   links: SigchainLinkRecord[]
   /** Latest PUK envelope addressed to this device, or null if none. */
-  pukEnvelope: { generation: number; envelope: PukHpkeEnvelope } | null
+  pukEnvelope: { generation: number; envelope: KeyEnvelope } | null
   /** Whether this device's CryptoState opened that envelope (label + AAD bound to its deviceId). */
   pukEnvelopeOpens: boolean
 }

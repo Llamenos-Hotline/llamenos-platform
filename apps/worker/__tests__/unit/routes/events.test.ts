@@ -20,7 +20,7 @@ vi.mock('@worker/lib/ws-events', () => ({
 // The one admin recipient of the hub: a write must seal to it (#2174).
 const ADMIN = 'ad'.repeat(32)
 const NON_ADMIN = 'ee'.repeat(32)
-const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-key-hex' })
+const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'c677a7ae12848b30608de55c6d151c98184d7d74ea82ce4c3604ff177375efebe2fbf104c304ef15fe13ec31ab817f60' })
 
 // ---------------------------------------------------------------------------
 // Test app factory

@@ -17,6 +17,7 @@
  * `puk::create_initial_puk`); these schemas only describe what goes over the wire.
  */
 import { z } from 'zod'
+import { keyEnvelopeSchema } from './common'
 
 const ed25519HexSchema = z.string().regex(/^[0-9a-f]{64}$/, 'Must be a 32-byte Ed25519 public key in lowercase hex')
 const x25519HexSchema = z.string().regex(/^[0-9a-f]{64}$/, 'Must be a 32-byte X25519 public key in lowercase hex')
@@ -152,25 +153,13 @@ export type SigchainResponse = z.infer<typeof sigchainResponseSchema>
 
 // --- Routes: /api/puk/envelopes ---
 
-/**
- * HPKE envelope v3 as produced by packages/crypto `hpke_envelope::HpkeEnvelope`
- * (`puk::create_initial_puk`, `puk::rotate_puk`). Opened with
- * `LABEL_PUK_WRAP_TO_DEVICE` and AAD `"<LABEL_PUK_WRAP_TO_DEVICE>:<deviceId>"`.
- */
-export const pukHpkeEnvelopeSchema = z.object({
-  /** Envelope version — packages/crypto only produces and accepts v3. */
-  v: z.number().int().min(3).max(3),
-  labelId: z.number().int().nonnegative(),
-  enc: z.string().min(1).max(128),
-  ct: z.string().min(1).max(512),
-})
-export type PukHpkeEnvelope = z.infer<typeof pukHpkeEnvelopeSchema>
 
 export const pukEnvelopeItemSchema = z.object({
   /** Sigchain device ID (genesis `deviceId` / device_add `deviceId`) the envelope is sealed to. */
   deviceId: z.string().min(1),
   generation: z.number().int().min(1),
-  envelope: pukHpkeEnvelopeSchema,
+  /** The PUK seed sealed to `deviceId` — the crate's `puk-seed` shape, bound to the device id. */
+  envelope: keyEnvelopeSchema,
 })
 export type PukEnvelopeItem = z.infer<typeof pukEnvelopeItemSchema>
 
@@ -184,7 +173,8 @@ export const pukEnvelopeResponseSchema = z.object({
   userPubkey: z.string(),
   deviceId: z.string(),
   generation: z.number().int(),
-  envelope: pukHpkeEnvelopeSchema,
+  /** The PUK seed sealed to `deviceId` — the crate's `puk-seed` shape, bound to the device id. */
+  envelope: keyEnvelopeSchema,
   createdAt: z.string(),
 })
 export type PukEnvelopeResponse = z.infer<typeof pukEnvelopeResponseSchema>

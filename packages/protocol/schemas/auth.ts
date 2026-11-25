@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { pubkeySchema } from './common'
+import { hexBytes, pubkeySchema } from './common'
 
 // --- Response schemas ---
 
@@ -7,6 +7,17 @@ export const loginResponseSchema = z.object({
   ok: z.boolean(),
   roles: z.array(z.string()),
 })
+
+/**
+ * One relay-event key (spec D9, #2999): it opens the frames of `hubId` for one
+ * epoch (UTC day). A member is handed keys only for hubs it belongs to.
+ */
+export const serverEventKeySchema = z.object({
+  hubId: z.string().min(1),
+  epoch: z.number().int().nonnegative(),
+  keyHex: hexBytes(32),
+})
+export type ServerEventKey = z.infer<typeof serverEventKeySchema>
 
 export const meResponseSchema = z.object({
   pubkey: pubkeySchema,
@@ -25,7 +36,12 @@ export const meResponseSchema = z.object({
   webauthnRequired: z.boolean(),
   webauthnRegistered: z.boolean(),
   adminDecryptionPubkey: z.string().optional(),
-  hubEventKeys: z.record(z.string(), z.string()).optional(),
+  /** Current and previous epoch keys for every active hub the user belongs to. */
+  serverEventKeys: z.array(serverEventKeySchema),
+  /** The current epoch. */
+  eventKeyEpoch: z.number().int().nonnegative(),
+  /** Seconds per epoch. */
+  eventKeyEpochDuration: z.number().int().positive(),
 })
 
 // --- Input schemas ---

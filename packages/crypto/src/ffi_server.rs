@@ -546,6 +546,43 @@ pub extern "C" fn ffi_content_seal(
     0
 }
 
+/// Seal `plaintext` with `shape`'s content AAD under an existing 32-byte key
+/// (only the firehose window shape; see `shape::content_seal_under`). Writes
+/// nonce(12) || ct || tag(16) to `out` (`out_len` ≥ pt_len + 28).
+#[no_mangle]
+pub extern "C" fn ffi_content_seal_under(
+    shape: u8,
+    key: *const u8,
+    key_len: usize,
+    plaintext: *const u8,
+    pt_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    clear_error();
+    check_null!(key, out);
+    check_input_size!(pt_len);
+    if key_len != 32 {
+        set_error("invalid_format: content key must be 32 bytes");
+        return -5;
+    }
+    check_output_size!(out_len, pt_len + 28);
+    let shape = match crate::shape::Shape::from_u8(shape) {
+        Ok(s) => s,
+        Err(e) => return set_crypto_error(&e),
+    };
+    let mut k = zeroize::Zeroizing::new([0u8; 32]);
+    k.copy_from_slice(unsafe { std::slice::from_raw_parts(key, 32) });
+    let pt = nullable_slice!(plaintext, pt_len);
+    match crate::shape::content_seal_under(shape, &k, pt) {
+        Ok(packed) => {
+            unsafe { std::slice::from_raw_parts_mut(out, packed.len()) }.copy_from_slice(&packed);
+            0
+        }
+        Err(e) => set_crypto_error(&e),
+    }
+}
+
 /// Open nonce(12) || ct || tag(16) of `shape` with its 32-byte key. Writes the
 /// plaintext (packed_len − 28 bytes) to `out`.
 #[no_mangle]

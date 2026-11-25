@@ -90,7 +90,7 @@ function historyRow(overrides: Partial<CallRecordRow> = {}): CallRecordRow {
     hasRecording: false,
     recordingSid: null,
     encryptedContent: 'ciphertext',
-    adminEnvelopes: [{ pubkey: 'd'.repeat(64), enc: 'e'.repeat(64), ct: 'wrapped-key' }],
+    adminEnvelopes: [{ pubkey: 'd'.repeat(64), enc: 'e'.repeat(64), ct: '4139e25c6ee318f126200348371f0f7a7598b5b6eb672e5dc7b5736c229fa46e016443d36c0669d1f18db26180b7e846' }],
     createdAt: new Date('2026-09-30T09:05:00.000Z'),
     cryptoFormat: CRYPTO_FORMAT_CURRENT,
     ...overrides,

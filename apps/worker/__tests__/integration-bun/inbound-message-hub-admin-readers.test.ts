@@ -25,7 +25,7 @@ import { ConversationsService, InboundUnreadableError } from '../../services/con
 import { IdentityService } from '../../services/identity'
 import { createSettingsDomain } from '../../services/settings-domain'
 import { messagingContactHash } from '../../lib/messaging-contact-hash'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import { requireDatabaseUrl } from '../helpers/database-url'
@@ -101,10 +101,9 @@ describe('inbound message on a deployment with no admin env keys (#1034)', () =>
     const envelopes = message.readerEnvelopes as Array<{ pubkey: string; enc: string; ct: string }>
     expect(envelopes.map(e => e.pubkey)).toEqual([deviceKey])
 
-    const sealed = new Uint8Array([...hexToBytes(envelopes[0]!.enc), ...hexToBytes(envelopes[0]!.ct)])
-    const contentKey = hpkeOpen(secret, sealed, utf8ToBytes(LABEL_MESSAGE), new Uint8Array(0))
+    const contentKey = shapeOpen('message-key', secret, [], envelopes[0]!)
     const plaintext = new TextDecoder().decode(
-      symmetricDecrypt(contentKey, hexToBytes(message.encryptedContent), new Uint8Array(0)),
+      contentOpen('message-key', contentKey, hexToBytes(message.encryptedContent)),
     )
     expect(plaintext).toBe(PLAINTEXT)
   })

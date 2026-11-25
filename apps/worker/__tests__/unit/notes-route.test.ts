@@ -180,7 +180,7 @@ describe('GET /notes', () => {
 
 const HEX64 = 'a'.repeat(64)
 const HPKE_ENC = 'b'.repeat(64)
-const WRAPPED_CT = 'dGVzdC13cmFwcGVkLWtleQ' // base64 non-empty
+const WRAPPED_CT = 'c'.repeat(96) // a 48-byte key wrap, lowercase hex (spec D2)
 
 // ---------------------------------------------------------------------------
 // POST / — create note

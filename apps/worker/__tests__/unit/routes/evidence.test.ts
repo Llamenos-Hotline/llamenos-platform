@@ -275,7 +275,7 @@ describe('POST /records/:id/evidence', () => {
 
 describe('POST /records/:id/evidence — a sealed description an admin can open (#2174)', () => {
   const ADMIN = 'ad'.repeat(32)
-  const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: 'wrapped-key' })
+  const envelopeTo = (pubkey: string) => ({ pubkey, enc: 'b'.repeat(64), ct: '4139e25c6ee318f126200348371f0f7a7598b5b6eb672e5dc7b5736c229fa46e016443d36c0669d1f18db26180b7e846' })
   const body = {
     fileId: 'file-123',
     filename: 'evidence.pdf',

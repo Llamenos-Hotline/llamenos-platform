@@ -6,20 +6,22 @@
  *            (devices.x25519Pubkey) — decryptable only after PIN unlock.
  */
 
-import { hpkeSeal } from '@llamenos/crypto/ffi'
-import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
-import { LABEL_PUSH_WAKE, LABEL_PUSH_FULL } from '@shared/crypto-labels'
+import { shapeSeal } from '@llamenos/crypto/ffi'
+import { hexToBytes, utf8ToBytes } from '@shared/encoding'
 import type { WakePayload, FullPushPayload } from '../types'
 
 /**
- * HPKE encrypt a payload for a single recipient pubkey with domain separation.
- * Returns hex-encoded: enc(32) || ciphertext+tag.
+ * HPKE-seal a push payload for one device through the crate's push shape (the
+ * crate chooses the label and AAD). Returns hex `enc(32) || ct` — the push
+ * transport carries one string, which clients split at 64 characters.
  */
-function hpkeEncryptPayload(plaintext: string, recipientPubkeyHex: string, label: string): string {
-  const labelBytes = utf8ToBytes(label)
-  const aad = utf8ToBytes(`${label}:push`)
-  const sealed = hpkeSeal(hexToBytes(recipientPubkeyHex), utf8ToBytes(plaintext), labelBytes, aad)
-  return bytesToHex(sealed)
+function hpkeEncryptPayload(
+  plaintext: string,
+  recipientPubkeyHex: string,
+  shape: 'push-wake' | 'push-full',
+): string {
+  const { enc, ct } = shapeSeal(shape, hexToBytes(recipientPubkeyHex), [], utf8ToBytes(plaintext))
+  return enc + ct
 }
 
 /**
@@ -27,7 +29,7 @@ function hpkeEncryptPayload(plaintext: string, recipientPubkeyHex: string, label
  * Uses the device's wake key — accessible without user's PIN.
  */
 export function encryptWakePayload(payload: WakePayload, deviceWakeKeyPublic: string): string {
-  return hpkeEncryptPayload(JSON.stringify(payload), deviceWakeKeyPublic, LABEL_PUSH_WAKE)
+  return hpkeEncryptPayload(JSON.stringify(payload), deviceWakeKeyPublic, 'push-wake')
 }
 
 /**
@@ -39,5 +41,5 @@ export function encryptWakePayload(payload: WakePayload, deviceWakeKeyPublic: st
  * no secret key exists (#1021).
  */
 export function encryptFullPayload(payload: FullPushPayload, deviceEncryptionPubkey: string): string {
-  return hpkeEncryptPayload(JSON.stringify(payload), deviceEncryptionPubkey, LABEL_PUSH_FULL)
+  return hpkeEncryptPayload(JSON.stringify(payload), deviceEncryptionPubkey, 'push-full')
 }

@@ -14,8 +14,10 @@ import { publicErrors, authErrors } from '../openapi/helpers'
 import { audit } from '../services/audit'
 import { getConnectionManager } from '../lib/ws-manager'
 import { getPrimaryRole, resolveAllRoleIds, resolvePermissions } from '@shared/permissions'
-import { deriveServerEventKey, getCurrentEpoch, EVENT_KEY_EPOCH_DURATION } from '../lib/hub-event-crypto'
-import { bytesToHex } from '@shared/encoding'
+import { serverEventKey } from '@llamenos/crypto/ffi'
+import { bytesToHex, hexToBytes } from '@shared/encoding'
+import { currentEpoch as currentEventEpoch, EVENT_EPOCH_SECONDS } from '../lib/ws-events'
+import { activeMemberHubIds } from '../lib/member-hubs'
 import { transitionalInstanceRecipient } from '../lib/hpke-recipient'
 
 const auth = new Hono<AppEnv>()
@@ -175,21 +177,24 @@ auth.get('/me',
 
     const primaryRole = getPrimaryRole(accountRoleIds, allRoles)
 
-    // Derive epoch-scoped server event key for client-side decryption (H1 + H5 fix)
-    // Key changes each epoch for forward secrecy. Client receives current + previous epoch keys.
-    const currentEpoch = getCurrentEpoch()
-    let serverEventKeyHex: string | undefined
-    let serverEventKeyPrevHex: string | undefined
-    let eventKeyEpoch: number | undefined
-    let eventKeyEpochDuration: number | undefined
-
+    // Relay-event keys (spec D9, #2999): one per (hub, epoch), for the current
+    // and previous epoch of every active hub this user belongs to — the same
+    // membership the relay checks at subscribe. A member of hub A is never
+    // handed hub B's key, so it cannot open hub B's frames.
+    const eventKeyEpoch = currentEventEpoch()
     const serverSecret = c.env.SERVER_SECRET
-    if (serverSecret) {
-      serverEventKeyHex = bytesToHex(deriveServerEventKey(serverSecret, undefined, currentEpoch))
-      serverEventKeyPrevHex = bytesToHex(deriveServerEventKey(serverSecret, undefined, currentEpoch - 1))
-      eventKeyEpoch = currentEpoch
-      eventKeyEpochDuration = EVENT_KEY_EPOCH_DURATION
+    if (!serverSecret) {
+      return c.json({ error: 'Server event keys are not configured' }, 500)
     }
+    const secret = hexToBytes(serverSecret)
+    const memberHubs = activeMemberHubIds(user, (await services.hubs.getHubs()).hubs)
+    const serverEventKeys = memberHubs.flatMap(hubId =>
+      [eventKeyEpoch, eventKeyEpoch - 1].map(epoch => ({
+        hubId,
+        epoch,
+        keyHex: bytesToHex(serverEventKey(secret, hubId, epoch)),
+      })),
+    )
 
     return c.json({
       pubkey: user.pubkey,
@@ -215,10 +220,9 @@ auth.get('/me',
       // Absent when the deployment has no env-configured platform admin, which the
       // clients already handle by omitting the admin envelope.
       adminDecryptionPubkey: transitionalInstanceRecipient(c.env),
-      serverEventKeyHex,
-      serverEventKeyPrevHex,
+      serverEventKeys,
       eventKeyEpoch,
-      eventKeyEpochDuration,
+      eventKeyEpochDuration: EVENT_EPOCH_SECONDS,
     })
   },
 )

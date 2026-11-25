@@ -28,6 +28,7 @@ import {
 import { EventOutbox } from '../../apps/worker/lib/event-outbox'
 import { deriveServerKeypair } from '../../apps/worker/lib/server-identity'
 import { createWsHandler, createConnectionData } from '../../apps/worker/routes/ws'
+import { activeMemberHubIds } from '../../apps/worker/lib/member-hubs'
 import type { WsConnectionData } from '../../apps/worker/routes/ws'
 import type { AppEnv } from '../../apps/worker/types/infra'
 import { KIND_BLAST_PROGRESS, KIND_BLAST_STATUS } from '../../packages/shared/event-kinds'
@@ -373,13 +374,9 @@ const wsHandler = createWsHandler()
 async function lookupUserHubs(pubkey: string): Promise<{ hubs: string[] } | null> {
   const user = await services.identity.getUserInternal(pubkey)
   if (!user || !user.active) return null
-  // Get all hubs and filter to those the user is a member of
+  // The same membership rule GET /api/auth/me hands event keys by (#2999).
   const { hubs } = await services.hubs.getHubs()
-  // User's hubRoles indicate hub membership
-  const memberHubIds = (user.hubRoles ?? []).map(hr => hr.hubId)
-  const activeHubIds = hubs
-    .filter(h => h.status === 'active' && memberHubIds.includes(h.id))
-    .map(h => h.id)
+  const activeHubIds = activeMemberHubIds(user, hubs)
   // Membership is the isolation boundary for relay subscriptions: every event
   // is published to the hub that owns it, so a user may subscribe only to hubs
   // they belong to. There is no catch-all pseudo-hub.

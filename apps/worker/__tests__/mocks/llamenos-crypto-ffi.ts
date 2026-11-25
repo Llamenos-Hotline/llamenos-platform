@@ -59,61 +59,89 @@ export function ed25519PubkeyFromSeed(seed: Uint8Array): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
-// HPKE Base Mode (X25519-HKDF-SHA256-AES256GCM) — simplified mock
+// HPKE envelopes, by shape — a stand-in, NOT the crate's wire format
 // ---------------------------------------------------------------------------
+//
+// The real `shapeSeal` / `shapeOpen` run `packages/crypto/src/shape.rs`, which
+// owns each shape's label and AAD. This mock only has to let Node-side unit tests
+// import code that seals: it binds `mock:<shape>` and the fields, keeps the real
+// lengths (enc 32 B, a key wrap's ct 48 B) so schema validation sees real
+// shapes, and is never evidence of interop. The server's real envelopes are
+// pinned against `packages/crypto/tests/fixtures/v2/` under bun:ffi
+// (`__tests__/integration-bun/v2-vectors.test.ts`).
 
-/**
- * HPKE Seal: encrypt plaintext for recipientPk.
- * The `label` parameter must be a registered domain separation label
- * (enforced in the real FFI; mock accepts any bytes for test flexibility).
- * Returns: enc(32 bytes) || ciphertext+tag
- */
-export function hpkeSeal(recipientPk: Uint8Array, plaintext: Uint8Array, label: Uint8Array, aad: Uint8Array): Uint8Array {
-  // 1. Generate ephemeral X25519 keypair
-  const ephSecretKey = randomBytes(32)
-  const enc = x25519.getPublicKey(ephSecretKey) // 32 bytes
-
-  // 2. ECDH: shared_secret = X25519(ephSecretKey, recipientPk)
-  const sharedSecret = x25519.getSharedSecret(ephSecretKey, recipientPk)
-
-  // 3. KDF: derive symmetric key via HKDF
-  const kem_context = concatBytes(enc, recipientPk)
-  const prk = hkdf(sha256Noble, sharedSecret, new Uint8Array(0), kem_context, 32)
-  const symmetricKey = hkdf(sha256Noble, prk, new Uint8Array(0), label, 32)
-
-  // 4. AEAD: AES-256-GCM encrypt
-  const nonce = randomBytes(12)
-  const cipher = gcm(symmetricKey, nonce, aad)
-  const ciphertext = cipher.encrypt(plaintext)
-
-  // Wire format: enc(32) || nonce(12) || ciphertext+tag
-  return concatBytes(enc, nonce, ciphertext)
+export class CryptoError extends Error {
+  readonly reason: string | null
+  constructor(public code: number, message: string) {
+    super(message)
+    this.name = 'CryptoError'
+    const m = /^([a-z_]+): /.exec(message)
+    this.reason = m ? m[1] : null
+  }
 }
 
-/**
- * HPKE Open: decrypt ciphertext using secretKey.
- * The `label` parameter must match the label used during seal.
- * envelope = enc(32) || nonce(12) || ciphertext+tag
- */
-export function hpkeOpen(secretKey: Uint8Array, envelope: Uint8Array, label: Uint8Array, aad: Uint8Array): Uint8Array {
-  const enc = envelope.subarray(0, 32)
-  const nonce = envelope.subarray(32, 44)
-  const ciphertext = envelope.subarray(44)
+export const SHAPES = [
+  'note-key', 'file-key', 'file-metadata-key', 'contact-profile-key', 'contact-id-key',
+  'hub-key', 'firehose-window-key', 'message-key', 'call-meta-key', 'puk-seed',
+  'audit-user-key', 'push-wake', 'push-full', 'platform-role-name',
+  'platform-role-description', 'recovery-group-share', 'recovery-share-contribution',
+  'recovery-puk-seed',
+] as const
+export type Shape = (typeof SHAPES)[number]
+export interface HpkeEnvelope { enc: string; ct: string }
 
-  // Compute recipient public key from secret key
-  const recipientPk = x25519.getPublicKey(secretKey)
+const enc8 = (s: string) => new TextEncoder().encode(s)
 
-  // ECDH: shared_secret = X25519(secretKey, enc)
-  const sharedSecret = x25519.getSharedSecret(secretKey, enc)
+function mockAead(shared: Uint8Array, enc: Uint8Array, shape: Shape, fields: readonly string[]) {
+  const okm = hkdf(sha256Noble, shared, enc, enc8(`mock:${shape}`), 44)
+  return { key: okm.subarray(0, 32), nonce: okm.subarray(32), aad: enc8(`mock:${shape}:${fields.join('|')}`) }
+}
 
-  // KDF
-  const kem_context = concatBytes(enc, recipientPk)
-  const prk = hkdf(sha256Noble, sharedSecret, new Uint8Array(0), kem_context, 32)
-  const symmetricKey = hkdf(sha256Noble, prk, new Uint8Array(0), label, 32)
+export function shapeSeal(shape: Shape, recipientPk: Uint8Array, fields: readonly string[], plaintext: Uint8Array): HpkeEnvelope {
+  const eph = randomBytes(32)
+  const enc = x25519.getPublicKey(eph)
+  const { key, nonce, aad } = mockAead(x25519.getSharedSecret(eph, recipientPk), enc, shape, fields)
+  return { enc: toHex(enc), ct: toHex(gcm(key, nonce, aad).encrypt(plaintext)) }
+}
 
-  // AEAD decrypt
-  const cipher = gcm(symmetricKey, nonce, aad)
-  return cipher.decrypt(ciphertext)
+export function shapeOpen(shape: Shape, secretKey: Uint8Array, fields: readonly string[], envelope: HpkeEnvelope): Uint8Array {
+  if (!/^[0-9a-f]{64}$/.test(envelope.enc) || !/^(?:[0-9a-f]{2})+$/.test(envelope.ct)) {
+    throw new CryptoError(-5, 'invalid_format: enc/ct must be lowercase hex')
+  }
+  const enc = fromHex(envelope.enc)
+  const { key, nonce, aad } = mockAead(x25519.getSharedSecret(secretKey, enc), enc, shape, fields)
+  try {
+    return gcm(key, nonce, aad).decrypt(fromHex(envelope.ct))
+  } catch {
+    throw new CryptoError(-1, 'decryption_failed: mock open failed')
+  }
+}
+
+export function contentSeal(shape: Shape, plaintext: Uint8Array): { packed: Uint8Array; key: Uint8Array } {
+  const key = randomBytes(32)
+  return { packed: symmetricEncrypt(key, plaintext, enc8(`mock:${shape}:content`)), key }
+}
+
+export function contentSealUnder(shape: 'firehose-window-key', key: Uint8Array, plaintext: Uint8Array): Uint8Array {
+  return symmetricEncrypt(key, plaintext, enc8(`mock:${shape}:content`))
+}
+
+export function contentOpen(shape: Shape, key: Uint8Array, packed: Uint8Array): Uint8Array {
+  return symmetricDecrypt(key, packed, enc8(`mock:${shape}:content`))
+}
+
+// Relay events — a stand-in; the real module is `packages/crypto/src/events.rs`.
+export function serverEventKey(serverSecret: Uint8Array, hubId: string, epoch: number): Uint8Array {
+  return hkdf(sha256Noble, serverSecret, enc8('mock:server-event'), enc8(`${hubId}|${epoch}`), 32)
+}
+
+export function sealServerEvent(serverSecret: Uint8Array, hubId: string, kind: number, epoch: number, json: string): string {
+  const key = serverEventKey(serverSecret, hubId, epoch)
+  return toHex(symmetricEncrypt(key, enc8(json), enc8(`mock:event:${hubId}:${kind}:${epoch}`)))
+}
+
+export function openServerEvent(key: Uint8Array, hubId: string, kind: number, epoch: number, payloadHex: string): string {
+  return new TextDecoder().decode(symmetricDecrypt(key, fromHex(payloadHex), enc8(`mock:event:${hubId}:${kind}:${epoch}`)))
 }
 
 // ---------------------------------------------------------------------------
@@ -179,8 +207,7 @@ export function caseSeal(purpose: CasePurpose, plaintext: string, readerPubkeys:
   const key = randomBytes(32)
   const encryptedContent = toHex(symmetricEncrypt(key, new TextEncoder().encode(plaintext), label))
   const readerEnvelopes = readers.map((pubkey) => {
-    const sealed = hpkeSeal(fromHex(pubkey), key, label, label)
-    return { pubkey, enc: toHex(sealed.subarray(0, 32)), ct: toHex(sealed.subarray(32)) }
+    return { pubkey, ...shapeSeal('message-key', fromHex(pubkey), [MOCK_CASE_LABEL[purpose]], key) }
   })
   return { encryptedContent, readerEnvelopes }
 }
@@ -190,7 +217,7 @@ export function caseOpen(purpose: CasePurpose, secretKey: Uint8Array, sealed: En
   const env = sealed.readerEnvelopes.find(e => e.pubkey === pubkey)
   if (!env) throw new Error('no envelope for this reader')
   const label = new TextEncoder().encode(MOCK_CASE_LABEL[purpose])
-  const key = hpkeOpen(secretKey, concatBytes(fromHex(env.enc), fromHex(env.ct)), label, label)
+  const key = shapeOpen('message-key', secretKey, [MOCK_CASE_LABEL[purpose]], env)
   return new TextDecoder().decode(symmetricDecrypt(key, fromHex(sealed.encryptedContent), label))
 }
 

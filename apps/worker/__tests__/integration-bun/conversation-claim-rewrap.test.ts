@@ -30,7 +30,7 @@
 import { describe, it, expect, afterAll, beforeEach } from 'bun:test'
 import { and, eq, inArray } from 'drizzle-orm'
 import { x25519 } from '@noble/curves/ed25519.js'
-import { hpkeOpen, hpkeSeal, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen, shapeSeal } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
 import { mayRewrapHistoryTo } from '@shared/history-rewrap-gate'
 import { LABEL_MESSAGE } from '@shared/crypto-labels'
@@ -52,8 +52,6 @@ const suite = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 /** The hub every inbound message below is addressed to: a conversation always has one (#2459). */
 const HUB_ID = `hub-rewrap-${suite}`
 let hubCreated = false
-const NO_AAD = new Uint8Array(0)
-const LABEL = utf8ToBytes(LABEL_MESSAGE)
 
 /** An X25519 keypair held by a client — the server never sees `secret`. */
 function makeKeypair() {
@@ -76,7 +74,7 @@ const bystander = {
 const createdConversations: string[] = []
 
 function unwrapContentKey(envelope: RecipientEnvelope, secret: Uint8Array): Uint8Array {
-  return hpkeOpen(secret, hexToBytes(envelope.enc + envelope.ct), LABEL, NO_AAD)
+  return shapeOpen('message-key', secret, [], envelope)
 }
 
 /**
@@ -92,7 +90,7 @@ async function readAs(messageId: string, keypair: { secret: Uint8Array; recipien
   const envelope = (row.readerEnvelopes as RecipientEnvelope[]).find((e) => e.pubkey === keypair.recipient)
   if (!envelope) throw new Error(`no envelope for ${keypair.recipient.slice(0, 8)}`)
   const contentKey = unwrapContentKey(envelope, keypair.secret)
-  return new TextDecoder().decode(symmetricDecrypt(contentKey, hexToBytes(row.encryptedContent), NO_AAD))
+  return new TextDecoder().decode(contentOpen('message-key', contentKey, hexToBytes(row.encryptedContent)))
 }
 
 /**
@@ -118,10 +116,9 @@ async function adminClientRewrap(conversationId: string): Promise<number> {
         mayRewrapHistoryTo(gaps.recipients.find((r) => r.pubkey === pk)!, m.createdAt),
       )
       return allowed.map((recipient) => {
-        const sealed = hpkeSeal(hexToBytes(recipient), contentKey, LABEL, NO_AAD)
         return {
           messageId: m.id,
-          envelope: { pubkey: recipient, enc: bytesToHex(sealed.subarray(0, 32)), ct: bytesToHex(sealed.subarray(32)) },
+          envelope: { pubkey: recipient, ...shapeSeal('message-key', hexToBytes(recipient), [], contentKey) },
         }
       })
     })
@@ -228,8 +225,7 @@ describe('claim re-wrap: the claiming volunteer can read pre-claim messages (#15
     const [row] = await db.select().from(messages).where(inArray(messages.id, [messageId]))
     const contentKey = unwrapContentKey((row.readerEnvelopes as RecipientEnvelope[])[0], admin.secret)
     const sealFor = (recipient: string) => {
-      const sealed = hpkeSeal(hexToBytes(recipient), contentKey, LABEL, NO_AAD)
-      return { pubkey: recipient, enc: bytesToHex(sealed.subarray(0, 32)), ct: bytesToHex(sealed.subarray(32)) }
+      return { pubkey: recipient, ...shapeSeal('message-key', hexToBytes(recipient), [], contentKey) }
     }
 
     // A valid assignee entry alongside a bystander entry: the whole batch fails.
@@ -251,10 +247,10 @@ describe('claim re-wrap: the claiming volunteer can read pre-claim messages (#15
     await adminClientRewrap(conversationId)
 
     // A wrap of a DIFFERENT key for the same device must not displace the real one.
-    const bogus = hpkeSeal(hexToBytes(volunteer.devices[0].recipient), new Uint8Array(32).fill(7), LABEL, NO_AAD)
+    const bogus = shapeSeal('message-key', hexToBytes(volunteer.devices[0].recipient), [], new Uint8Array(32).fill(7))
     const result = await service.addAssigneeEnvelopes(conversationId, [{
       messageId,
-      envelope: { pubkey: volunteer.devices[0].recipient, enc: bytesToHex(bogus.subarray(0, 32)), ct: bytesToHex(bogus.subarray(32)) },
+      envelope: { pubkey: volunteer.devices[0].recipient, ...bogus },
     }])
     expect(result.added).toBe(0)
     expect(await readAs(messageId, volunteer.devices[0])).toBe(plaintext)
@@ -321,8 +317,7 @@ describe('re-wrap gate: a key newer than the message needs confirmation (#2143)'
 
   function sealTo(recipient: string, secretFor: typeof admin, messageRow: { readerEnvelopes: unknown }) {
     const own = (messageRow.readerEnvelopes as RecipientEnvelope[]).find((e) => e.pubkey === secretFor.recipient)!
-    const sealed = hpkeSeal(hexToBytes(recipient), unwrapContentKey(own, secretFor.secret), LABEL, NO_AAD)
-    return { pubkey: recipient, enc: bytesToHex(sealed.subarray(0, 32)), ct: bytesToHex(sealed.subarray(32)) }
+    return { pubkey: recipient, ...shapeSeal('message-key', hexToBytes(recipient), [], unwrapContentKey(own, secretFor.secret)) }
   }
 
   async function claimedAgedMessage(tag: string) {

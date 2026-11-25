@@ -39,7 +39,8 @@ import { TestDB } from '../../db-helpers'
 import { ed25519 } from '@noble/curves/ed25519.js'
 import { hexToBytes, bytesToHex, utf8ToBytes } from '@shared/encoding'
 import { LABEL_ERASURE_OVERRIDE_SIG } from '@shared/crypto-labels'
-import type { PukHpkeEnvelope, SigchainLinkRecord } from '@protocol/schemas/sigchain'
+import type { KeyEnvelope } from '@protocol/schemas/common'
+import type { SigchainLinkRecord } from '@protocol/schemas/sigchain'
 import {
   buildSigchainLink,
   deviceAddPayload,
@@ -89,8 +90,8 @@ interface EpicEState {
   pukDevices?: Record<string, TestDevice>
   pukSigchainHead?: Pick<SigchainLinkRecord, 'seqNo' | 'hash'>
   concurrentPukResults?: Array<{ status: number; data: unknown }>
-  lastPukEnvelopeValue?: PukHpkeEnvelope
-  newPukEnvelopeValue?: PukHpkeEnvelope
+  lastPukEnvelopeValue?: KeyEnvelope
+  newPukEnvelopeValue?: KeyEnvelope
 
   sessionToken?: string
   freshUserSeed?: string
@@ -218,7 +219,7 @@ async function authorisePukDevice(
 }
 
 /** A real HPKE envelope of a fresh PUK seed sealed to the labelled device. */
-async function sealForPukDevice(s: EpicEState, label: string): Promise<PukHpkeEnvelope> {
+async function sealForPukDevice(s: EpicEState, label: string): Promise<KeyEnvelope> {
   return sealPukSeed(crypto.getRandomValues(new Uint8Array(32)), s.pukDevices![label])
 }
 
@@ -685,7 +686,7 @@ Then('the stored envelope for \\(device {string}, generation {int}\\) is updated
   const s = getS(world)
   const res = await apiGet(request, `/puk/envelopes/${encodeURIComponent(s.pukDevices![deviceLabel].deviceId)}`, s.pukUserSeed!)
   expect(res.status).toBe(200)
-  const data = res.data as { generation: number; envelope: PukHpkeEnvelope }
+  const data = res.data as { generation: number; envelope: KeyEnvelope }
   expect(data.generation).toBe(generation)
   expect(data.envelope).toEqual(s.newPukEnvelopeValue)
   expect(data.envelope).not.toEqual(s.lastPukEnvelopeValue)

@@ -439,7 +439,7 @@ describe('CasesService.createEvent', () => {
     const { db, service } = setup()
     db.$setInsertResult([makeEventRow()])
 
-    const mockEnvelope = { pubkey: 'pk-1', enc: 'b'.repeat(64), ct: 'wk' }
+    const mockEnvelope = { pubkey: 'pk-1', enc: 'b'.repeat(64), ct: 'f2b2d628a0f021981accdbce3f4ad042b302ac3ed750902495f8eccf725fcfffa3046a8e9d7e111997c267114b20ba39' }
     const result = await service.createEvent({
       hubId: 'hub-1',
       entityTypeId: 'entity-type-1',
@@ -459,7 +459,7 @@ describe('CasesService.createEvent', () => {
   it('increments parent subEventCount when parentEventId provided', async () => {
     const { db, service } = setup()
     db.$setInsertResult([makeEventRow({ parentEventId: 'parent-event-1' })])
-    const mockEnvelope = { pubkey: 'pk-1', enc: 'b'.repeat(64), ct: 'wk' }
+    const mockEnvelope = { pubkey: 'pk-1', enc: 'b'.repeat(64), ct: 'f2b2d628a0f021981accdbce3f4ad042b302ac3ed750902495f8eccf725fcfffa3046a8e9d7e111997c267114b20ba39' }
 
     await service.createEvent({
       hubId: 'hub-1',

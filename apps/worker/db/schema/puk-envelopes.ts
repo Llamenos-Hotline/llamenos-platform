@@ -15,7 +15,7 @@ import {
   timestamp,
   unique,
 } from 'drizzle-orm/pg-core'
-import type { PukHpkeEnvelope } from '@protocol/schemas/sigchain'
+import type { KeyEnvelope } from '@protocol/schemas/common'
 import { jsonb } from '../bun-jsonb'
 import { users } from './users'
 import { cryptoFormatCheck, cryptoFormatColumn } from '../crypto-format'
@@ -49,7 +49,7 @@ export const pukEnvelopes = pgTable(
      * HPKE v3 envelope of the PUK seed (packages/crypto HpkeEnvelope), sealed
      * to the device's X25519 key under LABEL_PUK_WRAP_TO_DEVICE.
      */
-    envelope: jsonb('envelope').$type<PukHpkeEnvelope>().notNull(),
+    envelope: jsonb('envelope').$type<KeyEnvelope>().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

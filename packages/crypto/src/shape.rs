@@ -351,6 +351,24 @@ pub fn content_seal(shape: Shape, plaintext: &[u8]) -> Result<SealedContent, Cry
     Ok(SealedContent { packed, key })
 }
 
+/// Seal `plaintext` with `shape`'s content AAD under an existing key — for the
+/// one shape whose key outlives a single item (the firehose buffer window key,
+/// which seals every message buffered in its window). Every other shape takes a
+/// fresh key per item through [`content_seal`].
+pub fn content_seal_under(
+    shape: Shape,
+    key: &[u8; 32],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    if shape != Shape::FirehoseWindowKey {
+        return Err(CryptoError::InvalidInput(format!(
+            "{shape:?} takes a fresh key per item; use content_seal"
+        )));
+    }
+    let aad = require_content(shape)?;
+    aes256gcm_encrypt(key, plaintext, &aad)
+}
+
 /// Open a content ciphertext of `shape` with its key.
 pub fn content_open(
     shape: Shape,
@@ -464,5 +482,12 @@ mod tests {
         );
         assert!(content_open(Shape::FileKey, &sealed.packed, &sealed.key).is_err());
         assert!(content_seal(Shape::HubKey, b"x").is_err());
+        let window = [3u8; 32];
+        let packed = content_seal_under(Shape::FirehoseWindowKey, &window, b"buffered").unwrap();
+        assert_eq!(
+            &*content_open(Shape::FirehoseWindowKey, &packed, &window).unwrap(),
+            b"buffered"
+        );
+        assert!(content_seal_under(Shape::NoteKey, &window, b"x").is_err());
     }
 }

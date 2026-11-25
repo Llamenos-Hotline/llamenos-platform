@@ -1,20 +1,18 @@
 /**
  * WebSocket event publishing — replaces publishNostrEvent.
  *
- * Encrypts content via Rust FFI (AES-256-GCM with epoch key),
- * then publishes through the ConnectionManager for fan-out.
+ * Seals content through the crate's events module (spec D9, #2999): a key per
+ * (hub, epoch) derived from SERVER_SECRET, and an AAD binding hub, kind and
+ * epoch. Nothing here derives a key, pads, or builds an AAD. Then publishes
+ * through the ConnectionManager for fan-out.
  *
  * Durable events (kind < 20000) are also persisted to a PostgreSQL
  * outbox table so they survive process restarts. A periodic drain
  * loop re-publishes any events that were persisted but not yet
  * delivered (e.g. from a previous process life).
  */
-import { hkdfSha256, symmetricEncrypt, randomBytes } from '@llamenos/crypto/ffi'
-import { bytesToHex, utf8ToBytes, hexToBytes } from '@shared/encoding'
-import {
-  LABEL_SERVER_EVENT_ENCRYPTION_KEY,
-  LABEL_HUB_EVENT_EPOCH,
-} from '@shared/crypto-labels'
+import { sealServerEvent } from '@llamenos/crypto/ffi'
+import { hexToBytes } from '@shared/encoding'
 import { getConnectionManager } from './ws-manager'
 import type { EventOutbox } from './event-outbox'
 import type { Env } from '../types/infra'
@@ -22,12 +20,12 @@ import { createLogger } from './logger'
 
 const log = createLogger('ws-events')
 
-/** Epoch duration: 1 UTC day in seconds */
-const EPOCH_DURATION_SEC = 86400
+/** Epoch duration: 1 UTC day in seconds (the crate's `EVENT_EPOCH_SECONDS`). */
+export const EVENT_EPOCH_SECONDS = 86400
 
 /** Get the current epoch (UTC day number) */
 export function currentEpoch(): number {
-  return Math.floor(Date.now() / 1000 / EPOCH_DURATION_SEC)
+  return Math.floor(Date.now() / 1000 / EVENT_EPOCH_SECONDS)
 }
 
 // ---------------------------------------------------------------------------
@@ -45,79 +43,18 @@ export function getEventOutbox(): EventOutbox | null {
   return outbox
 }
 
-/** Minimum padded bucket size */
-const MIN_BUCKET_SIZE = 512
-
 /**
- * Epoch-keyed event key cache. Keys are derived per-epoch for forward secrecy.
- * Old epochs are evicted when a new epoch starts.
- */
-const epochKeyCache = new Map<number, Uint8Array>()
-let lastCachedEpoch = -1
-
-function getOrDeriveEpochKey(serverSecret: string, epoch: number): Uint8Array {
-  const cached = epochKeyCache.get(epoch)
-  if (cached) return cached
-
-  const ikm = hexToBytes(serverSecret)
-  const salt = utf8ToBytes(LABEL_SERVER_EVENT_ENCRYPTION_KEY)
-  const info = utf8ToBytes(`${LABEL_HUB_EVENT_EPOCH}:${epoch}`)
-  const key = hkdfSha256(ikm, salt, info, 32)
-
-  epochKeyCache.set(epoch, key)
-
-  // Evict keys older than current - 1
-  if (epoch > lastCachedEpoch) {
-    lastCachedEpoch = epoch
-    for (const cachedEpoch of epochKeyCache.keys()) {
-      if (cachedEpoch < epoch - 1) {
-        epochKeyCache.delete(cachedEpoch)
-      }
-    }
-  }
-
-  return key
-}
-
-/**
- * Pad plaintext to power-of-2 bucket (min 512B).
- * Format: [4-byte LE actual-length][plaintext][random padding]
- */
-function padToBucket(plaintext: Uint8Array): Uint8Array {
-  const totalNeeded = 4 + plaintext.length
-  let bucket = MIN_BUCKET_SIZE
-  while (bucket < totalNeeded) {
-    bucket *= 2
-  }
-  const padded = new Uint8Array(bucket)
-  const view = new DataView(padded.buffer)
-  view.setUint32(0, plaintext.length, true)
-  padded.set(plaintext, 4)
-  if (bucket > totalNeeded) {
-    const padding = randomBytes(bucket - totalNeeded)
-    padded.set(padding, totalNeeded)
-  }
-  return padded
-}
-
-/**
- * Encrypt event content with AES-256-GCM using an epoch-scoped key.
- * Returns hex-encoded ciphertext (nonce + ciphertext + tag).
- *
- * Exported so `packages/crypto/scripts/gen-server-event-vectors.ts` can record
- * the bytes the relay really sends; no other caller should need it.
+ * Seal one relay frame of `hubId` / `kind` / `epoch` (hex payload). Exported for
+ * the conformance tests; the relay itself calls it only through publishEvent.
  */
 export function encryptEventContent(
   content: Record<string, unknown>,
   serverSecret: string,
+  hubId: string,
+  kind: number,
   epoch: number,
 ): string {
-  const key = getOrDeriveEpochKey(serverSecret, epoch)
-  const plaintext = utf8ToBytes(JSON.stringify(content))
-  const padded = padToBucket(plaintext)
-  const aad = utf8ToBytes(`${LABEL_HUB_EVENT_EPOCH}:${epoch}`)
-  const ciphertext = symmetricEncrypt(key, padded, aad)
-  return bytesToHex(ciphertext)
+  return sealServerEvent(hexToBytes(serverSecret), hubId, kind, epoch, JSON.stringify(content))
 }
 
 /** Durable events only — ephemeral events (kind >= 20000) skip the outbox */
@@ -151,12 +88,21 @@ export function publishEvent(
 
   const epoch = currentEpoch()
   const serverSecret = env?.SERVER_SECRET
+  // No plaintext fallback: a relay frame is sealed or it is not sent. Without
+  // SERVER_SECRET there is no event key, and no client could open the frame.
+  if (!serverSecret) {
+    log.error('publishEvent without SERVER_SECRET — event dropped', { kind })
+    return
+  }
   let payload: string
-
-  if (serverSecret) {
-    payload = encryptEventContent(content, serverSecret, epoch)
-  } else {
-    payload = JSON.stringify(content)
+  try {
+    payload = encryptEventContent(content, serverSecret, hubId, kind, epoch)
+  } catch (err) {
+    log.error('publishEvent could not seal the frame — event dropped', {
+      kind,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    return
   }
 
   const targetHub = hubId

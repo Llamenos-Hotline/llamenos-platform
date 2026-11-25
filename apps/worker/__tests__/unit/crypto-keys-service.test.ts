@@ -997,7 +997,7 @@ describe('CryptoKeysService — PUK Envelopes', () => {
       makeLink({ seqNo: 1, hash: 'h1', linkType: 'genesis', payload: GENESIS_PAYLOAD, userPubkey: USER_PUBKEY }),
       makeLink({ seqNo: 2, hash: 'h2', prevHash: 'h1', linkType: 'device_add', payload: DEVICE_ADD_PAYLOAD, userPubkey: USER_PUBKEY }),
     ]
-    const hpkeEnvelope = (ct: string) => ({ v: 3, labelId: 7, enc: 'ZW5j', ct })
+    const hpkeEnvelope = (ct: string) => ({ enc: 'ab'.repeat(32), ct })
 
     function makePukDb(chain: MockLink[], insertedRows: unknown[] = []) {
       const returning = vi.fn().mockResolvedValue(insertedRows)
@@ -1117,7 +1117,7 @@ describe('CryptoKeysService — PUK Envelopes', () => {
         userPubkey: 'user-pk1',
         deviceId: 'dev-1',
         generation: 3,
-        envelope: { v: 3, labelId: 7, enc: 'ZW5j', ct: 'bGF0ZXN0' },
+        envelope: { enc: 'ab'.repeat(32), ct: 'ef'.repeat(48) },
         createdAt: new Date(),
       }
 
@@ -1138,7 +1138,7 @@ describe('CryptoKeysService — PUK Envelopes', () => {
 
       expect(result).toBeTruthy()
       expect(result!.generation).toBe(3)
-      expect(result!.envelope).toEqual({ v: 3, labelId: 7, enc: 'ZW5j', ct: 'bGF0ZXN0' })
+      expect(result!.envelope).toEqual({ enc: 'ab'.repeat(32), ct: 'ef'.repeat(48) })
     })
   })
 })

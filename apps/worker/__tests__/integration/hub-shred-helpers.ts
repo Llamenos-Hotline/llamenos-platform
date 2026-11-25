@@ -21,7 +21,7 @@ import { drizzle } from 'drizzle-orm/postgres-js'
 import { eq } from 'drizzle-orm'
 import { x25519 } from '@noble/curves/ed25519.js'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen, type Shape } from '@llamenos/crypto/ffi'
 import { LABEL_MESSAGE } from '@shared/crypto-labels'
 import type { Database } from '../../db'
 import * as schema from '../../db/schema'
@@ -43,7 +43,6 @@ const REPO_ROOT = path.resolve(__dirname, '../../../..')
 const DATABASE_URL = requireDatabaseUrl()
 
 /** Stored records seal with no AAD; the label is bound as the HPKE info. */
-const NO_AAD = new Uint8Array(0)
 
 function urlFor(name: string): string {
   const url = new URL(DATABASE_URL)
@@ -67,12 +66,9 @@ export function reader(): { secret: Uint8Array; pubkey: string } {
 export function openEnvelope(
   secret: Uint8Array,
   env: { enc: string; ct: string },
-  label: string = LABEL_MESSAGE,
+  shape: Extract<Shape, 'message-key' | 'call-meta-key'> = 'message-key',
 ): Uint8Array {
-  const envelope = new Uint8Array(hexToBytes(env.enc).length + hexToBytes(env.ct).length)
-  envelope.set(hexToBytes(env.enc), 0)
-  envelope.set(hexToBytes(env.ct), hexToBytes(env.enc).length)
-  return hpkeOpen(secret, envelope, utf8ToBytes(label), NO_AAD)
+  return shapeOpen(shape, secret, [], { enc: env.enc, ct: env.ct })
 }
 
 /** Unwrap AND open, returning the plaintext. Throws if either step fails. */
@@ -80,12 +76,10 @@ export function readSealed(
   secret: Uint8Array,
   env: { enc: string; ct: string },
   encryptedContent: string,
-  label: string = LABEL_MESSAGE,
+  shape: Extract<Shape, 'message-key' | 'call-meta-key'> = 'message-key',
 ): string {
-  const key = openEnvelope(secret, env, label)
-  return new TextDecoder().decode(
-    symmetricDecrypt(key, hexToBytes(encryptedContent), NO_AAD),
-  )
+  const key = openEnvelope(secret, env, shape)
+  return new TextDecoder().decode(contentOpen(shape, key, hexToBytes(encryptedContent)))
 }
 
 /**
@@ -128,7 +122,7 @@ export async function expectNoteReadable(
   const [row] = await db.select().from(schema.notes).where(eq(schema.notes.id, noteId))
   const key = openEnvelope(secret, row!.authorEnvelope as { enc: string; ct: string })
   const plain = new TextDecoder().decode(
-    symmetricDecrypt(key, hexToBytes(row!.encryptedContent), NO_AAD),
+    contentOpen('message-key', key, hexToBytes(row!.encryptedContent)),
   )
   expect(plain).toBe(expectedPlaintext)
 }
