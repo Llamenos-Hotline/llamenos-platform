@@ -190,4 +190,4 @@ The recovery link is wire D14: K-of-N approvals, a delay, and the emergency floo
 
 ## 10. Sign-off
 
-The operator signs off L1–L7 on #2975.
+The operator signed off L1–L7 on #2975 on 2026-11-25, every decision as recommended. Build briefs are on #2975.
