@@ -8,15 +8,22 @@
 //! Environment (never argv: argv is world-readable via /proc/<pid>/cmdline):
 //!   SIP_E2E_PARAMS      path to the `sip` object of the /sip-token response (JSON)
 //!   SIP_E2E_STATE_DIR   the core's state directory
-//!   SIP_E2E_MODE        `answer` (default) or `abort-after-register`
+//!   SIP_E2E_MODE        `answer` (default), `echo` or `abort-after-register`
+//!   SIP_E2E_ECHO_URI    `echo`: the harness's echo target to call
 //!   SIP_E2E_PLAY_WAV    `answer`: sent as the microphone (file-backed audio)
 //!   SIP_E2E_RECORD_WAV  `answer`: what the caller sends is recorded here
 //!   SIP_E2E_TALK_SECS   `answer`: how long to hold the call (default 8)
+//!   SIP_E2E_FORCE_RELAY `answer`: `1` lets ICE pair only relay candidates, so
+//!                       the media provably crosses the TURN relay
 //!
 //! `answer`: register, wait for an inbound call, answer it, hold it for the
 //! talk time while sampling RTP counters, hang up. Prints one `SIP_E2E_*` line
 //! per milestone; exits 0 only if it registered, answered, the call reached
 //! Active with DTLS-SRTP, and RTP flowed BOTH ways (packets received AND sent).
+//!
+//! `echo`: register, call the harness's echo target, hold the call for the
+//! talk time. What the client sends comes back, so its own recording proves
+//! the media path in BOTH directions. Same exit rule as `answer`.
 //!
 //! `abort-after-register`: `std::process::abort()` the moment registration
 //! succeeds — no shutdown, no destructors: the state a SIGKILL or force-quit
@@ -92,7 +99,10 @@ fn main() {
     ))
     .unwrap_or_else(|e| fail(&format!("core did not start: {e}")));
 
-    if mode == "answer" {
+    if std::env::var("SIP_E2E_FORCE_RELAY").as_deref() == Ok("1") {
+        core.post(VoiceCommand::ForceIceRelay);
+    }
+    if mode == "answer" || mode == "echo" {
         core.post(VoiceCommand::UseAudioFiles {
             play: env("SIP_E2E_PLAY_WAV").into(),
             record: env("SIP_E2E_RECORD_WAV").into(),
@@ -132,11 +142,20 @@ fn main() {
                         std::process::abort(); // deliberately no shutdown()
                     }
                     println!("SIP_E2E_REGISTERED");
+                    if mode == "echo" {
+                        core.post(VoiceCommand::PlaceTestCall {
+                            uri: env("SIP_E2E_ECHO_URI"),
+                        });
+                    }
                 }
                 RegistrationState::Failed => fail(&format!("registration failed: {:?}", ev.reason)),
                 _ => {}
             },
             Ok(VoiceEvent::Call(ev)) => match ev.state {
+                CallState::Connecting if call_id.is_none() && mode == "echo" => {
+                    println!("SIP_E2E_CALLING call={}", ev.call_id);
+                    call_id = Some(ev.call_id.clone());
+                }
                 CallState::Incoming if call_id.is_none() => {
                     println!(
                         "SIP_E2E_INCOMING call={} app_call_id={}",

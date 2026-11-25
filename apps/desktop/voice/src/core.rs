@@ -23,6 +23,12 @@ use crate::VoiceError;
 
 const ITERATE_INTERVAL: Duration = Duration::from_millis(20);
 
+/// How long running streams may stay unencrypted while the DTLS handshake
+/// completes. liblinphone reports StreamsRunning BEFORE the handshake
+/// finishes (measured at Tier 2: the negotiated params read `None` there),
+/// so the check waits for `call_encryption_changed` — bounded, never open-ended.
+const DTLS_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+
 /// liblinphone's factory (data dir, config dir, resources dir, logging) is a
 /// process-global singleton, so two cores in one process share — and race on —
 /// all of it. There is also exactly one registration per device by design
@@ -108,6 +114,17 @@ pub enum VoiceCommand {
         play: PathBuf,
         record: PathBuf,
     },
+    /// Test harness only: originate a call to the harness's echo target. The
+    /// product places no outbound calls (spec §2); this exists so Tier 2 can
+    /// measure the media path in both directions with one endpoint.
+    #[cfg(feature = "e2e")]
+    PlaceTestCall {
+        uri: String,
+    },
+    /// Test harness only: ICE may pair ONLY relay candidates, so a call's media
+    /// provably crosses the TURN relay (the UDP-blocked / symmetric-NAT case).
+    #[cfg(feature = "e2e")]
+    ForceIceRelay,
     /// Test harness only: the receive/send counters of a call's audio stream.
     #[cfg(feature = "e2e")]
     AudioStats {
@@ -132,6 +149,10 @@ impl std::fmt::Debug for VoiceCommand {
             #[cfg(feature = "e2e")]
             Self::UseAudioFiles { .. } => f.write_str("UseAudioFiles"),
             #[cfg(feature = "e2e")]
+            Self::PlaceTestCall { uri } => write!(f, "PlaceTestCall({uri})"),
+            #[cfg(feature = "e2e")]
+            Self::ForceIceRelay => f.write_str("ForceIceRelay"),
+            #[cfg(feature = "e2e")]
             Self::AudioStats { call_id, .. } => write!(f, "AudioStats({call_id})"),
             #[cfg(test)]
             Self::RunOnPump(_) => f.write_str("RunOnPump"),
@@ -151,11 +172,21 @@ struct CallSlot {
     state: CallState,
     muted: bool,
     media_path: Option<MediaPath>,
+    /// liblinphone confirmed DTLS-SRTP keyed the media (`call_encryption_changed`).
+    encrypted: bool,
+    /// When streams started running. A call is only reported Active once its
+    /// media is ALSO encrypted; one still unencrypted at
+    /// `DTLS_HANDSHAKE_DEADLINE` past this is hung up (fail closed, spec §4.2).
+    streams_running_at: Option<std::time::Instant>,
 }
 
 struct PumpCtx {
     on_event: EventSink,
     calls: HashMap<String, CallSlot>,
+    /// The harness's own test call (e2e only), until its first state callback
+    /// names its Call-ID — liblinphone has not assigned one when `invite` returns.
+    #[cfg(feature = "e2e")]
+    pending_test_call: Option<*mut ffi::LinphoneCall>,
 }
 
 thread_local! {
@@ -360,6 +391,8 @@ fn pump_main(
         *c.borrow_mut() = Some(PumpCtx {
             on_event: config.on_event.clone(),
             calls: HashMap::new(),
+            #[cfg(feature = "e2e")]
+            pending_test_call: None,
         })
     });
     let _ = ready_tx.send(Ok(()));
@@ -385,6 +418,7 @@ fn pump_main(
         }
         unsafe {
             ffi::linphone_core_iterate(core);
+            enforce_dtls_deadline();
             refresh_media_paths();
         }
     }
@@ -472,6 +506,7 @@ unsafe fn create_core(config: &VoiceConfig) -> Result<*mut ffi::LinphoneCore, Vo
         Some(on_registration_state_changed),
     );
     ffi::linphone_core_cbs_set_call_state_changed(cbs, Some(on_call_state_changed));
+    ffi::linphone_core_cbs_set_call_encryption_changed(cbs, Some(on_call_encryption_changed));
     ffi::linphone_core_add_callbacks(core, cbs);
     ffi::linphone_core_cbs_unref(cbs);
 
@@ -626,6 +661,30 @@ unsafe fn dispatch(core: *mut ffi::LinphoneCore, cmd: VoiceCommand) {
             ffi::linphone_core_set_play_file(core, play.as_ptr());
             ffi::linphone_core_set_record_file(core, record.as_ptr());
         }
+        #[cfg(feature = "e2e")]
+        VoiceCommand::PlaceTestCall { uri } => {
+            let Ok(uri_c) = CString::new(uri) else {
+                emit(VoiceEvent::Error(
+                    "test call URI contains a NUL byte".into(),
+                ));
+                return;
+            };
+            let call = ffi::linphone_core_invite(core, uri_c.as_ptr());
+            if call.is_null() {
+                emit(VoiceEvent::Error(
+                    "liblinphone refused the test call".into(),
+                ));
+                return;
+            }
+            ffi::linphone_call_ref(call);
+            CTX.with(|c| {
+                if let Some(ctx) = c.borrow_mut().as_mut() {
+                    ctx.pending_test_call = Some(call);
+                }
+            });
+        }
+        #[cfg(feature = "e2e")]
+        VoiceCommand::ForceIceRelay => ffi::linphone_core_enable_forced_ice_relay(core, 1),
         #[cfg(feature = "e2e")]
         VoiceCommand::AudioStats { call_id, reply } => {
             let stats = call_ptr(&call_id).and_then(|call| crate::stats::audio_stats(call));
@@ -834,6 +893,8 @@ unsafe extern "C" fn on_call_state_changed(
 ) {
     let Some(id) = sip_call_id(call) else { return };
     let reason = cstr_opt(message).filter(|m| !m.is_empty());
+    #[cfg(feature = "e2e")]
+    adopt_test_call(call, &id);
     use ffi::LinphoneCallState as S;
     let mapped = match state {
         S::LinphoneCallStateIncomingReceived => {
@@ -863,6 +924,8 @@ unsafe extern "C" fn on_call_state_changed(
                             state: CallState::Incoming,
                             muted: false,
                             media_path: None,
+                            encrypted: false,
+                            streams_running_at: None,
                         },
                     );
                 }
@@ -871,34 +934,18 @@ unsafe extern "C" fn on_call_state_changed(
         }
         S::LinphoneCallStateConnected => CallState::Connecting,
         S::LinphoneCallStateStreamsRunning => {
-            // Mandatory DTLS, checked on what was NEGOTIATED, not what was
-            // asked for: an unencrypted leg is hung up, loudly (spec §4.2).
-            let current = ffi::linphone_call_get_current_params(call);
-            let menc = if current.is_null() {
-                ffi::LinphoneMediaEncryption::LinphoneMediaEncryptionNone
-            } else {
-                ffi::linphone_call_params_get_media_encryption(current)
-            };
-            if menc != ffi::LinphoneMediaEncryption::LinphoneMediaEncryptionDTLS {
-                ffi::linphone_call_terminate(call);
-                set_slot_state(&id, CallState::Error);
-                emit(VoiceEvent::Call(call_event(
-                    &id,
-                    CallState::Error,
-                    Some("media is not DTLS-SRTP encrypted — call ended".into()),
-                )));
+            let path = media_path_of(call);
+            let encrypted = with_slot(&id, |s| {
+                s.media_path = path;
+                s.streams_running_at
+                    .get_or_insert_with(std::time::Instant::now);
+                s.encrypted
+            });
+            // Active only once the media is DTLS-SRTP (on_call_encryption_changed
+            // promotes it then); until then the call stays Connecting.
+            if encrypted != Some(true) {
                 return;
             }
-            let path = media_path_of(call);
-            CTX.with(|c| {
-                if let Some(s) = c
-                    .borrow_mut()
-                    .as_mut()
-                    .and_then(|ctx| ctx.calls.get_mut(&id))
-                {
-                    s.media_path = path;
-                }
-            });
             CallState::Active
         }
         S::LinphoneCallStateError => CallState::Error,
@@ -933,6 +980,111 @@ unsafe extern "C" fn on_call_state_changed(
         return;
     }
     emit(VoiceEvent::Call(call_event(&id, mapped, reason)));
+}
+
+/// The harness's test call becomes a tracked slot once it has a Call-ID.
+#[cfg(feature = "e2e")]
+fn adopt_test_call(call: *mut ffi::LinphoneCall, id: &str) {
+    CTX.with(|c| {
+        let mut ctx = c.borrow_mut();
+        let Some(ctx) = ctx.as_mut() else { return };
+        if ctx.pending_test_call == Some(call) {
+            ctx.pending_test_call = None;
+            ctx.calls.insert(
+                id.to_string(),
+                CallSlot {
+                    call,
+                    app_call_id: None,
+                    state: CallState::Connecting,
+                    muted: false,
+                    media_path: None,
+                    encrypted: false,
+                    streams_running_at: None,
+                },
+            );
+        }
+    });
+}
+
+fn with_slot<T>(id: &str, f: impl FnOnce(&mut CallSlot) -> T) -> Option<T> {
+    CTX.with(|c| {
+        c.borrow_mut()
+            .as_mut()
+            .and_then(|ctx| ctx.calls.get_mut(id))
+            .map(f)
+    })
+}
+
+/// Mandatory DTLS, checked on what was NEGOTIATED, not what was asked for:
+/// the call becomes Active only when liblinphone reports its media keyed by
+/// DTLS-SRTP, and a leg whose encryption is turned off is hung up, loudly.
+unsafe extern "C" fn on_call_encryption_changed(
+    _core: *mut ffi::LinphoneCore,
+    call: *mut ffi::LinphoneCall,
+    on: u8,
+    _token: *const c_char,
+) {
+    let Some(id) = sip_call_id(call) else { return };
+    let current = ffi::linphone_call_get_current_params(call);
+    let dtls = on != 0
+        && !current.is_null()
+        && ffi::linphone_call_params_get_media_encryption(current)
+            == ffi::LinphoneMediaEncryption::LinphoneMediaEncryptionDTLS;
+    if !dtls {
+        fail_unencrypted(call, &id, "media is not DTLS-SRTP encrypted — call ended");
+        return;
+    }
+    let became_active = with_slot(&id, |s| {
+        s.encrypted = true;
+        let ready = s.streams_running_at.is_some() && s.state != CallState::Active;
+        if ready {
+            s.state = CallState::Active;
+            s.media_path = media_path_of(call);
+        }
+        ready
+    });
+    if became_active == Some(true) {
+        emit(VoiceEvent::Call(call_event(&id, CallState::Active, None)));
+    }
+}
+
+unsafe fn fail_unencrypted(call: *mut ffi::LinphoneCall, id: &str, why: &str) {
+    if set_slot_state(id, CallState::Error) {
+        ffi::linphone_call_terminate(call);
+        emit(VoiceEvent::Call(call_event(
+            id,
+            CallState::Error,
+            Some(why.into()),
+        )));
+    }
+}
+
+/// Hang up any call whose streams have run unencrypted past the deadline.
+unsafe fn enforce_dtls_deadline() {
+    let overdue: Vec<(String, *mut ffi::LinphoneCall)> = CTX.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|ctx| {
+                ctx.calls
+                    .iter()
+                    .filter(|(_, s)| {
+                        !s.encrypted
+                            && s.state != CallState::Error
+                            && s.streams_running_at
+                                .is_some_and(|t| t.elapsed() > DTLS_HANDSHAKE_DEADLINE)
+                    })
+                    .map(|(id, s)| (id.clone(), s.call))
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    for (id, call) in overdue {
+        fail_unencrypted(
+            call,
+            &id,
+            "the DTLS-SRTP handshake did not complete — call ended",
+        );
+    }
 }
 
 fn set_slot_state(id: &str, state: CallState) -> bool {

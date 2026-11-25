@@ -102,6 +102,7 @@ tests/load/*.json
 
 # Evidence from deploy/docker/tests/telephony/run-android-sip-e2e.sh (logs, issued credentials)
 .android-sip-evidence/
+.desktop-sip-evidence/
 
 # Local hash keys (scripts/lib/server-hash-keys.sh) and compose secret files
 .dev-secrets/

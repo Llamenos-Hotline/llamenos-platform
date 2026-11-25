@@ -1,0 +1,44 @@
+# Overlay: the telephony stack as the headless desktop client sees it, for
+# run-desktop-sip-e2e.sh. TEST ONLY.
+#
+# Layered on docker-compose.dev.yml + docker-compose.carrier.yml (app,
+# Postgres, RustFS, Asterisk, sip-bridge, simulated carrier). What it adds is
+# what a client on the HOST needs:
+#
+#   * Kamailio's TLS port (and only it) on host loopback, with 127.0.0.1 as a certificate SAN
+#     (the client verifies the hostname as well as the chain), and the app
+#     serving that edge's trust anchor (SIP_TLS_CA_FILE) in /sip-token.
+#   * Nothing else published: the client's media reaches Asterisk ONLY through
+#     the TURN relay (coturn, host networking, from the dev file's telephony
+#     profile), which the runner points at this stack's bridge network.
+#
+# Paths are relative to deploy/docker/ (the first compose file's directory).
+services:
+  asterisk:
+    # ARI on loopback for the spec's own reads (endpoint state, channels);
+    # no SIP and no RTP published — see the header.
+    ports: !override
+      - "127.0.0.1:${E2E_PBX_ARI_PORT:-38088}:8088"
+    environment:
+      - SIP_TLS_SANS=127.0.0.1
+    volumes:
+      # The test-only answer-and-echo target (extensions.d/), for the echo call.
+      - ./tests/telephony/extensions.d:/etc/asterisk/extensions.d:ro
+
+  app:
+    environment:
+      - SIP_TLS_CA_FILE=/var/lib/llamenos/sip-tls/kamailio.pem
+    volumes:
+      - sip-tls-anchor:/var/lib/llamenos/sip-tls:ro
+
+  kamailio:
+    environment:
+      - SIP_TLS_SANS=127.0.0.1
+    ports: !override
+      - "127.0.0.1:${E2E_SIP_TLS_PORT:-5061}:5061/tcp"
+
+  sip-bridge:
+    ports: !reset []
+
+volumes:
+  sip-tls-anchor:
