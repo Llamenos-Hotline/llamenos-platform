@@ -93,7 +93,7 @@ final class CryptoServiceTests: XCTestCase {
         let originalSigning = encrypted.state.signingPubkeyHex
         service.lock()
 
-        let restored = try service.unlockWithPin(data: encrypted, pin: pin)
+        let restored = try service.unlockWithPin(data: encrypted, pin: pin).state
         XCTAssertEqual(restored.signingPubkeyHex, originalSigning)
         XCTAssertTrue(service.isUnlocked)
     }

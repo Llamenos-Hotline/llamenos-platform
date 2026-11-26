@@ -48,6 +48,7 @@ fn identity_init_chain_vectors() {
     let secrets = DeviceSecrets {
         signing_seed: DEVICE_SIGNING_SEED,
         encryption_seed: DEVICE_ENCRYPTION_SEED,
+        kem_seed: None,
     };
     let device_pubkey = hex::encode(secrets.signing_pubkey().to_bytes());
     let device_enc_pubkey = hex::encode(secrets.encryption_pubkey().to_bytes());
@@ -114,6 +115,18 @@ fn identity_init_chain_vectors() {
         verified.active_device_pubkeys,
         vec![DEVICE_SIGNING_PUBKEY.to_string()]
     );
+    assert_eq!(verified.user_pubkey, DEVICE_SIGNING_PUBKEY);
+    // No device_kem yet: this device is not in any v2 genesis device set (#2496).
+    assert!(verified.device_kem_keys.is_empty());
+    let mut named = vec![
+        DEVICE_SIGNING_PUBKEY.to_string(),
+        hex::encode(
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([0x22u8; 32]))
+                .to_bytes(),
+        ),
+    ];
+    named.sort();
+    assert_eq!(verified.named_keys, named);
 
     // A server that reorders or drops the genesis link must not verify.
     assert!(verify_sigchain(std::slice::from_ref(&epoch)).is_err());

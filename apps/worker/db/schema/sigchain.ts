@@ -73,6 +73,32 @@ export const sigchainLinks = pgTable(
 )
 
 // ---------------------------------------------------------------------------
+// device_key_claims
+// ---------------------------------------------------------------------------
+
+/**
+ * Every device public key the server has ever seen, and the ONE user it belongs
+ * to (#2496; spec 2026-11-25-v2-device-linking-and-recovery §6, L5). The primary
+ * key is the UNIQUE-across-all-users constraint on signing keys and on
+ * encryption keys: a key named by one user's sigchain or device registration can
+ * never be registered by another user. Claims are permanent — a removed device's
+ * or an erased user's key stays claimed, so it can never be re-registered as
+ * someone else's device. Deliberately no foreign key to `users`, for that reason.
+ *
+ * Written by `claimDeviceKeys` (services/crypto-keys.ts) in the same transaction
+ * as the sigchain link or `devices` row that names the key.
+ */
+export const deviceKeyClaims = pgTable('device_key_claims', {
+  /** Lowercase hex public key: Ed25519 signing, X25519 or X-Wing encryption. */
+  key: text('key').primaryKey(),
+  /** The user the key belongs to. */
+  userPubkey: text('user_pubkey').notNull(),
+  /** `signing` | `encryption` */
+  kind: text('kind').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 

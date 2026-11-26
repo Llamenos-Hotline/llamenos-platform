@@ -681,6 +681,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_get_public_key(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_add_device_kem_key_and_load(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_build_auth_message(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_clear_ephemeral_key(
@@ -709,6 +711,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_decrypt_message(
     ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_device_kem_payload(
+    ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_ecdh_complete(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_ed25519_verify(
@@ -726,6 +730,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_generate_ephemeral_key(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_generate_wake_key(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_genesis_device_set(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_get_device_state(
     ): Short
@@ -784,6 +790,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_verify(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_verify_link(
+    ): Short
+    external fun uniffi_llamenos_core_checksum_func_mobile_sigchain_verify_users(
     ): Short
     external fun uniffi_llamenos_core_checksum_func_mobile_sign(
     ): Short
@@ -852,6 +860,8 @@ external fun uniffi_llamenos_core_fn_func_generate_ephemeral_keypair_mobile(unif
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_get_public_key(`secretKeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_add_device_kem_key_and_load(`data`: RustBuffer.ByValue,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_build_auth_message(`pubkeyHex`: RustBuffer.ByValue,`timestamp`: Long,`method`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,`nonce`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_clear_ephemeral_key(uniffi_out_err: UniffiRustCallStatus, 
@@ -880,6 +890,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_decrypt_hub_field(`packedHex`: 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_decrypt_message(`encryptedContent`: RustBuffer.ByValue,`envelopes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_device_kem_payload(`userPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_ecdh_complete(`theirPubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_ed25519_verify(`messageHex`: RustBuffer.ByValue,`signatureHex`: RustBuffer.ByValue,`pubkeyHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -897,6 +909,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_generate_and_load(`deviceId`: R
 external fun uniffi_llamenos_core_fn_func_mobile_generate_ephemeral_key(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_generate_wake_key(uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+external fun uniffi_llamenos_core_fn_func_mobile_genesis_device_set(`chainsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_get_device_state(uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -956,6 +970,8 @@ external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify(`linksJson`: Ru
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify_link(`linkJson`: RustBuffer.ByValue,`expectedSignerPubkey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
+external fun uniffi_llamenos_core_fn_func_mobile_sigchain_verify_users(`chainsJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_sign(`messageHex`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
 external fun uniffi_llamenos_core_fn_func_mobile_unlock(`data`: RustBuffer.ByValue,`pin`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1152,6 +1168,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_get_public_key() != 4118.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_add_device_kem_key_and_load() != 3746.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_build_auth_message() != 40360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1194,6 +1213,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_llamenos_core_checksum_func_mobile_decrypt_message() != 49000.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_device_kem_payload() != 48727.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_ecdh_complete() != 49203.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1219,6 +1241,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_generate_wake_key() != 33299.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_genesis_device_set() != 55106.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_get_device_state() != 13863.toShort()) {
@@ -1306,6 +1331,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_sigchain_verify_link() != 64332.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_llamenos_core_checksum_func_mobile_sigchain_verify_users() != 18903.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_llamenos_core_checksum_func_mobile_sign() != 19728.toShort()) {
@@ -1433,6 +1461,29 @@ public object FfiConverterUByte: FfiConverter<UByte, Byte> {
 
     override fun write(value: UByte, buf: ByteBuffer) {
         buf.put(value.toByte())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUShort: FfiConverter<UShort, Short> {
+    override fun lift(value: Short): UShort {
+        return value.toUShort()
+    }
+
+    override fun read(buf: ByteBuffer): UShort {
+        return lift(buf.getShort())
+    }
+
+    override fun lower(value: UShort): Short {
+        return value.toShort()
+    }
+
+    override fun allocationSize(value: UShort) = 2UL
+
+    override fun write(value: UShort, buf: ByteBuffer) {
+        buf.putShort(value.toShort())
     }
 }
 
@@ -1680,6 +1731,62 @@ public object FfiConverterTypeBanDigestBlind: FfiConverterRustBuffer<BanDigestBl
 
 
 /**
+ * A device's current format-2 encryption key, as its `device_kem` (or v2
+ * `device_add`) link names it.
+ */
+data class DeviceKemKey (
+    /**
+     * The device's Ed25519 key, hex
+     */
+    val `devicePubkey`: kotlin.String
+    , 
+    /**
+     * Its X-Wing encapsulation key, hex
+     */
+    val `kemPubkey`: kotlin.String
+    , 
+    /**
+     * The crypto_format the key belongs to (always 2)
+     */
+    val `format`: kotlin.UShort
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDeviceKemKey: FfiConverterRustBuffer<DeviceKemKey> {
+    override fun read(buf: ByteBuffer): DeviceKemKey {
+        return DeviceKemKey(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DeviceKemKey) = (
+            FfiConverterString.allocationSize(value.`devicePubkey`) +
+            FfiConverterString.allocationSize(value.`kemPubkey`) +
+            FfiConverterUShort.allocationSize(value.`format`)
+    )
+
+    override fun write(value: DeviceKemKey, buf: ByteBuffer) {
+            FfiConverterString.write(value.`devicePubkey`, buf)
+            FfiConverterString.write(value.`kemPubkey`, buf)
+            FfiConverterUShort.write(value.`format`, buf)
+    }
+}
+
+
+
+/**
  * Device key state exposed to callers (no secret material).
  */
 data class DeviceKeyState (
@@ -1697,6 +1804,14 @@ data class DeviceKeyState (
      * X25519 public key, hex-encoded (32 bytes / 64 hex chars)
      */
     val `encryptionPubkeyHex`: kotlin.String
+    , 
+    /**
+     * X-Wing encapsulation (public) key, hex-encoded (1216 bytes / 2432 hex
+     * chars) — the device's crypto_format 2 encryption key (wire spec D16).
+     * `None` for a pilot device that has not yet been given one
+     * ([`add_device_kem_key`]).
+     */
+    val `kemPubkeyHex`: kotlin.String?
     
 ){
     
@@ -1716,19 +1831,63 @@ public object FfiConverterTypeDeviceKeyState: FfiConverterRustBuffer<DeviceKeySt
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: DeviceKeyState) = (
             FfiConverterString.allocationSize(value.`deviceId`) +
             FfiConverterString.allocationSize(value.`signingPubkeyHex`) +
-            FfiConverterString.allocationSize(value.`encryptionPubkeyHex`)
+            FfiConverterString.allocationSize(value.`encryptionPubkeyHex`) +
+            FfiConverterOptionalString.allocationSize(value.`kemPubkeyHex`)
     )
 
     override fun write(value: DeviceKeyState, buf: ByteBuffer) {
             FfiConverterString.write(value.`deviceId`, buf)
             FfiConverterString.write(value.`signingPubkeyHex`, buf)
             FfiConverterString.write(value.`encryptionPubkeyHex`, buf)
+            FfiConverterOptionalString.write(value.`kemPubkeyHex`, buf)
+    }
+}
+
+
+
+/**
+ * An active member device with no `device_kem` link yet.
+ */
+data class DeviceMissingKem (
+    val `userPubkey`: kotlin.String
+    , 
+    val `devicePubkey`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDeviceMissingKem: FfiConverterRustBuffer<DeviceMissingKem> {
+    override fun read(buf: ByteBuffer): DeviceMissingKem {
+        return DeviceMissingKem(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DeviceMissingKem) = (
+            FfiConverterString.allocationSize(value.`userPubkey`) +
+            FfiConverterString.allocationSize(value.`devicePubkey`)
+    )
+
+    override fun write(value: DeviceMissingKem, buf: ByteBuffer) {
+            FfiConverterString.write(value.`userPubkey`, buf)
+            FfiConverterString.write(value.`devicePubkey`, buf)
     }
 }
 
@@ -1859,7 +2018,9 @@ data class EncryptedDeviceKeys (
     val `nonce`: kotlin.String
     , 
     /**
-     * AES-256-GCM ciphertext of (signing_seed || encryption_seed), hex-encoded
+     * AES-256-GCM ciphertext of `signing_seed || encryption_seed` (64 bytes,
+     * a pilot device without an X-Wing key) or `signing_seed ||
+     * encryption_seed || kem_seed` (96 bytes), hex-encoded
      */
     val `ciphertext`: kotlin.String
     , 
@@ -2189,6 +2350,107 @@ public object FfiConverterTypeEphemeralKeyPair: FfiConverterRustBuffer<Ephemeral
     override fun write(value: EphemeralKeyPair, buf: ByteBuffer) {
             FfiConverterString.write(value.`secretKeyHex`, buf)
             FfiConverterString.write(value.`publicKey`, buf)
+    }
+}
+
+
+
+/**
+ * An active member device that has a format-2 key, so it can be in a hub's
+ * migration genesis device set.
+ */
+data class GenesisDevice (
+    val `userPubkey`: kotlin.String
+    , 
+    val `devicePubkey`: kotlin.String
+    , 
+    val `kemPubkey`: kotlin.String
+    , 
+    val `format`: kotlin.UShort
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeGenesisDevice: FfiConverterRustBuffer<GenesisDevice> {
+    override fun read(buf: ByteBuffer): GenesisDevice {
+        return GenesisDevice(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUShort.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: GenesisDevice) = (
+            FfiConverterString.allocationSize(value.`userPubkey`) +
+            FfiConverterString.allocationSize(value.`devicePubkey`) +
+            FfiConverterString.allocationSize(value.`kemPubkey`) +
+            FfiConverterUShort.allocationSize(value.`format`)
+    )
+
+    override fun write(value: GenesisDevice, buf: ByteBuffer) {
+            FfiConverterString.write(value.`userPubkey`, buf)
+            FfiConverterString.write(value.`devicePubkey`, buf)
+            FfiConverterString.write(value.`kemPubkey`, buf)
+            FfiConverterUShort.write(value.`format`, buf)
+    }
+}
+
+
+
+/**
+ * The genesis device set for a hub's members, and every active device left
+ * out of it.
+ */
+data class GenesisDeviceSet (
+    /**
+     * Active devices with an X-Wing key: the genesis device set
+     */
+    val `included`: List<GenesisDevice>
+    , 
+    /**
+     * Active devices WITHOUT one. The genesis tool lists these to the admin;
+     * they are never in the device set, and link again after genesis (§5)
+     */
+    val `missing`: List<DeviceMissingKem>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeGenesisDeviceSet: FfiConverterRustBuffer<GenesisDeviceSet> {
+    override fun read(buf: ByteBuffer): GenesisDeviceSet {
+        return GenesisDeviceSet(
+            FfiConverterSequenceTypeGenesisDevice.read(buf),
+            FfiConverterSequenceTypeDeviceMissingKem.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: GenesisDeviceSet) = (
+            FfiConverterSequenceTypeGenesisDevice.allocationSize(value.`included`) +
+            FfiConverterSequenceTypeDeviceMissingKem.allocationSize(value.`missing`)
+    )
+
+    override fun write(value: GenesisDeviceSet, buf: ByteBuffer) {
+            FfiConverterSequenceTypeGenesisDevice.write(value.`included`, buf)
+            FfiConverterSequenceTypeDeviceMissingKem.write(value.`missing`, buf)
     }
 }
 
@@ -2666,6 +2928,11 @@ public object FfiConverterTypeSigchainLink: FfiConverterRustBuffer<SigchainLink>
  */
 data class SigchainVerifiedState (
     /**
+     * The user the chain belongs to: the genesis device's Ed25519 key, hex
+     */
+    val `userPubkey`: kotlin.String
+    , 
+    /**
      * Number of verified links
      */
     val `verifiedCount`: kotlin.ULong
@@ -2684,6 +2951,20 @@ data class SigchainVerifiedState (
      * All device pubkeys currently in the verified set
      */
     val `activeDevicePubkeys`: List<kotlin.String>
+    , 
+    /**
+     * The current X-Wing key of each ACTIVE device that has one, in
+     * `active_device_pubkeys` order. An active device absent here has no
+     * `device_kem` yet and is not in any v2 genesis device set (spec §5).
+     */
+    val `deviceKemKeys`: List<DeviceKemKey>
+    , 
+    /**
+     * Every public key the chain has ever named (signing keys, X25519 and
+     * X-Wing encryption keys, removed devices included), sorted. Another
+     * user's chain naming any of them is refused (`chain_key_reused`).
+     */
+    val `namedKeys`: List<kotlin.String>
     
 ){
     
@@ -2700,25 +2981,34 @@ data class SigchainVerifiedState (
 public object FfiConverterTypeSigchainVerifiedState: FfiConverterRustBuffer<SigchainVerifiedState> {
     override fun read(buf: ByteBuffer): SigchainVerifiedState {
         return SigchainVerifiedState(
+            FfiConverterString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceTypeDeviceKemKey.read(buf),
             FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: SigchainVerifiedState) = (
+            FfiConverterString.allocationSize(value.`userPubkey`) +
             FfiConverterULong.allocationSize(value.`verifiedCount`) +
             FfiConverterULong.allocationSize(value.`headSeq`) +
             FfiConverterString.allocationSize(value.`headHash`) +
-            FfiConverterSequenceString.allocationSize(value.`activeDevicePubkeys`)
+            FfiConverterSequenceString.allocationSize(value.`activeDevicePubkeys`) +
+            FfiConverterSequenceTypeDeviceKemKey.allocationSize(value.`deviceKemKeys`) +
+            FfiConverterSequenceString.allocationSize(value.`namedKeys`)
     )
 
     override fun write(value: SigchainVerifiedState, buf: ByteBuffer) {
+            FfiConverterString.write(value.`userPubkey`, buf)
             FfiConverterULong.write(value.`verifiedCount`, buf)
             FfiConverterULong.write(value.`headSeq`, buf)
             FfiConverterString.write(value.`headHash`, buf)
             FfiConverterSequenceString.write(value.`activeDevicePubkeys`, buf)
+            FfiConverterSequenceTypeDeviceKemKey.write(value.`deviceKemKeys`, buf)
+            FfiConverterSequenceString.write(value.`namedKeys`, buf)
     }
 }
 
@@ -2833,6 +3123,13 @@ sealed class CryptoException(message: String): kotlin.Exception(message) {
         class NoEventKey(message: String) : CryptoException(message)
         
     /**
+     * A user sigchain refused by one of its closed rules. `code` is the
+     * rejection code the vectors name (`chain_device_pop`, `chain_key_reused`,
+     * `chain_unauthorised_signer`, …); see [`crate::sigchain`].
+     */
+        class SigchainRejected(message: String) : CryptoException(message)
+        
+    /**
      * The hub has no admin reader to seal to. See [`crate::readers`].
      */
         class NoAdminReader(message: String) : CryptoException(message)
@@ -2872,7 +3169,8 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
             20 -> CryptoException.FutureTimestamp(FfiConverterString.read(buf))
             21 -> CryptoException.InvalidIdentifier(FfiConverterString.read(buf))
             22 -> CryptoException.NoEventKey(FfiConverterString.read(buf))
-            23 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
+            23 -> CryptoException.SigchainRejected(FfiConverterString.read(buf))
+            24 -> CryptoException.NoAdminReader(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -2972,8 +3270,12 @@ public object FfiConverterTypeCryptoError : FfiConverterRustBuffer<CryptoExcepti
                 buf.putInt(22)
                 Unit
             }
-            is CryptoException.NoAdminReader -> {
+            is CryptoException.SigchainRejected -> {
                 buf.putInt(23)
+                Unit
+            }
+            is CryptoException.NoAdminReader -> {
+                buf.putInt(24)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3203,6 +3505,62 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeDeviceKemKey: FfiConverterRustBuffer<List<DeviceKemKey>> {
+    override fun read(buf: ByteBuffer): List<DeviceKemKey> {
+        val len = buf.getInt()
+        return List<DeviceKemKey>(len) {
+            FfiConverterTypeDeviceKemKey.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DeviceKemKey>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDeviceKemKey.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DeviceKemKey>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDeviceKemKey.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeDeviceMissingKem: FfiConverterRustBuffer<List<DeviceMissingKem>> {
+    override fun read(buf: ByteBuffer): List<DeviceMissingKem> {
+        val len = buf.getInt()
+        return List<DeviceMissingKem>(len) {
+            FfiConverterTypeDeviceMissingKem.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DeviceMissingKem>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDeviceMissingKem.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DeviceMissingKem>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDeviceMissingKem.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeDevicePukEnvelope: FfiConverterRustBuffer<List<DevicePukEnvelope>> {
     override fun read(buf: ByteBuffer): List<DevicePukEnvelope> {
         val len = buf.getInt()
@@ -3221,6 +3579,34 @@ public object FfiConverterSequenceTypeDevicePukEnvelope: FfiConverterRustBuffer<
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDevicePukEnvelope.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeGenesisDevice: FfiConverterRustBuffer<List<GenesisDevice>> {
+    override fun read(buf: ByteBuffer): List<GenesisDevice> {
+        val len = buf.getInt()
+        return List<GenesisDevice>(len) {
+            FfiConverterTypeGenesisDevice.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<GenesisDevice>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeGenesisDevice.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<GenesisDevice>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeGenesisDevice.write(it, buf)
         }
     }
 }
@@ -3305,6 +3691,34 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeShamirShare.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeSigchainVerifiedState: FfiConverterRustBuffer<List<SigchainVerifiedState>> {
+    override fun read(buf: ByteBuffer): List<SigchainVerifiedState> {
+        val len = buf.getInt()
+        return List<SigchainVerifiedState>(len) {
+            FfiConverterTypeSigchainVerifiedState.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<SigchainVerifiedState>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeSigchainVerifiedState.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<SigchainVerifiedState>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeSigchainVerifiedState.write(it, buf)
         }
     }
 }
@@ -3665,6 +4079,26 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * Give a pilot device without an X-Wing key one, and load it (spec
+         * 2026-11-25-v2-device-linking-and-recovery §5). Unlocks `data` with `pin`,
+         * draws an X-Wing seed, re-encrypts all three seeds under the same PIN and
+         * loads the result. Returns the new blob, which the caller stores IN PLACE OF
+         * `data` before anything else, then publishes with a `device_kem` link
+         * ([`mobile_device_kem_payload`]). Refused for a blob that already holds one —
+         * call [`mobile_unlock`] for that.
+         */
+    @Throws(CryptoException::class) fun `mobileAddDeviceKemKeyAndLoad`(`data`: EncryptedDeviceKeys, `pin`: kotlin.String): EncryptedDeviceKeys {
+            return FfiConverterTypeEncryptedDeviceKeys.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_add_device_kem_key_and_load(
+    
+        FfiConverterTypeEncryptedDeviceKeys.lower(`data`),FfiConverterString.lower(`pin`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Build the canonical auth message bytes — the one construction path, exposed
          * so platform code never hand-builds the signed string.
          *
@@ -3875,6 +4309,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     
 
         /**
+         * The `device_kem` payload JSON for this device (spec §5): its X-Wing key and
+         * a possession signature for `user_pubkey`. Sign the link carrying it with
+         * [`mobile_sigchain_create_link`] — the link must be signed by this device.
+         */
+    @Throws(CryptoException::class) fun `mobileDeviceKemPayload`(`userPubkey`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_device_kem_payload(
+    
+        FfiConverterString.lower(`userPubkey`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Perform ECDH using the stored ephemeral secret and the peer's public key.
          * Returns the shared secret hex. The ephemeral secret is zeroized and removed
          * from state after this call — it cannot be used again.
@@ -4017,6 +4467,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_generate_wake_key(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * The migration-genesis device set for a hub's members' chains (spec §5):
+         * active devices with an X-Wing key, and every active device without one,
+         * which the genesis tool lists and never includes.
+         */
+    @Throws(CryptoException::class) fun `mobileGenesisDeviceSet`(`chainsJson`: kotlin.String): GenesisDeviceSet {
+            return FfiConverterTypeGenesisDeviceSet.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_genesis_device_set(
+    
+        FfiConverterString.lower(`chainsJson`),_status)
 }
     )
     }
@@ -4460,6 +4926,22 @@ public object FfiConverterSequenceTypeShamirShare: FfiConverterRustBuffer<List<S
     UniffiLib.uniffi_llamenos_core_fn_func_mobile_sigchain_verify_link(
     
         FfiConverterString.lower(`linkJson`),FfiConverterString.lower(`expectedSignerPubkey`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify several users' chains together, refusing any key named by two
+         * users' chains (`chain_key_reused`). `chains_json` is a JSON array of link
+         * arrays.
+         */
+    @Throws(CryptoException::class) fun `mobileSigchainVerifyUsers`(`chainsJson`: kotlin.String): List<SigchainVerifiedState> {
+            return FfiConverterSequenceTypeSigchainVerifiedState.lift(
+    uniffiRustCallWithError(CryptoException) { _status ->
+    UniffiLib.uniffi_llamenos_core_fn_func_mobile_sigchain_verify_users(
+    
+        FfiConverterString.lower(`chainsJson`),_status)
 }
     )
     }

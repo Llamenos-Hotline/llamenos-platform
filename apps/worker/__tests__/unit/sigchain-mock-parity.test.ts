@@ -17,12 +17,17 @@ import {
   createInitialPukMock,
   createSigchainLinkMock,
   derivePukSubkeysMock,
+  devicePopMessageMock,
+  genesisDeviceSetMock,
   pukWrapAad,
   verifySigchainLinkMock,
   verifySigchainMock,
   type MockSigchainLink,
 } from '../../../../tests/mocks/sigchain-mock'
 import { LABEL_PUK_WRAP_TO_DEVICE } from '@shared/crypto-labels'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { hexToBytes } from '@noble/hashes/utils.js'
 import { sigchainGenesisPayloadSchema, sigchainPukEpochPayloadSchema } from '@protocol/schemas/sigchain'
 
 // ── packages/crypto/src/sigchain.rs test_cross_language_vectors ──────────
@@ -125,10 +130,13 @@ describe('identity initialisation — Rust identity_init.rs vectors', () => {
   it('verifies like Rust verify_sigchain', () => {
     const chain = buildIdentityInitChain()
     expect(verifySigchainMock(chain)).toEqual({
+      userPubkey: DEVICE_SIGNING_PUBKEY,
       verifiedCount: 2,
       headSeq: 2,
       headHash: PUK_EPOCH_ENTRY_HASH,
       activeDevicePubkeys: [DEVICE_SIGNING_PUBKEY],
+      deviceKemKeys: [],
+      namedKeys: [DEVICE_SIGNING_PUBKEY, DEVICE_ENCRYPTION_PUBKEY].sort(),
     })
     // Same rejections identity_init.rs asserts.
     expect(() => verifySigchainMock([chain[1]])).toThrow('first sigchain link must have seq=1')
@@ -180,5 +188,34 @@ describe('PUK seed envelope', () => {
     // Bound to the device ID: opening with another device's AAD fails.
     await expect(hpkeOpenMock(envelope, bytesToHex(DEVICE_ENCRYPTION_SEED), LABEL_PUK_WRAP_TO_DEVICE, pukWrapAad('other-device')))
       .rejects.toThrow()
+  })
+})
+
+// ── packages/crypto/tests/fixtures/v2/device-binding.json (#2496) ─────────
+describe('device binding: the mock against the crate\'s vectors', () => {
+  const f = JSON.parse(
+    readFileSync(join(__dirname, '../../../../packages/crypto/tests/fixtures/v2/device-binding.json'), 'utf8'),
+  ) as {
+    popMessage: { user: string; signingPk: string; encryptionPk: string; format: number; messageHex: string }
+    positives: Array<{ name: string; chains: MockSigchainLink[][]; expect: unknown }>
+    negatives: Array<{ name: string; chains: MockSigchainLink[][]; expect: string }>
+  }
+
+  it('builds the pop message byte for byte', () => {
+    const m = f.popMessage
+    expect(bytesToHex(devicePopMessageMock(m.user, hexToBytes(m.signingPk), hexToBytes(m.encryptionPk), m.format))).toBe(m.messageHex)
+  })
+
+  it.each(f.positives.map(p => [p.name, p] as const))('accepts %s with the same genesis set', (_n, p) => {
+    expect(genesisDeviceSetMock(p.chains)).toEqual(p.expect)
+  })
+
+  it.each(f.negatives.map(n => [n.name, n] as const))('refuses %s with the same code', (_n, n) => {
+    expect(() => genesisDeviceSetMock(n.chains)).toThrow(new RegExp(`^${n.expect}: `))
+  })
+
+  it('covers every vector', () => {
+    expect(f.positives).toHaveLength(3)
+    expect(f.negatives).toHaveLength(8)
   })
 })

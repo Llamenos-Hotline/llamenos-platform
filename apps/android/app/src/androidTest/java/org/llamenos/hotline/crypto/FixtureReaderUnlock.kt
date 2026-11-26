@@ -81,8 +81,11 @@ internal suspend fun unlockFixtureReader(name: String, x25519SecretHex: String, 
             ),
         ),
         FIXTURE_PIN,
-    )
+    ).state
+    // A 64-byte blob is a pilot device's: unlocking gives it an X-Wing key (#2496)
+    // and leaves its X25519 key as it was.
     assertEquals(x25519PubkeyHex, state.encryptionPubkeyHex)
+    assertNotNull(state.kemPubkeyHex)
     assertNotNull(svc.encryptionPubkeyHex)
     return svc
 }

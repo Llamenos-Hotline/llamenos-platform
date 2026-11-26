@@ -156,6 +156,27 @@ pub fn mobile_unlock(
     Ok(ds)
 }
 
+/// Give a pilot device without an X-Wing key one, and load it (spec
+/// 2026-11-25-v2-device-linking-and-recovery §5). Unlocks `data` with `pin`,
+/// draws an X-Wing seed, re-encrypts all three seeds under the same PIN and
+/// loads the result. Returns the new blob, which the caller stores IN PLACE OF
+/// `data` before anything else, then publishes with a `device_kem` link
+/// ([`mobile_device_kem_payload`]). Refused for a blob that already holds one —
+/// call [`mobile_unlock`] for that.
+#[uniffi::export]
+pub fn mobile_add_device_kem_key_and_load(
+    data: EncryptedDeviceKeys,
+    pin: String,
+) -> Result<EncryptedDeviceKeys, CryptoError> {
+    let (upgraded, secrets) = device_keys::add_device_kem_key(&data, &pin)?;
+
+    let mut guard = state().lock().unwrap();
+    guard.secrets = Some(secrets);
+    guard.device_state = Some(upgraded.state.clone());
+
+    Ok(upgraded)
+}
+
 /// Lock the mobile crypto state — zeroize device secrets, hub keys, and server event keys.
 #[uniffi::export]
 pub fn mobile_lock() {
@@ -709,6 +730,38 @@ pub fn mobile_sigchain_verify(links_json: String) -> Result<SigchainVerifiedStat
     sigchain::verify_sigchain(&links)
 }
 
+/// The `device_kem` payload JSON for this device (spec §5): its X-Wing key and
+/// a possession signature for `user_pubkey`. Sign the link carrying it with
+/// [`mobile_sigchain_create_link`] — the link must be signed by this device.
+#[uniffi::export]
+pub fn mobile_device_kem_payload(user_pubkey: String) -> Result<String, CryptoError> {
+    with_secrets(|secrets, _| sigchain::device_kem_payload(secrets, &user_pubkey))
+}
+
+/// Verify several users' chains together, refusing any key named by two
+/// users' chains (`chain_key_reused`). `chains_json` is a JSON array of link
+/// arrays.
+#[uniffi::export]
+pub fn mobile_sigchain_verify_users(
+    chains_json: String,
+) -> Result<Vec<SigchainVerifiedState>, CryptoError> {
+    let chains: Vec<Vec<SigchainLink>> =
+        serde_json::from_str(&chains_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    sigchain::verify_user_sigchains(&chains)
+}
+
+/// The migration-genesis device set for a hub's members' chains (spec §5):
+/// active devices with an X-Wing key, and every active device without one,
+/// which the genesis tool lists and never includes.
+#[uniffi::export]
+pub fn mobile_genesis_device_set(
+    chains_json: String,
+) -> Result<sigchain::GenesisDeviceSet, CryptoError> {
+    let chains: Vec<Vec<SigchainLink>> =
+        serde_json::from_str(&chains_json).map_err(|e| CryptoError::InvalidInput(e.to_string()))?;
+    sigchain::genesis_device_set(&chains)
+}
+
 /// Verify a single sigchain link (stateless).
 #[uniffi::export]
 pub fn mobile_sigchain_verify_link(
@@ -1103,11 +1156,13 @@ mod tests {
         let secrets = DeviceSecrets {
             signing_seed: [7u8; 32],
             encryption_seed: [9u8; 32],
+            kem_seed: None,
         };
         let ds = DeviceKeyState {
             device_id: "stored-record-dev".into(),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: None,
         };
         assert_ne!(ds.signing_pubkey_hex, ds.encryption_pubkey_hex);
         (secrets, ds)
@@ -2049,11 +2104,13 @@ mod stored_record_vector_tests {
         let secrets = DeviceSecrets {
             signing_seed: [0x5au8; 32],
             encryption_seed,
+            kem_seed: None,
         };
         let ds = DeviceKeyState {
             device_id: format!("vector-{}", reader.name),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: hex::encode(secrets.encryption_pubkey().to_bytes()),
+            kem_pubkey_hex: None,
         };
         // The fixture's published pubkey must be the one its secret derives.
         assert_eq!(ds.encryption_pubkey_hex, reader.x25519_pubkey_hex);

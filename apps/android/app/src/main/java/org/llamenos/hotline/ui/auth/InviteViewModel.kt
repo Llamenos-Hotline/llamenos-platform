@@ -111,7 +111,13 @@ class InviteViewModel @Inject constructor(
             // moment the device keys can be registered (#2119). That registration cannot
             // undo a redemption (the invite is spent), so a failure does not block entry:
             // DeviceRegistrationManager logs it and every unlock retries.
-            if (errorRes == null) deviceRegistrationManager.register()
+            if (errorRes == null) {
+                deviceRegistrationManager.register()
+                // The user now exists server-side: create its sigchain genesis and
+                // first PUK, and publish this device's X-Wing key (#2496). Logged
+                // and retried on every unlock if it fails.
+                deviceRegistrationManager.ensureIdentity()
+            }
             _uiState.update {
                 if (errorRes == null) it.copy(stage = InviteStage.REDEEMED)
                 else it.copy(stage = InviteStage.VALID, errorRes = errorRes)

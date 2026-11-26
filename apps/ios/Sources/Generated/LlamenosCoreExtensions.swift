@@ -54,7 +54,7 @@ extension RecipientKeyEnvelope: Codable {
 
 extension DeviceKeyState: Codable {
     enum CodingKeys: String, CodingKey {
-        case deviceId, signingPubkeyHex, encryptionPubkeyHex
+        case deviceId, signingPubkeyHex, encryptionPubkeyHex, kemPubkeyHex
     }
 
     public init(from decoder: Decoder) throws {
@@ -62,7 +62,10 @@ extension DeviceKeyState: Codable {
         self.init(
             deviceId: try container.decode(String.self, forKey: .deviceId),
             signingPubkeyHex: try container.decode(String.self, forKey: .signingPubkeyHex),
-            encryptionPubkeyHex: try container.decode(String.self, forKey: .encryptionPubkeyHex)
+            encryptionPubkeyHex: try container.decode(String.self, forKey: .encryptionPubkeyHex),
+            // Absent in a pilot blob stored before X-Wing keys existed (#2496);
+            // unlocking gives the device one.
+            kemPubkeyHex: try container.decodeIfPresent(String.self, forKey: .kemPubkeyHex)
         )
     }
 
@@ -71,6 +74,7 @@ extension DeviceKeyState: Codable {
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(signingPubkeyHex, forKey: .signingPubkeyHex)
         try container.encode(encryptionPubkeyHex, forKey: .encryptionPubkeyHex)
+        try container.encodeIfPresent(kemPubkeyHex, forKey: .kemPubkeyHex)
     }
 }
 

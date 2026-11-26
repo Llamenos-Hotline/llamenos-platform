@@ -438,6 +438,7 @@ fn open_secrets(
     let mut secrets = DeviceSecrets {
         signing_seed: [0u8; 32],
         encryption_seed: [0u8; 32],
+        kem_seed: None,
     };
     secrets.signing_seed.copy_from_slice(&plaintext[..32]);
     secrets.encryption_seed.copy_from_slice(&plaintext[32..]);
@@ -562,6 +563,7 @@ mod tests {
         let mut s = DeviceSecrets {
             signing_seed: [0u8; 32],
             encryption_seed: [0u8; 32],
+            kem_seed: None,
         };
         for (i, b) in s.signing_seed.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);

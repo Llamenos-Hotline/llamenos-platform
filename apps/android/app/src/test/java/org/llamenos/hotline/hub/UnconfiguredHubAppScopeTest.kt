@@ -107,7 +107,7 @@ class UnconfiguredHubAppScopeTest {
     @Test
     fun `device registration after logout does not crash the process`() = runTest(dispatcher) {
         val crypto = CryptoService().also { it.setTestKeyState("a".repeat(64), "b".repeat(64), "device-1") }
-        val manager = DeviceRegistrationManager(apiService, crypto, appScope)
+        val manager = DeviceRegistrationManager(apiService, crypto, io.mockk.mockk(relaxed = true), appScope)
 
         manager.ensureRegistered()
 

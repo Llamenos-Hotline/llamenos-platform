@@ -118,7 +118,7 @@ Given('the user\'s sigchain authorises device {string}', async ({ request, world
   const signer = isFirst ? identityDevice : Object.values(s.sigchainDevices)[0]
   const body = isFirst
     ? buildSigchainLink(signer, null, 'genesis', genesisPayload(device))
-    : buildSigchainLink(signer, s.sigchainHead!, 'device_add', deviceAddPayload(device))
+    : buildSigchainLink(signer, s.sigchainHead!, 'device_add', deviceAddPayload(device, user.pubkey))
   const res = await apiPost<SigchainLinkRecord>(request, `/users/${user.pubkey}/sigchain`, { ...body }, user.deviceKey)
   expect(res.status).toBe(201)
   s.sigchainHead = { seqNo: res.data.seqNo, hash: res.data.hash }

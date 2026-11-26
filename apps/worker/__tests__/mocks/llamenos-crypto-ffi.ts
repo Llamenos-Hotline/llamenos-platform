@@ -81,6 +81,29 @@ export class CryptoError extends Error {
 }
 
 export { SHAPES, type Shape } from '@shared/crypto-shapes'
+
+export interface SigchainLink {
+  id: string
+  seq: number
+  prevHash: string | null
+  entryHash: string
+  signerDeviceId: string
+  signerPubkey: string
+  signature: string
+  timestamp: string
+  payloadJson: string
+}
+
+/**
+ * The server verifies a device_add / device_kem with the WHOLE chain through the
+ * crate (`ffi_sigchain_verify`): possession signatures, the active-signer rule
+ * and in-chain key reuse. There is no honest JS stand-in for that verifier, so
+ * the mock refuses loudly; those appends are tested under bun:ffi
+ * (`__tests__/integration-bun/device-key-binding.test.ts`).
+ */
+export function sigchainVerify(_links: readonly SigchainLink[]): never {
+  throw new CryptoError(-5, 'invalid_input: sigchainVerify needs the native crate; test this path under bun:ffi')
+}
 import type { Shape } from '@shared/crypto-shapes'
 export interface HpkeEnvelope { enc: string; ct: string }
 

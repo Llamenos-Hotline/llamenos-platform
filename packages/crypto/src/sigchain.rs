@@ -52,21 +52,6 @@ pub struct SigchainLink {
     pub payload_json: String,
 }
 
-/// Result of verifying a complete sigchain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
-pub struct SigchainVerifiedState {
-    /// Number of verified links
-    pub verified_count: u64,
-    /// Head sequence number
-    pub head_seq: u64,
-    /// Head entry hash
-    pub head_hash: String,
-    /// All device pubkeys currently in the verified set
-    pub active_device_pubkeys: Vec<String>,
-}
-
 /// Compute the canonical hash for a sigchain entry.
 ///
 /// ## Canonicalization Algorithm (cross-platform specification)
@@ -248,6 +233,255 @@ pub fn verify_sigchain_link(
     }
 }
 
+// ── Device key binding (#2496; spec 2026-11-25-v2-device-linking-and-recovery §5–§6) ──
+
+/// The `crypto_format` whose KEM suite a `device_kem` (and a v2 `device_add`)
+/// encryption key belongs to: format 2, X-Wing (wire spec D16).
+pub const DEVICE_KEM_FORMAT: u16 = 2;
+
+fn rejected(code: &'static str, detail: impl Into<String>) -> CryptoError {
+    CryptoError::SigchainRejected {
+        code,
+        detail: detail.into(),
+    }
+}
+
+/// `lp(b) = u16be(len(b)) ‖ b` (wire spec notation). Longer is an error.
+fn put_lp(out: &mut Vec<u8>, b: &[u8]) -> Result<(), CryptoError> {
+    let len = u16::try_from(b.len())
+        .map_err(|_| CryptoError::InvalidInput("lp field longer than 65535 bytes".into()))?;
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(b);
+    Ok(())
+}
+
+/// Lowercase hex of exactly `len` bytes, or `invalid_format`.
+fn decode_key_hex(hex_str: &str, len: usize, what: &str) -> Result<Vec<u8>, CryptoError> {
+    if hex_str.len() != len * 2
+        || !hex_str
+            .bytes()
+            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(CryptoError::InvalidFormat(format!(
+            "{what} must be {len} bytes of lowercase hex"
+        )));
+    }
+    hex::decode(hex_str).map_err(CryptoError::HexError)
+}
+
+/// Byte length of an encryption public key under `format`'s KEM suite. Only
+/// format 2 (X-Wing) is defined for a `device_kem`; any other is `unknown_format`.
+fn kem_public_key_len(format: u16) -> Result<usize, CryptoError> {
+    match format {
+        DEVICE_KEM_FORMAT => Ok(crate::device_keys::XWING_PUBLIC_KEY_LEN),
+        other => Err(rejected(
+            "unknown_format",
+            format!("no KEM suite for crypto_format {other}"),
+        )),
+    }
+}
+
+/// Decode and validate a `format` encryption key: exact length, lowercase hex,
+/// and a well-formed key of the suite (an X-Wing key must parse as one).
+fn decode_kem_public_key(encryption_pk_hex: &str, format: u16) -> Result<Vec<u8>, CryptoError> {
+    let len = kem_public_key_len(format)?;
+    let bytes = decode_key_hex(encryption_pk_hex, len, "encryptionPubkey")?;
+    x_wing::EncapsulationKey::try_from(bytes.as_slice()).map_err(|_| {
+        CryptoError::InvalidFormat("encryptionPubkey is not a valid X-Wing key".into())
+    })?;
+    Ok(bytes)
+}
+
+/// The bytes a possession signature (`pop`) signs (spec §6):
+///
+/// ```text
+/// utf8(L_DEVICE_POP) ‖ 0x00 ‖ H(lp(utf8(user)) ‖ lp(signingPk) ‖ lp(encryptionPk) ‖ u16be(format))
+/// ```
+///
+/// `user` is the user's pubkey as lowercase hex text (the same string the
+/// chain and grants name as `owner_user`); `signingPk` and `encryptionPk` are
+/// the raw key bytes. It proves possession of the signing key, and binds the
+/// encryption key to it and to the user.
+pub fn device_pop_message(
+    user_pubkey_hex: &str,
+    signing_pk: &[u8],
+    encryption_pk: &[u8],
+    format: u16,
+) -> Result<Vec<u8>, CryptoError> {
+    let mut inner =
+        Vec::with_capacity(2 + user_pubkey_hex.len() + 2 + 32 + 2 + encryption_pk.len() + 2);
+    put_lp(&mut inner, user_pubkey_hex.as_bytes())?;
+    put_lp(&mut inner, signing_pk)?;
+    put_lp(&mut inner, encryption_pk)?;
+    inner.extend_from_slice(&format.to_be_bytes());
+    let digest = Sha256::digest(&inner);
+
+    let label = crate::labels::LABEL_DEVICE_POP.as_bytes();
+    let mut msg = Vec::with_capacity(label.len() + 1 + 32);
+    msg.extend_from_slice(label);
+    msg.push(0x00);
+    msg.extend_from_slice(&digest);
+    Ok(msg)
+}
+
+/// Sign this device's possession signature over `encryption_pk_hex` (a key of
+/// `format`'s suite) for `user_pubkey_hex`. Returns the signature, hex.
+pub fn sign_device_pop(
+    secrets: &DeviceSecrets,
+    user_pubkey_hex: &str,
+    encryption_pk_hex: &str,
+    format: u16,
+) -> Result<String, CryptoError> {
+    let encryption_pk = decode_kem_public_key(encryption_pk_hex, format)?;
+    let signing_pk = secrets.signing_pubkey().to_bytes();
+    let msg = device_pop_message(user_pubkey_hex, &signing_pk, &encryption_pk, format)?;
+    Ok(hex::encode(secrets.signing_key().sign(&msg).to_bytes()))
+}
+
+/// Verify a possession signature. A malformed key or format is
+/// `invalid_format` / `unknown_format`; a signature that does not verify is
+/// `chain_device_pop`.
+pub fn verify_device_pop(
+    user_pubkey_hex: &str,
+    signing_pk_hex: &str,
+    encryption_pk_hex: &str,
+    format: u16,
+    pop_hex: &str,
+) -> Result<(), CryptoError> {
+    let signing_pk = decode_key_hex(signing_pk_hex, 32, "devicePubkey")?;
+    let encryption_pk = decode_kem_public_key(encryption_pk_hex, format)?;
+    let msg = device_pop_message(user_pubkey_hex, &signing_pk, &encryption_pk, format)?;
+    let pop = decode_key_hex(pop_hex, 64, "pop").map_err(|_| {
+        rejected(
+            "chain_device_pop",
+            "pop must be a 64-byte signature in lowercase hex",
+        )
+    })?;
+    let pk_arr: [u8; 32] = signing_pk
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::InvalidPublicKey)?;
+    let vk = VerifyingKey::from_bytes(&pk_arr).map_err(|_| CryptoError::InvalidPublicKey)?;
+    let sig_arr: [u8; 64] = pop
+        .as_slice()
+        .try_into()
+        .map_err(|_| rejected("chain_device_pop", "pop must be 64 bytes"))?;
+    vk.verify_strict(&msg, &ed25519_dalek::Signature::from_bytes(&sig_arr))
+        .map_err(|_| {
+            rejected(
+                "chain_device_pop",
+                "possession signature does not verify for this device, key and user",
+            )
+        })
+}
+
+/// The `device_kem` payload JSON for this device (spec §5): its unchanged
+/// Ed25519 key, its X-Wing key, `format: 2` and the possession signature. The
+/// link carrying it must be signed by this same device
+/// ([`create_sigchain_link`] with the same `secrets`).
+pub fn device_kem_payload(
+    secrets: &DeviceSecrets,
+    user_pubkey_hex: &str,
+) -> Result<String, CryptoError> {
+    let kem_pk = secrets
+        .kem_pubkey()
+        .ok_or_else(|| CryptoError::InvalidInput("device has no X-Wing key".into()))?;
+    let kem_pk_hex = hex::encode(kem_pk);
+    let pop = sign_device_pop(secrets, user_pubkey_hex, &kem_pk_hex, DEVICE_KEM_FORMAT)?;
+    let payload = serde_json::json!({
+        "type": "device_kem",
+        "devicePubkey": hex::encode(secrets.signing_pubkey().to_bytes()),
+        "format": DEVICE_KEM_FORMAT,
+        "encryptionPubkey": kem_pk_hex,
+        "pop": pop,
+    });
+    Ok(serde_json::to_string(&payload)?)
+}
+
+/// A device's current format-2 encryption key, as its `device_kem` (or v2
+/// `device_add`) link names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
+pub struct DeviceKemKey {
+    /// The device's Ed25519 key, hex
+    pub device_pubkey: String,
+    /// Its X-Wing encapsulation key, hex
+    pub kem_pubkey: String,
+    /// The crypto_format the key belongs to (always 2)
+    pub format: u16,
+}
+
+/// Result of verifying a complete sigchain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
+pub struct SigchainVerifiedState {
+    /// The user the chain belongs to: the genesis device's Ed25519 key, hex
+    pub user_pubkey: String,
+    /// Number of verified links
+    pub verified_count: u64,
+    /// Head sequence number
+    pub head_seq: u64,
+    /// Head entry hash
+    pub head_hash: String,
+    /// All device pubkeys currently in the verified set
+    pub active_device_pubkeys: Vec<String>,
+    /// The current X-Wing key of each ACTIVE device that has one, in
+    /// `active_device_pubkeys` order. An active device absent here has no
+    /// `device_kem` yet and is not in any v2 genesis device set (spec §5).
+    pub device_kem_keys: Vec<DeviceKemKey>,
+    /// Every public key the chain has ever named (signing keys, X25519 and
+    /// X-Wing encryption keys, removed devices included), sorted. Another
+    /// user's chain naming any of them is refused (`chain_key_reused`).
+    pub named_keys: Vec<String>,
+}
+
+/// Payload string field, if present.
+fn str_field<'a>(payload: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    payload.get(key).and_then(|v| v.as_str())
+}
+
+fn required_str<'a>(
+    payload: &'a serde_json::Value,
+    key: &str,
+    seq: u64,
+) -> Result<&'a str, CryptoError> {
+    str_field(payload, key)
+        .ok_or_else(|| CryptoError::InvalidFormat(format!("link at seq {seq} is missing `{key}`")))
+}
+
+fn required_format(payload: &serde_json::Value, seq: u64) -> Result<u16, CryptoError> {
+    payload
+        .get("format")
+        .and_then(|v| v.as_u64())
+        .and_then(|f| u16::try_from(f).ok())
+        .ok_or_else(|| CryptoError::InvalidFormat(format!("link at seq {seq} is missing `format`")))
+}
+
+/// Keys named by this chain, key → the device (Ed25519 key) it belongs to. A
+/// key may belong to one device only, ever: naming it for a second device is
+/// `chain_key_reused`.
+#[derive(Default)]
+struct NamedKeys(std::collections::BTreeMap<String, String>);
+
+impl NamedKeys {
+    fn claim(&mut self, key: &str, device: &str, seq: u64) -> Result<(), CryptoError> {
+        let key = key.to_ascii_lowercase();
+        match self.0.get(&key) {
+            Some(owner) if owner != device => Err(rejected(
+                "chain_key_reused",
+                format!("key {key} at seq {seq} already belongs to device {owner}"),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                self.0.insert(key, device.to_string());
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Verify an entire sigchain from genesis.
 ///
 /// Checks:
@@ -256,8 +490,14 @@ pub fn verify_sigchain_link(
 /// 3. Each link's entry hash is correctly computed
 /// 4. Each link's signature is valid
 /// 5. The first link must be a `user_init` payload
+/// 6. `device_add` carries the new device's X-Wing key, `format: 2` and a
+///    valid possession signature by the NEW device (spec §6)
+/// 7. `device_kem` is signed by the device it names, which must be active,
+///    and carries a valid possession signature (spec §5, §6)
+/// 8. No key is named for two different devices (`chain_key_reused`)
 ///
-/// Returns the verified state including the set of active device pubkeys.
+/// Returns the verified state including the set of active device pubkeys and
+/// their X-Wing keys.
 pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, CryptoError> {
     if links.is_empty() {
         return Err(CryptoError::InvalidInput(
@@ -268,34 +508,37 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
     // The first link establishes the initial device set
     let first = &links[0];
     if first.seq != 1 {
-        return Err(CryptoError::InvalidInput(
-            "first sigchain link must have seq=1".into(),
-        ));
+        return Err(rejected("chain_seq", "first sigchain link must have seq=1"));
     }
     if first.prev_hash.is_some() {
-        return Err(CryptoError::InvalidInput(
-            "first sigchain link must have prevHash=null".into(),
+        return Err(rejected(
+            "chain_prev_hash",
+            "first sigchain link must have prevHash=null",
         ));
     }
 
     // Parse first payload to get initial device pubkey
     let first_payload: serde_json::Value =
         serde_json::from_str(&first.payload_json).map_err(CryptoError::JsonError)?;
-    let payload_type = first_payload
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if payload_type != "user_init" {
+    if str_field(&first_payload, "type") != Some("user_init") {
         return Err(CryptoError::InvalidInput(
             "first sigchain link must have type=user_init".into(),
         ));
     }
 
-    let mut active_pubkeys: Vec<String> = vec![first.signer_pubkey.clone()];
-
     // Verify the first link (self-signed)
     if !verify_sigchain_link(first, &first.signer_pubkey)? {
         return Err(CryptoError::SignatureVerificationFailed);
+    }
+
+    let user_pubkey = first.signer_pubkey.to_ascii_lowercase();
+    let mut active_pubkeys: Vec<String> = vec![first.signer_pubkey.clone()];
+    let mut kem_keys: std::collections::BTreeMap<String, DeviceKemKey> =
+        std::collections::BTreeMap::new();
+    let mut named = NamedKeys::default();
+    named.claim(&first.signer_pubkey, &first.signer_pubkey, first.seq)?;
+    if let Some(enc) = str_field(&first_payload, "deviceEncryptionPubkey") {
+        named.claim(enc, &first.signer_pubkey, first.seq)?;
     }
 
     let mut prev_hash = first.entry_hash.clone();
@@ -304,30 +547,36 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
     for link in &links[1..] {
         // Check sequence monotonicity
         if link.seq != prev_seq + 1 {
-            return Err(CryptoError::InvalidInput(format!(
-                "sequence gap: expected {} but got {}",
-                prev_seq + 1,
-                link.seq
-            )));
+            return Err(rejected(
+                "chain_seq",
+                format!(
+                    "sequence gap: expected {} but got {}",
+                    prev_seq + 1,
+                    link.seq
+                ),
+            ));
         }
 
         // Check prevHash linkage (constant-time)
         match &link.prev_hash {
             Some(ph) if ct_hex_eq(ph, &prev_hash) => {}
             _ => {
-                return Err(CryptoError::InvalidInput(format!(
-                    "prevHash mismatch at seq {}",
-                    link.seq
-                )));
+                return Err(rejected(
+                    "chain_prev_hash",
+                    format!("prevHash mismatch at seq {}", link.seq),
+                ));
             }
         }
 
         // Signer must be in active device set
         if !active_pubkeys.contains(&link.signer_pubkey) {
-            return Err(CryptoError::InvalidInput(format!(
-                "signer {} not in active device set at seq {}",
-                link.signer_pubkey, link.seq
-            )));
+            return Err(rejected(
+                "chain_unauthorised_signer",
+                format!(
+                    "signer {} not in active device set at seq {}",
+                    link.signer_pubkey, link.seq
+                ),
+            ));
         }
 
         // Verify signature
@@ -336,34 +585,204 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
         }
 
         // Process payload to update device set
-        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&link.payload_json) {
-            match payload.get("type").and_then(|v| v.as_str()) {
-                Some("device_add") => {
-                    if let Some(pubkey) = payload.get("devicePubkey").and_then(|v| v.as_str()) {
-                        if !active_pubkeys.contains(&pubkey.to_string()) {
-                            active_pubkeys.push(pubkey.to_string());
-                        }
-                    }
+        let payload: serde_json::Value =
+            serde_json::from_str(&link.payload_json).map_err(CryptoError::JsonError)?;
+        match str_field(&payload, "type") {
+            Some("device_add") => {
+                let device = required_str(&payload, "devicePubkey", link.seq)?;
+                let enc = required_str(&payload, "encryptionPubkey", link.seq)?;
+                let format = required_format(&payload, link.seq)?;
+                let pop = required_str(&payload, "pop", link.seq)?;
+                verify_device_pop(&user_pubkey, device, enc, format, pop)?;
+                // A device is added once. Re-adding an active or removed device
+                // would let any active device replay that device's old pop and
+                // overwrite its key; a key change is the device's own
+                // `device_kem`, and a removed device links again with new keys.
+                if named.0.contains_key(&device.to_ascii_lowercase()) {
+                    return Err(rejected(
+                        "chain_key_reused",
+                        format!(
+                            "device_add at seq {} names device {device}, already in this chain",
+                            link.seq
+                        ),
+                    ));
                 }
-                Some("device_remove") => {
-                    if let Some(pubkey) = payload.get("devicePubkey").and_then(|v| v.as_str()) {
-                        active_pubkeys.retain(|p| p != pubkey);
-                    }
+                named.claim(device, device, link.seq)?;
+                named.claim(enc, device, link.seq)?;
+                if let Some(x25519) = str_field(&payload, "deviceEncryptionPubkey") {
+                    named.claim(x25519, device, link.seq)?;
                 }
-                _ => {} // Other payload types don't affect device set
+                if !active_pubkeys.iter().any(|p| p == device) {
+                    active_pubkeys.push(device.to_string());
+                }
+                kem_keys.insert(
+                    device.to_string(),
+                    DeviceKemKey {
+                        device_pubkey: device.to_string(),
+                        kem_pubkey: enc.to_string(),
+                        format,
+                    },
+                );
             }
+            Some("device_kem") => {
+                let device = required_str(&payload, "devicePubkey", link.seq)?;
+                // Signed by the device itself: it is that device's own key
+                // rotation, never another device's statement about it.
+                if !ct_hex_eq(device, &link.signer_pubkey) {
+                    return Err(rejected(
+                        "chain_unauthorised_signer",
+                        format!(
+                            "device_kem at seq {} is not signed by the device it names",
+                            link.seq
+                        ),
+                    ));
+                }
+                let enc = required_str(&payload, "encryptionPubkey", link.seq)?;
+                let format = required_format(&payload, link.seq)?;
+                let pop = required_str(&payload, "pop", link.seq)?;
+                verify_device_pop(&user_pubkey, device, enc, format, pop)?;
+                named.claim(enc, device, link.seq)?;
+                kem_keys.insert(
+                    device.to_string(),
+                    DeviceKemKey {
+                        device_pubkey: device.to_string(),
+                        kem_pubkey: enc.to_string(),
+                        format,
+                    },
+                );
+            }
+            Some("device_remove") => {
+                if let Some(pubkey) = str_field(&payload, "devicePubkey") {
+                    active_pubkeys.retain(|p| p != pubkey);
+                    kem_keys.remove(pubkey);
+                }
+            }
+            _ => {} // Other payload types don't affect device set
         }
 
         prev_hash = link.entry_hash.clone();
         prev_seq = link.seq;
     }
 
+    let device_kem_keys = active_pubkeys
+        .iter()
+        .filter_map(|p| kem_keys.get(p).cloned())
+        .collect();
+
     Ok(SigchainVerifiedState {
+        user_pubkey,
         verified_count: links.len() as u64,
         head_seq: prev_seq,
         head_hash: prev_hash,
         active_device_pubkeys: active_pubkeys,
+        device_kem_keys,
+        named_keys: named.0.into_keys().collect(),
     })
+}
+
+/// Verify several users' chains together (spec §6, "clients refuse a user
+/// chain that reuses a key seen in another user's chain"). Each chain is
+/// verified on its own, then any key named by two users' chains refuses the
+/// whole set with `chain_key_reused`, naming both users.
+pub fn verify_user_sigchains(
+    chains: &[Vec<SigchainLink>],
+) -> Result<Vec<SigchainVerifiedState>, CryptoError> {
+    let states = chains
+        .iter()
+        .map(|links| verify_sigchain(links))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut owner: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    for state in &states {
+        for key in &state.named_keys {
+            match owner.get(key.as_str()) {
+                Some(other) if *other != state.user_pubkey => {
+                    return Err(rejected(
+                        "chain_key_reused",
+                        format!(
+                            "key {key} is named by the chains of users {other} and {}",
+                            state.user_pubkey
+                        ),
+                    ));
+                }
+                Some(_) => {
+                    return Err(rejected(
+                        "chain_key_reused",
+                        format!("the chain of user {} is listed twice", state.user_pubkey),
+                    ));
+                }
+                None => {
+                    owner.insert(key.as_str(), state.user_pubkey.as_str());
+                }
+            }
+        }
+    }
+    Ok(states)
+}
+
+/// An active member device that has a format-2 key, so it can be in a hub's
+/// migration genesis device set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
+pub struct GenesisDevice {
+    pub user_pubkey: String,
+    pub device_pubkey: String,
+    pub kem_pubkey: String,
+    pub format: u16,
+}
+
+/// An active member device with no `device_kem` link yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
+pub struct DeviceMissingKem {
+    pub user_pubkey: String,
+    pub device_pubkey: String,
+}
+
+/// The genesis device set for a hub's members, and every active device left
+/// out of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "mobile", derive(uniffi::Record))]
+pub struct GenesisDeviceSet {
+    /// Active devices with an X-Wing key: the genesis device set
+    pub included: Vec<GenesisDevice>,
+    /// Active devices WITHOUT one. The genesis tool lists these to the admin;
+    /// they are never in the device set, and link again after genesis (§5)
+    pub missing: Vec<DeviceMissingKem>,
+}
+
+/// Partition the members' active devices for a hub's migration genesis
+/// (spec §5, the K-A gate). The chains are verified together first, so a
+/// forged or key-reusing chain refuses the whole set rather than contributing
+/// a device. An active device without a `device_kem` is reported in
+/// `missing` and is never silently included.
+pub fn genesis_device_set(chains: &[Vec<SigchainLink>]) -> Result<GenesisDeviceSet, CryptoError> {
+    let states = verify_user_sigchains(chains)?;
+    let mut included = Vec::new();
+    let mut missing = Vec::new();
+    for state in &states {
+        for device in &state.active_device_pubkeys {
+            match state
+                .device_kem_keys
+                .iter()
+                .find(|k| &k.device_pubkey == device)
+            {
+                Some(k) => included.push(GenesisDevice {
+                    user_pubkey: state.user_pubkey.clone(),
+                    device_pubkey: device.clone(),
+                    kem_pubkey: k.kem_pubkey.clone(),
+                    format: k.format,
+                }),
+                None => missing.push(DeviceMissingKem {
+                    user_pubkey: state.user_pubkey.clone(),
+                    device_pubkey: device.clone(),
+                }),
+            }
+        }
+    }
+    Ok(GenesisDeviceSet { included, missing })
 }
 
 #[cfg(test)]
@@ -376,6 +795,23 @@ mod tests {
         let secrets = unlock_device_keys(&encrypted, "12345678").unwrap();
         let pubkey = encrypted.state.signing_pubkey_hex.clone();
         (secrets, pubkey)
+    }
+
+    /// A v2 `device_add` payload for `new_device`, with its possession
+    /// signature for `user`.
+    fn device_add_payload(new_device: &DeviceSecrets, device_id: &str, user: &str) -> String {
+        let kem = hex::encode(new_device.kem_pubkey().unwrap());
+        let pop = sign_device_pop(new_device, user, &kem, DEVICE_KEM_FORMAT).unwrap();
+        serde_json::json!({
+            "type": "device_add",
+            "deviceId": device_id,
+            "devicePubkey": hex::encode(new_device.signing_pubkey().to_bytes()),
+            "deviceEncryptionPubkey": hex::encode(new_device.encryption_pubkey().to_bytes()),
+            "encryptionPubkey": kem,
+            "format": DEVICE_KEM_FORMAT,
+            "pop": pop,
+        })
+        .to_string()
     }
 
     #[test]
@@ -452,6 +888,7 @@ mod tests {
         let (secrets1, pubkey1) = test_device();
         let encrypted2 = generate_device_keys("dev-2", "65432100").unwrap();
         let pubkey2 = encrypted2.state.signing_pubkey_hex.clone();
+        let secrets2 = unlock_device_keys(&encrypted2, "65432100").unwrap();
 
         let link1 = create_sigchain_link(
             &secrets1,
@@ -464,8 +901,7 @@ mod tests {
         )
         .unwrap();
 
-        let payload =
-            format!(r#"{{"type":"device_add","devicePubkey":"{pubkey2}","deviceId":"dev-2"}}"#);
+        let payload = device_add_payload(&secrets2, "dev-2", &pubkey1);
         let link2 = create_sigchain_link(
             &secrets1,
             "link-2",
@@ -488,6 +924,7 @@ mod tests {
         let (secrets1, pubkey1) = test_device();
         let encrypted2 = generate_device_keys("dev-2", "65432100").unwrap();
         let pubkey2 = encrypted2.state.signing_pubkey_hex.clone();
+        let secrets2 = unlock_device_keys(&encrypted2, "65432100").unwrap();
 
         let link1 = create_sigchain_link(
             &secrets1,
@@ -500,8 +937,7 @@ mod tests {
         )
         .unwrap();
 
-        let add_payload =
-            format!(r#"{{"type":"device_add","devicePubkey":"{pubkey2}","deviceId":"dev-2"}}"#);
+        let add_payload = device_add_payload(&secrets2, "dev-2", &pubkey1);
         let link2 = create_sigchain_link(
             &secrets1,
             "l2",
@@ -599,8 +1035,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = verify_sigchain(&[link1, link2]);
-        assert!(matches!(result, Err(CryptoError::InvalidInput(_))));
+        let err = verify_sigchain(&[link1, link2]).unwrap_err();
+        assert_eq!(err.code(), "chain_prev_hash", "{err}");
     }
 
     #[test]
@@ -630,8 +1066,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = verify_sigchain(&[link1, link3]);
-        assert!(matches!(result, Err(CryptoError::InvalidInput(_))));
+        let err = verify_sigchain(&[link1, link3]).unwrap_err();
+        assert_eq!(err.code(), "chain_seq", "{err}");
     }
 
     #[test]
@@ -891,5 +1327,269 @@ mod tests {
         )
         .unwrap();
         assert_ne!(base, diff_payload);
+    }
+
+    // ── device_kem, pop and key reuse (#2496; spec §5–§6) ─────────────
+
+    fn fixed(seed: u8) -> DeviceSecrets {
+        DeviceSecrets {
+            signing_seed: [seed; 32],
+            encryption_seed: [seed.wrapping_add(100); 32],
+            kem_seed: Some([seed.wrapping_add(200); 32]),
+        }
+    }
+
+    fn pk(s: &DeviceSecrets) -> String {
+        hex::encode(s.signing_pubkey().to_bytes())
+    }
+
+    fn genesis_of(s: &DeviceSecrets, device_id: &str) -> SigchainLink {
+        let payload = serde_json::json!({
+            "type": "user_init",
+            "deviceId": device_id,
+            "devicePubkey": pk(s),
+            "deviceEncryptionPubkey": hex::encode(s.encryption_pubkey().to_bytes()),
+        })
+        .to_string();
+        create_sigchain_link(s, "g", device_id, 1, None, "2026-11-25T00:00:00Z", &payload).unwrap()
+    }
+
+    fn next(
+        signer: &DeviceSecrets,
+        device_id: &str,
+        prev: &SigchainLink,
+        payload: &str,
+    ) -> SigchainLink {
+        create_sigchain_link(
+            signer,
+            &format!("l{}", prev.seq + 1),
+            device_id,
+            prev.seq + 1,
+            Some(prev.entry_hash.clone()),
+            "2026-11-25T00:01:00Z",
+            payload,
+        )
+        .unwrap()
+    }
+
+    fn with_field(payload: &str, key: &str, value: serde_json::Value) -> String {
+        let mut v: serde_json::Value = serde_json::from_str(payload).unwrap();
+        v[key] = value;
+        v.to_string()
+    }
+
+    #[test]
+    fn device_kem_publishes_the_devices_xwing_key() {
+        let a = fixed(1);
+        let g = genesis_of(&a, "a1");
+        let kem = next(&a, "a1", &g, &device_kem_payload(&a, &pk(&a)).unwrap());
+        let state = verify_sigchain(std::slice::from_ref(&g)).unwrap();
+        assert!(state.device_kem_keys.is_empty(), "no device_kem yet");
+        let state = verify_sigchain(&[g, kem]).unwrap();
+        assert_eq!(state.user_pubkey, pk(&a));
+        assert_eq!(
+            state.device_kem_keys,
+            vec![DeviceKemKey {
+                device_pubkey: pk(&a),
+                kem_pubkey: hex::encode(a.kem_pubkey().unwrap()),
+                format: DEVICE_KEM_FORMAT,
+            }]
+        );
+        assert_eq!(state.device_kem_keys[0].kem_pubkey.len(), 2432);
+    }
+
+    #[test]
+    fn a_bad_pop_is_refused() {
+        let a = fixed(1);
+        let g = genesis_of(&a, "a1");
+        let good = device_kem_payload(&a, &pk(&a)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&good).unwrap();
+        let mut pop = hex::decode(v["pop"].as_str().unwrap()).unwrap();
+        pop[0] ^= 1;
+        let bad = with_field(&good, "pop", hex::encode(pop).into());
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &bad)]).unwrap_err();
+        assert_eq!(err.code(), "chain_device_pop", "{err}");
+
+        // A pop made for another user does not bind this one.
+        let other_user = device_kem_payload(&a, &pk(&fixed(9))).unwrap();
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &other_user)]).unwrap_err();
+        assert_eq!(err.code(), "chain_device_pop", "{err}");
+
+        // A pop over a different key does not bind this one.
+        let swapped = with_field(
+            &good,
+            "encryptionPubkey",
+            hex::encode(fixed(2).kem_pubkey().unwrap()).into(),
+        );
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &swapped)]).unwrap_err();
+        assert_eq!(err.code(), "chain_device_pop", "{err}");
+    }
+
+    #[test]
+    fn device_kem_must_be_signed_by_the_device_it_names() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        let add = next(&a, "a1", &g, &device_add_payload(&b, "b1", &pk(&a)));
+        // Device A signs a device_kem naming device B.
+        let forged = next(&a, "a1", &add, &device_kem_payload(&b, &pk(&a)).unwrap());
+        let err = verify_sigchain(&[g.clone(), add.clone(), forged]).unwrap_err();
+        assert_eq!(err.code(), "chain_unauthorised_signer", "{err}");
+        // B signing its own is valid.
+        let own = next(&b, "b1", &add, &device_kem_payload(&b, &pk(&a)).unwrap());
+        verify_sigchain(&[g, add, own]).unwrap();
+    }
+
+    #[test]
+    fn device_kem_is_valid_only_while_the_device_is_active() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        let add = next(&a, "a1", &g, &device_add_payload(&b, "b1", &pk(&a)));
+        let remove = next(
+            &a,
+            "a1",
+            &add,
+            &serde_json::json!({"type": "device_remove", "deviceId": "b1", "devicePubkey": pk(&b)})
+                .to_string(),
+        );
+        let state = verify_sigchain(&[g.clone(), add.clone(), remove.clone()]).unwrap();
+        assert_eq!(
+            state.device_kem_keys.len(),
+            0,
+            "a removed device keeps no key"
+        );
+        let late = next(&b, "b1", &remove, &device_kem_payload(&b, &pk(&a)).unwrap());
+        let err = verify_sigchain(&[g, add, remove, late]).unwrap_err();
+        assert_eq!(err.code(), "chain_unauthorised_signer", "{err}");
+    }
+
+    #[test]
+    fn device_add_requires_the_new_devices_pop() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        let good = device_add_payload(&b, "b1", &pk(&a));
+        let mut v: serde_json::Value = serde_json::from_str(&good).unwrap();
+        v.as_object_mut().unwrap().remove("pop");
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &v.to_string())]).unwrap_err();
+        assert_eq!(err.code(), "invalid_format", "{err}");
+        // A pop by the primary instead of the new device is refused.
+        let kem = hex::encode(b.kem_pubkey().unwrap());
+        let primary_pop = sign_device_pop(&a, &pk(&a), &kem, DEVICE_KEM_FORMAT).unwrap();
+        let bad = with_field(&good, "pop", primary_pop.into());
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &bad)]).unwrap_err();
+        assert_eq!(err.code(), "chain_device_pop", "{err}");
+        // An X-Wing key under any format but 2 is refused.
+        let fmt1 = with_field(&good, "format", 1.into());
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &fmt1)]).unwrap_err();
+        assert_eq!(err.code(), "unknown_format", "{err}");
+    }
+
+    #[test]
+    fn a_device_is_added_once() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        let add = next(&a, "a1", &g, &device_add_payload(&b, "b1", &pk(&a)));
+        // Replaying B's own valid device_add (its pop included) is refused.
+        let again = next(&a, "a1", &add, &device_add_payload(&b, "b1", &pk(&a)));
+        let err = verify_sigchain(&[g.clone(), add.clone(), again]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
+        // So is re-adding a removed device.
+        let remove = next(
+            &a,
+            "a1",
+            &add,
+            &serde_json::json!({"type": "device_remove", "deviceId": "b1", "devicePubkey": pk(&b)})
+                .to_string(),
+        );
+        let readd = next(&a, "a1", &remove, &device_add_payload(&b, "b1", &pk(&a)));
+        let err = verify_sigchain(&[g, add, remove, readd]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
+    }
+
+    #[test]
+    fn a_key_is_never_named_for_two_devices_of_one_chain() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        // device B claims A's X25519 key as its own.
+        let stolen = with_field(
+            &device_add_payload(&b, "b1", &pk(&a)),
+            "deviceEncryptionPubkey",
+            hex::encode(a.encryption_pubkey().to_bytes()).into(),
+        );
+        let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &stolen)]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
+    }
+
+    #[test]
+    fn a_chain_reusing_another_users_key_is_refused() {
+        let alice = fixed(1);
+        let mallory = fixed(3);
+        let ga = genesis_of(&alice, "a1");
+        let ka = next(
+            &alice,
+            "a1",
+            &ga,
+            &device_kem_payload(&alice, &pk(&alice)).unwrap(),
+        );
+        let gm = genesis_of(&mallory, "m1");
+        // Mallory names Alice's X-Wing key. Mallory holds her own signing key,
+        // so the pop verifies: only the cross-chain check refuses it.
+        let alice_kem = hex::encode(alice.kem_pubkey().unwrap());
+        let pop = sign_device_pop(&mallory, &pk(&mallory), &alice_kem, DEVICE_KEM_FORMAT).unwrap();
+        let payload = serde_json::json!({
+            "type": "device_kem", "devicePubkey": pk(&mallory), "format": DEVICE_KEM_FORMAT,
+            "encryptionPubkey": alice_kem, "pop": pop,
+        })
+        .to_string();
+        let km = next(&mallory, "m1", &gm, &payload);
+        verify_sigchain(&[gm.clone(), km.clone()]).expect("valid on its own");
+        let err = verify_user_sigchains(&[vec![ga.clone(), ka.clone()], vec![gm, km]]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
+        let err = genesis_device_set(&[vec![ga.clone(), ka.clone()], vec![ga, ka]]).unwrap_err();
+        assert_eq!(
+            err.code(),
+            "chain_key_reused",
+            "a chain listed twice is refused: {err}"
+        );
+    }
+
+    #[test]
+    fn genesis_device_set_lists_and_excludes_devices_without_device_kem() {
+        let alice = fixed(1);
+        let bob = fixed(2);
+        let ga = genesis_of(&alice, "a1");
+        let ka = next(
+            &alice,
+            "a1",
+            &ga,
+            &device_kem_payload(&alice, &pk(&alice)).unwrap(),
+        );
+        let gb = genesis_of(&bob, "b1");
+        let set = genesis_device_set(&[vec![ga, ka], vec![gb]]).unwrap();
+        assert_eq!(set.included.len(), 1);
+        assert_eq!(set.included[0].user_pubkey, pk(&alice));
+        assert_eq!(
+            set.missing,
+            vec![DeviceMissingKem {
+                user_pubkey: pk(&bob),
+                device_pubkey: pk(&bob)
+            }]
+        );
+    }
+
+    #[test]
+    fn pop_message_layout_is_pinned() {
+        let msg = device_pop_message("ab", &[1u8; 32], &[2u8; 3], 2).unwrap();
+        let label = crate::labels::LABEL_DEVICE_POP.as_bytes();
+        assert_eq!(&msg[..label.len()], label);
+        assert_eq!(msg[label.len()], 0);
+        let mut inner = vec![0, 2, b'a', b'b', 0, 32];
+        inner.extend_from_slice(&[1u8; 32]);
+        inner.extend_from_slice(&[0, 3, 2, 2, 2, 0, 2]);
+        assert_eq!(&msg[label.len() + 1..], Sha256::digest(&inner).as_slice());
     }
 }

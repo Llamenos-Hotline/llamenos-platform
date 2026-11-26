@@ -44,7 +44,41 @@ data class StoredKeyData(
     val signingPubkeyHex: String,
     val encryptionPubkeyHex: String,
     val deviceId: String,
-)
+    /** X-Wing public key; absent in a pilot blob stored before K-A (#2496). */
+    val kemPubkeyHex: String? = null,
+) {
+    fun toEncrypted() = EncryptedDeviceKeys(
+        kdfVersion = kdfVersion,
+        salt = salt,
+        argon2MCost = argon2MCost,
+        argon2TCost = argon2TCost,
+        argon2PCost = argon2PCost,
+        nonce = nonce,
+        ciphertext = ciphertext,
+        state = DeviceKeyState(
+            deviceId = deviceId,
+            signingPubkeyHex = signingPubkeyHex,
+            encryptionPubkeyHex = encryptionPubkeyHex,
+            kemPubkeyHex = kemPubkeyHex,
+        ),
+    )
+
+    companion object {
+        fun of(encrypted: EncryptedDeviceKeys) = StoredKeyData(
+            kdfVersion = encrypted.kdfVersion,
+            salt = encrypted.salt,
+            argon2MCost = encrypted.argon2MCost,
+            argon2TCost = encrypted.argon2TCost,
+            argon2PCost = encrypted.argon2PCost,
+            nonce = encrypted.nonce,
+            ciphertext = encrypted.ciphertext,
+            signingPubkeyHex = encrypted.state.signingPubkeyHex,
+            encryptionPubkeyHex = encrypted.state.encryptionPubkeyHex,
+            deviceId = encrypted.state.deviceId,
+            kemPubkeyHex = encrypted.state.kemPubkeyHex,
+        )
+    }
+}
 
 data class AuthUiState(
     val isLoading: Boolean = false,
@@ -266,6 +300,8 @@ class AuthViewModel @Inject constructor(
      * and an unknown pubkey is refused.
      */
     private fun onIdentityKnownToServer() {
+        // Also publishes this device's X-Wing key (device_kem) — after genesis and
+        // the first PUK if the user has no chain yet (spec 2026-11-25 §5, #2496).
         deviceRegistrationManager.ensureRegistered()
     }
 
@@ -342,22 +378,12 @@ class AuthViewModel @Inject constructor(
                 val newDeviceId = java.util.UUID.randomUUID().toString()
                 val encrypted = cryptoService.generateDeviceKeys(newDeviceId, pin)
 
-                // Serialize and store
-                val storedData = StoredKeyData(
-                    kdfVersion = encrypted.kdfVersion,
-                    salt = encrypted.salt,
-                    argon2MCost = encrypted.argon2MCost,
-                    argon2TCost = encrypted.argon2TCost,
-                    argon2PCost = encrypted.argon2PCost,
-                    nonce = encrypted.nonce,
-                    ciphertext = encrypted.ciphertext,
-                    signingPubkeyHex = encrypted.state.signingPubkeyHex,
-                    encryptionPubkeyHex = encrypted.state.encryptionPubkeyHex,
-                    deviceId = encrypted.state.deviceId,
-                )
+                // Serialize and store. A new device identity: the sigchain head
+                // recorded for a previous one is not its.
+                keystoreService.delete(KeystoreService.KEY_SIGCHAIN_HEAD)
                 keystoreService.store(
                     KeystoreService.KEY_ENCRYPTED_KEYS,
-                    json.encodeToString(storedData),
+                    json.encodeToString(StoredKeyData.of(encrypted)),
                 )
 
                 // Store pubkeys for display when locked
@@ -435,23 +461,14 @@ class AuthViewModel @Inject constructor(
                 val storedJson = keystoreService.retrieve(KeystoreService.KEY_ENCRYPTED_KEYS)
                     ?: throw IllegalStateException("No stored keys found")
 
-                val storedData = json.decodeFromString<StoredKeyData>(storedJson)
-                val encryptedData = EncryptedDeviceKeys(
-                    kdfVersion = storedData.kdfVersion,
-                    salt = storedData.salt,
-                    argon2MCost = storedData.argon2MCost,
-                    argon2TCost = storedData.argon2TCost,
-                    argon2PCost = storedData.argon2PCost,
-                    nonce = storedData.nonce,
-                    ciphertext = storedData.ciphertext,
-                    state = DeviceKeyState(
-                        deviceId = storedData.deviceId,
-                        signingPubkeyHex = storedData.signingPubkeyHex,
-                        encryptionPubkeyHex = storedData.encryptionPubkeyHex,
-                    ),
-                )
+                val encryptedData = json.decodeFromString<StoredKeyData>(storedJson).toEncrypted()
 
-                cryptoService.unlockWithPin(encryptedData, pin)
+                val unlocked = cryptoService.unlockWithPin(encryptedData, pin)
+                // A pilot blob just gained its X-Wing key (spec §5): it replaces
+                // the stored one before the key can be published.
+                unlocked.upgradedKeys?.let {
+                    keystoreService.store(KeystoreService.KEY_ENCRYPTED_KEYS, json.encodeToString(StoredKeyData.of(it)))
+                }
 
                 // Success — reset failed attempts
                 ks?.resetFailedAttempts()

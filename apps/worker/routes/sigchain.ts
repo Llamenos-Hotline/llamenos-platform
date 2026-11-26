@@ -71,7 +71,7 @@ sigchainRoutes.post('/',
   describeRoute({
     tags: ['Sigchain'],
     summary: 'Append a signed sigchain link',
-    description: 'Users may only append to their own sigchain. The server validates link semantics (genesis only at seq 1, payload.type matches linkType), hash-chain continuity (seqNo, prevHash), the recomputed entry hash and the Ed25519 signature before persisting.',
+    description: 'Users may only append to their own sigchain. The server validates link semantics (genesis only at seq 1, payload.type matches linkType), hash-chain continuity (seqNo, prevHash), the recomputed entry hash and the Ed25519 signature before persisting. A device_add or device_kem is verified with the whole chain by packages/crypto (possession signature, signer active, a device added once), and every device key a link names is claimed for this user: one another user holds is refused (#2496).',
     responses: {
       201: {
         description: 'Link appended',
@@ -83,7 +83,7 @@ sigchainRoutes.post('/',
       },
       ...authErrors,
       400: { ...authErrors[400], description: 'Validation error: invalid link semantics, payload shape or entry hash' },
-      409: { description: 'Hash-chain continuity violation (seqNo or prevHash mismatch)' },
+      409: { description: 'Hash-chain continuity violation (seqNo or prevHash mismatch), or a device key another user already holds (code `key_reused`, #2496)' },
     },
   }),
   validator('json', appendSigchainLinkBodySchema),
@@ -106,7 +106,10 @@ sigchainRoutes.post('/',
       return c.json(link, 201)
     } catch (err) {
       if (err instanceof CryptoKeyError) {
-        return c.json({ error: err.message }, err.status)
+        // `code`: the crate's closed rejection code for a refused device_add /
+        // device_kem (`chain_device_pop`, …), or `key_reused` for a key another
+        // user holds (#2496).
+        return c.json({ error: err.message, ...(err.code && { code: err.code }) }, err.status)
       }
       throw err
     }

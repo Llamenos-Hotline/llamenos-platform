@@ -39,6 +39,7 @@ class DeviceRegistrationManagerTest {
     private fun createManager() = DeviceRegistrationManager(
         apiService,
         cryptoService,
+        io.mockk.mockk(relaxed = true),
         CoroutineScope(testDispatcher),
     )
 

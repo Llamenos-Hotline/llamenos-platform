@@ -127,3 +127,4 @@
 109	llamenos:case-comment
 110	llamenos:offline-queue:v1
 111	llamenos:hub-key-rotation:v1
+112	llamenos:device-pop:v1

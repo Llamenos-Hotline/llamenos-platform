@@ -39,6 +39,9 @@ enum KeychainKey {
     static let biometricPIN = "biometric-pin"
     static let pinLockoutAttempts = "pin-lockout-attempts"
     static let pinLockoutUntil = "pin-lockout-until"
+    /// `user:seq:hash` of the last user-sigchain head this device verified (#2496).
+    /// A served chain that does not extend it is refused, never re-initialised.
+    static let sigchainHead = "sigchain-head"
 }
 
 // MARK: - KeychainService

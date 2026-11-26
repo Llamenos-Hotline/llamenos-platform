@@ -26,7 +26,30 @@ data class DeviceKeyState(
     val deviceId: String,
     val signingPubkeyHex: String,
     val encryptionPubkeyHex: String,
-)
+    /**
+     * X-Wing (ML-KEM-768 + X25519) public key, 2432 hex chars — the device's
+     * crypto_format 2 key (wire spec D16), published by a `device_kem` link.
+     * Null only for a pilot blob not yet unlocked since K-A (#2496); unlocking
+     * gives it one ([CryptoService.unlockWithPin]).
+     */
+    val kemPubkeyHex: String? = null,
+) {
+    internal fun toFfi() = org.llamenos.core.DeviceKeyState(
+        deviceId = deviceId,
+        signingPubkeyHex = signingPubkeyHex,
+        encryptionPubkeyHex = encryptionPubkeyHex,
+        kemPubkeyHex = kemPubkeyHex,
+    )
+
+    internal companion object {
+        fun fromFfi(s: org.llamenos.core.DeviceKeyState) = DeviceKeyState(
+            deviceId = s.deviceId,
+            signingPubkeyHex = s.signingPubkeyHex,
+            encryptionPubkeyHex = s.encryptionPubkeyHex,
+            kemPubkeyHex = s.kemPubkeyHex,
+        )
+    }
+}
 
 data class EncryptedDeviceKeys(
     val kdfVersion: UByte,
@@ -37,6 +60,41 @@ data class EncryptedDeviceKeys(
     val nonce: String,
     val ciphertext: String,
     val state: DeviceKeyState,
+) {
+    internal fun toFfi() = org.llamenos.core.EncryptedDeviceKeys(
+        kdfVersion = kdfVersion,
+        salt = salt,
+        argon2MCost = argon2MCost,
+        argon2TCost = argon2TCost,
+        argon2PCost = argon2PCost,
+        nonce = nonce,
+        ciphertext = ciphertext,
+        state = state.toFfi(),
+    )
+
+    internal companion object {
+        fun fromFfi(e: org.llamenos.core.EncryptedDeviceKeys) = EncryptedDeviceKeys(
+            kdfVersion = e.kdfVersion,
+            salt = e.salt,
+            argon2MCost = e.argon2MCost,
+            argon2TCost = e.argon2TCost,
+            argon2PCost = e.argon2PCost,
+            nonce = e.nonce,
+            ciphertext = e.ciphertext,
+            state = DeviceKeyState.fromFfi(e.state),
+        )
+    }
+}
+
+/**
+ * The result of a PIN unlock: the device state, and — for a pilot device whose
+ * blob had no X-Wing key — the re-encrypted blob that now holds one. The caller
+ * MUST store [upgradedKeys] in place of the old blob when it is not null
+ * (spec 2026-11-25-v2-device-linking-and-recovery §5).
+ */
+data class UnlockResult(
+    val state: DeviceKeyState,
+    val upgradedKeys: EncryptedDeviceKeys? = null,
 )
 
 data class AuthToken(
@@ -210,6 +268,9 @@ class CryptoService @Inject constructor() {
 
     /** X25519 encryption public key (hex). Used for HPKE. */
     var encryptionPubkeyHex: String? = null
+
+    /** This device's X-Wing public key, once unlocked (see [DeviceKeyState.kemPubkeyHex]). */
+    var kemPubkeyHex: String? = null
         private set
 
     /** Device identifier (UUID). */
@@ -267,25 +328,9 @@ class CryptoService @Inject constructor() {
                     deviceId = deviceId,
                     pin = pin,
                 )
-                val state = DeviceKeyState(
-                    deviceId = ffiResult.state.deviceId,
-                    signingPubkeyHex = ffiResult.state.signingPubkeyHex,
-                    encryptionPubkeyHex = ffiResult.state.encryptionPubkeyHex,
-                )
-                this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
-                this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
-                this@CryptoService.deviceId = state.deviceId
-                _unlockedState.value = true
-                EncryptedDeviceKeys(
-                    kdfVersion = ffiResult.kdfVersion,
-                    salt = ffiResult.salt,
-                    argon2MCost = ffiResult.argon2MCost,
-                    argon2TCost = ffiResult.argon2TCost,
-                    argon2PCost = ffiResult.argon2PCost,
-                    nonce = ffiResult.nonce,
-                    ciphertext = ffiResult.ciphertext,
-                    state = state,
-                )
+                val encrypted = EncryptedDeviceKeys.fromFfi(ffiResult)
+                adopt(encrypted.state)
+                encrypted
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Device key generation failed: ${e.message}", e)
             }
@@ -296,40 +341,34 @@ class CryptoService @Inject constructor() {
     /**
      * Decrypt device keys from PIN-encrypted storage and load into Rust state.
      */
-    suspend fun unlockWithPin(data: EncryptedDeviceKeys, pin: String): DeviceKeyState =
+    suspend fun unlockWithPin(data: EncryptedDeviceKeys, pin: String): UnlockResult =
         withContext(computeDispatcher) {
             NativeCryptoLibrary.require()
 
             try {
-                val ffiData = org.llamenos.core.EncryptedDeviceKeys(
-                    kdfVersion = data.kdfVersion,
-                    salt = data.salt,
-                    argon2MCost = data.argon2MCost,
-                    argon2TCost = data.argon2TCost,
-                    argon2PCost = data.argon2PCost,
-                    nonce = data.nonce,
-                    ciphertext = data.ciphertext,
-                    state = org.llamenos.core.DeviceKeyState(
-                        deviceId = data.state.deviceId,
-                        signingPubkeyHex = data.state.signingPubkeyHex,
-                        encryptionPubkeyHex = data.state.encryptionPubkeyHex,
-                    ),
-                )
-                val ffiState = org.llamenos.core.mobileUnlock(data = ffiData, pin = pin)
-                val state = DeviceKeyState(
-                    deviceId = ffiState.deviceId,
-                    signingPubkeyHex = ffiState.signingPubkeyHex,
-                    encryptionPubkeyHex = ffiState.encryptionPubkeyHex,
-                )
-                this@CryptoService.signingPubkeyHex = state.signingPubkeyHex
-                this@CryptoService.encryptionPubkeyHex = state.encryptionPubkeyHex
-                this@CryptoService.deviceId = state.deviceId
-                _unlockedState.value = true
-                state
+                val result = if (data.state.kemPubkeyHex == null) {
+                    // A pilot blob: unlock and gain an X-Wing key in one step (spec §5).
+                    val upgraded = EncryptedDeviceKeys.fromFfi(
+                        org.llamenos.core.mobileAddDeviceKemKeyAndLoad(data = data.toFfi(), pin = pin),
+                    )
+                    UnlockResult(upgraded.state, upgraded)
+                } else {
+                    UnlockResult(DeviceKeyState.fromFfi(org.llamenos.core.mobileUnlock(data = data.toFfi(), pin = pin)))
+                }
+                adopt(result.state)
+                result
             } catch (e: org.llamenos.core.CryptoException) {
                 throw CryptoException("Decryption failed: incorrect PIN", e)
             }
         }
+
+    private fun adopt(state: DeviceKeyState) {
+        signingPubkeyHex = state.signingPubkeyHex
+        encryptionPubkeyHex = state.encryptionPubkeyHex
+        kemPubkeyHex = state.kemPubkeyHex
+        deviceId = state.deviceId
+        _unlockedState.value = true
+    }
 
     /**
      * Lock by zeroizing device secrets in Rust memory.
@@ -772,6 +811,35 @@ class CryptoService @Inject constructor() {
             throw CryptoException("Sigchain link verification failed: ${e.message}", e)
         }
     }
+
+    /**
+     * This device's `device_kem` payload JSON for [userPubkey] (spec §5): its
+     * X-Wing key and possession signature, made in Rust. The link carrying it
+     * must be signed by this device ([createSigchainLink]).
+     */
+    suspend fun deviceKemPayload(userPubkey: String): String = withContext(computeDispatcher) {
+        NativeCryptoLibrary.require()
+        try {
+            org.llamenos.core.mobileDeviceKemPayload(userPubkey)
+        } catch (e: org.llamenos.core.CryptoException) {
+            throw CryptoException("device_kem payload failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * The migration-genesis device set for a hub's members' chains (spec §5):
+     * every chain verified together (cross-user key reuse refused), active
+     * devices with an X-Wing key in `included`, the rest in `missing`.
+     */
+    suspend fun genesisDeviceSet(chainsJson: String): org.llamenos.core.GenesisDeviceSet =
+        withContext(computeDispatcher) {
+            NativeCryptoLibrary.require()
+            try {
+                org.llamenos.core.mobileGenesisDeviceSet(chainsJson)
+            } catch (e: org.llamenos.core.CryptoException) {
+                throw CryptoException("Genesis device set refused: ${e.message}", e)
+            }
+        }
 
     /** Verify a complete sigchain (all links). */
     suspend fun verifySigchain(
