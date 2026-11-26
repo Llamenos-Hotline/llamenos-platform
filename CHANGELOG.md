@@ -210,6 +210,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Epic 54 Phase 3 — per-note ephemeral keys for forward secrecy
 - Epic 54 Phase 2 — Signal-style device linking via QR provisioning
 
+## 0.21.25 (2026-11-26)
+
+### Features
+
+- send shift heartbeats while clocked in (#2886) (#2907)
+- enforce no plaintext custom role vocabulary with a CHECK (#2787) (#2914)
+- never-orphaned admin-read guard on every sealed record write (#2174) (#3000)
+- v2 wire format, full stack — one envelope shape API, lowercase hex, per-hub relay events (#2974 stage 0) (#3038)
+
+### Fixes
+
+- a status callback with no call token acts on no call; the webhook log never carries callToken (#2627) (#2906)
+- biometric enrollment reports the real failure, not "Incorrect PIN" (#2899)
+- the wizard's hub admin is the hub's reader — hub content sealed to hub admins, inbound refused (never dropped) when there are none (#1034, #1035) (#2896)
+- refetch the hub key when an event will not decrypt (#1090) (#2920)
+- upgrade url to 2.5.9 for RUSTSEC-2026-0592 (#2929)
+- a failed list load shows its error, not the empty state (#2937)
+- seal event summaries on create instead of posting plaintext (#2956)
+- upgrade cookie to 0.18.3 for RUSTSEC-2026-0594 (#2960)
+- scope the offline queue to the device identity that sealed it (#2948) (#2950)
+- am cancel/delete collision; validate dialog buttons are distinct (#2936)
+- integration tests require DATABASE_URL instead of defaulting to the shared dev database (#2912)
+- firehose agent uses an X25519 key, not Ed25519, as its HPKE recipient (#1288) (#2922)
+- replies are sealed to this device + admins, never the assignee's signing key (#2552) (#2924)
+- bind entity/report/relationship type writes and by-id reads to the path hub (#2955)
+- files seal raw bytes, open via the device key, entity file fields round-trip (#3003) (#3009)
+- iOS and Android seal hub content to every admin of the hub; one reader rule in the crate (#1035) (#2923)
+- the webhook IP allowlist must be on or deliberately disabled, never silently absent (#2957)
+- restored backups keep the decryption key; sealed rows carry crypto_format (#2140, #2964) (#2997)
+- seal channel credentials at rest and redact them from the settings API (#3031) (#3035)
+- no compression on the API origin; one rule for every Caddy config (#3018) (#3039)
+- lefthook i18n checks can fail for the reason they exist (#1901) (#3049)
+
 ## 0.21.24 (2026-11-21)
 
 ### Fixes
