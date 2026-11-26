@@ -1119,7 +1119,12 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // smoke test is the only place a runner whose `claude` build rejects the
     // flag gets named as a configuration problem instead of failing every
     // real review as an opaque `engine-unavailable`.
-    expect(text).toMatch(/\| env HOME="\$rev_home" "\$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "\$rev_tools" --model "\$rev_model"/)
+    // Since #1508 every claude smoke call goes through ONE invocation in
+    // `smoke_once` (binary `$2`, model `$3`), and the claude primary hands it
+    // exactly the resolved pair — so both halves are pinned.
+    expect(text).toMatch(/\| env HOME="\$rev_home" "\$2" --print --permission-mode plan --strict-mcp-config --tools "\$rev_tools" --model "\$3"/)
+    expect(text).toContain('smoke_engine claude "$rev_binary" "$rev_model" "claude"')
+    expect(text).toContain('smoke_engine claude "$fb_binary" "$fb_model" "$fb_binary fallback"')
     expect(text, 'smoke test does not import reviewerInvocationFor from review.ts')
       .toMatch(/import \{ reviewerInvocationFor \} from "\.\/orchestrator\/src\/review\.ts"/)
     expect(text, 'smoke test pins a literal model again instead of resolving one')
@@ -1196,7 +1201,7 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     // comments legitimately say "`--strict-mcp-config` with no
     // `--mcp-config` alongside it", which a whole-job absence check would
     // trip on its own explanation.
-    const invocation = /^.*\| env HOME="\$rev_home" "\$rev_binary".*$/m.exec(fleetReviewJobText())
+    const invocation = /^.*\| env HOME="\$rev_home" "\$2".*$/m.exec(fleetReviewJobText())
     if (invocation === null) throw new Error('the smoke step\'s engine invocation line was not found')
     expect(invocation[0], 'the smoke invocation does not pass --strict-mcp-config').toContain('--strict-mcp-config')
     expect(invocation[0], 'a --mcp-config would hand the reviewer MCP servers again')
@@ -1260,9 +1265,9 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     expect(runBlock).not.toMatch(/\bopencode\b/)
   })
 
-  it('classifies a smoke-test failure as engine-quota, engine-auth, engine-misconfigured, or engine-unavailable', () => {
+  it('classifies a smoke-test failure as engine-quota, engine-auth, engine-misconfigured, engine-unavailable, or engine-unreadable', () => {
     const text = fleetReviewJobText()
-    for (const cause of ['engine-quota', 'engine-auth', 'engine-misconfigured', 'engine-unavailable']) {
+    for (const cause of ['engine-quota', 'engine-auth', 'engine-misconfigured', 'engine-unavailable', 'engine-unreadable']) {
       expect(text, `${cause} classification missing from the smoke-test step`).toContain(cause)
     }
   })
@@ -1351,8 +1356,13 @@ describe('rail: fleet/review runs as a claude session on a self-hosted runner, w
     const armGuards = text.match(/\[ "\$engine_class" != "engine-auth" \]/g) ?? []
     expect(armGuards.length, 'expected exactly two tolerance arms (kimi-primary and claude-primary)').toBe(2)
     expect(text.match(/\[ "\$\{FLEET_REVIEW_FALLBACK:-on\}" != "off" \]/g)?.length).toBe(4)
-    expect(text.match(/command -v "\$rev_binary" >\/dev\/null 2>&1/g)?.length).toBe(2)
-    expect(text.match(/command -v "\$fb_binary" >\/dev\/null 2>&1/g)?.length).toBe(4)
+    // The missing-binary pre-flight lives once, in `smoke_once` (#1508), and
+    // every engine call goes through it; the tolerance arms additionally
+    // refuse to cross without the other engine's binary on PATH.
+    expect(text.match(/command -v "\$2" >\/dev\/null 2>&1/g)?.length).toBe(1)
+    expect(text.match(/command -v "\$fb_binary" >\/dev\/null 2>&1/g)?.length).toBe(2)
+    expect(text).toContain('smoke_engine kimi "$rev_binary" "$kimi_model_suffix" "kimi"')
+    expect(text).toContain('smoke_engine claude "$rev_binary" "$rev_model" "claude"')
     // And the primary branch is selected from the RESOLVED engine — never
     // from an env var read directly — so the smoke test and the real review
     // smoke the same engine by construction (including the bootstrap

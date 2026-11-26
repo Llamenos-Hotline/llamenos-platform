@@ -349,13 +349,20 @@ behaviour, not a bug: the same posture this file has had since #848, just
 with a different reason the job might not be running yet.
 
 The smoke-test step also now names *why* the engine call failed, on one line,
-before it fails the job — it never turns a bad call into a pass. Three
-causes: `engine-quota` (weekly/usage-limit language from the provider),
-`engine-auth` (401 / invalid or missing key), or `engine-unavailable`
-(anything else — a bad model id, a network error, a rejected config, or the
-engine running but never producing a valid verdict), or `engine-misconfigured`
-(a `--model` id `claude` itself refuses outright — see `classifyEngineFailure`
-in `orchestrator/src/review.ts`). See the comment above "Smoke-test the
+before it fails the job — it never turns a bad call into a pass. Five
+causes: `engine-quota` (weekly/usage-limit language from the provider, on
+stderr or on stdout with exit 0), `engine-auth` (401 / invalid or missing
+key), `engine-misconfigured` (a `--model` id `claude` itself refuses
+outright — see `classifyEngineFailure` in `orchestrator/src/review.ts`),
+`engine-unavailable` (the engine could not be run at all — a missing binary,
+a crash, a network error), or `engine-unreadable` (#1508: the engine ran and
+ANSWERED, but `parseVerdict` could not read a verdict from the answer). The
+last two used to share `engine-unavailable`, whose detail says "could not be
+run" — false for an engine that answered, and it sent readers after quota and
+runner health that were fine. An unreadable answer is retried once (it is
+transient in practice); the retry must earn a parsed PASS, and a second
+unreadable answer fails closed. Only the job log carries an excerpt of what
+the engine said — scrubbed and capped; the check title carries the token. See the comment above "Smoke-test the
 review engine" in `.github/workflows/fleet-review.yml` for the exact
 classification, which is a best-effort heuristic over the engine's own error
 text, not a structured error code `claude` exposes.

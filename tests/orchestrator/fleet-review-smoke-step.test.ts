@@ -173,7 +173,34 @@ for _a in "$@"; do
   fi
   _prev="$_a"
 done
+# #1508: count real invocations, so the retry rail can prove an unreadable
+# answer is retried exactly ONCE and a cannot-run is never retried.
+_calls="\${MOCK_CLAUDE_CALLS:-/dev/null}"
+printf 'call\\n' >> "$_calls"
+_n="$(grep -c call "$_calls" 2>/dev/null || true)"
 case "\${MOCK_CLAUDE_RUN_MODE:-fail}" in
+  empty)
+    # Ran, exited 0, said nothing at all.
+    exit 0
+    ;;
+  prose)
+    # Ran and answered, in prose, with no verdict line at all.
+    printf 'Yes, 2 + 2 is equal to 4.\\n'
+    exit 0
+    ;;
+  quota-body)
+    # A usage-limit body delivered on STDOUT with exit 0 — an error wearing
+    # an answer's clothes. It is a cannot-run (engine-quota), not an
+    # unreadable answer, and it must never be retried as one.
+    printf 'Claude AI usage limit reached|1764000000\\n'
+    exit 0
+    ;;
+  flaky)
+    # Unreadable on the first call, a clean PASS on the second: the
+    # transient case the single retry exists for.
+    if [ "$_n" = "1" ]; then printf 'Sure.\\n'; else printf 'VERDICT: PASS\\n'; fi
+    exit 0
+    ;;
   fail)
     echo "simulated: Unexpected server error from provider" >&2
     exit 1
@@ -312,7 +339,7 @@ afterEach(() => {
  *  environment accidentally lacking a binary. */
 function runStep(
   script: string,
-  runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass' | 'auth-fail',
+  runMode: 'fail' | 'bad-verdict' | 'bad-model' | 'pass' | 'auth-fail' | 'empty' | 'prose' | 'quota-body' | 'flaky',
   extraEnv: Record<string, string> = {},
   engines: { primary?: 'kimi' | 'claude'; fallback?: 'on' | 'off' } = {},
 ): { status: number | null; output: string } {
@@ -353,7 +380,10 @@ describe('rail: the review-engine smoke step must always say why it failed', () 
     const { status, output } = runStep(smokeStepScript(), 'bad-verdict')
     expect(status).toBe(1)
     expect(output).toContain(FAILED_MARKER)
-    expect(output).toContain('engine-unavailable')
+    // #1508: it ran and answered — that is engine-unreadable, never the
+    // "could not be run" of engine-unavailable.
+    expect(output).toContain(`${FAILED_MARKER} engine-unreadable`)
+    expect(output).not.toContain('engine-unavailable')
   })
 
   // #866's own fix: an unresolvable `--model` id is a MISCONFIGURATION, not
@@ -585,9 +615,11 @@ function withoutStrictMcpConfig(script: string): string {
 /** The pre-fix shape: strips the `env HOME="$rev_home"` prefix from the
  *  engine invocation, so the engine inherits the runner's HOME exactly as it
  *  did before #1460. Asserts the prefix was present, so it can never pass
- *  vacuously. */
+ *  vacuously. Since #1508 every claude smoke call — primary and fallback —
+ *  goes through ONE invocation in `smoke_once` (binary as `$2`), so this one
+ *  replacement covers both arms. */
 function withoutTheGateOwnedHome(script: string): string {
-  const mutated = script.replace('| env HOME="$rev_home" "$rev_binary"', '| "$rev_binary"')
+  const mutated = script.replace('| env HOME="$rev_home" "$2"', '| "$2"')
   expect(mutated, 'the engine invocation does not carry `env HOME="$rev_home"` — this mutation is vacuous').not.toBe(script)
   return mutated
 }
@@ -663,17 +695,100 @@ describe('rail: the smoke step runs the engine under a gate-owned HOME (#1460, #
   })
 })
 
-describe('rail: the smoke step names what the engine actually said (partial #1508)', () => {
-  it('an unreadable verdict is reported as "answered but unparseable", with an excerpt — not as "could not be run"', () => {
-    // `bad-verdict` makes the fake engine answer with prose plus
-    // `VERDICT: MAYBE`. Before this, the headline was a bare
-    // `engine-unavailable` whose own detail string is "the review engine
-    // could not be run" — which sent #1511's reporter to look at runner
-    // health three times for a reviewer that had answered perfectly well.
-    const { status, output } = runStep(smokeStepScript(), 'bad-verdict')
+describe('rail: #1508 — could not run, ran but unreadable, and ran readably are three different outcomes', () => {
+  const calls = (): string => join(scratch, 'claude-calls')
+  const callCount = (): number =>
+    existsSync(calls()) ? readFileSync(calls(), 'utf8').split('\n').filter((l) => l === 'call').length : 0
+  const recorded = (): string => readFileSync(join(runnerTemp, 'fleet-review-engine-failure'), 'utf8').trim()
+
+  // ── State 1: the engine could not be invoked at all ──
+  it('could not run (the engine exits non-zero): engine-unavailable, the engine\'s own error text in the log, NO retry', () => {
+    const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_CLAUDE_CALLS: calls() })
     expect(status).toBe(1)
-    expect(output).toContain('the engine ANSWERED and parseVerdict could not read a verdict from it')
-    expect(output, 'the excerpt of the engine\'s own words is missing').toContain('I looked at the diff.')
+    expect(output).toContain(`${FAILED_MARKER} engine-unavailable`)
+    expect(output).toContain('simulated: Unexpected server error from provider')
+    expect(output).not.toContain('engine-unreadable')
+    expect(recorded()).toBe('engine-unavailable')
+    expect(callCount(), 'a cannot-run is not transient and must not be retried').toBe(1)
+  })
+
+  it('could not run (no engine binary on PATH): engine-unavailable, never engine-unreadable', () => {
+    rmSync(join(binDir, 'claude'))
+    // Drop every PATH entry that holds a real claude too, so the operator's
+    // own install cannot turn this into a live call — bun, jq and the rest
+    // of the step's tools stay reachable.
+    const path = (process.env['PATH'] ?? '').split(delimiter)
+      .filter((d) => d !== '' && !existsSync(join(d, 'claude')))
+    const { status, output } = runStep(smokeStepScript(), 'pass', { PATH: [binDir, ...path].join(delimiter) })
+    expect(status).toBe(1)
+    expect(output).toContain(`${FAILED_MARKER} engine-unavailable`)
+    expect(output).toContain('the claude CLI is not on PATH on this runner')
+    expect(recorded()).toBe('engine-unavailable')
+  })
+
+  it('a usage-limit body on stdout with exit 0 is engine-quota — a cannot-run, not an unreadable answer — and is not retried', () => {
+    const { status, output } = runStep(smokeStepScript(), 'quota-body', { MOCK_CLAUDE_CALLS: calls() })
+    expect(status).toBe(1)
+    expect(output).toContain(`${FAILED_MARKER} engine-quota`)
+    expect(output).toContain('usage limit reached')
+    expect(output).not.toContain('engine-unreadable')
+    expect(recorded()).toBe('engine-quota')
+    expect(callCount()).toBe(1)
+  })
+
+  // ── State 2: the engine ran and answered, and the answer was unreadable ──
+  it.each([
+    ['nothing at all', 'empty', '(no assistant text at all)'],
+    ['prose with no verdict line', 'prose', 'Yes, 2 + 2 is equal to 4.'],
+    ['a verdict line in a shape parseVerdict does not accept', 'bad-verdict', 'I looked at the diff.'],
+  ] as const)('ran but unreadable (%s): engine-unreadable — NOT engine-unavailable — with an excerpt of each answer, after exactly one retry', (_what, mode, excerpt) => {
+    const { status, output } = runStep(smokeStepScript(), mode, { MOCK_CLAUDE_CALLS: calls() })
+    expect(status, 'an unreadable answer must fail closed, never pass').toBe(1)
+    expect(output).toContain(`${FAILED_MARKER} engine-unreadable`)
+    expect(output).not.toContain('engine-unavailable')
+    expect(output).toContain("NOT 'could not be run'")
+    expect(output).toContain('retrying once (#1508)')
+    expect(output, "the excerpt of the engine's own words is missing").toContain(excerpt)
+    expect(output).toContain('Attempt 1: parseVerdict read UNREADABLE')
+    expect(output).toContain('Attempt 2: parseVerdict read UNREADABLE')
+    expect(recorded()).toBe('engine-unreadable')
+    expect(callCount(), 'an unreadable answer is retried exactly once').toBe(2)
+  })
+
+  it('a transient unreadable answer followed by a readable PASS concludes OK — and says the retry happened', () => {
+    const { status, output } = runStep(smokeStepScript(), 'flaky', { MOCK_CLAUDE_CALLS: calls() })
+    expect(status).toBe(0)
+    expect(output).toContain('review engine smoke test OK (engine=claude model=test-model; fallback=')
+    expect(output).toContain('primary passed on retry — attempt 1 was engine-unreadable (UNREADABLE)')
+    expect(output).toContain('smoke attempt 1 of 2 (claude): engine-unreadable — parseVerdict read UNREADABLE; first 300 chars of what it said: Sure.')
+    expect(output).not.toContain(FAILED_MARKER)
+    expect(existsSync(join(runnerTemp, 'fleet-review-engine-failure'))).toBe(false)
+    expect(callCount()).toBe(2)
+  })
+
+  // ── State 3: the engine ran and returned a readable verdict ──
+  it('ran readably: OK on the first call, no retry, no failure recorded', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_CLAUDE_CALLS: calls() })
+    expect(status).toBe(0)
+    expect(output).toContain('smoke verdict (parseVerdict of claude output): PASS')
+    expect(output).not.toContain('retrying once')
+    expect(output).not.toContain('primary passed on retry')
+    expect(existsSync(join(runnerTemp, 'fleet-review-engine-failure'))).toBe(false)
+    expect(callCount(), 'the common path must stay one call').toBe(1)
+  })
+
+  // MUTATION (per "audit gates by breaking them"): remove the retry and the
+  // flaky engine — which answers PASS on its second call — fails the step.
+  // Without this, the retry test above could pass on a script that never
+  // retried at all (e.g. one whose first call happened to read PASS).
+  it('MUTATION: without the retry, the same transient unreadable answer fails the step as engine-unreadable', () => {
+    const script = smokeStepScript()
+    const mutated = script.replace(/\n[ \t]*smoke_once "\$@"\n[ \t]*fi\n/, '\n            fi\n')
+    expect(mutated, 'the retry call was not found — this mutation is vacuous').not.toBe(script)
+    const { status, output } = runStep(mutated, 'flaky', { MOCK_CLAUDE_CALLS: calls() })
+    expect(status).toBe(1)
+    expect(output).toContain(`${FAILED_MARKER} engine-unreadable`)
+    expect(callCount()).toBe(1)
   })
 })
 
@@ -733,9 +848,8 @@ describe('rail: the smoke step tolerates a primary cannot-run via the other engi
   it('a kimi fallback that answers without a readable verdict fails the step, naming both engines — never a silent pass', () => {
     const { status, output } = runStep(smokeStepScript(), 'fail', { MOCK_KIMI_RUN_MODE: 'bad-verdict' }, { primary: 'claude', fallback: 'on' })
     expect(status).toBe(1)
-    expect(output).toContain(FAILED_MARKER)
-    expect(output).toContain('engine-unavailable')
-    expect(output).toContain('the kimi fallback ANSWERED without a readable verdict')
+    expect(output).toContain(`${FAILED_MARKER} engine-unreadable`)
+    expect(output).toContain('claude failed (engine-unavailable) and the kimi fallback engine ran and ANSWERED, twice')
     expect(output).toContain('I decline to answer health checks.')
   })
 
@@ -777,6 +891,29 @@ describe('rail: the smoke step tolerates a primary cannot-run via the other engi
     expect(output).toContain('engine-unavailable')
     expect(output).toContain('fake kimi simulated: provider unreachable')
     expect(output).not.toContain('engine=claude fallback')
+  })
+
+  // #1508, kimi side: an unreadable PRIMARY answer is retried once and then
+  // fails closed as engine-unreadable — it does NOT cross to the fallback,
+  // because the real review would be handed the same engine.
+  it('a kimi PRIMARY that answers unreadably fails as engine-unreadable and never crosses to claude', () => {
+    const { status, output } = runStep(smokeStepScript(), 'pass', { MOCK_KIMI_RUN_MODE: 'bad-verdict' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(1)
+    expect(output).toContain(`${FAILED_MARKER} engine-unreadable`)
+    expect(output).not.toContain('engine-unavailable')
+    expect(output).toContain('I decline to answer health checks.')
+    expect(output).toContain('retrying once (#1508)')
+    expect(output).not.toContain('smoke verdict (parseVerdict of claude fallback output)')
+    expect(readFileSync(join(runnerTemp, 'fleet-review-engine-failure'), 'utf8').trim()).toBe('engine-unreadable')
+  })
+
+  it('a healthy kimi PRIMARY with a claude fallback that answers unreadably DEGRADES as engine-unreadable — it does not fail the PR', () => {
+    const { status, output } = runStep(smokeStepScript(), 'prose', { MOCK_KIMI_RUN_MODE: 'pass' }, { primary: 'kimi', fallback: 'on' })
+    expect(status).toBe(0)
+    expect(output).toContain('fleet/review DEGRADED: the fallback review engine is unhealthy (engine-unreadable)')
+    expect(output).toContain('fallback=claude DEGRADED (engine-unreadable)')
+    expect(readFileSync(join(runnerTemp, 'fleet-review-fallback-degraded'), 'utf8').trim()).toBe('engine-unreadable')
+    expect(output).not.toContain(FAILED_MARKER)
   })
 
   it('a claude fallback that also cannot run fails the step, naming BOTH engines', () => {

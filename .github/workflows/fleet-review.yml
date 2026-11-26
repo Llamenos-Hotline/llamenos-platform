@@ -1513,12 +1513,16 @@ jobs:
       # fails, because a cannot-run primary is precisely the state the
       # fallback exists for and failing the smoke there would stop the review
       # that could still run (file header). A failure names WHY, on one line,
-      # before the job goes red, distinguishing three causes so an operator
-      # never has to open the log to tell "the account hit a usage limit"
-      # (`engine-quota`) from "the runner's engine login expired"
-      # (`engine-auth`) from everything else (`engine-unavailable` — a bad
-      # model id, a missing binary, or the engine running but never producing
-      # a valid verdict).
+      # before the job goes red, so an operator never has to open the log to
+      # tell "the account hit a usage limit" (`engine-quota`) from "the
+      # runner's engine login expired" (`engine-auth`) from "the model id is
+      # wrong" (`engine-misconfigured`) from "the engine could not be run at
+      # all" (`engine-unavailable` — a missing binary, a crash, a network
+      # error) from "the engine ran and answered, but its answer carried no
+      # readable verdict" (`engine-unreadable`, #1508 — retried once first,
+      # because it is transient in practice; see the THREE OUTCOMES block in
+      # the script). The last two used to share `engine-unavailable`, whose
+      # detail says "could not be run" — false for an engine that answered.
       - name: Smoke-test the review engine
         id: smoke
         if: steps.gate.outputs.outcome == 'run-engine'
@@ -1552,8 +1556,10 @@ jobs:
           rev_model=""
 
           # $1: engine-misconfigured | engine-quota | engine-auth |
-          # engine-unavailable | base-stale (the PR's base is too old to
-          # resolve the engines — not an engine fault). $2: the raw engine
+          # engine-unavailable | engine-unreadable (it ran and answered, the
+          # answer had no readable verdict — #1508) | base-stale (the PR's
+          # base is too old to resolve the engines — not an engine fault).
+          # $2: the raw engine
           # text to print for a
           # human, then always exits 1 — this function is the only way the
           # step fails, and it always fails. The class is also written where
@@ -1607,12 +1613,17 @@ jobs:
           # not just a well-formed-but-unknown one) is engine-misconfigured;
           # usage-limit language is engine-quota; 401/invalid-credential/
           # not-logged-in language is engine-auth; anything else the engine
-          # said is engine-unavailable.
+          # said is engine-unavailable. (`engine-unreadable` is never a
+          # classify() result: it is decided by parseVerdict over an answer,
+          # in smoke_once, not by matching error text.) The quota pattern
+          # also matches claude's own limit wording ("…limit reached",
+          # "you've hit your … limit"), so a usage-limit body maps to
+          # engine-quota even when it arrives on stdout with exit 0.
           classify() {
             local text="$1"
             if printf '%s' "$text" | grep -qiE "unrecognized_model|isn'?t described by this version'?s model catalog|issue with the selected model"; then
               echo "engine-misconfigured"
-            elif printf '%s' "$text" | grep -qiE 'quota|rate.?limit|usage.?limit|too many requests|\b429\b'; then
+            elif printf '%s' "$text" | grep -qiE 'quota|rate.?limit|usage.?limit|limit reached|hit your ([a-z-]+ )?limit|too many requests|\b429\b'; then
               echo "engine-quota"
             elif printf '%s' "$text" | grep -qiE '\b401\b|unauthorized|invalid.*(api.?key|token|credential)|not logged in|please (run|login|re-?authenticate)|authenticat(e|ion)? (fail|error|required)'; then
               echo "engine-auth"
@@ -1886,58 +1897,195 @@ jobs:
             kimi_model_suffix="--model $rev_model"
           fi
 
-          # kimi_verdict: extract the final assistant message from a kimi
-          # stream-json envelope (one JSON object per line; assistant text
-          # is the string `content` of the LAST `role:"assistant"` event —
-          # `decodeKimiOutput` in review.ts is the base-code twin of this
-          # extraction) and judge it with the base's own `parseVerdict`.
-          # jq, not a `bun -e` import of the decoder, for the version-
-          # boundary reason above: this step must be able to smoke-test the
-          # very PR that introduces the decoder. The extracted text is left
-          # in KIMI_SMOKE_TEXT for the caller's excerpt-on-failure path.
-          # $1: the raw kimi stdout. $2: the engine label for the verdict
-          # line. Exits 0 only on a parsed PASS.
-          kimi_verdict() {
-            KIMI_SMOKE_TEXT="$(printf '%s' "$1" | jq -rs '[.[] | select(type == "object" and .role == "assistant") | .content | select(type == "string")] | last // ""' 2>/dev/null)"
-            # Exported, not an assignment-prefix on printf: an env prefix on a
-            # pipeline's first command does NOT reach later commands (bun
-            # would see an undefined label).
-            export SMOKE_ENGINE_LABEL="$2"
-            printf '%s' "$KIMI_SMOKE_TEXT" | bun -e '
-              import { parseVerdict } from "./orchestrator/src/review.ts"
-              const text = await Bun.stdin.text()
-              console.log(text)
-              const verdict = parseVerdict(text)
-              console.log("smoke verdict (parseVerdict of " + process.env.SMOKE_ENGINE_LABEL + " output): " + verdict)
-              process.exit(verdict === "PASS" ? 0 : 1)
-            '
-          }
+          # ──────────────────────────────────────────────────────────────
+          # THREE OUTCOMES, never collapsed into one (#1508). Every engine
+          # call below goes through `smoke_engine`, which ends in exactly one
+          # of these, in `att_state`:
+          #
+          #   pass        the engine ran and parseVerdict read PASS from its
+          #               answer.
+          #   cannot-run  the engine could not be invoked (no binary, a stale
+          #               model id), it exited non-zero, or it exited 0 but
+          #               "answered" with an error body — usage limit, login,
+          #               model id — instead of an answer. `att_class` is
+          #               classify()'s name for it: engine-quota |
+          #               engine-auth | engine-misconfigured |
+          #               engine-unavailable.
+          #   unreadable  the engine ran, exited 0, and ANSWERED, but
+          #               parseVerdict read FAIL or UNREADABLE from the
+          #               answer. `att_class` is `engine-unreadable`. This is
+          #               NOT "could not be run": the engine is up, logged in
+          #               and answering, and a reader sent to check runner
+          #               health, quota or credentials finds nothing wrong —
+          #               which is exactly what #1508's reporter did, twice.
+          #
+          # An unreadable answer is retried ONCE, immediately, with the same
+          # invocation. In practice it is transient (the same PR passes on a
+          # later run with no code change), so one retry removes most of the
+          # blocking without weakening the gate: the retry has to EARN a
+          # parsed PASS too, and a second unreadable answer fails closed as
+          # `engine-unreadable`. Nothing here ever turns an unreadable answer
+          # into a pass. Only the unreadable outcome retries: a cannot-run is
+          # not transient on a seconds scale (a quota, a login, a model id, a
+          # missing binary), and its remedy is the OTHER engine, which the
+          # fallback arms below already provide. An unreadable primary does
+          # not cross to the fallback either — the real review would be
+          # handed the same engine, so the smoke must not be more tolerant
+          # than the gate it guards. The common path (one call, PASS) is
+          # untouched: the retry costs a call only on a run that would
+          # otherwise have failed.
+          #
+          # What is published where. The check's title and annotation carry
+          # only the token and its fixed detail sentence ("Name this run's
+          # outcome"); the retry warning below is fixed text plus the
+          # parseVerdict word. What the engine actually SAID goes to the job
+          # log only, as a scrubbed, capped excerpt (scrub_excerpt). The smoke
+          # prompt is the fixed 2 + 2 question above and the smoke never sees
+          # the diff, so its answer cannot quote diff content — but the scrub
+          # still applies, because the log is public and engine output is
+          # untrusted text.
+          # ──────────────────────────────────────────────────────────────
 
-          # claude_verdict: judge plain --print output with the base's
-          # parseVerdict — same function, same final line, same rule as every
-          # other arm. $1: the engine's stdout. $2: the engine label.
-          claude_verdict() {
-            export SMOKE_ENGINE_LABEL="$2"
-            printf '%s' "$1" | bun -e '
-              import { parseVerdict } from "./orchestrator/src/review.ts"
-              const text = await Bun.stdin.text()
-              console.log(text)
-              const verdict = parseVerdict(text)
-              console.log("smoke verdict (parseVerdict of " + process.env.SMOKE_ENGINE_LABEL + " output): " + verdict)
-              process.exit(verdict === "PASS" ? 0 : 1)
-            '
-          }
-
-          # Scrub+cap a model's prose for a one-line public log excerpt
-          # (shared by every ANSWERED-without-readable-verdict arm below):
+          # Scrub+cap a model's prose for a one-line public log excerpt:
           # newlines flattened, 300 characters, anything token-shaped
           # redacted — this text is the model's own words printed into a
           # public job log and must not become a way for engine output to
-          # carry a credential into one.
+          # carry a credential into one. Prints a placeholder for an empty
+          # answer, so "said nothing" is never an empty-looking line.
           scrub_excerpt() {
-            printf '%s' "$1" | tr -d '\000' | tr '\n\r\t' '   ' \
+            local e
+            e="$(printf '%s' "$1" | tr -d '\000' | tr '\n\r\t' '   ' \
               | sed -E 's#(sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9._-]{16,}|[A-Za-z0-9+/]{40,}={0,2})#[redacted]#g' \
-              | cut -c1-300
+              | cut -c1-300)"
+            printf '%s' "${e:-(no assistant text at all)}"
+          }
+
+          # judge_answer: the base's own `parseVerdict` (exact final line)
+          # over one answer. $1: the answer text. $2: the engine label.
+          # Called in THIS shell, never in `$(...)`, so the fail() below
+          # exits the step. Sets att_verdict (PASS | FAIL | UNREADABLE — the
+          # three values parseVerdict returns) and att_verdict_out (the text
+          # plus the "smoke verdict" line, for the log). Three distinct exit
+          # codes, so a bun that could not even import parseVerdict is never
+          # mistaken for an engine that answered FAIL.
+          judge_answer() {
+            export SMOKE_ENGINE_LABEL="$2"
+            att_verdict_out="$(printf '%s' "$1" | bun -e '
+              import { parseVerdict } from "./orchestrator/src/review.ts"
+              const text = await Bun.stdin.text()
+              console.log(text)
+              const verdict = parseVerdict(text)
+              console.log("smoke verdict (parseVerdict of " + process.env.SMOKE_ENGINE_LABEL + " output): " + verdict)
+              process.exit(verdict === "PASS" ? 0 : verdict === "FAIL" ? 3 : 4)
+            ' 2>&1)"
+            local judge_status=$?
+            case "$judge_status" in
+              0) att_verdict="PASS" ;;
+              3) att_verdict="FAIL" ;;
+              4) att_verdict="UNREADABLE" ;;
+              *) fail "engine-misconfigured" "the smoke step could not run the base checkout's parseVerdict (bun exit $judge_status) — the gate's own code failed, not the engine:"$'\n'"$att_verdict_out" ;;
+            esac
+          }
+
+          # smoke_once: ONE smoke call, classified into att_state (see the
+          # block comment above). $1: engine (claude | kimi). $2: its binary.
+          # $3: for claude the --model id; for kimi the model suffix (passed
+          # UNQUOTED on purpose — see kimi_model_suffix). $4: the label for
+          # log lines. Also sets att_class, att_out, att_err, att_exit and
+          # att_text (the assistant text an excerpt is cut from).
+          #
+          # kimi's answer is the string `content` of the LAST
+          # `role:"assistant"` event in its stream-json envelope
+          # (`decodeKimiOutput` in review.ts is the base-code twin of this
+          # extraction). jq, not a `bun -e` import of the decoder, for the
+          # version-boundary reason above: this step must be able to
+          # smoke-test the very PR that introduces the decoder.
+          smoke_once() {
+            att_state=""; att_class=""; att_out=""; att_err=""; att_exit=0
+            att_text=""; att_verdict=""; att_verdict_out=""
+            if [ "$1" = "kimi" ] && [ -n "$kimi_model_stale" ]; then
+              att_state="cannot-run"; att_class="engine-misconfigured"; att_exit=1
+              att_err="$kimi_model_stale"
+              return 0
+            fi
+            if ! command -v "$2" >/dev/null 2>&1; then
+              att_state="cannot-run"; att_class="engine-unavailable"; att_exit=1
+              att_err="the $2 CLI is not on PATH on this runner"
+              return 0
+            fi
+            if [ "$1" = "kimi" ]; then
+              att_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $3 --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
+              att_exit=$?
+              att_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
+            else
+              att_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
+                | env HOME="$rev_home" "$2" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$3" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
+              att_exit=$?
+              att_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
+            fi
+            if [ "$att_exit" -ne 0 ]; then
+              att_state="cannot-run"
+              att_class="$(classify "$att_out"$'\n'"$att_err")"
+              return 0
+            fi
+            if [ "$1" = "kimi" ]; then
+              att_text="$(printf '%s' "$att_out" | jq -rs '[.[] | select(type == "object" and .role == "assistant") | .content | select(type == "string")] | last // ""' 2>/dev/null)"
+            else
+              att_text="$att_out"
+            fi
+            judge_answer "$att_text" "$4"
+            if [ "$att_verdict" = "PASS" ]; then
+              att_state="pass"
+              return 0
+            fi
+            # Exit 0 is not proof of an answer: an engine can print a usage
+            # limit, a login prompt or a model-id refusal on stdout and exit
+            # 0. Those are cannot-runs wearing an answer's clothes, and only
+            # a POSITIVE match on that language moves the run there (so a
+            # usage-limit body maps to engine-quota and takes the fallback
+            # arm like any other quota). Everything else is an answer the
+            # pipeline could not read.
+            local answered_class
+            answered_class="$(classify "$att_out"$'\n'"$att_err")"
+            case "$answered_class" in
+              engine-quota|engine-auth|engine-misconfigured)
+                att_state="cannot-run"; att_class="$answered_class" ;;
+              *)
+                att_state="unreadable"; att_class="engine-unreadable" ;;
+            esac
+          }
+
+          # smoke_engine: smoke_once, retried ONCE on an unreadable answer
+          # (see the block comment above). Same arguments. Additionally sets
+          # att_retried (empty, or what attempt 1 returned) and att_first
+          # (attempt 1's log excerpt), so a pass on retry is reported, never
+          # silent, and a second failure names both answers.
+          smoke_engine() {
+            att_retried=""; att_first=""
+            smoke_once "$@"
+            if [ "$att_state" = "unreadable" ]; then
+              att_retried="$att_verdict"
+              att_first="parseVerdict read $att_verdict; first 300 chars of what it said: $(scrub_excerpt "$att_text")"
+              printf '%s\n' "$att_verdict_out"
+              echo "::warning::fleet/review: the $4 engine ran and ANSWERED the smoke test, but parseVerdict read $att_retried from its answer, not PASS (engine-unreadable, not an outage) — retrying once (#1508)"
+              echo "smoke attempt 1 of 2 ($4): engine-unreadable — $att_first"
+              smoke_once "$@"
+            fi
+          }
+
+          # The fail()/degraded() detail for an engine that answered twice
+          # without a readable verdict. $1: the engine label.
+          unreadable_detail() {
+            printf '%s' "the $1 engine ran and ANSWERED, twice, and parseVerdict could not read a PASS from either answer — this is engine-unreadable, NOT 'could not be run': the engine is up, logged in and answering, so the defect is in what it answered or in the parser. Attempt 1: $att_first. Attempt 2: parseVerdict read $att_verdict; first 300 chars of what it said: $(scrub_excerpt "$att_text")"
+          }
+
+          # Appended to the OK line when the primary needed its retry, so a
+          # pass that took two answers is on the record (rule V: a defence
+          # that fires must be visible).
+          primary_retry_note() {
+            if [ -n "$att_retried" ]; then
+              printf '; primary passed on retry — attempt 1 was engine-unreadable (%s)' "$att_retried"
+            fi
           }
 
           # ──────────────────────────────────────────────────────────────
@@ -1962,33 +2110,22 @@ jobs:
             # containment difference"). The read-only agent profile — not
             # HOME isolation — is what bounds the kimi reviewer's tool set.
             #
-            # Two CANNOT-RUN pre-flights fold into the SAME failure handling
-            # as the invocation itself, so all three take the fallback arm:
-            # a configured model id kimi's own config does not define (named
-            # engine-misconfigured — a provider rename, never an outage), and
-            # a missing binary (the file header's "a runner without kimi
-            # degrades to the claude-only gate" — a cannot-run like any
-            # other, which used to fail this step OUTRIGHT before the primary
-            # was even attempted, contradicting that header).
-            if [ -n "$kimi_model_stale" ]; then
-              run_status=1
-              run_out=""
-              run_err="$kimi_model_stale"
-              engine_class="engine-misconfigured"
-            elif ! command -v "$rev_binary" >/dev/null 2>&1; then
-              run_status=1
-              run_out=""
-              run_err="the $rev_binary CLI is not on PATH on this runner"
-              engine_class="engine-unavailable"
-            else
-              run_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
-              run_status=$?
-              run_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
-              if [ "$run_status" -ne 0 ]; then
-                engine_class="$(classify "$run_out"$'\n'"$run_err")"
-              fi
+            # Two CANNOT-RUN pre-flights live in smoke_once and fold into
+            # the SAME failure handling as the invocation itself, so all
+            # three take the fallback arm: a configured model id kimi's own
+            # config does not define (engine-misconfigured — a provider
+            # rename, never an outage), and a missing binary (the file
+            # header's "a runner without kimi degrades to the claude-only
+            # gate").
+            smoke_engine kimi "$rev_binary" "$kimi_model_suffix" "kimi"
+            if [ "$att_state" = "unreadable" ]; then
+              printf '%s\n' "$att_verdict_out"
+              fail "engine-unreadable" "$(unreadable_detail kimi)"
             fi
-            if [ "$run_status" -ne 0 ]; then
+            if [ "$att_state" = "cannot-run" ]; then
+              engine_class="$att_class"
+              run_out="$att_out"
+              run_err="$att_err"
               # CLAUDE FALLBACK TOLERANCE. A kimi failure in the CANNOT-RUN
               # family is exactly the state the fallback exists for (file
               # header): failing the smoke on a kimi outage would stop the
@@ -2010,41 +2147,33 @@ jobs:
               if [ "$engine_class" != "engine-auth" ] \
                   && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
                   && command -v "$fb_binary" >/dev/null 2>&1; then
-                fb_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
-                  | env HOME="$rev_home" "$fb_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$fb_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
-                fb_status=$?
-                fb_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
-                if [ "$fb_status" -ne 0 ]; then
-                  fail "engine-unavailable" "kimi failed ($engine_class) and the $fb_binary fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
-                fi
-                verdict_out="$(claude_verdict "$fb_out" "$fb_binary fallback")"
-                verdict_status=$?
-                if [ "$verdict_status" -ne 0 ]; then
-                  excerpt="$(scrub_excerpt "$fb_out")"
-                  fail "engine-unavailable" "kimi failed ($engine_class) and the $fb_binary fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
-                fi
-                printf '%s\n' "$verdict_out"
-                echo "review engine smoke test OK (engine=$fb_binary fallback; kimi unavailable: $engine_class)"
-                # The primary verdict check below must not run: kimi's output
-                # is its failure text, and the step has already concluded.
-                exit 0
+                smoke_engine claude "$fb_binary" "$fb_model" "$fb_binary fallback"
+                case "$att_state" in
+                  pass)
+                    printf '%s\n' "$att_verdict_out"
+                    echo "review engine smoke test OK (engine=$fb_binary fallback; kimi unavailable: $engine_class)"
+                    # The primary verdict check below must not run: kimi's
+                    # output is its failure text, and the step has already
+                    # concluded.
+                    exit 0
+                    ;;
+                  unreadable)
+                    printf '%s\n' "$att_verdict_out"
+                    fail "engine-unreadable" "kimi failed ($engine_class) and $(unreadable_detail "$fb_binary fallback")"
+                    ;;
+                  *)
+                    # Both engines cannot run: classed by the FALLBACK's own
+                    # failure, exactly as review.ts classes the real review's
+                    # both-failed run — the engine that was tried last is the
+                    # one whose remedy unblocks the gate.
+                    fail "$att_class" "kimi failed ($engine_class) and the $fb_binary fallback also failed ($att_class, exit $att_exit):"$'\n'"$att_out"$'\n'"$att_err"
+                    ;;
+                esac
               fi
               fail "$engine_class" "$run_out"$'\n'"$run_err"
             fi
-
-            verdict_out="$(kimi_verdict "$run_out" "kimi")"
-            verdict_status=$?
-            if [ "$verdict_status" -ne 0 ]; then
-              # Partial #1508, kimi arm: name what the engine ACTUALLY said,
-              # on the line directly under the headline — the engine ran and
-              # answered, and `parseVerdict` could not read a verdict out of
-              # the answer. That is not "could not be run", and reporting it
-              # as one sends a reader to check runner health for a reviewer
-              # that answered perfectly well.
-              excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
-              fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
-            fi
-            printf '%s\n' "$verdict_out"
+            printf '%s\n' "$att_verdict_out"
+            primary_note="$(primary_retry_note)"
             # BOTH-ENGINE SMOKE (#1767 ask 3): the primary answering says
             # NOTHING about the fallback's health — the fallback spent weeks
             # broken (handed kimi's empty model as a literal `--model ""`)
@@ -2058,120 +2187,83 @@ jobs:
             fb_health="off"
             if [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ]; then
               fb_health="healthy"
-              if ! command -v "$fb_binary" >/dev/null 2>&1; then
-                degraded "engine-unavailable" "the $fb_binary CLI is not on PATH on this runner — there is NO fallback until it is installed"
-              else
-                fb_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
-                  | env HOME="$rev_home" "$fb_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$fb_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
-                fb_status=$?
-                fb_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
-                if [ "$fb_status" -ne 0 ]; then
-                  degraded "$(classify "$fb_out"$'\n'"$fb_err")" "the $fb_binary fallback failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
-                else
-                  fb_verdict_out="$(claude_verdict "$fb_out" "$fb_binary fallback")"
-                  fb_verdict_status=$?
-                  if [ "$fb_verdict_status" -ne 0 ]; then
-                    excerpt="$(scrub_excerpt "$fb_out")"
-                    printf '%s\n' "$fb_verdict_out"
-                    degraded "engine-unavailable" "the $fb_binary fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"
-                  else
-                    printf '%s\n' "$fb_verdict_out"
-                  fi
-                fi
-              fi
+              smoke_engine claude "$fb_binary" "$fb_model" "$fb_binary fallback"
+              case "$att_state" in
+                pass) printf '%s\n' "$att_verdict_out" ;;
+                unreadable)
+                  printf '%s\n' "$att_verdict_out"
+                  degraded "engine-unreadable" "$(unreadable_detail "$fb_binary fallback")"
+                  ;;
+                *) degraded "$att_class" "the $fb_binary fallback failed (exit $att_exit) — there is NO working fallback until it is fixed:"$'\n'"$att_out"$'\n'"$att_err" ;;
+              esac
             fi
-            echo "review engine smoke test OK (engine=kimi model=$kimi_model_disp; fallback=$fb_binary $fb_health)"
+            echo "review engine smoke test OK (engine=kimi model=$kimi_model_disp; fallback=$fb_binary $fb_health$primary_note)"
             exit 0
           fi
 
           # ──────────────────────────────────────────────────────────────
           # PRIMARY: claude (FLEET_REVIEW_PRIMARY=claude, or the resolved
           # engine during the bootstrap window — see the comment on the
-          # branch above).
+          # branch above). A missing claude binary is a cannot-run like any
+          # other (smoke_once's pre-flight), not a step failure before the
+          # primary is even attempted.
           # ──────────────────────────────────────────────────────────────
-          # A missing claude binary is a cannot-run like any other (the kimi
-          # arm's mirror — see its pre-flight comment), not a step failure
-          # before the primary is even attempted.
-          if ! command -v "$rev_binary" >/dev/null 2>&1; then
-            run_status=1
-            run_out=""
-            run_err="the $rev_binary CLI is not on PATH on this runner"
-            engine_class="engine-unavailable"
-          else
-            run_out="$(cd "$root" && printf '%s\n' "$smoke_prompt" \
-              | env HOME="$rev_home" "$rev_binary" --print --permission-mode plan --strict-mcp-config --tools "$rev_tools" --model "$rev_model" --max-turns 1 2>"$RUNNER_TEMP/claude-run-stderr.log")"
-            run_status=$?
-            run_err="$(cat "$RUNNER_TEMP/claude-run-stderr.log" 2>/dev/null || true)"
-            if [ "$run_status" -ne 0 ]; then
-              engine_class="$(classify "$run_out"$'\n'"$run_err")"
-            fi
+          smoke_engine claude "$rev_binary" "$rev_model" "claude"
+          if [ "$att_state" = "unreadable" ]; then
+            printf '%s\n' "$att_verdict_out"
+            fail "engine-unreadable" "$(unreadable_detail claude)"
           fi
-          if [ "$run_status" -ne 0 ]; then
-            # KIMI FALLBACK TOLERANCE — the mirror of the claude arm above:
-            # a claude failure in the CANNOT-RUN family (quota, overload,
-            # timeout, crash, a model-id rejection — the measured 2026-10-04
-            # failure that put kimi first) re-runs the SAME health question
-            # through the kimi fallback before the step fails, when and only
-            # when the fallback is not disabled and a kimi binary is on
-            # PATH. `engine-auth` NEVER tolerates, either direction.
+          if [ "$att_state" = "cannot-run" ]; then
+            engine_class="$att_class"
+            run_out="$att_out"
+            run_err="$att_err"
+            # KIMI FALLBACK TOLERANCE — the mirror of the kimi-primary arm
+            # above: a claude failure in the CANNOT-RUN family (quota,
+            # overload, timeout, crash, a model-id rejection — the measured
+            # 2026-10-04 failure that put kimi first) re-runs the SAME
+            # health question through the kimi fallback before the step
+            # fails, when and only when the fallback is not disabled and a
+            # kimi binary is on PATH. `engine-auth` NEVER tolerates, either
+            # direction.
             if [ "$engine_class" != "engine-auth" ] \
                 && [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ] \
                 && command -v "$fb_binary" >/dev/null 2>&1; then
               if [ ! -f "$fallback_agent" ]; then
                 fail "engine-misconfigured" "the kimi fallback is needed (claude failed: $engine_class) but the read-only agent profile $fallback_agent is missing from this checkout — refusing to run a fallback reviewer with its full default tool set (shell included)"
               fi
-              # A configured kimi model id kimi's own config does not define
-              # is a cannot-run named engine-misconfigured (a provider
-              # rename, never an outage — see the pre-flight above).
-              if [ -n "$kimi_model_stale" ]; then
-                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (engine-misconfigured): $kimi_model_stale"
-              fi
               # The fallback runs under the RUNNER'S OWN HOME, NOT the
               # gate-owned claude HOME built above: kimi authenticates from
               # its own login state under its own config directory, which the
               # gate-owned HOME does not provision (file header, "ONE
               # containment difference"). The read-only agent profile — not
-              # HOME isolation — is what bounds the fallback's tool set.
-              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $fb_kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
-              fb_status=$?
-              fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
-              if [ "$fb_status" -ne 0 ]; then
-                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback also failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
-              fi
-              verdict_out="$(kimi_verdict "$fb_out" "$fb_binary fallback")"
-              verdict_status=$?
-              if [ "$verdict_status" -ne 0 ]; then
-                excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
-                fail "engine-unavailable" "claude failed ($engine_class) and the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
-              fi
-              printf '%s\n' "$verdict_out"
-              echo "review engine smoke test OK (engine=$fb_binary fallback; claude unavailable: $engine_class)"
-              # The claude verdict check below must not run: claude's output
-              # is its failure text, and the step has already concluded.
-              exit 0
+              # HOME isolation — is what bounds the fallback's tool set. A
+              # configured kimi model id kimi's own config does not define is
+              # smoke_once's engine-misconfigured pre-flight.
+              smoke_engine kimi "$fb_binary" "$fb_kimi_model_suffix" "$fb_binary fallback"
+              case "$att_state" in
+                pass)
+                  printf '%s\n' "$att_verdict_out"
+                  echo "review engine smoke test OK (engine=$fb_binary fallback; claude unavailable: $engine_class)"
+                  # The claude verdict check below must not run: claude's
+                  # output is its failure text, and the step has already
+                  # concluded.
+                  exit 0
+                  ;;
+                unreadable)
+                  printf '%s\n' "$att_verdict_out"
+                  fail "engine-unreadable" "claude failed ($engine_class) and $(unreadable_detail "$fb_binary fallback")"
+                  ;;
+                *)
+                  # Classed by the fallback's own failure — see the mirror
+                  # arm above.
+                  fail "$att_class" "claude failed ($engine_class) and the $fb_binary fallback also failed ($att_class, exit $att_exit):"$'\n'"$att_out"$'\n'"$att_err"
+                  ;;
+              esac
             fi
             fail "$engine_class" "$run_out"$'\n'"$run_err"
           fi
-
-          verdict_out="$(claude_verdict "$run_out" "claude")"
-          verdict_status=$?
-          if [ "$verdict_status" -ne 0 ]; then
-            # Partial #1508: name what the engine ACTUALLY said, on the line
-            # directly under the headline. `engine-unavailable`'s own detail
-            # string is "the review engine could not be run", which is false
-            # on this arm — the engine ran and answered, and `parseVerdict`
-            # could not read a verdict out of the answer. That one-line
-            # excerpt is what would have named #1511's prompt-injection
-            # refusal on the FIRST run instead of the third plus a human.
-            # Splitting the token itself (`engine-unreadable`, and a retry)
-            # is the rest of #1508 and is NOT done here: a new member of the
-            # NO-VERDICT taxonomy has to travel through `classifyEngineFailure`,
-            # the outcome titles and the check-name mapping, which is a
-            # bigger change than this one belongs in.
-            excerpt="$(scrub_excerpt "$run_out")"
-            fail "engine-unavailable" "the engine ANSWERED and parseVerdict could not read a verdict from it (this is NOT 'could not be run'); first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"$'\n'"$verdict_out"
-          fi
-          printf '%s\n' "$verdict_out"
+          printf '%s\n' "$att_verdict_out"
+          primary_note="$(primary_retry_note)"
           # BOTH-ENGINE SMOKE, kimi side — the mirror of the kimi-primary
           # arm's fallback health check (see it for the full #1767 rationale:
           # a healthy primary proves nothing about the fallback, so the
@@ -2180,32 +2272,21 @@ jobs:
           fb_health="off"
           if [ "${FLEET_REVIEW_FALLBACK:-on}" != "off" ]; then
             fb_health="healthy"
-            if ! command -v "$fb_binary" >/dev/null 2>&1; then
-              degraded "engine-unavailable" "the $fb_binary CLI is not on PATH on this runner — there is NO fallback until it is installed"
-            elif [ ! -f "$fallback_agent" ]; then
+            if [ ! -f "$fallback_agent" ]; then
               degraded "engine-misconfigured" "the read-only agent profile $fallback_agent is missing from this checkout — refusing to smoke the kimi fallback with its full default tool set (shell included)"
-            elif [ -n "$kimi_model_stale" ]; then
-              degraded "engine-misconfigured" "$kimi_model_stale"
             else
-              fb_out="$(cd "$root" && kimi --output-format stream-json -p "$smoke_prompt" $fb_kimi_model_suffix --agent-file "$fallback_agent" 2>"$RUNNER_TEMP/kimi-run-stderr.log")"
-              fb_status=$?
-              fb_err="$(cat "$RUNNER_TEMP/kimi-run-stderr.log" 2>/dev/null || true)"
-              if [ "$fb_status" -ne 0 ]; then
-                degraded "$(classify "$fb_out"$'\n'"$fb_err")" "the kimi fallback failed (exit $fb_status):"$'\n'"$fb_out"$'\n'"$fb_err"
-              else
-                fb_verdict_out="$(kimi_verdict "$fb_out" "kimi fallback")"
-                fb_verdict_status=$?
-                if [ "$fb_verdict_status" -ne 0 ]; then
-                  excerpt="$(scrub_excerpt "$KIMI_SMOKE_TEXT")"
-                  printf '%s\n' "$fb_verdict_out"
-                  degraded "engine-unavailable" "the kimi fallback ANSWERED without a readable verdict; first 300 chars of what it said: ${excerpt:-(no assistant text at all)}"
-                else
-                  printf '%s\n' "$fb_verdict_out"
-                fi
-              fi
+              smoke_engine kimi "$fb_binary" "$fb_kimi_model_suffix" "$fb_binary fallback"
+              case "$att_state" in
+                pass) printf '%s\n' "$att_verdict_out" ;;
+                unreadable)
+                  printf '%s\n' "$att_verdict_out"
+                  degraded "engine-unreadable" "$(unreadable_detail "$fb_binary fallback")"
+                  ;;
+                *) degraded "$att_class" "the $fb_binary fallback failed (exit $att_exit) — there is NO working fallback until it is fixed:"$'\n'"$att_out"$'\n'"$att_err" ;;
+              esac
             fi
           fi
-          echo "review engine smoke test OK (engine=$rev_binary model=$rev_model; fallback=$fb_binary $fb_health)"
+          echo "review engine smoke test OK (engine=$rev_binary model=$rev_model; fallback=$fb_binary $fb_health$primary_note)"
 
 
       # Bootstrap guard. The gate runs from the BASE checkout by design, so
@@ -2653,6 +2734,7 @@ jobs:
                       failure:engine-auth) token="NO-VERDICT:engine-auth" ;;
                       failure:engine-misconfigured) token="NO-VERDICT:engine-misconfigured" ;;
                       failure:engine-unavailable) token="NO-VERDICT:engine-unavailable" ;;
+                      failure:engine-unreadable) token="NO-VERDICT:engine-unreadable" ;;
                       *) token="NO-VERDICT:did-not-run" ;;
                     esac
                     ;;
@@ -2693,6 +2775,7 @@ jobs:
             NO-VERDICT:engine-auth) detail="the review engine is not logged in on the runner" ;;
             NO-VERDICT:engine-misconfigured) detail="the review engine or its model id is misconfigured" ;;
             NO-VERDICT:engine-unavailable) detail="the review engine could not be run" ;;
+            NO-VERDICT:engine-unreadable) detail="the review engine ran and answered the health check, twice, but parseVerdict could not read a verdict from its answer; the engine is up — the log has an excerpt of what it said (#1508)" ;;
             NO-VERDICT:base-stale) detail="the PR's base is too old to run the review engine steps (the engine and its model id are fine); rebase onto main and re-request the review" ;;
             NO-VERDICT:unknown-lane) detail="the branch names a fleet lane that does not exist" ;;
             NO-VERDICT:review-disabled) detail="FLEET_REVIEW_API_KEY is not configured on this repository" ;;
@@ -3012,6 +3095,26 @@ jobs:
                     printf '### `fleet/review` — **NO VERDICT**: the review engine could not run (`%s`)\n\n' "$ENGINE_FAILURE"
                     printf 'This red check is the fleet'\''s own review infrastructure failing closed, **not a reviewer rejecting this diff** — no reviewer read this code. Do not change the code on review grounds. When the engine is healthy again, request a review (or re-run this workflow) to have the diff actually judged.\n\n'
                     printf 'The check log names the failing engine, its model, and why it failed.\n'
+                  } > "$RUNNER_TEMP/no-verdict-comment.md"
+                  post_comment "$RUNNER_TEMP/no-verdict-comment.md" "$nv_marker"
+                  echo "posted: no-verdict notice ($ENGINE_FAILURE)"
+                fi
+                ;;
+              engine-unreadable)
+                # #1508: NOT an outage either — the engine ran and answered,
+                # twice, and the gate could not read a verdict from what it
+                # said. Saying "could not run" here is what sent readers to
+                # check quota, credentials and the runner for an engine that
+                # was healthy, so it gets its own notice.
+                nv_marker="<!-- fleet-review:no-verdict:$ENGINE_FAILURE -->"
+                if grep -qF -- "$nv_marker" "$RUNNER_TEMP/existing.txt"; then
+                  echo "already posted: no-verdict notice ($ENGINE_FAILURE)"
+                else
+                  {
+                    printf '%s\n\n' "$nv_marker"
+                    printf '### `fleet/review` — **NO VERDICT**: the review engine answered, but its answer was unreadable (`engine-unreadable`)\n\n'
+                    printf 'This red check is the fleet'\''s own review infrastructure failing closed, **not a reviewer rejecting this diff** — no reviewer read this code. The engine is up and answering: its health-check answer carried no verdict the gate could parse, on two attempts. Do not change the code on review grounds, and there is no outage to wait out. Request a review (or re-run this workflow); if it repeats, the defect is in the engine'\''s output or the gate'\''s parser.\n\n'
+                    printf 'The check log quotes the start of what the engine said on each attempt.\n'
                   } > "$RUNNER_TEMP/no-verdict-comment.md"
                   post_comment "$RUNNER_TEMP/no-verdict-comment.md" "$nv_marker"
                   echo "posted: no-verdict notice ($ENGINE_FAILURE)"
