@@ -24,6 +24,19 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_BASE="${REPO_ROOT}/deploy/docker/docker-compose.yml"
 COMPOSE_DEV="${REPO_ROOT}/deploy/docker/docker-compose.dev.yml"
 
+# Its OWN compose project. Merged with docker-compose.dev.yml the stack would
+# otherwise take that file's `name: llamenos-dev` — the shared dev stack — so it
+# ran on the dev Postgres volume, and the teardown's `down -v` deleted every
+# checkout's database with it. It still publishes the dev ports, so the dev stack
+# must be stopped first; that is checked below rather than discovered as a bind error.
+PROJECT="llamenos-integration-full"
+COMPOSE=(docker compose -p "${PROJECT}" -f "${COMPOSE_BASE}" -f "${COMPOSE_DEV}")
+# Not the dev cluster: `worktree-db.ts secure-shared` must never convert this one,
+# whose app owns its database as the single `llamenos` role (#2705).
+export LLAMENOS_PG_CLUSTER_NAME="${PROJECT}"
+# And so its signal-notifier shares the app's database, as in production.
+export SIGNAL_NOTIFIER_DATABASE=llamenos
+
 TEARDOWN=true
 RUN_TESTS=true
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
@@ -55,10 +68,7 @@ err() { echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2; }
 teardown() {
   if [[ "${TEARDOWN}" == "true" ]]; then
     log "Tearing down services..."
-    docker compose \
-      -f "${COMPOSE_BASE}" \
-      -f "${COMPOSE_DEV}" \
-      down -v --remove-orphans || true
+    "${COMPOSE[@]}" down -v --remove-orphans || true
   else
     log "Skipping teardown (--no-teardown). Services still running."
   fi
@@ -73,10 +83,15 @@ cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/lib/server-hash-keys.sh"
 ensure_hash_key_files "${REPO_ROOT}/deploy/docker/secrets" 0444
 
+if [[ -n "$(docker compose -p llamenos-dev ps -q 2>/dev/null)" ]]; then
+  err "the dev stack (compose project llamenos-dev) is running and holds the ports this stack"
+  err "publishes. Stop it first — 'docker compose -f deploy/docker/docker-compose.dev.yml stop' —"
+  err "never 'down -v', which deletes every checkout's database."
+  exit 1
+fi
+
 log "Starting ALL services (signal + telephony + inference profiles)..."
-docker compose \
-  -f "${COMPOSE_BASE}" \
-  -f "${COMPOSE_DEV}" \
+"${COMPOSE[@]}" \
   --profile signal \
   --profile telephony \
   --profile inference \
@@ -85,9 +100,9 @@ docker compose \
 log "All services healthy."
 
 if [[ "${RUN_TESTS}" == "true" ]]; then
-  # The server under test here is the containerised app, which always uses the
-  # shared `llamenos` database — point TestDB at that, not at this worktree's own.
-    source "${SCRIPT_DIR}/lib/worktree-db.sh"
+  # The server under test here is the containerised app, which uses its own
+  # stack's `llamenos` database — point TestDB at that, not at this worktree's own.
+  source "${SCRIPT_DIR}/lib/worktree-db.sh"
   worktree_db_export --shared
 
   log "Running backend BDD tests..."

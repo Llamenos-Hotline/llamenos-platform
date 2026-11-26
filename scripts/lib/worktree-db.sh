@@ -18,6 +18,12 @@
 #        unset     the primary checkout only: the shared `llamenos` database, with a
 #                  warning every time — a checkout mid-task is never switched silently
 #
+# Before resolving, the dev cluster is secured (`worktree-db.ts secure-shared`, #2705):
+# the well-known role `llamenos` — PG_PASSWORD, the one every worktree and every
+# hand-typed URL uses — is READ-ONLY on the shared database, enforced by Postgres
+# itself. Only the primary checkout resolves the shared database as `llamenos_owner`,
+# with the password from its git dir (never .env, which every worktree symlinks).
+#
 # Whatever the URL came from — environment, .env, --shared, the resolver — it passes
 # `worktree-db.ts check-url` before it is exported: a linked worktree that names the
 # shared dev database is refused (a fleet worker's, unconditionally). A refusal is
@@ -26,7 +32,8 @@
 # In a manual shell (e.g. running `bunx playwright test` directly), inside the worktree:
 #   source scripts/lib/worktree-db.sh && worktree_db_export
 #
-# DATABASE_URL carries PG_PASSWORD. Never echo it — log worktree_db_redact output only.
+# DATABASE_URL carries PG_PASSWORD or the owner secret. Never echo it — log
+# worktree_db_redact output only.
 # Works when sourced from bash or zsh.
 
 _worktree_db_log() { printf '[worktree-db] %s\n' "$*" >&2; }
@@ -102,6 +109,20 @@ worktree_db_export() {
     return 1
   fi
 
+  # Secure the dev cluster BEFORE resolving: the resolver hands the primary checkout
+  # the owner role only once the owner secret exists, which the first conversion
+  # writes. A Postgres that is down or rejects PG_PASSWORD (exit 3) is reported and
+  # left to the caller's own connection to fail on; anything else is fatal.
+  if [[ "$flag" != "--shared" ]]; then
+    local src=0
+    bun "$root/scripts/worktree-db.ts" secure-shared --quiet || src=$?
+    if [[ $src -eq 3 ]]; then
+      _worktree_db_log "WARNING: could not check the shared database's boundary (see above)"
+    elif [[ $src -ne 0 ]]; then
+      return 1
+    fi
+  fi
+
   line="$(bun "$root/scripts/worktree-db.ts" resolve)" || return 1
   local how
   read -r mode db user host port how <<<"$line"
@@ -112,25 +133,42 @@ worktree_db_export() {
     bun "$root/scripts/worktree-db.ts" ensure || return 1
   fi
   if [[ "$flag" == "--shared" ]]; then
+    # The containerised app's database, in its own stack: that stack's one role.
     mode=shared
     db=llamenos
+    user=llamenos
   fi
 
   case "$mode" in
     isolated)
       _worktree_db_log "database: $db (this worktree's own)" ;;
     shared)
-      _worktree_db_log "database: llamenos (SHARED with every worktree that has not opted in)" ;;
+      if [[ "$user" == "llamenos_owner" ]]; then
+        _worktree_db_log "database: llamenos (SHARED; this primary checkout writes it as llamenos_owner)"
+      else
+        _worktree_db_log "database: llamenos (SHARED, as role $user — READ-ONLY on a secured dev cluster, #2705)"
+      fi ;;
     *)
-      _worktree_db_log "WARNING: this worktree has not chosen a database, so it is on the SHARED 'llamenos'"
-      _worktree_db_log "         database, which every other worktree's test-reset wipes. Nothing was switched."
+      _worktree_db_log "WARNING: this primary checkout has not chosen a database, so it is on the SHARED"
+      _worktree_db_log "         'llamenos' database (as $user). Nothing was switched."
       _worktree_db_log "         Use its own:  bun scripts/worktree-db.ts use-isolated"
       _worktree_db_log "         Stay shared:  bun scripts/worktree-db.ts use-shared   (silences this warning)"
       ;;
   esac
 
-  password="${PG_PASSWORD:-$(_worktree_db_dotenv PG_PASSWORD "$root/.env")}"
-  password="$(_worktree_db_urlencode "${password:-dev}")"
+  if [[ "$user" == "llamenos_owner" ]]; then
+    # Same file as ownerSecretPath() in worktree-db.ts: the primary's git dir.
+    local secret_file
+    secret_file="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/llamenos-dev-db-owner"
+    password="$(tr -d '[:space:]' <"$secret_file")" || {
+      _worktree_db_log "ERROR: cannot read the owner credential ($secret_file)"
+      return 1
+    }
+  else
+    password="${PG_PASSWORD:-$(_worktree_db_dotenv PG_PASSWORD "$root/.env")}"
+    password="${password:-dev}"
+  fi
+  password="$(_worktree_db_urlencode "$password")"
   local resolved="postgresql://${user}:${password}@${host}:${port}/${db}"
   DATABASE_URL="$resolved" worktree_db_check_allowed DATABASE_URL || return 1
   export DATABASE_URL="$resolved"
