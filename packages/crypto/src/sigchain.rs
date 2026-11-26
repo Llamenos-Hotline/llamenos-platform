@@ -594,6 +594,19 @@ pub fn verify_sigchain(links: &[SigchainLink]) -> Result<SigchainVerifiedState, 
                 let format = required_format(&payload, link.seq)?;
                 let pop = required_str(&payload, "pop", link.seq)?;
                 verify_device_pop(&user_pubkey, device, enc, format, pop)?;
+                // A device is added once. Re-adding an active or removed device
+                // would let any active device replay that device's old pop and
+                // overwrite its key; a key change is the device's own
+                // `device_kem`, and a removed device links again with new keys.
+                if named.0.contains_key(&device.to_ascii_lowercase()) {
+                    return Err(rejected(
+                        "chain_key_reused",
+                        format!(
+                            "device_add at seq {} names device {device}, already in this chain",
+                            link.seq
+                        ),
+                    ));
+                }
                 named.claim(device, device, link.seq)?;
                 named.claim(enc, device, link.seq)?;
                 if let Some(x25519) = str_field(&payload, "deviceEncryptionPubkey") {
@@ -1471,6 +1484,29 @@ mod tests {
         let fmt1 = with_field(&good, "format", 1.into());
         let err = verify_sigchain(&[g.clone(), next(&a, "a1", &g, &fmt1)]).unwrap_err();
         assert_eq!(err.code(), "unknown_format", "{err}");
+    }
+
+    #[test]
+    fn a_device_is_added_once() {
+        let a = fixed(1);
+        let b = fixed(2);
+        let g = genesis_of(&a, "a1");
+        let add = next(&a, "a1", &g, &device_add_payload(&b, "b1", &pk(&a)));
+        // Replaying B's own valid device_add (its pop included) is refused.
+        let again = next(&a, "a1", &add, &device_add_payload(&b, "b1", &pk(&a)));
+        let err = verify_sigchain(&[g.clone(), add.clone(), again]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
+        // So is re-adding a removed device.
+        let remove = next(
+            &a,
+            "a1",
+            &add,
+            &serde_json::json!({"type": "device_remove", "deviceId": "b1", "devicePubkey": pk(&b)})
+                .to_string(),
+        );
+        let readd = next(&a, "a1", &remove, &device_add_payload(&b, "b1", &pk(&a)));
+        let err = verify_sigchain(&[g, add, remove, readd]).unwrap_err();
+        assert_eq!(err.code(), "chain_key_reused", "{err}");
     }
 
     #[test]

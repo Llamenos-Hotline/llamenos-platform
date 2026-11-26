@@ -44,7 +44,7 @@ pub struct DeviceKeyState {
     /// chars) — the device's crypto_format 2 encryption key (wire spec D16).
     /// `None` for a pilot device that has not yet been given one
     /// ([`add_device_kem_key`]).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kem_pubkey_hex: Option<String>,
 }
 

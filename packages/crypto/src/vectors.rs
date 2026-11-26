@@ -27,6 +27,7 @@ use crate::shape::{self, Payload, Shape};
 const HPKE_WRAP_PATH: &str = "tests/fixtures/v2/hpke-wrap.json";
 const FIXTURE_DEVICES_PATH: &str = "tests/fixtures/v2/fixture-reader-devices.json";
 const SERVER_EVENT_PATH: &str = "tests/fixtures/v2/server-event.json";
+const DEVICE_BINDING_PATH: &str = "tests/fixtures/v2/device-binding.json";
 
 fn rng(label: &str) -> ChaCha20Rng {
     let mut seed = [0u8; 32];
@@ -437,6 +438,281 @@ pub(crate) fn generate_fixture_reader_devices() -> Value {
     })
 }
 
+// ── Device key binding (#2496; spec 2026-11-25-v2-device-linking-and-recovery §5–§6) ──
+
+fn binding_device(r: &mut ChaCha20Rng) -> crate::device_keys::DeviceSecrets {
+    crate::device_keys::DeviceSecrets {
+        signing_seed: bytes32(r),
+        encryption_seed: bytes32(r),
+        kem_seed: Some(bytes32(r)),
+    }
+}
+
+fn binding_pk(s: &crate::device_keys::DeviceSecrets) -> String {
+    hex::encode(s.signing_pubkey().to_bytes())
+}
+
+fn binding_kem(s: &crate::device_keys::DeviceSecrets) -> String {
+    hex::encode(s.kem_pubkey().unwrap())
+}
+
+/// A chain under construction: one user's links, each signed by a named device.
+struct BindingChain(Vec<crate::sigchain::SigchainLink>);
+
+impl BindingChain {
+    fn genesis(s: &crate::device_keys::DeviceSecrets, device_id: &str) -> Self {
+        let payload = json!({
+            "type": "user_init",
+            "deviceId": device_id,
+            "devicePubkey": binding_pk(s),
+            "deviceEncryptionPubkey": hex::encode(s.encryption_pubkey().to_bytes()),
+        });
+        let link = crate::sigchain::create_sigchain_link(
+            s,
+            &format!("{device_id}-1"),
+            device_id,
+            1,
+            None,
+            "2026-11-25T00:00:00Z",
+            &payload.to_string(),
+        )
+        .unwrap();
+        BindingChain(vec![link])
+    }
+
+    fn then(
+        mut self,
+        s: &crate::device_keys::DeviceSecrets,
+        device_id: &str,
+        payload: &Value,
+    ) -> Self {
+        let prev = self.0.last().unwrap();
+        let seq = prev.seq + 1;
+        let link = crate::sigchain::create_sigchain_link(
+            s,
+            &format!("{device_id}-{seq}"),
+            device_id,
+            seq,
+            Some(prev.entry_hash.clone()),
+            &format!("2026-11-25T00:{seq:02}:00Z"),
+            &payload.to_string(),
+        )
+        .unwrap();
+        self.0.push(link);
+        self
+    }
+
+    fn json(&self) -> Value {
+        serde_json::to_value(&self.0).unwrap()
+    }
+}
+
+fn kem_payload(s: &crate::device_keys::DeviceSecrets, user: &str) -> Value {
+    serde_json::from_str(&crate::sigchain::device_kem_payload(s, user).unwrap()).unwrap()
+}
+
+fn add_payload(new: &crate::device_keys::DeviceSecrets, device_id: &str, user: &str) -> Value {
+    let kem = binding_kem(new);
+    json!({
+        "type": "device_add",
+        "deviceId": device_id,
+        "devicePubkey": binding_pk(new),
+        "deviceEncryptionPubkey": hex::encode(new.encryption_pubkey().to_bytes()),
+        "encryptionPubkey": kem,
+        "format": crate::sigchain::DEVICE_KEM_FORMAT,
+        "pop": crate::sigchain::sign_device_pop(new, user, &kem, crate::sigchain::DEVICE_KEM_FORMAT).unwrap(),
+    })
+}
+
+fn flip_pop(mut payload: Value) -> Value {
+    let mut pop = hex::decode(payload["pop"].as_str().unwrap()).unwrap();
+    pop[0] ^= 0x01;
+    payload["pop"] = Value::String(hex::encode(pop));
+    payload
+}
+
+fn generate_device_binding() -> Value {
+    let mut r = rng("llamenos:v2-vectors:device-binding");
+    let alice = binding_device(&mut r);
+    let alice2 = binding_device(&mut r);
+    let carol = binding_device(&mut r);
+    let mallory = binding_device(&mut r);
+    let (a, c, m) = (binding_pk(&alice), binding_pk(&carol), binding_pk(&mallory));
+
+    let alice_chain = || {
+        BindingChain::genesis(&alice, "alice-1").then(&alice, "alice-1", &kem_payload(&alice, &a))
+    };
+    let alice_two = alice_chain().then(&alice, "alice-1", &add_payload(&alice2, "alice-2", &a));
+    let carol_chain = BindingChain::genesis(&carol, "carol-1");
+
+    let mut no_pop = add_payload(&alice2, "alice-2", &a);
+    no_pop.as_object_mut().unwrap().remove("pop");
+    let mut stolen_x25519 = add_payload(&alice2, "alice-2", &a);
+    stolen_x25519["deviceEncryptionPubkey"] =
+        Value::String(hex::encode(alice.encryption_pubkey().to_bytes()));
+    // Mallory names Alice's X-Wing key with a pop she CAN make (she holds her
+    // own signing key): only the cross-chain check refuses it (§6).
+    let alice_kem = binding_kem(&alice);
+    let mallory_reuse = json!({
+        "type": "device_kem",
+        "devicePubkey": m,
+        "format": crate::sigchain::DEVICE_KEM_FORMAT,
+        "encryptionPubkey": alice_kem,
+        "pop": crate::sigchain::sign_device_pop(&mallory, &m, &alice_kem, crate::sigchain::DEVICE_KEM_FORMAT).unwrap(),
+    });
+
+    let set = |chains: &[&BindingChain]| {
+        let links: Vec<Vec<crate::sigchain::SigchainLink>> =
+            chains.iter().map(|c| c.0.clone()).collect();
+        serde_json::to_value(crate::sigchain::genesis_device_set(&links).unwrap()).unwrap()
+    };
+    let positives = json!([
+        {
+            "name": "device_kem",
+            "chains": [alice_chain().json()],
+            "expect": set(&[&alice_chain()]),
+        },
+        {
+            "name": "device_add_with_pop",
+            "chains": [alice_two.json()],
+            "expect": set(&[&alice_two]),
+        },
+        {
+            "name": "genesis_set_lists_a_device_without_device_kem",
+            "chains": [alice_chain().json(), carol_chain.json()],
+            "expect": set(&[&alice_chain(), &carol_chain]),
+        },
+    ]);
+
+    let negatives = json!([
+        {
+            "name": "device_kem_bad_pop",
+            "chains": [BindingChain::genesis(&alice, "alice-1").then(&alice, "alice-1", &flip_pop(kem_payload(&alice, &a))).json()],
+            "expect": "chain_device_pop",
+        },
+        {
+            "name": "device_kem_pop_for_another_user",
+            "chains": [BindingChain::genesis(&alice, "alice-1").then(&alice, "alice-1", &kem_payload(&alice, &c)).json()],
+            "expect": "chain_device_pop",
+        },
+        {
+            "name": "device_add_bad_pop",
+            "chains": [alice_chain().then(&alice, "alice-1", &flip_pop(add_payload(&alice2, "alice-2", &a))).json()],
+            "expect": "chain_device_pop",
+        },
+        {
+            "name": "device_add_without_pop",
+            "chains": [alice_chain().then(&alice, "alice-1", &no_pop).json()],
+            "expect": "invalid_format",
+        },
+        {
+            "name": "device_add_twice",
+            "chains": [alice_two.then(&alice, "alice-1", &add_payload(&alice2, "alice-2", &a)).json()],
+            "expect": "chain_key_reused",
+        },
+        {
+            "name": "device_kem_signed_by_another_device",
+            "chains": [alice_chain()
+                .then(&alice, "alice-1", &add_payload(&alice2, "alice-2", &a))
+                .then(&alice, "alice-1", &kem_payload(&alice2, &a))
+                .json()],
+            "expect": "chain_unauthorised_signer",
+        },
+        {
+            "name": "reused_key_within_a_chain",
+            "chains": [alice_chain().then(&alice, "alice-1", &stolen_x25519).json()],
+            "expect": "chain_key_reused",
+        },
+        {
+            "name": "reused_key_across_users",
+            "chains": [
+                alice_chain().json(),
+                BindingChain::genesis(&mallory, "mallory-1").then(&mallory, "mallory-1", &mallory_reuse).json(),
+            ],
+            "expect": "chain_key_reused",
+        },
+    ]);
+
+    let pop_kem = binding_kem(&alice);
+    let pop_msg = crate::sigchain::device_pop_message(
+        &a,
+        &alice.signing_pubkey().to_bytes(),
+        &hex::decode(&pop_kem).unwrap(),
+        crate::sigchain::DEVICE_KEM_FORMAT,
+    )
+    .unwrap();
+
+    json!({
+        "description": "User-sigchain device key binding (#2496; spec 2026-11-25-v2-device-linking-and-recovery \
+                        §5-§6): device_kem, device_add with its possession signature (pop), and the refusals \
+                        a verifier must make. Every case is opened with genesis_device_set over its chains (the \
+                        migration-genesis device set, which verifies every chain and refuses cross-user key \
+                        reuse); a negative names the closed rejection code. pop = Ed25519(device, \
+                        utf8(L_DEVICE_POP) || 0x00 || SHA-256(lp(utf8(user)) || lp(signingPk) || lp(encryptionPk) \
+                        || u16be(format))), lp = u16be length prefix. Format 2 = X-Wing (draft-connolly-cfrg-xwing-kem-06).",
+        "generator": "packages/crypto/src/vectors.rs (seeded ChaCha20; LLAMENOS_WRITE_VECTORS=1 cargo test --lib vectors)",
+        "kem": "X-Wing draft-06 (ML-KEM-768 + X25519)",
+        "format": crate::sigchain::DEVICE_KEM_FORMAT,
+        "popMessage": {
+            "user": a,
+            "signingPk": binding_pk(&alice),
+            "encryptionPk": pop_kem,
+            "format": crate::sigchain::DEVICE_KEM_FORMAT,
+            "messageHex": hex::encode(pop_msg),
+        },
+        "positives": positives,
+        "negatives": negatives,
+    })
+}
+
+#[test]
+fn device_binding_vectors_open_through_the_genesis_device_set() {
+    let f = load(DEVICE_BINDING_PATH);
+    let chains = |v: &Value| -> Vec<Vec<crate::sigchain::SigchainLink>> {
+        serde_json::from_value(v["chains"].clone()).unwrap()
+    };
+    let pm = &f["popMessage"];
+    let msg = crate::sigchain::device_pop_message(
+        pm["user"].as_str().unwrap(),
+        &hex::decode(pm["signingPk"].as_str().unwrap()).unwrap(),
+        &hex::decode(pm["encryptionPk"].as_str().unwrap()).unwrap(),
+        pm["format"].as_u64().unwrap() as u16,
+    )
+    .unwrap();
+    assert_eq!(hex::encode(msg), pm["messageHex"].as_str().unwrap());
+
+    let positives = f["positives"].as_array().unwrap();
+    assert_eq!(positives.len(), 3);
+    for p in positives {
+        let set = crate::sigchain::genesis_device_set(&chains(p)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&set).unwrap(),
+            p["expect"],
+            "{}",
+            p["name"]
+        );
+    }
+    let lists_missing = &positives[2]["expect"]["missing"];
+    assert_eq!(
+        lists_missing.as_array().unwrap().len(),
+        1,
+        "carol has no device_kem"
+    );
+
+    let negatives = f["negatives"].as_array().unwrap();
+    assert_eq!(negatives.len(), 8);
+    for n in negatives {
+        let err =
+            crate::sigchain::genesis_device_set(&chains(n)).expect_err(n["name"].as_str().unwrap());
+        assert_eq!(
+            err.code(),
+            n["expect"].as_str().unwrap(),
+            "{}: {err}",
+            n["name"]
+        );
+    }
+}
+
 fn render(v: &Value) -> String {
     let mut s = serde_json::to_string_pretty(v).unwrap();
     s.push('\n');
@@ -486,6 +762,7 @@ fn envelope(v: &Value) -> HpkeEnvelope {
 fn vectors_are_generated_by_this_crate() {
     check_or_write(HPKE_WRAP_PATH, &generate_hpke_wrap());
     check_or_write(SERVER_EVENT_PATH, &generate_server_event());
+    check_or_write(DEVICE_BINDING_PATH, &generate_device_binding());
     // Production Argon2id only (see generate_fixture_reader_devices).
     if !cfg!(feature = "test-kdf") {
         check_or_write(FIXTURE_DEVICES_PATH, &generate_fixture_reader_devices());
