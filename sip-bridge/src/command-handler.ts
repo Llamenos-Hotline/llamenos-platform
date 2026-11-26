@@ -59,7 +59,21 @@ export interface RingRequest {
    * parallel leg per entry, in the same leg registry as the phone legs.
    */
   appTargets?: Array<{ callToken: string; sipAor: string }>
+  /**
+   * The call's opaque push reference — the same value its VoIP push carries as `call-id`.
+   * Stamped on every in-app leg as [PUSH_REF_HEADER] so the app can join the INVITE to the
+   * push that announced it: the leg's SIP Call-ID is minted by the PBX and the app has no
+   * other way to tell which call (and so which hub) it is.
+   */
+  pushRef?: string
 }
+
+/**
+ * SIP header carrying the push reference on an in-app ring leg. Read by the clients
+ * (apps/android …/telephony/LinphoneService.kt and apps/ios/Sources/Services/
+ * LinphoneService.swift, `PUSH_REF_HEADER` / `pushRefHeader`) — rename all three together.
+ */
+export const PUSH_REF_HEADER = 'X-Llamenos-Push-Ref'
 
 /**
  * The caller ID an in-app leg presents. The app already knows which call is
@@ -472,6 +486,7 @@ export class CommandHandler {
         endpoint: () => appRingEndpoint(this.config.pbxType, target.sipAor),
         callerId: IN_APP_CALLER_ID,
         what: 'in-app volunteer endpoint',
+        sipHeaders: request.pushRef ? { [PUSH_REF_HEADER]: request.pushRef } : undefined,
       })
       if (id) {
         channelIds.push(id)
@@ -504,7 +519,7 @@ export class CommandHandler {
     parent: ActiveCall,
     parentCallSid: string,
     callToken: string,
-    leg: { endpoint: () => string; callerId: string; what: string }
+    leg: { endpoint: () => string; callerId: string; what: string; sipHeaders?: Record<string, string> }
   ): Promise<string | null> {
     // Resolved inside the try: a PBX type that cannot originate at all
     // (kamailio) is one more reason this leg does not happen, not a reason the
@@ -517,6 +532,7 @@ export class CommandHandler {
         callerId: leg.callerId,
         timeout: RING_TIMEOUT_SECONDS,
         appArgs: `dialed,${parentCallSid},${callToken}`,
+        ...(leg.sipHeaders ? { sipHeaders: leg.sipHeaders } : {}),
       })
       this.legs.set(channel.id, { parentCallSid, callToken, answered: false })
       parent.ringingChannels.push(channel.id)

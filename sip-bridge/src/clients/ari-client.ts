@@ -5,6 +5,7 @@ import type {
   BridgeOptions,
   OriginateParams,
 } from '../bridge-client'
+import { assertSipHeader } from '../bridge-client'
 import type {
   AnyAriEvent,
   AriBridge,
@@ -377,6 +378,15 @@ export class AriClient implements BridgeClient {
       timeout: params.timeout,
       app: this.config.stasisApp,
       appArgs: params.appArgs,
+      variables: params.sipHeaders
+        ? Object.fromEntries(
+            Object.entries(params.sipHeaders).map(([name, value]) => {
+              assertSipHeader(name, value)
+              // chan_pjsip adds each PJSIP_HEADER(add,…) set on the channel to its INVITE.
+              return [`PJSIP_HEADER(add,${name})`, value]
+            })
+          )
+        : undefined,
     })
     return { id: channel.id }
   }
@@ -464,6 +474,8 @@ export class AriClient implements BridgeClient {
     app: string
     appArgs?: string
     channelId?: string
+    /** Channel variables set before the dial (ARI `variables`). */
+    variables?: Record<string, string>
   }): Promise<AriChannel> {
     const body: Record<string, unknown> = {
       endpoint: params.endpoint,
@@ -473,6 +485,7 @@ export class AriClient implements BridgeClient {
     if (params.callerId) body.callerId = params.callerId
     if (params.appArgs) body.appArgs = params.appArgs
     if (params.channelId) body.channelId = params.channelId
+    if (params.variables && Object.keys(params.variables).length > 0) body.variables = params.variables
     return this.request<AriChannel>('POST', '/channels', body)
   }
 

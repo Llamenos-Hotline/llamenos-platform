@@ -590,6 +590,22 @@ describe('CommandHandler', () => {
       expect(handler.getStatus().ringingChannels).toBe(2)
     })
 
+    it('stamps the push ref on the in-app leg only, so the app can join the INVITE to its push', async () => {
+      await queuedCaller()
+      await handler.ringVolunteers({
+        parentCallSid: CALLER,
+        callerNumber: '+15557770001',
+        volunteers: [{ pubkey: 'tok-phone', phone: '+15550200' }],
+        appTargets: [{ callToken: 'tok-app', sipAor: 'vol_0123456789abcdef' }],
+        pushRef: '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6',
+      })
+
+      const [[phoneLeg], [appLeg]] = pbx.of('originate') as Array<[{ sipHeaders?: Record<string, string> }]>
+      // A carrier never sees our push reference.
+      expect(phoneLeg.sipHeaders).toBeUndefined()
+      expect(appLeg.sipHeaders).toEqual({ 'X-Llamenos-Push-Ref': '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6' })
+    })
+
     it('an in-app endpoint the PBX refuses costs that leg, not the ring', async () => {
       await queuedCaller()
       const logged = vi.spyOn(logger, 'error').mockImplementation(() => {})

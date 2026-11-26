@@ -110,6 +110,26 @@ export interface OriginateParams {
   timeout?: number
   /** Application-specific arguments (e.g., ARI appArgs, FS channel variables) */
   appArgs?: string
+  /**
+   * Extra SIP headers to put on the outbound INVITE (e.g. `X-Llamenos-Push-Ref`).
+   * Names and values are restricted to a safe token charset — see `assertSipHeader` —
+   * because both PBX dialects splice them into a dial string or variable name.
+   */
+  sipHeaders?: Record<string, string>
+}
+
+const SIP_HEADER_NAME = /^X-[A-Za-z0-9-]{1,64}$/
+const SIP_HEADER_VALUE = /^[A-Za-z0-9._~-]{1,256}$/
+
+/**
+ * Refuse a header that is not a plain `X-` extension header with a token value. ARI
+ * puts the name inside `PJSIP_HEADER(add,<name>)` and FreeSWITCH puts name and value in a
+ * `{k=v,...}` originate prefix, so a comma, brace, paren or CR/LF in either would let the
+ * header rewrite the dial string. The values we send are server-generated tokens.
+ */
+export function assertSipHeader(name: string, value: string): void {
+  if (!SIP_HEADER_NAME.test(name)) throw new Error(`Refusing SIP header name ${JSON.stringify(name)}`)
+  if (!SIP_HEADER_VALUE.test(value)) throw new Error(`Refusing SIP header value for ${name}`)
 }
 
 // ---- Bridge Options ----

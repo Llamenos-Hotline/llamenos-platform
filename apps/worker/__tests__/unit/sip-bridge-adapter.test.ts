@@ -376,6 +376,33 @@ describe('SipBridgeAdapter', () => {
       expect(body.hubId).toBe('hub-1')
     })
 
+    it('forwards the push ref with the in-app legs, and not for a phone-only ring (#1019)', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ channelIds: ['cs-v1'] }),
+      } as unknown as Response)
+
+      await adapter.ringVolunteers({
+        callSid: 'cs-parent',
+        callerNumber: '+15551111111',
+        volunteers: [],
+        appTargets: [{ sipAor: 'vol_0123456789abcdef', callToken: 'token-app' }],
+        pushRef: '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6',
+        callbackUrl: 'https://example.com/callback',
+      })
+      await adapter.ringVolunteers({
+        callSid: 'cs-parent',
+        callerNumber: '+15551111111',
+        volunteers: [{ phone: '+15552222222', callToken: 'token-a' }],
+        pushRef: '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6',
+        callbackUrl: 'https://example.com/callback',
+      })
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body).pushRef).toBe('3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6')
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).not.toHaveProperty('pushRef')
+    })
+
     // #1136: the bridge answers a total outage (every leg refused by the PBX/trunk) with a
     // machine-readable 502, which must surface as AllDialsFailedError so services/ringing.ts
     // retries, the circuit breaker sees it, and the call reports a telephony failure.

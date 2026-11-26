@@ -5,6 +5,7 @@ import type {
   BridgeOptions,
   OriginateParams,
 } from '../bridge-client'
+import { assertSipHeader } from '../bridge-client'
 import { logger } from '../logger'
 
 export interface EslConfig {
@@ -469,6 +470,11 @@ export class EslClient implements BridgeClient {
     if (params.callerId) vars.push(`origination_caller_id_number=${params.callerId}`)
     if (params.timeout) vars.push(`originate_timeout=${params.timeout}`)
     if (params.appArgs) vars.push(params.appArgs)
+    for (const [name, value] of Object.entries(params.sipHeaders ?? {})) {
+      assertSipHeader(name, value)
+      // mod_sofia adds a `sip_h_<name>` channel variable to the outbound INVITE as <name>.
+      vars.push(`sip_h_${name}=${value}`)
+    }
 
     const varsStr = vars.length > 0 ? `{${vars.join(',')}}` : ''
     const callerId = params.callerId ? ` XML default ${params.callerId}` : ''

@@ -402,6 +402,33 @@ describe('AriClient', () => {
       expect(ari.requests[0].authorization).toBe(`Basic ${btoa('llamenos:p+ss/w=rd')}`)
     })
 
+    it('originate sets each SIP header as a PJSIP_HEADER(add,…) channel variable', async () => {
+      ari = fakeAri([(req) => (req.method === 'POST' && req.path === '/channels' ? json(channel('leg-1')) : undefined)])
+      vi.stubGlobal('fetch', ari.fetchImpl)
+
+      await client.originate({
+        endpoint: 'PJSIP/vol_0123456789abcdef',
+        callerId: 'Llamenos',
+        timeout: 30,
+        appArgs: 'dialed,parent-1,token-1',
+        sipHeaders: { 'X-Llamenos-Push-Ref': '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6' },
+      })
+
+      expect(ari.requests[0].body).toMatchObject({
+        variables: { 'PJSIP_HEADER(add,X-Llamenos-Push-Ref)': '3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6' },
+      })
+    })
+
+    it('originate refuses a SIP header name that is not a plain X- token, sending nothing', async () => {
+      ari = fakeAri([])
+      vi.stubGlobal('fetch', ari.fetchImpl)
+
+      await expect(
+        client.originate({ endpoint: 'PJSIP/x', sipHeaders: { 'X-Evil),PJSIP_HEADER(add,Y': 'v' } })
+      ).rejects.toThrow(/Refusing SIP header name/)
+      expect(ari.requests).toHaveLength(0)
+    })
+
     it('answer / startMoh / stopMoh / playMedia hit the channel resources', async () => {
       ari = fakeAri([(req) => (req.path.endsWith('/play') ? json({ id: 'pb-9' }) : undefined)])
       vi.stubGlobal('fetch', ari.fetchImpl)

@@ -414,6 +414,12 @@ export interface RingVolunteersParams {
    * providers therefore never receive a non-empty list.
    */
   appTargets?: Array<{ sipAor: string; callToken: string }>
+  /**
+   * The call's opaque push reference (services/calls.ts `pushRef`) — what its VoIP push
+   * carries as `call-id`. Stamped on each in-app leg's INVITE so the app can join the ring
+   * to the push and so to the call's hub; meaningless without `appTargets`.
+   */
+  pushRef?: string
   callbackUrl: string
   /**
    * Hub ID — no longer embedded in callback URLs as ?hub= (CRIT-W1).
