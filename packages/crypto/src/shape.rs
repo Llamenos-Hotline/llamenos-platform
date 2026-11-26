@@ -452,10 +452,9 @@ mod tests {
     /// The AAD bytes are the format-1 bytes already on the pilot.
     #[test]
     fn aads_are_the_format_1_bytes() {
-        assert_eq!(
-            Shape::NoteKey.wrap_aad(&[]).unwrap(),
-            b"llamenos:note-key:key-wrap".to_vec()
-        );
+        // Spelled out, not built from the label: these are the pilot's bytes.
+        let aad = b"llamenos:note-key:key-wrap";
+        assert_eq!(Shape::NoteKey.wrap_aad(&[]).unwrap(), aad.to_vec());
         assert!(Shape::MessageKey.wrap_aad(&[]).unwrap().is_empty());
         assert_eq!(
             Shape::PlatformRoleName.wrap_aad(&["r1".into()]).unwrap(),
