@@ -3,7 +3,7 @@ import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { promisify } from 'node:util'
 import { gh } from './gh.js'
 import type { Outcome } from './ledger.js'
-import { NEEDS_HUMAN_LABEL } from './roles/planner.js'
+import { HUMAN_ACT_HEADER, NEEDS_HUMAN_LABEL } from './hold-labels.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -341,16 +341,19 @@ export interface SettleTarget {
   worktree?: string
   branch?: string
   /**
-   * The one control-label write settle() still performs: adds `needs-human`
-   * when the fleet is leaving an open PR for a person rather than something
-   * it will retry itself — see `SettleInput`'s own doc comment in tick.ts for
-   * exactly which two cases set this. `judge()` (select.ts) already vetoes
-   * any item carrying `needs-human`, so this is what keeps a handed-off item
-   * from being re-claimed on the next pass — not a record of what happened
-   * (that is derived on read; see ledger.ts's module comment), but an
-   * instruction to the fleet's own future self.
+   * The one control-label write settle() still performs: when set, the fleet
+   * is leaving this item for a PERSON rather than something it will retry
+   * itself, and this string is the act that person must take (see
+   * `SettleInput.humanAct` in tick.ts for exactly which outcomes set it).
+   * settle() posts it on the issue under `HUMAN_ACT_HEADER` and adds
+   * `needs-human`. #1815: the act is the input, not a boolean, so the fleet
+   * cannot put `needs-human` on an issue without saying what it is asking —
+   * a bare label read exactly like "an agent proposed this", and like
+   * "blocked on credentials", and nobody could see a question to answer.
+   * `judge()` (select.ts) vetoes any item carrying `needs-human`, which is
+   * what keeps a handed-off item from being re-claimed on the next pass.
    */
-  needsHuman?: boolean
+  humanAct?: string
 }
 
 /**
@@ -364,8 +367,8 @@ export interface SettleTarget {
  *    a failed salvage also cancels the teardown, not just runs before it and
  *    gets ignored.
  * 3. Destroy — reached only when salvage succeeded or had nothing to do.
- * 4. Add `needs-human`, if the caller says this outcome is one (see
- *    `SettleTarget.needsHuman`'s own comment). This is the ONLY label
+ * 4. Post the act a person must take and add `needs-human`, if the caller
+ *    names one (see `SettleTarget.humanAct`'s own comment). This is the ONLY label
  *    `settle()` writes — see ledger.ts's module comment on why an outcome
  *    label (`fleet:merged`, `fleet:rejected`, ...) is never written here at
  *    all: whether a PR merged is a fact about GitHub's state, derived on
@@ -402,12 +405,25 @@ export async function settle(target: SettleTarget, log: (msg: string) => void): 
     }
   }
 
-  if (target.needsHuman === true) {
-    try {
-      await labelIssue(target.itemId, NEEDS_HUMAN_LABEL)
-    } catch (e) {
-      log(`labelling issue ${target.itemId} with ${NEEDS_HUMAN_LABEL} failed: ${errMsg(e)}`)
-    }
+  if (target.humanAct !== undefined) await handOffToHuman(target.itemId, target.humanAct, log)
+}
+
+/**
+ * The reason first, then the label. If the comment fails the label is still
+ * added — the veto is the safety property and must not depend on a comment
+ * write — and the failure is logged, so a bare label is at least explained in
+ * fleet.log.
+ */
+async function handOffToHuman(itemId: string, act: string, log: (msg: string) => void): Promise<void> {
+  try {
+    await gh(['issue', 'comment', itemId, '--body', `${HUMAN_ACT_HEADER} ${act}`])
+  } catch (e) {
+    log(`posting the ${NEEDS_HUMAN_LABEL} reason on issue ${itemId} failed (${act}): ${errMsg(e)}`)
+  }
+  try {
+    await labelIssue(itemId, NEEDS_HUMAN_LABEL)
+  } catch (e) {
+    log(`labelling issue ${itemId} with ${NEEDS_HUMAN_LABEL} failed: ${errMsg(e)}`)
   }
 }
 
@@ -424,7 +440,8 @@ async function reportStrandedSalvage(target: SettleTarget, cause: unknown, log: 
   const worktree = target.worktree ?? '(unknown)'
   const localBranch = target.worktree !== undefined ? await currentBranch(target.worktree) : undefined
   const body = [
-    `**Salvage failed — this worker's output is stranded on the dispatch host.**`,
+    `${HUMAN_ACT_HEADER} salvage failed — this worker's output is stranded on the dispatch host, and only ` +
+      'a person on that host can push it. Remove the label once it is pushed (or deliberately discarded).',
     '',
     `- worktree (kept, not destroyed): \`${worktree}\``,
     `- local branch: \`${localBranch ?? 'unknown'}\``,

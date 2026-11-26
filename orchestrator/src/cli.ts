@@ -82,7 +82,9 @@ import {
   fleetPrsFromRuns, resolveFleetPrStates, renderFleetPrsSection,
   defaultFetchHumanQueue, renderHumanQueueSection,
 } from './digest-issue.js'
-import { proposeIssues, buildIssueCreateArgs, type ProposedIssue } from './roles/planner.js'
+import {
+  proposeIssues, buildIssueCreateArgs, buildProposalLabelArgs, AGENT_PROPOSED_LABEL, type ProposedIssue,
+} from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
 import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
@@ -839,7 +841,7 @@ async function relabelLane(itemId: string, from: string | undefined, to: string)
 }
 
 /**
- * `needsHuman` is FORWARDED, not dropped — and this mapping is a separate,
+ * `humanAct` is FORWARDED, not dropped — and this mapping is a separate,
  * exported, pure function precisely because it was being dropped here, in a
  * hand-written object literal, where nothing could see it. `settle`'s one
  * remaining label write (the `needs-human` label, worktree.ts) could
@@ -859,7 +861,7 @@ export function settleTargetFor(input: SettleInput): SettleTarget {
     outcome: input.outcome,
     worktree: input.worktree,
     branch: input.branch,
-    needsHuman: input.needsHuman,
+    humanAct: input.humanAct,
   }
 }
 
@@ -1632,7 +1634,7 @@ async function runDigest(hoursArg?: string): Promise<number> {
 
 /** The document the Planner reads to decide what to propose next. Missing
  *  entirely is not an error here — the Planner still runs, just with less
- *  context, and its own near-duplicate check and `needs-human` gate are
+ *  context, and its own near-duplicate check and `agent-proposed` gate are
  *  unaffected either way. */
 const GOAL_DOCUMENT_PATH = process.env['FLEET_GOAL_DOCUMENT']
   ?? join(REPO_ROOT, 'docs', 'superpowers', 'plans', '2026-09-12-fleet-live-dispatch.md')
@@ -1685,13 +1687,20 @@ export interface PlanDeps {
    * that "forgot" a label.
    */
   createIssue(args: ReturnType<typeof buildIssueCreateArgs>): Promise<string>
+  /**
+   * Makes sure the `agent-proposed` label exists, carrying the question it
+   * asks as its description (#1815). Typed to the one argv
+   * `buildProposalLabelArgs` produces, like `createIssue`. Run before the
+   * first issue is created: `gh issue create --label` refuses a missing label.
+   */
+  ensureProposalLabel(args: ReturnType<typeof buildProposalLabelArgs>): Promise<void>
   log(msg: string): void
 }
 
 /**
  * Turns each of the Planner's proposals into a real GitHub issue through
  * `buildIssueCreateArgs` — the only sanctioned path, per roles/planner.ts's
- * own module comment — so `needs-human` is attached unconditionally on
+ * own module comment — so `agent-proposed` is attached unconditionally on
  * every issue this command creates, with no parameter anywhere in this
  * function that could suppress it.
  */
@@ -1702,12 +1711,13 @@ export async function runPlanWith(deps: PlanDeps): Promise<number> {
   const proposals: ProposedIssue[] = await proposeIssues({
     goalDocument, openBacklog, recentRuns, invoke: deps.invoke,
   })
+  if (proposals.length > 0) await deps.ensureProposalLabel(buildProposalLabelArgs())
   for (const proposal of proposals) {
     const args = buildIssueCreateArgs(proposal)
     const out = await deps.createIssue(args)
-    deps.log(`plan: created issue for lane ${proposal.lane} (needs-human): ${out.trim()}`)
+    deps.log(`plan: created issue for lane ${proposal.lane} (${AGENT_PROPOSED_LABEL}): ${out.trim()}`)
   }
-  process.stdout.write(`plan: proposed ${proposals.length} issue(s), each created with needs-human attached\n`)
+  process.stdout.write(`plan: proposed ${proposals.length} issue(s), each created with ${AGENT_PROPOSED_LABEL} attached\n`)
   return 0
 }
 
@@ -1718,6 +1728,7 @@ function defaultPlanDeps(): PlanDeps {
     readGoalDocument: () => (existsSync(GOAL_DOCUMENT_PATH) ? readFileSync(GOAL_DOCUMENT_PATH, 'utf8') : ''),
     invoke: invokePlannerModel,
     createIssue: (args) => gh(args),
+    ensureProposalLabel: async (args) => { await gh(args) },
     log,
   }
 }

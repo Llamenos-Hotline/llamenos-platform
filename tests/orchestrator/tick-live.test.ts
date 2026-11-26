@@ -149,13 +149,18 @@ describe('tick: live dispatch pipeline (task 7)', () => {
 
   /**
    * The liveness gap the non-author reviewer named: a PR that passed both
-   * gates but whose arming failed is fail-CLOSED (nothing merges) yet
-   * invisible — correct work sitting open forever with a log line as its only
-   * explanation. It has to reach a human, and the reason has to travel with
-   * it, which means the ledger note the digest's "waiting on a human" section
-   * actually renders.
+   * gates but whose arming failed is fail-CLOSED (nothing merges) and must
+   * not be invisible — so the reason travels in the ledger note the digest's
+   * "waiting" section renders, and the PR itself says why it is unarmed.
+   *
+   * #1815: it is NOT a `needs-human` hand-off. queue-feed is the durable owner
+   * of arming and re-arms an unarmed green PR on its own pass, and the open
+   * PR holds the item (`findOpenPr`). This hand-off is what put a bare
+   * `needs-human` on #3029 on 2026-11-25 — the issue then read as waiting on
+   * a person when nobody had anything to do. Re-adding a hand-off here makes
+   * this fail.
    */
-  it('hands a failed arming to a human, with the reason in the note', async () => {
+  it('a failed arming is explained on the PR and in the note, and is NOT handed to a human (#3029)', async () => {
     const recorded: RunRecord[] = []
     const d = baseDeps({
       enableAutoMerge: vi.fn(async () => { throw new Error('gh: auto-merge is not enabled') }),
@@ -163,7 +168,9 @@ describe('tick: live dispatch pipeline (task 7)', () => {
     })
     await tick(d)
 
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', humanAct: undefined }))
+    expect(d.commentOnPr).toHaveBeenCalledWith('42', expect.stringContaining('gh: auto-merge is not enabled'))
+    expect(d.commentOnPr).toHaveBeenCalledWith('42', expect.stringContaining('queue-feed'))
     const terminal = recorded.find((r) => r.outcome === 'SUCCESS')
     expect(terminal?.note).toContain('arm=failed(gh: auto-merge is not enabled)')
     // `sha=` must remain the LAST field — status.ts's extractVerifiedSha and
@@ -174,7 +181,7 @@ describe('tick: live dispatch pipeline (task 7)', () => {
   it('leaves a successfully armed PR alone — no human needed', async () => {
     const d = baseDeps()
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', needsHuman: false }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', humanAct: undefined }))
   })
 
   it('does not disarm on the success path — that would undo what it just armed', async () => {
@@ -377,7 +384,7 @@ describe('tick: branch mismatch (issue #812)', () => {
     expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
       outcome: 'FAILED', pr: '836', note: expect.stringMatching(/^branch-mismatch:fleet-ios-1\b/),
     }))
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILED', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILED', humanAct: expect.any(String) }))
   })
 
   it('tells the PR it was not verified by the fleet, naming both branches', async () => {
@@ -400,7 +407,7 @@ describe('tick: branch mismatch (issue #812)', () => {
     const d = baseDeps({ dispatch: mismatched({ pr: undefined }) })
     await tick(d)
     expect(d.commentOnPr).not.toHaveBeenCalled()
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILED', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILED', humanAct: expect.any(String) }))
   })
 
   it('a claimed SUCCESS on the right branch still runs the full pipeline — the mismatch guard does not swallow it', async () => {
@@ -489,20 +496,20 @@ describe('tick: G1 needs-human handoff and G2 gate-trace observability', () => {
   it('a verified, reviewed, auto-merge-armed SUCCESS does NOT get needs-human — GitHub holds it, not a label', async () => {
     const d = baseDeps()
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', needsHuman: false }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', humanAct: undefined }))
   })
 
   it('an ordinary mechanical REJECTED does NOT get needs-human — it is still retryable', async () => {
     const failing: VerifyReport = { ...passingVerify, passed: false, reasons: ['touched never-write paths: .env'] }
     const d = baseDeps({ verifyMechanical: vi.fn(async () => failing) })
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED', needsHuman: false }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED', humanAct: undefined }))
   })
 
   it('a review-exhausted REJECTED does NOT get needs-human — it is still retryable', async () => {
     const d = baseDeps({ secondOpinion: vi.fn(async () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL — nope' })) })
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED', needsHuman: false }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'REJECTED', humanAct: undefined }))
   })
 
   // Issue #870: a review loop that ends UNREADABLE (the fleet's own
@@ -514,11 +521,13 @@ describe('tick: G1 needs-human handoff and G2 gate-trace observability', () => {
   // genuinely-successful workers (fleet-backend-705, fleet-desktop-775,
   // fleet-infra-722) tripped the consecutive-failure breaker on nothing but
   // the fleet's own plumbing.
-  it('a review loop ending UNREADABLE is recorded UNVERIFIED, not REJECTED or FAILED, WITH needs-human', async () => {
+  it('a review loop ending UNREADABLE is recorded UNVERIFIED, not REJECTED or FAILED, handed to a human with the PR to look at', async () => {
     const d = baseDeps({ secondOpinion: vi.fn(async () => ({ verdict: 'UNREADABLE' as const, text: 'reviewer engine was unreachable' })) })
     const r = await tick(d)
     expect(d.record).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'UNVERIFIED', pr: '42', branch: 'fleet/ios/1' }))
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'UNVERIFIED', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'UNVERIFIED', humanAct: expect.stringContaining('look at PR 42 directly'),
+    }))
     expect(r.failed).toBe(0) // this is not a `threw` / uncaught-exception FAILED
   })
 
@@ -578,7 +587,7 @@ describe('tick: G1 needs-human handoff and G2 gate-trace observability', () => {
       expect(d.verifyMechanical).not.toHaveBeenCalled()
       expect(d.secondOpinion).not.toHaveBeenCalled()
       expect(d.commentOnPr).toHaveBeenCalledWith('662', expect.stringContaining('NO automated verification'))
-      expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', needsHuman: true }))
+      expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', humanAct: expect.any(String) }))
       expect(d.record).toHaveBeenCalledWith(expect.objectContaining({
         outcome: 'SUCCESS',
         note: expect.stringContaining('scope=not-run'),
@@ -600,7 +609,7 @@ describe('tick: G1 needs-human handoff and G2 gate-trace observability', () => {
       const d = baseDeps({ dispatch })
       await tick(d)
       expect(d.commentOnPr).not.toHaveBeenCalled()
-      expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', needsHuman: true }))
+      expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS', humanAct: expect.any(String) }))
     })
   })
 })
@@ -773,18 +782,22 @@ describe('tick: ownership is checked BEFORE dispatch (#1764, #2623, #2979)', () 
     await tick(d)
     const final = vi.mocked(d.record).mock.calls.map(([x]) => x).at(-1)
     expect(final?.outcome).toBe('MISROUTED')
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'MISROUTED', needsHuman: false }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'MISROUTED', humanAct: undefined }))
     expect(d.relabelLane).toHaveBeenCalledWith('2', 'ios', 'infra')
   })
 
-  it('a worker BLOCKED on a decision is still BLOCKED with needs-human', async () => {
+  it('a worker BLOCKED on a decision is still BLOCKED, handed to a human with the worker\'s reason and both exits', async () => {
     const own: WorkItem = { id: '2', title: 'ios', body: `fix \`apps/ios/Sources/A.swift\`${pad}`, url: 'u', labels: [] }
     const d = misrouteDeps({
       listItems: async () => ({ ok: true as const, items: [own] }),
       dispatch: vi.fn(async (): Promise<DispatchOutcome> => ({ outcome: 'BLOCKED', note: 'needs a product decision' })),
     })
     await tick(d)
-    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'BLOCKED', needsHuman: true }))
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: 'BLOCKED', humanAct: expect.stringContaining('needs a product decision'),
+    }))
+    // Sequenced work has a home that is not "a human must act" (#1815).
+    expect(d.settle).toHaveBeenCalledWith(expect.objectContaining({ humanAct: expect.stringContaining('`blocked`') }))
     expect(d.relabelLane).not.toHaveBeenCalled()
   })
 
@@ -904,5 +917,98 @@ describe('tick: ownership is checked BEFORE dispatch (#1764, #2623, #2979)', () 
     const d = misrouteDeps({ readLabels: async () => ['agent-dispatchable', 'needs-human'] })
     const r = await tick(d)
     expect(r.unrouted).toEqual([])
+  })
+})
+
+/**
+ * #3044: the rail. Every comment `runLiveDispatch` posts is an AUXILIARY
+ * write — it tells a person something, it decides nothing. A `gh`/network
+ * failure on one (plausibly correlated with whatever else just failed) must
+ * never change the ledger row or what `settle()` is told: before this, an
+ * unguarded `commentOnPr` in a catch block escaped to the pass's outer catch
+ * and turned a verified, reviewed SUCCESS into a FAILED that spent an attempt,
+ * fed the failure breaker, and erased the `arm=failed(...)` reason.
+ *
+ * Each terminal path runs twice — writes working, then every comment write
+ * throwing — and the recorded terminal row and the settle() call must be
+ * identical. A path that is expected to comment must actually have tried to,
+ * or this rail would pass vacuously on a path that stopped commenting.
+ */
+describe('tick: an auxiliary write can never change the recorded outcome (#3044)', () => {
+  const failingVerify: VerifyReport = { ...passingVerify, passed: false, reasons: ['touched a forbidden path'] }
+  const cases: Array<[string, Partial<TickDeps>, { outcome: RunRecord['outcome']; comments: boolean }]> = [
+    ['armed SUCCESS', {}, { outcome: 'SUCCESS', comments: false }],
+    ['SUCCESS whose arming failed', {
+      enableAutoMerge: async () => { throw new Error('gh: auto-merge is not enabled') },
+    }, { outcome: 'SUCCESS', comments: true }],
+    ['branch mismatch', {
+      dispatch: async () => ({
+        outcome: 'FAILED', branch: 'fleet-ios-1', pr: '836', worktree: '/wt/llamenos-fleet-ios-1',
+        branchMismatch: 'fleet-ios-1', note: 'branch-mismatch:fleet-ios-1',
+      }),
+    }, { outcome: 'FAILED', comments: true }],
+    ['claimed SUCCESS the fleet cannot verify', {
+      dispatch: async () => ({ outcome: 'SUCCESS', pr: '662', note: 'dep:abc123' }),
+    }, { outcome: 'SUCCESS', comments: true }],
+    ['mechanical verification failed', {
+      verifyMechanical: async () => failingVerify,
+    }, { outcome: 'REJECTED', comments: true }],
+    ['review FAIL', {
+      secondOpinion: async () => ({ verdict: 'FAIL' as const, text: 'VERDICT: FAIL — nope' }),
+    }, { outcome: 'REJECTED', comments: true }],
+    ['review UNREADABLE', {
+      secondOpinion: async () => ({ verdict: 'UNREADABLE' as const, text: 'reviewer engine was unreachable' }),
+    }, { outcome: 'UNVERIFIED', comments: true }],
+    ['worker BLOCKED', {
+      dispatch: async () => ({ outcome: 'BLOCKED', note: 'needs a Twilio credential' }),
+    }, { outcome: 'BLOCKED', comments: false }],
+  ]
+
+  const run = async (over: Partial<TickDeps>, writesThrow: boolean) => {
+    const recorded: RunRecord[] = []
+    const lines: string[] = []
+    const order: string[] = []
+    const write = (kind: string) => vi.fn(async () => {
+      order.push(kind)
+      if (writesThrow) throw new Error(`gh: ${kind} HTTP 502`)
+    })
+    const d = baseDeps({
+      ...over,
+      record: vi.fn((r: RunRecord) => { recorded.push(r); order.push(`record:${r.outcome}`) }),
+      commentOnPr: write('comment-pr'),
+      commentOnIssue: write('comment-issue'),
+      log: (m: string) => { lines.push(m) },
+    })
+    const result = await tick(d)
+    // runId is minted per pass; everything else in the row is the outcome.
+    const terminal = recorded.filter((r) => r.outcome !== 'DISPATCHED').map(({ runId: _runId, ...rest }) => rest)
+    return { d, result, terminal, lines, order }
+  }
+
+  for (const [name, over, want] of cases) {
+    it(`${name}: a throwing comment leaves the row and the settle() call untouched`, async () => {
+      const ok = await run(over, false)
+      const broken = await run(over, true)
+
+      expect(ok.terminal.map((r) => r.outcome)).toEqual([want.outcome])
+      expect(broken.terminal).toEqual(ok.terminal)
+      expect(broken.result).toEqual(ok.result)
+      expect(vi.mocked(broken.d.settle).mock.calls).toEqual(vi.mocked(ok.d.settle).mock.calls)
+      expect(broken.d.settle).toHaveBeenCalledTimes(1)
+
+      const tried = vi.mocked(broken.d.commentOnPr).mock.calls.length + vi.mocked(broken.d.commentOnIssue).mock.calls.length
+      if (want.comments) {
+        expect(tried).toBeGreaterThan(0)
+        // Never silent: each failed write says so in fleet.log.
+        expect(broken.lines.some((l) => l.includes('HTTP 502'))).toBe(true)
+      }
+    })
+  }
+
+  it('the terminal row is recorded before any comment the dispatch path posts', async () => {
+    const { order } = await run({ enableAutoMerge: async () => { throw new Error('gh: nope') } }, false)
+    const recordedAt = order.indexOf('record:SUCCESS')
+    expect(recordedAt).toBeGreaterThan(-1)
+    expect(order.indexOf('comment-pr')).toBeGreaterThan(recordedAt)
   })
 })

@@ -50,7 +50,7 @@ import { LEDGER_FILE } from './paths.js'
  * Extension of that same principle (the fix for the #705/#724/#729/#775/
  * #784/#785 incident): `UNVERIFIED` also must never decrement an item's OWN
  * per-attempt retry budget (`failedAttemptsIn`, below) — see that function's
- * doc comment. `needsHuman` (tick.ts) already stops the item being
+ * doc comment. `humanAct` (tick.ts) already stops the item being
  * re-claimed while the label stands; the retry budget is a SEPARATE
  * question — "once a human clears that label, how many attempts does this
  * item still have?" — and an infrastructure gap that was never the worker's
@@ -162,7 +162,7 @@ export function since(windowMs: number, now = Date.now()): RunRecord[] {
 // brand-new worker onto a branch that already had a correct, finished PR —
 // never reached a real verdict on the work at all, so it must not cost the
 // item any of its three attempts. This does NOT reopen the item to
-// unbounded re-claiming: `needsHuman` (tick.ts) already attaches
+// unbounded re-claiming: `humanAct` (tick.ts) already attaches
 // `needs-human`, which `judge()`'s veto (select.ts) uses to stop dispatch
 // regardless of how many attempts remain. The retry budget and the veto
 // label answer two different questions — "how many attempts are left" vs.

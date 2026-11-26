@@ -2,11 +2,12 @@ import { checkBreakers, inQuotaCooldown, isQuotaHaltReason, parseQuotaResumeAt }
 import { LIMITS, MAX_ATTEMPTS_PER_ITEM, type Lane } from './config.js'
 import { providerOf } from './engines.js'
 import { failedAttemptsIn, type Outcome, type RunRecord } from './ledger.js'
-import { runReviewLoop, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
+import { runReviewLoop, type ReviewLoopDeps, type SecondOpinionInput, type SecondOpinionResult } from './review.js'
 import { judge, selectForLane, LANE_LABEL_PREFIX, type Rejection } from './select.js'
 import type { ListResult, WorkItem } from './source.js'
 import { buildGateTrace } from './trace.js'
 import { fleetBranchFor, legacyFleetBranchFor } from './ci.js'
+import { BLOCKED_LABEL, NEEDS_HUMAN_LABEL } from './hold-labels.js'
 import {
   assessOpenPr, buildReentryPassedComment, buildVerificationFailedComment, latestMechanicalRejection,
   REENTRY_NOTE_PREFIX,
@@ -83,31 +84,37 @@ export interface SettleInput {
   pr?: string
   /**
    * G1: the ONE control-label write settle() still performs is `needs-human`
-   * — added when the fleet is leaving an open PR for a human to look at
-   * rather than something it will retry itself, so `judge()`'s existing veto
-   * (`select.ts`, `needs-human` is already in every lane's `vetoLabels`)
-   * keeps the item from being re-claimed on the next pass. An ordinary
-   * mechanical or review REJECTED is still retried up to
+   * — added when the fleet is leaving the item for a PERSON rather than
+   * something it will retry itself, so `judge()`'s existing veto
+   * (`select.ts`, `needs-human` is in every lane's `vetoLabels`) keeps the
+   * item from being re-claimed on the next pass.
+   *
+   * #1815: this is the ACT that person must take, not a boolean. settle()
+   * posts it on the issue beside the label, so `needs-human` can no longer
+   * appear without the question it is asking. `undefined` means no hand-off.
+   * Required (not optional) so every return path of `runLiveDispatch` decides
+   * it explicitly.
+   *
+   * An ordinary mechanical or review REJECTED is still retried up to
    * `MAX_ATTEMPTS_PER_ITEM` (the worker may simply fix it next attempt), so
-   * exactly three cases set this now: a worker-reported SUCCESS that could
-   * not be run through the pipeline at all (missing branch/worktree) — see
-   * the `else` branch in `runLiveDispatch` — a branch mismatch (issue #812:
-   * the work landed on a branch other than `fleet/<lane>/<item>`), whatever
-   * the worker claimed, and an `UNVERIFIED` outcome (issue #870: the
-   * review loop ended `UNREADABLE` — the fleet's own verification pipeline,
-   * not the worker's diff, could not reach a verdict). The first is the
-   * shape of issue #660/PR #662: a claimed success with an open, unverified
-   * PR is far more dangerous left agent-dispatchable than a routine
-   * rejection is. The third is the shape of issue #870: re-dispatching a
-   * brand new worker attempt against a branch that may already hold correct,
-   * finished work wastes a worker on a problem this fleet never actually
-   * diagnosed.
+   * exactly four cases set this: a worker-reported SUCCESS that could not be
+   * run through the pipeline at all (missing branch/worktree — issue
+   * #660/PR #662: a claimed success with an open, unverified PR is far more
+   * dangerous left agent-dispatchable than a routine rejection), a branch
+   * mismatch (issue #812: the work landed on a branch other than
+   * `fleet/<lane>/<item>`), an `UNVERIFIED` outcome (issue #870: the review
+   * loop ended `UNREADABLE`, so re-dispatching a brand new worker against a
+   * branch that may already hold finished work wastes a worker on a problem
+   * nobody diagnosed), and a worker `BLOCKED` that is not a routing slip.
    *
    * A PR that is verified, reviewed, and simply waiting — on a required
-   * check, or on a code owner's approval — is NOT flagged here: it is
-   * waiting on GitHub, which needs no label from this process to hold it.
+   * check, a code owner's approval, OR on being armed — is NOT handed off: it
+   * is waiting on GitHub and on queue-feed (the durable owner of arming,
+   * queue-feed.ts), and `findOpenPr` holds the item while its PR is open.
+   * The arm-failure hand-off that used to live here is what put a bare
+   * `needs-human` on #3029 on 2026-11-25, for a PR nobody needed to act on.
    */
-  needsHuman: boolean
+  humanAct: string | undefined
 }
 
 export interface TickDeps {
@@ -353,19 +360,25 @@ function failedVerificationOutcome(report: VerifyReport | undefined): 'REJECTED'
   return report?.testsRunnerCrashed === true ? 'UNVERIFIED' : 'REJECTED'
 }
 
+/** The PR comment for a failed mechanical verification — posted on the
+ *  dispatch path as a `Notice`, and by the re-entry pass directly. */
+function verificationFailedBody(report: VerifyReport | undefined, reentry: boolean): string {
+  return buildVerificationFailedComment({
+    sha: report?.verifiedCommit,
+    reasons: (report?.reasons ?? ['verification produced no report']).map((r) =>
+      r.length > MAX_REASON_CHARS ? `${r.slice(0, MAX_REASON_CHARS)}…` : r),
+    runnerCrashed: report?.testsRunnerCrashed === true,
+    reentry,
+  })
+}
+
 /** Best-effort: a comment that cannot be posted must not change the outcome
  *  already decided, or the recorded ledger row. */
 async function commentVerificationFailedOnPr(
   deps: TickDeps, pr: string, report: VerifyReport | undefined, reentry: boolean,
 ): Promise<void> {
   try {
-    await deps.commentOnPr(pr, buildVerificationFailedComment({
-      sha: report?.verifiedCommit,
-      reasons: (report?.reasons ?? ['verification produced no report']).map((r) =>
-        r.length > MAX_REASON_CHARS ? `${r.slice(0, MAX_REASON_CHARS)}…` : r),
-      runnerCrashed: report?.testsRunnerCrashed === true,
-      reentry,
-    }))
+    await deps.commentOnPr(pr, verificationFailedBody(report, reentry))
   } catch (e) {
     deps.log(`verify: could not comment the failed verification on pr ${pr}: ${errorMessage(e)}`)
   }
@@ -457,6 +470,80 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
 }
 
 /**
+ * #1815: what a worker's BLOCKED asks of a person. The fleet cannot tell
+ * "needs a credential" from "has to wait for #N" from a free-text note, so the
+ * act names both exits: `blocked` (sequenced — nobody needs to act) is the
+ * right home for the second, and the label is never left to imply the first.
+ */
+export function blockedHumanAct(note: string | undefined): string {
+  const said = note === undefined || note.trim() === '' ? '(the worker gave no reason)' : note.trim()
+  return `the dispatched worker reported BLOCKED: ${said.slice(0, 2000)}\n\n` +
+    `If it is waiting on other work, replace \`${NEEDS_HUMAN_LABEL}\` with \`${BLOCKED_LABEL}\` — nobody needs to ` +
+    'act. If it needs a credential, an account, provisioning or a decision, provide it and remove the label.'
+}
+
+/**
+ * #3044: something the dispatch path wants a person told — on the PR or on the
+ * issue. A notice is an AUXILIARY write: it explains an outcome, it never
+ * decides one. `decideDispatch` can only QUEUE notices (it is not handed
+ * `commentOnPr`/`commentOnIssue` at all), and `runLiveDispatch` sends them
+ * only after the terminal row is recorded, each in its own try/catch. So a
+ * `gh` or network failure on a comment — plausibly correlated with whatever
+ * just made arming fail — cannot reach the outcome by construction, rather
+ * than by every catch block remembering to guard its own comment.
+ */
+type Notice =
+  | { to: 'pr'; pr: string; body: string }
+  | { to: 'issue'; itemId: string; body: string }
+
+/**
+ * Everything `decideDispatch` may touch to reach an outcome. Deliberately a
+ * `Pick`, not `TickDeps`: there is no comment-writing dep in it, so a comment
+ * posted from the decision phase is a type error, not a review finding. The
+ * review loop is the one consumer that posts mid-flight (its comments are
+ * guarded inside review.ts and precede the revise round they explain); the
+ * caller builds its deps, so they arrive here already bound.
+ */
+type DecisionDeps = Pick<TickDeps, 'dispatch' | 'enableAutoMerge' | 'log'> & {
+  reviewLoop: ReviewLoopDeps
+}
+
+/** What the dispatch already told us, filled in the moment `dispatch` returns
+ *  so a later throw still records the branch and PR it was working on. */
+interface Dispatched { worktree?: string; branch?: string; pr?: string }
+
+interface Decision {
+  final: RunRecord
+  humanAct?: string
+  /**
+   * Set ONLY at the single arm site. The disarm is keyed on this, not on the
+   * outcome, because the two are not equivalent: the unverifiable
+   * claimed-SUCCESS branch also records `SUCCESS` while arming nothing, so an
+   * outcome-keyed disarm skipped it — and an arming left by an EARLIER
+   * attempt on the same PR survived into a pass that never verified anything.
+   * Every terminal path that did not itself arm must disarm.
+   */
+  armed: boolean
+  /** Set when a BLOCKED report turns out to be a routing slip (#1764 ask 3). */
+  rerouteTo?: string
+  /** Sent after the terminal row is recorded; see `Notice`. */
+  notices: Notice[]
+}
+
+/** Never throws: a notice that cannot be posted is logged, and that is all. */
+async function sendNotices(deps: TickDeps, item: WorkItem, notices: readonly Notice[]): Promise<void> {
+  for (const n of notices) {
+    try {
+      if (n.to === 'pr') await deps.commentOnPr(n.pr, n.body)
+      else await deps.commentOnIssue(n.itemId, n.body)
+    } catch (e) {
+      const where = n.to === 'pr' ? `pr ${n.pr}` : `issue ${n.itemId}`
+      deps.log(`notice: could not comment on ${where} for item ${item.id}: ${errorMessage(e)} — the outcome stands`)
+    }
+  }
+}
+
+/**
  * The live-dispatch pipeline for exactly one item. Order is the safety
  * property, not a style choice:
  *
@@ -477,7 +564,11 @@ async function reenterFailedOpenPr(deps: TickDeps, lane: Lane, item: WorkItem, r
  *    (`fleet/verify`, `fleet/review` — see ci.ts) plus GitHub's own
  *    code-owner rule, all enforced by the repo ruleset on the head SHA.
  * 6. Exactly one terminal ledger row, whatever the outcome.
- * 7. `settle()` — unconditionally, even when something above threw.
+ * 7. The decision's notices (#3044) — comments explaining the outcome, sent
+ *    only once that row exists, each guarded, so none can change it.
+ * 8. `settle()` — unconditionally, even when something above threw.
+ *
+ * Steps 2-5 are `decideDispatch`; this function owns 1 and 6-8.
  */
 async function runLiveDispatch(
   deps: TickDeps,
@@ -488,269 +579,39 @@ async function runLiveDispatch(
 ): Promise<{ outcome: Outcome; threw: boolean }> {
   deps.record({ ...base, outcome: 'DISPATCHED' })
 
-  let worktree: string | undefined
-  let branch: string | undefined
-  let pr: string | undefined
-  let final: RunRecord
-  let needsHuman = false
+  const seen: Dispatched = {}
+  const decisionDeps: DecisionDeps = {
+    dispatch: deps.dispatch,
+    enableAutoMerge: deps.enableAutoMerge,
+    log: deps.log,
+    reviewLoop: {
+      verifyMechanical: deps.verifyMechanical,
+      prDiff: deps.prDiff,
+      secondOpinion: deps.secondOpinion,
+      postReview: deps.postReview,
+      commentOnPr: deps.commentOnPr,
+      reviseWithWorker: ({ verdictText }) => deps.reviseWithWorker(item, lane, verdictText),
+      haltFleet: deps.haltFleet,
+      log: deps.log,
+    },
+  }
+
+  let decision: Decision
   let threw = false
-  /**
-   * Set ONLY at the single arm site below. The disarm is keyed on this, not
-   * on the outcome, because the two are not equivalent: the unverifiable
-   * claimed-SUCCESS branch also records `SUCCESS` while arming nothing, so an
-   * outcome-keyed disarm skipped it — and an arming left by an EARLIER
-   * attempt on the same PR survived into a pass that never verified anything.
-   * Every terminal path that did not itself arm must disarm.
-   */
-  let armed = false
-  /** Set when a BLOCKED report turns out to be a routing slip (#1764 ask 3). */
-  let rerouteTo: string | undefined
-
   try {
-    const result = await deps.dispatch(item, lane)
-    worktree = result.worktree
-    branch = result.branch
-    pr = result.pr
-
-    if (result.branchMismatch !== undefined) {
-      // Issue #812: the work is on a branch this item was not dispatched
-      // for (live shape: PR #836 on `fleet-shared-704`). Checked BEFORE the
-      // outcome, and terminal whatever the worker claimed: verifying the
-      // expected branch would judge a diff that is not the one that merges,
-      // and verifying the actual one would run lane scope against a branch
-      // CI itself does not recognise as a fleet branch. FAILED, never armed
-      // (`armed` stays false, so the disarm below also clears any earlier
-      // arming), `needs-human` so it is not silently re-claimed, and the PR
-      // told plainly that nothing verified it.
-      const mismatch = result.branchMismatch
-      needsHuman = true
-      deps.log(
-        `verify: item ${item.id} pr ${pr ?? '(none)'} REFUSED — branch-mismatch:${mismatch} ` +
-        `(dispatched for ${fleetBranchFor(lane.id, item.id)}) — not verified, auto-merge not armed`,
-      )
-      if (pr !== undefined) {
-        await deps.commentOnPr(
-          pr,
-          `This PR is on branch \`${mismatch}\`, but the fleet dispatched issue #${item.id} on ` +
-          `\`${fleetBranchFor(lane.id, item.id)}\`. It was NOT verified by the fleet — no scope check, ` +
-          'no diff-targeted tests, no non-author review — and auto-merge has not been armed. ' +
-          'It needs a human: review it from scratch, or close it and re-dispatch the issue.',
-        )
-      }
-      final = {
-        ...base, outcome: 'FAILED', branch, pr,
-        note: truncateNote(result.note ?? `branch-mismatch:${mismatch}`),
-      }
-    } else if (result.outcome === 'SUCCESS' && branch !== undefined && pr !== undefined && worktree !== undefined) {
-      // The bounded mechanical-verify -> second-opinion -> (on FAIL) revise
-      // -> re-verify loop (task 13, review.ts). Mechanical failure is
-      // terminal on whatever round it happens (no review is ever requested
-      // for it); a tamper detection trips the kill switch via `haltFleet`
-      // and is never retried — both handled entirely inside the loop, not
-      // here.
-      const loop = await runReviewLoop(
-        { authorEngine: lane.engine, pr, worktree, branch, lane, allLanes: deps.lanes },
-        {
-          verifyMechanical: deps.verifyMechanical,
-          prDiff: deps.prDiff,
-          secondOpinion: deps.secondOpinion,
-          postReview: deps.postReview,
-          commentOnPr: deps.commentOnPr,
-          reviseWithWorker: ({ verdictText }) => deps.reviseWithWorker(item, lane, verdictText),
-          haltFleet: deps.haltFleet,
-          log: deps.log,
-        },
-      )
-      const verifyReport = loop.lastReport
-
-      // G2: one log line for the verify stage, ALWAYS — whether or not it
-      // passed — so an operator reading fleet.log can tell "verify ran and
-      // refused" from "verify never ran" without cross-referencing the
-      // ledger. The review line below only appears when that stage was
-      // actually reached, which is itself the signal: a run that
-      // stops at mechanical verification has a verify line and nothing
-      // after it.
-      deps.log(`verify: item ${item.id} pr ${pr} ${buildGateTrace({ report: verifyReport })}`)
-
-      if (verifyReport === undefined || !verifyReport.passed) {
-        const reasons = verifyReport?.reasons ?? []
-        await deps.commentOnIssue(
-          item.id,
-          loop.runnerCrashed === true
-            ? `The test runner reached no verdict after ${loop.rounds} round(s) — this is the fleet's own ` +
-              `infrastructure, not a finding about the work, and no review was requested yet:\n- ${reasons.join('\n- ')}`
-            : `Mechanical verification failed after ${loop.rounds} round(s):\n- ${reasons.join('\n- ')}`,
-        )
-        // #2738: the PR itself says so. The issue comment above is where the
-        // fleet reports to the ITEM; a person looking at the PR saw an
-        // ordinary open PR awaiting review.
-        await commentVerificationFailedOnPr(deps, pr, verifyReport, false)
-        final = {
-          ...base, outcome: failedVerificationOutcome(verifyReport), branch, pr,
-          note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({ report: verifyReport })}`),
-          ...verificationFieldFor(verifyReport),
-        }
-      } else {
-        deps.log(`review: item ${item.id} pr ${pr} verdict=${loop.finalVerdict} rounds=${loop.rounds}`)
-
-        if (loop.finalVerdict === 'FAIL') {
-          // A real reviewer read the diff and said no — the fleet's own
-          // verification pipeline worked exactly as designed and caught
-          // something. This is the shape `circuit.ts`'s consecutive-failure
-          // breaker exists to catch, so it counts toward that streak.
-          await deps.commentOnIssue(
-            item.id,
-            `Review did not pass after ${loop.rounds} round(s) (final verdict: ${loop.finalVerdict}) — needs a human.`,
-          )
-          final = {
-            ...base, outcome: 'REJECTED', branch, pr,
-            note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({
-              report: verifyReport, reviewVerdict: loop.finalVerdict, reviewText: loop.lastVerdictText,
-            })}`),
-          }
-        } else if (loop.finalVerdict === 'UNREADABLE') {
-          // Issue #870: UNREADABLE never means "the diff is bad" — it means
-          // this fleet's OWN verification pipeline (the reviewer engine, a
-          // tamper check, or — the fleet-infra-722 shape, see review.ts's
-          // `runReviewLoop` — the revise round losing contact with a worker
-          // that had already finished correctly) could not reach a verdict.
-          // Mechanical verification already passed by this point (the branch
-          // above returns before this one is ever reached), so the work
-          // itself has NOT been shown to be bad — recording REJECTED here
-          // would count a fleet-side verification gap as if a real reviewer
-          // had rejected the work, and three of those in a row would trip
-          // `circuit.ts`'s consecutive-failure breaker over nothing but the
-          // fleet's own plumbing (the exact incident this outcome exists to
-          // stop). `needsHuman: true`: a PR the fleet could not get a second
-          // opinion on should be looked at directly, not silently re-dispatched
-          // as a brand new worker attempt against a branch that likely
-          // already holds correct, finished work.
-          await deps.commentOnIssue(
-            item.id,
-            `The fleet could not get a verification verdict after ${loop.rounds} round(s) (${loop.finalVerdict}) — ` +
-            'this is a gap in the fleet\'s own verification, not a claim that the work is wrong. Needs a human look.',
-          )
-          needsHuman = true
-          final = {
-            ...base, outcome: 'UNVERIFIED', branch, pr,
-            note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({
-              report: verifyReport, reviewVerdict: loop.finalVerdict, reviewText: loop.lastVerdictText,
-            })}`),
-          }
-        } else {
-          // The ONLY place auto-merge is armed: mechanical verification
-          // passed AND the non-author review passed. Best-effort and
-          // fail-closed — if arming fails nothing merges, which is the safe
-          // direction, so it is logged rather than failing the item.
-          let armFailure: string | undefined
-          try {
-            await deps.enableAutoMerge(pr)
-            armed = true
-            deps.log(`auto-merge: armed on pr ${pr} — GitHub merges it when its required checks are green`)
-          } catch (e) {
-            // Fail-closed: nothing merges, which is the safe direction. But
-            // the work is verified, reviewed and correct, and nobody asked
-            // GitHub to merge it — so without this the PR sits open forever
-            // with a log line as its only explanation. `needs-human` puts it
-            // in the digest's "waiting on a human" section, and the reason
-            // goes in the ledger note that section renders.
-            armFailure = errorMessage(e)
-            needsHuman = true
-            deps.log(`auto-merge: could not arm on pr ${pr}: ${armFailure} — it will not merge unattended`)
-          }
-
-          // SUCCESS means the fleet finished ITS part — verified, reviewed,
-          // auto-merge armed — never a claim that the PR merged. Whether it
-          // did is a fact about GitHub, derived live by `llamenos-fleet
-          // status <issue>` and by the digest's own "waiting" section; see
-          // ledger.ts's module comment on why nothing here caches it.
-          // The arm failure PREFIXES the trace rather than following it:
-          // `sha=` must stay the last field, because `status.ts`'s
-          // `extractVerifiedSha` and its own comment both depend on that.
-          const trace = buildGateTrace({
-            report: verifyReport, reviewVerdict: loop.finalVerdict, reviewText: loop.lastVerdictText,
-          })
-          final = {
-            ...base, outcome: 'SUCCESS', branch, pr,
-            note: truncateNote(armFailure === undefined ? trace : `arm=failed(${armFailure}) ${trace}`),
-          }
-        }
-      }
-    } else if (result.outcome === 'SUCCESS') {
-      // G3's root-caused finding for issue #660/PR #662: `dispatch-one.sh`'s
-      // WORKER-written terminal status (as opposed to the throwaway
-      // DISPATCHED seed file written before the worker starts) never
-      // includes a `branch:` or `worktree:` key — only `session`, `status`,
-      // `pr`, `merged_sha`, `duration_sec`, `notes`. `realDispatch` (cli.ts)
-      // now recovers both independently of the worker's own report (branch
-      // is deterministic and known before dispatch; worktree is resolved
-      // via `findWorktreeForBranch`, asking git directly), so this branch
-      // should be rare — but a worker that crashes before ever pushing
-      // anything, or one dispatched with an unresolvable worktree, can still
-      // land here with a claimed SUCCESS this fleet cannot verify.
-      //
-      // The ENTIRE pipeline — scope, diff-targeted tests, non-author review
-      // — is skipped for exactly that reason, so
-      // this is recorded as-is (never silently upgraded to a real SUCCESS)
-      // with an explicit trace showing every stage as not-run, `needs-human`
-      // attached so it is never re-claimed, and — if a PR exists — a comment
-      // telling the human it received NO automated verification at all.
-      deps.log(
-        `verify: item ${item.id} pr ${pr ?? '(none)'} SKIPPED — dispatch result missing ` +
-        `${branch === undefined ? 'branch ' : ''}${worktree === undefined ? 'worktree ' : ''}` +
-        `— the mechanical verify -> review pipeline never ran for this claimed SUCCESS`,
-      )
-      const trace = buildGateTrace({})
-      if (pr !== undefined) {
-        await deps.commentOnPr(
-          pr,
-          'The fleet could not run its verification pipeline for this PR (missing ' +
-          `${branch === undefined ? 'a known branch' : 'a resolvable worktree'} after dispatch) — ` +
-          'no scope check, no diff-targeted tests, and no non-author review were performed. ' +
-          'Please review this PR from scratch; it has had NO automated verification.',
-        )
-      }
-      final = { ...base, outcome: 'SUCCESS', branch, pr, note: truncateNote(`${result.note ?? ''} | ${trace}`.trim()) }
-      needsHuman = true
-    } else {
-      // The worker itself did not reach a mergeable state (BLOCKED, FAILED,
-      // TIMEOUT, QUOTA), recorded as-is.
-      //
-      // QUOTA specifically: issue #817 made this reachable against a real
-      // worker — `engines.ts`'s `dispatch()` now reads the worker's own raw
-      // log directly and reclassifies FAILED -> QUOTA when the runtime died
-      // at turn <= 1 on a provider quota rejection (`detectQuotaFromLog`),
-      // since `dispatch-one.sh` itself still has no quota-detection of its
-      // own. `result` carries `quotaResetHint`/`quotaResetAt` straight onto
-      // this ledger row when that happened, which is what `circuit.ts`'s
-      // `quotaBreaker` and the per-provider `inQuotaCooldown` backoff above both
-      // read back.
-      final = { ...base, ...result }
-      // BLOCKED no longer spends the item's attempt budget (ledger.ts,
-      // `TERMINAL_FAILURES`), so the `needs-human` veto is the only thing
-      // keeping a worker that reported it cannot proceed from being
-      // re-dispatched into the same wall on every pass. A person clears the
-      // label once the missing grant or decision exists.
-      //
-      // Unless the wall is a lane boundary (#1764 ask 3): when the paths the
-      // worker named are ones only another lane's OWN PR may write, the item
-      // is re-routed there — MISROUTED, no `needs-human`, because nobody needs
-      // to decide anything and a parked item is invisible work.
-      if (result.outcome === 'BLOCKED') {
-        const r = routeBlocked({ note: result.note ?? '', lane, lanes: deps.lanes, tree })
-        if (r.kind === 'misrouted') {
-          rerouteTo = r.to
-          final = { ...final, outcome: 'MISROUTED', note: truncateNote(`${r.why} -> ${LANE_LABEL_PREFIX}${r.to}: ${r.paths.join(', ')}`) }
-          deps.log(`item ${item.id} BLOCKED on another lane's paths — re-routing to ${r.to}: ${r.paths.join(', ')}`)
-        } else {
-          needsHuman = true
-        }
-      }
-    }
+    decision = await decideDispatch(decisionDeps, item, lane, deps.lanes, base, tree, seen)
   } catch (e) {
     threw = true
-    final = { ...base, outcome: 'FAILED', note: errorMessage(e), branch, pr }
+    // Nothing queued by a decision that never finished is sent: it would
+    // explain an outcome that was not the one recorded.
+    decision = {
+      final: { ...base, outcome: 'FAILED', note: errorMessage(e), branch: seen.branch, pr: seen.pr },
+      armed: false,
+      notices: [],
+    }
   }
+  const { final, humanAct, armed, rerouteTo, notices } = decision
+  const { worktree, branch, pr } = seen
 
   // Every path that did not ITSELF arm must disarm. Keyed on `armed` rather
   // than on the outcome: an earlier attempt on this same PR may have armed
@@ -769,6 +630,9 @@ async function runLiveDispatch(
 
   deps.record(final)
 
+  // #3044: only now, with the outcome durable, does anyone get told about it.
+  await sendNotices(deps, item, notices)
+
   if (rerouteTo !== undefined) {
     await moveLane(deps, item, lane.id, rerouteTo,
       `The worker dispatched on lane \`${lane.id}\` reported BLOCKED on paths only lane \`${rerouteTo}\`'s own ` +
@@ -777,7 +641,7 @@ async function runLiveDispatch(
   }
 
   try {
-    await deps.settle({ item, lane, outcome: final.outcome, worktree, branch, pr, needsHuman })
+    await deps.settle({ item, lane, outcome: final.outcome, worktree, branch, pr, humanAct })
   } catch (e) {
     // settle() failing must not abort the pass or hide the outcome already
     // recorded above — it is logged and the loop continues.
@@ -785,6 +649,293 @@ async function runLiveDispatch(
   }
 
   return { outcome: final.outcome, threw }
+}
+
+/**
+ * Steps 2-5 of `runLiveDispatch`: dispatch, verify, review, arm — and the
+ * outcome they add up to. It writes nothing to GitHub but the arming itself
+ * and the review loop's own posts; every comment explaining the outcome is a
+ * returned `Notice` (see there for why).
+ */
+async function decideDispatch(
+  d: DecisionDeps,
+  item: WorkItem,
+  lane: Lane,
+  allLanes: Lane[],
+  base: BaseRecord,
+  tree: TreeIndex | undefined,
+  seen: Dispatched,
+): Promise<Decision> {
+  const notices: Notice[] = []
+  const result = await d.dispatch(item, lane)
+  const { worktree, branch, pr } = result
+  seen.worktree = worktree
+  seen.branch = branch
+  seen.pr = pr
+
+  if (result.branchMismatch !== undefined) {
+    // Issue #812: the work is on a branch this item was not dispatched
+    // for (live shape: PR #836 on `fleet-shared-704`). Checked BEFORE the
+    // outcome, and terminal whatever the worker claimed: verifying the
+    // expected branch would judge a diff that is not the one that merges,
+    // and verifying the actual one would run lane scope against a branch
+    // CI itself does not recognise as a fleet branch. FAILED, never armed
+    // (`armed` stays false, so the disarm also clears any earlier arming),
+    // `needs-human` so it is not silently re-claimed, and the PR told
+    // plainly that nothing verified it.
+    const mismatch = result.branchMismatch
+    d.log(
+      `verify: item ${item.id} pr ${pr ?? '(none)'} REFUSED — branch-mismatch:${mismatch} ` +
+      `(dispatched for ${fleetBranchFor(lane.id, item.id)}) — not verified, auto-merge not armed`,
+    )
+    if (pr !== undefined) {
+      notices.push({
+        to: 'pr', pr,
+        body:
+          `This PR is on branch \`${mismatch}\`, but the fleet dispatched issue #${item.id} on ` +
+          `\`${fleetBranchFor(lane.id, item.id)}\`. It was NOT verified by the fleet — no scope check, ` +
+          'no diff-targeted tests, no non-author review — and auto-merge has not been armed. ' +
+          'It needs a human: review it from scratch, or close it and re-dispatch the issue.',
+      })
+    }
+    return {
+      final: {
+        ...base, outcome: 'FAILED', branch, pr,
+        note: truncateNote(result.note ?? `branch-mismatch:${mismatch}`),
+      },
+      humanAct:
+        `review ${pr === undefined ? 'the work' : `PR ${pr}`} from scratch, or close it and re-dispatch this issue. ` +
+        `It landed on branch \`${mismatch}\`, not \`${fleetBranchFor(lane.id, item.id)}\`, so the fleet verified ` +
+        'nothing about it and armed nothing. Remove the label when done.',
+      armed: false,
+      notices,
+    }
+  }
+
+  if (result.outcome === 'SUCCESS' && branch !== undefined && pr !== undefined && worktree !== undefined) {
+    // The bounded mechanical-verify -> second-opinion -> (on FAIL) revise
+    // -> re-verify loop (task 13, review.ts). Mechanical failure is
+    // terminal on whatever round it happens (no review is ever requested
+    // for it); a tamper detection trips the kill switch via `haltFleet`
+    // and is never retried — both handled entirely inside the loop, not
+    // here.
+    const loop = await runReviewLoop({ authorEngine: lane.engine, pr, worktree, branch, lane, allLanes }, d.reviewLoop)
+    const verifyReport = loop.lastReport
+
+    // G2: one log line for the verify stage, ALWAYS — whether or not it
+    // passed — so an operator reading fleet.log can tell "verify ran and
+    // refused" from "verify never ran" without cross-referencing the
+    // ledger. The review line below only appears when that stage was
+    // actually reached, which is itself the signal: a run that
+    // stops at mechanical verification has a verify line and nothing
+    // after it.
+    d.log(`verify: item ${item.id} pr ${pr} ${buildGateTrace({ report: verifyReport })}`)
+
+    if (verifyReport === undefined || !verifyReport.passed) {
+      const reasons = verifyReport?.reasons ?? []
+      notices.push({
+        to: 'issue', itemId: item.id,
+        body: loop.runnerCrashed === true
+          ? `The test runner reached no verdict after ${loop.rounds} round(s) — this is the fleet's own ` +
+            `infrastructure, not a finding about the work, and no review was requested yet:\n- ${reasons.join('\n- ')}`
+          : `Mechanical verification failed after ${loop.rounds} round(s):\n- ${reasons.join('\n- ')}`,
+      })
+      // #2738: the PR itself says so. The issue comment above is where the
+      // fleet reports to the ITEM; a person looking at the PR saw an
+      // ordinary open PR awaiting review.
+      notices.push({ to: 'pr', pr, body: verificationFailedBody(verifyReport, false) })
+      return {
+        final: {
+          ...base, outcome: failedVerificationOutcome(verifyReport), branch, pr,
+          note: truncateNote(`rounds=${loop.rounds} ${buildGateTrace({ report: verifyReport })}`),
+          ...verificationFieldFor(verifyReport),
+        },
+        armed: false,
+        notices,
+      }
+    }
+
+    d.log(`review: item ${item.id} pr ${pr} verdict=${loop.finalVerdict} rounds=${loop.rounds}`)
+    const reviewTrace = buildGateTrace({
+      report: verifyReport, reviewVerdict: loop.finalVerdict, reviewText: loop.lastVerdictText,
+    })
+
+    if (loop.finalVerdict === 'FAIL') {
+      // A real reviewer read the diff and said no — the fleet's own
+      // verification pipeline worked exactly as designed and caught
+      // something. This is the shape `circuit.ts`'s consecutive-failure
+      // breaker exists to catch, so it counts toward that streak.
+      notices.push({
+        to: 'issue', itemId: item.id,
+        body: `Review did not pass after ${loop.rounds} round(s) (final verdict: ${loop.finalVerdict}) — needs a human.`,
+      })
+      return {
+        final: { ...base, outcome: 'REJECTED', branch, pr, note: truncateNote(`rounds=${loop.rounds} ${reviewTrace}`) },
+        armed: false,
+        notices,
+      }
+    }
+
+    if (loop.finalVerdict === 'UNREADABLE') {
+      // Issue #870: UNREADABLE never means "the diff is bad" — it means
+      // this fleet's OWN verification pipeline (the reviewer engine, a
+      // tamper check, or — the fleet-infra-722 shape, see review.ts's
+      // `runReviewLoop` — the revise round losing contact with a worker
+      // that had already finished correctly) could not reach a verdict.
+      // Mechanical verification already passed by this point (the branch
+      // above returns before this one is ever reached), so the work
+      // itself has NOT been shown to be bad — recording REJECTED here
+      // would count a fleet-side verification gap as if a real reviewer
+      // had rejected the work, and three of those in a row would trip
+      // `circuit.ts`'s consecutive-failure breaker over nothing but the
+      // fleet's own plumbing (the exact incident this outcome exists to
+      // stop). A `humanAct` hand-off: a PR the fleet could not get a second
+      // opinion on should be looked at directly, not silently re-dispatched
+      // as a brand new worker attempt against a branch that likely
+      // already holds correct, finished work.
+      return {
+        final: { ...base, outcome: 'UNVERIFIED', branch, pr, note: truncateNote(`rounds=${loop.rounds} ${reviewTrace}`) },
+        humanAct:
+          `look at PR ${pr} directly. The fleet could not get a verification verdict after ${loop.rounds} ` +
+          `round(s) (${loop.finalVerdict}) — a gap in the fleet's own verification, not a claim that the work ` +
+          'is wrong. Merge it if it is sound, or close it; either way remove the label so the issue can move.',
+        armed: false,
+        notices,
+      }
+    }
+
+    // The ONLY place auto-merge is armed: mechanical verification
+    // passed AND the non-author review passed. Best-effort and
+    // fail-closed — if arming fails nothing merges, which is the safe
+    // direction, so it is logged rather than failing the item.
+    let armed = false
+    let armFailure: string | undefined
+    try {
+      await d.enableAutoMerge(pr)
+      armed = true
+      d.log(`auto-merge: armed on pr ${pr} — GitHub merges it when its required checks are green`)
+    } catch (e) {
+      // Fail-closed: nothing merges, which is the safe direction. NO
+      // hand-off (#1815): the work is verified and reviewed, the PR is
+      // open (so `findOpenPr` holds the item), and queue-feed re-arms
+      // an unarmed green PR on its own pass. Nobody has an act to take,
+      // so `needs-human` here asked nothing — the #3029 false gate. The
+      // PR itself says why it is not armed, and the reason stays in the
+      // ledger note the digest's "waiting" section renders.
+      armFailure = errorMessage(e)
+      d.log(`auto-merge: could not arm on pr ${pr}: ${armFailure} — left for queue-feed to arm`)
+      notices.push({
+        to: 'pr', pr,
+        body:
+          'Verified and reviewed by the fleet, but auto-merge could not be armed: ' +
+          `${armFailure}. queue-feed re-evaluates and arms it on its own pass; nothing is needed from a ` +
+          'person unless it stays unarmed.',
+      })
+    }
+
+    // SUCCESS means the fleet finished ITS part — verified, reviewed,
+    // auto-merge armed — never a claim that the PR merged. Whether it
+    // did is a fact about GitHub, derived live by `llamenos-fleet
+    // status <issue>` and by the digest's own "waiting" section; see
+    // ledger.ts's module comment on why nothing here caches it.
+    // The arm failure PREFIXES the trace rather than following it:
+    // `sha=` must stay the last field, because `status.ts`'s
+    // `extractVerifiedSha` and its own comment both depend on that.
+    return {
+      final: {
+        ...base, outcome: 'SUCCESS', branch, pr,
+        note: truncateNote(armFailure === undefined ? reviewTrace : `arm=failed(${armFailure}) ${reviewTrace}`),
+      },
+      armed,
+      notices,
+    }
+  }
+
+  if (result.outcome === 'SUCCESS') {
+    // G3's root-caused finding for issue #660/PR #662: `dispatch-one.sh`'s
+    // WORKER-written terminal status (as opposed to the throwaway
+    // DISPATCHED seed file written before the worker starts) never
+    // includes a `branch:` or `worktree:` key — only `session`, `status`,
+    // `pr`, `merged_sha`, `duration_sec`, `notes`. `realDispatch` (cli.ts)
+    // now recovers both independently of the worker's own report (branch
+    // is deterministic and known before dispatch; worktree is resolved
+    // via `findWorktreeForBranch`, asking git directly), so this branch
+    // should be rare — but a worker that crashes before ever pushing
+    // anything, or one dispatched with an unresolvable worktree, can still
+    // land here with a claimed SUCCESS this fleet cannot verify.
+    //
+    // The ENTIRE pipeline — scope, diff-targeted tests, non-author review
+    // — is skipped for exactly that reason, so
+    // this is recorded as-is (never silently upgraded to a real SUCCESS)
+    // with an explicit trace showing every stage as not-run, `needs-human`
+    // attached so it is never re-claimed, and — if a PR exists — a comment
+    // telling the human it received NO automated verification at all.
+    d.log(
+      `verify: item ${item.id} pr ${pr ?? '(none)'} SKIPPED — dispatch result missing ` +
+      `${branch === undefined ? 'branch ' : ''}${worktree === undefined ? 'worktree ' : ''}` +
+      `— the mechanical verify -> review pipeline never ran for this claimed SUCCESS`,
+    )
+    const trace = buildGateTrace({})
+    if (pr !== undefined) {
+      notices.push({
+        to: 'pr', pr,
+        body:
+          'The fleet could not run its verification pipeline for this PR (missing ' +
+          `${branch === undefined ? 'a known branch' : 'a resolvable worktree'} after dispatch) — ` +
+          'no scope check, no diff-targeted tests, and no non-author review were performed. ' +
+          'Please review this PR from scratch; it has had NO automated verification.',
+      })
+    }
+    return {
+      final: { ...base, outcome: 'SUCCESS', branch, pr, note: truncateNote(`${result.note ?? ''} | ${trace}`.trim()) },
+      humanAct: pr !== undefined
+        ? `review PR ${pr} from scratch: the worker reported success, but the fleet could not run its ` +
+          'verification pipeline on it (no scope check, no diff-targeted tests, no non-author review). ' +
+          'Merge or close it, then remove the label.'
+        : 'find the worker\'s output: it reported success but no PR, branch or worktree could be resolved, so ' +
+          'the fleet verified nothing. Remove the label to re-dispatch.',
+      armed: false,
+      notices,
+    }
+  }
+
+  // The worker itself did not reach a mergeable state (BLOCKED, FAILED,
+  // TIMEOUT, QUOTA), recorded as-is.
+  //
+  // QUOTA specifically: issue #817 made this reachable against a real
+  // worker — `engines.ts`'s `dispatch()` now reads the worker's own raw
+  // log directly and reclassifies FAILED -> QUOTA when the runtime died
+  // at turn <= 1 on a provider quota rejection (`detectQuotaFromLog`),
+  // since `dispatch-one.sh` itself still has no quota-detection of its
+  // own. `result` carries `quotaResetHint`/`quotaResetAt` straight onto
+  // this ledger row when that happened, which is what `circuit.ts`'s
+  // `quotaBreaker` and the per-provider `inQuotaCooldown` backoff above both
+  // read back.
+  const final: RunRecord = { ...base, ...result }
+  // BLOCKED no longer spends the item's attempt budget (ledger.ts,
+  // `TERMINAL_FAILURES`), so the `needs-human` veto is the only thing
+  // keeping a worker that reported it cannot proceed from being
+  // re-dispatched into the same wall on every pass. A person clears the
+  // label once the missing grant or decision exists.
+  //
+  // Unless the wall is a lane boundary (#1764 ask 3): when the paths the
+  // worker named are ones only another lane's OWN PR may write, the item
+  // is re-routed there — MISROUTED, no `needs-human`, because nobody needs
+  // to decide anything and a parked item is invisible work.
+  if (result.outcome === 'BLOCKED') {
+    const r = routeBlocked({ note: result.note ?? '', lane, lanes: allLanes, tree })
+    if (r.kind === 'misrouted') {
+      d.log(`item ${item.id} BLOCKED on another lane's paths — re-routing to ${r.to}: ${r.paths.join(', ')}`)
+      return {
+        final: { ...final, outcome: 'MISROUTED', note: truncateNote(`${r.why} -> ${LANE_LABEL_PREFIX}${r.to}: ${r.paths.join(', ')}`) },
+        armed: false,
+        rerouteTo: r.to,
+        notices,
+      }
+    }
+    return { final, humanAct: blockedHumanAct(result.note), armed: false, notices }
+  }
+  return { final, armed: false, notices }
 }
 
 /**

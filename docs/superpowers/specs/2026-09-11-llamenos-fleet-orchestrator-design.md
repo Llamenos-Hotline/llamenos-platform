@@ -177,7 +177,11 @@ unreadable, and the digest reported a quiet night with a full backlog.
 Implementation: GitHub Issues carry the work; a Projects v2 board carries state
 as columns (`Next-up → In Progress → In Review → Blocked → Done`); labels carry
 lane assignment (`lane:ios`, `lane:backend`, …), dispatchability
-(`agent-dispatchable`), and vetoes (`needs-human`, `needs-decision`, `blocked`).
+(`agent-dispatchable`), and vetoes (`agent-proposed`, `needs-human`, `needs-decision`,
+`blocked`, `needs-info`). *Amended by #1815:* the Planner's own proposals carry
+`agent-proposed` (a yes/no a human answers), not `needs-human` (an act only a
+person can take); `orchestrator/src/hold-labels.ts` defines what each veto asks,
+and `orchestrator/README.md` § "What the hold labels mean" is the operator view.
 Labels are read fresh per item at dispatch time, never from a search index.
 An issue whose body is under 200 characters is rejected as under-specified — a
 worker briefed on nothing is worse than no worker.

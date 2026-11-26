@@ -114,7 +114,7 @@ const OUTCOMES_MEANING_A_PR_WAS_LEFT_FOR_A_HUMAN: ReadonlySet<Outcome> =
  * after this fleet's redesign SUCCESS no longer implies "merged" — see
  * ledger.ts's module comment — it can mean a clean auto-merge OR a claimed
  * success this fleet could not verify and left for a human (tick.ts's
- * `needsHuman` handoff). UNVERIFIED (issue #870) is the same idea again: a
+ * `humanAct` handoff). UNVERIFIED (issue #870) is the same idea again: a
  * PR this fleet's own plumbing failed to confirm one way or the other, left
  * open for exactly this "waiting on a human" section to surface it.
  * Distinguishing those two requires a LIVE `gh` query

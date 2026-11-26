@@ -12,7 +12,9 @@ import {
   doctorHaltVerdict,
 } from '../../orchestrator/src/cli.js'
 import { renderDigest, computeBanner } from '../../orchestrator/src/digest.js'
-import { buildIssueCreateArgs, NEEDS_HUMAN_LABEL, type ProposedIssue } from '../../orchestrator/src/roles/planner.js'
+import {
+  buildIssueCreateArgs, buildProposalLabelArgs, AGENT_PROPOSED_LABEL, type ProposedIssue,
+} from '../../orchestrator/src/roles/planner.js'
 import type { RunRecord } from '../../orchestrator/src/ledger.js'
 import type { WorkItem } from '../../orchestrator/src/source.js'
 import type { SettleInput, TickResult } from '../../orchestrator/src/tick.js'
@@ -257,6 +259,7 @@ function planDeps(over: Partial<PlanDeps> = {}): PlanDeps {
     readGoalDocument: () => 'goal doc',
     invoke: async () => '[]',
     createIssue: vi.fn(async () => 'https://github.com/x/y/issues/1'),
+    ensureProposalLabel: vi.fn(async () => {}),
     log: () => {},
     ...over,
   }
@@ -270,10 +273,24 @@ const proposal: ProposedIssue = {
 }
 
 describe('runPlanWith', () => {
-  it('creates no issues when the model proposes nothing', async () => {
+  it('creates no issues (and touches no label) when the model proposes nothing', async () => {
     const createIssue = vi.fn(async () => '')
-    await runPlanWith(planDeps({ createIssue }))
+    const ensureProposalLabel = vi.fn(async () => {})
+    await runPlanWith(planDeps({ createIssue, ensureProposalLabel }))
     expect(createIssue).not.toHaveBeenCalled()
+    expect(ensureProposalLabel).not.toHaveBeenCalled()
+  })
+
+  // `gh issue create --label` refuses a label the repo does not have, so the
+  // label must exist before the first create — not after it.
+  it('ensures agent-proposed exists before creating the first issue', async () => {
+    const order: string[] = []
+    await runPlanWith(planDeps({
+      invoke: async () => JSON.stringify([proposal]),
+      ensureProposalLabel: vi.fn(async (args: string[]) => { order.push(`label:${args.join(' ')}`) }),
+      createIssue: vi.fn(async () => { order.push('create'); return 'u' }),
+    }))
+    expect(order).toEqual([`label:${buildProposalLabelArgs().join(' ')}`, 'create'])
   })
 
   // This is the load-bearing test for Part 2: it does not merely check that
@@ -283,7 +300,7 @@ describe('runPlanWith', () => {
   // hand-assembles its own `gh issue create` argv (bypassing the one
   // sanctioned path, and thereby the unconditional `needs-human` label)
   // fails this test even if it remembers to add every OTHER label by hand.
-  it('creates every proposed issue through buildIssueCreateArgs, so needs-human is always attached', async () => {
+  it('creates every proposed issue through buildIssueCreateArgs, so agent-proposed is always attached', async () => {
     const createIssue = vi.fn(async () => 'https://github.com/x/y/issues/1')
     await runPlanWith(planDeps({
       invoke: async () => JSON.stringify([proposal]),
@@ -295,7 +312,7 @@ describe('runPlanWith', () => {
     const args = (createIssue as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string[]
     const labelIdx = args.indexOf('--label')
     expect(labelIdx).toBeGreaterThanOrEqual(0)
-    expect(args[labelIdx + 1]?.split(',')).toContain(NEEDS_HUMAN_LABEL)
+    expect(args[labelIdx + 1]?.split(',')).toContain(AGENT_PROPOSED_LABEL)
   })
 
   it('drops a proposal that near-duplicates the open backlog before ever calling createIssue', async () => {
@@ -601,7 +618,7 @@ describe('resolveAwaitingHumanWith (digest live derivation)', () => {
 })
 
 describe('settleTargetFor', () => {
-  const input = (needsHuman: boolean): SettleInput => ({
+  const input = (humanAct: string | undefined): SettleInput => ({
     item: { id: '7', title: 't', body: 'b', url: 'u', labels: [] },
     lane: {
       id: 'ios', mode: 'live', cap: 1, engine: 'claude',
@@ -611,23 +628,23 @@ describe('settleTargetFor', () => {
     worktree: '/wt/ios-7',
     branch: 'fleet/ios/7',
     pr: '99',
-    needsHuman,
+    humanAct,
   })
 
-  // The regression this exists for: needsHuman was silently omitted from the
+  // The regression this exists for: the hand-off was silently omitted from the
   // object literal handed to settle(), so the `needs-human` label — the only
   // thing stopping the fleet re-dispatching a claimed SUCCESS it could not
   // verify (issue #660's shape) — could never be applied in production.
   // TypeScript could not see it: every field it does set is optional on
   // SettleTarget, so an omission type-checks.
-  it.each([true, false])('carries needsHuman=%s through to settle()', (needsHuman) => {
-    expect(settleTargetFor(input(needsHuman)).needsHuman).toBe(needsHuman)
+  it.each(['review PR 99 from scratch', undefined])('carries humanAct=%s through to settle()', (humanAct) => {
+    expect(settleTargetFor(input(humanAct)).humanAct).toBe(humanAct)
   })
 
   it('carries the worktree, branch, outcome and item id settle() needs to clean up', () => {
-    expect(settleTargetFor(input(true))).toEqual({
+    expect(settleTargetFor(input('act'))).toEqual({
       name: 'fleet-ios-7', itemId: '7', outcome: 'SUCCESS',
-      worktree: '/wt/ios-7', branch: 'fleet/ios/7', needsHuman: true,
+      worktree: '/wt/ios-7', branch: 'fleet/ios/7', humanAct: 'act',
     })
   })
 })
