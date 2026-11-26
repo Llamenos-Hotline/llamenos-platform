@@ -8,9 +8,10 @@ import { delimiter, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   changedFilesFrom, addedLinesFromNumstat, testTargetsFor, isSafeTestPath, resolvesWithinRoot, verifyMechanical,
-  judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases, scopeStrayAdvice,
+  judgeTargetRun, parseVitestJson, parseVitestFailures, workspaceAliases,
 } from '../../orchestrator/src/verify.js'
 import { classifyImpact } from '../../orchestrator/src/impact.js'
+import { reviewLanesFor } from '../../orchestrator/src/route.js'
 import type { TargetOutcome, TestRunResult } from '../../orchestrator/src/verify.js'
 import type { Lane } from '../../orchestrator/src/config.js'
 import { ISRG_ROOT_X1, throwawayPrivateKeyPem } from './pem-fixtures.js'
@@ -251,41 +252,86 @@ describe('verifyMechanical', () => {
   it('still records verifiedCommit even when scope verification fails', () => {
     // A record of what was examined must exist regardless of the verdict —
     // an auditor asking "what commit did this failing report even look at"
-    // must get an answer, not undefined-because-it-failed-early.
+    // must get an answer, not undefined-because-it-failed-early. A file
+    // outside the lane no longer fails (#3056), so fail on the supply chain.
     return (async () => {
-      const { dir, headSha } = makeRepoWithDivergedMain()
-      const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
-      const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: outOfScopeLane })
+      const { dir, headSha } = makeRepoWithDivergedMain('deploy/docker/x.yml')
+      const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: testLane })
 
       expect(report.passed).toBe(false)
       expect(report.verifiedCommit).toBe(headSha)
     })()
   })
 
-  it('appends ownership advice to a scope failure when allLanes is provided', async () => {
+  // #3056: lane write-scope is routing. The file below is outside the PR's
+  // lane and another lane owns it — and the gate PASSES, naming that lane.
+  it('passes a file outside the lane and names the lane that owns it (#3056)', async () => {
     const { dir } = makeRepoWithDivergedMain()
     const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
     const notesOwner: Lane = { ...testLane, id: 'docs', scope: { owned: ['notes.md'], notOwned: [] } }
     const report = await verifyMechanical({
-      worktree: dir, branch: 'main', lane: outOfScopeLane, allLanes: [outOfScopeLane, notesOwner],
+      worktree: dir, branch: 'main', lane: outOfScopeLane, allLanes: [outOfScopeLane, notesOwner], skipTests: true,
+    })
+
+    expect(report.passed).toBe(true)
+    expect(report.reasons).toEqual([])
+    expect(report.reviewLanes).toEqual([{ lane: 'docs', files: ['notes.md'] }])
+  })
+
+  it('a file no lane owns also passes, and names nobody', async () => {
+    const { dir } = makeRepoWithDivergedMain()
+    const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: outOfScopeLane, allLanes: [outOfScopeLane], skipTests: true,
+    })
+
+    expect(report.passed).toBe(true)
+    expect(report.reviewLanes).toEqual([])
+  })
+
+  it('reports no reviewLanes at all when allLanes is omitted — "not asked", not "no other lane"', async () => {
+    const { dir } = makeRepoWithDivergedMain()
+    const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: outOfScopeLane, skipTests: true })
+
+    expect(report.passed).toBe(true)
+    expect(report.reviewLanes).toBeUndefined()
+  })
+
+  // The unscoped case: a branch that is not `fleet/<lane>/…` has no authoring
+  // lane, and its review routing must not be undecidable because of it.
+  it('routes review for a PR with no authoring lane (a branch that is not fleet/<lane>/…) (#3056)', async () => {
+    const { dir } = makeRepoWithDivergedMain()
+    const unscoped: Lane = { ...testLane, id: '(no lane — not a fleet branch)', scope: { owned: [], notOwned: [] } }
+    const notesOwner: Lane = { ...testLane, id: 'docs', scope: { owned: ['notes.md'], notOwned: [] } }
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: unscoped, allLanes: [notesOwner], skipTests: true,
+    })
+
+    expect(report.passed).toBe(true)
+    expect(report.reviewLanes).toEqual([{ lane: 'docs', files: ['notes.md'] }])
+  })
+
+  it('still fails a supply-chain file the lane does not own, whoever owns it (#3056)', async () => {
+    const { dir } = makeRepoWithDivergedMain('deploy/docker/x.yml')
+    const deployOwner: Lane = { ...testLane, id: 'infra', scope: { owned: ['deploy/'], notOwned: [] } }
+    const report = await verifyMechanical({
+      worktree: dir, branch: 'main', lane: testLane, allLanes: [testLane, deployOwner], skipTests: true,
     })
 
     expect(report.passed).toBe(false)
-    expect(report.reasons).toContain('touched files outside lane "test"\'s scope: notes.md')
-    const advice = report.reasons.filter((r) => r.startsWith('scope advice:'))
-    expect(advice).toHaveLength(1)
-    expect(advice[0]).toContain('notes.md')
-    expect(advice[0]).toContain('owned by lane "docs"')
-    expect(advice[0]).toContain('scope:docs')
+    expect(report.reasons).toHaveLength(1)
+    expect(report.reasons[0]).toContain('touched files outside lane "test"\'s scope')
+    expect(report.reasons[0]).toContain('deploy/docker/x.yml')
+    // Refused, and ALSO routed: the report still says who owns it.
+    expect(report.reviewLanes).toEqual([{ lane: 'infra', files: ['deploy/docker/x.yml'] }])
   })
 
-  it('adds no advice when allLanes is omitted — the legacy failure text is unchanged', async () => {
-    const { dir } = makeRepoWithDivergedMain()
-    const outOfScopeLane: Lane = { ...testLane, scope: { owned: ['some-other-file.md'], notOwned: [] } }
-    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: outOfScopeLane })
-
-    expect(report.passed).toBe(false)
-    expect(report.reasons).toEqual(['touched files outside lane "test"\'s scope: notes.md'])
+  it('the owning lane may write its own supply-chain file', async () => {
+    const { dir } = makeRepoWithDivergedMain('deploy/docker/x.yml')
+    const deployOwner: Lane = { ...testLane, id: 'infra', scope: { owned: ['deploy/'], notOwned: [] } }
+    const report = await verifyMechanical({ worktree: dir, branch: 'main', lane: deployOwner, skipTests: true })
+    expect(report.passed).toBe(true)
   })
 
   // `skipTests` exists for the `fleet/review` CI job, where `fleet/verify` is
@@ -332,13 +378,13 @@ describe('verifyMechanical', () => {
   })
 })
 
-// --- scopeStrayAdvice: the remedy half of a scope failure. The bare stray
-// line cannot tell "apply a scope: label" from "no grant can reach this
-// file", and the four NO-VERDICT:scope PRs of 2026-10 (#1837, #1838, #1785,
-// #1766) needed three different remedies under one identical message. These
-// pin the classification: grantable, grant-excluded, unowned.
+// --- reviewLanesFor: who should review a diff, from the files outside the
+// authoring lane (#3056). It replaced `scopeStrayAdvice`, which told a reader
+// which REMEDY applied to a scope failure (apply a label / move the file / wait
+// for an owner). There is no failure to remedy for a cross-lane file any more,
+// so the question left is only "which lane owns it".
 
-describe('scopeStrayAdvice', () => {
+describe('reviewLanesFor', () => {
   const laneOf = (id: string, owned: string[], notOwned: string[] = []): Lane => ({
     id, mode: 'live', cap: 1, engine: 'claude',
     requireLabel: 'agent-dispatchable', vetoLabels: [],
@@ -346,78 +392,54 @@ describe('scopeStrayAdvice', () => {
   })
   const android = laneOf('android', ['apps/android/', 'packages/i18n/locales/'])
   const backend = laneOf('backend', ['apps/worker/'])
-  const ios = laneOf('ios', ['apps/ios/', '.github/workflows/ios*.yml'])
+  const ios = laneOf('ios', ['apps/ios/', '.github/workflows/ios*.yml', 'packages/i18n/locales/'])
   const all = [android, backend, ios]
 
-  it('names the owning lane and the scope: label for a grantable stray', () => {
-    const lines = scopeStrayAdvice(['apps/worker/__tests__/unit/mobile-client-routes.test.ts'], android, all)
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('scope advice: apps/worker/__tests__/unit/mobile-client-routes.test.ts')
-    expect(lines[0]).toContain('owned by lane "backend"')
-    expect(lines[0]).toContain('scope:backend')
-    expect(lines[0]).not.toContain('grant-excluded')
+  it('names the owning lane, with the files that named it', () => {
+    expect(reviewLanesFor(['apps/worker/__tests__/unit/mobile-client-routes.test.ts'], 'android', all))
+      .toEqual([{ lane: 'backend', files: ['apps/worker/__tests__/unit/mobile-client-routes.test.ts'] }])
   })
 
-  it('says "owned by no lane" for a stray no lane owns — a grant cannot help there', () => {
-    const lines = scopeStrayAdvice(['docs/epics/epic-237.md'], android, all)
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('owned by no lane (#1115)')
-    // It names the remedy that CANNOT work (a grant) rather than offering one.
-    expect(lines[0]).not.toContain('apply a scope:')
-    expect(lines[0]).not.toContain('re-request review')
+  it('names nobody for a file no lane owns — there is no one to ask', () => {
+    expect(reviewLanesFor(['docs/epics/epic-237.md'], 'android', all)).toEqual([])
   })
 
-  it('classifies a grant-excluded stray as unreachable by label even when a lane owns it', () => {
-    // ios owns `.github/workflows/ios*.yml`, but GRANT_EXCLUDED_PATHS refuses
-    // every workflow to a grant — advising `scope:ios` here would name a
-    // remedy that provably cannot work.
-    const lines = scopeStrayAdvice(['.github/workflows/ios-e2e.yml'], android, all)
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('grant-excluded')
-    expect(lines[0]).toContain('owned by lane "ios"')
-    expect(lines[0]).not.toContain('scope:ios label and re-request')
+  it('never names the PR\'s own lane', () => {
+    expect(reviewLanesFor(['apps/android/x.kt', 'apps/worker/a.ts'], 'android', all))
+      .toEqual([{ lane: 'backend', files: ['apps/worker/a.ts'] }])
   })
 
-  it('never offers a lane with an empty owned list — "no ownership check" is not ownership', () => {
-    const offLane = laneOf('offlane', [])
-    const lines = scopeStrayAdvice(['anything/at/all.ts'], android, [android, offLane])
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('owned by no lane')
+  it('never names a lane with an empty owned list — "no ownership check" is not ownership', () => {
+    expect(reviewLanesFor(['anything/at/all.ts'], 'android', [android, laneOf('offlane', [])])).toEqual([])
   })
 
-  it('never offers the PR its own lane as a grant candidate', () => {
-    const lines = scopeStrayAdvice(['apps/android/x.kt'], android, all)
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('owned by no lane')
+  // A shared-write grant (the locale files, package.json) is owned by several
+  // lanes equally; attributing it to one would be a guess.
+  it('names nobody for a path several lanes own equally specifically', () => {
+    expect(reviewLanesFor(['packages/i18n/locales/en.json'], 'backend', all)).toEqual([])
   })
 
-  it('returns [] when allLanes is absent, keeping the legacy message byte-identical', () => {
-    expect(scopeStrayAdvice(['apps/worker/x.ts'], android, undefined)).toEqual([])
-    expect(scopeStrayAdvice([], android, all)).toEqual([])
+  it('prefers the lane whose owned pattern matches longest', () => {
+    const wide = laneOf('wide', ['apps/'])
+    expect(reviewLanesFor(['apps/worker/a.ts'], 'android', [android, backend, wide]))
+      .toEqual([{ lane: 'backend', files: ['apps/worker/a.ts'] }])
   })
 
-  it('groups files that share an owner set onto one advice line', () => {
-    const lines = scopeStrayAdvice(['apps/worker/a.ts', 'apps/worker/b.ts'], android, all)
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain('apps/worker/a.ts, apps/worker/b.ts')
+  it('honours a carve-out: ios disclaims nothing here, but a notOwned entry hides the file from that lane', () => {
+    const carved = laneOf('carved', ['apps/'], ['apps/worker/'])
+    expect(reviewLanesFor(['apps/worker/a.ts'], 'android', [android, carved])).toEqual([])
   })
 
-  it('emits one line per class when a stray list mixes all three', () => {
-    const lines = scopeStrayAdvice(
-      ['apps/worker/a.ts', 'docs/epics/x.md', '.github/workflows/ios-e2e.yml'],
-      android,
-      all,
-    )
-    expect(lines).toHaveLength(3)
-    expect(lines.some((l) => l.includes('owned by lane "backend"'))).toBe(true)
-    expect(lines.some((l) => l.includes('owned by no lane'))).toBe(true)
-    expect(lines.some((l) => l.includes('grant-excluded'))).toBe(true)
-    // The trace prefixes must not match the advice lines — buildGateTrace
-    // filters reasons by them, and advice in the one-line trace is noise.
-    for (const l of lines) {
-      expect(l.startsWith('touched files outside lane')).toBe(false)
-      expect(l.startsWith('touched never-write paths')).toBe(false)
-    }
+  it('groups several files onto one lane and sorts lanes by id', () => {
+    expect(reviewLanesFor(['apps/worker/b.ts', 'apps/ios/x.swift', 'apps/worker/a.ts'], 'android', all)).toEqual([
+      { lane: 'backend', files: ['apps/worker/a.ts', 'apps/worker/b.ts'] },
+      { lane: 'ios', files: ['apps/ios/x.swift'] },
+    ])
+  })
+
+  it('a workflow ios owns routes to ios, exactly as any other path does — the supply-chain refusal is the gate\'s, not routing\'s', () => {
+    expect(reviewLanesFor(['.github/workflows/ios-e2e.yml'], 'android', all))
+      .toEqual([{ lane: 'ios', files: ['.github/workflows/ios-e2e.yml'] }])
   })
 })
 

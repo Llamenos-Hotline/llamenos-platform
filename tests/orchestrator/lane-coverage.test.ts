@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { loadLanes, loadGrantableLanes, GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS, type Lane } from '../../orchestrator/src/config.js'
 import { loadLaneScopes, matchesPath, type LaneScope } from '../../orchestrator/src/fragments.js'
-import { checkScope, checkScopeAcross } from '../../orchestrator/src/scope.js'
-import { planScopeGrants } from '../../orchestrator/src/scope-grant.js'
-import { scopeStrayAdvice } from '../../orchestrator/src/verify.js'
+import { checkScope, checkScopeRouting } from '../../orchestrator/src/scope.js'
+import { reviewLanesFor } from '../../orchestrator/src/route.js'
 import { trackedFiles } from './codeowners.js'
 
 /**
@@ -35,8 +34,16 @@ import { trackedFiles } from './codeowners.js'
  *    `scripts/ci/mac-runner-disk-guard.sh` and `tests/runner-boundary.spec.ts`
  *    are owned by the mac fragment, so the ratchet counted them owned, while
  *    the gate answered `unowned` for every one of them. The ratchet now asks
- *    the gate's own two instruments (`planScopeGrants`, `scopeStrayAdvice`)
- *    with the gate's own lane list, for every file, as every lane's PR.
+ *    the gate's own instruments (then `planScopeGrants` and `scopeStrayAdvice`,
+ *    now `checkScopeRouting` and `reviewLanesFor`) with the gate's own lane
+ *    list, for every file, as every lane's PR.
+ *
+ * #3056 changed what the gate does with an unowned or cross-lane path: it no
+ * longer REFUSES one (stray-scope is routing, `checkScopeRouting`/`reviewLanesFor`),
+ * so "owned by no lane" stopped being a verdict and became a hole in review
+ * routing — a path no lane owns names no reviewer. The ownership assertions
+ * below are therefore still the rail that matters; what they judge the gate by
+ * is what it still does: refuse the supply chain, and route the rest.
  *
  * It runs against the REAL fragments and the REAL tree, because the failure is
  * a disagreement between what the tree contains and what the fragments
@@ -46,9 +53,8 @@ import { trackedFiles } from './codeowners.js'
 /**
  * Paths that NO lane owns, on purpose, each with the reason a reviewer can
  * disagree with. Adding one is a deliberate act. The entry must stay unowned
- * (a dead entry fails below) and must be grant-excluded, so the gate's verdict
- * for it is "grant-excluded" — true, with an accurate remedy — and never
- * "owned by no lane".
+ * (a dead entry fails below) and must be in `GRANT_EXCLUDED_PATHS`, so the gate
+ * REFUSES it on every lane's PR rather than merely routing it to nobody.
  */
 const WITHHELD_BY_DESIGN: ReadonlyArray<{ path: string; why: string }> = [
   {
@@ -76,23 +82,7 @@ const fragmentOwns = (file: string): boolean =>
 
 const withheld = (file: string): boolean => WITHHELD_BY_DESIGN.some((w) => file.startsWith(w.path))
 
-/**
- * Every way the live gate can answer "owned by no lane" for `file`, when a PR
- * on lane `own` touches it: the grant planner's `unowned` refusal and the
- * `scope advice:` line `fleet/verify` prints. Empty means the gate never says it.
- */
-function unownedVerdicts(file: string, own: Lane, all: Lane[]): string[] {
-  const out: string[] = []
-  const plan = planScopeGrants([file], own, all)
-  if (plan.refused.some((r) => r.reason === 'unowned')) out.push(`planScopeGrants: ${file} unowned on a ${own.id} PR`)
-  // scopeStrayAdvice is only ever handed files the PR's own lane strays on.
-  if (checkScope([file], own.scope, []).strayed.length > 0) {
-    if (scopeStrayAdvice([file], own, all).some((l) => l.includes('owned by no lane'))) {
-      out.push(`scopeStrayAdvice: ${file} "owned by no lane" on a ${own.id} PR`)
-    }
-  }
-  return out
-}
+const route = (files: string[], own: Lane) => checkScopeRouting(files, own.scope, NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS)
 
 describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
   it('every tracked file is owned by a fragment, or is withheld by design', () => {
@@ -102,22 +92,23 @@ describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
     expect(orphans, `owned by no fragment and not in WITHHELD_BY_DESIGN:\n  ${orphans.join('\n  ')}`).toEqual([])
   })
 
-  it('the live gate never answers "owned by no lane" — for any tracked file, as any lane\'s PR', () => {
-    const verdicts = tracked.flatMap((f) => lanes.flatMap((own) => unownedVerdicts(f, own, grantable)))
-    expect(verdicts, `the gate still reports an unowned path:\n  ${verdicts.slice(0, 40).join('\n  ')}`).toEqual([])
-  })
-
-  it('the instrument can fail: a path nobody owns IS reported (audit by breaking)', () => {
+  it('a path no lane owns is routed to nobody and refused to nobody — except the supply chain (#3056)', () => {
     const infra = lanes.find((l) => l.id === 'infra')
     if (infra === undefined) throw new Error('no infra lane')
     const ghost = 'zzz-owned-by-nobody/file.txt'
     expect(fragmentOwns(ghost)).toBe(false)
-    expect(unownedVerdicts(ghost, infra, grantable).length).toBe(2)
-    // …and with the fragments' docs ownership removed, the runbook that blocked #2957 is reported again.
-    const withoutDocs = lanes.map((l) => ({ ...l, scope: { ...l.scope, owned: l.scope.owned.filter((p) => !p.startsWith('docs/')) } }))
-    const infraNoDocs = withoutDocs.find((l) => l.id === 'infra')
-    if (infraNoDocs === undefined) throw new Error('no infra lane')
-    expect(unownedVerdicts('docs/runbooks/deploy-official.md', infraNoDocs, withoutDocs).length).toBeGreaterThan(0)
+    const r = route([ghost], infra)
+    expect(r).toEqual({ forbidden: [], supplyChain: [], outside: [ghost] })
+    expect(reviewLanesFor(r.outside, infra.id, grantable)).toEqual([])
+  })
+
+  it('the instrument can fail: take docs/ ownership away and the runbook that blocked #2957 stops naming a reviewer (audit by breaking)', () => {
+    const ios = lanes.find((l) => l.id === 'ios')
+    if (ios === undefined) throw new Error('no ios lane')
+    const runbook = 'docs/runbooks/deploy-official.md'
+    expect(reviewLanesFor([runbook], ios.id, grantable)).toEqual([{ lane: 'infra', files: [runbook] }])
+    const withoutDocs = grantable.map((l) => ({ ...l, scope: { ...l.scope, owned: l.scope.owned.filter((p) => !p.startsWith('docs/')) } }))
+    expect(reviewLanesFor([runbook], ios.id, withoutDocs)).toEqual([])
   })
 
   it('every tracked file has an AUTHORING owner — a lane that can hold a branch — or is withheld by design (#2723)', () => {
@@ -130,7 +121,7 @@ describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
     expect(orphans, `owned by no authoring lane and not in WITHHELD_BY_DESIGN:\n  ${orphans.join('\n  ')}`).toEqual([])
   })
 
-  it('the Mac host files are authored by infra and grant-excluded for every other lane (#2723) — mac reviews them', () => {
+  it('the Mac host files are authored by infra and REFUSED to every other lane (#2723) — mac reviews them', () => {
     const infra = lanes.find((l) => l.id === 'infra')
     if (infra === undefined) throw new Error('no infra lane')
     for (const f of ['scripts/ci/mac-runner-disk-guard.sh', 'scripts/mac-run.sh', 'tests/runner-boundary.spec.ts', '.github/workflows/ios-e2e.yml']) {
@@ -138,7 +129,7 @@ describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
       expect(checkScope([f], infra.scope, []).strayed, `infra authors ${f}`).toEqual([])
       expect(GRANT_EXCLUDED_PATHS.some((p) => matchesPath(f, p)), `${f} must be grant-excluded`).toBe(true)
       for (const own of lanes.filter((l) => l.id !== 'infra')) {
-        expect(planScopeGrants([f], own, grantable).refused, `${f} on a ${own.id} PR`).toEqual([{ file: f, reason: 'grant-excluded' }])
+        expect(route([f], own).supplyChain, `${f} on a ${own.id} PR`).toEqual([f])
       }
     }
   })
@@ -159,7 +150,7 @@ describe('no path is owned by nobody (#2935, #2875, #1115)', () => {
   })
 })
 
-describe('the scope-declaring fragments are unreachable by any scope grant (#2935)', () => {
+describe('the scope-declaring fragments are refused to every lane (#2935, #3056)', () => {
   const fragments = (): string[] => tracked.filter((f) => f.startsWith('.claude/agents/fragments/'))
 
   it('the fragments are tracked (so the assertions below are about real files)', () => {
@@ -173,29 +164,29 @@ describe('the scope-declaring fragments are unreachable by any scope grant (#293
     }
   })
 
-  it('a grant cannot carry any lane onto one, whichever lane the PR is on', () => {
+  // Nobody owns them, so for every lane's PR they are outside the lane AND
+  // supply chain: refused, and there is no label that could change that.
+  it('whichever lane the PR is on, the gate refuses one', () => {
     for (const f of fragments()) {
       for (const own of lanes) {
-        expect(planScopeGrants([f], own, grantable).refused, `${f} on a ${own.id} PR`).toEqual([{ file: f, reason: 'grant-excluded' }])
-        // The gate's own judgement with EVERY other lane granted at once, which is the widest a label set can be.
-        const others = grantable.filter((l) => l.id !== own.id).map((l) => l.scope)
-        expect(checkScopeAcross([f], own.scope, others, NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed, `${f} on a ${own.id} PR`).toEqual([f])
+        expect(route([f], own), `${f} on a ${own.id} PR`).toEqual({ forbidden: [], supplyChain: [f], outside: [f] })
       }
     }
   })
 
-  it('the rest of .claude/ is owned (so a PR can change it) but equally ungrantable', () => {
+  it('the rest of .claude/ is owned (so a PR can change it) but equally refused to every other lane', () => {
     const settings = '.claude/settings.json'
     expect(tracked).toContain(settings)
     const infra = lanes.find((l) => l.id === 'infra')
     const backend = lanes.find((l) => l.id === 'backend')
     if (infra === undefined || backend === undefined) throw new Error('missing lane')
     expect(checkScope([settings], infra.scope, []).strayed).toEqual([])
-    expect(checkScopeAcross([settings], backend.scope, [infra.scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed).toEqual([settings])
+    expect(route([settings], backend).supplyChain).toEqual([settings])
+    expect(route([settings], infra).supplyChain).toEqual([])
   })
 })
 
-describe('the files that decide what scanners and reviewers see are owned but ungrantable (#2935)', () => {
+describe('the files that decide what scanners and reviewers see are owned by infra and refused to everyone else (#2935, #3056)', () => {
   const GATE_CONFIG = [
     '.gitleaks.toml', '.gitleaksignore', '.trivyignore', '.codeqlignore', 'deny.toml', '.mise.toml', '.mcp.json', 'CODEOWNERS',
     '.github/labels.yml', '.github/dependabot.yml', '.github/actionlint.yaml', '.github/codeql/codeql-config.yml',
@@ -219,21 +210,19 @@ describe('the files that decide what scanners and reviewers see are owned but un
     }
   })
 
-  it('no scope: grant can carry another lane onto the gate configuration — with EVERY lane granted at once', () => {
+  it('no other lane\'s PR may write the gate configuration — there is no label to carry it there', () => {
     for (const own of lanes.filter((l) => l.id !== 'infra')) {
-      const granted = lanes.filter((l) => l.id !== own.id).map((l) => l.scope)
       for (const f of GATE_CONFIG) {
-        expect(checkScopeAcross([f], own.scope, granted, NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed, `${f} on a ${own.id} PR`).toEqual([f])
-        expect(planScopeGrants([f], own, grantable).refused, `${f} on a ${own.id} PR`).toEqual([{ file: f, reason: 'grant-excluded' }])
+        expect(route([f], own).supplyChain, `${f} on a ${own.id} PR`).toEqual([f])
       }
     }
   })
 
-  it('the relaxed half still works: ordinary root files are grantable, so one label covers them', () => {
+  it('the relaxed half: ordinary root files are only routed to infra, never refused', () => {
     const backend = lane('backend')
     for (const f of GRANTABLE_ROOT) {
-      expect(planScopeGrants([f], backend, grantable).refused, f).toEqual([])
-      expect(checkScopeAcross([f], backend.scope, [lane('infra').scope], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed, f).toEqual([])
+      expect(route([f], backend), f).toEqual({ forbidden: [], supplyChain: [], outside: [f] })
+      expect(reviewLanesFor([f], backend.id, grantable), f).toEqual([{ lane: 'infra', files: [f] }])
     }
   })
 
@@ -259,39 +248,38 @@ describe('documentation lands with what it documents (#2935)', () => {
     if (l === undefined) throw new Error(`no lane ${id}`)
     return l
   }
-  const across = (files: string[], own: Lane, granted: Lane[]) =>
-    checkScopeAcross(files, own.scope, granted.map((g) => g.scope), NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS).strayed
+  const outside = (files: string[], own: Lane): string[] => route(files, own).outside
+  const reviewers = (files: string[], own: Lane): string[] => reviewLanesFor(outside(files, own), own.id, grantable).map((r) => r.lane)
 
   it('the runbook is reachable by a PR that also touches apps/worker/lib/config.ts — as one commit, from either lane', () => {
     expect(tracked).toContain(RUNBOOK)
-    // A backend PR owns the whole diff outright, with no grant at all.
-    expect(across(PR_2957, lane('backend'), [])).toEqual([])
-    // #2957 as it was actually opened — an infra PR — needs exactly one grant, and the planner can make it.
-    expect(across(PR_2957, lane('infra'), [])).toEqual(PR_2957.filter((f) => f.startsWith('apps/worker/')))
-    expect(across(PR_2957, lane('infra'), [lane('backend')])).toEqual([])
-    const plan = planScopeGrants(PR_2957, lane('infra'), grantable)
-    expect(plan.refused).toEqual([])
-    expect(plan.grants).toEqual(['backend'])
+    // A backend PR owns the whole diff outright: nothing outside, nobody to ask.
+    expect(outside(PR_2957, lane('backend'))).toEqual([])
+    // #2957 as it was actually opened — an infra PR. It is no longer refused:
+    // the backend half is routed to backend, which reviews it.
+    expect(route(PR_2957, lane('infra'))).toEqual({
+      forbidden: [], supplyChain: [], outside: PR_2957.filter((f) => f.startsWith('apps/worker/')),
+    })
+    expect(reviewers(PR_2957, lane('infra'))).toEqual(['backend'])
   })
 
-  it('the allow is not a blanket: a lane still cannot write another lane\'s code', () => {
-    expect(across(['apps/worker/lib/config.ts'], lane('desktop'), [])).toEqual(['apps/worker/lib/config.ts'])
-    expect(across(['apps/worker/lib/config.ts'], lane('infra'), [lane('desktop')])).toEqual(['apps/worker/lib/config.ts'])
-    expect(across(['src/client/routes/x.tsx'], lane('infra'), [])).toEqual(['src/client/routes/x.tsx'])
-    // …and a docs-owning lane gets docs, not the code those docs describe.
-    expect(across(['apps/worker/lib/config.ts', 'docs/runbooks/rollback.md'], lane('infra'), [])).toEqual(['apps/worker/lib/config.ts'])
+  it('the routing is not a blanket: each file names the lane that owns it, and only that lane', () => {
+    expect(reviewers(['apps/worker/lib/config.ts'], lane('desktop'))).toEqual(['backend'])
+    expect(reviewers(['src/client/routes/x.tsx'], lane('infra'))).toEqual(['desktop'])
+    // …and a docs-owning lane owns docs, not the code those docs describe.
+    expect(outside(['apps/worker/lib/config.ts', 'docs/runbooks/rollback.md'], lane('infra'))).toEqual(['apps/worker/lib/config.ts'])
   })
 
-  it('infra authors the mac runbook through docs/ (#2723); scope:mac still reaches exactly that one file', () => {
+  it('infra authors the mac runbook through docs/ (#2723); mac reviews exactly that one file', () => {
     expect(checkScope([MAC_RUNBOOK], lane('infra').scope, []).strayed).toEqual([])
     for (const l of lanes) {
       if (l.id === 'infra') continue
       expect(checkScope([MAC_RUNBOOK], l.scope, []).strayed, `${l.id} must not own the mac runbook`).toEqual([MAC_RUNBOOK])
     }
-    // An infra PR needs no grant for it; another lane's PR reaches it with scope:mac, and scope:mac reaches nothing else.
-    expect(across([MAC_RUNBOOK, 'docs/runbooks/deploy-official.md'], lane('infra'), [])).toEqual([])
-    expect(across([MAC_RUNBOOK], lane('ios'), [lane('mac')])).toEqual([])
-    expect(across(['docs/runbooks/deploy-official.md'], lane('ios'), [lane('mac')])).toEqual(['docs/runbooks/deploy-official.md'])
+    // An infra PR owns it outright; on another lane's PR it names mac, and mac names nothing else.
+    expect(outside([MAC_RUNBOOK, 'docs/runbooks/deploy-official.md'], lane('infra'))).toEqual([])
+    expect(reviewers([MAC_RUNBOOK], lane('ios'))).toEqual(['mac'])
+    expect(reviewers(['docs/runbooks/deploy-official.md'], lane('ios'))).toEqual(['infra'])
   })
 
   it('the docs tree is owned by infra and by the surface it documents, and nothing is left over', () => {
@@ -315,7 +303,7 @@ describe('documentation lands with what it documents (#2935)', () => {
   })
 })
 
-describe('.github/scripts/ — assigned to infra and withheld from grants (#2875 option 1)', () => {
+describe('.github/scripts/ — assigned to infra and refused to every other lane (#2875 option 1, #3056)', () => {
   const SCRIPTS = [
     '.github/scripts/check-action-pins.test.ts',
     '.github/scripts/check-action-pins.ts',
@@ -342,13 +330,11 @@ describe('.github/scripts/ — assigned to infra and withheld from grants (#2875
     }
   })
 
-  it('a scope: grant cannot carry another lane onto them — the same treatment as .github/workflows/', () => {
+  it('another lane\'s PR may not write them — the same treatment as .github/workflows/', () => {
     expect(GRANT_EXCLUDED_PATHS).toContain('.github/scripts/')
     const backend = lanes.find((l) => l.id === 'backend')
     if (backend === undefined) throw new Error('no backend lane')
-    for (const f of SCRIPTS) {
-      expect(planScopeGrants([f], backend, lanes).refused, f).toEqual([{ file: f, reason: 'grant-excluded' }])
-    }
+    for (const f of SCRIPTS) expect(route([f], backend).supplyChain, f).toEqual([f])
   })
 
   it('no compiled Python artifact is tracked under it', () => {

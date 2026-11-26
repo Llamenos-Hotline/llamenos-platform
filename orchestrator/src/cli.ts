@@ -41,7 +41,7 @@ import {
   reviewRequestEventFromEnv, reviewRequestFor, reviewTriggerLogins, isRepublishOnlyEvent,
   reviewNotRequestedAdvice, reviewGateFailsClosed,
   ciContextFromEnv, ciDiff, ciChangedFiles, ciHeadTree,
-  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, SCOPE_GRANT_PREFIX, VERIFY_JOB, QUEUE_CLEARED_LABEL,
+  REVIEW_JOB, REVIEW_KEY_ENV, REVIEW_REQUEST_LOGIN, VERIFY_JOB, QUEUE_CLEARED_LABEL,
   itemIdFromBranch, fleetBranchFor, legacyFleetBranchFor,
   type CiContext, type CiVerdict, type ReviewReportEntry,
 } from './ci.js'
@@ -87,7 +87,6 @@ import {
 } from './roles/planner.js'
 import { updateBranchFromMain, type UpdateBranchInput, type UpdateBranchResult } from './roles/integrator.js'
 import { requestReviewAtOpen, refireReviewRequest, defaultReviewRequestAtOpenDeps } from './review-request.js'
-import { grantScopeAtOpen, grantScopeThenRequestReview, defaultScopeGrantDeps, type ScopeGrantOutcome } from './scope-grant.js'
 import { armAutoMergeWithQueueClearance } from './automerge.js'
 import { MERGE_HOLD_LABEL, readQueueHistory, placeManualHold } from './merge-hold.js'
 
@@ -725,60 +724,15 @@ async function realDispatch(item: WorkItem, lane: Lane): Promise<DispatchOutcome
   // module comment for the three rules this honours (event-count
   // confirmation, pending-is-success at open, never ask the author).
   //
-  // A cross-lane diff needs its `scope:<lane>` grant(s) BEFORE that request is
-  // meaningful (#2643): `fleet/verify` reads the labels when it runs, and a
-  // PR whose first run lacked them stops at NO-VERDICT:scope with no reviewer
-  // run at all. `grantScopeAtOpen` applies exactly the grants the diff needs
-  // and re-fires the review itself (the labels alone do not trigger it), so
-  // the plain request below runs for every PR whose grant did not CONFIRM that
-  // re-fire (none needed, or an unconfirmed one that may have left no pending
-  // reviewer) — see grantScopeThenRequestReview.
-  await grantScopeThenRequestReview({
-    grant: () => grantScopeAtOpenFor(resolved.pr, branch, resolved.branchMismatch),
-    requestReview: () => requestReviewAtOpen(
-      { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
-      defaultReviewRequestAtOpenDeps(log),
-    ),
-  })
+  // A cross-lane diff needs nothing extra here: `fleet/verify` no longer
+  // gates on which lanes' paths a PR touches (#3056), it names the lanes that
+  // should review. So the request is the same for every PR.
+  await requestReviewAtOpen(
+    { pr: resolved.pr, headRefName: branch, branchMismatch: resolved.branchMismatch },
+    defaultReviewRequestAtOpenDeps(log),
+  )
 
   return resolved
-}
-
-async function grantScopeAtOpenFor(
-  pr: string | undefined,
-  headRefName: string,
-  branchMismatch: string | undefined,
-): Promise<ScopeGrantOutcome> {
-  const reviewDeps = defaultReviewRequestAtOpenDeps(log)
-  return grantScopeAtOpen(
-    { pr, headRefName, branchMismatch },
-    defaultScopeGrantDeps(
-      log,
-      () => loadGrantableLanes(REPO_ROOT, LANE_MODES_FILE, rejectLogger),
-      async (prNumber, branch) => {
-        const r = await refireReviewRequest({ pr: prNumber, headRefName: branch }, reviewDeps)
-        return r.kind === 'requested'
-      },
-    ),
-  )
-}
-
-/** `llamenos-fleet scope-grant <pr>` — the same step, by hand, for a PR that
- *  is already open (one opened before the dispatcher applied grants itself,
- *  or one a worker pushed more files to). */
-async function runScopeGrantCommand(pr: string | undefined): Promise<number> {
-  if (pr === undefined) {
-    process.stderr.write('usage: llamenos-fleet scope-grant <pr>\n')
-    return 2
-  }
-  const head = await ghJson<{ headRefName: string }>(['pr', 'view', pr, '--json', 'headRefName'])
-  if (head === undefined) {
-    process.stderr.write(`scope-grant: could not read PR ${pr}\n`)
-    return 1
-  }
-  const outcome = await grantScopeAtOpenFor(pr, head.headRefName, undefined)
-  process.stdout.write(`scope-grant: ${JSON.stringify(outcome)}\n`)
-  return outcome.kind === 'granted' || outcome.kind === 'not-needed' ? 0 : 1
 }
 
 /** `llamenos-fleet merge-hold <pr> --reason "…"` — hold a PR on purpose, with the
@@ -930,8 +884,8 @@ function scrubbedTestEnv(tmp: string): NodeJS.ProcessEnv {
 /**
  * #2738: mechanical verification of one commit of an open PR, by running the
  * `fleet/verify` gate itself (`runVerifyCi`) — the same code, the same
- * `vitest run --config <suite config>` per routed suite, the same scope-grant
- * and trust-anchor reads — against a `git archive` export of exactly that
+ * `vitest run --config <suite config>` per routed suite, the same trust-anchor
+ * read — against a `git archive` export of exactly that
  * commit, with git decisions made in this trusted checkout. Not against a
  * worker's worktree: settle() destroyed it, and a verdict about "whatever was
  * in a working directory" is how round 1 on #2737 reported a runner that
@@ -972,7 +926,6 @@ export async function verifyOpenPrHead(input: { lane: Lane; pr: string; headSha:
       verify: async (v) => { last = await verifyMechanical({ ...v, testEnv: scrubbedTestEnv(tmp) }); return last },
       pathExists: existsSync,
       log,
-      prLabels: async () => (await readPrFacts(n))?.labels,
       trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
     })
     if (last === undefined) throw new Error(`the verify gate produced no report: ${verdict.summary}`)
@@ -2460,7 +2413,6 @@ const HANDLERS: Record<string, CommandHandler> = {
     return revert(runId, defaultRevertDeps())
   },
   digest: (rest) => runDigest(rest[0]),
-  'scope-grant': (rest) => runScopeGrantCommand(rest[0]),
   'merge-hold': (rest) => runMergeHoldCommand(rest),
   'verify-ci': asVerification(() => runCiGate(VERIFY_JOB, (ctx) => runVerifyCi({
     ctx,
@@ -2468,15 +2420,6 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    // `scope:<lane>` grants are the ONLY thing this read decides here:
-    // `fleet/verify` runs no review (that is `fleet/review`, which reads the
-    // PR itself and fails closed on its own). A grant only ever widens what
-    // a diff may touch, so an unreadable read granting nothing is the closed
-    // direction — and the log says exactly that.
-    prLabels: async () => (await readPrFacts(
-      ctx.pr,
-      `its ${SCOPE_GRANT_PREFIX}<lane> grants are unknown, so none apply and it is judged on its own lane alone`,
-    ))?.labels,
     trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
   }))),
   'review-ci': asVerification(() => runCiGate(REVIEW_JOB, (ctx) => runReviewCi({
@@ -2486,7 +2429,6 @@ const HANDLERS: Record<string, CommandHandler> = {
     verify: verifyMechanical,
     pathExists: existsSync,
     log: ciLog,
-    prLabels: async () => (await readPrFacts(ctx.pr))?.labels,
     trustAnchorApprovals: () => readTrustAnchorApprovals(ctx),
     prDiff: () => ciDiff(ctx),
     // The cache KEY (#2014) — the same tree the gate step keyed its lookup

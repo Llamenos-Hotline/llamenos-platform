@@ -9,8 +9,8 @@ import { checkScope } from './scope.js'
  * "which lane authors this issue" has one answer.
  *
  * The dispatch unit is a whole issue (or an epic stage), handed to ONE lane
- * that authors all of it. A cross-lane diff is legitimate: the orchestrator
- * grants the other lanes at PR open (`scope-grant.ts`) and those lanes review
+ * that authors all of it. A cross-lane diff is legitimate: `fleet/verify`
+ * names the other lanes it touches (`reviewLanesFor`) and those lanes review
  * it. Nothing here ever splits an issue into per-lane slices — "issue × lane"
  * is how a format change spanning the crate, the protocol, the server and the
  * clients used to land as PRs that drifted apart.
@@ -107,7 +107,7 @@ export function scopeOwns(scope: LaneScope, path: string): boolean {
   return !path.endsWith('/') && checkScope([`${path}/`], scope, []).strayed.length === 0
 }
 
-function longestOwnedMatch(scope: LaneScope, path: string): number {
+export function longestOwnedMatch(scope: LaneScope, path: string): number {
   let best = -1
   for (const p of scope.owned) {
     if ((matchesPath(path, p) || matchesPath(`${path}/`, p)) && p.length > best) best = p.length
@@ -156,6 +156,42 @@ export function attributePaths(paths: readonly string[], lanes: readonly Lane[])
     else unmatched.push(path)
   }
   return { attributed, sharedWrite, unmatched }
+}
+
+/**
+ * Which OTHER lanes should review a diff, from the files outside the authoring
+ * lane's own scope (#3056). Routing metadata, never a verdict: the gate no
+ * longer fails a PR for touching another lane's paths, it says who to ask.
+ *
+ * Each file goes to the one lane whose owned pattern matches it longest. A
+ * file several lanes own equally specifically is a deliberate shared-write
+ * grant (`package.json`, the locale files) and names nobody — it could be
+ * attributed to any of them, so attributing it to one would be a guess.
+ * Scope-only fragments (`mac`) are included: they cannot author but they do
+ * review the files they own. Lanes with no owned paths own nothing.
+ */
+export function reviewLanesFor(
+  files: readonly string[],
+  ownLaneId: string,
+  lanes: readonly Lane[],
+): { lane: string; files: string[] }[] {
+  const candidates = lanes.filter((l) => l.id !== ownLaneId && l.scope.owned.length > 0)
+  const byLane = new Map<string, string[]>()
+  for (const f of [...new Set(files)].sort()) {
+    let bestLen = -1
+    let best: string[] = []
+    for (const lane of candidates) {
+      if (!scopeOwns(lane.scope, f)) continue
+      const len = longestOwnedMatch(lane.scope, f)
+      if (len > bestLen) {
+        bestLen = len
+        best = [lane.id]
+      } else if (len === bestLen) best.push(lane.id)
+    }
+    const only = best.length === 1 ? best[0] : undefined
+    if (only !== undefined) byLane.set(only, [...(byLane.get(only) ?? []), f])
+  }
+  return [...byLane.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([lane, laneFiles]) => ({ lane, files: laneFiles }))
 }
 
 export type AuthorDecision =

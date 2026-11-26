@@ -153,94 +153,52 @@ describe('fleet/verify in CI', () => {
     expect(v.summary).toContain('touched never-write paths')
   })
 
-  describe('scope:<lane> grants (#1115)', () => {
+  // #3056: lane write-scope is routing, not a gate. `scope:<lane>` labels no
+  // longer exist as an input — the gate neither reads them nor needs them —
+  // and the lanes a diff touches are reported to the reader instead.
+  describe('cross-lane routing (#3056)', () => {
     const desktopLane = (): Lane => ({
       id: 'desktop', mode: 'off', cap: 1, engine: 'claude',
       requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
       scope: { owned: ['src/client/'], notOwned: [] },
     })
     const bothLanes = async (): Promise<Lane[]> => [lane(), desktopLane()]
-    const grantedIn = (d: VerifyCiDeps): string[] =>
-      (((d.verify as Mock).mock.calls[0]?.[0] as VerifyInput).grantedLanes ?? []).map((l) => l.id)
 
-    it('passes the granted lane through to verify', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['review', 'scope:desktop'] })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual(['desktop'])
-    })
-
-    it('grants nothing when the PR carries no scope label', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['review'] })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual([])
-    })
-
-    // Unreadable labels must not be confused with "no labels": the gate is
-    // judging whether a diff is authorised, so not knowing has to mean not
-    // granted.
-    it('fails closed when the labels cannot be read', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => undefined })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual([])
-    })
-
-    it('ignores a label naming something that is not a lane, rather than treating it as a wildcard', async () => {
-      const logged: string[] = []
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:everything'], log: (m) => logged.push(m) })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual([])
-      expect(logged.join('\n')).toContain('not a known lane')
-    })
-
-    it('never duplicates the PR\'s own lane into the grant list', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:ios', 'scope:desktop'] })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual(['desktop'])
-    })
-
-    it('deduplicates a repeated grant', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:desktop', 'scope: desktop'] })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual(['desktop'])
-    })
-
-    // The tests run against the head export get the same grants as the
-    // mechanical pass — otherwise the second call would re-judge the diff
-    // against the bare lane and contradict the first.
-    it('applies the same grants to the tested run, not just the mechanical pass', async () => {
-      const d = deps({ lanes: bothLanes, prLabels: async () => ['scope:desktop'] })
+    it('hands verify every lane so the files outside the PR\'s own can be attributed', async () => {
+      const d = deps({ lanes: bothLanes })
       await runVerifyCi(d)
       const calls = (d.verify as Mock).mock.calls as [VerifyInput][]
       expect(calls.length).toBeGreaterThan(1)
-      for (const [input] of calls) {
-        expect((input.grantedLanes ?? []).map((l) => l.id)).toEqual(['desktop'])
-      }
+      for (const [input] of calls) expect((input.allLanes ?? []).map((l) => l.id)).toEqual(['ios', 'desktop'])
     })
 
-    // The fail-open the review gate caught on this PR's first revision: an
-    // `off` lane legitimately has an empty scope, and honouring a grant for
-    // it would have made the whole PR unrestricted.
-    it('drops a grant for a lane that owns nothing, rather than letting it widen the PR', async () => {
-      const emptyLane = (): Lane => ({
-        id: 'shared', mode: 'off', cap: 1, engine: 'claude',
-        requireLabel: 'agent-dispatchable', vetoLabels: ['needs-human'],
-        scope: { owned: [], notOwned: [] },
-      })
-      const logged: string[] = []
-      const d = deps({
-        lanes: async () => [lane(), emptyLane()],
-        prLabels: async () => ['scope:shared'],
-        log: (m) => logged.push(m),
-      })
-      await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual([])
-      expect(logged.join('\n')).toContain('grants nothing')
-    })
-
-    it('a deps object with no prLabels at all behaves exactly like a PR with no grants', async () => {
+    it('passes verify no grant input at all: a label cannot widen what the gate allows', async () => {
       const d = deps({ lanes: bothLanes })
       await runVerifyCi(d)
-      expect(grantedIn(d)).toEqual([])
+      const input = (d.verify as Mock).mock.calls[0]?.[0] as Record<string, unknown>
+      expect(input).not.toHaveProperty('grantedLanes')
+    })
+
+    it('names the reviewing lanes in the summary of a PASSING gate', async () => {
+      const routed: VerifyReport = { ...passing, reviewLanes: [{ lane: 'desktop', files: ['src/client/a.ts'] }] }
+      const v = await runVerifyCi(deps({ lanes: bothLanes, verify: vi.fn(async () => routed) }))
+      expect(v.ok).toBe(true)
+      expect(v.summary).toContain('review lanes: desktop (src/client/a.ts)')
+    })
+
+    it('names them on a FAILING gate too, so a refusal says who else is involved', async () => {
+      const failed: VerifyReport = {
+        ...passing, passed: false, reasons: ['touched never-write paths: .env'],
+        reviewLanes: [{ lane: 'desktop', files: ['src/client/a.ts'] }],
+      }
+      const v = await runVerifyCi(deps({ lanes: bothLanes, verify: vi.fn(async () => failed) }))
+      expect(v.ok).toBe(false)
+      expect(v.summary).toContain('review lanes: desktop (src/client/a.ts)')
+    })
+
+    it('says nothing about lanes for a single-lane PR', async () => {
+      const v = await runVerifyCi(deps({ lanes: bothLanes }))
+      expect(v.summary).not.toContain('review lanes')
     })
   })
 
@@ -353,7 +311,7 @@ describe('fleet/review in CI', () => {
   })
 
   const TRUST_REFUSAL = 'touched trust-anchor files — a shipped client\'s TLS trust decision, which lands only with a human sign-off: x'
-  const STRAY_REFUSAL = 'touched files outside lane "ios"\'s scope: apps/worker/x.ts'
+  const STRAY_REFUSAL = 'touched files outside lane "ios"\'s scope that only their owning lane\'s own PR may write (CI, deploy, supply chain): deploy/x.yml'
   const SECRET_REFUSAL = 'touched never-write paths — secret material, never agent-writable and not clearable by any approval: .env'
   const held = { files: ['apps/desktop/src/net.rs'], approvedBy: [] }
 
@@ -372,7 +330,7 @@ describe('fleet/review in CI', () => {
   // A sign-off would not land these, so naming sign-off would send the
   // operator to approve a PR that still cannot merge.
   it.each([
-    ['also out of the lane\'s scope', [TRUST_REFUSAL, STRAY_REFUSAL], held],
+    ['also touching supply-chain files outside the lane', [TRUST_REFUSAL, STRAY_REFUSAL], held],
     ['also carrying secret material', [SECRET_REFUSAL, TRUST_REFUSAL], held],
     ['signed off, but refused for another reason', [STRAY_REFUSAL], { files: held.files, approvedBy: ['rhonda-rodododo'] }],
     ['a trust refusal with no structured trustAnchors on the report', [TRUST_REFUSAL], undefined],
@@ -484,7 +442,7 @@ describe('fleet/review in CI', () => {
   it('requests no review at all for a diff that failed scope', async () => {
     const failed: VerifyReport = {
       ...passing, passed: false,
-      reasons: ['touched files outside lane "ios"\'s scope: apps/worker/x.ts'],
+      reasons: ['touched files outside lane "ios"\'s scope that only their owning lane\'s own PR may write (CI, deploy, supply chain): deploy/x.yml'],
     }
     const d = deps({ verify: vi.fn(async () => failed) })
     const v = await runReviewCi(d)

@@ -6,21 +6,21 @@ import { runVerifyCi, decideReviewGate, decideReviewSet, type VerifyCiDeps } fro
 import { GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS, type Lane } from '../../orchestrator/src/config.js'
 import { classifyImpact, tierFor } from '../../orchestrator/src/impact.js'
 import { requiredAdditionalReviewers } from '../../orchestrator/src/review.js'
-import { checkScopeAcross } from '../../orchestrator/src/scope.js'
+import { checkScopeRouting } from '../../orchestrator/src/scope.js'
+import { reviewLanesFor } from '../../orchestrator/src/route.js'
 import type { VerifyInput, VerifyReport } from '../../orchestrator/src/verify.js'
 
 /**
  * Rail for fleet-verify.yml running `gh` without a token.
  *
  * The `Verify` step runs `bun orchestrator/src/cli.ts verify-ci`, which reads
- * the PR's live labels with `gh api repos/<repo>/pulls/<n>` (readPrFacts in
- * cli.ts) to resolve its `scope:<lane>` grants (#1115). That step had no
- * `GH_TOKEN`, so on every run since the grants shipped the read died with
- * "gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN
- * environment variable" (e.g. run 36359003050, and every passing run beside
- * it). `resolveGrantedLanes` treats an unreadable label list as "no grants",
- * so the check still went green or red on everything else, and nobody saw
- * that a scope grant could never take effect. The `Resolve the base/head
+ * the PR with `gh api` (`readTrustAnchorApprovals` in cli.ts, and until #3056
+ * the PR's labels for its `scope:<lane>` grants, #1115). That step once had no
+ * `GH_TOKEN`, so on every run the read died with "gh: To use GitHub CLI in a
+ * GitHub Actions workflow, set the GH_TOKEN environment variable" (e.g. run
+ * 36359003050, and every passing run beside it). The gate treated an
+ * unreadable read as "nothing granted", so the check still went green or red
+ * on everything else and nobody saw that a grant could never take effect. The `Resolve the base/head
  * SHAs` step in the same job always had its token, which is why merge_group
  * branch resolution worked and this one did not stand out.
  *
@@ -239,7 +239,8 @@ describe('rail: every fleet-verify step that reaches gh has the workflow token',
  *     verdict to `buildGateTrace`, so EVERY one of its traces reads
  *     `review=not-run` — 57 of 57 runs inspected, PASS and FAIL, low- and
  *     high-impact, and this PR's own run 36359884331, whose label read
- *     SUCCEEDED. The label read feeds `scope:<lane>` grants and nothing else.
+ *     SUCCEEDED. The label read fed `scope:<lane>` grants and nothing else
+ *     (the grants, and so the read, were removed in #3056).
  *   - The review half of the merge gate is `fleet/review`, a separate
  *     required check that reads the PR itself and refuses on an unreadable
  *     read before anything else (`decideReviewGate`'s first branch).
@@ -309,55 +310,54 @@ describe('behaviour: an unreadable PR read never turns either fleet gate green',
 
   describe('fleet/verify — scope, impact and tests; no review stage', () => {
     /**
-     * `verifyMechanical`'s scope half over the real `checkScopeAcross` and
-     * the real never-write / grant-excluded lists, so what a grant does here
-     * is what it does in CI. The rest of the report is fixed.
+     * `verifyMechanical`'s scope half over the real `checkScopeRouting` and
+     * the real never-write / grant-excluded lists, so what the gate does with
+     * a cross-lane diff here is what it does in CI. The rest of the report is
+     * fixed.
      */
     const scopeVerify = (changed: string[]) => vi.fn(async (input: VerifyInput): Promise<VerifyReport> => {
-      const { forbidden, strayed } = checkScopeAcross(
-        changed, input.lane.scope, (input.grantedLanes ?? []).map((l) => l.scope),
-        [...NEVER_WRITE_PATHS], [...GRANT_EXCLUDED_PATHS],
+      const { forbidden, supplyChain, outside } = checkScopeRouting(
+        changed, input.lane.scope, [...NEVER_WRITE_PATHS], [...GRANT_EXCLUDED_PATHS],
       )
       const reasons = [
         ...(forbidden.length > 0 ? [`touched never-write paths: ${forbidden.join(', ')}`] : []),
-        ...(strayed.length > 0 ? [`touched files outside lane "${input.lane.id}"'s scope: ${strayed.join(', ')}`] : []),
+        ...(supplyChain.length > 0 ? [`touched files outside lane "${input.lane.id}"'s scope that only their owning lane's own PR may write: ${supplyChain.join(', ')}`] : []),
       ]
       const { impact, reasons: impactReasons } = classifyImpact(changed, 1)
       return {
         passed: reasons.length === 0, reasons, changedFiles: changed, addedLines: 1, impact, impactReasons,
+        reviewLanes: reviewLanesFor(outside, input.lane.id, input.allLanes ?? []),
         ...(input.skipTests === true ? {} : { testsRun: ['orchestrator'], testsPassed: true }),
         verifiedCommit: 'c0ffee',
       }
     })
-    const verifyWith = (labels: string[] | undefined, changed: string[]): VerifyCiDeps => ({
+    const verifyWith = (changed: string[]): VerifyCiDeps => ({
       ctx: { branch: 'fleet/orch/1', repoDir: '/base', headDir: '/tmp/head', baseSha: 'b', headSha: 'h', pr: '42' },
       lanes: async () => [OWN, GRANTABLE],
       verify: scopeVerify(changed),
       pathExists: (p) => !p.endsWith('/.git'),
       log: () => {},
-      prLabels: async () => labels,
     })
 
-    it('unreadable labels grant nothing: a high-impact diff that needs its scope: grant FAILS', async () => {
-      const v = await runVerifyCi(verifyWith(undefined, [HIGH_IMPACT, NEEDS_GRANT]))
+    // The case this file used to pin the other way round (#3056): a diff that
+    // spans a lane boundary needed a `scope:backend` label, an unreadable
+    // label read dropped it, and the gate failed. No label is read any more,
+    // so there is nothing to fail on, and the lane to ask is named instead.
+    it('a diff spanning two lanes passes with no label read at all, and names the other lane', async () => {
+      const v = await runVerifyCi(verifyWith([HIGH_IMPACT, NEEDS_GRANT]))
+      expect(v.ok).toBe(true)
+      expect(v.summary).toContain(`review lanes: backend (${NEEDS_GRANT})`)
+    })
+
+    it('has no review stage: the verdict is the same with or without a cross-lane file', async () => {
+      expect((await runVerifyCi(verifyWith([HIGH_IMPACT]))).ok).toBe(true)
+      expect((await runVerifyCi(verifyWith([HIGH_IMPACT, NEEDS_GRANT]))).ok).toBe(true)
+    })
+
+    it('still refuses a supply-chain file the PR\'s own lane does not own — routing never excuses it', async () => {
+      const v = await runVerifyCi(verifyWith([HIGH_IMPACT, '.github/workflows/ci.yml']))
       expect(v.ok).toBe(false)
-      expect(v.summary).toContain(`touched files outside lane "orch"'s scope: ${NEEDS_GRANT}`)
-    })
-
-    it('the same diff with its scope:backend label READ passes — the failed read alone decides the rail above', async () => {
-      expect((await runVerifyCi(verifyWith(['scope:backend'], [HIGH_IMPACT, NEEDS_GRANT]))).ok).toBe(true)
-    })
-
-    // Pinned deliberately, because the opposite was proposed on this PR:
-    // making fleet/verify ALSO fail whenever the read fails would add no
-    // safety — a grant only widens scope, and the review is fleet/review's,
-    // which already refuses on the same failed read (rail above) — but it
-    // would turn every GitHub API hiccup into a red check on every PR.
-    it('has no review stage: on a diff needing no grant, an unreadable read does not change the verdict', async () => {
-      const unreadable = await runVerifyCi(verifyWith(undefined, [HIGH_IMPACT]))
-      const readable = await runVerifyCi(verifyWith(['review'], [HIGH_IMPACT]))
-      expect(unreadable.ok).toBe(true)
-      expect(unreadable.ok).toBe(readable.ok)
+      expect(v.summary).toContain('.github/workflows/ci.yml')
     })
   })
 })

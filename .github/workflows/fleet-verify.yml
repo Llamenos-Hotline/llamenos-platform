@@ -42,22 +42,19 @@ name: Fleet Verify
 on:
   # `types:` is spelled out rather than left bare, and `review_requested` is
   # the addition (#1124). A bare `pull_request:` means exactly
-  # `[opened, synchronize, reopened]`, and that list is why `scope:<lane>`
-  # grants (#1117) were inert: a grant is read HERE, inside this gate —
-  # `resolveGrantedLanes` in orchestrator/src/ci.ts reads the PR's own labels
-  # — but applying a label is not one of those three events, so nothing
-  # re-evaluated the PR afterwards. The PR went on showing the `scope=fail`
-  # verdict computed before the grant existed, until an unrelated push
-  # happened to re-trigger the gate. Verified live before this fix: #1060
-  # (scope:infra), #1064 (scope:desktop, scope:shared) and #1072
-  # (scope:desktop) each carried their grant and each still reported the
-  # stale failure.
+  # `[opened, synchronize, reopened]`, and that list is why anything the gate
+  # reads from the PR's LIVE state rather than its diff was inert: applying a
+  # label, or a human signing off a trust-anchor change (#2556), is not one of
+  # those three events, so nothing re-evaluated the PR afterwards and it went
+  # on showing the verdict computed before. (#1124 was first seen with
+  # `scope:<lane>` grants; #3056 removed those — lane write-scope is routing,
+  # not a gate — and the trust-anchor sign-off is what this arm re-reads now.)
   #
   # `review_requested`, not `labeled`, for two reasons. First, requesting a
   # review is ONE "re-evaluate this PR" event that serves both gates —
   # fleet/review already keys off the review-request flow (#1158/#1164), so
-  # the operator applies the grant, requests a review, and verify re-runs
-  # with the grant live while review runs on the fresh verdict. Second,
+  # the operator signs off, requests a review, and verify re-runs with the
+  # sign-off live while review runs on the fresh verdict. Second,
   # `labeled` fires on EVERY label change, because `on:` cannot filter by
   # label name; the only way to narrow it is a job-level `if:`, and per #848
   # a job instantiated on an event and then skipped by `if:` satisfies
@@ -435,10 +432,10 @@ jobs:
               ;;
           esac
 
-      # GH_TOKEN: `verify-ci` reads the PR's live labels with `gh api
-      # repos/<repo>/pulls/<n>` (readPrFacts in cli.ts) to resolve its
-      # `scope:<lane>` grants (#1115). Without a token that read fails on
-      # every run and the grants are silently dropped. The workflow token,
+      # GH_TOKEN: `verify-ci` reads the PR's reviews and comments with `gh api`
+      # (`readTrustAnchorApprovals` in cli.ts) to find a trust-anchor sign-off
+      # on the exact head (#2556). Without a token that read fails on every run
+      # and a signed-off change is silently held. The workflow token,
       # never a secret: this step runs the judged commit's own tests, and the
       # job's `pull-requests: read` is all that read needs. A rail
       # (tests/orchestrator/fleet-verify-token.test.ts) fails any step here
@@ -460,10 +457,10 @@ jobs:
         run: bun orchestrator/src/cli.ts verify-ci
 
   # #2813: see the matching job in fleet-review.yml. A `review_requested`
-  # run re-evaluates the PR (a `scope:<lane>` grant applied since the head
+  # run re-evaluates the PR (a trust-anchor sign-off given since the head
   # was judged, #1124) under `fleet/verify/re-evaluate`; this job then
   # re-runs the head's one `fleet/verify` carrier in place, which re-reads
-  # the PR's live labels and concludes on them. Before #2813 the review
+  # the PR's live state and concludes on it. Before #2813 the review
   # request published a second `fleet/verify` and cancelled the first
   # through the shared concurrency group — a `cancelled` carrier admission
   # then reported as `expected` forever (#2616).

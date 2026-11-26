@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { checkScopeAcross } from '../../orchestrator/src/scope.js'
+import { checkScopeRouting } from '../../orchestrator/src/scope.js'
 import { loadLaneScopes, type LaneScope } from '../../orchestrator/src/fragments.js'
 import { GRANT_EXCLUDED_PATHS, NEVER_WRITE_PATHS } from '../../orchestrator/src/config.js'
 import { trackedFiles } from './codeowners.js'
@@ -41,8 +41,12 @@ function harnessFiles(): string[] {
 describe('shared test harness is writable by the backend lane (#2642)', () => {
   let backend: LaneScope
   let desktop: LaneScope
+  // `outside` is what used to be `strayed`: the files the PR's own lane does
+  // not own. Since #3056 that is routing, not a refusal — what this class of
+  // file still decides is whether the lane OWNS the harness, so that a backend
+  // PR names no other lane to review it.
   const gate = (files: string[], own: LaneScope) =>
-    checkScopeAcross(files, own, [], NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS)
+    checkScopeRouting(files, own, NEVER_WRITE_PATHS, GRANT_EXCLUDED_PATHS)
 
   beforeAll(async () => {
     const scopes = await loadLaneScopes(process.cwd())
@@ -64,27 +68,27 @@ describe('shared test harness is writable by the backend lane (#2642)', () => {
   })
 
   it.each(['tests/db-helpers.ts', 'tests/global-setup.ts'])(
-    'instance %s: no stray, so fleet/verify cannot say scope=fail and skip the review',
+    'instance %s: nothing outside the lane, so the PR names no other reviewing lane',
     (file) => {
-      expect(gate([file], backend).strayed).toEqual([])
+      expect(gate([file], backend).outside).toEqual([])
     },
   )
 
   it('every tracked shared harness file is in backend scope — a file added tomorrow is covered by the class', () => {
     const files = harnessFiles()
-    expect(gate(files, backend).strayed).toEqual([])
+    expect(gate(files, backend).outside).toEqual([])
   })
 
   it('an invented future harness module is covered too (the class, not a list)', () => {
-    expect(gate(['tests/some-harness-nobody-has-written-yet.ts'], backend).strayed).toEqual([])
-    expect(gate(['tests/helpers/some-future-helper.ts'], backend).strayed).toEqual([])
+    expect(gate(['tests/some-harness-nobody-has-written-yet.ts'], backend).outside).toEqual([])
+    expect(gate(['tests/helpers/some-future-helper.ts'], backend).outside).toEqual([])
   })
 
   it('shared-write, not a transfer: desktop still writes the same harness on its own PR', () => {
-    expect(gate(harnessFiles(), desktop).strayed).toEqual([])
+    expect(gate(harnessFiles(), desktop).outside).toEqual([])
   })
 
-  describe('what stays out of backend reach', () => {
+  describe('what stays outside the backend lane (routed to its owner, not refused)', () => {
     it.each([
       ['a desktop Playwright suite at the tests/ root', 'tests/hub-settings.spec.ts'],
       ['a Bun guard suite at the tests/ root', 'tests/guards.test.ts'],
@@ -93,11 +97,11 @@ describe('shared test harness is writable by the backend lane (#2642)', () => {
       ['desktop browser-driving step code', 'tests/steps/admin/admin.steps.ts'],
       ['the orchestrator’s own tests', 'tests/orchestrator/scope.test.ts'],
     ])('%s', (_what, file) => {
-      expect(gate([file], backend).strayed).toEqual([file])
+      expect(gate([file], backend).outside).toEqual([file])
     })
   })
 
-  describe('the grant boundary this issue is explicitly NOT about (#1115)', () => {
+  describe('the supply-chain boundary this issue is explicitly NOT about (#1115, #3056)', () => {
     it.each([
       '.github/workflows/ci.yml',
       '.github/actions/setup/action.yml',
@@ -105,8 +109,8 @@ describe('shared test harness is writable by the backend lane (#2642)', () => {
       'Dockerfile',
       'Caddyfile',
       'knope.toml',
-    ])('backend still cannot reach %s', (file) => {
-      expect(gate([file], backend).strayed).toEqual([file])
+    ])('backend still cannot write %s', (file) => {
+      expect(gate([file], backend).supplyChain).toEqual([file])
     })
 
     it('GRANT_EXCLUDED_PATHS is unchanged in what it protects: it does not (and need not) name tests/', () => {

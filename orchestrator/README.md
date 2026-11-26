@@ -101,7 +101,6 @@ from the repo root: `bun run fleet <command>`.
 | `llamenos-fleet resume` | Clears the local halt file and reason, records a resume timestamp (which resets the consecutive-failure breaker's window), and logs `RESUMED`. |
 | `llamenos-fleet missing-checks [--pr N] [--porcelain]` | Diffs the base branch's LIVE ruleset against what is actually on each open PR's head, and reports any required context that is **absent** rather than red (#1662). Read-only. Exits `1` when a head is blocked forever, `2` when a required set could not be read, `0` on a clean sweep. See below. |
 | `llamenos-fleet pr-why <pr> [--porcelain]` | Why is this PR not merging (#2469)? Reads ONE PR's live state and prints a **ranked list of named verdicts**, each with the evidence it was derived from and the remedy — `codeowner-approval-missing` (never reported for a path whose only owner is the PR's author — GitHub treats that as satisfied, so it is the `codeowner-approval-vacuous` note instead, #2897), `automerge-stale`, `not-queued`, `queued-ok`, `required-context-absent` (via `missing-checks`), `review-verdict-stale-by-tree`, `fleet-queue-guard-unsatisfied`, `check-carrier-ambiguous`, `head-moved`, and the rest of `VERDICT_NAMES` in `orchestrator/src/pr-why.ts`. Read-only: it prints remedies and runs none. Exits `0` when nothing is owed (queued, merged), `1` when blocked, `2` when any verdict could not be observed. See below. |
-| `llamenos-fleet scope-grant <pr>` | Applies the `scope:<lane>` label(s) a fleet PR's diff needs, posts a marked PR comment saying so, and re-fires the review request (#2643). The same step `tick` runs when it discovers a dispatched PR; by hand it covers a PR opened before that existed or one a worker pushed more files to. Refuses — applying nothing — when the diff holds a `GRANT_EXCLUDED_PATHS` path, a secret, or a path no lane owns. Exits 0 on `granted`/`not-needed`. |
 | `llamenos-fleet queue-sweep [--porcelain]` | Cancels **orphaned `merge_group` runs** (#1868): runs on `gh-readonly-queue/<base>/pr-<n>-<basesha>` branches whose PR is no longer in the merge queue, or is queued with a different base commit than the branch was built from (a dequeued, ejected, or rebuilt entry's old run keeps executing otherwise and holds a Mac mini hostage). Only a run that still has a **non-completed job** is cancelled — liveness is judged by job `status`, never by the run's own status or any `conclusion` (both are unreliable in observed ways; see the module comment in `orchestrator/src/queue-sweep.ts`). An unreadable run list, queue, or jobs list cancels NOTHING (fail closed). Also runs automatically at the start of every `tick` pass, so an orphan lives at most one tick interval; this command is the on-demand form. Exits `2` when the sweep could not decide or a cancel was refused, `0` otherwise — a cancelled orphan is the sweep working, not a defect. |
 | `llamenos-fleet queue-feed` | The merge queue's durable owner (#2036). Re-arms auto-merge on PRs that are CLEAN, unarmed, and not in the queue — every ejected PR lands in exactly that state, and nothing else ever looked. Bounds only the ADDITION of never-admitted PRs by queue depth — an ejected or dequeued PR (last merge-queue timeline event a removal) is re-armed at any depth (#2619), and a fleet-dispatched one is given the `queue-cleared` label first, because the queue guard reads it inside the group. Arms only when all four conditions hold (fresh per-PR CLEAN, a cached `fleet/review` PASS for the head's tree and claim, changes that git merges cleanly onto the queue and the same pass's picks, iOS-gate-risk PRs alone), never re-queues a PR whose last queue attempt failed on its own diff, and re-queues a cancellation-only ejection only when it was provably an infrastructure timeout — once per head, recorded on the PR (#2458). Exits `2` when a prerequisite read (the queue, the ruleset) was undecidable. See below. |
 
@@ -500,7 +499,7 @@ push.
 **The orchestrator makes that request itself when a worker's PR appears
 (#1760).** `realDispatch` calls `requestReviewAtOpen`
 (`orchestrator/src/review-request.ts`) in the same step it links the issue
-and applies any `scope:<lane>` grant (it deliberately does not arm
+(it deliberately does not arm
 auto-merge, #2732), so a fleet PR is never born with an empty
 `requested_reviewers` list — before this, every one was, and `fleet/review`
 could only ever republish `NO-VERDICT:unreviewed` on it: permanently
@@ -662,8 +661,8 @@ lane parked work that was already diagnosed.
    together with every consumer it breaks. The consumer lanes
    (`CONTRACT_CONSUMER_LANE_IDS`: backend, desktop, ios, android) review it.
    The router sends an issue to `shared` when it cites the contract and two or
-   more consumer lanes; a schema field one route reads stays a backend PR with
-   a `scope:shared` grant.
+   more consumer lanes; a schema field one route reads stays a backend PR that `shared`
+   reviews.
 2. **Every path has an owner that can hold a branch.**
    `tests/orchestrator/lane-coverage.test.ts` fails for any tracked file owned
    by no lane, or owned only by a fragment that is not a lane. The Mac host
@@ -771,155 +770,102 @@ silence.
 | `.github/ci/audit-allowlist.txt` | infra, grant-excluded | A grant cannot reach it, so no other lane can add a line to silence its own finding. "Removal-only" is not expressible as a path grant; #1967's suggested mechanism (a check that a new line carries a tracking issue and an expiry) is separate work. |
 | Mac host files | infra authors, mac reviews | See point 2. |
 
-## Cross-lane PRs: `scope:<lane>` grants (#1115)
+## Cross-lane PRs: lane scope is routing, not a gate (#3056)
 
-A lane's scope is the set of paths its workers may write, parsed from
+A lane's scope is the set of paths it owns, parsed from
 `.claude/agents/fragments/<lane>-supervisor.md`. Most work fits one lane.
 Some genuinely does not: a permission-boundary fix spans the shared module,
 the server that enforces it, the client that consumes it and the tests that
-prove it. That is one atomic change — splitting it produces PRs that each go
-green alone and leave `main` red between merges.
+prove it. That is one atomic change, authored as one PR (#2979).
 
-Before this existed the author had no legal move: stray and be hard-blocked
-at `fleet/verify` with `scope=fail`, or split and break `main`. Now a PR can
-carry `scope:<lane>` labels, and `fleet/verify` treats a file as in-scope if
-**any** authorised lane owns it — its own, plus each granted one.
+**`fleet/verify` no longer fails a PR for touching another lane's paths.** The
+gate used to treat every path outside the authoring lane as a failure and let
+a `scope:<lane>` label excuse it (#1115, #2643). That was built to stop
+concurrent per-platform workers overwriting each other's slice of one change.
+With one worker authoring the whole change there is no second writer to
+overwrite, and the label only recorded that a deliberately full-stack PR was
+full-stack: PR #3051 (79 files, five platforms) needed five hand-applied
+labels that changed nothing it was allowed to do. So the two halves were split:
 
-```
-# a backend fix that must also update the desktop BDD steps it invalidates
-gh pr edit <N> --add-label scope:desktop
-```
+| Class | What `fleet/verify` does | Why |
+|---|---|---|
+| **Never-write** (`NEVER_WRITE_PATHS` — secrets, and a private key in any file) | **Refuses.** Absolute; binds even an unrestricted lane. | A security control, unchanged. |
+| **Supply chain** (`GRANT_EXCLUDED_PATHS`) outside the PR's own lane | **Refuses.** | CI, deploy and the scanner config are the one outside-the-lane class no label ever excused. Only the owning lane's own PR writes them. |
+| **Trust anchor** | Holds for a human sign-off on the exact head. | Unchanged (#2556). |
+| **Any other path outside the authoring lane** | **Passes.** Reports `reviewLanes`: the lanes that own those files. | Routing metadata — who should review — not evidence of a defect. |
 
-What a grant cannot do:
+`checkScopeRouting` (`src/scope.ts`) makes the split; `reviewLanesFor`
+(`src/route.ts`) attributes each outside file to the one lane whose owned
+pattern matches it longest. A path several lanes own equally specifically (a
+shared-write grant such as `package.json` or the locale files) names nobody,
+and a path no lane owns names nobody — `lane-coverage.test.ts` is what keeps
+the second set empty. The job summary of a passing or failing gate carries a
+`review lanes: <lane> (<files>)` line; it is deliberately not in the one-line
+gate trace, which is machine-parsed.
 
-- **Reach a secret.** `NEVER_WRITE_PATHS` is checked first and is absolute.
-  Be precise about what that covers, because an earlier draft of this section
-  overstated it: `NEVER_WRITE_PATHS` is `SECRET_PATH_PATTERNS` and covers
-  **secrets only**. `deploy/` and `.github/workflows/` are deliberately *not*
-  in it, because lanes legitimately own some of them. Nor are committed
-  TEMPLATES of a secret (`.env.example`, `keystore.properties.example`): the
-  never-write comparison is `matchesSecretPath`, which subtracts
-  `SECRET_TEMPLATE_SUFFIXES` from the match, because a file that exists to be
-  committed and read cannot be a secret and a deploy template nobody may edit
-  is a deploy nobody may fix (#1253). That subtraction applies only to
-  `TEMPLATED_SECRET_PATTERNS` — `.env` and `keystore.properties`, the two
-  patterns a tracked template justifies. A new secret pattern inherits no
-  carve-out unless a tracked template proves it needs one, so
-  `.npmrc.example` and `id_rsa.example` remain forbidden. The interactive write-deny hook in
-  `.claude/settings.json` never blocked them either — its `\.env$` is
-  anchored — so this removes a divergence rather than creating one. A
-  template is exempt from the WRITE gate only: `classifyImpact` still rates
-  it high-impact, and `gitleaks` still reads its contents.
+There is no label to apply. `scope:<lane>` labels, the `scope-grant` command
+and the at-open grant step (`scope-grant.ts`) were removed: with the gate no
+longer reading them they were inert, and an inert label that looks meaningful
+is worse than none. Lane labels themselves stay — they are the dispatch key
+(`lane:<id>` plus `agent-dispatchable`) and the review router.
 
-- **Reach CI or deploy config via a grant.** That is enforced separately, by
-  `GRANT_EXCLUDED_PATHS` — `.github/workflows/`, `.github/actions/`,
-  `deploy/`, `Dockerfile*`, `Caddyfile*`, `knope.toml`. A grant is refused
-  these even when the granted lane owns them. Without that list, one
-  self-applied `scope:infra` label would extend any worker's write scope to
-  the supply chain that builds, tests, signs and ships the app, and
-  `fleet/verify` would say `scope=pass`.
+**Not built:** the lanes `reviewLanes` names are *reported*, not auto-requested.
+`fleet/review` is one run by `llamenos-auto` and there is no `<lane>-reviewer`
+profile to request; the only reviewer profiles are the ones `.claude/agents/`
+holds. Requesting a lane as a reviewer needs a reviewer identity per lane,
+which is a separate decision.
 
-  The exclusion binds **grants only**. The owning lane still writes these
-  normally on its own PR: infra edits its own workflows, ios edits
-  `.github/workflows/ios*.yml`. And it is deliberately narrow — `scripts/` is
-  infra-owned but *not* excluded, because a cross-lane fix such as #1060
-  genuinely needs `scripts/bootstrap-admin.ts`. `.github/ci/` is likewise
-  absent: those are lint baselines, already shared-write, and not supply
-  chain.
-- **Be self-issued from the diff.** Labels live outside the commit, so a
-  worker cannot widen its own scope by editing a file in its own PR. That is
-  the whole reason the grant is a label and not a trailer in the PR body.
-  **This is a narrower claim than "a worker cannot grant itself scope."** The
-  fleet pushes with a GitHub account that can also run `gh pr edit
-  --add-label`, so a worker that chose to could label its own PR. What the
-  label buys is that the grant is *outside the diff*: it cannot arrive by
-  merging a branch, it is visible on the PR without reading the patch, and it
-  survives review as an explicit, separately-auditable act. Restricting who
-  may apply `scope:*` is a follow-up, not something this mechanism provides.
-- **Silently apply when unreadable.** If the labels cannot be read the gate
-  grants nothing and judges the PR on its own lane alone. Not knowing means
-  not granted. The same applies inside a merge queue, where the PR number is
-  not available: grants drop, so a cross-lane PR that passed on its own branch
-  can still fail in the queue. That direction is safe but surprising — worth
-  knowing before enabling a merge queue.
+**The branch no longer decides review routing.** `reviewLanesFor` takes the
+lanes' own scopes, not the PR's lane, so a PR whose branch is not
+`fleet/<lane>/<item>` (every manually dispatched unit) gets the same routing
+as one that is. For such a PR the own lane is `UNSCOPED_LANE`, which owns
+nothing, so every non-secret path is "outside" it *for routing* and none is
+refused as supply chain — as before, the supply-chain refusal applies only to
+a fleet branch whose lane is known.
 
-- **Make a fragment a lane.** A fragment can own paths without being a lane:
-  `mac-supervisor` owns a machine, so nothing is dispatched to it and a
-  `fleet/mac/<item>` branch stays "unknown lane". Its paths are still
-  grantable — `SCOPE_ONLY_LANE_IDS` in `config.ts` names the fragments whose
-  `scope:<id>` label the gate and `scope-grant` honour, and `loadGrantableLanes`
-  is the lane list they read (`loadLanes`, which dispatch/doctor/digest use,
-  never contains one). The measured need (#2867): a fleet-authored change to
-  `scripts/ci/mac-ci-work-volume.sh` must update `docs/runbooks/mac-ci-runner-disk.md`
-  in the same commit, and while `mac` was not grantable the runbook read as
-  owned by no lane and the gate said to delete it. The list is explicit, not
-  "every fragment outside `LANE_IDS`", so making a fragment grantable is a
-  decision in this human-gated file. The grant reaches only
-  `SCOPE_ONLY_GRANT_PATHS` — the runbook — not everything the fragment owns:
-  `mac` also owns the disk guard and `mac-run.sh`, which execute on the shared
-  self-hosted runner and stay unreachable by any grant. `GRANT_EXCLUDED_PATHS`
-  still applies: a diff holding `.github/workflows/ios-e2e.yml` is refused whole
-  and lands from a plain branch, as before.
+Details worth keeping:
 
-- **Widen via a lane that owns nothing.** An `off` lane, or one whose fragment
-  is missing or unparseable, has `owned: []` — and an empty owned list means
-  "no ownership check". Honouring a grant for such a lane would make the whole
-  PR unrestricted, so an empty granted scope is discarded and logged. Only the
-  PR's OWN lane may be unrestricted; a grant may widen only by a real lane's
-  real paths.
-- **Merge two lanes into one scope.** Each lane is still resolved with its own
-  `owned`/`notOwned` pair and its own longest-match rules. Flattening them
-  would let one lane's grant cancel another's exclusion and make a path
-  writable that neither lane can write by itself.
+- **Never-write is `SECRET_PATH_PATTERNS` only.** `deploy/` and
+  `.github/workflows/` are deliberately *not* in it, because lanes
+  legitimately own some of them; that is what `GRANT_EXCLUDED_PATHS` is for.
+  Committed TEMPLATES of a secret (`.env.example`, `keystore.properties.example`)
+  are not secrets: the never-write comparison is `matchesSecretPath`, which
+  subtracts `SECRET_TEMPLATE_SUFFIXES` from the match (#1253), only for
+  `TEMPLATED_SECRET_PATTERNS` (`.env`, `keystore.properties`). A new secret
+  pattern inherits no carve-out unless a tracked template proves it needs one,
+  so `.npmrc.example` and `id_rsa.example` remain forbidden. A template is
+  exempt from the WRITE gate only: `classifyImpact` still rates it high-impact
+  and `gitleaks` still reads its contents.
+- **The supply-chain list is narrow on purpose.** `scripts/` is infra-owned
+  but *not* on it, because a cross-lane fix such as #1060 genuinely needs
+  `scripts/bootstrap-admin.ts`. `.github/ci/` is likewise absent: lint
+  baselines, already shared-write, not supply chain. The name
+  `GRANT_EXCLUDED_PATHS` is historical.
+- **A fragment can own paths without being a lane.** `mac-supervisor` owns a
+  machine, so nothing is dispatched to it and a `fleet/mac/<item>` branch stays
+  "unknown lane". `SCOPE_ONLY_LANE_IDS` in `config.ts` names the fragments that
+  are nonetheless a *reviewer* (`reviewLanesFor` reads `loadGrantableLanes`;
+  `loadLanes`, which dispatch/doctor/digest use, never contains one), narrowed
+  to `SCOPE_ONLY_GRANT_PATHS` — the runbook — so the disk guard and
+  `mac-run.sh`, which execute on the shared self-hosted runner, route to infra.
+  The list is explicit, not "every fragment outside `LANE_IDS`", so making a
+  fragment a reviewer is a decision in this human-gated file.
+- **A lane that owns nothing owns nothing.** An `off` lane, or one whose
+  fragment is missing or unparseable, has `owned: []`; `reviewLanesFor` skips
+  it, so "no ownership check" never reads as "owns this file".
 
-### Applied at PR open, not by hand (#2643)
-
-The label used to be an operator's job. Four of seven overnight PRs (#2633,
-#2634, #2637, #2638) each fixed one problem across a lane boundary and each
-stopped at `NO-VERDICT:scope` with `review=not-run` — no reviewer ran at all —
-until an operator applied the labels, then DELETEd and POSTed the requested
-reviewer (`fleet-verify.yml` listens for `review_requested`, not `labeled`,
-and a rerun repeats the stale label lookup).
-
-`realDispatch` now does that step itself, in `src/scope-grant.ts`
-(`grantScopeAtOpen`), the moment it discovers a dispatched PR and **before**
-the at-open review request:
-
-1. `planScopeGrants` reads the PR's files and, for every file the PR's own
-   lane does not own, picks a real lane that does (smallest label set,
-   alphabetical on a tie).
-2. If any file is grant-excluded, a secret, or owned by no lane, **nothing is
-   granted** — a partial grant on a PR that cannot pass would only make the
-   label list read like an authorisation nobody gave. The refusal is logged
-   and the gate's `scope advice:` lines carry the remedy as before.
-3. Otherwise it adds the missing `scope:<lane>` labels, posts a comment
-   beginning `<!-- fleet:scope-grant -->` listing each label and the files
-   that needed it, and re-fires the review (`refireReviewRequest`: DELETE a
-   pending trigger reviewer, POST it back, confirm by `review_requested` event
-   count). The first gate run therefore already sees the grant.
-
-Visibility: a fleet-applied grant is the labels **plus** that marked comment;
-a grant an operator applied by hand has no such comment. The boundary is
-unchanged and still enforced where it always was — the gate re-judges every
-file against the labels (`checkScopeAcross`), `GRANT_EXCLUDED_PATHS` still
-refuses CI/deploy/supply-chain paths to any grant, and removing the label
-returns the PR to its own lane alone. This module can only apply a label the
-gate would honour from an operator.
-
-### Known gap this does not close
+### Known gap: the supply-chain refusal is opt-in by branch name
 
 `resolveLane` still falls back to `UNSCOPED_LANE` for any branch not named
-`fleet/<lane>/…`, and an unrestricted scope means no ownership check at all.
-So the scope gate is currently **opt-in by branch name** — the one string the
-worker being contained chooses. The precondition for closing that, that every
-path has an owner, now holds (#2935): `tests/orchestrator/lane-coverage.test.ts`
-asks the gate's own instruments about every tracked file as every lane's PR
-and fails on any answer of "owned by no lane". The one deliberate exception is
-the directory of fragments that declare lane scope, which no lane owns and which
-is `GRANT_EXCLUDED_PATHS`, so the gate calls it grant-excluded. The `unowned`
-verdict stays as a fail-closed guard for a file added without an owner; the
-ratchet is what keeps it unreachable. `NEVER_WRITE_PATHS` and CODEOWNERS bind
-universally either way.
+`fleet/<lane>/…`, and an unrestricted own lane means no supply-chain check.
+That was always so (the ownership check it replaced behaved the same), and
+CODEOWNERS binds every path to a human either way; but it is the one string
+the worker being contained chooses. The precondition for closing it — every
+path has an owner — holds (#2935): `lane-coverage.test.ts` asks about every
+tracked file as every lane's PR. The deliberate exception is the directory of
+fragments that declare lane scope, which no lane owns and which is in
+`GRANT_EXCLUDED_PATHS`, so every lane's PR is refused it. `NEVER_WRITE_PATHS`
+and CODEOWNERS bind universally either way.
 
 ## The merge-queue guard: only the supervisor queues a fleet PR (#1894)
 

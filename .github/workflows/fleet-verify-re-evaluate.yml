@@ -7,8 +7,8 @@
 # the head's `fleet/verify` carrier and admission reported the context as
 # `expected` with every check green. This file only CALLS fleet-verify.yml;
 # its `fleet-verify/refresh-carrier` job then re-runs the head's one carrier
-# in place, which re-reads the PR's live labels (a `scope:<lane>` grant,
-# #1124) and concludes on them.
+# in place, which re-reads the PR's live state (a trust-anchor sign-off,
+# #1124) and concludes on it.
 name: Fleet Verify Re-evaluate
 
 on:
