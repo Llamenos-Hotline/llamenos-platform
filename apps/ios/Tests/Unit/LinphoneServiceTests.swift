@@ -4,43 +4,123 @@ import Testing
 
 // MARK: - LinphoneServiceTests
 //
-// These tests exercise the `pendingCallHubIds` map in LinphoneService, which does not
-// touch liblinphone. What a started Core exposes is covered by `LinphoneServiceCoreTests`
-// below; SIP registration itself is not exercised anywhere (see that suite's note).
+// These exercise the call→hub logic in LinphoneService, which does not touch liblinphone:
+// `handleCallEvent` is what the Core delegate feeds every call-state change into. What a
+// started Core exposes is covered by `LinphoneServiceCoreTests` below; SIP registration
+// itself is not exercised anywhere (see that suite's note).
+//
+// The multi-hub axiom (#1019): a RING never moves the active hub; an ANSWER with the app
+// unlocked does. The push's `call-id` is the server's pushRef, never the SIP Call-ID, so
+// every test here gives the two different values, as production does.
 
 struct LinphoneServiceTests {
 
-    @Test func handleVoipPushStoresCallIdToHubIdMapping() {
-        let svc = LinphoneService()
-        svc.handleVoipPush(callId: "call-abc-001", hubId: "hub-uuid-001")
-        #expect(svc.pendingCallHubIdForTesting("call-abc-001") == "hub-uuid-001")
+    private let pushRef = "3f9c0e2a7b1d4c58a6e0f1b2c3d4e5f6"
+    private let sipCallId = "a84b4c76e66710@pbx.example.org"
+
+    /// A service with a fresh hub context browsing `active`, registered for `registered`.
+    private func service(
+        unlocked: Bool,
+        active: String = "hub-a",
+        registered: Set<String> = ["hub-a", "hub-b"]
+    ) -> (LinphoneService, HubContext) {
+        let hubContext = HubContext()
+        hubContext.setActiveHub(active)
+        let svc = LinphoneService(isAppUnlocked: { unlocked })
+        svc.prepareForCallEventsForTesting(hubContext: hubContext, registeredHubIds: registered)
+        return (svc, hubContext)
     }
 
-    @Test func pendingCallHubIdRemovedAfterConsumption() {
+    @Test func handleVoipPushRecordsThePushRefsHub() {
         let svc = LinphoneService()
-        svc.handleVoipPush(callId: "call-abc-001", hubId: "hub-uuid-001")
-        svc.consumePendingCallHubForTesting("call-abc-001")
-        #expect(svc.pendingCallHubIdForTesting("call-abc-001") == nil)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-uuid-001")
+        #expect(svc.pushedCallHubIdForTesting(pushRef) == "hub-uuid-001")
     }
 
-    @Test func separateCallIdsAreTrackedIndependently() {
+    @Test func separatePushRefsAreTrackedIndependently() {
         let svc = LinphoneService()
-        svc.handleVoipPush(callId: "call-aaa", hubId: "hub-001")
-        svc.handleVoipPush(callId: "call-bbb", hubId: "hub-002")
-        #expect(svc.pendingCallHubIdForTesting("call-aaa") == "hub-001")
-        #expect(svc.pendingCallHubIdForTesting("call-bbb") == "hub-002")
+        svc.handleVoipPush(pushRef: "ref-aaa", hubId: "hub-001")
+        svc.handleVoipPush(pushRef: "ref-bbb", hubId: "hub-002")
+        #expect(svc.pushedCallHubIdForTesting("ref-aaa") == "hub-001")
+        #expect(svc.pushedCallHubIdForTesting("ref-bbb") == "hub-002")
+        #expect(svc.pushedCallHubIdForTesting("ref-unknown") == nil)
     }
 
-    @Test func unknownCallIdReturnsNil() {
-        let svc = LinphoneService()
-        #expect(svc.pendingCallHubIdForTesting("call-unknown") == nil)
+    @Test func aRingDoesNotSwitchTheActiveHubEvenWhileUnlocked() {
+        let (svc, hubContext) = service(unlocked: true)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        let rangFor = svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+
+        #expect(rangFor == "hub-b")
+        #expect(hubContext.activeHubId == "hub-a")
     }
 
-    @Test func overwritingCallIdUpdatesHubId() {
-        let svc = LinphoneService()
-        svc.handleVoipPush(callId: "call-abc-001", hubId: "hub-uuid-001")
-        svc.handleVoipPush(callId: "call-abc-001", hubId: "hub-uuid-002")
-        #expect(svc.pendingCallHubIdForTesting("call-abc-001") == "hub-uuid-002")
+    @Test func answeringWhileUnlockedSwitchesToTheCallsHub() {
+        let (svc, hubContext) = service(unlocked: true)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+        #expect(hubContext.activeHubId == "hub-a")
+        svc.handleCallEvent(.answered, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+
+        #expect(hubContext.activeHubId == "hub-b")
+        #expect(svc.ringingCallHubIdForTesting(sipCallId) == nil)
+    }
+
+    @Test func theRingIsJoinedToItsPushByPushRefNotBySipCallId() {
+        // The INVITE's Call-ID is minted by the PBX. Looking the push up by it never
+        // matches; only the push-ref header carries the value the push was keyed by.
+        let (svc, _) = service(unlocked: true)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        #expect(svc.handleCallEvent(.ringing, sipCallId: pushRef + "-not", pushRef: nil, isIncoming: true) == nil)
+        #expect(svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true) == "hub-b")
+    }
+
+    @Test func answeringWhileLockedLeavesTheActiveHubAlone() {
+        let (svc, hubContext) = service(unlocked: false)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+        svc.handleCallEvent(.answered, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+
+        #expect(hubContext.activeHubId == "hub-a")
+    }
+
+    @Test func aDeclinedOrMissedCallNeverSwitchesTheActiveHub() {
+        let (svc, hubContext) = service(unlocked: true)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+        svc.handleCallEvent(.ended, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+        // A late Connected for a call already ended has nothing to switch to.
+        svc.handleCallEvent(.answered, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+
+        #expect(hubContext.activeHubId == "hub-a")
+        #expect(svc.pushedCallHubIdForTesting(pushRef) == nil)
+    }
+
+    @Test func anOutgoingCallConnectingNeverSwitchesTheActiveHub() {
+        let (svc, hubContext) = service(unlocked: true)
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-b")
+
+        svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+        svc.handleCallEvent(.answered, sipCallId: sipCallId, pushRef: pushRef, isIncoming: false)
+
+        #expect(hubContext.activeHubId == "hub-a")
+    }
+
+    @Test func aPushedHubThisDeviceIsNotRegisteredForIsNotTrusted() {
+        // The VoIP push is not authenticated. A hub it names that this device holds no
+        // SIP registration for is not a hub to answer into.
+        let (svc, hubContext) = service(unlocked: true, registered: ["hub-a"])
+        svc.handleVoipPush(pushRef: pushRef, hubId: "hub-not-a-member")
+
+        #expect(svc.handleCallEvent(.ringing, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true) == nil)
+        svc.handleCallEvent(.answered, sipCallId: sipCallId, pushRef: pushRef, isIncoming: true)
+
+        #expect(hubContext.activeHubId == "hub-a")
     }
 }
 

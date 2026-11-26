@@ -11,7 +11,7 @@ import linphonesw
 protocol LinphoneServiceProtocol: AnyObject {
     func registerHubAccount(hubId: String, sipParams: SipTokenResponse) throws
     func unregisterHubAccount(hubId: String)
-    func handleVoipPush(callId: String, hubId: String)
+    func handleVoipPush(pushRef: String, hubId: String)
 }
 
 // MARK: - LinphoneError
@@ -231,10 +231,17 @@ struct SipIceServer: Decodable, Equatable, CustomStringConvertible {
 /// Manages a Linphone SIP core instance for real-time VoIP call handling.
 ///
 /// One SIP account is registered per hub the volunteer is on-shift for.
-/// The `pendingCallHubIds` map correlates incoming VoIP push payloads
-/// (which carry a `callId` and `hubId`) with the Linphone `Call` object
-/// that subsequently arrives in `onCallStateChanged`, so the hub context
-/// can be switched before the call is presented to the volunteer.
+///
+/// Multi-hub axiom: a ring is a background event — it arrives from any member hub, whether
+/// or not the volunteer is looking — so it never switches the active hub. The hub is
+/// switched when the volunteer ANSWERS (the incoming call reaches `Connected`) and only
+/// while the app is unlocked; the other permitted switch is a notification tap
+/// (`AppDelegate.handleNotificationResponse`).
+///
+/// Which hub a call belongs to: the VoIP push names it, keyed by the push's `call-id` —
+/// the server's opaque `pushRef`, NOT the SIP Call-ID, which the PBX mints per leg. The
+/// bridge stamps the push ref on the in-app INVITE as `pushRefHeader`, and that header is
+/// what joins the two.
 ///
 /// The SDK is linked through the `linphonesw` Swift package (apps/ios/project.yml);
 /// `#if canImport(linphonesw)` only matters for a build that drops that dependency.
@@ -242,10 +249,34 @@ struct SipIceServer: Decodable, Equatable, CustomStringConvertible {
 final class LinphoneService: LinphoneServiceProtocol {
     // MARK: - Private State
 
-    /// callId → hubId map set by VoIP push before Linphone fires onCallStateChanged.
-    private var pendingCallHubIds: [String: String] = [:]
+    /// pushRef → hubId, recorded by `handleVoipPush` before the INVITE arrives.
+    private var pushedCallHubIds: [String: String] = [:]
+    /// SIP Call-ID → hubId of an inbound call that rang here, held until it is answered
+    /// or ends. Read once, on answer.
+    private var ringingCallHubIds: [String: String] = [:]
+    /// Hubs this device holds a SIP registration for. Registrations are made only for
+    /// hubs the server confirmed at clock-in, so a pushed hub outside this set — the VoIP
+    /// push is not authenticated — is not one to answer into.
+    private var registeredHubIds: Set<String> = []
     private let pendingCallLock = NSLock()
     private weak var hubContext: HubContext?
+    /// Whether the app is unlocked right now. The answer path switches the hub only then.
+    private let isAppUnlocked: () -> Bool
+
+    /// SIP header carrying the call's push ref on an in-app ring leg. Set by the bridge
+    /// (sip-bridge/src/command-handler.ts `PUSH_REF_HEADER`); rename all three together.
+    static let pushRefHeader = "X-Llamenos-Push-Ref"
+
+    /// What happened to a call, independent of the SDK's `Call.State`, so the hub logic
+    /// can be driven (and tested) without a live `Call`.
+    enum CallEvent: Equatable {
+        /// The INVITE arrived and the phone is ringing.
+        case ringing
+        /// The call connected — for an incoming call, the volunteer answered it here.
+        case answered
+        /// Released, ended or failed.
+        case ended
+    }
 
     #if canImport(linphonesw)
     private var core: Core?
@@ -307,7 +338,11 @@ final class LinphoneService: LinphoneServiceProtocol {
 
     // MARK: - Initialization
 
-    init() {}
+    /// - Parameter isAppUnlocked: whether the app is unlocked now. Defaults to locked, so a
+    ///   service built without it can never switch the hub from the answer path.
+    init(isAppUnlocked: @escaping () -> Bool = { false }) {
+        self.isAppUnlocked = isAppUnlocked
+    }
 
     /// Configure the service with an app-wide HubContext and start the Linphone Core.
     ///
@@ -537,6 +572,7 @@ final class LinphoneService: LinphoneServiceProtocol {
         hubAccounts[hubId] = account
         hubAuthInfos[hubId] = (authInfo, turnAuthInfo)
         registeredIdentities[hubId] = identityKey
+        pendingCallLock.withLock { _ = registeredHubIds.insert(hubId) }
         #else
         _ = (hubId, sipParams)
         #endif
@@ -544,6 +580,7 @@ final class LinphoneService: LinphoneServiceProtocol {
 
     /// Unregister the SIP account for the given hub. Called when the volunteer clocks out.
     func unregisterHubAccount(hubId: String) {
+        pendingCallLock.withLock { _ = registeredHubIds.remove(hubId) }
         #if canImport(linphonesw)
         registeredIdentities[hubId] = nil
         guard let core, let account = hubAccounts.removeValue(forKey: hubId) else { return }
@@ -723,12 +760,46 @@ final class LinphoneService: LinphoneServiceProtocol {
 
     // MARK: - VoIP Push Handling
 
-    /// Record the hub ID that triggered a VoIP push for a given call ID.
-    /// Called by PushKit before Linphone fires `onCallStateChanged(.IncomingReceived)`.
-    func handleVoipPush(callId: String, hubId: String) {
-        pendingCallLock.lock()
-        defer { pendingCallLock.unlock() }
-        pendingCallHubIds[callId] = hubId
+    /// Record the hub a VoIP push announced a call for. `pushRef` is the push's `call-id`.
+    /// Records only — nothing here, nor on the ring that follows, touches the active hub.
+    func handleVoipPush(pushRef: String, hubId: String) {
+        pendingCallLock.withLock { pushedCallHubIds[pushRef] = hubId }
+    }
+
+    // MARK: - Call Events
+
+    /// Apply a call event. The ONLY place the call path switches the active hub: an
+    /// incoming call `.answered` while the app is unlocked. Returns the hub the call was
+    /// resolved to on `.ringing` (for presenting it), else nil.
+    ///
+    /// - Parameters:
+    ///   - sipCallId: the INVITE's SIP Call-ID (`callLog.callId`).
+    ///   - pushRef: the INVITE's `pushRefHeader`, when the bridge stamped one.
+    @discardableResult
+    func handleCallEvent(_ event: CallEvent, sipCallId: String, pushRef: String?, isIncoming: Bool) -> String? {
+        switch event {
+        case .ringing:
+            let hubId: String? = pendingCallLock.withLock {
+                guard let pushRef, let pushed = pushedCallHubIds.removeValue(forKey: pushRef),
+                      registeredHubIds.contains(pushed) else { return nil }
+                ringingCallHubIds[sipCallId] = pushed
+                return pushed
+            }
+            return hubId
+        case .answered:
+            let hubId = pendingCallLock.withLock { ringingCallHubIds.removeValue(forKey: sipCallId) }
+            // Consumed either way: a call answered while locked does not switch later.
+            if let hubId, isIncoming, isAppUnlocked() {
+                hubContext?.setActiveHub(hubId)
+            }
+            return nil
+        case .ended:
+            pendingCallLock.withLock {
+                ringingCallHubIds.removeValue(forKey: sipCallId)
+                if let pushRef { pushedCallHubIds.removeValue(forKey: pushRef) }
+            }
+            return nil
+        }
     }
 
     // MARK: - Core Delegate (Linphone)
@@ -737,25 +808,21 @@ final class LinphoneService: LinphoneServiceProtocol {
     private func setupCoreDelegate(core: Core) {
         let delegate = CoreDelegateStub(
             onCallStateChanged: { [weak self] _, call, state, _ in
-                guard let self else { return }
-                let callId = call.callLog?.callId ?? ""
+                guard let self, let sipCallId = call.callLog?.callId else { return }
+                let event: CallEvent
                 switch state {
-                case .IncomingReceived:
-                    self.pendingCallLock.lock()
-                    let hubId = self.pendingCallHubIds.removeValue(forKey: callId)
-                    self.pendingCallLock.unlock()
-                    if let hubId {
-                        Task { @MainActor in
-                            self.hubContext?.setActiveHub(hubId)
-                        }
-                    }
-                case .Released, .End:
-                    self.pendingCallLock.lock()
-                    self.pendingCallHubIds.removeValue(forKey: callId)
-                    self.pendingCallLock.unlock()
-                default:
-                    break
+                case .IncomingReceived: event = .ringing
+                case .Connected: event = .answered
+                case .Released, .End, .Error: event = .ended
+                default: return
                 }
+                let pushRef = call.remoteParams?.getCustomHeader(headerName: Self.pushRefHeader)
+                self.handleCallEvent(
+                    event,
+                    sipCallId: sipCallId,
+                    pushRef: pushRef?.isEmpty == false ? pushRef : nil,
+                    isIncoming: call.dir == .Incoming
+                )
             }
         )
         core.addDelegate(delegate: delegate)
@@ -765,18 +832,21 @@ final class LinphoneService: LinphoneServiceProtocol {
     // MARK: - Test-only Accessors
 
     #if DEBUG
-    /// Returns the pending hub ID for a call ID without consuming it. For unit tests only.
-    func pendingCallHubIdForTesting(_ callId: String) -> String? {
-        pendingCallLock.lock()
-        defer { pendingCallLock.unlock() }
-        return pendingCallHubIds[callId]
+    /// The hub a push recorded for `pushRef`, without consuming it. For unit tests only.
+    func pushedCallHubIdForTesting(_ pushRef: String) -> String? {
+        pendingCallLock.withLock { pushedCallHubIds[pushRef] }
     }
 
-    /// Remove the pending hub ID for a call ID, simulating post-consumption. For unit tests only.
-    func consumePendingCallHubForTesting(_ callId: String) {
-        pendingCallLock.lock()
-        pendingCallHubIds.removeValue(forKey: callId)
-        pendingCallLock.unlock()
+    /// The hub held for a ringing call's SIP Call-ID. For unit tests only.
+    func ringingCallHubIdForTesting(_ sipCallId: String) -> String? {
+        pendingCallLock.withLock { ringingCallHubIds[sipCallId] }
+    }
+
+    /// Bind a hub context and mark hubs as registered without a Core or a REGISTER, so the
+    /// call-event logic can be tested on its own. For unit tests only.
+    func prepareForCallEventsForTesting(hubContext: HubContext, registeredHubIds: Set<String>) {
+        self.hubContext = hubContext
+        pendingCallLock.withLock { self.registeredHubIds = registeredHubIds }
     }
 
     /// SDK-independent snapshot of the running Core's configuration, so unit tests can

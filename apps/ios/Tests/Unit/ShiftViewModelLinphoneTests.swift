@@ -22,7 +22,7 @@ final class MockLinphoneService: LinphoneServiceProtocol {
         unregisteredHubIds.append(hubId)
     }
 
-    func handleVoipPush(callId: String, hubId: String) {
+    func handleVoipPush(pushRef: String, hubId: String) {
         // Not exercised in ShiftsViewModel tests
     }
 }
