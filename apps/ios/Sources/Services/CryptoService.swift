@@ -14,6 +14,18 @@ private func ffiMobileUnlock(data: EncryptedDeviceKeys, pin: String) throws -> D
     try mobileUnlock(data: data, pin: pin)
 }
 
+private func ffiMobileAddDeviceKemKeyAndLoad(data: EncryptedDeviceKeys, pin: String) throws -> EncryptedDeviceKeys {
+    try mobileAddDeviceKemKeyAndLoad(data: data, pin: pin)
+}
+
+private func ffiMobileDeviceKemPayload(userPubkey: String) throws -> String {
+    try mobileDeviceKemPayload(userPubkey: userPubkey)
+}
+
+private func ffiMobileGenesisDeviceSet(chainsJson: String) throws -> GenesisDeviceSet {
+    try mobileGenesisDeviceSet(chainsJson: chainsJson)
+}
+
 private func ffiMobileLock() {
     mobileLock()
 }
@@ -219,6 +231,8 @@ final class CryptoService: @unchecked Sendable {
     private(set) var signingPubkeyHex: String?
     private(set) var encryptionPubkeyHex: String?
     private(set) var deviceId: String?
+    /// This device's X-Wing public key, once unlocked (crypto_format 2, wire spec D16).
+    private(set) var kemPubkeyHex: String?
     var pubkey: String? { encryptionPubkeyHex }
     var isUnlocked: Bool { ffiMobileIsUnlocked() }
     var hasIdentity: Bool { signingPubkeyHex != nil }
@@ -228,20 +242,53 @@ final class CryptoService: @unchecked Sendable {
     func generateDeviceKeys(deviceId: String, pin: String) throws -> EncryptedDeviceKeys {
         guard ffiMobileIsValidPin(pin) else { throw CryptoServiceError.invalidPin }
         let encrypted = try ffiMobileGenerateAndLoad(deviceId: deviceId, pin: pin)
-        self.signingPubkeyHex = encrypted.state.signingPubkeyHex
-        self.encryptionPubkeyHex = encrypted.state.encryptionPubkeyHex
-        self.deviceId = encrypted.state.deviceId
+        adopt(encrypted.state)
         return encrypted
     }
 
     // MARK: - Unlock / Lock
 
-    func unlockWithPin(data: EncryptedDeviceKeys, pin: String) throws -> DeviceKeyState {
-        let ds = try ffiMobileUnlock(data: data, pin: pin)
+    /// The result of a PIN unlock. `upgradedKeys` is set for a pilot device whose
+    /// blob had no X-Wing key: the re-encrypted blob that now holds one, which the
+    /// caller MUST store in place of the old one (spec 2026-11-25 §5, #2496).
+    struct UnlockResult {
+        let state: DeviceKeyState
+        let upgradedKeys: EncryptedDeviceKeys?
+    }
+
+    func unlockWithPin(data: EncryptedDeviceKeys, pin: String) throws -> UnlockResult {
+        let result: UnlockResult
+        if data.state.kemPubkeyHex == nil {
+            // A pilot blob: unlock and gain an X-Wing key in one step.
+            let upgraded = try ffiMobileAddDeviceKemKeyAndLoad(data: data, pin: pin)
+            result = UnlockResult(state: upgraded.state, upgradedKeys: upgraded)
+        } else {
+            result = UnlockResult(state: try ffiMobileUnlock(data: data, pin: pin), upgradedKeys: nil)
+        }
+        adopt(result.state)
+        return result
+    }
+
+    private func adopt(_ ds: DeviceKeyState) {
         self.signingPubkeyHex = ds.signingPubkeyHex
         self.encryptionPubkeyHex = ds.encryptionPubkeyHex
+        self.kemPubkeyHex = ds.kemPubkeyHex
         self.deviceId = ds.deviceId
-        return ds
+    }
+
+    /// This device's `device_kem` payload JSON for `userPubkey` (spec §5): its
+    /// X-Wing key and possession signature, made in Rust. The link carrying it
+    /// must be signed by this device (`createSigchainLink`).
+    func deviceKemPayload(userPubkey: String) throws -> String {
+        guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
+        return try ffiMobileDeviceKemPayload(userPubkey: userPubkey)
+    }
+
+    /// The migration-genesis device set for a hub's members' chains (spec §5):
+    /// every chain verified together, cross-user key reuse refused; a device
+    /// without a `device_kem` is in `missing`, never in `included`.
+    func genesisDeviceSet(chainsJson: String) throws -> GenesisDeviceSet {
+        try ffiMobileGenesisDeviceSet(chainsJson: chainsJson)
     }
 
     /// Lock the crypto state — zeroize device secrets, hub keys, and server event keys in Rust.
@@ -440,6 +487,12 @@ final class CryptoService: @unchecked Sendable {
     func createSigchainLink(id: String, seq: UInt64, prevHash: String?, timestamp: String, payloadJson: String) throws -> SigchainLink {
         guard isUnlocked else { throw CryptoServiceError.noKeyLoaded }
         return try ffiMobileSigchainCreateLink(id: id, seq: seq, prevHash: prevHash, timestamp: timestamp, payloadJson: payloadJson)
+    }
+
+    /// Verify a whole user sigchain through packages/crypto `verify_sigchain`
+    /// (stateless). `linksJson` is a JSON array of the crate's `SigchainLink`.
+    func verifySigchain(linksJson: String) throws -> SigchainVerifiedState {
+        try mobileSigchainVerify(linksJson: linksJson)
     }
 
     /// Verify a single sigchain link's Ed25519 signature against an expected signer pubkey.

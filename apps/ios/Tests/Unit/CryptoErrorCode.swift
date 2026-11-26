@@ -15,6 +15,13 @@ func cryptoErrorCode(_ error: Error) -> String {
         return "invalid_id"
     case .NoEventKey:
         return "no_event_key"
+    case .SigchainRejected(let message):
+        // A flat error: the closed code is carried as `sigchain rejected (<code>): …`.
+        if let open = message.range(of: "sigchain rejected ("),
+           let close = message[open.upperBound...].firstIndex(of: ")") {
+            return String(message[open.upperBound..<close])
+        }
+        return "invalid_input"
     default:
         return "invalid_input"
     }
