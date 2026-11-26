@@ -187,12 +187,22 @@ class LinphoneService @Inject constructor(
     /** Current SIP registration state for every member hub that has been registered. */
     val registrationStates: StateFlow<Map<String, RegistrationState>> = _registrationStates.asStateFlow()
 
-    private val pendingCallHubIds: MutableMap<String, String> = Collections.synchronizedMap(
-        object : LinkedHashMap<String, String>(MAX_PENDING_CALLS + 1, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
-                size > MAX_PENDING_CALLS
-        }
-    )
+    /**
+     * pushRef → hub, recorded by the push handlers when a VoIP push announces a call.
+     *
+     * Keyed by the push's `call-id`, which is the server's opaque `pushRef`
+     * (apps/worker/lib/voip-push.ts) — NOT the SIP Call-ID. The PBX mints its own Call-ID
+     * for every leg it originates, so the INVITE is matched to its push through the
+     * [PUSH_REF_HEADER] the bridge stamps on in-app legs, never through `callLog.callId`.
+     */
+    private val pushedCallHubIds: MutableMap<String, String> = boundedCallMap()
+
+    /**
+     * SIP Call-ID → hub of an inbound call that rang on this device, held from the ring
+     * until the call is answered or ends. Read once, on [Call.State.Connected]: the answer
+     * path is the only call-handling path allowed to switch the active hub.
+     */
+    private val ringingCallHubIds: MutableMap<String, String> = boundedCallMap()
 
     /**
      * The liblinphone [Call] behind [IncomingCallTracker.ringingCall], so accept/decline can
@@ -206,6 +216,20 @@ class LinphoneService @Inject constructor(
 
         /** Max pending call→hub mappings retained. Evicts oldest entries to bound memory. */
         private const val MAX_PENDING_CALLS = 100
+
+        /**
+         * SIP header carrying the call's `pushRef` on an in-app ring leg — set by the bridge
+         * (sip-bridge/src/command-handler.ts, `PUSH_REF_HEADER`). The same value is the VoIP
+         * push's `call-id`, so this is what joins the INVITE to the push that announced it.
+         */
+        const val PUSH_REF_HEADER = "X-Llamenos-Push-Ref"
+
+        private fun boundedCallMap(): MutableMap<String, String> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, String>(MAX_PENDING_CALLS + 1, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+                    size > MAX_PENDING_CALLS
+            }
+        )
 
         /**
          * Expiry requested in each REGISTER. liblinphone's own default; stated explicitly so the
@@ -405,8 +429,14 @@ class LinphoneService @Inject constructor(
     /** Hub IDs currently bound to a SIP registration. */
     fun registeredHubIds(): Set<String> = synchronized(lock) { identityByHub.keys.toSet() }
 
-    fun storePendingCallHub(callId: String, hubId: String) {
-        pendingCallHubIds.put(callId, hubId)
+    /**
+     * Record the hub a VoIP push announced a call for. [pushRef] is the push's `call-id`.
+     *
+     * Records only: nothing here, nor on the ring that follows, touches the active hub
+     * (multi-hub axiom). The hub is applied if and when the call is answered.
+     */
+    fun storePendingCallHub(pushRef: String, hubId: String) {
+        pushedCallHubIds[pushRef] = hubId
     }
 
     private fun createAuthInfo(sip: SipAccountParams): AuthInfo =
@@ -636,19 +666,31 @@ class LinphoneService @Inject constructor(
     }
 
     /**
-     * Hub an inbound INVITE arrived for: the push-wake mapping first, else the hub whose
-     * registered identity matches the INVITE's To (user@domain — transport and tag params
-     * differ between the registered identity and the INVITE's Request-URI, so they are
-     * not compared). This SDK's Call has no getAccount(); identity matching is the seam.
+     * Hub an inbound INVITE arrived for: the hub its push announced, joined through the
+     * INVITE's [PUSH_REF_HEADER]; else the hub whose registered identity the INVITE's To
+     * names (user@domain — transport and tag params differ between the registered identity
+     * and the Request-URI, so they are not compared). This SDK's Call has no getAccount();
+     * identity matching is the seam.
+     *
+     * The identity match only counts when it is unambiguous. `/sip-token` is not hub-scoped,
+     * so a member of several hubs binds every one of them to the same identity, and an
+     * INVITE to it does not say which hub it is for. Guessing would put the volunteer in the
+     * wrong hub when they answer; no hub is the honest answer, and the call still rings.
      */
-    private fun resolveIncomingHubId(call: Call, callId: String): String? {
-        pendingCallHubIds[callId]?.let { return it }
+    private fun resolveIncomingHubId(call: Call): String? {
+        pushRefOf(call)?.let { ref -> pushedCallHubIds.remove(ref)?.let { return it } }
         val to = call.toAddress ?: return null
-        return hubAccounts.entries.firstOrNull { (_, account) ->
-            val identity = account.params?.identityAddress
-            identity != null && identity.username == to.username && identity.domain == to.domain
-        }?.key
+        return hubAccounts.entries
+            .filter { (_, account) ->
+                val identity = account.params?.identityAddress
+                identity != null && identity.username == to.username && identity.domain == to.domain
+            }
+            .map { it.key }
+            .singleOrNull()
     }
+
+    private fun pushRefOf(call: Call): String? =
+        call.remoteParams?.getCustomHeader(PUSH_REF_HEADER)?.takeIf { it.isNotBlank() }
 
     private fun setupCoreListener(core: Core) {
         core.addListener(object : CoreListenerStub() {
@@ -666,12 +708,12 @@ class LinphoneService @Inject constructor(
     internal fun handleCallState(call: Call, state: Call.State) {
         val callId = call.callLog?.callId ?: return
         when (state) {
+            // The phone starts ringing. Multi-hub axiom: a ring is a background event — it
+            // arrives whether or not the volunteer is looking, from any member hub — so it
+            // records the call's hub and switches nothing.
             Call.State.IncomingReceived -> {
-                val hubId = resolveIncomingHubId(call, callId)
-                // Populate the call→hub mapping for the post-answer switch even when the
-                // push-wake path never ran (cold inbound INVITE): resolve it from the
-                // registered account and store it. Deliberately NOT consumed here.
-                if (hubId != null) storePendingCallHub(callId, hubId)
+                val hubId = resolveIncomingHubId(call)
+                if (hubId != null) ringingCallHubIds[callId] = hubId
 
                 val remote = call.remoteAddress
                 val info = RingingCallInfo(
@@ -685,17 +727,18 @@ class LinphoneService @Inject constructor(
                 incomingCallNotifier.showIncomingCall(info)
             }
             // An incoming call reaches Connected only after it was answered on this device,
-            // so this — not the ring — is where the multi-hub axiom allows switching the
-            // active hub, and only while the app is unlocked. (Overlaps #1200's Connected
-            // handler; identical semantics — keep one copy when resolving the merge.)
+            // so this — not the ring — is where the axiom allows switching the active hub,
+            // and only while the app is unlocked. Consumed either way: a call answered while
+            // locked does not switch later.
             Call.State.Connected -> {
-                val hubId = pendingCallHubIds.remove(callId) ?: return
+                val hubId = ringingCallHubIds.remove(callId) ?: return
                 if (call.dir == Call.Dir.Incoming && cryptoService.isUnlocked) {
                     scope.launch { activeHubState.setActiveHub(hubId) }
                 }
             }
             Call.State.Released, Call.State.End, Call.State.Error -> {
-                pendingCallHubIds.remove(callId)
+                ringingCallHubIds.remove(callId)
+                pushRefOf(call)?.let(pushedCallHubIds::remove)
                 incomingCallTracker.onCallTerminated(callId)
                 if (ringingCallHandle?.callLog?.callId == callId) ringingCallHandle = null
                 incomingCallNotifier.cancel()
@@ -715,8 +758,8 @@ class LinphoneService @Inject constructor(
      */
     internal fun coreForTesting(): Core? = core
 
-    internal fun pendingCallHubIdForTesting(callId: String): String? = pendingCallHubIds.get(callId)
-    internal fun consumePendingCallHubForTesting(callId: String) { pendingCallHubIds.remove(callId) }
+    internal fun pushedCallHubIdForTesting(pushRef: String): String? = pushedCallHubIds[pushRef]
+    internal fun ringingCallHubIdForTesting(sipCallId: String): String? = ringingCallHubIds[sipCallId]
     internal fun associateHubAccountForTesting(hubId: String, account: org.linphone.core.Account) {
         hubAccounts[hubId] = account
     }

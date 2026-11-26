@@ -45,6 +45,17 @@
                  DeepLinkValidator and allow 0-click navigation to any screen (H33). -->
         </activity>
 
+        <!-- Call notification taps (CallNotificationTap): switches to the call's hub.
+             NOT exported — only this app's own PendingIntent may start it, so no other app
+             can move the volunteer's active hub. -->
+        <activity
+            android:name=".CallNotificationTapActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+
         <activity
             android:name=".DeepLinkActivity"
             android:exported="true"

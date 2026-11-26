@@ -37,6 +37,7 @@ import org.linphone.core.Address
 import org.linphone.core.AuthInfo
 import org.linphone.core.Call
 import org.linphone.core.CallLog
+import org.linphone.core.CallParams
 import org.linphone.core.Core
 import org.linphone.core.CoreListener
 import org.linphone.core.Factory
@@ -859,11 +860,19 @@ class SipRegistrationTest {
 
     // ---- Active hub switch: answer path only ----
 
-    private fun incomingCall(callId: String): Call {
+    /**
+     * An inbound INVITE as the PBX sends it: a SIP Call-ID minted for the leg, and the push
+     * ref the bridge stamps in `X-Llamenos-Push-Ref`. The two are unrelated values.
+     */
+    private fun incomingCall(sipCallId: String, pushRef: String?): Call {
         val callLog = mockk<CallLog>()
-        every { callLog.callId } returns callId
+        every { callLog.callId } returns sipCallId
+        val remoteParams = mockk<CallParams>()
+        every { remoteParams.getCustomHeader(any()) } returns null
+        every { remoteParams.getCustomHeader("X-Llamenos-Push-Ref") } returns pushRef
         val call = mockk<Call>()
         every { call.callLog } returns callLog
+        every { call.remoteParams } returns remoteParams
         every { call.dir } returns Call.Dir.Incoming
         // The ring path (main's inbound-calling feature) reads these on IncomingReceived.
         every { call.remoteAddress } returns mockk<Address>(relaxed = true)
@@ -873,19 +882,19 @@ class SipRegistrationTest {
 
     @Test
     fun `ringing does not switch the active hub`() {
-        linphoneService.storePendingCallHub("call-1", HUB_B)
+        linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns true
 
-        coreListener.captured.onCallStateChanged(core, incomingCall("call-1"), Call.State.IncomingReceived, "")
+        coreListener.captured.onCallStateChanged(core, incomingCall(SIP_CALL_ID, PUSH_REF), Call.State.IncomingReceived, "")
 
         coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
     }
 
     @Test
-    fun `answering with the app unlocked switches to the call's hub`() {
-        linphoneService.storePendingCallHub("call-1", HUB_B)
+    fun `answering with the app unlocked switches to the pushed call's hub`() {
+        linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns true
-        val call = incomingCall("call-1")
+        val call = incomingCall(SIP_CALL_ID, PUSH_REF)
 
         coreListener.captured.onCallStateChanged(core, call, Call.State.IncomingReceived, "")
         coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
@@ -896,10 +905,12 @@ class SipRegistrationTest {
 
     @Test
     fun `answering while the app is locked leaves the active hub alone`() {
-        linphoneService.storePendingCallHub("call-1", HUB_B)
+        linphoneService.storePendingCallHub(PUSH_REF, HUB_B)
         every { cryptoService.isUnlocked } returns false
+        val call = incomingCall(SIP_CALL_ID, PUSH_REF)
 
-        coreListener.captured.onCallStateChanged(core, incomingCall("call-1"), Call.State.Connected, "")
+        coreListener.captured.onCallStateChanged(core, call, Call.State.IncomingReceived, "")
+        coreListener.captured.onCallStateChanged(core, call, Call.State.Connected, "")
 
         coVerify(exactly = 0) { activeHubState.setActiveHub(any()) }
     }
@@ -909,6 +920,9 @@ class SipRegistrationTest {
         const val HUB_URL = "http://hub.test"
         const val HUB_A = "hub-a"
         const val HUB_B = "hub-b"
+        /** The VoIP push's `call-id`: the server's opaque pushRef, never a SIP Call-ID. */
+        const val PUSH_REF = "5e1f0a9c3b7d42e8a1c6f0b9d2e4a7c3"
+        const val SIP_CALL_ID = "b1c2d3e4f5@pbx.example.org"
         const val SIP_USERNAME = "vol_0123456789abcdef"
         const val SIP_PASSWORD = "s3cret-sip-password"
         const val SIP_DOMAIN = "sip.example.org"
