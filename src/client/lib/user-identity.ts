@@ -190,7 +190,9 @@ export async function ensureDeviceKem(userPubkey: string): Promise<SigchainVerif
  */
 async function assertExtendsVerifiedHead(userPubkey: string, links: SigchainLinkRecord[]): Promise<void> {
   const known = await getVerifiedSigchainHead()
-  if (!known || known.userPubkey !== userPubkey) return
+  if (!known) return
+  // Fail closed: another user's head is not "no head" (sign-out clears it).
+  if (known.userPubkey !== userPubkey) throw new Error('The sigchain head this device recorded is another user\'s')
   const at = links[known.seq - 1]
   if (!at || at.hash !== known.hash) {
     throw new Error('The server\'s sigchain does not extend the head this device verified')

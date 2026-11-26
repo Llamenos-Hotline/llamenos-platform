@@ -378,7 +378,9 @@ class AuthViewModel @Inject constructor(
                 val newDeviceId = java.util.UUID.randomUUID().toString()
                 val encrypted = cryptoService.generateDeviceKeys(newDeviceId, pin)
 
-                // Serialize and store
+                // Serialize and store. A new device identity: the sigchain head
+                // recorded for a previous one is not its.
+                keystoreService.delete(KeystoreService.KEY_SIGCHAIN_HEAD)
                 keystoreService.store(
                     KeystoreService.KEY_ENCRYPTED_KEYS,
                     json.encodeToString(StoredKeyData.of(encrypted)),

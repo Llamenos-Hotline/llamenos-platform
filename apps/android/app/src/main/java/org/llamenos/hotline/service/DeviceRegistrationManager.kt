@@ -162,11 +162,19 @@ class DeviceRegistrationManager @Inject constructor(
         }
     }
 
-    /** The (seq, hash) of [user]'s chain head this device last verified, if any. */
+    /**
+     * The (seq, hash) of [user]'s chain head this device last verified, or null
+     * only when none was ever recorded. Fails closed: a malformed value or another
+     * user's head throws — "no head" is what lets an empty chain be initialised.
+     */
     private fun verifiedHead(user: String): Pair<Int, String>? {
-        val parts = keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD)?.split(':') ?: return null
-        if (parts.size != 3 || parts[0] != user) return null
-        return parts[1].toIntOrNull()?.let { it to parts[2] }
+        val stored = keyValueStore.retrieve(KeystoreService.KEY_SIGCHAIN_HEAD) ?: return null
+        val parts = stored.split(':')
+        val seq = parts.getOrNull(1)?.toIntOrNull()
+        if (parts.size != 3 || parts[0] != user || seq == null) {
+            throw IllegalStateException("The sigchain head this device recorded cannot be read")
+        }
+        return seq to parts[2]
     }
 
     private fun recordHead(user: String, verified: org.llamenos.core.SigchainVerifiedState) {

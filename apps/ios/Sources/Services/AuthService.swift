@@ -115,7 +115,9 @@ final class AuthService {
         let deviceId = UUID().uuidString
         let encrypted = try cryptoService.generateDeviceKeys(deviceId: deviceId, pin: pin)
 
-        // Persist the encrypted device key blob
+        // Persist the encrypted device key blob. A new device identity: the
+        // sigchain head recorded for a previous one is not its (#2496).
+        keychainService.delete(key: KeychainKey.sigchainHead)
         let jsonData = try JSONEncoder().encode(encrypted)
         try keychainService.store(key: KeychainKey.encryptedKeys, data: jsonData)
 

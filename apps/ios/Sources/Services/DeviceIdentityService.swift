@@ -41,6 +41,7 @@ final class DeviceIdentityService {
         case notAuthorised
         case kemNotPublished
         case chainRolledBack
+        case unreadableHead
 
         var errorDescription: String? {
             switch self {
@@ -48,6 +49,7 @@ final class DeviceIdentityService {
             case .notAuthorised: return "Verified sigchain does not authorise this device"
             case .kemNotPublished: return "Verified sigchain does not name this device's X-Wing key"
             case .chainRolledBack: return "The server's sigchain does not extend the head this device verified"
+            case .unreadableHead: return "The sigchain head this device recorded cannot be read"
             }
         }
     }
@@ -79,7 +81,7 @@ final class DeviceIdentityService {
         if publishedKemKey == kem { return }
 
         var links = try await sigchain(of: user)
-        if let known = verifiedHead(of: user) {
+        if let known = try verifiedHead(of: user) {
             guard known.seq >= 1, known.seq <= links.count, links[known.seq - 1].hash == known.hash else {
                 throw IdentityError.chainRolledBack
             }
@@ -90,7 +92,7 @@ final class DeviceIdentityService {
         guard verified.userPubkey == user, verified.activeDevicePubkeys.contains(user) else {
             throw IdentityError.notAuthorised
         }
-        recordHead(user: user, verified)
+        try recordHead(user: user, verified)
 
         if !verified.deviceKemKeys.contains(where: { $0.devicePubkey == user && $0.kemPubkey == kem }) {
             let payload = try cryptoService.deviceKemPayload(userPubkey: user)
@@ -100,7 +102,7 @@ final class DeviceIdentityService {
             guard verified.deviceKemKeys.contains(where: { $0.devicePubkey == user && $0.kemPubkey == kem }) else {
                 throw IdentityError.kemNotPublished
             }
-            recordHead(user: user, verified)
+            try recordHead(user: user, verified)
         }
         publishedKemKey = kem
     }
@@ -212,18 +214,18 @@ final class DeviceIdentityService {
 
     // MARK: - Verified head
 
-    private func verifiedHead(of user: String) -> (seq: Int, hash: String)? {
-        guard let stored = try? keychainService.retrieveString(key: KeychainKey.sigchainHead) else { return nil }
+    /// The head this device last verified for `user`, or nil only when none was
+    /// ever recorded. Fails closed: a Keychain read error, a malformed value or
+    /// another user's head is an error, never "no head" — "no head" is what lets
+    /// an empty chain be initialised.
+    private func verifiedHead(of user: String) throws -> (seq: Int, hash: String)? {
+        guard let stored = try keychainService.retrieveString(key: KeychainKey.sigchainHead) else { return nil }
         let parts = stored.split(separator: ":").map(String.init)
-        guard parts.count == 3, parts[0] == user, let seq = Int(parts[1]) else { return nil }
+        guard parts.count == 3, parts[0] == user, let seq = Int(parts[1]) else { throw IdentityError.unreadableHead }
         return (seq, parts[2])
     }
 
-    private func recordHead(user: String, _ verified: SigchainVerifiedState) {
-        do {
-            try keychainService.storeString("\(user):\(verified.headSeq):\(verified.headHash)", key: KeychainKey.sigchainHead)
-        } catch {
-            logger.error("Could not record the verified sigchain head: \(error.localizedDescription, privacy: .public)")
-        }
+    private func recordHead(user: String, _ verified: SigchainVerifiedState) throws {
+        try keychainService.storeString("\(user):\(verified.headSeq):\(verified.headHash)", key: KeychainKey.sigchainHead)
     }
 }

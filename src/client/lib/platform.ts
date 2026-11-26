@@ -842,6 +842,8 @@ export async function persistAndUnlockDeviceKeys(
   pin: string,
 ): Promise<DeviceKeyState | null> {
   const store = await getSecureStore()
+  // A new device identity: the sigchain head recorded for the previous one is not its.
+  await store.delete(SIGCHAIN_HEAD_KEY)
   await store.set(STORE_KEY, encrypted)
   return unlockWithPin(encrypted, pin)
 }
