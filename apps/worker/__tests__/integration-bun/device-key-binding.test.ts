@@ -68,6 +68,12 @@ const SERVER_REFUSAL: Record<string, { status: number; code?: string }> = {
   reused_key_across_users: { status: 409, code: 'key_reused' },
 }
 
+function positive(name: string): Case {
+  const c = fixture.positives.find(p => p.name === name)
+  if (!c) throw new Error(`device-binding.json has no positive ${name}`)
+  return c
+}
+
 const LINK_TYPE: Record<string, SigchainLinkType> = {
   user_init: 'genesis',
   device_add: 'device_add',
@@ -171,7 +177,7 @@ describe('device-binding vectors through the server append path', () => {
   }
 
   it('claims every key a chain names for its user', async () => {
-    const c = fixture.positives.find(p => p.name === 'device_add_with_pop')!
+    const c = positive('device_add_with_pop')
     await appendAll(c)
     const chain = c.chains[0]
     const user = chain[0].signerPubkey
@@ -224,7 +230,7 @@ describe('device registration is bound to one user (#2496)', () => {
   })
 
   it('binds a registration to the user\'s sigchain once it has one', async () => {
-    const c = fixture.positives.find(p => p.name === 'device_kem')!
+    const c = positive('device_kem')
     await appendAll(c)
     const user = c.chains[0][0].signerPubkey
     const genesis = JSON.parse(c.chains[0][0].payloadJson) as { devicePubkey: string; deviceEncryptionPubkey: string }
@@ -248,7 +254,7 @@ describe('device registration is bound to one user (#2496)', () => {
   })
 
   it('refuses registering a key another user\'s sigchain names', async () => {
-    const c = fixture.positives.find(p => p.name === 'device_kem')!
+    const c = positive('device_kem')
     await appendAll(c)
     const genesis = JSON.parse(c.chains[0][0].payloadJson) as { deviceEncryptionPubkey: string }
     let refused: unknown = null
