@@ -162,7 +162,7 @@ Given('a {string} entity is created via the API with structured JSONB data', asy
         entityTypeId: etRes.data.id,
         statusHash: 'active',
         encryptedSummary: 'storage-test-summary',
-        summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'storage-test-ct' }],
+        summaryEnvelopes: [{ pubkey: adminDeviceKey(), enc: DUMMY_ENC, ct: 'c'.repeat(96) }],
         blindIndexes: { category: ['storage-test'] },
       },
     )
