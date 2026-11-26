@@ -82,11 +82,6 @@ const ALLOWED = new Map<string, string>([
     'comment only: names the nonce-less label to explain why the nonce is required',
   ],
   [
-    'tests/mocks/hpke-mock.ts',
-    'mirrors the numeric label registry for the browser mock — a label-to-id map, ' +
-      'not a message builder',
-  ],
-  [
     'apps/worker/__tests__/unit/auth-message-single-source.test.ts',
     'this test',
   ],

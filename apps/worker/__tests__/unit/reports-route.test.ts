@@ -17,7 +17,7 @@ import { settingsDomainMock } from '../helpers/settings-domain-mock'
 
 const HEX64 = 'a'.repeat(64)
 const HPKE_ENC = 'b'.repeat(64)
-const WRAPPED_CT = 'dGVzdC13cmFwcGVkLWtleQ'
+const WRAPPED_CT = 'c'.repeat(96) // a 48-byte key wrap, lowercase hex (spec D2)
 
 /** A valid recipientEnvelope for use in test request bodies. */
 const testEnvelope = { pubkey: HEX64, enc: HPKE_ENC, ct: WRAPPED_CT }

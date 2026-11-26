@@ -6,18 +6,15 @@
  *   encryptionSeed = HKDF-SHA256(signingSeed, salt = none, info = LABEL_DEVICE_ENCRYPTION_SEED)
  *   encryptionPubkey = X25519(encryptionSeed)
  *
- * Content is encrypted in the canonical envelope wire format so the real UI can
- * decrypt it: a random per-item AES-256-GCM key (hex(iv || ct || tag)) bound to
- * `contentAad(label)`, HPKE-wrapped per reader under a registered
- * domain-separation label bound to `keyWrapAad(label)`; envelopes carry hex
- * `enc` and base64url `ct`. Both AADs come from `@shared/envelope-aad` — the
- * same single definition the desktop client and the Rust core derive — never
- * re-spelt here.
+ * Content is encrypted in the envelope wire format the real UI decrypts: a
+ * random per-item AES-256-GCM key (hex(iv || ct || tag)), HPKE-wrapped per
+ * reader, both layers through the crate's shape API — the crate chooses the
+ * label and AAD for the shape (spec D1). Envelopes carry lowercase hex `enc`
+ * and `ct` (spec D2).
  */
 import { x25519 } from '@noble/curves/ed25519.js'
-import { caseSeal, hkdfSha256, hpkeSeal, randomBytes, symmetricEncrypt, type CasePurpose } from '@llamenos/crypto/ffi'
+import { caseSeal, contentSeal, hkdfSha256, shapeSeal, type CasePurpose, type Shape } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { contentAad, keyWrapAad } from '@shared/envelope-aad'
 import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import type { RecipientEnvelope } from '@shared/types'
 import type { SampleIdentity } from './sample-identities'
@@ -46,34 +43,22 @@ export function sampleReader(identity: SampleIdentity): SampleReader {
   return { pubkey: identity.pubkey, encryptionPubkey: deriveSampleEncryptionPubkey(identity.seedHex) }
 }
 
-function base64url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('base64url')
-}
-
 /**
- * Encrypt `plaintext` under a fresh random content key and HPKE-wrap that key
- * for every reader with `label` (a constant from crypto-labels).
+ * Encrypt `plaintext` under a fresh content key and HPKE-wrap that key for
+ * every reader, as `shape`.
  */
 export function sealForReaders(
   plaintext: string,
   readers: SampleReader[],
-  label: string,
+  shape: Extract<Shape, 'note-key' | 'message-key' | 'call-meta-key'>,
 ): { encryptedContent: string; envelopes: RecipientEnvelope[] } {
-  const contentKey = randomBytes(32)
-  const encryptedContent = bytesToHex(symmetricEncrypt(contentKey, utf8ToBytes(plaintext), contentAad(label)))
-  const labelBytes = utf8ToBytes(label)
-  const aadKeyWrap = keyWrapAad(label)
-
-  const envelopes = readers.map((reader): RecipientEnvelope => {
-    // hpkeSeal output is enc(32) || ct+tag
-    const sealed = hpkeSeal(hexToBytes(reader.encryptionPubkey), contentKey, labelBytes, aadKeyWrap)
-    return {
-      pubkey: reader.pubkey,
-      enc: bytesToHex(sealed.subarray(0, 32)),
-      ct: base64url(sealed.subarray(32)),
-    }
-  })
-
+  const { packed, key } = contentSeal(shape, utf8ToBytes(plaintext))
+  const envelopes = readers.map((reader): RecipientEnvelope => ({
+    pubkey: reader.pubkey,
+    ...shapeSeal(shape, hexToBytes(reader.encryptionPubkey), [], key),
+  }))
+  key.fill(0)
+  const encryptedContent = bytesToHex(packed)
   return { encryptedContent, envelopes }
 }
 

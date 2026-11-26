@@ -87,7 +87,8 @@ class NoteCreateCallTest {
             EncryptedNote(
                 ciphertextHex = "deadbeef",
                 envelopes = secondArg<List<String>>().map { pub ->
-                    NoteEnvelope(pub, HpkeEnvelope(v = 3, labelId = 0, enc = "enc-$pub", ct = "ct-$pub"))
+                    NoteEnvelope(pub, HpkeEnvelope(
+                enc = "enc-$pub", ct = "ct-$pub"))
                 },
             )
         }

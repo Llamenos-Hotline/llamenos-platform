@@ -70,17 +70,13 @@ internal fun noteReadCandidates(note: SharedNote, ourEncryptionPubkey: String): 
     val candidates = mutableListOf<HpkeEnvelope>()
     note.authorEnvelope?.let { authorEnv ->
         candidates += HpkeEnvelope(
-            v = HpkeEnvelope.CURRENT_VERSION,
-            labelId = HpkeEnvelope.LABEL_ID_NOTE_KEY,
-            enc = authorEnv.enc,
+                enc = authorEnv.enc,
             ct = authorEnv.ct,
         )
     }
     note.adminEnvelopes?.find { it.pubkey == ourEncryptionPubkey }?.let { adminEnv ->
         candidates += HpkeEnvelope(
-            v = HpkeEnvelope.CURRENT_VERSION,
-            labelId = HpkeEnvelope.LABEL_ID_NOTE_KEY,
-            enc = adminEnv.enc,
+                enc = adminEnv.enc,
             ct = adminEnv.ct,
         )
     }

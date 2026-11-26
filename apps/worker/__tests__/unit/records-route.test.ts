@@ -17,7 +17,7 @@ import { serviceErrorHandler } from '../helpers/service-error-handler'
 
 const HEX64 = 'a'.repeat(64)
 const HPKE_ENC = 'b'.repeat(64)
-const WRAPPED_CT = 'dGVzdC13cmFwcGVkLWtleQ'
+const WRAPPED_CT = 'c'.repeat(96) // a 48-byte key wrap, lowercase hex (spec D2)
 const TEST_ENVELOPE = { pubkey: HEX64, enc: HPKE_ENC, ct: WRAPPED_CT }
 const VALID_UUID = '00000000-0000-4000-8000-000000000001'
 // The hub's one admin recipient is TEST_ENVELOPE's key; NON_ADMIN_ENVELOPE names no admin (#2174).

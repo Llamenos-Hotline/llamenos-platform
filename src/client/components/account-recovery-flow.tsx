@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import { LABEL_RECOVERY_SHARE_CONTRIBUTE } from '@shared/crypto-labels'
 import {
   initiateRecovery,
   verifyRecoveryCode,
@@ -12,7 +11,7 @@ import {
   deviceGenerateAndLoad,
   getDevicePubkeys,
   recoveryGroupReconstructFromShares,
-  type HpkeEnvelope,
+  type KeyEnvelope,
   type EncryptedShareEnvelope,
 } from '@/lib/platform'
 import { PinInput } from '@/components/pin-input'
@@ -101,16 +100,16 @@ export function AccountRecoveryFlow({ onBack }: Props) {
       try {
         // H16: Pass all encrypted envelopes to Rust in one IPC call.
         // The private key is reconstructed inside Rust and NEVER enters JavaScript.
+        // Each contribution opens under the AAD it was sealed with: this
+        // session and the holder that contributed it.
         const envelopes: EncryptedShareEnvelope[] = session.contributions.map(
           (contribution) => ({
-            envelope: JSON.parse(contribution.encryptedShare) as HpkeEnvelope,
+            envelope: JSON.parse(contribution.encryptedShare) as KeyEnvelope,
+            contributorPubkey: contribution.contributorPubkey,
           }),
         )
 
-        await recoveryGroupReconstructFromShares(
-          envelopes,
-          LABEL_RECOVERY_SHARE_CONTRIBUTE,
-        )
+        await recoveryGroupReconstructFromShares(envelopes, session.sessionId)
 
         setStep('set-pin')
       } catch (err) {

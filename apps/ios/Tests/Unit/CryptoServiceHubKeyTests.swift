@@ -35,70 +35,34 @@ struct CryptoServiceHubKeyTests {
         #expect(crypto.hasHubKey(hubId: "hub-001") == false)
     }
 
-    @Test func storeServerEventKeyStoresAsHubKey() {
+    /// Relay-event keys are per hub (#2999) and live in Rust; a hub this user
+    /// holds no key for opens nothing.
+    @Test func serverEventKeysArePerHub() throws {
         let crypto = CryptoService()
-        let keyHex = String(repeating: "ef", count: 32)
-        crypto.storeServerEventKey(hubId: "hub-svr", keyHex: keyHex)
-        #expect(crypto.hasHubKey(hubId: "hub-svr") == true)
-        crypto.clearHubKeys()
-    }
-
-    @Test func setServerEventKeysStoresInRust() throws {
-        let crypto = CryptoService()
-        let currentKey = String(repeating: "11", count: 32)
-        try crypto.setServerEventKeys(currentHex: currentKey)
-        // Server event keys are separate from hub keys — no hub key assertion
-        // The key is stored in Rust for mobile_decrypt_server_event
+        try crypto.setServerEventKeys([
+            ServerEventKey(hubId: "hub-a", epoch: 20000, keyHex: String(repeating: "11", count: 32)),
+        ])
+        #expect(crypto.openServerEvent(hubId: "hub-b", kind: 1000, epoch: 20000, payloadHex: String(repeating: "00", count: 540)) == nil)
         crypto.lock()
     }
 
-    @Test func decryptHubEventReturnsNilForUnknownHub() {
+    @Test func aMalformedEventKeyListIsRefusedWhole() {
         let crypto = CryptoService()
-        let result = crypto.decryptHubEvent(ciphertextHex: String(repeating: "00", count: 40), hubId: "no-such-hub")
-        #expect(result == nil)
-    }
-
-    @Test func decryptEventWithAttributionReturnsNilWhenEmpty() {
-        let crypto = CryptoService()
-        let result = crypto.decryptEventWithAttribution(ciphertextHex: String(repeating: "00", count: 40))
-        #expect(result == nil)
+        #expect(codeOfFailure {
+            try crypto.setServerEventKeys([
+                ServerEventKey(hubId: "Hub_A", epoch: 1, keyHex: String(repeating: "11", count: 32)),
+            ])
+        } == "invalid_id")
     }
 }
 
-/// The hub-key envelope's AAD, exercised rather than asserted about.
+/// The hub-key envelope, exercised through the production loader.
 ///
-/// `docs/protocol/PROTOCOL.md` §2.7 binds `UTF-8("llamenos:hub-key-wrap:key-wrap")`
-/// to both the seal and the open. iOS passed an empty AAD until #1631 — as did
-/// the desktop and Android, so the three agreed with each other and with
-/// neither the spec nor the Rust crate's own `hpke_wrap_key`. These cases are
-/// written so that reverting the fix fails them: one proves the composite AAD
-/// round-trips, one proves an empty-AAD wrap no longer opens, and one proves
-/// the AAD is binding rather than merely passed.
+/// The hub-key shape fixes the label and AAD in Rust (spec D1), the same call
+/// Android makes, so these cases prove the shape binds (another shape's wrap does
+/// not open as a hub key) and that the one encoding is enforced (D2: base64url and
+/// uppercase are refused, never normalised — the #1649 verification cases).
 struct CryptoServiceHubKeyAadTests {
-
-    /// A wrap sealed by the caller, converted to the hex wire form
-    /// `loadHubKey` consumes (`toFfiEnvelope` maps hex -> base64url again).
-    private func wireEnvelope(
-        _ crypto: CryptoService,
-        hubKeyHex: String,
-        recipientPubkeyHex: String,
-        label: String,
-        aadHex: String
-    ) throws -> HubKeyEnvelopeResponse {
-        let sealed = try crypto.hpkeSealKey(
-            keyHex: hubKeyHex,
-            recipientPubkeyHex: recipientPubkeyHex,
-            label: label,
-            aadHex: aadHex
-        )
-        return HubKeyEnvelopeResponse(
-            envelope: SharedAdminEnvelope(
-                ct: try mobileBase64urlToHex(b64: sealed.ct),
-                enc: try mobileBase64urlToHex(b64: sealed.enc),
-                pubkey: recipientPubkeyHex
-            )
-        )
-    }
 
     private func unlockedService() throws -> (CryptoService, String) {
         let crypto = CryptoService()
@@ -110,67 +74,53 @@ struct CryptoServiceHubKeyAadTests {
         return (crypto, pubkey)
     }
 
-    /// Case 1 — wrap and unwrap under the composite AAD succeeds.
-    @Test func compositeAadRoundTrips() throws {
-        let (crypto, pubkey) = try unlockedService()
-        defer { crypto.lock() }
-        let envelope = try wireEnvelope(
-            crypto,
-            hubKeyHex: String(repeating: "7a", count: 32),
-            recipientPubkeyHex: pubkey,
-            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
-            aadHex: try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_HUB_KEY_WRAP)
-        )
-        try crypto.loadHubKey(hubId: "hub-aad-composite", envelope: envelope)
-        #expect(crypto.hasHubKey(hubId: "hub-aad-composite") == true)
+    private func response(enc: String, ct: String, pubkey: String) -> HubKeyEnvelopeResponse {
+        HubKeyEnvelopeResponse(envelope: SharedAdminEnvelope(ct: ct, enc: enc, pubkey: pubkey))
     }
 
-    /// Case 2 — the wire break. A wrap sealed with an EMPTY AAD, which is what
-    /// every pre-#1631 client wrote, must no longer open. Pre-production, so
-    /// invalidating those envelopes is the fix, not a regression.
-    @Test func emptyAadWrapNoLongerOpens() throws {
+    private func base64url(_ hex: String) -> String {
+        let bytes = Data(hexString: hex) ?? Data()
+        return bytes.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    /// The hub-key shape round-trips through `loadHubKey`.
+    @Test func hubKeyShapeRoundTrips() throws {
         let (crypto, pubkey) = try unlockedService()
         defer { crypto.lock() }
-        let envelope = try wireEnvelope(
-            crypto,
-            hubKeyHex: String(repeating: "7a", count: 32),
-            recipientPubkeyHex: pubkey,
-            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
-            aadHex: ""
-        )
-        #expect(throws: (any Error).self) {
-            try crypto.loadHubKey(hubId: "hub-aad-empty", envelope: envelope)
+        let sealed = try crypto.shapeSeal(shape: .hubKey, recipientPubkeyHex: pubkey, plaintextHex: String(repeating: "7a", count: 32))
+        try crypto.loadHubKey(hubId: "hub-shape", envelope: response(enc: sealed.enc, ct: sealed.ct, pubkey: pubkey))
+        #expect(crypto.hasHubKey(hubId: "hub-shape") == true)
+    }
+
+    /// The shape binds: a wrap sealed as another shape does not open as a hub key.
+    @Test func anotherShapesWrapDoesNotOpenAsAHubKey() throws {
+        let (crypto, pubkey) = try unlockedService()
+        defer { crypto.lock() }
+        let sealed = try crypto.shapeSeal(shape: .noteKey, recipientPubkeyHex: pubkey, plaintextHex: String(repeating: "7a", count: 32))
+        #expect(codeOfFailure {
+            try crypto.loadHubKey(hubId: "hub-other-shape", envelope: response(enc: sealed.enc, ct: sealed.ct, pubkey: pubkey))
+        } == "decryption_failed")
+        #expect(crypto.hasHubKey(hubId: "hub-other-shape") == false)
+    }
+
+    /// D2: base64url and uppercase hex are refused as `invalid_format`.
+    @Test func base64urlAndUppercaseAreRefused() throws {
+        let (crypto, pubkey) = try unlockedService()
+        defer { crypto.lock() }
+        let sealed = try crypto.shapeSeal(shape: .hubKey, recipientPubkeyHex: pubkey, plaintextHex: String(repeating: "7a", count: 32))
+        for (enc, ct) in [
+            (base64url(sealed.enc), base64url(sealed.ct)),
+            (sealed.enc, base64url(sealed.ct)),
+            (sealed.enc.uppercased(), sealed.ct),
+            (sealed.enc, sealed.ct.uppercased()),
+        ] {
+            #expect(codeOfFailure {
+                try crypto.loadHubKey(hubId: "hub-d2", envelope: response(enc: enc, ct: ct, pubkey: pubkey))
+            } == "invalid_format")
         }
-        #expect(crypto.hasHubKey(hubId: "hub-aad-empty") == false)
-    }
-
-    /// Case 3 — the AAD is binding, not decorative: a wrap sealed under a
-    /// *different* label's composite AAD does not open as a hub key, even
-    /// though the bytes are a perfectly well-formed key-wrap AAD.
-    @Test func anotherLabelsCompositeAadDoesNotOpen() throws {
-        let (crypto, pubkey) = try unlockedService()
-        defer { crypto.lock() }
-        let envelope = try wireEnvelope(
-            crypto,
-            hubKeyHex: String(repeating: "7a", count: 32),
-            recipientPubkeyHex: pubkey,
-            label: CryptoLabels.LABEL_HUB_KEY_WRAP,
-            aadHex: try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_NOTE_KEY)
-        )
-        #expect(throws: (any Error).self) {
-            try crypto.loadHubKey(hubId: "hub-aad-wrong-label", envelope: envelope)
-        }
-        #expect(crypto.hasHubKey(hubId: "hub-aad-wrong-label") == false)
-    }
-
-    /// Case 4 — the AAD bytes iOS binds are the bytes PROTOCOL.md §2.7 names.
-    /// The desktop derives the same string from `@shared/envelope-aad` and
-    /// Android from the same Rust function, so a divergence here is the one
-    /// cross-language failure this envelope can still have.
-    @Test func aadBytesMatchTheProtocolSpelling() throws {
-        let expected = Data("llamenos:hub-key-wrap:key-wrap".utf8)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        #expect(try mobileKeyWrapAadHex(label: CryptoLabels.LABEL_HUB_KEY_WRAP) == expected)
+        #expect(crypto.hasHubKey(hubId: "hub-d2") == false)
     }
 }

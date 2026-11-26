@@ -20,9 +20,9 @@ vi.mock('hono-openapi', () => ({
 
 import pukRoutes from '@worker/routes/puk'
 import { CryptoKeyError } from '@worker/services/crypto-keys'
-import type { PukHpkeEnvelope } from '@protocol/schemas/sigchain'
+import type { KeyEnvelope } from '@protocol/schemas/common'
 
-const ENVELOPE: PukHpkeEnvelope = { v: 3, labelId: 44, enc: 'enc-b64url', ct: 'ct-b64url' }
+const ENVELOPE: KeyEnvelope = { enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) }
 
 // ---------------------------------------------------------------------------
 // Helpers

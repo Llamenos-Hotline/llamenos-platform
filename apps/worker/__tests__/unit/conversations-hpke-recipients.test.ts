@@ -26,9 +26,9 @@ import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { ConversationsService, InboundUnreadableError } from '@worker/services/conversations'
 import { encryptMessageForStorage } from '@worker/lib/crypto'
-import { hpkeOpen, symmetricDecrypt } from '@llamenos/crypto/ffi'
+import { contentOpen, shapeOpen } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes, bytesToUtf8 } from '@shared/encoding'
-import { LABEL_DEVICE_ENCRYPTION_SEED, LABEL_MESSAGE } from '@shared/crypto-labels'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import { hpkeRecipientPubkey } from '@worker/lib/hpke-recipient'
 import { createMockDb } from './mock-db'
 
@@ -48,14 +48,11 @@ function volunteerKeys(seedHex: string) {
 const VOL = volunteerKeys('11'.repeat(32))
 const ADMIN_X25519 = hpkeRecipientPubkey('ab'.repeat(32))!
 
-const LABEL = utf8ToBytes(LABEL_MESSAGE)
 // Stored-record format (#1393): the label is HPKE info, and there is no AAD.
-const NO_AAD = new Uint8Array(0)
 
 function openWith(secret: Uint8Array, encryptedContent: string, env: { enc: string; ct: string }): string {
-  const sealed = new Uint8Array([...hexToBytes(env.enc), ...hexToBytes(env.ct)])
-  const key = hpkeOpen(secret, sealed, LABEL, NO_AAD)
-  return bytesToUtf8(symmetricDecrypt(key, hexToBytes(encryptedContent), NO_AAD))
+  const key = shapeOpen('message-key', secret, [], env)
+  return bytesToUtf8(contentOpen('message-key', key, hexToBytes(encryptedContent)))
 }
 
 describe('Ed25519 identity keys are not HPKE recipients', () => {

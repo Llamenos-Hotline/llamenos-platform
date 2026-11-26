@@ -56,6 +56,15 @@ pub mod padding;
 // === Encryption module (HPKE + AES-256-GCM) ===
 pub mod encryption;
 
+pub mod events;
+
+pub mod id_profile;
+
+pub mod shape;
+
+#[cfg(test)]
+mod vectors;
+
 // === The one definition of an envelope AAD (mirrors packages/shared/envelope-aad.ts) ===
 pub mod envelope_aad;
 
@@ -99,15 +108,15 @@ pub use envelope_aad::{
     content_aad, content_aad_hex, key_wrap_aad, key_wrap_aad_hex, KEY_WRAP_AAD_SUFFIX,
 };
 pub use errors::CryptoError;
+pub use events::ServerEventKey;
 pub use hpke_envelope::HpkeEnvelope;
 pub use labels::*;
 pub use puk::PukState;
+pub use shape::Shape;
 pub use sigchain::{SigchainLink, SigchainVerifiedState};
 
 // Re-export encryption types
-pub use encryption::{
-    EncryptedKeyData, EncryptedMessage, EncryptedNote, KeyEnvelope, RecipientKeyEnvelope,
-};
+pub use encryption::{EncryptedKeyData, EncryptedMessage, EncryptedNote, RecipientKeyEnvelope};
 
 // Re-export audit key types
 pub use audit_key::AuditKeyAdminEnvelope;

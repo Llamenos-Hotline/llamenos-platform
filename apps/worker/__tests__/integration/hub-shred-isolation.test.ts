@@ -64,7 +64,7 @@ async function seedUser(hubIds: string[]): Promise<{ pubkey: string }> {
     userPubkey: u.pubkey,
     deviceId: device!.id,
     generation: 1,
-    envelope: { v: 3, labelId: 1, enc: 'cHVr', ct: 'ZW52ZWxvcGU' },
+    envelope: { enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) },
   })
   // A custom role's slug is its id (roles_custom_role_has_no_plaintext, #2787).
   const roleId = `role-${u.pubkey.slice(0, 8)}`

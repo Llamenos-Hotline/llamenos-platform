@@ -47,7 +47,7 @@ beforeEach(() => {
   mocks.activeHubAdminReaders.mockResolvedValue([ADMIN, SECOND_ADMIN])
   mocks.encryptMessage.mockImplementation(async (_plaintext: string, readers: string[]) => ({
     encryptedContent: 'ct',
-    readerEnvelopes: readers.map(pubkey => ({ pubkey, enc: 'e'.repeat(64), ct: 'c'.repeat(32) })),
+    readerEnvelopes: readers.map(pubkey => ({ pubkey, enc: 'e'.repeat(64), ct: 'c'.repeat(96) })),
   }))
   mocks.bulkCreateContacts.mockResolvedValue({ created: 2 })
   mocks.mergeContacts.mockResolvedValue({})

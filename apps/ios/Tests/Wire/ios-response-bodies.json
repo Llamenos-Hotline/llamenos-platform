@@ -139,10 +139,10 @@
       "conversationId": "33333333-3333-4333-8333-333333333333",
       "direction": "outbound",
       "authorPubkey": "abababababababababababababababababababababababababababababababab",
-      "encryptedContent": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "encryptedContent": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       "readerEnvelopes": [
         {
-          "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "ct": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
           "enc": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
           "pubkey": "abababababababababababababababababababababababababababababababab"
         }
@@ -197,13 +197,13 @@
       "clockedInAt": "2026-10-20T09:30:00.000Z",
       "currentShift": {
         "id": "55555555-5555-4555-8555-555555555555",
-        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "startTime": "00:00",
         "endTime": "23:59"
       },
       "nextShift": {
         "id": "55555555-5555-4555-8555-555555555555",
-        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "encryptedName": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "startTime": "00:00",
         "endTime": "23:59",
         "day": 2

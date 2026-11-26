@@ -11,10 +11,8 @@
  * (default 1 hour), providing forward secrecy — compromising one window key
  * only exposes messages in that window.
  */
-import { hpkeSeal, symmetricEncrypt, randomBytes } from '@llamenos/crypto/ffi'
+import { contentSealUnder, randomBytes, shapeSeal } from '@llamenos/crypto/ffi'
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@shared/encoding'
-import { keyWrapAad } from '@shared/envelope-aad'
-import { LABEL_FIREHOSE_BUFFER_ENCRYPT } from '@shared/crypto-labels'
 import { hpkeRecipientPubkey, type HpkeRecipientPubkey } from '../lib/hpke-recipient'
 import { createLogger } from '../lib/logger'
 import type { FirehoseService } from '../services/firehose'
@@ -35,12 +33,11 @@ export interface FirehoseGroupMessage {
 }
 
 /**
- * Encrypt plaintext with a given symmetric key using AES-256-GCM.
- * Returns hex-encoded nonce(12) + ciphertext + tag(16).
+ * Seal one buffered message under the window key, as the crate's
+ * 'firehose-window-key' content shape. Returns hex nonce(12) + ciphertext + tag(16).
  */
 function encryptWithWindowKey(plaintext: string, windowKey: Uint8Array): string {
-  const ct = symmetricEncrypt(windowKey, utf8ToBytes(plaintext), utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT))
-  return bytesToHex(ct)
+  return bytesToHex(contentSealUnder('firehose-window-key', windowKey, utf8ToBytes(plaintext)))
 }
 
 /**
@@ -69,14 +66,8 @@ async function getOrCreateWindowKey(
   // Generate a new window key
   const windowKeyBytes = randomBytes(32)
 
-  // HPKE-seal the key for the agent
-  const labelBytes = utf8ToBytes(LABEL_FIREHOSE_BUFFER_ENCRYPT)
-  const aadKeyWrap = keyWrapAad(LABEL_FIREHOSE_BUFFER_ENCRYPT)
-  const sealed = hpkeSeal(hexToBytes(agentPubkey), windowKeyBytes, labelBytes, aadKeyWrap)
-
-  const enc = bytesToHex(sealed.subarray(0, 32))
-  const ct = bytesToHex(sealed.subarray(32))
-  const sealedKey = JSON.stringify({ enc, ct })
+  // HPKE-seal the key for the agent (the crate chooses label and AAD)
+  const sealedKey = JSON.stringify(shapeSeal('firehose-window-key', hexToBytes(agentPubkey), [], windowKeyBytes))
 
   const windowStart = now
   const windowEnd = new Date(now.getTime() + DEFAULT_WINDOW_DURATION_MS)

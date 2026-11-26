@@ -20,16 +20,12 @@ import { getActiveHub, listHubRoles, listRoles, type RoleDefinition } from '@/li
 import { decryptFromHub, encryptForHub } from '@/lib/hub-key-manager'
 import {
   getDevicePubkeys,
-  hpkeOpenFromState,
-  hpkeSeal,
-  type HpkeEnvelope,
+  shapeOpenFromState,
+  shapeSeal,
+  type KeyEnvelope,
 } from '@/lib/platform'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
-import {
-  LABEL_HUB_ROLE_ENCRYPT,
-  LABEL_PLATFORM_ROLE_DESC_ENCRYPT,
-  LABEL_PLATFORM_ROLE_NAME_ENCRYPT,
-} from '@shared/crypto-labels'
+import { LABEL_HUB_ROLE_ENCRYPT } from '@shared/crypto-labels'
 
 /** A role with its name and description resolved for this device. */
 export interface ReadableRole extends RoleDefinition {
@@ -56,10 +52,6 @@ function hexToText(hex: string): string {
   return new TextDecoder().decode(hexToBytes(hex))
 }
 
-function roleFieldAad(roleId: string, field: 'name' | 'description'): string {
-  return textToHex(`${roleId}:${field}`)
-}
-
 /** One platform-role envelope pair per admin device that must read the role. */
 export async function sealPlatformRoleEnvelopes(
   roleId: string,
@@ -69,12 +61,11 @@ export async function sealPlatformRoleEnvelopes(
 ): Promise<Array<{ adminPubkey: string; encryptedName: string; encryptedDescription: string }>> {
   return Promise.all([...new Set(recipientPubkeys)].map(async adminPubkey => ({
     adminPubkey,
-    encryptedName: JSON.stringify(await hpkeSeal(
-      textToHex(name), adminPubkey, LABEL_PLATFORM_ROLE_NAME_ENCRYPT, roleFieldAad(roleId, 'name'),
-    )),
-    encryptedDescription: JSON.stringify(await hpkeSeal(
-      textToHex(description), adminPubkey, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, roleFieldAad(roleId, 'description'),
-    )),
+    // The shapes bind the role id; the crate chooses the label and AAD.
+    encryptedName: JSON.stringify(await shapeSeal('platform-role-name', adminPubkey, textToHex(name), [roleId])),
+    encryptedDescription: JSON.stringify(
+      await shapeSeal('platform-role-description', adminPubkey, textToHex(description), [roleId]),
+    ),
   })))
 }
 
@@ -85,11 +76,11 @@ async function openPlatformRole(
   const mine = myEncPubkey ? role.envelopes?.find(e => e.adminPubkey === myEncPubkey) : undefined
   if (!mine) return null
   try {
-    const nameEnvelope: HpkeEnvelope = JSON.parse(mine.encryptedName)
-    const descEnvelope: HpkeEnvelope = JSON.parse(mine.encryptedDescription)
+    const nameEnvelope: KeyEnvelope = JSON.parse(mine.encryptedName)
+    const descEnvelope: KeyEnvelope = JSON.parse(mine.encryptedDescription)
     const [nameHex, descHex] = await Promise.all([
-      hpkeOpenFromState(nameEnvelope, LABEL_PLATFORM_ROLE_NAME_ENCRYPT, roleFieldAad(role.id, 'name')),
-      hpkeOpenFromState(descEnvelope, LABEL_PLATFORM_ROLE_DESC_ENCRYPT, roleFieldAad(role.id, 'description')),
+      shapeOpenFromState('platform-role-name', nameEnvelope, [role.id]),
+      shapeOpenFromState('platform-role-description', descEnvelope, [role.id]),
     ])
     return { name: hexToText(nameHex), description: hexToText(descHex) }
   } catch {

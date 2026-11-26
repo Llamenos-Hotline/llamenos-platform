@@ -229,12 +229,8 @@ struct RecoveryRequestsView: View {
             let envelopeData = shareData.shareEnvelope.data(using: .utf8) ?? Data()
             let envelope = try JSONDecoder().decode(HpkeEnvelope.self, from: envelopeData)
 
-            // Decrypt our stored Shamir share using HPKE
-            let shareHex = try cryptoService.hpkeOpenKey(
-                envelope: envelope,
-                expectedLabel: CryptoLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP,
-                aadHex: ""
-            )
+            // Open our stored Shamir share (the recovery-group-share shape)
+            let shareHex = try cryptoService.shapeOpen(shape: .recoveryGroupShare, envelope: envelope)
 
             // Verify share against commitment if available
             if let commitment = shareData.shareCommitment {
@@ -250,16 +246,13 @@ struct RecoveryRequestsView: View {
                 }
             }
 
-            // HPKE-seal share to the recovering user's new device pubkey
-            // AAD = sessionId:contributorPubkey (hex-encoded UTF-8)
-            let aadString = "\(sessionId):\(signingPubkey)"
-            let aadHex = aadString.data(using: .utf8)!.map { String(format: "%02x", $0) }.joined()
-
-            let contribution = try cryptoService.hpkeSeal(
-                plaintextHex: shareHex,
+            // Seal the share to the recovering user's new device: the
+            // recovery-share-contribution shape binds this session and contributor.
+            let contribution = try cryptoService.shapeSeal(
+                shape: .recoveryShareContribution,
                 recipientPubkeyHex: session.newDevicePubkey,
-                label: CryptoLabels.LABEL_RECOVERY_SHARE_CONTRIBUTE,
-                aadHex: aadHex
+                plaintextHex: shareHex,
+                aadFields: [sessionId, signingPubkey]
             )
 
             // Sign the contribution: ed25519Sign(JSON(envelope) + ":" + sessionId)

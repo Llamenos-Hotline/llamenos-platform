@@ -176,7 +176,7 @@ final class ReportsViewModel {
                   let ours = result.envelopes.first(where: { $0.pubkey == ourPubkey }) else {
                 throw CryptoServiceError.noKeyLoaded
             }
-            let authorEnvelope = ProtocolKeyEnvelope(
+            let authorEnvelope = KeyEnvelope(
                 ct: ours.envelope.ct,
                 enc: ours.envelope.enc
             )

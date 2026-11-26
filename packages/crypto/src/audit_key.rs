@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::errors::CryptoError;
-use crate::hpke_envelope::{hpke_open_key, hpke_seal_key, HpkeEnvelope};
-use crate::labels::{LABEL_AUDIT_DETAILS, LABEL_AUDIT_USER_KEY_WRAP};
+use crate::hpke_envelope::HpkeEnvelope;
+use crate::labels::LABEL_AUDIT_DETAILS;
+use crate::shape::{open_key_from, seal_to, Shape};
 
 /// An admin envelope: the audit key HPKE-wrapped to one admin's X25519 public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,16 +56,10 @@ pub fn wrap_audit_key_to_admins(
         ));
     }
 
-    let aad = format!("{LABEL_AUDIT_USER_KEY_WRAP}:{user_pubkey_hex}");
-
+    let fields = [user_pubkey_hex.to_string()];
     let mut envelopes = Vec::with_capacity(admin_pubkeys_hex.len());
     for &admin_pk in admin_pubkeys_hex {
-        let envelope = hpke_seal_key(
-            audit_key,
-            admin_pk,
-            LABEL_AUDIT_USER_KEY_WRAP,
-            aad.as_bytes(),
-        )?;
+        let envelope = seal_to(admin_pk, Shape::AuditUserKey, &fields, audit_key)?;
         envelopes.push(AuditKeyAdminEnvelope {
             admin_pubkey_hex: admin_pk.to_string(),
             envelope,
@@ -86,13 +81,12 @@ pub fn unwrap_audit_key(
     admin_secret_hex: &str,
     user_pubkey_hex: &str,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    let aad = format!("{LABEL_AUDIT_USER_KEY_WRAP}:{user_pubkey_hex}");
-
-    hpke_open_key(
+    let secret = crate::encryption::secret_from_hex(admin_secret_hex)?;
+    open_key_from(
+        &secret,
+        Shape::AuditUserKey,
+        &[user_pubkey_hex.to_string()],
         &admin_envelope.envelope,
-        admin_secret_hex,
-        LABEL_AUDIT_USER_KEY_WRAP,
-        aad.as_bytes(),
     )
 }
 

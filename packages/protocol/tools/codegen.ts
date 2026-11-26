@@ -167,6 +167,9 @@ function defNameFromPath(propertyName: string, isArrayItem: boolean): string {
  * mobile rename, not a codegen tweak.
  */
 const REFERENCED_BY_NAME = new Set([
+  // #2999 — `serverEventKeys` items would otherwise be named `ServerEventKey`,
+  // which is the crate's UniFFI record of the same shape: a Swift-module collision.
+  'RelayEventKey',
   // #2046 — assignee re-wrap: `messages` / `envelopes` items
   'AssigneeEnvelopeGap',
   'AssigneeRecipient',
@@ -836,9 +839,6 @@ function stripSwiftConvenienceExtensions(lines: string[]): string {
   // `Error` shadows Swift's Error protocol — rename to InviteError.
   output = output.replace(/^enum Error: String/gm, 'enum InviteError: String')
   output = output.replace(/\blet error: Error\?/g, 'let error: InviteError?')
-
-  // `KeyEnvelope` conflicts with UniFFI's KeyEnvelope — rename to ProtocolKeyEnvelope.
-  output = output.replace(/\bKeyEnvelope\b/g, 'ProtocolKeyEnvelope')
 
   // `Group` shadows SwiftUI's Group view — rename to AffinityGroupElement.
   output = output.replace(/^(struct |\/\/ MARK: - )Group\b/gm, '$1AffinityGroupElement')

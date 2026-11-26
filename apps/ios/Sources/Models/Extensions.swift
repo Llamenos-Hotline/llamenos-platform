@@ -136,11 +136,11 @@ extension NoteResponse {
     func decryptionCandidates(encryptionPubkey: String) -> [HpkeEnvelope] {
         var candidates: [HpkeEnvelope] = []
         if let authorEnv = authorEnvelope {
-            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: authorEnv.enc, ct: authorEnv.ct))
+            candidates.append(HpkeEnvelope(enc: authorEnv.enc, ct: authorEnv.ct))
         }
         if let adminEnvs = adminEnvelopes,
            let ourEnvelope = adminEnvs.first(where: { $0.pubkey == encryptionPubkey }) {
-            candidates.append(HpkeEnvelope(v: 3, labelId: 0, enc: ourEnvelope.enc, ct: ourEnvelope.ct))
+            candidates.append(HpkeEnvelope(enc: ourEnvelope.enc, ct: ourEnvelope.ct))
         }
         return candidates
     }

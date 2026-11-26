@@ -174,7 +174,7 @@ interface HubData {
 }
 const data = {} as Record<'A' | 'B', HubData>
 const contactHash = `contact-${suffix}`
-const ENVELOPE = { pubkey: hex('e1'), enc: 'b'.repeat(64), ct: 'c'.repeat(32) }
+const ENVELOPE = { pubkey: hex('e1'), enc: 'b'.repeat(64), ct: 'c'.repeat(96) }
 
 async function seedHub(hubId: string, owner: Actor): Promise<HubData> {
   const [conv] = await db.insert(conversations).values({

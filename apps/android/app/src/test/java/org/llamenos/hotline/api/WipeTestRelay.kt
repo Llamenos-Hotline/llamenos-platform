@@ -33,7 +33,7 @@ class WipeTestRelay(
         every { it.ed25519Verify(any(), any(), any()) } answers {
             WipeSigner.verify(firstArg(), secondArg(), thirdArg())
         }
-        every { it.decryptServerEventWithStoredKeys(any(), any()) } returns decryptedEvent
+        every { it.openServerEvent(any(), any(), any(), any()) } returns decryptedEvent
     }
 
     val service: WebSocketService

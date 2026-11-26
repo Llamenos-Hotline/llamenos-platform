@@ -29,8 +29,8 @@ import {
   ed25519AuthPubkey,
 } from '@worker/lib/hpke-recipient'
 import { encryptMessageForStorage } from '@worker/lib/crypto'
-import { hpkeOpen } from '@llamenos/crypto/ffi'
-import { LABEL_MESSAGE, LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
+import { shapeOpen } from '@llamenos/crypto/ffi'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import { deriveAdminKeys } from '../../../../scripts/bootstrap-admin'
 
 /** The admin seed every test harness in this repo already uses. */
@@ -181,14 +181,8 @@ describe('sealing to the Ed25519 key instead of the X25519 one', () => {
   )
 
   function openAdminEnvelope(sealedHex: { enc: string; ct: string }): Uint8Array {
-    const envelope = new Uint8Array([...hexToBytes(sealedHex.enc), ...hexToBytes(sealedHex.ct)])
-    // Stored-record format (#1393): the label is HPKE info, and there is no AAD.
-    return hpkeOpen(
-      adminX25519Secret,
-      envelope,
-      new TextEncoder().encode(LABEL_MESSAGE),
-      new Uint8Array(0),
-    )
+    // Stored-record format (#1393): the 'message-key' shape.
+    return shapeOpen('message-key', adminX25519Secret, [], sealedHex)
   }
 
   it('confirms the derived secret matches the X25519 public key the config names', () => {

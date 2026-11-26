@@ -12,7 +12,7 @@ import { ServiceError } from '@worker/services/service-error'
 const VALID_ENVELOPE = {
   pubkey: 'a'.repeat(64),
   enc: 'b'.repeat(64),
-  ct: 'wrapped-key-hex',
+  ct: 'c677a7ae12848b30608de55c6d151c98184d7d74ea82ce4c3604ff177375efebe2fbf104c304ef15fe13ec31ab817f60',
 }
 
 function makeApp() {

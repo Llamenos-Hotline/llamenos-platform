@@ -262,21 +262,17 @@ const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
  */
 function RelayWrappedLayout() {
   const { serverPubkey, wsRelayUrl } = useConfig()
-  const { publicKey, serverEventKeyHex, serverEventKeyPrevHex, eventKeyEpoch } = useAuth()
+  const { publicKey, serverEventKeys } = useAuth()
 
-  // Push epoch-scoped server event keys to Rust CryptoState (H2 hardening —
-  // keys never stay in JS memory longer than needed for the IPC call)
+  // Push the per-hub relay-event keys to Rust CryptoState (#2999). Every hub this
+  // user belongs to, not only the active one: events from every member hub are
+  // handled regardless of which hub the UI shows (multi-hub axiom).
   useEffect(() => {
-    if (serverEventKeyHex && eventKeyEpoch !== undefined) {
-      const keys: Array<[number, string]> = [[eventKeyEpoch, serverEventKeyHex]]
-      if (serverEventKeyPrevHex) {
-        keys.push([eventKeyEpoch - 1, serverEventKeyPrevHex])
-      }
-      setServerEventKeys(keys).catch((err: unknown) => {
-        console.error('[relay] Failed to push event keys to Rust:', err)
-      })
-    }
-  }, [serverEventKeyHex, serverEventKeyPrevHex, eventKeyEpoch])
+    if (serverEventKeys.length === 0) return
+    setServerEventKeys(serverEventKeys).catch((err: unknown) => {
+      console.error('[relay] Failed to push event keys to Rust:', err)
+    })
+  }, [serverEventKeys])
 
   return (
     <RelayProvider

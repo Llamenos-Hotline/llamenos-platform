@@ -268,12 +268,23 @@ fn encrypt_device_secrets(
 ) -> Result<EncryptedDeviceKeys, CryptoError> {
     let mut salt = [0u8; 32];
     getrandom::getrandom(&mut salt).expect("getrandom failed");
-
-    let kek = derive_kek(credential, &salt)?;
-
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    encrypt_device_secrets_with(secrets, credential, state, &salt, &nonce_bytes)
+}
+
+/// [`encrypt_device_secrets`] under a chosen salt and nonce. Production draws
+/// both fresh; the seeded vectors (`crate::vectors`) fix them so the PIN blob a
+/// UniFFI test unlocks as the vector recipient is reproducible.
+pub(crate) fn encrypt_device_secrets_with(
+    secrets: &DeviceSecrets,
+    credential: &str,
+    state: &DeviceKeyState,
+    salt: &[u8; 32],
+    nonce_bytes: &[u8; 12],
+) -> Result<EncryptedDeviceKeys, CryptoError> {
+    let kek = derive_kek(credential, salt)?;
+    let nonce = Nonce::from_slice(nonce_bytes);
 
     let cipher = Aes256Gcm::new_from_slice(kek.as_slice())
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;

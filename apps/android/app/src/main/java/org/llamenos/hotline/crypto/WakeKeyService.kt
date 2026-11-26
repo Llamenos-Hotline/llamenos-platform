@@ -7,7 +7,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.llamenos.protocol.CryptoLabels
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -247,16 +246,10 @@ class WakeKeyService @Inject constructor(
 
             try {
                 val envelope = json.decodeFromString<HpkeEnvelopeJson>(envelopeJson)
-                val ffiEnvelope = org.llamenos.core.HpkeEnvelope(
-                    v = envelope.v.toUByte(),
-                    labelId = envelope.labelId.toUByte(),
-                    enc = envelope.enc,
-                    ct = envelope.ct,
-                )
-                val plaintextHex = org.llamenos.core.mobileHpkeOpenWithWakeKey(
-                    envelope = ffiEnvelope,
-                    expectedLabel = LABEL_PUSH_WAKE,
-                    aadHex = "",
+                // The push-wake shape: the crate supplies the label and AAD.
+                val plaintextHex = org.llamenos.core.mobileShapeOpenWithWakeKey(
+                    shape = org.llamenos.core.Shape.PUSH_WAKE,
+                    envelope = org.llamenos.core.HpkeEnvelope(enc = envelope.enc, ct = envelope.ct),
                 )
                 val bytes = hexToBytes(plaintextHex)
                 val plaintext = String(bytes, Charsets.UTF_8)
@@ -284,7 +277,6 @@ class WakeKeyService @Inject constructor(
     companion object {
         internal const val KEY_WAKE_SECRET = "wake-secret"
         internal const val KEY_WAKE_PUBKEY = "wake-pubkey"
-        private val LABEL_PUSH_WAKE = CryptoLabels.LABEL_PUSH_WAKE
 
         /** AES-GCM IV length in bytes. */
         private const val GCM_IV_LENGTH = 12
@@ -298,8 +290,6 @@ class WakeKeyService @Inject constructor(
  */
 @Serializable
 private data class HpkeEnvelopeJson(
-    val v: Int,
-    val labelId: Int,
     val enc: String,
     val ct: String,
 )

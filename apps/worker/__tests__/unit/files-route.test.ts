@@ -56,7 +56,7 @@ function makeApp(opts: {
       id: 'file-1',
       uploadedBy: 'uploader-pub',
       status: 'complete',
-      recipientEnvelopes: [{ pubkey: 'recipient-pub', enc: HEX64, ct: 'wk' }],
+      recipientEnvelopes: [{ pubkey: 'recipient-pub', enc: HEX64, ct: 'f2b2d628a0f021981accdbce3f4ad042b302ac3ed750902495f8eccf725fcfffa3046a8e9d7e111997c267114b20ba39' }],
       encryptedMetadata: [{ pubkey: 'recipient-pub', blob: 'meta-blob' }],
     },
   } = opts
@@ -136,7 +136,7 @@ describe('GET /files/:id/content', () => {
         id: 'f1',
         uploadedBy: 'uploader',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'k' }],
+        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'b4159f725074c88574403cac13fd483a30828a860293cd248fe7b12b3f57e727f5999fa95ca06c85d1a19bbc362c93fe' }],
       },
     })
     const res = await request('/f1/content')
@@ -172,7 +172,7 @@ describe('GET /files/:id/content', () => {
         id: 'f1',
         uploadedBy: 'someone-else',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'recipient-pub', enc: HEX64, ct: 'key' }],
+        recipientEnvelopes: [{ pubkey: 'recipient-pub', enc: HEX64, ct: '7c63ea2ebd1ba2247b45073ad34df5a434f0f6b5773c8671c4572dc899a02971ff9de896ee6992574dc9c73eacc5d6f8' }],
       },
     })
     const res = await request('/f1/content')
@@ -226,7 +226,7 @@ describe('GET /files/:id/envelopes', () => {
         id: 'f1',
         uploadedBy: 'up',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'k' }],
+        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'b4159f725074c88574403cac13fd483a30828a860293cd248fe7b12b3f57e727f5999fa95ca06c85d1a19bbc362c93fe' }],
       },
     })
     const res = await request('/f1/envelopes')
@@ -241,8 +241,8 @@ describe('GET /files/:id/envelopes', () => {
         uploadedBy: 'up',
         status: 'complete',
         recipientEnvelopes: [
-          { pubkey: 'recipient-pub', enc: HEX64, ct: 'my-key' },
-          { pubkey: 'other-pub', enc: HEX64, ct: 'other-key' },
+          { pubkey: 'recipient-pub', enc: HEX64, ct: '0b2523e28e13744002c5b06788bba21c3a182fa13f6e256fb499c61fc3652c44f29a538d28f47c40249b8a3be2a06507' },
+          { pubkey: 'other-pub', enc: HEX64, ct: 'fdd7fc167c839febfd0c5c2b76de1155ef1c540ea2383c80727986c825cbb5df661c7558751878989df644cad7bc42e9' },
         ],
       },
     })
@@ -262,8 +262,8 @@ describe('GET /files/:id/envelopes', () => {
         uploadedBy: 'up',
         status: 'complete',
         recipientEnvelopes: [
-          { pubkey: 'pub-1', enc: HEX64, ct: 'k1' },
-          { pubkey: 'pub-2', enc: HEX64, ct: 'k2' },
+          { pubkey: 'pub-1', enc: HEX64, ct: 'ca5b589907aec73f337c6d02d6dcda6aa91129adafae59c82b224d106439f5444801d376db96c81150377b877ad90958' },
+          { pubkey: 'pub-2', enc: HEX64, ct: 'bb11594a4ab7bd7873373c24f08f5a8e2019c19f948c0bf1a99016a79792cea8faf401b585231c82c9997a971bb9a701' },
         ],
       },
     })
@@ -280,7 +280,7 @@ describe('GET /files/:id/envelopes', () => {
         id: 'f1',
         uploadedBy: 'uploader-pub',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'k' }],
+        recipientEnvelopes: [{ pubkey: 'someone-else', enc: HEX64, ct: 'b4159f725074c88574403cac13fd483a30828a860293cd248fe7b12b3f57e727f5999fa95ca06c85d1a19bbc362c93fe' }],
       },
     })
     const res = await request('/f1/envelopes')
@@ -302,7 +302,7 @@ describe('GET /files/:id/metadata', () => {
         id: 'f1',
         uploadedBy: 'up',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'someone', enc: HEX64, ct: 'k' }],
+        recipientEnvelopes: [{ pubkey: 'someone', enc: HEX64, ct: 'b4159f725074c88574403cac13fd483a30828a860293cd248fe7b12b3f57e727f5999fa95ca06c85d1a19bbc362c93fe' }],
         encryptedMetadata: [{ pubkey: 'someone', blob: 'b' }],
       },
     })
@@ -317,7 +317,7 @@ describe('GET /files/:id/metadata', () => {
         id: 'f1',
         uploadedBy: 'up',
         status: 'complete',
-        recipientEnvelopes: [{ pubkey: 'my-pub', enc: HEX64, ct: 'k' }],
+        recipientEnvelopes: [{ pubkey: 'my-pub', enc: HEX64, ct: 'b4159f725074c88574403cac13fd483a30828a860293cd248fe7b12b3f57e727f5999fa95ca06c85d1a19bbc362c93fe' }],
         encryptedMetadata: [
           { pubkey: 'my-pub', blob: 'my-blob' },
           { pubkey: 'other-pub', blob: 'other-blob' },
@@ -361,8 +361,8 @@ describe('POST /files/:id/share', () => {
   // shareFileBodySchema requires fileKeyEnvelopeSchema (pubkey, enc, ct)
   // and encryptedMetadataEntrySchema (pubkey, encryptedContent, enc, ct)
   const shareBody = {
-    envelope: { pubkey: HEX64, enc: HPKE_ENC, ct: 'encrypted-key-data' },
-    encryptedMetadata: { pubkey: HEX64, encryptedContent: 'meta-content', enc: HPKE_ENC, ct: 'meta-ct' },
+    envelope: { pubkey: HEX64, enc: HPKE_ENC, ct: '0c8f41f82e28d12d87a6d894e16bc83bd5b739fe3ae5152a405e385f875e0bfad1bf89556738d6ed568f4040c9ac53c9' },
+    encryptedMetadata: { pubkey: HEX64, encryptedContent: 'ab'.repeat(40), enc: HPKE_ENC, ct: '3f7476de60dd77f5c187ea67e96175d499dc77c6adcbd977ef9c129a8977d401fbab3e8555e181827ae71e0ae485ca9f' },
   }
 
   it('rejects without files:share permission', async () => {

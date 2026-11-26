@@ -14,11 +14,12 @@ use llamenos_core::auth::{
 };
 use llamenos_core::encryption::{
     decrypt_draft, decrypt_note, decrypt_with_pin, encrypt_draft, encrypt_export, encrypt_note,
-    encrypt_with_pin, hpke_unwrap_key, hpke_wrap_key, open_record_for_reader,
-    seal_record_for_readers, EncryptedKeyData, EncryptedMessage, EncryptedNote, KeyEnvelope,
-    RecipientKeyEnvelope, RecordReader,
+    encrypt_with_pin, open_record_for_reader, seal_record_for_readers, EncryptedKeyData,
+    EncryptedMessage, EncryptedNote, RecipientKeyEnvelope, RecordReader,
 };
+use llamenos_core::hpke_envelope::HpkeEnvelope as KeyEnvelope;
 use llamenos_core::labels::*;
+use llamenos_core::shape::{open_key_from, seal_to, Shape};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -35,6 +36,34 @@ const TEST_ADMIN_SECRET_KEY: &str =
 /// Third test keypair for adversarial / "wrong key" tests.
 const TEST_WRONG_SECRET_KEY: &str =
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+/// The shape a label's key wrap is sealed as (this file names wraps by label).
+fn shape_of(label: &str) -> Shape {
+    match label {
+        l if l == LABEL_NOTE_KEY => Shape::NoteKey,
+        l if l == LABEL_MESSAGE => Shape::MessageKey,
+        l if l == LABEL_HUB_KEY_WRAP => Shape::HubKey,
+        l if l == LABEL_FILE_KEY => Shape::FileKey,
+        other => panic!("no shape for {other}"),
+    }
+}
+
+fn hpke_wrap_key(
+    key: &[u8; 32],
+    pk: &str,
+    label: &str,
+) -> Result<KeyEnvelope, llamenos_core::CryptoError> {
+    seal_to(pk, shape_of(label), &[], key)
+}
+
+fn hpke_unwrap_key(
+    env: &KeyEnvelope,
+    sk_hex: &str,
+    label: &str,
+) -> Result<zeroize::Zeroizing<[u8; 32]>, llamenos_core::CryptoError> {
+    let sk: [u8; 32] = hex::decode(sk_hex).unwrap().try_into().unwrap();
+    open_key_from(&sk, shape_of(label), &[], env)
+}
 
 /// Test PIN for key encryption vectors.
 const TEST_PIN: &str = "12345678";
@@ -1060,34 +1089,36 @@ fn call_record_admin_only_decryption() {
 #[test]
 fn domain_separation_all_labels() {
     let admin_x25519 = x25519_pubkey(TEST_ADMIN_SECRET_KEY);
+    let sk: [u8; 32] = hex::decode(TEST_ADMIN_SECRET_KEY)
+        .unwrap()
+        .try_into()
+        .unwrap();
     let key = [0x42; 32];
 
-    // Wrap same key with different labels
-    let labels = [
-        LABEL_NOTE_KEY,
-        LABEL_MESSAGE,
-        LABEL_HUB_KEY_WRAP,
-        LABEL_CALL_META,
-    ];
-    let envelopes: Vec<_> = labels
+    // Every key-payload shape that takes no AAD fields: the same key sealed as
+    // each one opens only as that one. Shapes with fields bind them too; the
+    // per-field cases are the crate's shape tests and the v2 negative vectors.
+    let shapes: Vec<Shape> = Shape::ALL
         .iter()
-        .map(|l| hpke_wrap_key(&key, &admin_x25519, l).unwrap())
+        .copied()
+        .filter(|s| s.arity() == 0 && matches!(s.payload(), llamenos_core::shape::Payload::Key))
+        .collect();
+    assert!(
+        shapes.len() >= 8,
+        "too few key shapes to mean anything: {shapes:?}"
+    );
+    let envelopes: Vec<_> = shapes
+        .iter()
+        .map(|s| seal_to(&admin_x25519, *s, &[], &key).unwrap())
         .collect();
 
-    // Each envelope only unwraps with its own label
     for (i, env) in envelopes.iter().enumerate() {
-        for (j, label) in labels.iter().enumerate() {
-            let result = hpke_unwrap_key(env, TEST_ADMIN_SECRET_KEY, label);
+        for (j, shape) in shapes.iter().enumerate() {
+            let result = open_key_from(&sk, *shape, &[], env);
             if i == j {
-                assert!(result.is_ok(), "Same label must succeed: {label}");
-                assert_eq!(*result.unwrap(), key);
+                assert_eq!(*result.expect("same shape must open"), key, "{shape:?}");
             } else {
-                assert!(
-                    result.is_err(),
-                    "Cross-label {}/{} must fail",
-                    labels[i],
-                    label
-                );
+                assert!(result.is_err(), "{:?} opened as {shape:?}", shapes[i]);
             }
         }
     }

@@ -1,3 +1,4 @@
+import type { MeResponse } from '@protocol/schemas'
 import { request, ApiError, NetworkError, REQUEST_TIMEOUT_MS } from './client'
 import { getApiUrl } from '../api-config'
 import { netFetch } from '../net'
@@ -46,5 +47,5 @@ export async function logout() {
 }
 
 export async function getMe() {
-  return request<{ pubkey: string; roles: string[]; permissions: string[]; primaryRole: { id: string; name: string | null; slug: string } | null; name: string; transcriptionEnabled: boolean; spokenLanguages: string[]; uiLanguage: string; profileCompleted: boolean; onBreak: boolean; callPreference: 'phone' | 'browser' | 'both'; webauthnRequired: boolean; webauthnRegistered: boolean; adminDecryptionPubkey: string; serverEventKeyHex?: string; serverEventKeyPrevHex?: string; eventKeyEpoch?: number; eventKeyEpochDuration?: number }>('/auth/me')
+  return request<MeResponse>('/auth/me')
 }

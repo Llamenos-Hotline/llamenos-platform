@@ -6,6 +6,7 @@
  */
 import { dlopen, FFIType, ptr } from 'bun:ffi'
 import { resolve } from 'path'
+import { SHAPES, type Shape } from '../shared/crypto-shapes'
 
 // Resolve library path — configurable via LLAMENOS_CRYPTO_LIB env var
 const LIB_PATH = process.env.LLAMENOS_CRYPTO_LIB ??
@@ -40,12 +41,82 @@ const lib = dlopen(LIB_PATH, {
     args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
     returns: FFIType.i32,
   },
-  ffi_hpke_seal: {
-    args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
+  ffi_shape_seal: {
+    args: [
+      FFIType.u8,               // shape
+      FFIType.ptr, FFIType.u64, // recipient X25519 pubkey (32)
+      FFIType.ptr, FFIType.u64, // AAD fields (UTF-8 JSON string array, or empty)
+      FFIType.ptr, FFIType.u64, // plaintext
+      FFIType.ptr, FFIType.u64, // out: enc(32) || ct
+    ],
     returns: FFIType.i32,
   },
-  ffi_hpke_open: {
-    args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64],
+  ffi_shape_open: {
+    args: [
+      FFIType.u8,               // shape
+      FFIType.ptr, FFIType.u64, // X25519 secret (32)
+      FFIType.ptr, FFIType.u64, // AAD fields
+      FFIType.ptr, FFIType.u64, // envelope: enc(32) || ct
+      FFIType.ptr, FFIType.u64, // out: plaintext
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_content_seal: {
+    args: [
+      FFIType.u8,               // shape
+      FFIType.ptr, FFIType.u64, // plaintext
+      FFIType.ptr, FFIType.u64, // out key (32)
+      FFIType.ptr, FFIType.u64, // out: nonce || ct || tag
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_content_seal_under: {
+    args: [
+      FFIType.u8,               // shape
+      FFIType.ptr, FFIType.u64, // key (32)
+      FFIType.ptr, FFIType.u64, // plaintext
+      FFIType.ptr, FFIType.u64, // out: nonce || ct || tag
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_content_open: {
+    args: [
+      FFIType.u8,               // shape
+      FFIType.ptr, FFIType.u64, // key (32)
+      FFIType.ptr, FFIType.u64, // nonce || ct || tag
+      FFIType.ptr, FFIType.u64, // out: plaintext
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_server_event_key: {
+    args: [
+      FFIType.ptr, FFIType.u64, // SERVER_SECRET
+      FFIType.ptr, FFIType.u64, // hub id (UTF-8)
+      FFIType.u64,              // epoch
+      FFIType.ptr, FFIType.u64, // out (32)
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_seal_server_event: {
+    args: [
+      FFIType.ptr, FFIType.u64, // SERVER_SECRET
+      FFIType.ptr, FFIType.u64, // hub id (UTF-8)
+      FFIType.u32,              // kind
+      FFIType.u64,              // epoch
+      FFIType.ptr, FFIType.u64, // event JSON (UTF-8)
+      FFIType.ptr, FFIType.u64, // out: nonce || ct || tag
+    ],
+    returns: FFIType.i32,
+  },
+  ffi_open_server_event: {
+    args: [
+      FFIType.ptr, FFIType.u64, // event key (32)
+      FFIType.ptr, FFIType.u64, // hub id (UTF-8)
+      FFIType.u32,              // kind
+      FFIType.u64,              // epoch
+      FFIType.ptr, FFIType.u64, // payload (lowercase hex, UTF-8)
+      FFIType.ptr, FFIType.u64, // out: JSON
+    ],
     returns: FFIType.i32,
   },
   ffi_ed25519_sign: {
@@ -120,11 +191,21 @@ const lib = dlopen(LIB_PATH, {
 })
 
 class CryptoError extends Error {
+  /**
+   * The crate's closed rejection code (`CryptoError::code` in Rust —
+   * `invalid_format`, `decryption_failed`, `invalid_id`, …) when the failure
+   * came from the crate, else `null`. Vectors assert this, never merely a throw.
+   */
+  readonly reason: string | null
   constructor(public code: number, message: string) {
     super(message)
     this.name = 'CryptoError'
+    const m = /^([a-z_]+): /.exec(message)
+    this.reason = m ? m[1] : null
   }
 }
+
+export { CryptoError }
 
 function getLastError(): string {
   const buf = new Uint8Array(512)
@@ -198,40 +279,188 @@ export function symmetricDecrypt(key: Uint8Array, ciphertext: Uint8Array, aad: U
   return out
 }
 
+// ── HPKE envelopes, by shape (spec D1) ───────────────────────────────
+
+export { SHAPES, type Shape } from '../shared/crypto-shapes'
+
+function shapeByte(shape: Shape): number {
+  const i = SHAPES.indexOf(shape)
+  if (i < 0) throw new CryptoError(-5, `invalid_input: unknown shape ${shape}`)
+  return i
+}
+
+function fieldsBytes(fields: readonly string[]): Uint8Array {
+  return fields.length ? new TextEncoder().encode(JSON.stringify(fields)) : new Uint8Array(0)
+}
+
+/** A sealed HPKE envelope: `enc` and `ct`, both lowercase hex. */
+export interface HpkeEnvelope { enc: string; ct: string }
+
+function hexOf(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('hex')
+}
+
+/** Strict lowercase hex → bytes; anything else is `invalid_format` (spec D2). */
+function bytesOfHex(field: string, hex: string): Uint8Array {
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex)) {
+    throw new CryptoError(-5, `invalid_format: ${field} must be lowercase hex`)
+  }
+  return Uint8Array.from(Buffer.from(hex, 'hex'))
+}
+
 /**
- * HPKE seal (encrypt for a recipient). The `label` parameter must be a registered
- * domain separation label (e.g., utf8ToBytes("llamenos:note-key")). Raw info bytes
- * are rejected — Albrecht defense enforced at the FFI boundary.
+ * Seal `plaintext` as `shape` to a 32-byte X25519 recipient. `fields` are the
+ * per-record AAD values the shape binds (empty for most shapes).
  */
-export function hpkeSeal(recipientPk: Uint8Array, plaintext: Uint8Array, label: Uint8Array, aad: Uint8Array): Uint8Array {
-  const outLen = 32 + plaintext.length + 16
-  const out = new Uint8Array(outLen)
-  checkResult(lib.symbols.ffi_hpke_seal(
+export function shapeSeal(
+  shape: Shape,
+  recipientPk: Uint8Array,
+  fields: readonly string[],
+  plaintext: Uint8Array,
+): HpkeEnvelope {
+  const f = fieldsBytes(fields)
+  const out = new Uint8Array(32 + plaintext.length + 16)
+  checkResult(lib.symbols.ffi_shape_seal(
+    shapeByte(shape),
     ptr(recipientPk), recipientPk.length,
-    plaintext.length > 0 ? ptr(plaintext) : null, plaintext.length,
-    ptr(label), label.length,
-    aad.length > 0 ? ptr(aad) : null, aad.length,
-    ptr(out), outLen,
+    f.length ? ptr(f) : null, f.length,
+    plaintext.length ? ptr(plaintext) : null, plaintext.length,
+    ptr(out), out.length,
+  ))
+  return { enc: hexOf(out.subarray(0, 32)), ct: hexOf(out.subarray(32)) }
+}
+
+/** Open an envelope of `shape` with a 32-byte X25519 secret. */
+export function shapeOpen(
+  shape: Shape,
+  secretKey: Uint8Array,
+  fields: readonly string[],
+  envelope: HpkeEnvelope,
+): Uint8Array {
+  const enc = bytesOfHex('enc', envelope.enc)
+  const ct = bytesOfHex('ct', envelope.ct)
+  if (enc.length !== 32 || ct.length < 16) {
+    throw new CryptoError(-5, 'invalid_format: enc must be 32 bytes and ct at least 16')
+  }
+  const env = new Uint8Array(enc.length + ct.length)
+  env.set(enc)
+  env.set(ct, 32)
+  const f = fieldsBytes(fields)
+  const out = new Uint8Array(env.length - 48)
+  checkResult(lib.symbols.ffi_shape_open(
+    shapeByte(shape),
+    ptr(secretKey), secretKey.length,
+    f.length ? ptr(f) : null, f.length,
+    ptr(env), env.length,
+    out.length ? ptr(out) : ptr(new Uint8Array(1)), out.length,
   ))
   return out
 }
 
-/**
- * HPKE open (decrypt). The `label` parameter must be a registered domain separation
- * label matching the one used during seal. Albrecht defense enforced at the FFI boundary.
- */
-export function hpkeOpen(secretKey: Uint8Array, envelope: Uint8Array, label: Uint8Array, aad: Uint8Array): Uint8Array {
-  const ptLen = envelope.length - 48
-  if (ptLen < 0) throw new CryptoError(-5, 'envelope too short')
-  const out = new Uint8Array(ptLen)
-  checkResult(lib.symbols.ffi_hpke_open(
-    ptr(secretKey), secretKey.length,
-    ptr(envelope), envelope.length,
-    ptr(label), label.length,
-    aad.length > 0 ? ptr(aad) : null, aad.length,
-    ptr(out), ptLen,
+/** Seal `plaintext` under a fresh content key with `shape`'s content AAD. */
+export function contentSeal(shape: Shape, plaintext: Uint8Array): { packed: Uint8Array; key: Uint8Array } {
+  const key = new Uint8Array(32)
+  const packed = new Uint8Array(plaintext.length + 28)
+  checkResult(lib.symbols.ffi_content_seal(
+    shapeByte(shape),
+    plaintext.length ? ptr(plaintext) : null, plaintext.length,
+    ptr(key), 32,
+    ptr(packed), packed.length,
+  ))
+  return { packed, key }
+}
+
+/** Seal under an existing key — only the firehose window shape, whose key seals a whole window. */
+export function contentSealUnder(shape: 'firehose-window-key', key: Uint8Array, plaintext: Uint8Array): Uint8Array {
+  const packed = new Uint8Array(plaintext.length + 28)
+  checkResult(lib.symbols.ffi_content_seal_under(
+    shapeByte(shape),
+    ptr(key), key.length,
+    plaintext.length ? ptr(plaintext) : null, plaintext.length,
+    ptr(packed), packed.length,
+  ))
+  return packed
+}
+
+/** Open a content ciphertext of `shape` with its key. */
+export function contentOpen(shape: Shape, key: Uint8Array, packed: Uint8Array): Uint8Array {
+  if (packed.length < 28) throw new CryptoError(-5, 'invalid_format: ciphertext too short')
+  const out = new Uint8Array(packed.length - 28)
+  checkResult(lib.symbols.ffi_content_open(
+    shapeByte(shape),
+    ptr(key), key.length,
+    ptr(packed), packed.length,
+    out.length ? ptr(out) : ptr(new Uint8Array(1)), out.length,
   ))
   return out
+}
+
+// ── Relay events (spec D9, #2999) ────────────────────────────────────
+
+/** The relay-event key of `hubId` for `epoch` — what a member of that hub is handed. */
+export function serverEventKey(serverSecret: Uint8Array, hubId: string, epoch: number): Uint8Array {
+  const hub = new TextEncoder().encode(hubId)
+  const out = new Uint8Array(32)
+  checkResult(lib.symbols.ffi_server_event_key(
+    ptr(serverSecret), serverSecret.length,
+    ptr(hub), hub.length,
+    BigInt(epoch),
+    ptr(out), 32,
+  ))
+  return out
+}
+
+/** Seal one relay frame; returns the lowercase-hex payload. */
+export function sealServerEvent(
+  serverSecret: Uint8Array,
+  hubId: string,
+  kind: number,
+  epoch: number,
+  json: string,
+): string {
+  const hub = new TextEncoder().encode(hubId)
+  const body = new TextEncoder().encode(json)
+  // nonce + the padding bucket (next power of two >= 4 + len, min 512) + tag
+  let bucket = 512
+  while (bucket < 4 + body.length) bucket *= 2
+  const out = new Uint8Array(12 + bucket + 16)
+  const written = lib.symbols.ffi_seal_server_event(
+    ptr(serverSecret), serverSecret.length,
+    ptr(hub), hub.length,
+    kind,
+    BigInt(epoch),
+    ptr(body), body.length,
+    ptr(out), out.length,
+  )
+  if (written < 0) checkResult(written)
+  return hexOf(out.subarray(0, written))
+}
+
+/**
+ * Open one relay frame with its key. The server never needs this; tests and
+ * BDD steps use it to read what the relay published, through the same code
+ * every client runs.
+ */
+export function openServerEvent(
+  key: Uint8Array,
+  hubId: string,
+  kind: number,
+  epoch: number,
+  payloadHex: string,
+): string {
+  const hub = new TextEncoder().encode(hubId)
+  const payload = new TextEncoder().encode(payloadHex)
+  const out = new Uint8Array(Math.max(1, payloadHex.length / 2))
+  const written = lib.symbols.ffi_open_server_event(
+    ptr(key), key.length,
+    ptr(hub), hub.length,
+    kind,
+    BigInt(epoch),
+    payload.length ? ptr(payload) : ptr(new Uint8Array(1)), payload.length,
+    ptr(out), out.length,
+  )
+  if (written < 0) checkResult(written)
+  return new TextDecoder().decode(out.subarray(0, written))
 }
 
 export function ed25519Sign(secretKey: Uint8Array, message: Uint8Array): Uint8Array {

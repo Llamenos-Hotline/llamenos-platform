@@ -49,7 +49,6 @@ import {
 } from '../fixtures'
 import * as clientLabels from '@shared/crypto-labels'
 import { buildAuthMessage } from '@shared/auth-message'
-import { keyWrapAadHex } from '@shared/envelope-aad'
 import { bytesToHex } from '@shared/encoding'
 import { generateAdminKeys } from '../../../scripts/bootstrap-admin'
 import { x25519 } from '@noble/curves/ed25519.js'
@@ -351,14 +350,14 @@ Then('every admin envelope should name a distinct recipient', async ({ cryptoWor
 })
 
 When('I encrypt the same payload as two separate notes', async ({ page, cryptoWorld }) => {
-  const notes = await page.evaluate(async ({ payload, keyWrapAad }) => {
+  const notes = await page.evaluate(async ({ payload }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
       getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
       encryptNote(payload: string, author: string, admins: string[]): Promise<{
         encryptedContent: string
         authorEnvelope: { enc: string; ct: string }
       }>
-      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+      shapeOpenFromState(shape: string, env: unknown): Promise<string>
     }
     const me = await p.getDevicePubkeys()
     const one = await p.encryptNote(payload, me.signingPubkeyHex, [])
@@ -369,34 +368,17 @@ When('I encrypt the same payload as two separate notes', async ({ page, cryptoWo
     // same key still differ byte-for-byte. Only the unwrapped key is evidence.
     // Verified by mutation: pinning encryptNote to a constant content key left
     // a wrapped-ciphertext comparison green.
-    // A stored envelope is hex in BOTH fields (PROTOCOL.md §2.4); the IPC
-    // `HpkeEnvelope` is base64url in both. Converting `enc` and passing `ct`
-    // through was the same defect the production code carried, so this step
-    // would have stayed green while the desktop wrote envelopes nothing else
-    // could read.
-    const hexToB64url = (hex: string) =>
-      btoa(String.fromCharCode(...(hex.match(/../g) ?? []).map(h => parseInt(h, 16))))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-    const toEnv = (e: { enc: string; ct: string }) => ({
-      v: 3,
-      labelId: 0, // LABEL_NOTE_KEY
-      enc: hexToB64url(e.enc),
-      ct: hexToB64url(e.ct),
-    })
-    // A note's key wrap binds the canonical key-wrap AAD (PROTOCOL.md §2.3:
-    // `UTF-8("llamenos:note-key:key-wrap")`), which is what `encryptNote` seals
-    // with and `decryptNote` opens with. Passing empty here failed the AEAD tag
-    // and threw out of the step — it is derived from `@shared/envelope-aad`,
-    // never re-spelled, so it cannot drift from the production call site again.
-    const k1 = await p.hpkeOpenKeyFromState(toEnv(one.authorEnvelope), 'llamenos:note-key', keyWrapAad)
-    const k2 = await p.hpkeOpenKeyFromState(toEnv(two.authorEnvelope), 'llamenos:note-key', keyWrapAad)
+    // The stored envelope IS the IPC envelope ({enc, ct}, hex — spec D1, D2),
+    // and the note shape fixes the label and AAD in Rust.
+    const k1 = await p.shapeOpenFromState('note-key', one.authorEnvelope)
+    const k2 = await p.shapeOpenFromState('note-key', two.authorEnvelope)
     return {
       one: { encryptedContent: one.encryptedContent },
       two: { encryptedContent: two.encryptedContent },
       keysEqual: k1 === k2,
       keyLen: k1.length,
     }
-  }, { payload: NOTE_PAYLOAD, keyWrapAad: keyWrapAadHex(clientLabels.LABEL_NOTE_KEY) })
+  }, { payload: NOTE_PAYLOAD })
   cryptoWorld.notesPair = notes
 })
 
@@ -533,95 +515,80 @@ Then('every label should be prefixed {string}', async ({}, prefix: string) => {
   expect(bad, `labels missing the "${prefix}" prefix: ${bad.join(', ')}`).toEqual([])
 })
 
-// ─── Label enforcement at unwrap (Albrecht defense) ─────────────────────
+// ─── Shape enforcement at unwrap (spec D1) ───────────────────────────────
 //
-// This asserts that the CLIENT passes an expected label to the unwrap call and
-// refuses a mismatch, rather than trusting whatever labelId the envelope
-// carries. The equivalent property of the Rust implementation is covered by
-// packages/crypto/tests/interop.rs::hpke_cross_label_rejection and
-// ::domain_separation_all_labels.
+// The webview names a shape; the label is the shape's, bound as HPKE info, so an
+// envelope opened as another shape fails the AEAD. Against the mock this shows
+// the webview build is internally consistent; the crate's own property is pinned
+// by packages/crypto/src/shape.rs and the v2 vectors.
 
-When('I wrap a key under the label {string}', async ({ page, cryptoWorld }, labelName: string) => {
-  const label = (clientLabels as unknown as Record<string, string>)[labelName]
-  expect(label, `unknown label constant ${labelName}`).toBeTruthy()
+/** The AAD fields a test seal binds for `shape` (the puk-seed shape binds the device id). */
+function testFields(shape: string, deviceId: string): string[] {
+  return shape === 'puk-seed' ? [deviceId] : []
+}
+
+When('I wrap a key as the shape {string}', async ({ page, cryptoWorld }, shape: string) => {
   const envelope = await page.evaluate(
-    async (lbl) => {
+    async (shp) => {
       const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
         getDevicePubkeys(): Promise<EncryptedDeviceKeys['state']>
-        hpkeSealKey(k: string, pub: string, label: string, aad: string): Promise<unknown>
+        shapeSeal(shape: string, pub: string, plaintextHex: string, fields?: string[]): Promise<unknown>
       }
       const me = await p.getDevicePubkeys()
       const keyHex = Array.from(crypto.getRandomValues(new Uint8Array(32)), b =>
         b.toString(16).padStart(2, '0'),
       ).join('')
-      const env = await p.hpkeSealKey(keyHex, me.encryptionPubkeyHex, lbl, '')
-      return { env, keyHex }
+      const fields = shp === 'puk-seed' ? [me.deviceId] : []
+      const env = await p.shapeSeal(shp, me.encryptionPubkeyHex, keyHex, fields)
+      return { env, keyHex, deviceId: me.deviceId }
     },
-    label,
+    shape,
   )
   cryptoWorld.wrapped = envelope
 })
 
-Then('unwrapping it under the label {string} should succeed', async ({ page, cryptoWorld }, labelName: string) => {
-  const label = (clientLabels as unknown as Record<string, string>)[labelName]
-  const w = cryptoWorld.wrapped
-  expect(w, 'the wrap step must record the envelope').toBeTruthy()
-  const result = await page.evaluate(async ({ lbl, wrapped }) => {
+async function openAsShape(
+  page: import('@playwright/test').Page,
+  shape: string,
+  wrapped: { env: unknown; keyHex: string; deviceId: string },
+): Promise<{ ok: boolean; error: string | null }> {
+  return page.evaluate(async ({ shp, w, fields }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+      shapeOpenFromState(shape: string, env: unknown, fields?: string[]): Promise<string>
     }
     try {
-      const got = await p.hpkeOpenKeyFromState(wrapped.env, lbl, '')
-      return { ok: got === wrapped.keyHex, error: null as string | null }
+      const got = await p.shapeOpenFromState(shp, w.env, fields)
+      return { ok: got === w.keyHex, error: null as string | null }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
-  }, { lbl: label, wrapped: w as { env: unknown; keyHex: string } })
+  }, { shp: shape, w: wrapped, fields: testFields(shape, wrapped.deviceId) })
+}
+
+Then('unwrapping it as the shape {string} should succeed', async ({ page, cryptoWorld }, shape: string) => {
+  const w = cryptoWorld.wrapped as { env: unknown; keyHex: string; deviceId: string } | undefined
+  expect(w, 'the wrap step must record the envelope').toBeTruthy()
+  const result = await openAsShape(page, shape, w!)
   expect(result.error).toBeNull()
-  // Compare the unwrapped key to the original inside the page; only the
-  // boolean crosses back, so no key material is ever surfaced to the runner.
+  // Compared inside the page; only the boolean crosses back.
   expect(result.ok, 'unwrapped key should equal the key that was wrapped').toBe(true)
 })
 
-Then('unwrapping it under the label {string} should be rejected', async ({ page, cryptoWorld }, labelName: string) => {
-  const label = (clientLabels as unknown as Record<string, string>)[labelName]
-  expect(label, `unknown label constant ${labelName}`).toBeTruthy()
-  const w = cryptoWorld.wrapped
+Then('unwrapping it as the shape {string} should be rejected', async ({ page, cryptoWorld }, shape: string) => {
+  const w = cryptoWorld.wrapped as { env: unknown; keyHex: string; deviceId: string } | undefined
   expect(w, 'the wrap step must record the envelope').toBeTruthy()
-  const result = await page.evaluate(async ({ lbl, env }) => {
-    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenKeyFromState(e: unknown, expected: string, aad: string): Promise<string>
-    }
-    try {
-      await p.hpkeOpenKeyFromState(env, lbl, '')
-      return { rejected: false, error: null as string | null }
-    } catch (e) {
-      return { rejected: true, error: e instanceof Error ? e.message : String(e) }
-    }
-  }, { lbl: label, env: w!.env })
-  expect(result.rejected, `unwrap under ${labelName} must be rejected, but it succeeded`).toBe(true)
+  const result = await openAsShape(page, shape, w!)
+  // Another shape is another label as HPKE info: the AEAD fails, not the gate.
+  expect(result.error, `unwrap as ${shape} must be rejected`).toMatch(/decryption_failed/)
 })
 
-Then('unwrapping it under the label {string} should be refused as not openable from the webview', async ({ page, cryptoWorld }, labelName: string) => {
-  const label = (clientLabels as unknown as Record<string, string>)[labelName]
-  expect(label, `unknown label constant ${labelName}`).toBeTruthy()
-  const w = cryptoWorld.wrapped
+Then('unwrapping it as the shape {string} should be refused as not openable from the webview', async ({ page, cryptoWorld }, shape: string) => {
+  const w = cryptoWorld.wrapped as { env: unknown; keyHex: string; deviceId: string } | undefined
   expect(w, 'the wrap step must record the envelope').toBeTruthy()
-  const result = await page.evaluate(async ({ lbl, env }) => {
-    const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenKeyFromState(e: unknown, expected: string, aad: string): Promise<string>
-    }
-    try {
-      await p.hpkeOpenKeyFromState(env, lbl, '')
-      return { error: null as string | null }
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) }
-    }
-  }, { lbl: label, env: w!.env })
-  // The envelope IS valid under this label (the step above wrapped it under it),
-  // so a refusal for any other reason — a label mismatch, say — would be the
-  // allow-list not doing its job.
-  expect(result.error, `unwrap under ${labelName} must be refused`).toMatch(/not openable from the webview/)
+  const result = await openAsShape(page, shape, w!)
+  // The envelope IS valid for this shape (the step above sealed it so), so a
+  // refusal for any other reason would be the gate not doing its job.
+  expect(result.error, `unwrap as ${shape} must be refused`).toMatch(/not openable from the webview/)
 })
 
 // ─── Recovery group: shares are sealed in Rust, never returned ───────────
@@ -665,11 +632,9 @@ Then('the result should contain sealed share envelopes and no plaintext shares',
 Then('the webview should be unable to open a share envelope itself', async ({ page, cryptoWorld }) => {
   const r = cryptoWorld.recoveryGroup
   expect(r, 'the create step must record the group summary').toBeTruthy()
-  const label = clientLabels.LABEL_RECOVERY_GROUP_SHARE_WRAP
-  const errors = await page.evaluate(async ({ envelope, lbl }) => {
+  const errors = await page.evaluate(async ({ envelope }) => {
     const p = (window as unknown as Record<string, unknown>).__TEST_PLATFORM as {
-      hpkeOpenFromState(env: unknown, expected: string, aad: string): Promise<string>
-      hpkeOpenKeyFromState(env: unknown, expected: string, aad: string): Promise<string>
+      shapeOpenFromState(shape: string, env: unknown, fields?: string[]): Promise<string>
     }
     const attempt = async (open: () => Promise<string>) => {
       try {
@@ -679,11 +644,8 @@ Then('the webview should be unable to open a share envelope itself', async ({ pa
         return e instanceof Error ? e.message : String(e)
       }
     }
-    return [
-      await attempt(() => p.hpkeOpenFromState(envelope, lbl, '')),
-      await attempt(() => p.hpkeOpenKeyFromState(envelope, lbl, '')),
-    ]
-  }, { envelope: r!.envelope, lbl: label })
+    return [await attempt(() => p.shapeOpenFromState('recovery-group-share', envelope))]
+  }, { envelope: r!.envelope })
   for (const err of errors) expect(err).toMatch(/not openable from the webview/)
 })
 

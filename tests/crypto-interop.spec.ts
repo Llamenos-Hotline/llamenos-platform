@@ -340,11 +340,12 @@ test.describe('Cross-platform crypto interop', () => {
 
     // Same-label unwrap succeeds
     await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).resolves.toBeDefined()
-    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_MESSAGE, keyWrapAad(labels.LABEL_MESSAGE))).resolves.toBeDefined()
+    // The message-key shape is the stored-record format: its key wrap carries no AAD.
+    await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_MESSAGE, NO_AAD)).resolves.toBeDefined()
     await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_HUB_KEY_WRAP, keyWrapAad(labels.LABEL_HUB_KEY_WRAP))).resolves.toBeDefined()
 
     // Cross-label unwrap fails (AEAD verification failure)
-    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_MESSAGE, keyWrapAad(labels.LABEL_MESSAGE))).rejects.toThrow()
+    await expect(hpkeUnwrap(wrappedWithNoteLabel, adminSecretKey, labels.LABEL_MESSAGE, NO_AAD)).rejects.toThrow()
     await expect(hpkeUnwrap(wrappedWithMessageLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).rejects.toThrow()
     await expect(hpkeUnwrap(wrappedWithHubLabel, adminSecretKey, labels.LABEL_NOTE_KEY, keyWrapAad(labels.LABEL_NOTE_KEY))).rejects.toThrow()
   })

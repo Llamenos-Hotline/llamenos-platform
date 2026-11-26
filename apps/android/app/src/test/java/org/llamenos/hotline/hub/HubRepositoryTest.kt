@@ -186,51 +186,6 @@ class HubRepositoryTest {
     }
 
     @Test
-    fun `an event that will not open refetches the hub key once and retries`() = runTest {
-        val rotated = makeEnvelope(ct = "rotated")
-        coEvery { apiService.getHubKey("hub-a") } returns rotated
-        // The held key predates the rotation: the first open fails, the reloaded key opens it.
-        every { cryptoService.decryptHubEvent("beef", "hub-a") } returnsMany listOf(null, "{\"type\":\"after\"}")
-
-        val plaintext = repo.decryptHubEvent("hub-a", "beef")
-
-        assertEquals("{\"type\":\"after\"}", plaintext)
-        coVerify(exactly = 1) { apiService.getHubKey("hub-a") }
-        coVerify(exactly = 1) { cryptoService.loadHubKey("hub-a", rotated) }
-    }
-
-    @Test
-    fun `an event that opens never asks the server for the key`() = runTest {
-        every { cryptoService.decryptHubEvent("beef", "hub-a") } returns "{}"
-
-        assertEquals("{}", repo.decryptHubEvent("hub-a", "beef"))
-
-        coVerify(exactly = 0) { apiService.getHubKey(any()) }
-    }
-
-    @Test
-    fun `a removed member's refetch evicts the key and the event stays unreadable`() = runTest {
-        coEvery { apiService.getHubKey("hub-a") } returns makeEnvelope()
-        repo.refreshHubKey("hub-a")
-        coEvery { apiService.getHubKey("hub-a") } throws ApiException(403, "not a member")
-        every { cryptoService.decryptHubEvent("beef", "hub-a") } returns null
-
-        assertNull(repo.decryptHubEvent("hub-a", "beef"))
-
-        coVerify(exactly = 1) { cryptoService.clearHubKeysOnly() }
-    }
-
-    @Test
-    fun `undecryptable events cannot turn into a stream of key requests`() = runTest {
-        coEvery { apiService.getHubKey("hub-a") } returns makeEnvelope()
-        every { cryptoService.decryptHubEvent(any(), "hub-a") } returns null
-
-        repeat(5) { assertNull(repo.decryptHubEvent("hub-a", "beef")) }
-
-        coVerify(exactly = 1) { apiService.getHubKey("hub-a") }
-    }
-
-    @Test
     fun `loadAllHubKeys evicts the key of a hub no longer in the member list`() = runTest {
         val keyA = makeEnvelope(ct = "a")
         val keyB = makeEnvelope(ct = "b")

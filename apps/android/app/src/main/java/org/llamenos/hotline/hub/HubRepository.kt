@@ -17,8 +17,6 @@ import org.llamenos.hotline.crypto.CryptoService
 import org.llamenos.hotline.model.Hub
 import org.llamenos.protocol.HubKeyEnvelopeResponse
 import java.io.IOException
-import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,9 +43,6 @@ class HubRepository @Inject constructor(
      */
     private val heldEnvelopes = mutableMapOf<String, HubKeyEnvelopeResponse>()
     private val keyCacheMutex = Mutex()
-
-    /** When each hub's key was last refetched because an event would not decrypt. */
-    private val lastDecryptRefetch = mutableMapOf<String, TimeSource.Monotonic.ValueTimeMark>()
 
     /** Outcome of fetching one hub's key envelope. */
     private sealed interface KeyFetch {
@@ -83,31 +78,6 @@ class HubRepository @Inject constructor(
         applyFetches(mapOf(hubId to fetchHubKey(hubId)))
     }
 
-    /**
-     * Decrypt a hub event with [hubId]'s key, recovering from a key that predates a rotation.
-     *
-     * A member who stays in the hub after a hub-key rotation keeps the old key in Rust
-     * until it is refetched, and nothing tells the client a rotation happened. An event
-     * that will not open is the signal: refetch the hub's key once and retry. Refetches
-     * for one hub are spaced [DECRYPT_REFETCH_COOLDOWN] apart, so a stream of corrupt or
-     * foreign events cannot turn into a stream of key requests.
-     *
-     * Returns null when the event still will not open — the key could not be refreshed,
-     * the member was removed (the refetch evicts the key), or the event is not valid.
-     */
-    suspend fun decryptHubEvent(hubId: String, encryptedHex: String): String? {
-        cryptoService.decryptHubEvent(encryptedHex, hubId)?.let { return it }
-        if (!claimDecryptRefetch(hubId)) return null
-        refreshHubKey(hubId)
-        return cryptoService.decryptHubEvent(encryptedHex, hubId)
-    }
-
-    private suspend fun claimDecryptRefetch(hubId: String): Boolean = keyCacheMutex.withLock {
-        val last = lastDecryptRefetch[hubId]
-        if (last != null && last.elapsedNow() < DECRYPT_REFETCH_COOLDOWN) return@withLock false
-        lastDecryptRefetch[hubId] = TimeSource.Monotonic.markNow()
-        true
-    }
 
     /**
      * Refresh the keys of every hub in [hubs] — the server's authoritative member-hub
@@ -234,8 +204,6 @@ class HubRepository @Inject constructor(
         /** Retries after the first attempt for a network failure fetching a hub key. */
         const val KEY_FETCH_RETRIES = 2
         const val KEY_FETCH_BACKOFF_MS = 1_000L
-        /** Minimum spacing between decrypt-failure refetches of one hub's key. */
-        val DECRYPT_REFETCH_COOLDOWN = 30.seconds
     }
 
     /**

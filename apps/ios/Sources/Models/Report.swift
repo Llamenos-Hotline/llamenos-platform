@@ -86,7 +86,7 @@ struct CreateReportRequest: Encodable, Sendable {
     let title: String
     let category: String?
     let encryptedContent: String
-    let authorEnvelope: ProtocolKeyEnvelope
+    let authorEnvelope: KeyEnvelope
     let adminEnvelopes: [RecipientEnvelope]
 }
 

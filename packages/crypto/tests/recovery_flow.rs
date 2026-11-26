@@ -10,10 +10,30 @@
 //! 7. Combine shares to reconstruct recovery group private key
 //! 8. Use reconstructed key to HPKE-open a PUK seed envelope (LABEL_RECOVERY_PUK_SEED_WRAP)
 
-use llamenos_core::hpke_envelope::{generate_x25519_keypair, hpke_open, hpke_seal};
-use llamenos_core::labels::{
-    LABEL_RECOVERY_GROUP_SHARE_WRAP, LABEL_RECOVERY_PUK_SEED_WRAP, LABEL_RECOVERY_SHARE_CONTRIBUTE,
-};
+use llamenos_core::hpke_envelope::{generate_x25519_keypair, HpkeEnvelope};
+use llamenos_core::shape::{open_from_hex, seal_to, Shape};
+use llamenos_core::CryptoError;
+
+/// Seal through the shape API: the crate chooses the label and the AAD.
+fn hpke_seal(
+    pt: &[u8],
+    pk: &str,
+    shape: Shape,
+    fields: &[&str],
+) -> Result<HpkeEnvelope, CryptoError> {
+    let fields: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+    seal_to(pk, shape, &fields, pt)
+}
+
+fn hpke_open(
+    env: &HpkeEnvelope,
+    sk: &str,
+    shape: Shape,
+    fields: &[&str],
+) -> Result<Vec<u8>, CryptoError> {
+    let fields: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+    open_from_hex(sk, shape, &fields, env).map(|z| z.to_vec())
+}
 use llamenos_core::shamir::{
     combine, commit, generate_recovery_group_keypair, split, verify, Share,
 };
@@ -39,15 +59,9 @@ fn full_recovery_ceremony_flow() {
 
     let mut puk_seed = [0u8; 32];
     getrandom::getrandom(&mut puk_seed).unwrap();
-    let puk_seed_aad = b"hub-abc:puk-seed";
 
-    let puk_seed_envelope = hpke_seal(
-        &puk_seed,
-        &recovery_pk,
-        LABEL_RECOVERY_PUK_SEED_WRAP,
-        puk_seed_aad,
-    )
-    .unwrap();
+    let puk_seed_envelope =
+        hpke_seal(&puk_seed, &recovery_pk, Shape::RecoveryPukSeed, &[]).unwrap();
 
     // --- Step 3: Split recovery group private key into shares ---
 
@@ -66,12 +80,11 @@ fn full_recovery_ceremony_flow() {
         .enumerate()
         .map(|(i, share)| {
             let share_bytes = serialize_share(share);
-            let aad = format!("hub-abc:share:{i}");
             hpke_seal(
                 &share_bytes,
                 holder_pubkeys[i],
-                LABEL_RECOVERY_GROUP_SHARE_WRAP,
-                aad.as_bytes(),
+                Shape::RecoveryGroupShare,
+                &[],
             )
             .unwrap()
         })
@@ -89,12 +102,11 @@ fn full_recovery_ceremony_flow() {
 
     for i in 0..2 {
         // Holder decrypts their stored share
-        let aad = format!("hub-abc:share:{i}");
         let share_bytes = hpke_open(
             &share_envelopes[i],
             &holder_keys[i].0,
-            LABEL_RECOVERY_GROUP_SHARE_WRAP,
-            aad.as_bytes(),
+            Shape::RecoveryGroupShare,
+            &[],
         )
         .unwrap();
 
@@ -107,15 +119,12 @@ fn full_recovery_ceremony_flow() {
         );
 
         // HPKE-wrap share to new device's pubkey
-        let contribute_aad = format!(
-            "{}:{}:{}",
-            LABEL_RECOVERY_SHARE_CONTRIBUTE, session_id, holder_pubkeys[i]
-        );
+        let contribute_fields = [session_id, holder_pubkeys[i]];
         let contribution_envelope = hpke_seal(
             &share_bytes,
             &new_device_pk,
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            contribute_aad.as_bytes(),
+            Shape::RecoveryShareContribution,
+            &contribute_fields,
         )
         .unwrap();
 
@@ -123,8 +132,8 @@ fn full_recovery_ceremony_flow() {
         let decrypted_share_bytes = hpke_open(
             &contribution_envelope,
             &new_device_sk,
-            LABEL_RECOVERY_SHARE_CONTRIBUTE,
-            contribute_aad.as_bytes(),
+            Shape::RecoveryShareContribution,
+            &contribute_fields,
         )
         .unwrap();
 
@@ -149,8 +158,8 @@ fn full_recovery_ceremony_flow() {
     let recovered_puk_seed = hpke_open(
         &puk_seed_envelope,
         &reconstructed_sk_hex,
-        LABEL_RECOVERY_PUK_SEED_WRAP,
-        puk_seed_aad,
+        Shape::RecoveryPukSeed,
+        &[],
     )
     .unwrap();
 
@@ -167,20 +176,14 @@ fn wrong_label_on_share_wrap_rejected() {
     let shares = split(&secret, 3, 2).unwrap();
 
     let share_bytes = serialize_share(&shares[0]);
-    let envelope = hpke_seal(
-        &share_bytes,
-        &holder_pk,
-        LABEL_RECOVERY_GROUP_SHARE_WRAP,
-        b"aad",
-    )
-    .unwrap();
+    let envelope = hpke_seal(&share_bytes, &holder_pk, Shape::RecoveryGroupShare, &[]).unwrap();
 
     // Try to open with wrong label (Albrecht defense)
     let result = hpke_open(
         &envelope,
         &holder_sk,
-        LABEL_RECOVERY_PUK_SEED_WRAP, // wrong label
-        b"aad",
+        Shape::RecoveryPukSeed, // wrong shape
+        &[],
     );
     assert!(result.is_err(), "wrong label should be rejected");
 }
@@ -195,22 +198,22 @@ fn aad_binding_prevents_cross_session_replay() {
     let share_bytes = serialize_share(&shares[0]);
 
     // Contribution for session A
-    let aad_a = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:session-A:{holder_pk}");
+    let aad_a = ["session-a", holder_pk.as_str()];
     let envelope = hpke_seal(
         &share_bytes,
         &new_device_pk,
-        LABEL_RECOVERY_SHARE_CONTRIBUTE,
-        aad_a.as_bytes(),
+        Shape::RecoveryShareContribution,
+        &aad_a,
     )
     .unwrap();
 
     // Try to open with session B AAD — should fail
-    let aad_b = format!("{LABEL_RECOVERY_SHARE_CONTRIBUTE}:session-B:{holder_pk}");
+    let aad_b = ["session-b", holder_pk.as_str()];
     let result = hpke_open(
         &envelope,
         &new_device_sk,
-        LABEL_RECOVERY_SHARE_CONTRIBUTE,
-        aad_b.as_bytes(),
+        Shape::RecoveryShareContribution,
+        &aad_b,
     );
     assert!(
         result.is_err(),
@@ -221,8 +224,8 @@ fn aad_binding_prevents_cross_session_replay() {
     let result = hpke_open(
         &envelope,
         &new_device_sk,
-        LABEL_RECOVERY_SHARE_CONTRIBUTE,
-        aad_a.as_bytes(),
+        Shape::RecoveryShareContribution,
+        &aad_a,
     );
     assert!(result.is_ok(), "correct AAD should succeed");
 }

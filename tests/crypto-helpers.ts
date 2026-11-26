@@ -13,8 +13,8 @@ import { gcm } from '@noble/ciphers/aes.js'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
-import { LABEL_DEVICE_ENCRYPTION_SEED, LABEL_MESSAGE } from '@shared/crypto-labels'
-import { hpkeSealMock, base64urlDecode } from './mocks/hpke-mock'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
+import { shapeSealMock } from './mocks/hpke-mock'
 import { utf8ToBytes } from '@noble/ciphers/utils.js'
 import { x25519 } from '@noble/curves/ed25519.js'
 
@@ -251,12 +251,7 @@ export async function encryptMessageForDesktop(
   const readerEnvelopes = await Promise.all(
     readerSigningSeedHexes.map(async (seedHex) => {
       const pubkey = deviceEncryptionPubkeyFromSigningSeed(seedHex)
-      const envelope = await hpkeSealMock(contentKey, pubkey, LABEL_MESSAGE, new Uint8Array(0))
-      return {
-        pubkey,
-        enc: bytesToHex(base64urlDecode(envelope.enc)),
-        ct: bytesToHex(base64urlDecode(envelope.ct)),
-      }
+      return { pubkey, ...await shapeSealMock('message-key', pubkey, [], contentKey) }
     }),
   )
   return { encryptedContent: bytesToHex(packed), readerEnvelopes }

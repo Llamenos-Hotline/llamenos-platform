@@ -1,30 +1,25 @@
 /**
- * File envelopes bind the canonical AAD at the desktop call sites.
+ * File envelopes take their AAD from the crate, by shape, at the desktop call sites.
  *
- * `contentAad(label)` on the AES-256-GCM content layer, `keyWrapAad(label)`
- * on the HPKE key wrap — the single convention defined in
- * `@shared/envelope-aad` and mirrored in Rust. Files were a missed call site:
- * the content layers passed `''` (empty AAD) and `hpkeWrapKey` sealed its key
- * wrap with `''`, so a file sealed by the desktop failed the tag check on
- * every other implementation (iOS, Android) — and vice versa.
+ * The content layer runs in WebCrypto (#3003), so its AAD crosses IPC — but only
+ * as the value `shape_content_aad` returns for the file shapes; the webview never
+ * builds one. Files were once a missed call site that passed `''`, so a file
+ * sealed by the desktop failed the tag check on every other implementation.
  *
- * `file-crypto.ts` imports its crypto from `./platform`, so mocking that
- * module boundary intercepts every call and the AAD argument each function
- * receives IS the contract. (The note and contact-identifier call sites live
- * inside `platform.ts` itself; they are pinned by the
- * `envelope_aad_cross_platform` Rust test, which scans these sources the same
- * way it scans the mobile ones.)
+ * `file-crypto.ts` imports its crypto from `./platform`, so mocking that module
+ * boundary intercepts every call and the arguments each function receives ARE
+ * the contract.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { contentAadHex } from '@shared/envelope-aad'
-import { LABEL_FILE_KEY, LABEL_FILE_METADATA } from '@shared/crypto-labels'
+import { shapeContentAadHexMock } from '../../../tests/mocks/hpke-mock'
 
 const mocks = vi.hoisted(() => ({
   aesGcmEncrypt: vi.fn(async (_pt: string, _key: string, _aadHex: string) => '00'),
   aesGcmSealBytes: vi.fn(async (_pt: Uint8Array, _key: string, _aadHex: string) => new Uint8Array(29)),
   aesGcmOpenBytes: vi.fn(async (_ct: Uint8Array, _key: string, _aadHex: string) => new Uint8Array([1, 2, 3])),
   resolveEncryptionPubkey: vi.fn(async (pubkey: string) => pubkey),
-  hpkeWrapKey: vi.fn(async (_key: string, _pubkey: string, _label: string) => ({ enc: 'ab'.repeat(32), ct: 'cd' })),
+  hpkeWrapKey: vi.fn(async (_key: string, _pubkey: string, _shape: string) => ({ enc: 'ab'.repeat(32), ct: 'cd'.repeat(48) })),
+  shapeContentAadHex: vi.fn(async (shape: Parameters<typeof shapeContentAadHexMock>[0]) => shapeContentAadHexMock(shape)),
   unwrapFileKey: vi.fn(async (_envelope: unknown) => 'cd'.repeat(32)),
   decryptFileMetadata: vi.fn(async (_entry: unknown) => '{}'),
   rewrapFileKey: vi.fn(async (_envelope: unknown, _pub: string) => ({ enc: 'ab', ct: 'cd' })),
@@ -38,6 +33,7 @@ vi.mock('./platform', async importOriginal => ({
   aesGcmOpenBytes: mocks.aesGcmOpenBytes,
   resolveEncryptionPubkey: mocks.resolveEncryptionPubkey,
   hpkeWrapKey: mocks.hpkeWrapKey,
+  shapeContentAadHex: mocks.shapeContentAadHex,
   unwrapFileKey: mocks.unwrapFileKey,
   decryptFileMetadata: mocks.decryptFileMetadata,
   rewrapFileKey: mocks.rewrapFileKey,
@@ -51,20 +47,20 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('file envelopes bind the canonical AAD', () => {
-  it('encryptFile binds contentAad(FILE_KEY) on the content and contentAad(FILE_METADATA) on the metadata', async () => {
+describe('file envelopes take their AAD from the crate by shape', () => {
+  it('encryptFile binds the file-key content AAD on the content and the file-metadata-key AAD on the metadata', async () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'evidence.txt', { type: 'text/plain' })
     await encryptFile(file, [READER_PUBKEY])
 
     expect(aesGcmSealBytes).toHaveBeenCalledTimes(1)
-    expect(aesGcmSealBytes.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
+    expect(aesGcmSealBytes.mock.calls[0][2]).toBe(shapeContentAadHexMock('file-key'))
     expect(aesGcmEncrypt).toHaveBeenCalledTimes(1)
-    expect(aesGcmEncrypt.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_METADATA))
+    expect(aesGcmEncrypt.mock.calls[0][2]).toBe(shapeContentAadHexMock('file-metadata-key'))
 
-    // The key wraps go through hpkeWrapKey, which seals under keyWrapAad(label).
+    // The key wraps go through hpkeWrapKey as the matching shapes.
     expect(hpkeWrapKey).toHaveBeenCalledTimes(2)
-    expect(hpkeWrapKey.mock.calls[0][2]).toBe(LABEL_FILE_KEY)
-    expect(hpkeWrapKey.mock.calls[1][2]).toBe(LABEL_FILE_METADATA)
+    expect(hpkeWrapKey.mock.calls[0][2]).toBe('file-key')
+    expect(hpkeWrapKey.mock.calls[1][2]).toBe('file-metadata-key')
 
     // No layer was sealed with an empty AAD.
     for (const call of [...aesGcmSealBytes.mock.calls, ...aesGcmEncrypt.mock.calls]) {
@@ -72,10 +68,10 @@ describe('file envelopes bind the canonical AAD', () => {
     }
   })
 
-  it('decryptFile opens the content with contentAad(FILE_KEY)', async () => {
+  it('decryptFile opens the content with the file-key content AAD', async () => {
     await decryptFile(new ArrayBuffer(4), { pubkey: READER_PUBKEY, enc: 'ab'.repeat(32), ct: 'cd' })
 
     expect(aesGcmOpenBytes).toHaveBeenCalledTimes(1)
-    expect(aesGcmOpenBytes.mock.calls[0][2]).toBe(contentAadHex(LABEL_FILE_KEY))
+    expect(aesGcmOpenBytes.mock.calls[0][2]).toBe(shapeContentAadHexMock('file-key'))
   })
 })

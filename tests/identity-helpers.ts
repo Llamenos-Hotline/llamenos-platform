@@ -15,27 +15,26 @@ import { ed25519, x25519 } from '@noble/curves/ed25519.js'
 import { hkdf } from '@noble/hashes/hkdf.js'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex, hexToBytes, randomBytes, utf8ToBytes } from '@noble/hashes/utils.js'
-import { LABEL_DEVICE_ENCRYPTION_SEED, LABEL_PUK_WRAP_TO_DEVICE } from '@shared/crypto-labels'
+import { LABEL_DEVICE_ENCRYPTION_SEED } from '@shared/crypto-labels'
 import {
   SIGCHAIN_GENESIS_SEQ,
   sigchainGenesisPayloadSchema,
   sigchainPukEpochPayloadSchema,
   type AppendSigchainLinkBody,
-  type PukHpkeEnvelope,
   type SigchainLinkRecord,
   type SigchainLinkType,
   type SigchainResponse,
 } from '@protocol/schemas/sigchain'
+import type { KeyEnvelope } from '@protocol/schemas/common'
 import { apiGet, apiPost } from './api-helpers'
 import {
   createInitialPukMock,
   createSigchainLinkMock,
-  pukWrapAad,
   verifySigchainMock,
   type MockPukState,
   type MockSigchainLink,
 } from './mocks/sigchain-mock'
-import { hpkeSealMock } from './mocks/hpke-mock'
+import { shapeSealMock } from './mocks/hpke-mock'
 
 /** One device of a test user: signing key = the user's identity key for the first device. */
 export interface TestDevice {
@@ -141,9 +140,8 @@ export function toMockSigchainLink(record: SigchainLinkRecord): MockSigchainLink
 }
 
 /** A PUK seed envelope sealed to `device`, as `puk::create_initial_puk` / `rotate_puk` seal it. */
-export async function sealPukSeed(seed: Uint8Array, device: TestDevice): Promise<PukHpkeEnvelope> {
-  const env = await hpkeSealMock(seed, device.encryptionPubkeyHex, LABEL_PUK_WRAP_TO_DEVICE, pukWrapAad(device.deviceId))
-  return { v: 3, labelId: env.labelId, enc: env.enc, ct: env.ct }
+export async function sealPukSeed(seed: Uint8Array, device: TestDevice): Promise<KeyEnvelope> {
+  return shapeSealMock('puk-seed', device.encryptionPubkeyHex, [device.deviceId], seed)
 }
 
 export async function getSigchainViaApi(
@@ -207,7 +205,7 @@ export interface PageIdentity {
   deviceId: string
   links: SigchainLinkRecord[]
   /** Latest PUK envelope addressed to this device, or null if none. */
-  pukEnvelope: { generation: number; envelope: PukHpkeEnvelope } | null
+  pukEnvelope: { generation: number; envelope: KeyEnvelope } | null
   /** Whether this device's CryptoState opened that envelope (label + AAD bound to its deviceId). */
   pukEnvelopeOpens: boolean
 }
@@ -220,7 +218,7 @@ export interface PageIdentity {
  */
 export async function readIdentityFromPage(page: Page): Promise<PageIdentity> {
   await page.waitForFunction(() => !!window.__TEST_PLATFORM, { timeout: 30_000 })
-  return page.evaluate(async ({ pukLabel }) => {
+  return page.evaluate(async () => {
     const platform = window.__TEST_PLATFORM
     if (!platform) throw new Error('__TEST_PLATFORM not available')
     const device = await platform.getDevicePubkeys()
@@ -242,17 +240,16 @@ export async function readIdentityFromPage(page: Page): Promise<PageIdentity> {
     if (envRes.ok) {
       const body = await envRes.json()
       pukEnvelope = { generation: body.generation, envelope: body.envelope }
-      const aad = new TextEncoder().encode(`${pukLabel}:${device.deviceId}`)
-      const aadHex = Array.from(aad, b => b.toString(16).padStart(2, '0')).join('')
       try {
-        await platform.pukUnwrapSeedFromState(body.envelope, pukLabel, aadHex)
+        // The puk-seed shape binds this device's id; Rust (the mock here) supplies it.
+        await platform.pukUnwrapSeedFromState(body.envelope)
         pukEnvelopeOpens = true
       } catch {
         pukEnvelopeOpens = false
       }
     }
     return { pubkey: device.signingPubkeyHex, deviceId: device.deviceId, links, pukEnvelope, pukEnvelopeOpens }
-  }, { pukLabel: LABEL_PUK_WRAP_TO_DEVICE })
+  })
 }
 
 /**

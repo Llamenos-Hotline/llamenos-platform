@@ -146,9 +146,11 @@ final class CryptoServiceTests: XCTestCase {
         XCTAssertEqual(result.envelopes.count, 3)
         XCTAssertFalse(result.ciphertextHex.isEmpty)
         for env in result.envelopes {
-            XCTAssertEqual(env.envelope.v, 3)
-            XCTAssertFalse(env.envelope.enc.isEmpty)
-            XCTAssertFalse(env.envelope.ct.isEmpty)
+            // The v2 wire shape (D1, D2): lowercase hex, a 32-byte `enc` and a
+            // 48-byte key-wrap `ct`; no version, no labelId.
+            XCTAssertEqual(env.envelope.enc.count, 64)
+            XCTAssertEqual(env.envelope.ct.count, 96)
+            XCTAssertEqual(env.envelope.enc, env.envelope.enc.lowercased())
         }
     }
 

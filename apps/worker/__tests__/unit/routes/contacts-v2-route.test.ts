@@ -17,7 +17,7 @@ const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
 const VALID_ENVELOPE = {
   pubkey: 'a'.repeat(64),
   enc: 'b'.repeat(64),
-  ct: 'wrapped-key-hex',
+  ct: 'c677a7ae12848b30608de55c6d151c98184d7d74ea82ce4c3604ff177375efebe2fbf104c304ef15fe13ec31ab817f60',
 }
 // VALID_ENVELOPE's key is the hub's one admin recipient (#2174); this one is not.
 const NON_ADMIN_ENVELOPE = { ...VALID_ENVELOPE, pubkey: 'e'.repeat(64) }
