@@ -238,7 +238,7 @@ nobody touched.
 
 ## 11. Contract surface and gates
 
-**Contract PR:**
+**Full-stack PRs** (contract and clients together; the split and order are in the briefs on #2978):
 - `retention` in the definition format, the validator and the policy: **in #3025's contract PR (D-A)**, since both were signed off together;
 - the categories, the default/floor/max limits in platform settings (R3), and default rows at hub creation;
 - the one deletion routine with its order, `deletion_pending`, and no soft deletes;
@@ -248,8 +248,11 @@ nobody touched.
 - the orphan report;
 - `retention-coverage`.
 
-**Client adoption:** the hold control, the lifetime report, the erasure flow on the token lookup,
-and the shared confirmation component.
+**Clients, in the same PRs as the contract they consume:** the hold control, the lifetime report, the
+erasure flow on the token lookup, and the shared confirmation component, on desktop, iOS and
+Android.
+
+*Revised 2026-11-25 by operator decision.* The original text said "Client adoption". R1–R10 are unchanged.
 
 **Stage 1 gate (#2978):**
 - A new hub purges every category at its defaults, with no admin action.

@@ -352,7 +352,8 @@ covers it instead.
 
 ## 13. Contract surface and gates
 
-**Contract PR (#2947's, one PR):**
+**One full-stack PR (#2947's):** the contract below **and every client consumer**. A contract bug found
+while adopting is fixed in that PR.
 - the crate: the definition model, validator, policy, seal/open, normalisers and tokens;
 - `packages/protocol`: the definition and policy schemas, and codegen;
 - the worker: `sealed_documents` for the ported types, `document_type_policies`, `document_index_tokens`, the generated write guard, the permission matcher, and the bundle mapping;
@@ -364,7 +365,11 @@ covers it instead.
   - a refused sealed→plaintext change;
   - a server-served stale definition that clients must refuse.
 
-**Then adoption, one PR per client,** each ported fully, with its old reader composition deleted.
+**Clients, in the same PR:** desktop, iOS and Android, each ported fully, with its old reader
+composition deleted. Only the per-row pilot decisions (D-E on #2974) follow as their own PR, because
+they wait on the operator.
+
+*Revised 2026-11-25 by operator decision.* The original text said "Then adoption, one PR per client". E1–E12 are unchanged.
 
 **Gates (#2974 stage 3):**
 - Case records and contacts written by each client open on the other two under v2 headers, on real clients.
