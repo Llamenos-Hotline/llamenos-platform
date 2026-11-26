@@ -216,6 +216,8 @@ val copyCryptoVectors by tasks.registering(CopyCryptoVectors::class) {
         // The crate-generated v2 vectors (spec D15), read by ServerEventInteropTest.
         file("$fixtures/v2/server-event.json"),
         file("$fixtures/v2/hpke-wrap.json"),
+        // Device key binding (#2496), read by DeviceBindingVectorTest.
+        file("$fixtures/v2/device-binding.json"),
     )
 }
 
