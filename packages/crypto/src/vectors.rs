@@ -532,7 +532,7 @@ fn flip_pop(mut payload: Value) -> Value {
 }
 
 fn generate_device_binding() -> Value {
-    let mut r = rng("llamenos:v2-vectors:device-binding");
+    let mut r = rng("llamenos v2 vectors: device-binding");
     let alice = binding_device(&mut r);
     let alice2 = binding_device(&mut r);
     let carol = binding_device(&mut r);
