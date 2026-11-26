@@ -208,11 +208,13 @@ pub(crate) fn generate_hpke_wrap() -> Value {
         let secrets = crate::device_keys::DeviceSecrets {
             signing_seed: bytes32(&mut r),
             encryption_seed: secret,
+            kem_seed: None,
         };
         let state = crate::device_keys::DeviceKeyState {
             device_id: "v2-vectors".into(),
             signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
             encryption_pubkey_hex: pubkey.clone(),
+            kem_pubkey_hex: None,
         };
         let mut nonce = [0u8; 12];
         r.fill_bytes(&mut nonce);
@@ -402,12 +404,14 @@ pub(crate) fn generate_fixture_reader_devices() -> Value {
             let secrets = crate::device_keys::DeviceSecrets {
                 signing_seed: bytes32(&mut r),
                 encryption_seed: seed,
+                kem_seed: None,
             };
             assert_eq!(hex::encode(secrets.encryption_pubkey().to_bytes()), pk);
             let state = crate::device_keys::DeviceKeyState {
                 device_id: format!("fixture-{}", reader["name"].as_str().unwrap()),
                 signing_pubkey_hex: hex::encode(secrets.signing_pubkey().to_bytes()),
                 encryption_pubkey_hex: pk.clone(),
+                kem_pubkey_hex: None,
             };
             let mut nonce = [0u8; 12];
             r.fill_bytes(&mut nonce);

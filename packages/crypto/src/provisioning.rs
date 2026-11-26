@@ -537,6 +537,7 @@ pub fn decrypt_provisioned_bundle(
     let mut secrets = DeviceSecrets {
         signing_seed: [0u8; 32],
         encryption_seed: [0u8; 32],
+        kem_seed: None,
     };
     secrets.signing_seed.copy_from_slice(&plaintext[1..33]);
     secrets
@@ -579,6 +580,7 @@ pub fn decrypt_provisioned_bundle(
         secrets: DeviceSecrets {
             signing_seed: secrets.signing_seed,
             encryption_seed: secrets.encryption_seed,
+            kem_seed: None,
         },
         sas_code,
     })
@@ -1229,6 +1231,7 @@ mod tests {
         let primary = DeviceSecrets {
             signing_seed: seq(0x21),
             encryption_seed: seq(0x01),
+            kem_seed: None,
         };
         let new_device_sk = seq(0x65);
         let primary_ephemeral = X25519StaticSecret::from(seq(0xa1));

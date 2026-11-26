@@ -326,6 +326,7 @@ mod tests {
             device_id: "d".into(),
             signing_pubkey_hex: "ed".repeat(32),
             encryption_pubkey_hex: device_pk.clone(),
+            kem_pubkey_hex: None,
         };
         let sealed = seal_as_device(
             ShiftFieldPurpose::AvailabilityReason,
