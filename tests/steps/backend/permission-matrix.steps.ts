@@ -486,7 +486,7 @@ When('the {string} user sends {string} to {string} with share body', async ({ re
   const wrapped = await wrapKeyForRecipient(file.contentKey, recipient.pubkeyHex, recipient.skHex, LABEL_FILE_KEY)
   getSharedState(world).lastResponse = await apiPost(request, `/hubs/${hubId}/files/${file.fileId}/share`, {
     envelope: { pubkey: recipient.pubkeyHex, ...wrapped },
-    encryptedMetadata: { pubkey: recipient.pubkeyHex, encryptedContent: 'aa', ...wrapped },
+    encryptedMetadata: { pubkey: recipient.pubkeyHex, encryptedContent: 'aa'.repeat(28), ...wrapped },
   }, user.deviceKey)
 })
 

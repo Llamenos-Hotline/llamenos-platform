@@ -17,11 +17,13 @@
  * surviving equivalent and is covered on the dev surface.
  */
 import { expect } from '@playwright/test'
-import { bytesToHex } from '@noble/hashes/utils.js'
+import { hexToBytes } from '@noble/hashes/utils.js'
+import { gcm } from '@noble/ciphers/aes.js'
 import { When, Then, After, getState, setState } from './fixtures'
 import { apiGet, devDelete, devGet, devPost, seedHexToPubkey } from '../../api-helpers'
-import { decryptContent, importedDeviceHpkeRecipient, unwrapKey } from '../../crypto-helpers'
-import { LABEL_CALL_META, LABEL_NOTE_KEY } from '@shared/crypto-labels'
+import { importedDeviceHpkeRecipient } from '../../crypto-helpers'
+import { shapeContentAadHexMock, shapeOpenMock } from '../../mocks/hpke-mock'
+import type { Shape } from '@shared/crypto-shapes'
 import { SAMPLE_CALLS, SAMPLE_HUB } from '@worker/lib/sample-dataset'
 import type { CallRecord } from '@protocol/schemas/calls'
 
@@ -69,24 +71,15 @@ function account(world: Record<string, unknown>, name: string): SampleCredential
 const ADMIN = (world: Record<string, unknown>) => account(world, 'Sample Admin')
 const VOLUNTEER = (world: Record<string, unknown>) => account(world, 'James Chen')
 
-function base64urlToHex(value: string): string {
-  return bytesToHex(new Uint8Array(Buffer.from(value, 'base64url')))
-}
-
 /**
- * Decrypt content the sample seeder sealed for a sample account.
+ * Decrypt content the sample seeder sealed for a sample account, as `shape`.
  *
- * `apps/worker/lib/sample-crypto.ts` writes the **canonical** envelope format —
- * `contentAad(label)` on the content layer, `keyWrapAad(label)` on the key wrap
- * — for every label it uses, LABEL_CALL_META included. This reader used to pass
- * an empty AAD on both layers, which is the *stored-record* convention
- * (`apps/worker/lib/crypto.ts`), and so could never open anything the seeder
- * wrote: both sample-dataset decryption scenarios failed with `OpenError`. Which of the
- * two conventions applies is a property of the writer, never of the label — see
- * `@shared/envelope-aad`.
- *
- * It now goes through the shared canonical readers instead of a second
- * hand-rolled HPKE suite, so there is one implementation to keep correct.
+ * `apps/worker/lib/sample-crypto.ts` seals both layers through the crate's shape
+ * API, so the shape decides the label and both AADs (spec D1): the note shape
+ * carries the canonical pair, the call-metadata shape the stored-record (empty)
+ * pair. This reader opens through the shape mirror in tests/mocks/hpke-mock.ts —
+ * pinned byte-for-byte against the crate's v2 vectors — rather than restating
+ * either convention here. Envelopes are lowercase hex (spec D2).
  *
  * Sample accounts are imported-device identities: their X25519 key is HKDF'd from
  * the signing seed, exactly as the desktop derives it on `device_import_and_load`.
@@ -95,11 +88,13 @@ async function decryptFor(
   seedHex: string,
   encryptedContent: string,
   envelope: { enc: string; ct: string },
-  label: string,
+  shape: Extract<Shape, 'note-key' | 'call-meta-key'>,
 ): Promise<string> {
   const reader = importedDeviceHpkeRecipient(seedHex)
-  const contentKey = await unwrapKey(base64urlToHex(envelope.ct), envelope.enc, reader.skHex, label)
-  return decryptContent(encryptedContent, contentKey, label)
+  const contentKey = await shapeOpenMock(shape, reader.skHex, [], { enc: envelope.enc, ct: envelope.ct })
+  const data = hexToBytes(encryptedContent)
+  const aad = hexToBytes(shapeContentAadHexMock(shape))
+  return new TextDecoder().decode(gcm(contentKey, data.slice(0, 12), aad).decrypt(data.slice(12)))
 }
 
 interface NoteRow {
@@ -235,7 +230,7 @@ Then('every note written by the sample volunteer decrypts to its authored text f
   expect(notes.length).toBeGreaterThan(0)
   for (const note of notes) {
     expect(note.authorPubkey).toBe(volunteer.pubkey)
-    const plaintext = await decryptFor(volunteer.seedHex, note.encryptedContent, note.authorEnvelope, LABEL_NOTE_KEY)
+    const plaintext = await decryptFor(volunteer.seedHex, note.encryptedContent, note.authorEnvelope, 'note-key')
     expect(plaintext).toBe(noteTextByCallId.get(note.callId))
   }
 })
@@ -247,7 +242,7 @@ Then('every sample note decrypts to its authored text for the sample admin', asy
   for (const note of notes) {
     const envelope = note.adminEnvelopes.find(e => e.pubkey === admin.pubkey)
     expect(envelope, `admin envelope for ${note.callId}`).toBeDefined()
-    const plaintext = await decryptFor(admin.seedHex, note.encryptedContent, envelope!, LABEL_NOTE_KEY)
+    const plaintext = await decryptFor(admin.seedHex, note.encryptedContent, envelope!, 'note-key')
     expect(plaintext).toBe(noteTextByCallId.get(note.callId))
   }
 })
@@ -263,7 +258,7 @@ Then('every sample call record decrypts for the sample admin with the fictional 
     const envelope = call.adminEnvelopes?.find(e => e.pubkey === admin.pubkey)
     expect(envelope, `admin envelope for ${call.id}`).toBeDefined()
     expect(call.encryptedContent, `encrypted metadata for ${call.id}`).toBeTruthy()
-    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent!, envelope!, LABEL_CALL_META)) as { answeredBy: string | null; callerNumber: string }
+    const meta = JSON.parse(await decryptFor(admin.seedHex, call.encryptedContent!, envelope!, 'call-meta-key')) as { answeredBy: string | null; callerNumber: string }
     const sample = SAMPLE_CALLS.find(c => `sample-${c.key}` === call.id)
     expect(sample, `sample call for ${call.id}`).toBeDefined()
     expect(meta.callerNumber).toBe(sample!.callerNumber)
