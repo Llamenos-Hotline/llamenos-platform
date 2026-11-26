@@ -53,15 +53,29 @@ pre-commit:
     ipc-allowlist-check:
       glob: "{apps/desktop/src/**/*.rs,src/client/lib/platform.ts}"
       run: bun run check:ipc-allowlist
-    i18n-validate:
-      glob: "{packages/i18n/locales/*.json,src/client/**/*.tsx}"
-      run: bun run i18n:validate:all
+    # #1901: each platform's validator fires on the sources where that
+    # platform's string references live (the old glob covered only locales and
+    # desktop .tsx, so no Swift or Kotlin edit ever ran it). A locale or
+    # validator change fires all three. Every run also re-checks the shared
+    # locale invariants (casing, coverage, completeness), ~0.5-1.5s each.
+    i18n-validate-ios:
+      glob: "{packages/i18n/locales/*.json,packages/i18n/deferred.json,packages/i18n/tools/*.ts,apps/ios/Sources/**/*.swift}"
+      run: bun run i18n:validate:ios
+    i18n-validate-android:
+      glob: "{packages/i18n/locales/*.json,packages/i18n/deferred.json,packages/i18n/tools/*.ts,apps/android/app/src/main/java/**/*.kt}"
+      run: bun run i18n:validate:android
+    i18n-validate-desktop:
+      glob: "{packages/i18n/locales/*.json,packages/i18n/deferred.json,packages/i18n/tools/*.ts,src/client/**/*.{ts,tsx}}"
+      run: bun run i18n:validate:desktop
     test-specs-validate:
       glob: "{packages/test-specs/features/**/*.feature,tests/steps/**/*.ts}"
       run: bun run test-specs:validate
     i18n-codegen-freshness:
-      glob: "packages/i18n/locales/*.json"
-      run: bun run i18n:codegen && git diff --exit-code apps/ios/Resources/Localizable/ apps/android/app/src/main/res/values*/strings.xml apps/android/app/src/main/java/org/llamenos/i18n/I18n.kt
+      # #1901: the outputs are gitignored, so `git diff` over them always
+      # exits 0. --check regenerates in memory and compares bytes against every
+      # file on disk (plus orphans no locale produces); it writes nothing.
+      glob: "{packages/i18n/locales/*.json,packages/i18n/tools/*.ts}"
+      run: bun run packages/i18n/tools/i18n-codegen.ts --check
     no-generated-files:
       glob: "{apps/ios/Resources/Localizable/**/*.strings,apps/android/app/src/main/res/values*/strings.xml,apps/android/app/src/main/java/org/llamenos/i18n/I18n.kt,apps/ios/Sources/Generated/LlamenosCore.swift,packages/protocol/generated/**}"
       run: |
