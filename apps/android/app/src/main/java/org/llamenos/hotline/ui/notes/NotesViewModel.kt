@@ -265,6 +265,16 @@ class NotesViewModel @Inject constructor(
     }
 
     /**
+     * Select the loaded note with [noteId] — what a route that names a note shows. A note
+     * not in the loaded list clears the selection rather than leaving another note on screen.
+     */
+    fun selectNoteById(noteId: String) {
+        _uiState.update { state ->
+            if (state.selectedNote?.id == noteId) state else state.copy(selectedNote = state.notes.firstOrNull { it.id == noteId })
+        }
+    }
+
+    /**
      * Clear the selected note (navigating back from detail).
      */
     fun clearSelectedNote() {

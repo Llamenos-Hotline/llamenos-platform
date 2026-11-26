@@ -243,6 +243,19 @@ class ConversationsViewModel @Inject constructor(
     }
 
     /**
+     * Open the loaded conversation with [conversationId] — what a route that names a
+     * conversation shows. The list opens it before navigating, so that is a no-op; a
+     * deep link opens it here. One not in the loaded list clears the selection rather
+     * than leaving another conversation's thread on screen.
+     */
+    fun openConversationById(conversationId: String) {
+        val state = _uiState.value
+        if (state.selectedConversation?.id == conversationId) return
+        val conversation = state.conversations.firstOrNull { it.id == conversationId }
+        if (conversation != null) openConversation(conversation) else closeConversation()
+    }
+
+    /**
      * Clear the selected conversation (navigating back).
      */
     fun closeConversation() {

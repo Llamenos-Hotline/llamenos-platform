@@ -319,6 +319,11 @@ tasks.matching { it.name.endsWith("UnitTestJavaRes") }.configureEach {
  * same PR, and a regression below the list fails the build. There is no exemption list —
  * a method that is not listed is simply not claimed yet.
  *
+ * A line starting `+` CONTINUES the flow above it: it runs on that flow's install, with no
+ * `pm clear`, which is how a restart phase (`+notesAfterRestart` after `notesCreate`) reads
+ * back what phase 1 left. A continuation whose predecessor failed is not run and fails too —
+ * it has nothing to read, and reporting it as passed or skipped would hide the regression.
+ *
  * The Cucumber runner only runs JUnit classes when `cucumberUseAndroidJUnitRunner=true`
  * is passed, which is why `connectedDebugAndroidTest` alone never ran the probe.
  */
@@ -338,8 +343,8 @@ abstract class M1ProbeGate @Inject constructor(
     @get:OutputDirectory
     abstract val reportDir: DirectoryProperty
 
-    private data class Required(val method: String, val role: String?) {
-        val label get() = if (role == null) method else "$method[$role]"
+    private data class Required(val method: String, val role: String?, val continuesPrevious: Boolean) {
+        val label get() = (if (continuesPrevious) "+" else "") + if (role == null) method else "$method[$role]"
     }
 
     private fun adb(vararg args: String): String {
@@ -360,10 +365,14 @@ abstract class M1ProbeGate @Inject constructor(
             .filter { it.isNotEmpty() }
             .map { line ->
                 val parts = line.split(Regex("\\s+"))
-                check(parts.size <= 2) { "m1-probe-required.txt: expected '<method> [role]', got '$line'" }
-                Required(parts[0], parts.getOrNull(1))
+                check(parts.size <= 2) { "m1-probe-required.txt: expected '[+]<method> [role]', got '$line'" }
+                val continues = parts[0].startsWith("+")
+                Required(parts[0].removePrefix("+"), parts.getOrNull(1), continues)
             }
         if (required.isEmpty()) throw GradleException("m1-probe-required.txt lists no probe methods — a gate that runs nothing passes nothing")
+        if (required.first().continuesPrevious) {
+            throw GradleException("m1-probe-required.txt: '${required.first().label}' continues a flow, but no flow precedes it")
+        }
 
         // adb honours ANDROID_SERIAL; without it, more than one device is ambiguous.
         val devices = adb("devices").lines().drop(1).count { it.endsWith("\tdevice") }
@@ -374,8 +383,18 @@ abstract class M1ProbeGate @Inject constructor(
 
         val reports = reportDir.get().asFile.apply { deleteRecursively(); mkdirs() }
         val failed = mutableListOf<String>()
+        var previousPassed = false
         for (entry in required) {
-            adb("shell", "pm", "clear", "$APP_ID")
+            if (entry.continuesPrevious && !previousPassed) {
+                logger.lifecycle("M1 probe FAIL ${entry.label} (not run: the flow it continues failed)")
+                // No `.instrument.txt`: nothing ran, so the failure's cause is the predecessor's
+                // report (classify-infra-failure.py reads only those), not a second one.
+                reports.resolve("${entry.label.replace(Regex("[^A-Za-z0-9_.-]"), "_")}.not-run.txt")
+                    .writeText("not run: the flow it continues failed\n")
+                failed += entry.label
+                continue
+            }
+            if (!entry.continuesPrevious) adb("shell", "pm", "clear", "$APP_ID")
             adb("logcat", "-c")
             val args = buildList {
                 addAll(listOf("shell", "am", "instrument", "-w", "-e", "cucumberUseAndroidJUnitRunner", "true"))
@@ -393,6 +412,7 @@ abstract class M1ProbeGate @Inject constructor(
             // longer exists, and must fail like any other regression.
             val passed = Regex("^OK \\(1 test\\)", RegexOption.MULTILINE).containsMatchIn(output)
             logger.lifecycle("M1 probe ${if (passed) "PASS" else "FAIL"} ${entry.label}")
+            previousPassed = passed
             if (!passed) {
                 failed += entry.label
                 logger.error(evidence.lines().filter { "PROBE" in it }.takeLast(25).joinToString("\n"))

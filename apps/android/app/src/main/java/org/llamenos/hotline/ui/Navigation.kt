@@ -16,6 +16,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import org.llamenos.hotline.api.VersionChecker
 import org.llamenos.hotline.ui.components.UpdateBanner
 import org.llamenos.hotline.ui.components.UpdateRequiredScreen
+import androidx.lifecycle.ViewModel
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -777,8 +780,12 @@ private fun NavigationTree(
             )
         }
 
-        composable(LlamenosRoute.NoteDetail.ROUTE_PATTERN) {
-            val notesViewModel: NotesViewModel = hiltViewModel()
+        composable(LlamenosRoute.NoteDetail.ROUTE_PATTERN) { backStackEntry ->
+            val notesViewModel: NotesViewModel = mainScopedViewModel(navController, backStackEntry)
+            val noteId = backStackEntry.arguments?.getString("noteId")
+            // The list selects the note before navigating here; a deep link does not, and a
+            // shared view model may still hold a DIFFERENT note — select by the route's id.
+            LaunchedEffect(noteId) { noteId?.let(notesViewModel::selectNoteById) }
             NoteDetailScreen(
                 viewModel = notesViewModel,
                 onNavigateBack = { navController.popBackStack() },
@@ -805,7 +812,7 @@ private fun NavigationTree(
                 },
             ),
         ) { backStackEntry ->
-            val notesViewModel: NotesViewModel = hiltViewModel()
+            val notesViewModel: NotesViewModel = mainScopedViewModel(navController, backStackEntry)
             val conversationId = backStackEntry.arguments?.getString("conversationId")
             val callId = backStackEntry.arguments?.getString("callId")
             val hubId = backStackEntry.arguments?.getString("hubId")
@@ -818,8 +825,10 @@ private fun NavigationTree(
             )
         }
 
-        composable(LlamenosRoute.ConversationDetail.ROUTE_PATTERN) {
-            val conversationsViewModel: ConversationsViewModel = hiltViewModel()
+        composable(LlamenosRoute.ConversationDetail.ROUTE_PATTERN) { backStackEntry ->
+            val conversationsViewModel: ConversationsViewModel = mainScopedViewModel(navController, backStackEntry)
+            val conversationId = backStackEntry.arguments?.getString("conversationId")
+            LaunchedEffect(conversationId) { conversationId?.let(conversationsViewModel::openConversationById) }
             ConversationDetailScreen(
                 viewModel = conversationsViewModel,
                 onNavigateBack = { navController.popBackStack() },
@@ -1276,4 +1285,23 @@ private fun NavigationTree(
             )
         }
     }
+}
+
+/**
+ * The view model the Main tabs show — the one scoped to the [LlamenosRoute.Main] entry,
+ * which every note and conversation screen is pushed on top of.
+ *
+ * Those screens used to ask for their own (`hiltViewModel()` scopes to the CURRENT entry),
+ * so each got an empty copy of what the tab had (#1705): a note saved from the editor
+ * reloaded a list nobody was looking at, and the Notes tab showed "No notes" for a note the
+ * server held; note detail and conversation detail opened with nothing selected, so a
+ * conversation's thread was empty and Send did nothing. One list, one selection.
+ */
+@Composable
+private inline fun <reified VM : ViewModel> mainScopedViewModel(
+    navController: NavHostController,
+    entry: NavBackStackEntry,
+): VM {
+    val mainEntry = remember(entry) { navController.getBackStackEntry(LlamenosRoute.Main.route) }
+    return hiltViewModel(mainEntry)
 }

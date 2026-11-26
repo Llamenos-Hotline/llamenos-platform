@@ -40,6 +40,16 @@ Feature: Cross-DO Integration Workflows
     When another SMS arrives from "+15550002222" with body "Follow up"
     Then the conversation should be reopened
 
+  # An admin handing a waiting conversation to a volunteer (the desktop's Reassign sends only
+  # `assignedTo`) ends the wait exactly as the volunteer's own claim does. Left `waiting`, it
+  # was missing from the assignee's default Active list (#1705).
+  Scenario: An admin assigning a waiting conversation makes it active
+    Given 1 volunteers are on shift
+    When an SMS arrives from "+15550003333" with body "Assign me"
+    Then the conversation status should be "waiting"
+    When the admin assigns the conversation to the volunteer
+    Then the conversation status should be "active"
+
   # ─── Invite → Registration → Call Handling ─────────────────────────
 
   Scenario: Invited volunteer can handle calls

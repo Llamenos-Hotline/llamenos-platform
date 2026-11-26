@@ -255,6 +255,19 @@ Then('the conversation status should be {string}', async ({ request, world }, ex
   }
 })
 
+When('the admin assigns the conversation to the volunteer', async ({ request, world }) => {
+  const conversationId = getCrossDoState(world).conversationId
+  const volPubkey = getScenarioState(world).volunteers[0]?.pubkey
+  expect(conversationId, 'a conversation arrived').toBeTruthy()
+  expect(volPubkey, 'a volunteer is on shift').toBeTruthy()
+  const { status } = await apiPatch(
+    request,
+    `/hubs/${getScenarioState(world).hubId}/conversations/${conversationId}`,
+    { assignedTo: volPubkey! },
+  )
+  expect(status, 'the admin assigns the conversation').toBe(200)
+})
+
 When('the admin closes the conversation', async ({ request, world }) => {
   if (getCrossDoState(world).conversationId) {
     await apiPatch(request, `/hubs/${getScenarioState(world).hubId}/conversations/${getCrossDoState(world).conversationId}`, { status: 'closed' })
