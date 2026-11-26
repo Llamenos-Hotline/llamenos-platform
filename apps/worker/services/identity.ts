@@ -30,6 +30,7 @@ import {
   authNonces,
   hubKeys,
   envelopeRevocationJobs,
+  deviceKeyClaims,
 } from '../db/schema'
 import type {
   User,
@@ -2632,6 +2633,9 @@ export class IdentityService {
       await tx.delete(provisionRooms)
       await tx.delete(inviteCodes)
       await tx.delete(users)
+      // Claims are permanent in real data (no FK to users, #2496); this is the
+      // destructive test wipe, after which no user that named them exists.
+      await tx.delete(deviceKeyClaims)
     })
   }
 
@@ -2646,6 +2650,7 @@ export class IdentityService {
       await tx.delete(webauthnChallenges)
       await tx.delete(sessions)
       await tx.delete(users)
+      await tx.delete(deviceKeyClaims)
     })
   }
 }

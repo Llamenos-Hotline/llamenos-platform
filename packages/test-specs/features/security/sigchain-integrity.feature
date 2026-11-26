@@ -96,3 +96,40 @@ Feature: Sigchain Integrity
     Then the sigchain link types are "1:genesis,2:puk_epoch"
     And the stored sigchain verifies and authorises only the user's device
     And the user's device opens its PUK envelope to the seed the puk_epoch link binds
+
+  # ── Device key binding (#2496; spec 2026-11-25-v2-device-linking-and-recovery §5–§6) ──
+
+  @backend
+  Scenario: A device publishes its X-Wing key with a device_kem link
+    Given the user has a genesis sigchain link
+    When the user's device appends its device_kem link
+    Then the response status is 201
+    And the stored sigchain names the device's X-Wing key
+
+  @backend
+  Scenario: A device_kem whose possession signature does not verify is refused
+    Given the user has a genesis sigchain link
+    When the user's device appends a device_kem link with a corrupted possession signature
+    Then the response status is 400
+    And the error message contains "chain_device_pop"
+
+  @backend
+  Scenario: A device_add without the new device's possession signature is refused
+    Given the user has a genesis sigchain link
+    When the user appends a device_add link with no possession signature
+    Then the response status is 400
+
+  @backend
+  Scenario: A user's chain may not name another user's X-Wing key
+    Given the user has a genesis sigchain link
+    And the user's device has published its device_kem link
+    And a second registered user with a genesis sigchain link
+    When the second user publishes a device_kem naming the first user's X-Wing key
+    Then the response status is 409
+
+  @backend
+  Scenario: A device may not register another user's encryption key
+    Given the user has a genesis sigchain link
+    And a second registered user
+    When the second user registers a device with the first user's X25519 key
+    Then the response status is 409

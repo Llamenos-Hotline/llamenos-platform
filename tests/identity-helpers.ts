@@ -28,9 +28,13 @@ import {
 } from '@protocol/schemas/sigchain'
 import type { KeyEnvelope } from '@protocol/schemas/common'
 import { apiGet, apiPost } from './api-helpers'
+import { ml_kem768_x25519 } from '@noble/post-quantum/hybrid.js'
 import {
+  DEVICE_KEM_FORMAT,
   createInitialPukMock,
   createSigchainLinkMock,
+  deviceKemPayloadMock,
+  signDevicePopMock,
   verifySigchainMock,
   type MockPukState,
   type MockSigchainLink,
@@ -46,6 +50,8 @@ export interface TestDevice {
   /** X25519 encryption seed — HKDF(signingSeed, LABEL_DEVICE_ENCRYPTION_SEED), as device_import_and_load derives it. */
   encryptionSeed: Uint8Array
   encryptionPubkeyHex: string
+  /** X-Wing public key (crypto_format 2, #2496), from a random seed. */
+  kemPubkeyHex: string
 }
 
 /** A device whose keys derive from `signingSeedHex` the way the desktop client imports a seed. */
@@ -64,6 +70,7 @@ export function testDevice(signingSeedHex: string, deviceId?: string): TestDevic
     signingPubkeyHex,
     encryptionSeed,
     encryptionPubkeyHex: bytesToHex(x25519.getPublicKey(encryptionSeed)),
+    kemPubkeyHex: bytesToHex(ml_kem768_x25519.keygen(randomBytes(32)).publicKey),
   }
 }
 
@@ -116,13 +123,25 @@ export function genesisPayload(device: TestDevice): Record<string, unknown> {
   }
 }
 
-export function deviceAddPayload(device: TestDevice): Record<string, unknown> {
+/**
+ * A v2 `device_add` for `device` in `userPubkey`'s chain: its X-Wing key and its
+ * possession signature, made by the NEW device (spec 2026-11-25 §6, #2496).
+ */
+export function deviceAddPayload(device: TestDevice, userPubkey: string): Record<string, unknown> {
   return {
     type: 'device_add',
     deviceId: device.deviceId,
     devicePubkey: device.signingPubkeyHex,
     deviceEncryptionPubkey: device.encryptionPubkeyHex,
+    encryptionPubkey: device.kemPubkeyHex,
+    format: DEVICE_KEM_FORMAT,
+    pop: signDevicePopMock(hexToBytes(device.signingSeedHex), userPubkey, device.kemPubkeyHex, DEVICE_KEM_FORMAT),
   }
+}
+
+/** `device`'s own `device_kem` in `userPubkey`'s chain (spec §5); sign it with `device`. */
+export function deviceKemPayload(device: TestDevice, userPubkey: string): Record<string, unknown> {
+  return JSON.parse(deviceKemPayloadMock(hexToBytes(device.signingSeedHex), device.kemPubkeyHex, userPubkey)) as Record<string, unknown>
 }
 
 /** Server sigchain record → packages/crypto `SigchainLink` (mirrors toCryptoSigchainLink in user-identity.ts). */

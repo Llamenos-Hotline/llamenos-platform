@@ -13,6 +13,7 @@ import { apiGet, apiPost, createUserViaApi, ADMIN_NSEC } from '../../api-helpers
 import {
   buildSigchainLink,
   deviceAddPayload,
+  deviceKemPayload,
   genesisPayload,
   getSigchainViaApi,
   initializeIdentityViaApi,
@@ -46,6 +47,7 @@ interface SigchainTestState {
   user?: SigchainUser
   secondUser?: SigchainUser
   head?: Pick<SigchainLinkRecord, 'seqNo' | 'hash'>
+  secondHead?: Pick<SigchainLinkRecord, 'seqNo' | 'hash'>
   identity?: InitializedIdentity
 }
 
@@ -72,7 +74,7 @@ function payloadFor(linkType: SigchainLinkType, device: TestDevice): Record<stri
     case 'genesis':
       return genesisPayload(device)
     case 'device_add':
-      return deviceAddPayload(randomTestDevice(`added-${crypto.randomUUID()}`))
+      return deviceAddPayload(randomTestDevice(`added-${crypto.randomUUID()}`), device.signingPubkeyHex)
     case 'device_remove': {
       const removed = randomTestDevice(`removed-${crypto.randomUUID()}`)
       return { type: 'device_remove', deviceId: removed.deviceId, devicePubkey: removed.signingPubkeyHex }
@@ -273,4 +275,80 @@ Then('the first link has linkType {string}', async ({ request, world }, linkType
   const user = requireUser(getS(world))
   const links = await getSigchainViaApi(request, user.pubkey, user.deviceKey)
   expect(links[0].linkType).toBe(linkType)
+})
+
+// ── Device key binding (#2496) ──────────────────────────────────────
+
+/** The user's genesis device publishing its own X-Wing key, signed by itself. */
+function kemLink(user: SigchainUser, head: Pick<SigchainLinkRecord, 'seqNo' | 'hash'>, payload: Record<string, unknown>) {
+  return buildSigchainLink(user.device, head, 'device_kem', payload)
+}
+
+When('the user\'s device appends its device_kem link', async ({ request, world }) => {
+  const s = getS(world)
+  const user = requireUser(s)
+  await appendAndTrack(request, world, kemLink(user, s.head!, deviceKemPayload(user.device, user.pubkey)))
+})
+
+Given('the user\'s device has published its device_kem link', async ({ request, world }) => {
+  const s = getS(world)
+  const user = requireUser(s)
+  const res = await appendAndTrack(request, world, kemLink(user, s.head!, deviceKemPayload(user.device, user.pubkey)))
+  expect(res.status).toBe(201)
+})
+
+When('the user\'s device appends a device_kem link with a corrupted possession signature', async ({ request, world }) => {
+  const s = getS(world)
+  const user = requireUser(s)
+  const payload = deviceKemPayload(user.device, user.pubkey)
+  const pop = payload.pop as string
+  payload.pop = (pop[0] === '0' ? '1' : '0') + pop.slice(1)
+  await appendAndTrack(request, world, kemLink(user, s.head!, payload))
+})
+
+When('the user appends a device_add link with no possession signature', async ({ request, world }) => {
+  const s = getS(world)
+  const user = requireUser(s)
+  const { pop: _pop, ...payload } = deviceAddPayload(randomTestDevice(`no-pop-${crypto.randomUUID()}`), user.pubkey)
+  await appendAndTrack(request, world, buildSigchainLink(user.device, s.head!, 'device_add', payload))
+})
+
+Then('the stored sigchain names the device\'s X-Wing key', async ({ request, world }) => {
+  const user = requireUser(getS(world))
+  const links = await getSigchainViaApi(request, user.pubkey, user.deviceKey)
+  const verified = verifySigchainMock(links.map(toMockSigchainLink))
+  expect(verified.deviceKemKeys).toEqual([{ devicePubkey: user.pubkey, kemPubkey: user.device.kemPubkeyHex, format: 2 }])
+})
+
+Given('a second registered user with a genesis sigchain link', async ({ request, world }) => {
+  const s = getS(world)
+  const created = await createUserViaApi(request, { name: `Second User ${Date.now()}` })
+  const second: SigchainUser = { deviceKey: created.deviceKey, pubkey: created.pubkey, device: testDevice(created.deviceKey) }
+  s.secondUser = second
+  const res = await postLink(request, second.deviceKey, second.pubkey, buildSigchainLink(second.device, null, 'genesis', genesisPayload(second.device)))
+  expect(res.status).toBe(201)
+  s.secondHead = { seqNo: res.data.seqNo, hash: res.data.hash }
+})
+
+When('the second user publishes a device_kem naming the first user\'s X-Wing key', async ({ request, world }) => {
+  const s = getS(world)
+  const first = requireUser(s)
+  const second = s.secondUser!
+  // The second user CAN sign a valid pop over the first user's key (it holds
+  // its own signing key): only the cross-user uniqueness refuses it.
+  const stolen = { ...second.device, kemPubkeyHex: first.device.kemPubkeyHex }
+  const body = buildSigchainLink(second.device, s.secondHead!, 'device_kem', deviceKemPayload(stolen, second.pubkey))
+  setLastResponse(world, await postLink(request, second.deviceKey, second.pubkey, body))
+})
+
+When('the second user registers a device with the first user\'s X25519 key', async ({ request, world }) => {
+  const s = getS(world)
+  const first = requireUser(s)
+  const second = s.secondUser!
+  const res = await apiPost(request, '/devices/register', {
+    platform: 'desktop',
+    ed25519Pubkey: second.pubkey,
+    x25519Pubkey: first.device.encryptionPubkeyHex,
+  }, second.deviceKey)
+  setLastResponse(world, res)
 })
